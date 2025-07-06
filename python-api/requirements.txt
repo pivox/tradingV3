@@ -1,0 +1,9 @@
+requests
+pandas
+pyyaml
+urllib3<2
+get-project-root
+uvicorn
+fastapi
+debugpy
+pytz

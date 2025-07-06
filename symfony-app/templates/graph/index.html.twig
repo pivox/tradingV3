@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Graphique Chandeliers - SOLUSDT</title>
+
+    <!-- Chart.js v4.2.1 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.2.1/dist/chart.umd.min.js"></script>
+
+    <!-- Luxon -->
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+
+    <!-- Adapter Luxon -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+
+    <!-- Plugin chandeliers v3.1.0 -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.1.0/dist/chartjs-chart-financial.min.js"></script>
+</head>
+<body>
+<h2>Graphique Chandeliers - SOLUSDT</h2>
+
+<label for="interval">Intervalle :</label>
+<select id="interval">
+    <option value="1m">1m</option>
+    <option value="5m" selected>5m</option>
+    <option value="15m">15m</option>
+    <option value="1h">1h</option>
+    <option value="4h">4h</option>
+</select>
+
+<canvas id="candlestickChart" width="900" height="400"></canvas>
+
+<script>
+    const ctx = document.getElementById('candlestickChart').getContext('2d');
+    let chart;
+
+    async function loadChart(interval = '5m') {
+        const res = await fetch(`/api/klines?symbol=SOLUSDT&interval=${interval}`);
+        const json = await res.json();
+        const klines = json['hydra:member'] || [];
+
+        const data = klines.map(k => ({
+            x: new Date(k.timestamp),
+            o: k.open,
+            h: k.high,
+            l: k.low,
+            c: k.close
+        }));
+
+        if (chart) chart.destroy();
+
+        chart = new Chart(ctx, {
+            type: 'candlestick',
+            data: {
+                datasets: [{
+                    label: `SOLUSDT (${interval})`,
+                    data: data,
+                    borderColor: 'black',
+                    color: {
+                        up: 'green',
+                        down: 'red',
+                        unchanged: 'gray'
+                    }
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            unit: 'minute',
+                            tooltipFormat: 'DD T'
+                        }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'Prix (USDT)'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    document.getElementById('interval').addEventListener('change', (e) => {
+        loadChart(e.target.value);
+    });
+
+    loadChart();
+</script>
+</body>
+</html>
