@@ -1,0 +1,27 @@
+system.globalNamespaceEnabled:
+  - value: true
+    constraints: {}
+
+system.visibilityStore:
+  - value: "postgresql"
+    constraints: {}
+
+system.enableBatcher:
+  - value: true
+    constraints: {}
+
+system.enableParentClosePolicy:
+  - value: true
+    constraints: {}
+
+system.enableCrossNamespaceCommands:
+  - value: true
+    constraints: {}
+
+system.enableScheduledWorkflowExecution:
+  - value: true
+    constraints: {}
+
+system.enableReadFromClosedExecutionV2:
+  - value: true
+    constraints: {}
