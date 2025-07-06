@@ -1,2 +1,22 @@
+# Symfony
+/symfony-app/var/
+/symfony-app/vendor/
 
+# Frontend
 /frontend/node_modules/
+/frontend/build/
+
+# Python
+/python-api/__pycache__/
+/python-api/.venv/
+/python-api/env/
+
+# Temporal
+/temporal/__pycache__/
+/temporal/.venv/
+/temporal/app/__pycache__/
+
+# Docker
+**/.DS_Store
+**/*.log
+mysql-data/
