@@ -106,11 +106,12 @@ services:
       - POSTGRES_USER=temporal
       - POSTGRES_PWD=temporal
       - POSTGRES_SEEDS=postgresql
-      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development.yaml
+      - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/config/dynamicconfig/development.yaml
     ports:
       - "7233:7233"
     volumes:
-      - ./config/dynamicconfig:/etc/temporal/config/dynamicconfig
+      - ./temporal/config/dynamicconfig:/etc/temporal/config/dynamicconfig
+      - ./temporal:/app
     networks:
       - temporal-net
       - shared-net
@@ -129,13 +130,13 @@ services:
 
   temporal-worker:
     build:
-      context: ./temporal/worker
+      context: ./temporal/workers
       dockerfile: Dockerfile
     container_name: temporal_worker
-    command: [ "python", "app/worker.py" ]
+    command: [ "python", "worker_main.py" ]
     volumes:
-      - .:/app
-    working_dir: /app
+      - ./temporal:/app
+    working_dir: /app/workers
     depends_on:
       - temporal
     environment:

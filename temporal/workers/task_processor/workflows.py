@@ -1,10 +1,5 @@
-import asyncio
 from temporalio import workflow
-from task_processor.activities import (
-    check_redis_for_task,
-    call_api,
-    post_result_to_symfony
-)
+from datetime import timedelta
 
 @workflow.defn
 class GenericTaskProcessorWorkflow:
@@ -12,29 +7,27 @@ class GenericTaskProcessorWorkflow:
     async def run(self, queue_name: str, symfony_base_url: str, poll_interval: int = 5):
         while True:
             task = await workflow.execute_activity(
-                check_redis_for_task,
+                "check_redis_for_task",  # ← nom de l’activity (string), pas fonction directe
                 queue_name,
                 5,
-                start_to_close_timeout=10
+                start_to_close_timeout=timedelta(seconds=10)
             )
 
             if task:
-                # Appel API générique
                 result = await workflow.execute_activity(
-                    call_api,
+                    "call_api",
                     task,
-                    start_to_close_timeout=60
+                    start_to_close_timeout=timedelta(seconds=60)
                 )
 
-                # Envoi vers Symfony
                 response_target = task.get("response_target")
                 if response_target:
                     await workflow.execute_activity(
-                        post_result_to_symfony,
+                        "post_result_to_symfony",
                         result,
                         symfony_base_url,
                         response_target,
-                        start_to_close_timeout=30
+                        start_to_close_timeout=timedelta(seconds=30)
                     )
 
-            await asyncio.sleep(poll_interval)
+            await workflow.sleep(poll_interval)

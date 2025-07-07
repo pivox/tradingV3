@@ -9,6 +9,6 @@ RUN apt-get update && \
     apt-get remove -y gcc libffi-dev libpq-dev && \
     apt-get autoremove -y
 
-COPY ./task_processor ./task_processor
+COPY task_processor ./task_processor
 
 CMD ["python", "task_processor/worker.py"]

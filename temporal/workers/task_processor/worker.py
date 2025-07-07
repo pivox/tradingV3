@@ -1,4 +1,5 @@
-import asyncio
+import os
+
 from temporalio.worker import Worker
 from temporalio.client import Client
 
@@ -9,8 +10,10 @@ from task_processor.activities import (
     post_result_to_symfony
 )
 
-async def main():
-    client = await Client.connect("localhost:7233")
+async def start_worker_task_processor():
+    TEMPORAL_HOST = os.getenv("TEMPORAL_HOST", "temporal:7233")
+
+    client = await Client.connect(TEMPORAL_HOST)
 
     worker = Worker(
         client,
@@ -24,6 +27,3 @@ async def main():
     )
 
     await worker.run()
-
-if __name__ == "__main__":
-    asyncio.run(main())
