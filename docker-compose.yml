@@ -108,7 +108,7 @@ services:
       - POSTGRES_SEEDS=postgresql
       - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/config/dynamicconfig/development.yaml
     ports:
-      - "7233:7233"
+      - "7235:7233"
     volumes:
       - ./temporal/config/dynamicconfig:/etc/temporal/config/dynamicconfig
       - ./temporal:/app
@@ -119,31 +119,14 @@ services:
   temporal-ui:
     image: temporalio/ui:2.39.0
     container_name: temporal_ui
-    depends_on:
-      - temporal
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
     ports:
-      - "8233:8080"
-    networks:
-      - temporal-net
-
-  temporal-worker:
-    build:
-      context: ./temporal/workers
-      dockerfile: Dockerfile
-    container_name: temporal_worker
-    command: [ "python", "worker_main.py" ]
-    volumes:
-      - ./temporal:/app
-    working_dir: /app/workers
+      - "8234:8080"
     depends_on:
       - temporal
-    environment:
-      - TEMPORAL_HOST=temporal:7233
     networks:
       - temporal-net
-      - shared-net
 
   temporal-scripts:
     build:
@@ -152,10 +135,31 @@ services:
     container_name: temporal_scripts
     command: [ "tail", "-f", "/dev/null" ]
     volumes:
-      - .:/app
+      - ./temporal/scripts:/app
     working_dir: /app
     depends_on:
       - temporal
+    networks:
+      - temporal-net
+      - shared-net
+  temporal-signal-api:
+    build:
+      context: ./temporal/signal_api
+      dockerfile: Dockerfile
+    container_name: temporal_signal_api
+    ports:
+      - "5000:5000"  # Exposé sur localhost:5000
+    depends_on:
+      - temporal
+    networks:
+      - temporal-net
+      - shared-net
+  task_processor:
+    build:
+      context: ./temporal/workers/task_processor
+      dockerfile: Dockerfile
+    env_file:
+      - ./temporal/workers/task_processor/.env
     networks:
       - temporal-net
       - shared-net
@@ -180,6 +184,10 @@ volumes:
 
 networks:
   frontend-net:
+    name: frontend-net
   symfony-net:
+    name: symfony-net
   temporal-net:
+    name: temporal-net
   shared-net:
+    name: shared-net
