@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from indicators.volume_indicator import compute_volume_indicator, validate_volume_conditions
-from model.indicator_request import IndicatorRequest
+from technical_indicator.indicators.volume_indicator import compute_volume_indicator, validate_volume_conditions
+from technical_indicator.model.indicator_request import IndicatorRequest
 
 router = APIRouter()
 

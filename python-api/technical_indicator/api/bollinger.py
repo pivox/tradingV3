@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from indicators.bollinger_indicator import compute_bollinger_bands, validate_bollinger_conditions
-from model.indicator_request import IndicatorRequest
+from technical_indicator.indicators.bollinger_indicator import compute_bollinger_bands, validate_bollinger_conditions
+from technical_indicator.model.indicator_request import IndicatorRequest
 
 router = APIRouter()
 

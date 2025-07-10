@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import importlib
-import os
+from pathlib import Path
 
 app = FastAPI(
     title="Technical Indicator API",
@@ -17,11 +17,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Import dynamique des routes d'indicateurs
-api_path = "api"
-for filename in os.listdir(api_path):
-    if filename.endswith(".py") and not filename.startswith("__"):
-        module_name = f"{api_path}.{filename[:-3]}"
+# Import dynamique des routes d’indicateurs dans technical_indicator/api
+api_dir = Path(__file__).parent / "technical_indicator" / "api"
+for pyfile in api_dir.glob("*.py"):
+    if not pyfile.name.startswith("__"):
+        module_name = f"technical_indicator.api.{pyfile.stem}"
         module = importlib.import_module(module_name)
         if hasattr(module, "router"):
             app.include_router(module.router)

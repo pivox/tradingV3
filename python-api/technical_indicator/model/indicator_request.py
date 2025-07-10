@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from typing import List, Optional
 
-from model.kline import Kline
+from technical_indicator.model.kline import Kline
 
 
 class IndicatorRequest(BaseModel):

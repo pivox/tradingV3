@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from indicators.supertrend_indicator import compute_supertrend, validate_supertrend
-from model.indicator_request import IndicatorRequest
+from technical_indicator.indicators.supertrend_indicator import compute_supertrend, validate_supertrend
+from technical_indicator.model.indicator_request import IndicatorRequest
 
 router = APIRouter()
 
