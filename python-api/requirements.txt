@@ -9,3 +9,4 @@ debugpy
 pytz
 temporalio>=1.3.0
 httpx
+dotenv
