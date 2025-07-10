@@ -5,7 +5,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-@activity.defn
+@activity.defn(name="activities.api_activities.call_api")
 async def call_api(request: ApiCallRequest) -> dict:
     try:
         session = requests.Session()

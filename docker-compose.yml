@@ -80,6 +80,7 @@ services:
       - db
     networks:
       - backend-net
+      - shared-net
 
   ##################################
   # TEMPORAL STACK (isolé)
@@ -90,8 +91,8 @@ services:
     environment:
       - POSTGRES_USER=temporal
       - POSTGRES_PASSWORD=temporal
-    volumes:
-      - temporal_db_data:/var/lib/postgresql/data
+#    volumes:
+#      - temporal_db_data:/var/lib/postgresql/data
     ports:
       - "5434:5432"
     networks:
@@ -128,7 +129,7 @@ services:
     depends_on:
       - temporal
     environment:
-      - TEMPORAL_ADDRESS=temporal_server:7233
+      - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_UI_PORT=8080
       - TEMPORAL_UI_AUTH_ENABLED=false
       - TEMPORAL_CSRF_COOKIE_INSECURE=true
@@ -136,11 +137,12 @@ services:
       - "8233:8080"
     networks:
       - temporal-net
+      - shared-net
     restart: always
 
 volumes:
   mysql-data:
-  temporal_db_data:
+#  temporal_db_data:
 
 networks:
   frontend-net:

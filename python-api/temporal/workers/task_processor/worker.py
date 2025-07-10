@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 from temporalio.worker import Worker
 from temporalio.client import Client
 
-# Chargement des variables d'environnement
 load_dotenv()
 
 from workflows.api_rate_limiter_workflow import ApiRateLimiterWorkflow
