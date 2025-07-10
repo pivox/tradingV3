@@ -1,29 +1,28 @@
 import os
+import asyncio
+from dotenv import load_dotenv
 
 from temporalio.worker import Worker
 from temporalio.client import Client
 
-from task_processor.workflows import GenericTaskProcessorWorkflow
-from task_processor.activities import (
-    check_redis_for_task,
-    call_api,
-    post_result_to_symfony
-)
+# Chargement des variables d'environnement
+load_dotenv()
 
-async def start_worker_task_processor():
-    TEMPORAL_HOST = os.getenv("TEMPORAL_HOST", "temporal:7233")
+from workflows.api_rate_limiter_workflow import ApiRateLimiterWorkflow
+from activities.api_activities import call_api
 
-    client = await Client.connect(TEMPORAL_HOST)
+TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
+TASK_QUEUE_NAME = os.getenv("TASK_QUEUE_NAME", "default-queue")  # Harmonisé avec ton signal
 
+async def main():
+    client = await Client.connect(TEMPORAL_ADDRESS)
     worker = Worker(
         client,
-        task_queue="task-processor-queue",
-        workflows=[GenericTaskProcessorWorkflow],
-        activities=[
-            check_redis_for_task,
-            call_api,
-            post_result_to_symfony
-        ],
+        task_queue=TASK_QUEUE_NAME,
+        workflows=[ApiRateLimiterWorkflow],
+        activities=[call_api],
     )
-
     await worker.run()
+
+if __name__ == "__main__":
+    asyncio.run(main())
