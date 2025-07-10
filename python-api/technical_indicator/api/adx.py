@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from indicators.adx_indicator import compute_adx, validate_adx_conditions
-from model.indicator_request import IndicatorRequest
+from technical_indicator.indicators.adx_indicator import compute_adx, validate_adx_conditions
+from technical_indicator.model.indicator_request import IndicatorRequest
 
 router = APIRouter()
 

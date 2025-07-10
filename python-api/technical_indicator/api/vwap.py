@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from indicators.vwap_indicator import compute_vwap, validate_vwap_conditions
-from model.indicator_request import IndicatorRequest
+from technical_indicator.indicators.vwap_indicator import compute_vwap, validate_vwap_conditions
+from technical_indicator.model.indicator_request import IndicatorRequest
 
 router = APIRouter()
 

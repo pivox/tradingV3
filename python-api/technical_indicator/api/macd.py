@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from indicators.macd_indicator import validate_macd_conditions, compute_macd
-from model.indicator_request import IndicatorRequest
+from technical_indicator.indicators.macd_indicator import validate_macd_conditions, compute_macd
+from technical_indicator.model.indicator_request import IndicatorRequest
 
 router = APIRouter()
 

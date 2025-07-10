@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from indicators.stochastic_rsi_indicator import compute_stochastic_rsi, validate_stochastic_rsi_conditions
-from model.indicator_request import IndicatorRequest
+from technical_indicator.indicators.stochastic_rsi_indicator import compute_stochastic_rsi, validate_stochastic_rsi_conditions
+from technical_indicator.model.indicator_request import IndicatorRequest
 
 router = APIRouter()
 

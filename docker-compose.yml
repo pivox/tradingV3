@@ -10,10 +10,10 @@ services:
     volumes:
       - ./frontend:/app
     ports:
-      - "3000:3000"  # Accès via localhost:3000
+      - "3000:3000"
     environment:
       - CHOKIDAR_USEPOLLING=true
-      - REACT_APP_API_URL=http://localhost:8080  # Appelle NGINX exposé
+      - REACT_APP_API_URL=http://localhost:8080
     command: sh -c "npm install --legacy-peer-deps && npm start"
     networks:
       - frontend-net
@@ -27,41 +27,41 @@ services:
     volumes:
       - ./symfony-app:/var/www/html
     environment:
-      DATABASE_URL: "mysql://symfony:symfony@db:3306/symfony_db"
+      - DATABASE_URL=mysql://symfony:symfony@db:3306/symfony_db
     depends_on:
       - db
       - python
     networks:
-      - symfony-net
+      - backend-net
       - shared-net
 
   nginx:
     image: nginx:latest
     container_name: symfony_nginx
     ports:
-      - "8080:80"  # Expose l'API publique
+      - "8080:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
       - ./symfony-app:/var/www/html
     depends_on:
       - php
     networks:
-      - symfony-net
+      - backend-net
 
   db:
     image: mysql:8.0
     container_name: mysql_db
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: symfony_db
-      MYSQL_USER: symfony
-      MYSQL_PASSWORD: symfony
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=symfony_db
+      - MYSQL_USER=symfony
+      - MYSQL_PASSWORD=symfony
     volumes:
       - mysql-data:/var/lib/mysql
     ports:
       - "3306:3306"
     networks:
-      - symfony-net
+      - backend-net
 
   python:
     build: ./python-api
@@ -69,17 +69,17 @@ services:
     volumes:
       - ./python-api:/app
     environment:
-      DB_HOST: db
-      DB_PORT: 3306
-      DB_NAME: symfony_db
-      DB_USER: symfony
-      DB_PASSWORD: symfony
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=symfony_db
+      - DB_USER=symfony
+      - DB_PASSWORD=symfony
     ports:
       - "8888:8000"
     depends_on:
       - db
     networks:
-      - symfony-net
+      - backend-net
 
   ##################################
   # TEMPORAL STACK (isolé)
@@ -88,8 +88,10 @@ services:
     image: postgres:13
     container_name: temporal_postgresql
     environment:
-      POSTGRES_USER: temporal
-      POSTGRES_PASSWORD: temporal
+      - POSTGRES_USER=temporal
+      - POSTGRES_PASSWORD=temporal
+    volumes:
+      - temporal_db_data:/var/lib/postgresql/data
     ports:
       - "5434:5432"
     networks:
@@ -106,88 +108,46 @@ services:
       - POSTGRES_USER=temporal
       - POSTGRES_PWD=temporal
       - POSTGRES_SEEDS=postgresql
+      - TEMPORAL_CLI_SHOW_STACKS=1
       - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/config/dynamicconfig/development.yaml
     ports:
-      - "7235:7233"
+      - "7233:7233"
+      - "7234:7234"
+      - "7235:7235"
+      - "7239:7239"
     volumes:
       - ./temporal/config/dynamicconfig:/etc/temporal/config/dynamicconfig
-      - ./temporal:/app
     networks:
       - temporal-net
       - shared-net
+    restart: always
 
   temporal-ui:
     image: temporalio/ui:2.39.0
     container_name: temporal_ui
+    depends_on:
+      - temporal
     environment:
-      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_ADDRESS=temporal_server:7233
+      - TEMPORAL_UI_PORT=8080
+      - TEMPORAL_UI_AUTH_ENABLED=false
+      - TEMPORAL_CSRF_COOKIE_INSECURE=true
     ports:
-      - "8234:8080"
-    depends_on:
-      - temporal
+      - "8233:8080"
     networks:
       - temporal-net
-
-  temporal-scripts:
-    build:
-      context: ./temporal/scripts
-      dockerfile: Dockerfile
-    container_name: temporal_scripts
-    command: [ "tail", "-f", "/dev/null" ]
-    volumes:
-      - ./temporal/scripts:/app
-    working_dir: /app
-    depends_on:
-      - temporal
-    networks:
-      - temporal-net
-      - shared-net
-  temporal-signal-api:
-    build:
-      context: ./temporal/signal_api
-      dockerfile: Dockerfile
-    container_name: temporal_signal_api
-    ports:
-      - "5000:5000"  # Exposé sur localhost:5000
-    depends_on:
-      - temporal
-    networks:
-      - temporal-net
-      - shared-net
-  task_processor:
-    build:
-      context: ./temporal/workers/task_processor
-      dockerfile: Dockerfile
-    env_file:
-      - ./temporal/workers/task_processor/.env
-    networks:
-      - temporal-net
-      - shared-net
-
-  ##################################
-  # REDIS SHARED
-  ##################################
-  redis:
-    image: redis:7
-    container_name: redis_server
-    ports:
-      - "6379:6379"
-    networks:
-      - shared-net
-
-##################################
-# VOLUMES & NETWORKS
-##################################
+    restart: always
 
 volumes:
   mysql-data:
+  temporal_db_data:
 
 networks:
   frontend-net:
-    name: frontend-net
-  symfony-net:
-    name: symfony-net
+    driver: bridge
+  backend-net:
+    driver: bridge
   temporal-net:
-    name: temporal-net
+    driver: bridge
   shared-net:
-    name: shared-net
+    driver: bridge

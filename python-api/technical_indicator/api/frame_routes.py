@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from model.indicator_request import IndicatorRequest
-from api import rsi, macd, ema, bollinger, stochastic_rsi, vwap, volume, candle, supertrend, adx
+from technical_indicator.model.indicator_request import IndicatorRequest
+from technical_indicator.api import rsi, macd, ema, bollinger, stochastic_rsi, vwap, volume, candle, supertrend, adx
 import logging
 import time
 

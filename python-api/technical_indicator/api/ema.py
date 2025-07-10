@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from indicators.ema_indicator import compute_ema, validate_ema_conditions
-from model.indicator_request import IndicatorRequest
+from technical_indicator.indicators.ema_indicator import compute_ema, validate_ema_conditions
+from technical_indicator.model.indicator_request import IndicatorRequest
 
 router = APIRouter()
 

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from indicators.rsi_indicator import compute_rsi, validate_rsi_conditions
-from model.indicator_request import IndicatorRequest
+from technical_indicator.indicators.rsi_indicator import compute_rsi, validate_rsi_conditions
+from technical_indicator.model.indicator_request import IndicatorRequest
 
 router = APIRouter()
 
