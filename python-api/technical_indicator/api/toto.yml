@@ -1,0 +1,102 @@
+indicators:
+  - name: rsi
+    enabled: true
+    score: 1.5
+    sides: [long, short]
+    periods: [6, 14]
+    conditions:
+      long: "RSI(6) > 78 OR RSI(14) > 70"
+      short: "RSI(6) < 22 OR RSI(14) < 30"
+    timeframes: [1m, 5m, 15m, 1h, 4h]
+    min_klines_required: 14
+
+  - name: ema
+    enabled: true
+    score: 1.5
+    sides: [long, short]
+    cross:
+      long: "EMA9 > EMA21"
+      short: "EMA9 < EMA21"
+    price_vs_ema200: true
+    timeframes: [1m, 5m, 15m, 1h, 4h]
+    min_klines_required: 200
+
+  - name: macd
+    enabled: true
+    score: 1.0
+    sides: [long, short]
+    conditions:
+      long: "MACD > Signal AND positive divergence"
+      short: "MACD < Signal AND negative divergence"
+    timeframes: [15m, 1h, 4h]
+    min_klines_required: 35
+
+  - name: bollinger
+    enabled: true
+    score: 1.0
+    sides: [long, short]
+    conditions:
+      long: "Bounce on lower band"
+      short: "Rejection from upper band"
+    timeframes: [5m, 15m, 4h]
+    min_klines_required: 20
+
+  - name: stochastic_rsi
+    enabled: true
+    score: 1.2
+    sides: [long, short]
+    conditions:
+      long: "StochRSI < 0.2 AND bullish crossover"
+      short: "StochRSI > 0.8 AND bearish crossover"
+    timeframes: [1m, 5m]
+    min_klines_required: 20
+
+  - name: vwap
+    enabled: true
+    score: 1.2
+    sides: [long, short]
+    conditions:
+      long: "Price > VWAP AND buyer volume"
+      short: "Price < VWAP AND seller volume"
+    timeframes: [1m, 5m, 15m]
+    min_klines_required: all_session
+
+  - name: volume
+    enabled: true
+    score: 1.3
+    sides: [long, short]
+    conditions:
+      long: "Abnormal buy volume on resistance breakout"
+      short: "Abnormal sell volume on support breakdown"
+    timeframes: [1m, 5m, 15m, 1h]
+    min_klines_required: 50
+
+  - name: candle
+    enabled: true
+    score: 1.0
+    sides: [long, short]
+    pattern:
+      long: "Lower wick rejection (green candle with dominant lower shadow)"
+      short: "Upper wick rejection (red candle with dominant upper shadow)"
+    timeframes: [1m, 5m, 15m, 1h]
+    min_klines_required: 2
+
+  - name: supertrend
+    enabled: true
+    score: 1.0
+    sides: [long, short]
+    conditions:
+      long: "Price > Supertrend"
+      short: "Price < Supertrend"
+    timeframes: [15m, 1h, 4h]
+    min_klines_required: 15
+
+  - name: adx
+    enabled: true
+    score: 1.0
+    sides: [long, short]
+    conditions:
+      long: "+DI > -DI AND ADX > 25"
+      short: "+DI < -DI AND ADX > 25"
+    timeframes: [15m, 1h, 4h]
+    min_klines_required: 14
