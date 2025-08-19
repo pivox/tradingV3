@@ -25,3 +25,7 @@ system.enableScheduledWorkflowExecution:
 system.enableReadFromClosedExecutionV2:
   - value: true
     constraints: {}
+
+frontend.enableOpenAPIHTTPHandler:
+  - value: true
+    constraints: {}
