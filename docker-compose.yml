@@ -47,6 +47,7 @@ services:
       - php
     networks:
       - backend-net
+      - shared-net
 
   db:
     image: mysql:8.0
@@ -91,43 +92,57 @@ services:
     environment:
       - POSTGRES_USER=temporal
       - POSTGRES_PASSWORD=temporal
-#    volumes:
-#      - temporal_db_data:/var/lib/postgresql/data
     ports:
       - "5434:5432"
     networks:
       - temporal-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   temporal:
-    image: temporalio/auto-setup:1.22
+    image: temporalio/auto-setup:1.25
     container_name: temporal_server
     depends_on:
-      - postgresql
+      postgresql:
+        condition: service_healthy
     environment:
-      - DB=postgresql
+      - DB=postgres12
       - DB_PORT=5432
       - POSTGRES_USER=temporal
       - POSTGRES_PWD=temporal
       - POSTGRES_SEEDS=postgresql
       - TEMPORAL_CLI_SHOW_STACKS=1
+      - ENABLE_HTTP_API=true
       - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/config/dynamicconfig/development.yaml
+    expose:
+      - "8080" # HTTP Gateway pour temporal-ui
     ports:
-      - "7233:7233"
+      - "7233:7233" # gRPC externe
       - "7234:7234"
       - "7235:7235"
       - "7239:7239"
+      - "7243:7243"
     volumes:
       - ./temporal/config/dynamicconfig:/etc/temporal/config/dynamicconfig
     networks:
       - temporal-net
       - shared-net
     restart: always
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "workflow", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   temporal-ui:
     image: temporalio/ui:2.39.0
     container_name: temporal_ui
     depends_on:
-      - temporal
+      temporal:
+        condition: service_healthy
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_UI_PORT=8080
@@ -142,7 +157,6 @@ services:
 
 volumes:
   mysql-data:
-#  temporal_db_data:
 
 networks:
   frontend-net:
