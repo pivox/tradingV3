@@ -65,7 +65,7 @@ services:
       - backend-net
 
   python:
-    build: ./python-api
+    build: ./technical_indicator
     container_name: indicator_api
     volumes:
       - ./python-api:/app
