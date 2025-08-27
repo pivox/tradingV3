@@ -4,7 +4,7 @@ FROM php:8.3-fpm
 RUN apt-get update && apt-get install -y \
     git unzip zip curl sqlite3 libsqlite3-dev \
     libicu-dev libxml2-dev libzip-dev \
-    && docker-php-ext-install intl pdo pdo_mysql pdo_sqlite opcache zip \
+    && docker-php-ext-install intl pdo pdo_mysql pdo_sqlite opcache zip sockets \
     && pecl install redis && docker-php-ext-enable redis
 
 # Set memory limit

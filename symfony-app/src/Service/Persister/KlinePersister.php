@@ -21,4 +21,16 @@ class KlinePersister
         $this->em->flush();
         return $persistedKlines;
     }
+
+    public function persistMany(?Contract $contract, array $dtos, float|int $stepSeconds)
+    {
+        $persistedKlines = [];
+        foreach ($dtos as $dto) {
+            $kline = (new Kline())->fillFromDto($dto, $contract, $stepSeconds);
+            $this->em->persist($kline);
+            $persistedKlines[] = $kline;
+        }
+        $this->em->flush();
+        return $persistedKlines;
+    }
 }

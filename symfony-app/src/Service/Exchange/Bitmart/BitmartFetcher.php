@@ -16,7 +16,7 @@ class BitmartFetcher implements ExchangeFetcherInterface
     public function __construct(
         private HttpClientInterface $httpClient,
         private LoggerInterface $logger,
-        private ClockInterface $clock
+        private ClockInterface $clock,
     ) {}
 
     public function fetchContracts(): array
@@ -53,7 +53,7 @@ class BitmartFetcher implements ExchangeFetcherInterface
     {
         $maxCount = 500;
         $stepMinutes = $step;
-        $chunkDuration = $stepMinutes * $maxCount; // durée maximale d’un appel en minutes
+        $chunkDuration = $stepMinutes * $maxCount; // durée maximale d'un appel en minutes
         $results = [];
 
         $cursor = \DateTimeImmutable::createFromInterface($startTime);
@@ -71,7 +71,7 @@ class BitmartFetcher implements ExchangeFetcherInterface
                 'end_time'   => $chunkEnd->getTimestamp(),
             ];
 
-            $this->logger->info('📊 Fetching klines from BitMart', [
+            $this->logger->info('📊 Fetching klines from BitMart via rate limiter', [
                 'symbol' => $symbol,
                 'start' => $cursor->format('Y-m-d H:i:s'),
                 'end'   => $chunkEnd->format('Y-m-d H:i:s'),

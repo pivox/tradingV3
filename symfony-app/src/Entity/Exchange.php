@@ -29,4 +29,9 @@ class Exchange
     public function setName(string $name): self { $this->name = $name; return $this; }
 
     public function getContracts(): Collection { return $this->contracts; }
+
+    public function __toString(): string
+    {
+        return $this->name;
+    }
 }

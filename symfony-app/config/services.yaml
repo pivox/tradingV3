@@ -16,18 +16,18 @@ services:
     # this creates a service per class whose id is the fully-qualified class name
     App\:
         resource: '../src/'
+        exclude:
+            - '../src/DependencyInjection/'
+            - '../src/Entity/'
+            - '../src/Kernel.php'
 
-    App\Controller\IndicatorController:
-        arguments:
-            $pythonApiBaseUrl: '%pythonApiBaseUrl%'
-    App\Command\DispatchContractTaskCommand:
-        arguments:
-            $signalApiUrl: '%env(SIGNAL_API_URL)%'
 
 
     App\Service\Exchange\Bitmart\BitmartFetcher:
         arguments:
             $httpClient: '@http_client'
+            $logger: '@logger'
+            $clock: '@clock'
         tags: [ 'mon.exchange.fetcher' ]
 
     App\Service\ExchangeFetcherInterface: '@App\Service\Exchange\Bitmart\BitmartFetcher'
@@ -42,3 +42,4 @@ services:
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
+
