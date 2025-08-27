@@ -32,4 +32,20 @@ class KlineRepository extends ServiceEntityRepository
             ->getQuery()
             ->getResult();
     }
+
+    /**
+     * Trouve toutes les Klines par symbol et interval, triés par timestamp DESC
+     */
+    public function findBySymbolAndInterval(string $symbol, int $step): array
+    {
+        return $this->createQueryBuilder('k')
+            ->innerJoin('k.contract', 'contract')
+            ->where('contract.symbol = :symbol')
+            ->andWhere('k.step = :step')
+            ->orderBy('k.timestamp', 'DESC')
+            ->setParameter('symbol', $symbol)
+            ->setParameter('step', $step)
+            ->getQuery()
+            ->getResult();
+    }
 }
