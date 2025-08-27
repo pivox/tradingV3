@@ -1,0 +1,16 @@
+# docker-compose.workers.yml
+services:
+  api-rate-limiter-worker:
+    build: ./api_rate_limiter
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TASK_QUEUE_NAME=api_rate_limiter_queue
+    networks: [temporal-net, shared-net]
+
+networks:
+  temporal-net:
+    external: true
+    name: tradingv3_temporal-net
+  shared-net:
+    external: true
+    name: tradingv3_shared-net
