@@ -5,7 +5,9 @@ namespace App\Command;
 use App\Entity\Contract;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
+use App\Service\Exchange\Bitmart\BitmartFetcher;
 use App\Service\Indicator\IndicatorValidatorClient;
+use App\Service\Persister\KlinePersister;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -17,7 +19,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 #[AsCommand(
     name: 'app:test:indicator',
-    description: 'Teste la validation Python (POST /validate) pour un contrat et un timeframe à partir des klines en base.'
+    description: 'Teste la validation Python (POST /validate) pour un contrat et un timeframe à partir des klines en base, en préfetchant depuis Bitmart.'
 )]
 final class TestIndicatorCommand extends Command
 {
@@ -26,6 +28,8 @@ final class TestIndicatorCommand extends Command
         private readonly ContractRepository $contracts,
         private readonly KlineRepository $klines,
         private readonly IndicatorValidatorClient $indicatorClient,
+        private readonly BitmartFetcher $bitmartFetcher,   // ← ajout
+        private readonly KlinePersister $klinePersister,   // ← ajout
     ) {
         parent::__construct();
     }
@@ -37,6 +41,7 @@ final class TestIndicatorCommand extends Command
             ->addArgument('timeframe', InputArgument::REQUIRED, 'Timeframe (1m,5m,15m,1h,4h,...)')
             ->addOption('limit', null, InputOption::VALUE_REQUIRED, 'Nombre de klines à envoyer au validateur', 100)
             ->addOption('json', null, InputOption::VALUE_NONE, 'Affiche la décision brute JSON en sortie')
+            ->addOption('no-prefetch', null, InputOption::VALUE_NONE, 'Désactive le préfetch Bitmart (lecture DB uniquement)')
         ;
     }
 
@@ -47,11 +52,12 @@ final class TestIndicatorCommand extends Command
         $timeframe = strtolower((string) $input->getArgument('timeframe'));
         $limit     = (int) $input->getOption('limit');
         $asJson    = (bool) $input->getOption('json');
+        $noPrefetch= (bool) $input->getOption('no-prefetch');
 
-        $io->title('🔎 Test indicateur Python');
+        $io->title('🔎 Test indicateur Python (avec préfetch Bitmart)');
         $io->text(sprintf('Contrat: <info>%s</info> | Timeframe: <info>%s</info> | Limit: <info>%d</info>', $symbol, $timeframe, $limit));
 
-        // 1) Trouver le contrat
+        // 1) Contrat
         /** @var Contract|null $contract */
         $contract = $this->contracts->find($symbol);
         if (!$contract) {
@@ -59,11 +65,37 @@ final class TestIndicatorCommand extends Command
             return Command::FAILURE;
         }
 
-        // 2) Mapping timeframe -> step (secondes)
+        // 2) TF -> step
         $stepSeconds = $this->stepFor($timeframe);
         if ($stepSeconds === null) {
             $io->error("Timeframe non supporté: $timeframe");
             return Command::FAILURE;
+        }
+        $stepMinutes = intdiv($stepSeconds, 60);
+
+        // 2.5) PREFETCH Bitmart + persistance (si non désactivé)
+        if (!$noPrefetch) {
+            try {
+                $now = new \DateTimeImmutable();
+                $start = $now->sub(new \DateInterval('PT' . ($limit * $stepMinutes) . 'M'));
+                $end   = $now;
+
+                $io->section('⤵️ Prefetch Bitmart');
+                $io->text(sprintf('Fenêtre: %s → %s (%d minutes/step)',
+                    $start->format('Y-m-d H:i:s'),
+                    $end->format('Y-m-d H:i:s'),
+                    $stepMinutes
+                ));
+
+                // fetchKlines attend step en MINUTES
+                $dtos = $this->bitmartFetcher->fetchKlines($symbol, $start, $end, $stepMinutes);
+
+                // Persist en SECONDES
+                $persisted = $this->klinePersister->persistMany($contract, $dtos, $stepSeconds);
+                $io->success("Klines persistés (prefetch): $persisted");
+            } catch (\Throwable $e) {
+                $io->warning('Prefetch Bitmart échoué: ' . $e->getMessage());
+            }
         }
 
         // 3) Lire les klines (les plus récents), puis remettre en ordre chrono ASC
@@ -76,13 +108,13 @@ final class TestIndicatorCommand extends Command
             ->getResult();
 
         if (!$rows) {
-            $io->warning('Aucun kline trouvé pour ce contrat/timeframe.');
+            $io->warning('Aucun kline trouvé pour ce contrat/timeframe après préfetch.');
             return Command::SUCCESS;
         }
 
         $rows = array_reverse($rows); // ASC
 
-        // 4) Construire la payload klines -> format API Python
+        // 4) Payload pour l’API Python
         $klinesPayload = array_map(function ($k) {
             /** @var \App\Entity\Kline $k */
             return [
@@ -103,7 +135,7 @@ final class TestIndicatorCommand extends Command
             return Command::SUCCESS;
         }
 
-        // 6) Affichage lisible
+        // 6) Affichage
         $valid = (bool)($decision['valid'] ?? false);
         $side  = $decision['side'] ?? null;
         $score = $decision['score'] ?? null;
