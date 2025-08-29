@@ -1,119 +1,37 @@
+# technical_indicator/indicator_rules.yaml
+timeframes:
+  4h:
+    threshold: 0.8
+    conditions:
+      - indicator: rsi
+        params: { period: 14 }
+        op: "<"
+        value: 30
+        weight: 0.5
+        side: "LONG"
+        reason: "RSI < 30"
+      - indicator: macd
+        params: { fast: 12, slow: 26, signal: 9 }
+        op: ">"
+        value: 0
+        weight: 0.5
+        side: "LONG"
+        reason: "MACD > 0"
 
-type_loader: bitmart
-timezone: "UTC"
-is_fixed: false
-fixed_date: "2025-06-26 12:00:00"
-
-strategy:
-  long_enabled: true
-  short_enabled: true
-  min_score_required: 5.0
-
-indicators:
-  long:
-    rsi:
-      enabled: true
-      score: 1.5
-      timeframes: [1m, 5m, 15m, 1h, 4h]
-      periods: [6, 14]
-      condition: "RSI > 78 (6) OR RSI > 70 (14)"
-    ema:
-      enabled: true
-      score: 1.5
-      timeframes: [1m, 5m, 15m, 1h, 4h]
-      cross: "EMA9 > EMA21"
-      price_vs_ema200: true
-    macd:
-      enabled: true
-      score: 1.0
-      timeframes: [15m, 1h, 4h]
-      condition: "MACD > Signal AND divergence positive"
-    bollinger:
-      enabled: true
-      score: 1.0
-      timeframes: [5m, 15m, 4h]
-      condition: "Rebond sur bande inférieure"
-    stochastic_rsi:
-      enabled: true
-      score: 1.2
-      timeframes: [1m, 5m]
-      condition: "StochRSI < 0.2 + croisement haussier"
-    vwap:
-      enabled: true
-      score: 1.2
-      timeframes: [1m, 5m, 15m]
-      condition: "Prix > VWAP + volume acheteur"
-    volume:
-      enabled: true
-      score: 1.3
-      timeframes: [1m, 5m, 15m, 1h]
-      condition: "Volume acheteur anormal sur cassure résistance"
-    candle:
-      enabled: true
-      score: 1.0
-      timeframes: [1m, 5m, 15m, 1h]
-      pattern: "Rejet bas (bougie verte avec mèche basse dominante)"
-    supertrend:
-      enabled: true
-      score: 1.0
-      timeframes: [15m, 1h, 4h]
-      condition: "Prix > Supertrend"
-    adx:
-      enabled: true
-      score: 1.0
-      timeframes: [15m, 1h, 4h]
-      condition: "+DI > -DI AND ADX > 25"
-
-  short:
-    rsi:
-      enabled: true
-      score: 1.5
-      timeframes: [1m, 5m, 15m, 1h, 4h]
-      periods: [6, 14]
-      condition: "RSI < 22 (6) OR RSI < 30 (14)"
-    ema:
-      enabled: true
-      score: 1.5
-      timeframes: [1m, 5m, 15m, 1h, 4h]
-      cross: "EMA9 < EMA21"
-      price_vs_ema200: true
-    macd:
-      enabled: true
-      score: 1.0
-      timeframes: [15m, 1h, 4h]
-      condition: "MACD < Signal AND divergence négative"
-    bollinger:
-      enabled: true
-      score: 1.0
-      timeframes: [5m, 15m, 4h]
-      condition: "Rejet bande supérieure"
-    stochastic_rsi:
-      enabled: true
-      score: 1.2
-      timeframes: [1m, 5m]
-      condition: "StochRSI > 0.8 + croisement baissier"
-    vwap:
-      enabled: true
-      score: 1.2
-      timeframes: [1m, 5m, 15m]
-      condition: "Prix < VWAP + volume vendeur"
-    volume:
-      enabled: true
-      score: 1.3
-      timeframes: [1m, 5m, 15m, 1h]
-      condition: "Volume vendeur anormal sur cassure support"
-    candle:
-      enabled: true
-      score: 1.0
-      timeframes: [1m, 5m, 15m, 1h]
-      pattern: "Rejet haut (bougie rouge avec mèche haute dominante)"
-    supertrend:
-      enabled: true
-      score: 1.0
-      timeframes: [15m, 1h, 4h]
-      condition: "Prix < Supertrend"
-    adx:
-      enabled: true
-      score: 1.0
-      timeframes: [15m, 1h, 4h]
-      condition: "+DI < -DI AND ADX > 25"
+  1m:
+    threshold: 0.7
+    conditions:
+      - indicator: ema
+        params: { period: 20 }
+        op: ">"
+        value: 0           # comparé à close/ema -> adapter si tu veux un ratio
+        weight: 0.4
+        side: "LONG"
+        reason: "Close above EMA20"
+      - indicator: supertrend
+        params: { period: 10, multiplier: 3 }
+        op: "=="
+        value: 1           # direction=1 => tendance haussière (à adapter selon ton implémentation)
+        weight: 0.6
+        side: "LONG"
+        reason: "Supertrend up"

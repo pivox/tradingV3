@@ -1,3 +1,5 @@
+name: tradingv3
+
 services:
 
   ##################################
@@ -68,13 +70,19 @@ services:
     build: ./technical_indicator
     container_name: indicator_api
     volumes:
-      - ./python-api:/app
+      - ./technical_indicator/app:/app/app
+      - ./technical_indicator/indicators:/app/indicators
+      - ./technical_indicator/indicator_rules.yaml:/app/indicator_rules.yaml
     environment:
       - DB_HOST=db
       - DB_PORT=3306
       - DB_NAME=symfony_db
       - DB_USER=symfony
       - DB_PASSWORD=symfony
+      - INDICATOR_RULES_PATH=/app/indicator_rules.yaml
+      - FASTAPI_RELOAD=1        # non prod par défaut
+      - UVICORN_WORKERS=1       # si tu actives reload, garde 1 worker
+      - INDICATOR_RULES_PATH=/app/indicator_rules.yaml
     ports:
       - "8888:8000"
     depends_on:
