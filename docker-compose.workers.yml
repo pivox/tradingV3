@@ -6,6 +6,12 @@ services:
       - TEMPORAL_ADDRESS=temporal:7233
       - TASK_QUEUE_NAME=api_rate_limiter_queue
     networks: [temporal-net, shared-net]
+  cron-symfony-fetch-klines-worker:
+    build: ./cron_symfony_fetch_klines
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TASK_QUEUE_NAME=cron_symfony_fetch_klines
+    networks: [temporal-net, shared-net]
 
 networks:
   temporal-net:
