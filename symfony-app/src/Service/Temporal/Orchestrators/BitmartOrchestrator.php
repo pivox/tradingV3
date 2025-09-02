@@ -24,7 +24,6 @@ final class BitmartOrchestrator
         ];
         $this->gateway->ensureWorkflowRunning($ref);
         $x =  $this->gateway->sendSignal($ref, new SignalPayload('submit', $envelope));
-        dump($x);
         return $x;
     }
 

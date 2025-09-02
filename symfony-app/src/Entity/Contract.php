@@ -9,6 +9,8 @@ use ApiPlatform\Metadata\Get;
 use ApiPlatform\Metadata\GetCollection;
 use ApiPlatform\Metadata\Post;
 use Doctrine\ORM\Mapping as ORM;
+use Doctrine\Common\Collections\ArrayCollection;
+use Doctrine\Common\Collections\Collection;
 
 #[ORM\Entity]
 #[ApiFilter(SearchFilter::class, properties: ['cex' => 'exact'])]
@@ -28,6 +30,12 @@ class Contract
     #[ORM\ManyToOne(targetEntity: Exchange::class, inversedBy: 'contracts')]
     #[ORM\JoinColumn(name: 'exchange_name', referencedColumnName: 'name', nullable: false)]
     private Exchange $exchange;
+
+    /**
+     * @var Collection<int, Kline>
+     */
+    #[ORM\OneToMany(mappedBy: 'contract', targetEntity: Kline::class, cascade: ['persist', 'remove'], orphanRemoval: true)]
+    private Collection $klines;
 
     #[ORM\Column(type: 'string', nullable: true)]
     private ?string $productType = null;
@@ -122,6 +130,11 @@ class Contract
     #[ORM\Column(type: 'datetime', nullable: true)]
     private ?\DateTimeInterface $nextSchedule = null;
 
+    public function __construct()
+    {
+        $this->klines = new ArrayCollection();
+    }
+
     public function getExchange(): Exchange { return $this->exchange; }
     public function setExchange(Exchange $exchange): self { $this->exchange = $exchange; return $this; }
 
@@ -137,6 +150,33 @@ class Contract
     public function getSymbol(): string
     {
         return $this->symbol;
+    }
+
+    /**
+     * @return Collection<int, Kline>
+     */
+    public function getKlines(): Collection
+    {
+        return $this->klines;
+    }
+
+    public function addKline(Kline $kline): self
+    {
+        if (!$this->klines->contains($kline)) {
+            $this->klines->add($kline);
+            $kline->setContract($this);
+        }
+        return $this;
+    }
+
+    public function removeKline(Kline $kline): self
+    {
+        if ($this->klines->removeElement($kline)) {
+            if ($kline->getContract() === $this) {
+                $kline->setContract(null);
+            }
+        }
+        return $this;
     }
 
 }
