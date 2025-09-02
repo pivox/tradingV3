@@ -48,21 +48,35 @@ final class TestIndicatorCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io        = new SymfonyStyle($input, $output);
-        $symbol    = strtoupper((string) $input->getArgument('contract'));
+        $symbolArg = strtoupper((string) $input->getArgument('contract'));
         $timeframe = strtolower((string) $input->getArgument('timeframe'));
         $limit     = (int) $input->getOption('limit');
-        $asJson    = (bool) $input->getOption('json');
         $noPrefetch= (bool) $input->getOption('no-prefetch');
 
-        $io->title('🔎 Test indicateur Python (avec préfetch Bitmart)');
-        $io->text(sprintf('Contrat: <info>%s</info> | Timeframe: <info>%s</info> | Limit: <info>%d</info>', $symbol, $timeframe, $limit));
+        $io->title('🔎 Test indicateur Python (simplifié)');
+        $io->text(sprintf(
+            'Contrat(s): <info>%s</info> | Timeframe: <info>%s</info> | Limit: <info>%d</info>',
+            $symbolArg, $timeframe, $limit
+        ));
 
-        // 1) Contrat
-        /** @var Contract|null $contract */
-        $contract = $this->contracts->find($symbol);
-        if (!$contract) {
-            $io->error("Contrat introuvable: $symbol");
-            return Command::FAILURE;
+        // 1) Récupération contrats
+        if ($symbolArg === 'ALL') {
+            $contracts = $this->contracts->createQueryBuilder('c')
+                ->leftJoin('c.klines', 'k')
+                ->andWhere('k.timestamp >= :t')->setParameter('t', '2025-08-31 12:00:00')
+                ->select('DISTINCT c')
+                ->getQuery()->getResult();
+            if (!$contracts) {
+                $io->error("Aucun contrat trouvé en base.");
+                return Command::FAILURE;
+            }
+        } else {
+            $c = $this->contracts->find($symbolArg);
+            if (!$c) {
+                $io->error("Contrat introuvable: $symbolArg");
+                return Command::FAILURE;
+            }
+            $contracts = [$c];
         }
 
         // 2) TF -> step
@@ -73,93 +87,73 @@ final class TestIndicatorCommand extends Command
         }
         $stepMinutes = intdiv($stepSeconds, 60);
 
-        // 2.5) PREFETCH Bitmart + persistance (si non désactivé)
-        if (!$noPrefetch) {
+        $invalidCount = 0;
+
+        // 3) Boucle contrats
+        $i= 0;
+        foreach ($contracts as $contract) {
+            if ($i == 2000) break; // DEBUG
+            $symbol = $contract->getSymbol();
+
+            // Prefetch Bitmart (optionnel)
+            if (!$noPrefetch) {
+                try {
+                    $now   = new \DateTimeImmutable();
+                    $start = $now->sub(new \DateInterval('PT' . ($limit * $stepMinutes) . 'M'));
+                    $end   = $now;
+                    $dtos = $this->bitmartFetcher->fetchKlines($symbol, $start, $end, $stepMinutes);
+                    $this->klinePersister->persistMany($contract, $dtos, $stepSeconds);
+                } catch (\Throwable $e) {
+                    // ignorer préfetch si erreur
+                }
+            }
+
+            // Charger les klines
+            $rows = $this->klines->createQueryBuilder('k')
+                ->andWhere('k.contract = :c')->setParameter('c', $contract)
+                ->andWhere('k.step = :s')->setParameter('s', $stepSeconds)
+                ->orderBy('k.timestamp', 'DESC')
+                ->setMaxResults($limit)
+                ->getQuery()
+                ->getResult();
+
+            if (!$rows) {
+                $invalidCount++;
+                continue;
+            }
+
+            $rows = array_reverse($rows);
+
+            $klinesPayload = array_map(function ($k) {
+                return [
+                    'timestamp' => $k->getTimestamp()->getTimestamp(),
+                    'open'      => (float) $k->getOpen(),
+                    'high'      => (float) $k->getHigh(),
+                    'low'       => (float) $k->getLow(),
+                    'close'     => (float) $k->getClose(),
+                    'volume'    => (float) $k->getVolume(),
+                ];
+            }, $rows);
+
             try {
-                $now = new \DateTimeImmutable();
-                $start = $now->sub(new \DateInterval('PT' . ($limit * $stepMinutes) . 'M'));
-                $end   = $now;
-
-                $io->section('⤵️ Prefetch Bitmart');
-                $io->text(sprintf('Fenêtre: %s → %s (%d minutes/step)',
-                    $start->format('Y-m-d H:i:s'),
-                    $end->format('Y-m-d H:i:s'),
-                    $stepMinutes
-                ));
-
-                // fetchKlines attend step en MINUTES
-                $dtos = $this->bitmartFetcher->fetchKlines($symbol, $start, $end, $stepMinutes);
-
-                // Persist en SECONDES
-                $persisted = $this->klinePersister->persistMany($contract, $dtos, $stepSeconds);
-                $io->success("Klines persistés (prefetch): $persisted");
+                $decision = $this->indicatorClient->validate($symbol, $timeframe, $klinesPayload);
+               if ($decision['long_score'] || $decision['short_score']) dump($decision);
+                $valid = (bool)($decision['valid'] ?? false);
             } catch (\Throwable $e) {
-                $io->warning('Prefetch Bitmart échoué: ' . $e->getMessage());
+                $valid = false;
             }
-        }
 
-        // 3) Lire les klines (les plus récents), puis remettre en ordre chrono ASC
-        $rows = $this->klines->createQueryBuilder('k')
-            ->andWhere('k.contract = :c')->setParameter('c', $contract)
-            ->andWhere('k.step = :s')->setParameter('s', $stepSeconds)
-            ->orderBy('k.timestamp', 'DESC')
-            ->setMaxResults($limit)
-            ->getQuery()
-            ->getResult();
-
-        if (!$rows) {
-            $io->warning('Aucun kline trouvé pour ce contrat/timeframe après préfetch.');
-            return Command::SUCCESS;
-        }
-
-        $rows = array_reverse($rows); // ASC
-
-        // 4) Payload pour l’API Python
-        $klinesPayload = array_map(function ($k) {
-            /** @var \App\Entity\Kline $k */
-            return [
-                'timestamp' => $k->getTimestamp()->getTimestamp(),
-                'open'      => (float) $k->getOpen(),
-                'high'      => (float) $k->getHigh(),
-                'low'       => (float) $k->getLow(),
-                'close'     => (float) $k->getClose(),
-                'volume'    => (float) $k->getVolume(),
-            ];
-        }, $rows);
-
-        // 5) Appel du validateur Python
-        $decision = $this->indicatorClient->validate($symbol, $timeframe, $klinesPayload);
-
-        if ($asJson) {
-            $output->writeln(json_encode($decision, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES));
-            return Command::SUCCESS;
-        }
-
-        // 6) Affichage
-        $valid = (bool)($decision['valid'] ?? false);
-        $side  = $decision['side'] ?? null;
-        $score = $decision['score'] ?? null;
-
-        $io->section('Résultat du validateur');
-        $io->writeln('Valid : ' . ($valid ? '<info>OUI</info>' : '<error>NON</error>'));
-        $io->writeln('Side  : ' . ($side ? "<comment>$side</comment>" : '—'));
-        $io->writeln('Score : ' . ($score !== null ? (string)$score : '—'));
-
-        if (!empty($decision['reasons']) && is_array($decision['reasons'])) {
-            $io->section('Raisons');
-            foreach ($decision['reasons'] as $r) {
-                $io->writeln(" • $r");
+            if ($valid) {
+                $io->writeln("{$symbol}: <info>OUI</info>");
+            } else {
+                $invalidCount++;
             }
+            $i++;
         }
 
-        if (!empty($decision['debug']) && is_array($decision['debug'])) {
-            $io->section('Debug');
-            foreach ($decision['debug'] as $k => $v) {
-                $io->writeln(sprintf('%s: %s', $k, is_scalar($v) ? (string)$v : json_encode($v)));
-            }
-        }
+        // 4) Résumé
+        $io->success("Nombre de contrats avec Valid = NON : {$invalidCount}");
 
-        $io->success('Test terminé.');
         return Command::SUCCESS;
     }
 

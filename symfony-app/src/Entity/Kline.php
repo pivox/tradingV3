@@ -120,4 +120,20 @@ class Kline
         return $this->step;
     }
 
+    public function toArray(): array
+    {
+        return [
+            'id'        => $this->id,
+            'timestamp' => $this->timestamp->getTimestamp(), // ou format('Y-m-d H:i:s')
+            'open'      => $this->open,
+            'close'     => $this->close,
+            'high'      => $this->high,
+            'low'       => $this->low,
+            'volume'    => $this->volume,
+            'step'      => $this->step,
+            'contract'  => $this->contract->getSymbol(),
+        ];
+    }
+
+
 }

@@ -1,0 +1,370 @@
+# Révisions Signal15m / Signal5m / Signal1m + YAML
+
+## Points clés des révisions
+
+* `declare(strict_types=1);`
+* Lecture de deux paramètres anti-bruit (débruitage) :
+
+  * `cross_min_diff` (module du **MACD–Signal** minimum pour valider un croisement)
+  * `kijun_break_min_pct` (franchissement Kijun minimal en % du prix)
+* Harmonisation de `use_last_closed`, `eps`, `min_bars`, `bb_lookback` et des seuils ADX.
+* Retour enrichi (champs `checks` et `debug`) pour faciliter le logging et les tests.
+
+---
+
+## src/Service/Signals/Timeframe/Signal15mService.php (révisé)
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace App\Service\Signals\Timeframe;
+
+use App\Entity\Kline;
+use App\Service\Config\TradingParameters;
+use App\Service\Indicator\Trend\Ema;
+use App\Service\Indicator\Trend\Adx;
+use App\Service\Indicator\Trend\Ichimoku;
+use App\Service\Indicator\Momentum\Rsi;
+use App\Service\Indicator\Momentum\Macd;
+use App\Service\Indicator\Volatility\Bollinger;
+
+final class Signal15mService
+{
+    public function __construct(
+        private Ema $ema,
+        private Adx $adx,
+        private Ichimoku $ichimoku,
+        private Rsi $rsi,
+        private Macd $macd,
+        private Bollinger $bollinger,
+        private TradingParameters $params,
+
+        // Défauts
+        private float $defaultEps               = 1.0e-6,
+        private bool  $defaultUseLastClosed     = true,
+        private int   $defaultMinBars           = 220,
+        private int   $defaultTrendMinAdx       = 23,
+        private int   $defaultRangeMaxAdx       = 18,
+        private int   $defaultBbLookback        = 3,
+        private int   $defaultEmaFastPeriod     = 50,
+        private int   $defaultEmaSlowPeriod     = 200,
+        private float $defaultCrossMinDiff      = 0.0,   // |MACD-Signal| min pour valider un cross
+        private float $defaultKijunBreakMinPct  = 0.0005 // 5 bps au‑dessus de Kijun par défaut
+    ) {}
+
+    /** @param Kline[] $candles */
+    public function evaluate(array $candles): array
+    {
+        // 1) Config
+        $cfg = $this->params->getConfig();
+        $tf  = $cfg['timeframes']['15m'] ?? [];
+
+        $eps           = $cfg['runtime']['eps']               ?? $this->defaultEps;
+        $useLastClosed = $cfg['runtime']['use_last_closed']   ?? $this->defaultUseLastClosed;
+        $minBars       = $tf['guards']['min_bars']            ?? $this->defaultMinBars;
+        $trendMinAdx   = $tf['regime']['trend_min_adx']       ?? $this->defaultTrendMinAdx;
+        $rangeMaxAdx   = $tf['regime']['range_max_adx']       ?? $this->defaultRangeMaxAdx;
+        $bbLookback    = $tf['regime']['bb_lookback']         ?? $this->defaultBbLookback;
+        $emaFastPeriod = $tf['indicators']['ema_fast']['period'] ?? ($tf['indicators']['ema50']['period'] ?? $this->defaultEmaFastPeriod);
+        $emaSlowPeriod = $tf['indicators']['ema_slow']['period'] ?? ($tf['indicators']['ema200']['period'] ?? $this->defaultEmaSlowPeriod);
+        $crossMinDiff  = $tf['runtime']['cross_min_diff']       ?? ($cfg['runtime']['cross_min_diff'] ?? $this->defaultCrossMinDiff);
+        $kijunMinPct   = $tf['runtime']['kijun_break_min_pct']  ?? ($cfg['runtime']['kijun_break_min_pct'] ?? $this->defaultKijunBreakMinPct);
+
+        if (count($candles) < $minBars) {
+            return ['signal'=>'NONE','status'=>'insufficient_data','checks'=>[],'debug'=>[]];
+        }
+
+        // 2) Séries
+        $closes = array_map(fn(Kline $k)=>$k->getClose(),$candles);
+        $highs  = array_map(fn(Kline $k)=>$k->getHigh(), $candles);
+        $lows   = array_map(fn(Kline $k)=>$k->getLow(),  $candles);
+
+        // 3) Indicateurs
+        $emaFast = $this->ema->calculate($closes, $emaFastPeriod);
+        $emaSlow = $this->ema->calculate($closes, $emaSlowPeriod);
+        $adx14   = $this->adx->calculate($highs, $lows, $closes, 14);
+        $ich     = $this->ichimoku->calculateFull($highs, $lows, $closes, 9, 26, 52, 26, true);
+        $rsiNow  = $this->rsi->calculate($closes, 14);
+
+        $macdNow=$sigNow=$histNow=$diffNow=$diffPrev=0.0; $histPrev=null;
+        if (method_exists($this->macd,'calculateFull')) {
+            $m=$this->macd->calculateFull($closes,12,26,9);
+            if (!empty($m['macd'])&&!empty($m['signal'])) {
+                $macdNow=(float)end($m['macd']); $sigNow=(float)end($m['signal']);
+                $histNow=isset($m['hist'])&&!empty($m['hist'])?(float)end($m['hist']):($macdNow-$sigNow);
+                $n=count($m['macd']); if($n>1){$diffPrev=(float)$m['macd'][$n-2]-(float)$m['signal'][$n-2]; $histPrev=isset($m['hist'])&&count($m['hist'])>1?(float)$m['hist'][$n-2]:null;}
+            }
+            $diffNow=$macdNow-$sigNow;
+        } else {
+            $m=$this->macd->calculate($closes,12,26,9); $macdNow=(float)($m['macd']??0); $sigNow=(float)($m['signal']??0); $histNow=(float)($m['hist']??($macdNow-$sigNow));
+            $diffNow=$macdNow-$sigNow; $m2=$this->macd->calculate(array_slice($closes,0,-1),12,26,9); $diffPrev=(float)(($m2['macd']??0)-($m2['signal']??0));
+        }
+
+        $bb=['upper'=>0.0,'lower'=>0.0,'middle'=>0.0,'width'=>0.0]; $bbW=[];
+        if(method_exists($this->bollinger,'calculateFull')){ $b=$this->bollinger->calculateFull($closes,20,2.0); if(!empty($b['upper'])&&!empty($b['lower'])){ $n=min(count($b['upper']),count($b['lower'])); for($i=0;$i<$n;$i++){ $bbW[]=(float)($b['upper'][$i]-$b['lower'][$i]); } $bb['upper']=(float)end($b['upper']); $bb['lower']=(float)end($b['lower']); $bb['middle']=!empty($b['middle'])?(float)end($b['middle']):($bb['upper']+$bb['lower'])/2.0; $bb['width']=$bbW? (float)end($bbW):($bb['upper']-$bb['lower']); }} else { $b=$this->bollinger->calculate($closes,20,2.0); $bb['upper']=(float)($b['upper']??0); $bb['lower']=(float)($b['lower']??0); $bb['middle']=(float)($b['middle']??(($bb['upper']+$bb['lower'])/2.0)); $bb['width']=(float)($b['width']??($bb['upper']-$bb['lower'])); }
+
+        // 4) Closes de référence
+        $lastClose=(float)end($closes); $prevClose=$lastClose;
+        if($useLastClosed && count($closes)>1){ $tmp=$closes; array_pop($tmp); $lastClose=(float)end($tmp); $prevClose=(float)(count($tmp)>1?$tmp[count($tmp)-2]:$lastClose);} elseif(count($closes)>1){$prevClose=(float)$closes[count($closes)-2];}
+
+        // 5) Régime et conditions
+        $regime = $adx14 >= $trendMinAdx ? 'trend' : ($adx14 <= $rangeMaxAdx ? 'range' : 'neutral');
+        $emaUp  = ($emaFast > $emaSlow + $eps); $emaDown=($emaSlow > $emaFast + $eps);
+        $macdUp   = ($diffPrev <= 0+$eps) && ($diffNow > 0+$eps) && (abs($diffNow) >= $crossMinDiff) && ($histPrev===null || $histNow >= $histPrev - $eps);
+        $macdDown = ($diffPrev >= 0-$eps) && ($diffNow < 0-$eps) && (abs($diffNow) >= $crossMinDiff) && ($histPrev===null || $histNow <= $histPrev + $eps);
+        $kijun=$ich['kijun']??0.0; $senkouA=$ich['senkou_a']??0.0;
+        $kijunBreakUp   = ($prevClose <= $kijun+$eps) && ($lastClose > $kijun+$eps) && (($lastClose-$kijun)/max($lastClose,1e-12) >= $kijunMinPct);
+        $kijunBreakDown = ($prevClose >= $kijun-$eps) && ($lastClose < $kijun-$eps) && (($kijun-$lastClose)/max($lastClose,1e-12) >= $kijunMinPct);
+        $ichiBull = ($lastClose > $kijun+$eps) || ($lastClose > $senkouA+$eps);
+        $ichiBear = ($kijun > $lastClose+$eps) || ($senkouA > $lastClose+$eps);
+
+        $bbWidthUp=false; if($bbW && count($bbW)>$bbLookback){ $now=end($bbW); $prev=$bbW[count($bbW)-1-$bbLookback]; $bbWidthUp = ($now > $prev + $eps); }
+
+        // 6) Décision
+        $path='neutral'; $signal='NONE'; $trigger='';
+        if($regime==='trend'){
+            $path='trend';
+            $long  = $emaUp   && ($macdUp   || $kijunBreakUp   || $ichiBull || $rsiNow > 50+$eps);
+            $short = $emaDown && ($macdDown || $kijunBreakDown || $ichiBear || $rsiNow < 50-$eps);
+            if($long){ $signal='LONG';  $trigger = $macdUp?'macd_cross_up':($kijunBreakUp?'kijun_break_up':($ichiBull?'ichi_price_above':'rsi>50')); }
+            elseif($short){ $signal='SHORT'; $trigger = $macdDown?'macd_cross_down':($kijunBreakDown?'kijun_break_down':($ichiBear?'ichi_price_below':'rsi<50')); }
+        } elseif($regime==='range'){
+            $path='range';
+            if(($rsiNow>50+$eps)&&$bbWidthUp){$signal='LONG'; $trigger='range_momentum_up';}
+            elseif(($rsiNow<50-$eps)&&$bbWidthUp){$signal='SHORT'; $trigger='range_momentum_down';}
+        } else {
+            if($emaUp && ($macdUp||$kijunBreakUp)) { $path='trend'; $signal='LONG';  $trigger=$macdUp?'macd_cross_up':'kijun_break_up'; }
+            elseif($emaDown && ($macdDown||$kijunBreakDown)) { $path='trend'; $signal='SHORT'; $trigger=$macdDown?'macd_cross_down':'kijun_break_down'; }
+        }
+
+        return [
+            'ema_fast'=>$emaFast,'ema_slow'=>$emaSlow,'adx14'=>$adx14,'rsi14'=>$rsiNow,
+            'macd'=>['macd'=>$macdNow,'signal'=>$sigNow,'hist'=>$histNow,'diff'=>$diffNow,'prev_diff'=>$diffPrev],
+            'bollinger'=>$bb,
+            'ichimoku'=>['tenkan'=>$ich['tenkan']??0.0,'kijun'=>$kijun,'senkou_a'=>$senkouA,'senkou_b'=>$ich['senkou_b']??0.0],
+            'regime'=>$regime,'path'=>$path,'trigger'=>$trigger,'signal'=>$signal,
+            'checks'=>['ema_up'=>$emaUp,'ema_down'=>$emaDown,'macd_up'=>$macdUp,'macd_down'=>$macdDown,'bb_width_up'=>$bbWidthUp],
+            'debug'=>['cross_min_diff'=>$crossMinDiff,'kijun_break_min_pct'=>$kijunMinPct]
+        ];
+    }
+}
+```
+
+---
+
+## src/Service/Signals/Timeframe/Signal5mService.php (révisé)
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace App\Service\Signals\Timeframe;
+
+use App\Entity\Kline;
+use App\Service\Config\TradingParameters;
+use App\Service\Indicator\Trend\Ema;
+use App\Service\Indicator\Trend\Adx;
+use App\Service\Indicator\Trend\Ichimoku;
+use App\Service\Indicator\Momentum\Rsi;
+use App\Service\Indicator\Momentum\Macd;
+use App\Service\Indicator\Volatility\Bollinger;
+
+final class Signal5mService
+{
+    public function __construct(
+        private Ema $ema,
+        private Adx $adx,
+        private Ichimoku $ichimoku,
+        private Rsi $rsi,
+        private Macd $macd,
+        private Bollinger $bollinger,
+        private TradingParameters $params,
+        private float $defaultEps=1.0e-6,
+        private bool $defaultUseLastClosed=true,
+        private int $defaultMinBars=220,
+        private int $defaultTrendMinAdx=21,
+        private int $defaultRangeMaxAdx=16,
+        private int $defaultBbLookback=2,
+        private int $defaultEmaFastPeriod=50,
+        private int $defaultEmaSlowPeriod=200,
+        private float $defaultCrossMinDiff=0.0,
+        private float $defaultKijunBreakMinPct=0.0005
+    ){}
+
+    /** @param Kline[] $candles */
+    public function evaluate(array $candles): array
+    {
+        $cfg=$this->params->getConfig(); $tf=$cfg['timeframes']['5m']??[];
+        $eps=$cfg['runtime']['eps']??$this->defaultEps; $useLast=$cfg['runtime']['use_last_closed']??$this->defaultUseLastClosed;
+        $min=$tf['guards']['min_bars']??$this->defaultMinBars; if(count($candles)<$min){return ['signal'=>'NONE','status'=>'insufficient_data'];}
+        $trend=$tf['regime']['trend_min_adx']??$this->defaultTrendMinAdx; $range=$tf['regime']['range_max_adx']??$this->defaultRangeMaxAdx; $bbLb=$tf['regime']['bb_lookback']??$this->defaultBbLookback;
+        $pFast=$tf['indicators']['ema_fast']['period']??($tf['indicators']['ema50']['period']??$this->defaultEmaFastPeriod);
+        $pSlow=$tf['indicators']['ema_slow']['period']??($tf['indicators']['ema200']['period']??$this->defaultEmaSlowPeriod);
+        $crossMin=$tf['runtime']['cross_min_diff']??($cfg['runtime']['cross_min_diff']??$this->defaultCrossMinDiff);
+        $kijunMin=$tf['runtime']['kijun_break_min_pct']??($cfg['runtime']['kijun_break_min_pct']??$this->defaultKijunBreakMinPct);
+
+        $closes=array_map(fn(Kline $k)=>$k->getClose(),$candles); $highs=array_map(fn(Kline $k)=>$k->getHigh(),$candles); $lows=array_map(fn(Kline $k)=>$k->getLow(),$candles);
+        $emaF=$this->ema->calculate($closes,$pFast); $emaS=$this->ema->calculate($closes,$pSlow); $adx=$this->adx->calculate($highs,$lows,$closes,14);
+        $ich=$this->ichimoku->calculateFull($highs,$lows,$closes,9,26,52,26,true); $rsi=$this->rsi->calculate($closes,14);
+
+        $macd=$sig=$hist=$dNow=$dPrev=0.0; $hPrev=null; if(method_exists($this->macd,'calculateFull')){ $m=$this->macd->calculateFull($closes,12,26,9); if(!empty($m['macd'])&&!empty($m['signal'])){ $macd=(float)end($m['macd']); $sig=(float)end($m['signal']); $hist=isset($m['hist'])&&!empty($m['hist'])?(float)end($m['hist']):($macd-$sig); $n=count($m['macd']); if($n>1){$dPrev=(float)$m['macd'][$n-2]-(float)$m['signal'][$n-2]; $hPrev=isset($m['hist'])&&count($m['hist'])>1?(float)$m['hist'][$n-2]:null;}} $dNow=$macd-$sig; } else { $m=$this->macd->calculate($closes,12,26,9); $macd=(float)($m['macd']??0); $sig=(float)($m['signal']??0); $hist=(float)($m['hist']??($macd-$sig)); $dNow=$macd-$sig; $m2=$this->macd->calculate(array_slice($closes,0,-1),12,26,9); $dPrev=(float)(($m2['macd']??0)-($m2['signal']??0)); }
+
+        $bb=['upper'=>0.0,'lower'=>0.0,'middle'=>0.0,'width'=>0.0]; $w=[]; if(method_exists($this->bollinger,'calculateFull')){ $b=$this->bollinger->calculateFull($closes,20,2.0); if(!empty($b['upper'])&&!empty($b['lower'])){ $n=min(count($b['upper']),count($b['lower'])); for($i=0;$i<$n;$i++){$w[]=(float)($b['upper'][$i]-$b['lower'][$i]);} $bb['upper']=(float)end($b['upper']); $bb['lower']=(float)end($b['lower']); $bb['middle']=!empty($b['middle'])?(float)end($b['middle']):($bb['upper']+$bb['lower'])/2.0; $bb['width']=$w?(float)end($w):($bb['upper']-$bb['lower']); }} else { $b=$this->bollinger->calculate($closes,20,2.0); $bb['upper']=(float)($b['upper']??0); $bb['lower']=(float)($b['lower']??0); $bb['middle']=(float)($b['middle']??(($bb['upper']+$bb['lower'])/2.0)); $bb['width']=(float)($b['width']??($bb['upper']-$bb['lower'])); }
+
+        $last=(float)end($closes); $prev=$last; if($useLast && count($closes)>1){ $tmp=$closes; array_pop($tmp); $last=(float)end($tmp); $prev=(float)(count($tmp)>1?$tmp[count($tmp)-2]:$last);} elseif(count($closes)>1){ $prev=(float)$closes[count($closes)-2]; }
+
+        $reg=$adx>=$trend?'trend':($adx<=$range?'range':'neutral'); $emaUp=($emaF>$emaS+$eps); $emaDn=($emaS>$emaF+$eps);
+        $macdUp=($dPrev<=0+$eps)&&($dNow>0+$eps)&&(abs($dNow)>=$crossMin)&&($hPrev===null||$hist>=$hPrev-$eps); $macdDn=($dPrev>=0-$eps)&&($dNow<0-$eps)&&(abs($dNow)>=$crossMin)&&($hPrev===null||$hist<=$hPrev+$eps);
+        $k=$ich['kijun']??0.0; $sa=$ich['senkou_a']??0.0; $kUp=($prev<=$k+$eps)&&($last>$k+$eps)&&(($last-$k)/max($last,1e-12)>=$kijunMin); $kDn=($prev>=$k-$eps)&&($last<$k-$eps)&&(($k-$last)/max($last,1e-12)>=$kijunMin); $ichiBull=($last>$k+$eps)||($last>$sa+$eps); $ichiBear=($k>$last+$eps)||($sa>$last+$eps);
+        $wUp=false; if($w && count($w)>$bbLb){ $now=end($w); $p=$w[count($w)-1-$bbLb]; $wUp=($now>$p+$eps); }
+
+        $path='neutral'; $sig='NONE'; $tr='';
+        if($reg==='trend'){ $path='trend'; if($emaUp&&($macdUp||$kUp||$ichiBull||$rsi>50+$eps)){ $sig='LONG'; $tr=$macdUp?'macd_cross_up':($kUp?'kijun_break_up':($ichiBull?'ichi_price_above':'rsi>50')); }
+            elseif($emaDn&&($macdDn||$kDn||$ichiBear||$rsi<50-$eps)){ $sig='SHORT'; $tr=$macdDn?'macd_cross_down':($kDn?'kijun_break_down':($ichiBear?'ichi_price_below':'rsi<50')); } }
+        elseif($reg==='range'){ $path='range'; if(($rsi>50+$eps)&&$wUp){$sig='LONG'; $tr='range_momentum_up';} elseif(($rsi<50-$eps)&&$wUp){$sig='SHORT'; $tr='range_momentum_down';} }
+        else { if($emaUp&&($macdUp||$kUp)){ $path='trend'; $sig='LONG'; $tr=$macdUp?'macd_cross_up':'kijun_break_up'; } elseif($emaDn&&($macdDn||$kDn)){ $path='trend'; $sig='SHORT'; $tr=$macdDn?'macd_cross_down':'kijun_break_down'; } }
+
+        return ['ema_fast'=>$emaF,'ema_slow'=>$emaS,'adx14'=>$adx,'rsi14'=>$rsi,'macd'=>['macd'=>$macd,'signal'=>$sig,'hist'=>$hist,'diff'=>$dNow,'prev_diff'=>$dPrev],'bollinger'=>$bb,'ichimoku'=>['tenkan'=>$ich['tenkan']??0.0,'kijun'=>$k,'senkou_a'=>$sa,'senkou_b'=>$ich['senkou_b']??0.0],'regime'=>$reg,'path'=>$path,'trigger'=>$tr,'signal'=>$sig];
+    }
+}
+```
+
+---
+
+## src/Service/Signals/Timeframe/Signal1mService.php (révisé)
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace App\Service\Signals\Timeframe;
+
+use App\Entity\Kline;
+use App\Service\Config\TradingParameters;
+use App\Service\Indicator\Trend\Ema;
+use App\Service\Indicator\Trend\Adx;
+use App\Service\Indicator\Trend\Ichimoku;
+use App\Service\Indicator\Momentum\Rsi;
+use App\Service\Indicator\Momentum\Macd;
+use App\Service\Indicator\Volatility\Bollinger;
+
+final class Signal1mService
+{
+    public function __construct(
+        private Ema $ema,
+        private Adx $adx,
+        private Ichimoku $ichimoku,
+        private Rsi $rsi,
+        private Macd $macd,
+        private Bollinger $bollinger,
+        private TradingParameters $params,
+        private float $defaultEps=1.0e-6,
+        private bool $defaultUseLastClosed=true,
+        private int $defaultMinBars=220,
+        private int $defaultTrendMinAdx=19,
+        private int $defaultRangeMaxAdx=15,
+        private int $defaultBbLookback=1,
+        private int $defaultEmaFastPeriod=34,
+        private int $defaultEmaSlowPeriod=144,
+        private float $defaultCrossMinDiff=0.0,
+        private float $defaultKijunBreakMinPct=0.0005
+    ){}
+
+    /** @param Kline[] $candles */
+    public function evaluate(array $candles): array
+    {
+        $cfg=$this->params->getConfig(); $tf=$cfg['timeframes']['1m']??[];
+        $eps=$cfg['runtime']['eps']??$this->defaultEps; $useLast=$cfg['runtime']['use_last_closed']??$this->defaultUseLastClosed;
+        $min=$tf['guards']['min_bars']??$this->defaultMinBars; if(count($candles)<$min){return ['signal'=>'NONE','status'=>'insufficient_data'];}
+        $trend=$tf['regime']['trend_min_adx']??$this->defaultTrendMinAdx; $range=$tf['regime']['range_max_adx']??$this->defaultRangeMaxAdx; $bbLb=$tf['regime']['bb_lookback']??$this->defaultBbLookback;
+        $pFast=$tf['indicators']['ema_fast']['period']??($tf['indicators']['ema34']['period']??$this->defaultEmaFastPeriod);
+        $pSlow=$tf['indicators']['ema_slow']['period']??($tf['indicators']['ema144']['period']??$this->defaultEmaSlowPeriod);
+        $crossMin=$tf['runtime']['cross_min_diff']??($cfg['runtime']['cross_min_diff']??$this->defaultCrossMinDiff);
+        $kijunMin=$tf['runtime']['kijun_break_min_pct']??($cfg['runtime']['kijun_break_min_pct']??$this->defaultKijunBreakMinPct);
+
+        $closes=array_map(fn(Kline $k)=>$k->getClose(),$candles); $highs=array_map(fn(Kline $k)=>$k->getHigh(),$candles); $lows=array_map(fn(Kline $k)=>$k->getLow(),$candles);
+        $emaF=$this->ema->calculate($closes,$pFast); $emaS=$this->ema->calculate($closes,$pSlow); $adx=$this->adx->calculate($highs,$lows,$closes,14);
+        $ich=$this->ichimoku->calculateFull($highs,$lows,$closes,9,26,52,26,true); $rsi=$this->rsi->calculate($closes,14);
+
+        $macd=$sig=$hist=$dNow=$dPrev=0.0; $hPrev=null; if(method_exists($this->macd,'calculateFull')){ $m=$this->macd->calculateFull($closes,12,26,9); if(!empty($m['macd'])&&!empty($m['signal'])){ $macd=(float)end($m['macd']); $sig=(float)end($m['signal']); $hist=isset($m['hist'])&&!empty($m['hist'])?(float)end($m['hist']):($macd-$sig); $n=count($m['macd']); if($n>1){$dPrev=(float)$m['macd'][$n-2]-(float)$m['signal'][$n-2]; $hPrev=isset($m['hist'])&&count($m['hist'])>1?(float)$m['hist'][$n-2]:null;}} $dNow=$macd-$sig; } else { $m=$this->macd->calculate($closes,12,26,9); $macd=(float)($m['macd']??0); $sig=(float)($m['signal']??0); $hist=(float)($m['hist']??($macd-$sig)); $dNow=$macd-$sig; $m2=$this->macd->calculate(array_slice($closes,0,-1),12,26,9); $dPrev=(float)(($m2['macd']??0)-($m2['signal']??0)); }
+
+        $bb=['upper'=>0.0,'lower'=>0.0,'middle'=>0.0,'width'=>0.0]; $w=[]; if(method_exists($this->bollinger,'calculateFull')){ $b=$this->bollinger->calculateFull($closes,20,2.0); if(!empty($b['upper'])&&!empty($b['lower'])){ $n=min(count($b['upper']),count($b['lower'])); for($i=0;$i<$n;$i++){$w[]=(float)($b['upper'][$i]-$b['lower'][$i]);} $bb['upper']=(float)end($b['upper']); $bb['lower']=(float)end($b['lower']); $bb['middle']=!empty($b['middle'])?(float)end($b['middle']):($bb['upper']+$bb['lower'])/2.0; $bb['width']=$w?(float)end($w):($bb['upper']-$bb['lower']); }} else { $b=$this->bollinger->calculate($closes,20,2.0); $bb['upper']=(float)($b['upper']??0); $bb['lower']=(float)($b['lower']??0); $bb['middle']=(float)($b['middle']??(($bb['upper']+$bb['lower'])/2.0)); $bb['width']=(float)($b['width']??($bb['upper']-$bb['lower'])); }
+
+        $last=(float)end($closes); $prev=$last; if($useLast && count($closes)>1){ $tmp=$closes; array_pop($tmp); $last=(float)end($tmp); $prev=(float)(count($tmp)>1?$tmp[count($tmp)-2]:$last);} elseif(count($closes)>1){ $prev=(float)$closes[count($closes)-2]; }
+
+        $reg=$adx>=$trend?'trend':($adx<=$range?'range':'neutral'); $emaUp=($emaF>$emaS+$eps); $emaDn=($emaS>$emaF+$eps);
+        $macdUp=($dPrev<=0+$eps)&&($dNow>0+$eps)&&(abs($dNow)>=$crossMin)&&($hPrev===null||$hist>=$hPrev-$eps); $macdDn=($dPrev>=0-$eps)&&($dNow<0-$eps)&&(abs($dNow)>=$crossMin)&&($hPrev===null||$hist<=$hPrev+$eps);
+        $k=$ich['kijun']??0.0; $sa=$ich['senkou_a']??0.0; $kUp=($prev<=$k+$eps)&&($last>$k+$eps)&&(($last-$k)/max($last,1e-12)>=$kijunMin); $kDn=($prev>=$k-$eps)&&($last<$k-$eps)&&(($k-$last)/max($last,1e-12)>=$kijunMin); $ichiBull=($last>$k+$eps)||($last>$sa+$eps); $ichiBear=($k>$last+$eps)||($sa>$last+$eps);
+        $wUp=false; if($w && count($w)>$bbLb){ $now=end($w); $p=$w[count($w)-1-$bbLb]; $wUp=($now>$p+$eps); }
+
+        $path='neutral'; $sig='NONE'; $tr='';
+        if($reg==='trend'){ $path='trend'; if($emaUp&&($macdUp||$kUp||$ichiBull||$rsi>50+$eps)){ $sig='LONG'; $tr=$macdUp?'macd_cross_up':($kUp?'kijun_break_up':($ichiBull?'ichi_price_above':'rsi>50')); }
+            elseif($emaDn&&($macdDn||$kDn||$ichiBear||$rsi<50-$eps)){ $sig='SHORT'; $tr=$macdDn?'macd_cross_down':($kDn?'kijun_break_down':($ichiBear?'ichi_price_below':'rsi<50')); } }
+        elseif($reg==='range'){ $path='range'; if(($rsi>50+$eps)&&$wUp){$sig='LONG'; $tr='range_momentum_up';} elseif(($rsi<50-$eps)&&$wUp){$sig='SHORT'; $tr='range_momentum_down';} }
+        else { if($emaUp&&($macdUp||$kUp)){ $path='trend'; $sig='LONG'; $tr=$macdUp?'macd_cross_up':'kijun_break_up'; } elseif($emaDn&&($macdDn||$kDn)){ $path='trend'; $sig='SHORT'; $tr=$macdDn?'macd_cross_down':'kijun_break_down'; } }
+
+        return ['ema_fast'=>$emaF,'ema_slow'=>$emaS,'adx14'=>$adx,'rsi14'=>$rsi,'macd'=>['macd'=>$macd,'signal'=>$sig,'hist'=>$hist,'diff'=>$dNow,'prev_diff'=>$dPrev],'bollinger'=>$bb,'ichimoku'=>['tenkan'=>$ich['tenkan']??0.0,'kijun'=>$k,'senkou_a'=>$sa,'senkou_b'=>$ich['senkou_b']??0.0],'regime'=>$reg,'path'=>$path,'trigger'=>$tr,'signal'=>$sig];
+    }
+}
+```
+
+---
+
+## YAML – ajouts/ajustements recommandés
+
+> À ajouter une fois sous `parameters.app.trading.runtime` pour partager partout :
+
+```yaml
+parameters:
+  app.trading:
+    runtime:
+      eps: 1.0e-6
+      use_last_closed: true
+      cross_min_diff: 0.000001     # amplitude mini du diff MACD-Signal pour valider un cross
+      kijun_break_min_pct: 0.0005  # 5 bps mini au‑dessus/dessous de Kijun pour valider un break
+```
+
+> Les blocs `timeframes.15m` / `5m` / `1m` existants restent valides. Vous pouvez optionnellement surcharger :
+
+```yaml
+    timeframes:
+      '15m':
+        runtime:
+          cross_min_diff: 0.000002
+          kijun_break_min_pct: 0.0007
+      '5m':
+        runtime:
+          cross_min_diff: 0.000002
+          kijun_break_min_pct: 0.0007
+      '1m':
+        runtime:
+          cross_min_diff: 0.000003
+          kijun_break_min_pct: 0.0010
+```
+
+> Remarque : ces seuils sont volontairement faibles (unités = prix du sous‑jacent pour `kijun_break_min_pct`, unités MACD pour `cross_min_diff`). Ajustez‑les après observation live/backtest.
+
+
+
+parameters:
+app.trading:
+runtime:
+eps: 1.0e-6
+use_last_closed: true
+cross_min_diff: 0.000001 # amplitude mini du diff MACD-Signal pour valider un cross
+kijun_break_min_pct: 0.0005 # 5 bps mini au‑dessus/dessous de Kijun pour valider un break
+
+timeframes:
+'15m':
+runtime:
+cross_min_diff: 0.000002
+kijun_break_min_pct: 0.0007
+'5m':
+runtime:
+cross_min_diff: 0.000002
+kijun_break_min_pct: 0.0007
+'1m':
+runtime:
+cross_min_diff: 0.000003
+kijun_break_min_pct: 0.0010

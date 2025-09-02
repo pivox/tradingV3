@@ -32,17 +32,26 @@ services:
             $clock: '@clock'
         tags: [ 'mon.exchange.fetcher' ]
 
+    App\Service\Indicator\IndicatorValidatorClient:
+        arguments:
+            $baseUrl: '%indicator_base%'
+            $timeout: '%indicator_timeout%'
+            $maxRetries: '%indicator_retries%'
+    App\Service\Config\TradingParameters:
+        arguments:
+            $projectDir: '%kernel.project_dir%'
     App\Service\ExchangeFetcherInterface: '@App\Service\Exchange\Bitmart\BitmartFetcher'
     Symfony\Component\Clock\NativeClock: ~
     Symfony\Component\Clock\ClockInterface: '@Symfony\Component\Clock\NativeClock'
     App\State\BitmartKlineProvider:
         tags: [ 'api_platform.state_provider' ]
 
-    App\Service\Indicator\IndicatorValidatorClient:
-        arguments:
-            $baseUrl: '%indicator_base%'
-            $timeout: '%indicator_timeout%'
-            $maxRetries: '%indicator_retries%'
+    App\Service\Indicator\Trend\Ema: ~
+    App\Service\Indicator\Trend\Adx: ~
+    App\Service\Indicator\Trend\Ichimoku: ~
+
+    App\Service\Signals\Timeframe\Signal4hService: ~
+
     clock.test:
         class: Symfony\Component\Clock\MockClock
         public: true

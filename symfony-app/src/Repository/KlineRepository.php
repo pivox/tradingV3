@@ -48,4 +48,29 @@ class KlineRepository extends ServiceEntityRepository
             ->getQuery()
             ->getResult();
     }
+
+    public function findRecentBySymbolAndTimeframe(string $symbol, string $timeframe, int $limit)
+    {
+        return $this->createQueryBuilder('k')
+            ->innerJoin('k.contract', 'contract')
+            ->where('contract.symbol = :symbol')->setParameter('symbol', $symbol)
+            ->andWhere('k.step = :step')->setParameter('step', $this->stepFor($timeframe))
+            ->orderBy('k.timestamp', 'DESC')
+            ->setMaxResults($limit)
+            ->getQuery()
+            ->getResult();
+    }
+
+    private function stepFor(string $timeframe): int
+    {
+        return match($timeframe) {
+            '1m'  => 60,
+            '5m'  => 300,
+            '15m' => 900,
+            '1h'  => 3600,
+            '4h'  => 14400,
+            '1d'  => 86400,
+            default => throw new \InvalidArgumentException("Unsupported timeframe: $timeframe"),
+        };
+    }
 }

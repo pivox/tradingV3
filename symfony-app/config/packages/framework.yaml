@@ -3,6 +3,11 @@ framework:
     secret: '%env(APP_SECRET)%'
 
     session: true
+    http_client:
+        scoped_clients:
+            python.client:
+                base_uri: '%env(INDICATOR_BASE)%'
+                timeout: 30
 
     #esi: true
     #fragments: true
