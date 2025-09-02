@@ -1,35 +1,34 @@
+// src/App.js
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import DashboardPage from './pages/DashboardPage';
-import ChartsPage from './pages/ChartsPage';
-import SetupsPage from './pages/SetupsPage';
-import TopContractsPage from './pages/TopContractsPage';
-import HistoryPage from './pages/HistoryPage';
-import SettingsPage from './pages/SettingsPage';
+import ContractPage from './pages/ContractPage';
+import PositionsPage from './pages/PositionsPage';
+import PipelinePage from './pages/PipelinePage';
+import './styles/app.css';
 
 function App() {
     return (
-        <Router>
-            <nav className="p-4 shadow-lg flex space-x-4 bg-white">
-                <Link to="/dashboard">Dashboard</Link>
-                <Link to="/charts">Charts</Link>
-                <Link to="/setups">Setups</Link>
-                <Link to="/top-contracts">Top Contrats</Link>
-                <Link to="/history">Historique</Link>
-                <Link to="/settings">Paramètres</Link>
-            </nav>
-            <div className="p-4">
-                <Routes>
-                    <Route path="/dashboard" element={<DashboardPage />} />
-                    <Route path="/charts" element={<ChartsPage />} />
-                    <Route path="/setups" element={<SetupsPage />} />
-                    <Route path="/top-contracts" element={<TopContractsPage />} />
-                    <Route path="/history" element={<HistoryPage />} />
-                    <Route path="/settings" element={<SettingsPage />} />
-                    <Route path="/" element={<DashboardPage />} />
-                </Routes>
+        <BrowserRouter>
+            <div className="app-container">
+                <nav className="sidebar">
+                    <ul>
+                        <li><Link to="/">Dashboard</Link></li>
+                        <li><Link to="/contracts">Contrats</Link></li>
+                        <li><Link to="/positions">Positions</Link></li>
+                        <li><Link to="/pipeline">Pipeline</Link></li>
+                    </ul>
+                </nav>
+                <main className="content">
+                    <Routes>
+                        <Route path="/" element={<DashboardPage />} />
+                        <Route path="/contracts/:contractId?" element={<ContractPage />} />
+                        <Route path="/positions" element={<PositionsPage />} />
+                        <Route path="/pipeline" element={<PipelinePage />} />
+                    </Routes>
+                </main>
             </div>
-        </Router>
+        </BrowserRouter>
     );
 }
 

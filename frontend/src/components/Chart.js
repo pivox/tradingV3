@@ -1,34 +1,43 @@
-// src/components/CandleChart.js
+// src/components/Chart.js
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
-const CandleChart = ({ contractId }) => {
+const Chart = ({ contractId }) => {
     const [chartData, setChartData] = useState([]);
     const [timeframe, setTimeframe] = useState('1h');
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
+        if (!contractId) return;
+
         setLoading(true);
+        setError(null);
+
         fetch(`/api/chart-data/${contractId}?timeframe=${timeframe}`)
-            .then(res => res.json())
+            .then(res => {
+                if (!res.ok) throw new Error(`Erreur: ${res.status}`);
+                return res.json();
+            })
             .then(data => {
                 setChartData(data);
                 setLoading(false);
             })
-            .catch(error => {
-                console.error('Erreur de chargement des données du graphique:', error);
+            .catch(err => {
+                console.error('Erreur de chargement des données du graphique:', err);
+                setError(err.message);
                 setLoading(false);
             });
     }, [contractId, timeframe]);
 
-    if (loading) {
-        return <div>Chargement du graphique...</div>;
-    }
+    if (!contractId) return <div className="chart-placeholder">Sélectionnez un contrat pour afficher le graphique</div>;
+    if (loading) return <div className="chart-loading">Chargement du graphique...</div>;
+    if (error) return <div className="chart-error">Erreur: {error}</div>;
 
     return (
-        <div className="candlestick-chart">
+        <div className="chart-container">
             <div className="timeframe-selector">
-                {['5m', '15m', '1h', '4h', '1d'].map(tf => (
+                {['5m', '15m', '30m', '1h', '4h', '1d'].map(tf => (
                     <button
                         key={tf}
                         onClick={() => setTimeframe(tf)}
@@ -44,7 +53,10 @@ const CandleChart = ({ contractId }) => {
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis
                         dataKey="timestamp"
-                        tickFormatter={(timestamp) => new Date(timestamp).toLocaleDateString()}
+                        tickFormatter={(timestamp) => {
+                            const date = new Date(timestamp);
+                            return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+                        }}
                     />
                     <YAxis domain={['auto', 'auto']} />
                     <Tooltip
@@ -59,4 +71,4 @@ const CandleChart = ({ contractId }) => {
     );
 };
 
-export default CandleChart;
+export default Chart;
