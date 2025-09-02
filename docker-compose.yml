@@ -6,7 +6,7 @@ services:
   # FRONTEND (isolé)
   ##################################
   frontend-dev:
-    image: node:16-alpine
+    image: node:20-alpine
     container_name: frontend_dev
     working_dir: /app
     volumes:
@@ -32,7 +32,6 @@ services:
       - DATABASE_URL=mysql://symfony:symfony@db:3306/symfony_db
     depends_on:
       - db
-      - python
     networks:
       - backend-net
       - shared-net
@@ -65,31 +64,49 @@ services:
       - "3306:3306"
     networks:
       - backend-net
+    healthcheck:
+      test: [ "CMD-SHELL", "mysqladmin ping -h localhost -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
-  python:
-    build: ./technical_indicator
-    container_name: indicator_api
-    volumes:
-      - ./technical_indicator/app:/app/app
-      - ./technical_indicator/indicators:/app/indicators
-      - ./technical_indicator/indicator_rules.yaml:/app/indicator_rules.yaml
-    environment:
-      - DB_HOST=db
-      - DB_PORT=3306
-      - DB_NAME=symfony_db
-      - DB_USER=symfony
-      - DB_PASSWORD=symfony
-      - INDICATOR_RULES_PATH=/app/indicator_rules.yaml
-      - FASTAPI_RELOAD=1        # non prod par défaut
-      - UVICORN_WORKERS=1       # si tu actives reload, garde 1 worker
-      - INDICATOR_RULES_PATH=/app/indicator_rules.yaml
-    ports:
-      - "8888:8000"
-    depends_on:
-      - db
-    networks:
-      - backend-net
-      - shared-net
+  ##################################
+  # (Optionnel) API indicateurs techniques - commentée
+  ##################################
+  # python:
+  #   build: ./technical_indicator
+  #   container_name: indicator_api
+  #   working_dir: /app
+  #   command: [ "/app/entrypoint.sh" ]
+  #   environment:
+  #     - DB_HOST=db
+  #     - DB_PORT=3306
+  #     - DB_NAME=symfony_db
+  #     - DB_USER=symfony
+  #     - DB_PASSWORD=symfony
+  #     - UVICORN_HOST=0.0.0.0
+  #     - UVICORN_PORT=8000
+  #     - UVICORN_WORKERS=1
+  #     - FASTAPI_RELOAD=1
+  #     - WATCHFILES_FORCE_POLLING=1
+  #   volumes:
+  #     - ./technical_indicator/app:/app/app
+  #     - ./technical_indicator/indicators:/app/indicators
+  #   ports:
+  #     - "8888:8000"
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   networks:
+  #     - backend-net
+  #     - shared-net
+  #   healthcheck:
+  #     test: [ "CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1" ]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 10
+  #     start_period: 10s
 
   ##################################
   # TEMPORAL STACK (isolé)
@@ -128,11 +145,7 @@ services:
     expose:
       - "8080" # HTTP Gateway pour temporal-ui
     ports:
-      - "7233:7233" # gRPC externe
-      - "7234:7234"
-      - "7235:7235"
-      - "7239:7239"
-      - "7243:7243"
+      - "7233:7233"   # gRPC
     volumes:
       - ./temporal/config/dynamicconfig:/etc/temporal/config/dynamicconfig
     networks:
@@ -140,10 +153,11 @@ services:
       - shared-net
     restart: always
     healthcheck:
-      test: ["CMD", "tctl", "--address", "temporal:7233", "workflow", "list"]
+      test: [ "CMD-SHELL", "temporal operator cluster health --address=$(hostname -i):7233 >/dev/null 2>&1 || tctl --address=$(hostname -i):7233 cluster health >/dev/null 2>&1" ]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 60
+      start_period: 120s
 
   temporal-ui:
     image: temporalio/ui:2.39.0
@@ -163,15 +177,48 @@ services:
       - shared-net
     restart: always
 
+  ##################################
+  # WORKERS (ajoutés depuis docker-compose.workers.yml)
+  ##################################
+  api-rate-limiter-worker:
+    build: ./api_rate_limiter
+    container_name: api_rate_limiter_worker
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TASK_QUEUE_NAME=api_rate_limiter_queue
+    depends_on:
+      temporal:
+        condition: service_healthy
+    networks:
+      - temporal-net
+      - shared-net
+
+  cron-symfony-fetch-klines-worker:
+    build: ./cron_symfony_fetch_klines
+    container_name: cron_symfony_fetch_klines_worker
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TASK_QUEUE_NAME=cron_symfony_fetch_klines
+    depends_on:
+      temporal:
+        condition: service_healthy
+    networks:
+      - temporal-net
+      - shared-net
+
 volumes:
   mysql-data:
 
 networks:
   frontend-net:
     driver: bridge
+    name: tradingv3_frontend-net
   backend-net:
     driver: bridge
+    name: tradingv3_backend-net
   temporal-net:
     driver: bridge
+    name: tradingv3_temporal-net
   shared-net:
     driver: bridge
+    name: tradingv3_shared-net
