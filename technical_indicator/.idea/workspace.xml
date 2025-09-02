@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="c916fe82-42e8-4f3f-96f9-ea8c2017cde4" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/../.idea/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../.idea/modules.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../.idea/php.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../.idea/tradingV3.iml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../.idea/vcs.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../frontend/src/components/ContractList.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../frontend/src/config.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../frontend/src/pages/ContractDetailPage.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../frontend/src/pages/ContractPage.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../frontend/src/pages/PipelinePage.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../frontend/src/pages/PositionsPage.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../frontend/src/services/api.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/config/packages/trading.yaml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Controller/TradingController.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Config/TradingParameters.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Indicator/Momentum/Macd.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Indicator/Momentum/Rsi.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Indicator/Trend/Adx.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Indicator/Trend/Ema.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Indicator/Trend/Ichimoku.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Indicator/Volatility/Bollinger.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Pipeline/ContractSelector.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Signals/Timeframe/Signal15mService.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Signals/Timeframe/Signal1hService.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Signals/Timeframe/Signal1mService.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Signals/Timeframe/Signal4hService.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Signals/Timeframe/Signal5mService.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Signals/t.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Trading/RiskGuard.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Trading/TradingService.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../docker-compose.yml" beforeDir="false" afterPath="$PROJECT_DIR$/../docker-compose.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../frontend/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/../frontend/package.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../frontend/src/App.js" beforeDir="false" afterPath="$PROJECT_DIR$/../frontend/src/App.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../frontend/src/components/CandleChart.js" beforeDir="false" afterPath="$PROJECT_DIR$/../frontend/src/components/CandleChart.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../frontend/src/pages/DashboardPage.js" beforeDir="false" afterPath="$PROJECT_DIR$/../frontend/src/pages/DashboardPage.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../frontend/src/styles/app.css" beforeDir="false" afterPath="$PROJECT_DIR$/../frontend/src/styles/app.css" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/config/packages/framework.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/config/packages/framework.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/config/services.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/config/services.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Command/TestIndicatorCommand.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Command/TestIndicatorCommand.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Entity/Contract.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Entity/Contract.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Entity/Kline.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Entity/Kline.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Repository/KlineRepository.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Repository/KlineRepository.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Service/Persister/KlinePersister.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Persister/KlinePersister.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Service/Temporal/Orchestrators/BitmartOrchestrator.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Temporal/Orchestrators/BitmartOrchestrator.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Dockerfile" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/loaders.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/main.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/models.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/registry.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/rules_engine.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/config_loader.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/indicator_rules.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/indicatorv2.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/leverage_max.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/entrypoint.sh" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/../frontend/src/components/Chart.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators/adx_indicator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators/bollinger_indicator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators/candle_indicator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators/ema_indicator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators/macd_indicator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators/rsi_indicator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators/stochastic_rsi_indicator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators/supertrend_indicator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators/volume_indicator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators/vwap_indicator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/model/indicator_request.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/model/kline.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/.." />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 1
+}</component>
+  <component name="ProjectId" id="31xl47kMwhXlGzVddDq2IMvto4S" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;SHELLCHECK.PATH&quot;: &quot;/Users/haythem.mabrouk/Library/Application Support/JetBrains/PyCharm2025.2/plugins/Shell Script/shellcheck&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/haythem.mabrouk/workspace/perso/tradingV3/technical_indicator/app&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;MTFeaturesSettingsConfigurable&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  }
+}</component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/app" />
+      <recent name="$PROJECT_DIR$/config" />
+    </key>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-e03c56caf84a-JavaScript-PY-252.23892.439" />
+        <option value="bundled-python-sdk-b3ae9b5d7125-f0eec537fc84-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-252.23892.439" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="c916fe82-42e8-4f3f-96f9-ea8c2017cde4" name="Changes" comment="" />
+      <created>1756473411092</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1756473411092</updated>
+      <workItem from="1756473412285" duration="17999000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+</project>
