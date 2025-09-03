@@ -1,0 +1,192 @@
+version: '1.2'
+meta:
+    name: SCALPING v1.2
+    description: >-
+        Stratégie scalping MTF (contexte 4H/1H, exécution 15m/5m/1m),
+        risque fixe, stop ATR, TP1=2R 60%, trailing ATR, time-stop,
+        quantization, liquidation guard.
+    created_at: '2025-09-03'
+
+symbols:
+    allowed_quotes: [USDT, USD]
+    blacklist: []
+
+risk:
+    fixed_risk_pct: 2.0           # % de l'equity par trade
+    daily_max_loss_pct: 6.0       # stop journalier
+    max_concurrent_positions: 4
+    correlation:
+        enabled: true
+        max_same_sector: 2
+
+atr:
+    period: 14
+    method: wilder               # wilder|simple
+    sl_multiplier: 1.5           # SL = k * ATR
+    trailing_multiplier: 2.5     # trailing ATR après TP1
+    trail_after_tp1: true
+    trail_step_pct: 0.10         # facultatif, pas de trail si <10% d'un ATR (débounce)
+
+mtf:
+    context: [4h, 1h]
+    execution: [15m, 5m, 1m]
+
+quantization:
+    tick_size: 0.01
+    step_size: 0.001
+
+liquidation_guard:
+    min_ratio: 3.0               # distance(liq) >= 3x distance(stop)
+    fallback_max_leverage: 10    # garde-fou si liq inconnue
+
+order_plan:
+    routing:
+        prefer: limit
+        fallback: market
+        post_only: true
+        slippage_bps_max: 5
+    brackets:
+        tp_split:
+            tp1_r_multiple: 2.0
+            tp1_size_pct: 60
+            tp2_trailing: atr
+    time_stop:
+        enabled: true
+        max_minutes: 90
+        min_progress_r: 0.5        # si <0.5R au bout de 90 min -> sortie
+
+indicators:
+    ema:
+        fast: 20
+        slow: 50
+        trend: 200
+    adx:
+        period: 14
+        min: 18
+    rsi:
+        period: 14
+        bull: 50
+        bear: 50
+    macd:
+        fast: 12
+        slow: 26
+        signal: 9
+    donchian:
+        period: 20
+    bollinger:
+        period: 20
+        std: 2
+        min_width_pct: 0.3
+    ichimoku:
+        tenkan: 9
+        kijun: 26
+        senkou_b: 52
+    choppiness:
+        period: 14
+        max: 61
+    stochrsi:
+        period: 14
+        k: 3
+        d: 3
+    vwap:
+        session: daily
+
+long:
+    context:
+        '4h':
+            all:
+                - price_above_ema: 200
+                - ichimoku_bull: true          # close au-dessus du nuage & spanA > spanB
+        '1h':
+            all:
+                - adx_over: 18
+                - rsi_over: 50
+                - obv_slope_non_negative: true
+    execution:
+        any_of:
+            - '15m':
+                  all:
+                      - ema_fast_gt_slow: true
+                      - macd_hist_gt: 0
+                      - stochrsi_k_cross_up_d: true
+                      - choppiness_below: 61
+                      - close_above_donchian_mid: true
+            - '5m':
+                  all:
+                      - ema_fast_gt_slow: true
+                      - macd_hist_gt: 0
+                      - close_above_vwap: true
+            - '1m':
+                  trigger:
+                      - breakout_above_donchian_high: true
+                      - or_retest_vwap_bullish_wick: true
+    entries:
+        type: continuation_or_breakout
+        confirmation_candles_max: 3
+    stop_loss:
+        mode: atr
+        k: 1.5
+    take_profit:
+        tp1_r: 2.0
+        tp1_size_pct: 60
+        remainder_trailing: atr
+    invalidations:
+        any_of:
+            - '15m':
+                  - rsi_cross_down: 50
+                  - macd_signal_cross_down: true
+            - '1h':
+                  - ema_fast_cross_down_slow: true
+
+short:
+    context:
+        '4h':
+            all:
+                - price_below_ema: 200
+                - ichimoku_bear: true          # close sous nuage & spanA < spanB
+        '1h':
+            all:
+                - adx_over: 18
+                - rsi_under: 50
+                - obv_slope_non_positive: true
+    execution:
+        any_of:
+            - '15m':
+                  all:
+                      - ema_fast_lt_slow: true
+                      - macd_hist_lt: 0
+                      - stochrsi_k_cross_down_d: true
+                      - choppiness_below: 61
+                      - close_below_donchian_mid: true
+            - '5m':
+                  all:
+                      - ema_fast_lt_slow: true
+                      - macd_hist_lt: 0
+                      - close_below_vwap: true
+            - '1m':
+                  trigger:
+                      - breakdown_below_donchian_low: true
+                      - or_retest_vwap_bearish_wick: true
+    entries:
+        type: continuation_or_breakdown
+        confirmation_candles_max: 3
+    stop_loss:
+        mode: atr
+        k: 1.5
+    take_profit:
+        tp1_r: 2.0
+        tp1_size_pct: 60
+        remainder_trailing: atr
+    invalidations:
+        any_of:
+            - '15m':
+                  - rsi_cross_up: 50
+                  - macd_signal_cross_up: true
+            - '1h':
+                  - ema_fast_cross_up_slow: true
+
+integration:
+    services:
+        atr: 'App\\Service\\Indicators\\AtrCalculator'
+        position_sizer: 'App\\Service\\Risk\\PositionSizer'
+        signal: 'App\\Service\\Signals\\SignalScalpingService'

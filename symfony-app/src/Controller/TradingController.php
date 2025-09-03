@@ -41,6 +41,7 @@ final class TradingController extends AbstractController
             ->select('c');
 
         $contracts = $qb->getQuery()->getResult();
+        $results = [];
         foreach ($contracts as $contract) {
             $symbol = $contract->getSymbol();
             $data = $this->tradingService->getSignal($symbol, '4h', 300);

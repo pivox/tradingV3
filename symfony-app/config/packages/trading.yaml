@@ -159,7 +159,7 @@ parameters:
                         ema_trend: { above: { left: ema_fast, right: ema_slow } }
                         macd_cross_up: { cross_up: { left: macd.macd, right: macd.signal } }
                         rsi_cross_up: { cross_up: { left: rsi14, value: 50 } }
-                        kijun_break_up:{ cross_up: { left: close, right: ichimoku.kijun } }
+                        kijun_break_up: { cross_up: { left: close, right: ichimoku.kijun } }
                         ichi_price_above:
                             any:
                                 - { above: { left: close, right: ichimoku.kijun } }
@@ -231,178 +231,192 @@ parameters:
                             bb_expansion: 0.05
                         pass_threshold: 0.55
             '5m':
-                macd_cross_up: { cross_up: { left: macd.macd, right: macd.signal } }
-                rsi_cross_up: { cross_up: { left: rsi14, value: 50 } }
-                kijun_break_up: { cross_up: { left: close, right: ichimoku.kijun } }
-                ichi_price_above:
-                any:
-                    - { above: { left: close, right: ichimoku.kijun } }
-                    - { above: { left: close, right: ichimoku.senkou_span_a } }
+                indicators:
+                    ema_fast: { type: ema, period: 50,  source: close }
+                    ema_slow: { type: ema, period: 200, source: close }
+                    adx14: { type: adx, period: 14 }
+                    ichimoku: { type: ichimoku, tenkan: 9, kijun: 26, senkou_b: 52 }
+                    rsi14: { type: rsi, period: 14,  source: close }
+                    macd: { type: macd, fast: 12, slow: 26, signal: 9, source: close }
+                    bb20: { type: bollinger, period: 20, stdev: 2, source: close, output: [ upper, lower, middle, width ] }
 
+                regime:
+                    trend_min_adx: 21
+                    range_max_adx: 16
+                    bb_lookback: 2
 
-                rsi_momentum_up: { above: { left: rsi14, value: 50 } }
-                bb_expansion: { slope_up: { left: bb20.width, lookback: 2 } }
+                long:
+                    criteria:
+                        trend_regime: { above: { left: adx14, value: 21 } }
+                        range_regime: { above: { left: 16, right: adx14 } }
 
+                        ema_trend: { above: { left: ema_fast, right: ema_slow } }
+                        macd_cross_up: { cross_up: { left: macd.macd, right: macd.signal } }
+                        rsi_cross_up: { cross_up: { left: rsi14, value: 50 } }
+                        kijun_break_up: { cross_up: { left: close, right: ichimoku.kijun } }
+                        ichi_price_above:
+                            any:
+                                - { above: { left: close, right: ichimoku.kijun } }
+                                - { above: { left: close, right: ichimoku.senkou_span_a } }
 
-                trigger_any:
-                any: [ { ref: macd_cross_up }, { ref: rsi_cross_up }, { ref: kijun_break_up }, { ref: ichi_price_above } ]
+                        rsi_momentum_up: { above: { left: rsi14, value: 50 } }
+                        bb_expansion: { slope_up: { left: bb20.width, lookback: 2 } }
 
+                        trigger_any:
+                            any: [ { ref: macd_cross_up }, { ref: rsi_cross_up }, { ref: kijun_break_up }, { ref: ichi_price_above } ]
 
-                trend_long:
-                all: [ { ref: trend_regime }, { ref: ema_trend }, { ref: trigger_any } ]
+                        trend_long:
+                            all: [ { ref: trend_regime }, { ref: ema_trend }, { ref: trigger_any } ]
 
+                        range_long:
+                            all: [ { ref: range_regime }, { ref: rsi_momentum_up }, { ref: bb_expansion } ]
 
-                range_long:
-                all: [ { ref: range_regime }, { ref: rsi_momentum_up }, { ref: bb_expansion } ]
+                    rule:
+                        any: [ { ref: trend_long }, { ref: range_long } ]
 
-
-                rule:
-                any: [ { ref: trend_long }, { ref: range_long } ]
-
-
-                score:
-                weights:
-                ema_trend: 0.25
-                macd_cross_up: 0.25
-                rsi_cross_up: 0.15
-                kijun_break_up: 0.15
-                ichi_price_above: 0.05
-                rsi_momentum_up: 0.10
-                bb_expansion: 0.05
-                pass_threshold: 0.55
-
+                    score:
+                        weights:
+                            ema_trend: 0.25
+                            macd_cross_up: 0.25
+                            rsi_cross_up: 0.15
+                            kijun_break_up: 0.15
+                            ichi_price_above: 0.05
+                            rsi_momentum_up: 0.10
+                            bb_expansion: 0.05
+                        pass_threshold: 0.55
 
                 short:
-                criteria:
-                trend_regime: { above: { left: adx14, value: 21 } }
-                range_regime: { above: { left: 16, right: adx14 } }
+                    criteria:
+                        trend_regime: { above: { left: adx14, value: 21 } }
+                        range_regime: { above: { left: 16, right: adx14 } }
 
+                        ema_trend: { above: { left: ema_slow, right: ema_fast } }
+                        macd_cross_down: { cross_down: { left: macd.macd, right: macd.signal } }
+                        rsi_cross_down: { cross_down: { left: rsi14, value: 50 } }
+                        kijun_break_down: { cross_down: { left: close, right: ichimoku.kijun } }
+                        ichi_price_below:
+                            any:
+                                - { above: { left: ichimoku.kijun,        right: close } }
+                                - { above: { left: ichimoku.senkou_span_a, right: close } }
 
-                ema_trend: { above: { left: ema_slow, right: ema_fast } }
-                macd_cross_down: { cross_down: { left: macd.macd, right: macd.signal } }
-                rsi_cross_down: { cross_down: { left: rsi14, value: 50 } }
-                kijun_break_down: { cross_down: { left: close, right: ichimoku.kijun } }
-                ichi_price_below:
-                any:
-                    - { above: { left: ichimoku.kijun, right: close } }
-                    - { above: { left: ichimoku.senkou_span_a, right: close } }
+                        rsi_momentum_down: { above: { left: 50, right: rsi14 } }
+                        bb_expansion: { slope_up: { left: bb20.width, lookback: 2 } }
 
+                        trigger_any:
+                            any: [ { ref: macd_cross_down }, { ref: rsi_cross_down }, { ref: kijun_break_down }, { ref: ichi_price_below } ]
 
-                rsi_momentum_down: { above: { left: 50, right: rsi14 } }
-                bb_expansion: { slope_up: { left: bb20.width, lookback: 2 } }
+                        trend_short:
+                            all: [ { ref: trend_regime }, { ref: ema_trend }, { ref: trigger_any } ]
 
+                        range_short:
+                            all: [ { ref: range_regime }, { ref: rsi_momentum_down }, { ref: bb_expansion } ]
 
-                trigger_any:
-                any: [ { ref: macd_cross_down }, { ref: rsi_cross_down }, { ref: kijun_break_down }, { ref: ichi_price_below } ]
+                    rule:
+                        any: [ { ref: trend_short }, { ref: range_short } ]
 
+                    score:
+                        weights:
+                            ema_trend: 0.25
+                            macd_cross_down: 0.25
+                            rsi_cross_down: 0.15
+                            kijun_break_down: 0.15
+                            ichi_price_below: 0.05
+                            rsi_momentum_down: 0.10
+                            bb_expansion: 0.05
+                        pass_threshold: 0.55
 
-                trend_short:
-                all: [ { ref: trend_regime }, { ref: ema_trend }, { ref: trigger_any } ]
-
-
-                range_short:
-                all: [ { ref: range_regime }, { ref: rsi_momentum_down }, { ref: bb_expansion } ]
-
-
-                rule:
-                any: [ { ref: trend_short }, { ref: range_short } ]
-
-
-                score:
-                weights:
-                ema_trend: 0.25
-                macd_cross_down: 0.25
-                rsi_cross_down: 0.15
-                kijun_break_down: 0.15
-                ichi_price_below: 0.05
-                rsi_momentum_down: 0.10
-                bb_expansion: 0.05
-                pass_threshold: 0.55
             '1m':
-                macd_cross_up: { cross_up: { left: macd.macd, right: macd.signal } }
-                rsi_cross_up: { cross_up: { left: rsi14, value: 50 } }
-                kijun_break_up: { cross_up: { left: close, right: ichimoku.kijun } }
-                ichi_price_above:
-                any:
-                    - { above: { left: close, right: ichimoku.kijun } }
-                    - { above: { left: close, right: ichimoku.senkou_span_a } }
+                indicators:
+                    ema_fast: { type: ema, period: 50,  source: close }
+                    ema_slow: { type: ema, period: 200, source: close }
+                    adx14: { type: adx, period: 14 }
+                    ichimoku: { type: ichimoku, tenkan: 9, kijun: 26, senkou_b: 52 }
+                    rsi14: { type: rsi, period: 14,  source: close }
+                    macd: { type: macd, fast: 12, slow: 26, signal: 9, source: close }
+                    bb20: { type: bollinger, period: 20, stdev: 2, source: close, output: [ upper, lower, middle, width ] }
 
+                regime:
+                    trend_min_adx: 19
+                    range_max_adx: 15
+                    bb_lookback: 1
 
-                rsi_momentum_up: { above: { left: rsi14, value: 50 } }
-                bb_expansion: { slope_up: { left: bb20.width, lookback: 1 } }
+                long:
+                    criteria:
+                        trend_regime: { above: { left: adx14, value: 19 } }
+                        range_regime: { above: { left: 15, right: adx14 } }
 
+                        ema_trend: { above: { left: ema_fast, right: ema_slow } }
+                        macd_cross_up: { cross_up: { left: macd.macd, right: macd.signal } }
+                        rsi_cross_up: { cross_up: { left: rsi14, value: 50 } }
+                        kijun_break_up: { cross_up: { left: close, right: ichimoku.kijun } }
+                        ichi_price_above:
+                            any:
+                                - { above: { left: close, right: ichimoku.kijun } }
+                                - { above: { left: close, right: ichimoku.senkou_span_a } }
 
-                trigger_any:
-                any: [ { ref: macd_cross_up }, { ref: rsi_cross_up }, { ref: kijun_break_up }, { ref: ichi_price_above } ]
+                        rsi_momentum_up: { above: { left: rsi14, value: 50 } }
+                        bb_expansion: { slope_up: { left: bb20.width, lookback: 1 } }
 
+                        trigger_any:
+                            any: [ { ref: macd_cross_up }, { ref: rsi_cross_up }, { ref: kijun_break_up }, { ref: ichi_price_above } ]
 
-                trend_long:
-                all: [ { ref: trend_regime }, { ref: ema_trend }, { ref: trigger_any } ]
+                        trend_long:
+                            all: [ { ref: trend_regime }, { ref: ema_trend }, { ref: trigger_any } ]
 
+                        range_long:
+                            all: [ { ref: range_regime }, { ref: rsi_momentum_up }, { ref: bb_expansion } ]
 
-                range_long:
-                all: [ { ref: range_regime }, { ref: rsi_momentum_up }, { ref: bb_expansion } ]
+                    rule:
+                        any: [ { ref: trend_long }, { ref: range_long } ]
 
-
-                rule:
-                any: [ { ref: trend_long }, { ref: range_long } ]
-
-
-                score:
-                weights:
-                ema_trend: 0.25
-                macd_cross_up: 0.25
-                rsi_cross_up: 0.15
-                kijun_break_up: 0.15
-                ichi_price_above: 0.05
-                rsi_momentum_up: 0.10
-                bb_expansion: 0.05
-                pass_threshold: 0.55
-
+                    score:
+                        weights:
+                            ema_trend: 0.25
+                            macd_cross_up: 0.25
+                            rsi_cross_up: 0.15
+                            kijun_break_up: 0.15
+                            ichi_price_above: 0.05
+                            rsi_momentum_up: 0.10
+                            bb_expansion: 0.05
+                        pass_threshold: 0.55
 
                 short:
-                criteria:
-                trend_regime: { above: { left: adx14, value: 19 } }
-                range_regime: { above: { left: 15, right: adx14 } }
+                    criteria:
+                        trend_regime: { above: { left: adx14, value: 19 } }
+                        range_regime: { above: { left: 15, right: adx14 } }
 
+                        ema_trend: { above: { left: ema_slow, right: ema_fast } }
+                        macd_cross_down: { cross_down: { left: macd.macd, right: macd.signal } }
+                        rsi_cross_down: { cross_down: { left: rsi14, value: 50 } }
+                        kijun_break_down: { cross_down: { left: close, right: ichimoku.kijun } }
+                        ichi_price_below:
+                            any:
+                                - { above: { left: ichimoku.kijun,        right: close } }
+                                - { above: { left: ichimoku.senkou_span_a, right: close } }
 
-                ema_trend: { above: { left: ema_slow, right: ema_fast } }
-                macd_cross_down: { cross_down: { left: macd.macd, right: macd.signal } }
-                rsi_cross_down: { cross_down: { left: rsi14, value: 50 } }
-                kijun_break_down: { cross_down: { left: close, right: ichimoku.kijun } }
-                ichi_price_below:
-                any:
-                    - { above: { left: ichimoku.kijun, right: close } }
-                    - { above: { left: ichimoku.senkou_span_a, right: close } }
+                        rsi_momentum_down: { above: { left: 50, right: rsi14 } }
+                        bb_expansion: { slope_up: { left: bb20.width, lookback: 1 } }
 
+                        trigger_any:
+                            any: [ { ref: macd_cross_down }, { ref: rsi_cross_down }, { ref: kijun_break_down }, { ref: ichi_price_below } ]
 
-                rsi_momentum_down: { above: { left: 50, right: rsi14 } }
-                bb_expansion: { slope_up: { left: bb20.width, lookback: 1 } }
+                        trend_short:
+                            all: [ { ref: trend_regime }, { ref: ema_trend }, { ref: trigger_any } ]
 
+                        range_short:
+                            all: [ { ref: range_regime }, { ref: rsi_momentum_down }, { ref: bb_expansion } ]
 
-                trigger_any:
-                any: [ { ref: macd_cross_down }, { ref: rsi_cross_down }, { ref: kijun_break_down }, { ref: ichi_price_below } ]
+                    rule:
+                        any: [ { ref: trend_short }, { ref: range_short } ]
 
+                    score:
+                        weights:
+                            ema_trend: 0.25
+                            macd_cross_down: 0.25
+                            rsi_cross_down: 0.15
+                            kijun_break_down: 0.15
+                            ichi_price_below: 0.05
+                            rsi_momentum_down: 0.10
+                            bb_expansion: 0.05
+                        pass_threshold: 0.55
 
-                trend_short:
-                all: [ { ref: trend_regime }, { ref: ema_trend }, { ref: trigger_any } ]
-
-
-                range_short:
-                all: [ { ref: range_regime }, { ref: rsi_momentum_down }, { ref: bb_expansion } ]
-
-
-                rule:
-                any: [ { ref: trend_short }, { ref: range_short } ]
-
-
-                score:
-                weights:
-                ema_trend: 0.25
-                macd_cross_down: 0.25
-                rsi_cross_down: 0.15
-                kijun_break_down: 0.15
-                ichi_price_below: 0.05
-                rsi_momentum_down: 0.10
-                bb_expansion: 0.05
-                pass_threshold: 0.55
