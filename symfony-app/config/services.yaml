@@ -7,7 +7,14 @@ parameters:
     indicator_base: '%env(default::INDICATOR_BASE)%'
     indicator_timeout: 20
     indicator_retries: 2
+    quantization.tick_size: 0.01
+    quantization.step_size: 0.001
+    liquidation_guard.min_ratio: 3.0
+    liquidation_guard.fallback_max_leverage: 10.0
 
+
+    # Path to strategy YAML (also set in packages/scalping.yaml)
+    trading.scalping.file: '%kernel.project_dir%/config/trading.scalping.yml'
 services:
     # default configuration for services in *this* file
     _defaults:
@@ -55,6 +62,18 @@ services:
     clock.test:
         class: Symfony\Component\Clock\MockClock
         public: true
+
+    App\Service\Indicator\AtrCalculator: ~
+    App\Service\Risk\PositionSizer:
+        arguments:
+            $tickSize: '%quantization.tick_size%'
+            $stepSize: '%quantization.step_size%'
+            $fallbackMaxLeverage: '%liquidation_guard.fallback_max_leverage%'
+            $minLiqRatio: '%liquidation_guard.min_ratio%'
+
+    # App\Service\Signals\SignalScalpingService: ~
+
+    # Expose YAML config as container parameters (optional)
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
