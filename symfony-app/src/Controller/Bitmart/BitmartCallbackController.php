@@ -3,40 +3,48 @@
 namespace App\Controller\Bitmart;
 
 use App\Entity\Contract;
+use App\Repository\ContractPipelineRepository;
+use App\Repository\ContractRepository;
+use App\Repository\KlineRepository;
 use App\Service\Exchange\Bitmart\BitmartFetcher;
 use App\Service\Persister\ContractPersister;
 use App\Service\Pipeline\ContractPipelineService;
+use App\Service\Temporal\Dto\WorkflowRef;
+use App\Service\Temporal\Orchestrators\BitmartOrchestrator;
+use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
-use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\Routing\Annotation\Route;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 
 /**
- * Callback pour rafraîchir la liste des contrats Bitmart.
- * - Persistance des contrats
- * - Seed du pipeline en 4h (idempotent)
+ * Callbacks pour Bitmart :
+ * - Rafraîchissement de la liste des contrats
+ * - Cron périodiques (1m, 5m, 15m, 1h, 4h)
  */
 class BitmartCallbackController extends AbstractController
 {
+    public function __construct(
+        private readonly BitmartOrchestrator $bitmartOrchestrator,
+        private readonly ContractRepository $contractRepository,
+        private readonly KlineRepository $klineRepository,
+    )
+    {
+    }
+
     #[Route('/api/callback/bitmart/fetch-all-contract', name: 'bitmart_contracts_callback', methods: ['POST'])]
-    public function __invoke(
-        Request $request,
+    public function fetchAllContracts(
         ContractPersister $persister,
         BitmartFetcher $bitmartFetcher,
         ContractPipelineService $pipelineService,
         LoggerInterface $logger,
-    ): JsonResponse
-    {
+    ): JsonResponse {
         $contracts = $bitmartFetcher->fetchContracts();
         $logger->info('Fetched ' . count($contracts) . ' contracts from Bitmart');
 
         $seeded = 0;
         foreach ($contracts as $dto) {
-            // 1) Persistance du contrat
             $contract = $persister->persistFromDto($dto, 'bitmart');
-
-            // 2) Seed pipeline 4h (idempotent)
             $pipelineService->ensureSeeded4h($contract);
             $seeded++;
         }
@@ -47,4 +55,5 @@ class BitmartCallbackController extends AbstractController
             'seeded_pipeline_4h'  => $seeded,
         ]);
     }
+
 }

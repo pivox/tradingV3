@@ -5,257 +5,207 @@ namespace App\Service\Signals\Timeframe;
 
 use App\Entity\Kline;
 use App\Service\Config\TradingParameters;
-use App\Service\Indicator\Trend\Ema;
-use App\Service\Indicator\Trend\Adx;
-use App\Service\Indicator\Trend\Ichimoku;
-use App\Service\Indicator\Momentum\Rsi;
-use App\Service\Indicator\Momentum\Macd;
-use App\Service\Indicator\Volatility\Bollinger;
+use App\Service\Indicator\Volatility\Donchian;
+use App\Service\Indicator\Volume\Vwap;
+use Psr\Log\LoggerInterface;
+
+// adaptez le namespace selon votre projet
 
 /**
- * Service de signal pour le timeframe 1m (micro‑exécution / timing d'entrée).
+ * Service de signal pour le timeframe 1m (micro-exécution / timing d'entrée).
  *
- * Objectif : déclencher très vite, en cohérence avec 4H→1H→15m déjà validés.
- *  - Régime via ADX (seuils plus sensibles que 5m),
- *  - Alignement EMA (ema_fast vs ema_slow),
- *  - Triggers rapides : MACD cross, RSI cross 50, franchissement Kijun, price vs Senkou A,
- *  - Optionnel : expansion de volatilité (pente de width Bollinger sur 1–2 barres).
+ * Conformité YML v1.2 (branche 1m) :
+ *  - LONG  : trigger = breakout_above_donchian_high  OR  retest_vwap_bullish_wick
+ *  - SHORT : trigger = breakdown_below_donchian_low  OR  retest_vwap_bearish_wick
+ *
+ * Hypothèses :
+ *  - Le contexte MTF (4H/1H) et l’exécution 15m/5m ont déjà validé la direction.
+ *  - Ici on ne fait que le TRIGGER 1m, sans filtres additionnels.
  */
 final class Signal1mService
 {
     public function __construct(
-        private Ema $ema,
-        private Adx $adx,
-        private Ichimoku $ichimoku,
-        private Rsi $rsi,
-        private Macd $macd,
-        private Bollinger $bollinger,
+        private LoggerInterface $validationLogger, // canal 'validation'
+        private LoggerInterface $signalsLogger,    // canal 'signals'
+        private Donchian $donchian,
+        private Vwap $vwap,
         private TradingParameters $params,
 
-        // Défauts (ultra réactifs)
-        private float $defaultEps             = 1.0e-6,
-        private bool  $defaultUseLastClosed   = true,
-        private int   $defaultMinBars         = 220,
-        private int   $defaultTrendMinAdx     = 19,
-        private int   $defaultRangeMaxAdx     = 15,
-        private int   $defaultBbLookback      = 1,
-        private int   $defaultEmaFastPeriod   = 34,   // plus réactif par défaut en 1m
-        private int   $defaultEmaSlowPeriod   = 144
+        // Défauts cohérents avec la logique 1m
+        private float $defaultEps              = 1.0e-6,
+        private bool  $defaultUseLastClosed    = true,
+        private int   $defaultMinBars          = 220,
+        private int   $defaultDonchianPeriod   = 20,
+        private string $defaultVwapSession     = 'daily',
+        // Détection retest VWAP
+        private float $defaultVwapTolBps       = 8.0,   // tolérance ±8 bps autour du VWAP
+        private float $defaultMinWickRatio     = 0.50   // mèche ≥ 50% de la range (rejet franc)
     ) {}
 
     /**
      * @param Kline[] $candles  Bougies dans l'ordre chronologique (ancienne → récente)
      * @return array{
-     *   ema_fast: float,
-     *   ema_slow: float,
-     *   adx14: float,
-     *   rsi14: float,
-     *   macd: array{macd:float,signal:float,hist:float,diff:float,prev_diff:float},
-     *   bollinger: array{upper:float,lower:float,middle:float,width:float},
-     *   ichimoku: array{tenkan:float,kijun:float,senkou_a:float,senkou_b:float},
-     *   regime: string,
-     *   path: string,
+     *   donchian: array{upper:float,lower:float,mid:float,upper_prev:float,lower_prev:float},
+     *   vwap: float,
+     *   close: float,
+     *   wick: array{upper:float,lower:float,body:float,range:float,lower_ratio:float,upper_ratio:float},
      *   trigger: string,
      *   signal: string,
+     *   path: string,
      *   status?: string
      * }
      */
     public function evaluate(array $candles): array
     {
-        // 1) Config YAML
+        // 1) Config YAML (défensive)
         $cfg = $this->params->getConfig();
-        $tf  = $cfg['timeframes']['1m'] ?? [];
 
         $eps           = $cfg['runtime']['eps']              ?? $this->defaultEps;
         $useLastClosed = $cfg['runtime']['use_last_closed']  ?? $this->defaultUseLastClosed;
-        $minBars       = $tf['guards']['min_bars']           ?? $this->defaultMinBars;
 
-        $trendMinAdx   = $tf['regime']['trend_min_adx']      ?? $this->defaultTrendMinAdx;
-        $rangeMaxAdx   = $tf['regime']['range_max_adx']      ?? $this->defaultRangeMaxAdx;
-        $bbLookback    = $tf['regime']['bb_lookback']        ?? $this->defaultBbLookback;
+        $minBars       = $cfg['timeframes']['1m']['guards']['min_bars'] ?? $this->defaultMinBars;
 
-        $emaFastPeriod = $tf['indicators']['ema_fast']['period'] ?? ($tf['indicators']['ema34']['period'] ?? $this->defaultEmaFastPeriod);
-        $emaSlowPeriod = $tf['indicators']['ema_slow']['period'] ?? ($tf['indicators']['ema144']['period'] ?? $this->defaultEmaSlowPeriod);
+        $donchianPeriod = $cfg['indicators']['donchian']['period'] ?? $this->defaultDonchianPeriod; // 20
+        $vwapSession    = $cfg['indicators']['vwap']['session']     ?? $this->defaultVwapSession;    // daily
 
-        // 2) Garde-fou
+        $vwapTolBps     = $cfg['timeframes']['1m']['triggers']['vwap_tol_bps']    ?? $this->defaultVwapTolBps;
+        $minWickRatio   = $cfg['timeframes']['1m']['triggers']['min_wick_ratio']  ?? $this->defaultMinWickRatio;
+
+        // 2) Garde-fou data
         if (count($candles) < $minBars) {
-            return [
-                'ema_fast'  => 0.0,
-                'ema_slow'  => 0.0,
-                'adx14'     => 0.0,
-                'rsi14'     => 0.0,
-                'macd'      => ['macd'=>0.0,'signal'=>0.0,'hist'=>0.0,'diff'=>0.0,'prev_diff'=>0.0],
-                'bollinger' => ['upper'=>0.0,'lower'=>0.0,'middle'=>0.0,'width'=>0.0],
-                'ichimoku'  => ['tenkan'=>0.0,'kijun'=>0.0,'senkou_a'=>0.0,'senkou_b'=>0.0],
-                'regime'    => 'neutral',
-                'path'      => 'neutral',
-                'trigger'   => '',
-                'signal'    => 'NONE',
-                'status'    => 'insufficient_data',
+            $validation =  [
+                'donchian' => ['upper'=>0.0,'lower'=>0.0,'mid'=>0.0,'upper_prev'=>0.0,'lower_prev'=>0.0],
+                'vwap'     => 0.0,
+                'close'    => 0.0,
+                'wick'     => ['upper'=>0.0,'lower'=>0.0,'body'=>0.0,'range'=>0.0,'lower_ratio'=>0.0,'upper_ratio'=>0.0],
+                'path'     => 'execution_1m',
+                'trigger'  => '',
+                'signal'   => 'NONE',
+                'status'   => 'insufficient_data',
             ];
+
+            $this->signalsLogger->info('signals.tick', $validation);
+            $this->validationLogger->warning('validation.violation', $validation);
+            return $validation;
         }
 
-        // 3) Séries OHLC
-        $closes = array_map(fn(Kline $k) => $k->getClose(), $candles);
-        $highs  = array_map(fn(Kline $k) => $k->getHigh(),  $candles);
-        $lows   = array_map(fn(Kline $k) => $k->getLow(),   $candles);
+        // 3) Séries OHLCV
+        $opens   = array_map(fn(Kline $k) => $k->getOpen(),   $candles);
+        $closes  = array_map(fn(Kline $k) => $k->getClose(),  $candles);
+        $highs   = array_map(fn(Kline $k) => $k->getHigh(),   $candles);
+        $lows    = array_map(fn(Kline $k) => $k->getLow(),    $candles);
+        $volumes = array_map(fn(Kline $k) => $k->getVolume(), $candles);
 
-        // 4) Indicateurs
-        $emaFast = $this->ema->calculate($closes, $emaFastPeriod);
-        $emaSlow = $this->ema->calculate($closes, $emaSlowPeriod);
-        $adx14   = $this->adx->calculate($highs, $lows, $closes, 14);
-
-        $ich = $this->ichimoku->calculateFull($highs, $lows, $closes, 9, 26, 52, 26, true);
-        if (!isset($ich['senkou_a']) && isset($ich['tenkan'], $ich['kijun'])) {
-            $ich['senkou_a'] = ($ich['tenkan'] + $ich['kijun']) / 2.0; // secours
+        // 4) Référence : dernier close clôturé si demandé
+        $idxLast = count($candles) - 1;
+        $idxUse  = $idxLast;
+        if ($useLastClosed && $idxLast > 0) {
+            $idxUse = $idxLast - 1;
         }
 
-        $rsiNow  = $this->rsi->calculate($closes, 14);
-        $rsiPrev = $this->rsi->calculate(array_slice($closes, 0, -1), 14);
+        $open  = (float) $opens[$idxUse];
+        $close = (float) $closes[$idxUse];
+        $high  = (float) $highs[$idxUse];
+        $low   = (float) $lows[$idxUse];
 
-        // MACD séries avec diff précédent
-        $macdNow = 0.0; $sigNow = 0.0; $histNow = 0.0; $diffNow = 0.0; $diffPrev = 0.0;
-        if (method_exists($this->macd, 'calculateFull')) {
-            $m = $this->macd->calculateFull($closes, 12, 26, 9);
-            if (!empty($m['macd']) && !empty($m['signal'])) {
-                $macdNow = (float) end($m['macd']);
-                $sigNow  = (float) end($m['signal']);
-                $histNow = isset($m['hist']) && !empty($m['hist']) ? (float) end($m['hist']) : ($macdNow - $sigNow);
-                $nMacd = count($m['macd']); $nSig = count($m['signal']);
-                if ($nMacd > 1 && $nSig > 1) {
-                    $prevMacd = (float) $m['macd'][$nMacd - 2];
-                    $prevSig  = (float) $m['signal'][$nSig - 2];
-                    $diffPrev = $prevMacd - $prevSig;
-                }
+        // 5) Donchian (on a besoin de la borne "précédente" pour valider un breakout propre)
+        //    -> upper_prev = upper(N-1) = plus haut des N barres précédant la barre utilisée
+        //    -> lower_prev = lower(N-1) = plus bas des N barres précédant la barre utilisée
+        $dc = $this->donchian->calculateSeries($highs, $lows, $donchianPeriod); // attendez : implémentez calculateSeries qui renvoie arrays 'upper','lower'
+        $dcUpper = 0.0; $dcLower = 0.0; $dcMid = 0.0; $dcUpperPrev = 0.0; $dcLowerPrev = 0.0;
+
+        if (is_array($dc) && !empty($dc['upper']) && !empty($dc['lower'])) {
+            $dcUpper = (float) $dc['upper'][$idxUse] ?? 0.0;
+            $dcLower = (float) $dc['lower'][$idxUse] ?? 0.0;
+            $dcMid   = ($dcUpper + $dcLower) / 2.0;
+
+            // bornes "précédentes" : on exclut la barre utilisée
+            $idxPrev = $idxUse - 1;
+            if ($idxPrev >= 0) {
+                $dcUpperPrev = (float) $dc['upper'][$idxPrev] ?? $dcUpper;
+                $dcLowerPrev = (float) $dc['lower'][$idxPrev] ?? $dcLower;
+            } else {
+                $dcUpperPrev = $dcUpper;
+                $dcLowerPrev = $dcLower;
             }
-            $diffNow = $macdNow - $sigNow;
-        } else {
-            $m = $this->macd->calculate($closes, 12, 26, 9);
-            $macdNow = (float) ($m['macd'] ?? 0.0);
-            $sigNow  = (float) ($m['signal'] ?? 0.0);
-            $histNow = (float) ($m['hist'] ?? ($macdNow - $sigNow));
-            $diffNow = $macdNow - $sigNow;
-            $m2 = $this->macd->calculate(array_slice($closes, 0, -1), 12, 26, 9);
-            $diffPrev = (float) (($m2['macd'] ?? 0.0) - ($m2['signal'] ?? 0.0));
         }
 
-        // Bollinger
-        $bb = ['upper'=>0.0,'lower'=>0.0,'middle'=>0.0,'width'=>0.0];
-        $bbWidthSeries = [];
-        if (method_exists($this->bollinger, 'calculateFull')) {
-            $b = $this->bollinger->calculateFull($closes, 20, 2.0);
-            if (!empty($b['upper']) && !empty($b['lower'])) {
-                $n = min(count($b['upper']), count($b['lower']));
-                for ($i = 0; $i < $n; $i++) { $bbWidthSeries[] = (float) ($b['upper'][$i] - $b['lower'][$i]); }
-                $bb['upper']  = (float) end($b['upper']);
-                $bb['lower']  = (float) end($b['lower']);
-                $bb['middle'] = !empty($b['middle']) ? (float) end($b['middle']) : ($bb['upper'] + $bb['lower']) / 2.0;
-                $bb['width']  = $bbWidthSeries ? (float) end($bbWidthSeries) : ($bb['upper'] - $bb['lower']);
-            }
-        } else {
-            $b = $this->bollinger->calculate($closes, 20, 2.0);
-            $bb['upper']  = (float) ($b['upper']  ?? 0.0);
-            $bb['lower']  = (float) ($b['lower']  ?? 0.0);
-            $bb['middle'] = (float) ($b['middle'] ?? (($bb['upper'] + $bb['lower']) / 2.0));
-            $bb['width']  = (float) ($b['width']  ?? ($bb['upper'] - $bb['lower']));
+        // 6) VWAP (session = daily)
+        $vwapVal = 0.0;
+        if (method_exists($this->vwap, 'calculateSession')) {
+            $vwapVal = (float) $this->vwap->calculateSession(array_slice($candles, 0, $idxUse + 1), $vwapSession);
+        } elseif (method_exists($this->vwap, 'calculateFull')) {
+            $v = $this->vwap->calculateFull($candles, $vwapSession);
+            $vwapVal = is_array($v) && isset($v[$idxUse]) ? (float) $v[$idxUse] : (float) (is_array($v) && !empty($v) ? end($v) : 0.0);
+        } elseif (method_exists($this->vwap, 'calculate')) {
+            $vwapVal = (float) $this->vwap->calculate(array_slice($closes, 0, $idxUse + 1), array_slice($volumes, 0, $idxUse + 1), $vwapSession);
         }
 
-        // 5) Closes de référence
-        $lastClose = end($closes);
-        $prevClose = $lastClose;
-        if ($useLastClosed && count($closes) > 1) {
-            $tmp = $closes; array_pop($tmp);
-            $lastClose = (float) end($tmp);
-            $prevClose = (float) (count($tmp) > 1 ? $tmp[count($tmp) - 2] : $lastClose);
-        } elseif (count($closes) > 1) {
-            $prevClose = (float) $closes[count($closes) - 2];
-        }
+        // 7) Métriques de mèche (wick)
+        $body  = max(abs($close - $open), $eps);
+        $range = max($high - $low, $eps);
+        $upperWick = max($high - max($open, $close), 0.0);
+        $lowerWick = max(min($open, $close) - $low, 0.0);
+        $lowerRatio = $lowerWick / $range;
+        $upperRatio = $upperWick / $range;
 
-        // 6) Régime
-        $regime = 'neutral';
-        if ($adx14 >= $trendMinAdx)      { $regime = 'trend'; }
-        elseif ($adx14 <= $rangeMaxAdx)  { $regime = 'range'; }
+        // 8) Déclencheurs 1m (YML)
+        // Breakout Donchian (on compare au "prev" pour éviter un faux signal intra-range)
+        $breakoutAboveDonchianHigh = ($close > $dcUpperPrev + $eps);
+        $breakdownBelowDonchianLow = ($close < $dcLowerPrev - $eps);
 
-        // 7) Triggers
-        $emaTrendUp   = ($emaFast > $emaSlow + $eps);
-        $emaTrendDown = ($emaSlow > $emaFast + $eps);
+        // Retest VWAP avec mèche de rejet
+        $tol = $vwapVal * ($vwapTolBps / 10000.0);
+        $nearOrCrossBelowVwap = ($low <= $vwapVal + $tol);   // touche ou traverse légèrement par le bas
+        $nearOrCrossAboveVwap = ($high >= $vwapVal - $tol);  // touche ou traverse légèrement par le haut
 
-        $macdCrossUp   = ($diffPrev <= 0 + $eps) && ($diffNow > 0 + $eps);
-        $macdCrossDown = ($diffPrev >= 0 - $eps) && ($diffNow < 0 - $eps);
+        $bullishRetestVwap = $nearOrCrossBelowVwap && ($close > $vwapVal + $eps) && ($lowerRatio >= $minWickRatio - $eps);
+        $bearishRetestVwap = $nearOrCrossAboveVwap && ($close < $vwapVal - $eps) && ($upperRatio >= $minWickRatio - $eps);
 
-        $rsiCrossUp   = ($rsiPrev <= 50 + $eps) && ($rsiNow > 50 + $eps);
-        $rsiCrossDown = ($rsiPrev >= 50 - $eps) && ($rsiNow < 50 - $eps);
-
-        $kijun   = $ich['kijun']    ?? 0.0;
-        $senkouA = $ich['senkou_a'] ?? 0.0;
-        $priceAboveLine = ($lastClose > $kijun + $eps) || ($lastClose > $senkouA + $eps);
-        $priceBelowLine = ($kijun > $lastClose + $eps) || ($senkouA > $lastClose + $eps);
-
-        $kijunBreakUp   = ($prevClose <= $kijun + $eps) && ($lastClose > $kijun + $eps);
-        $kijunBreakDown = ($prevClose >= $kijun - $eps) && ($lastClose < $kijun - $eps);
-
-        $bbWidthUp = false;
-        if ($bbWidthSeries && count($bbWidthSeries) > $bbLookback) {
-            $nowW  = (float) end($bbWidthSeries);
-            $prevW = $bbWidthSeries[count($bbWidthSeries) - 1 - $bbLookback];
-            $bbWidthUp = ($nowW > $prevW + $eps);
-        }
-
-        // 8) Décision
-        $path = 'neutral';
-        $trigger = '';
+        // 9) Décision
         $signal = 'NONE';
+        $trigger = '';
+        $path = 'execution_1m';
 
-        if ($regime === 'trend') {
-            $path = 'trend';
-            $long  = $emaTrendUp   && ($macdCrossUp   || $rsiCrossUp   || $kijunBreakUp   || $priceAboveLine);
-            $short = $emaTrendDown && ($macdCrossDown || $rsiCrossDown || $kijunBreakDown || $priceBelowLine);
-
-            if ($long) {
-                $signal = 'LONG';
-                $trigger = $macdCrossUp ? 'macd_cross_up' : ($rsiCrossUp ? 'rsi_cross_up' : ($kijunBreakUp ? 'kijun_break_up' : 'ichi_price_above'));
-            } elseif ($short) {
-                $signal = 'SHORT';
-                $trigger = $macdCrossDown ? 'macd_cross_down' : ($rsiCrossDown ? 'rsi_cross_down' : ($kijunBreakDown ? 'kijun_break_down' : 'ichi_price_below'));
-            }
-        } elseif ($regime === 'range') {
-            $path = 'range';
-            $long  = ($rsiNow > 50 + $eps) && $bbWidthUp;
-            $short = ($rsiNow < 50 - $eps) && $bbWidthUp;
-
-            if ($long)  { $signal = 'LONG';  $trigger = 'range_momentum_up'; }
-            if ($short) { $signal = 'SHORT'; $trigger = 'range_momentum_down'; }
-        } else {
-            if ($emaTrendUp && ($macdCrossUp || $rsiCrossUp || $kijunBreakUp)) {
-                $path='trend'; $signal='LONG';  $trigger = $macdCrossUp ? 'macd_cross_up' : ($rsiCrossUp ? 'rsi_cross_up' : 'kijun_break_up');
-            } elseif ($emaTrendDown && ($macdCrossDown || $rsiCrossDown || $kijunBreakDown)) {
-                $path='trend'; $signal='SHORT'; $trigger = $macdCrossDown ? 'macd_cross_down' : ($rsiCrossDown ? 'rsi_cross_down' : 'kijun_break_down');
-            }
+        if ($breakoutAboveDonchianHigh || $bullishRetestVwap) {
+            $signal  = 'LONG';
+            $trigger = $breakoutAboveDonchianHigh ? 'breakout_above_donchian_high' : 'retest_vwap_bullish_wick';
+        } elseif ($breakdownBelowDonchianLow || $bearishRetestVwap) {
+            $signal  = 'SHORT';
+            $trigger = $breakdownBelowDonchianLow ? 'breakdown_below_donchian_low' : 'retest_vwap_bearish_wick';
         }
 
-        return [
-            'ema_fast'  => $emaFast,
-            'ema_slow'  => $emaSlow,
-            'adx14'     => $adx14,
-            'rsi14'     => $rsiNow,
-            'macd'      => [
-                'macd' => $macdNow,
-                'signal' => $sigNow,
-                'hist' => $histNow,
-                'diff' => $diffNow,
-                'prev_diff' => $diffPrev,
+        // 10) Retour
+        $validation = [
+            'donchian' => [
+                'upper'      => $dcUpper,
+                'lower'      => $dcLower,
+                'mid'        => $dcMid,
+                'upper_prev' => $dcUpperPrev,
+                'lower_prev' => $dcLowerPrev,
             ],
-            'bollinger' => $bb,
-            'ichimoku'  => [
-                'tenkan'   => $ich['tenkan']   ?? 0.0,
-                'kijun'    => $ich['kijun']    ?? 0.0,
-                'senkou_a' => $ich['senkou_a'] ?? 0.0,
-                'senkou_b' => $ich['senkou_b'] ?? 0.0,
+            'vwap' => $vwapVal,
+            'close' => $close,
+            'wick' => [
+                'upper'       => $upperWick,
+                'lower'       => $lowerWick,
+                'body'        => $body,
+                'range'       => $range,
+                'lower_ratio' => $lowerRatio,
+                'upper_ratio' => $upperRatio,
             ],
-            'regime'  => $regime,
-            'path'    => $path,
             'trigger' => $trigger,
             'signal'  => $signal,
+            'path'    => $path,
         ];
+
+        $this->signalsLogger->info('signals.tick', $validation);
+        if ($signal == 'NONE') {
+            $this->validationLogger->warning('validation.violation', $validation);
+        } else {
+            $this->validationLogger->info('validation.ok', $validation);
+        }
+
+        return $validation;
     }
 }

@@ -26,4 +26,48 @@ class ContractPipelineRepository extends ServiceEntityRepository
             ->getQuery()
             ->getResult();
     }
+
+    public function getAllSymbolsWithActive4h(): array
+    {
+        return $this->getAllSymbolsWithActiveTimeframe('4h');
+    }
+
+    public function getAllSymbolsWithActive1h(): array
+    {
+        return $this->getAllSymbolsWithActiveTimeframe('1h');
+    }
+
+    public function getAllSymbolsWithActive15m(): array
+    {
+        return $this->getAllSymbolsWithActiveTimeframe('15m');
+    }
+
+    public function getAllSymbolsWithActive5m(): array
+    {
+        return $this->getAllSymbolsWithActiveTimeframe('5m');
+    }
+
+    public function getAllSymbolsWithActive1m(): array
+    {
+        return $this->getAllSymbolsWithActiveTimeframe('1m');
+    }
+
+    private function getAllSymbolsWithActiveTimeframe(string $timeframe, int $limit = 221): array
+    {
+        $result = $this->createQueryBuilder('p')
+            ->innerJoin('p.contract', 'c')
+            ->select('c.symbol AS contractSymbol')
+            ->where('p.currentTimeframe = :tf')->setParameter('tf', $timeframe)
+            ->setMaxResults($limit)
+            ->getQuery()
+            ->getResult();
+//        $query = $this->createQueryBuilder('p')
+//            ->innerJoin('p.contract', 'c')
+//            ->select('c.symbol AS contractSymbol')
+//            ->where('p.currentTimeframe = :tf')->setParameter('tf', $timeframe)
+//            ->setMaxResults($limit)
+//            ->getQuery();
+//        dd($query->getSQL(), $query->getParameters());
+        return array_map(fn($item) => $item['contractSymbol'], $result) ?? [];
+    }
 }

@@ -25,7 +25,7 @@ RUN chmod +x script.py
 
 # Valeurs par défaut (surchageables)
 ENV TEMPORAL_ADDRESS=temporal:7233 \
-    TASK_QUEUE_NAME=cron_symfony_4h
+    TASK_QUEUE_NAME=cron_symfony
 
 # ⬇️ LANCE LE WORKER AUTOMATIQUEMENT
 ENTRYPOINT ["/entrypoint.sh"]

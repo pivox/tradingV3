@@ -6,48 +6,48 @@ namespace App\Service\Signals\Timeframe;
 use App\Entity\Kline;
 use App\Service\Config\TradingParameters;
 use App\Service\Indicator\Trend\Ema;
-use App\Service\Indicator\Trend\Adx;
-use App\Service\Indicator\Trend\Ichimoku;
 use App\Service\Indicator\Momentum\Rsi;
 use App\Service\Indicator\Momentum\Macd;
+use App\Service\Indicator\Momentum\StochRsi;
 use App\Service\Indicator\Volatility\Bollinger;
+use App\Service\Indicator\Volatility\Donchian;
+use App\Service\Indicator\Volatility\Choppiness;
+use Psr\Log\LoggerInterface;
 
-/**
- * Service de signal pour le timeframe 15m (exécution/trigger).
- *
- * Idée générale :
- *  - Déterminer un régime (tendance/range) via l'ADX,
- *  - En tendance : chercher un déclencheur rapide (croisement MACD↑/↓, franchissement Kijun, RSI cross 50),
- *  - En range : privilégier momentum mean-reversion léger (RSI>50 ou <50) avec expansion de volatilité (pente width Bollinger).
- *
- * Remarques d'implémentation :
- *  - Lecture défensive de la config YAML via TradingParameters (fallback robustes),
- *  - On laisse la dernière bougie potentiellement non clôturée de côté pour les comparaisons de prix si use_last_closed=true,
- *  - On fournit un champ "trigger" (macd_cross_up/down, kijun_break_up/down, rsi_cross_up/down) pour tracer la cause d'entrée.
- */
+// VWAP n'est pas requis dans la branche 15m du YML, on l'omet ici.
+
 final class Signal15mService
 {
     public function __construct(
+        private LoggerInterface $validationLogger, // canal 'validation'
+        private LoggerInterface $signalsLogger,    // canal 'signals'
         private Ema $ema,
-        private Adx $adx,
-        private Ichimoku $ichimoku,
         private Rsi $rsi,
         private Macd $macd,
+        private StochRsi $stochRsi,
         private Bollinger $bollinger,
+        private Donchian $donchian,
+        private Choppiness $choppiness,
         private TradingParameters $params,
 
-
-// Défauts
+        // Défauts cohérents avec le YML v1.2
         private float $defaultEps = 1.0e-6,
-        private bool $defaultUseLastClosed = true,
-        private int $defaultMinBars = 220,
-        private int $defaultTrendMinAdx = 23,
-        private int $defaultRangeMaxAdx = 18,
-        private int $defaultBbLookback = 3,
-        private int $defaultEmaFastPeriod = 50,
-        private int $defaultEmaSlowPeriod = 200,
-        private float $defaultCrossMinDiff = 0.0, // |MACD-Signal| min pour valider un cross
-        private float $defaultKijunBreakMinPct = 0.0005 // 5 bps au‑dessus de Kijun par défaut
+        private bool  $defaultUseLastClosed = true,
+        private int   $defaultMinBars = 220,
+        private int   $defaultEmaFastPeriod = 20,
+        private int   $defaultEmaSlowPeriod = 50,
+        private int   $defaultMacdFast = 12,
+        private int   $defaultMacdSlow = 26,
+        private int   $defaultMacdSignal = 9,
+        private int   $defaultStochRsiPeriod = 14,
+        private int   $defaultStochRsiK = 3,
+        private int   $defaultStochRsiD = 3,
+        private int   $defaultDonchianPeriod = 20,
+        private int   $defaultChopPeriod = 14,
+        private float $defaultChopMax = 61.0,
+        private int   $defaultBbPeriod = 20,
+        private float $defaultBbStd = 2.0,
+        private float $defaultBbMinWidthPct = 0.3 // optionnel : garde-fou de volatilité
     ) {}
 
     /**
@@ -55,12 +55,12 @@ final class Signal15mService
      * @return array{
      *   ema_fast: float,
      *   ema_slow: float,
-     *   adx14: float,
      *   rsi14: float,
-     *   macd: array{macd:float,signal:float,hist:float,diff:float,prev_diff:float},
-     *   bollinger: array{upper:float,lower:float,middle:float,width:float},
-     *   ichimoku: array{tenkan:float,kijun:float,senkou_a:float,senkou_b:float},
-     *   regime: string,
+     *   macd: array{macd:float,signal:float,hist:float},
+     *   stochrsi: array{k:float,d:float,cross:string},
+     *   donchian: array{upper:float,lower:float,mid:float},
+     *   choppiness: float,
+     *   bollinger?: array{upper:float,lower:float,middle:float,width:float,width_pct?:float},
      *   path: string,
      *   trigger: string,
      *   signal: string,
@@ -71,35 +71,52 @@ final class Signal15mService
     {
         // 1) Config YAML (sécurisée)
         $cfg = $this->params->getConfig();
-        $tf  = $cfg['timeframes']['15m'] ?? [];
+        $tf  = $cfg['timeframes']['15m'] ?? []; // section spécifique si vous en avez une
 
         $eps           = $cfg['runtime']['eps']              ?? $this->defaultEps;
         $useLastClosed = $cfg['runtime']['use_last_closed']  ?? $this->defaultUseLastClosed;
         $minBars       = $tf['guards']['min_bars']           ?? $this->defaultMinBars;
 
-        $trendMinAdx   = $tf['regime']['trend_min_adx']      ?? $this->defaultTrendMinAdx;
-        $rangeMaxAdx   = $tf['regime']['range_max_adx']      ?? $this->defaultRangeMaxAdx;
-        $bbLookback    = $tf['regime']['bb_lookback']        ?? $this->defaultBbLookback;
+        $emaFastPeriod = $cfg['indicators']['ema']['fast']   ?? $this->defaultEmaFastPeriod;
+        $emaSlowPeriod = $cfg['indicators']['ema']['slow']   ?? $this->defaultEmaSlowPeriod;
 
-        $emaFastPeriod = $tf['indicators']['ema_fast']['period'] ?? ($tf['indicators']['ema50']['period'] ?? $this->defaultEmaFastPeriod);
-        $emaSlowPeriod = $tf['indicators']['ema_slow']['period'] ?? ($tf['indicators']['ema200']['period'] ?? $this->defaultEmaSlowPeriod);
+        $macdFast      = $cfg['indicators']['macd']['fast']  ?? $this->defaultMacdFast;
+        $macdSlow      = $cfg['indicators']['macd']['slow']  ?? $this->defaultMacdSlow;
+        $macdSignal    = $cfg['indicators']['macd']['signal']?? $this->defaultMacdSignal;
+
+        $srsiPeriod    = $cfg['indicators']['stochrsi']['period'] ?? $this->defaultStochRsiPeriod;
+        $srsiK         = $cfg['indicators']['stochrsi']['k']      ?? $this->defaultStochRsiK;
+        $srsiD         = $cfg['indicators']['stochrsi']['d']      ?? $this->defaultStochRsiD;
+
+        $donchianPeriod= $cfg['indicators']['donchian']['period'] ?? $this->defaultDonchianPeriod;
+
+        $chopPeriod    = $cfg['indicators']['choppiness']['period'] ?? $this->defaultChopPeriod;
+        $chopMax       = $cfg['indicators']['choppiness']['max']    ?? $this->defaultChopMax;
+
+        $bbPeriod      = $cfg['indicators']['bollinger']['period'] ?? $this->defaultBbPeriod;
+        $bbStd         = $cfg['indicators']['bollinger']['std']    ?? $this->defaultBbStd;
+        $bbMinWidthPct = $cfg['indicators']['bollinger']['min_width_pct'] ?? $this->defaultBbMinWidthPct;
 
         // 2) Garde-fou
         if (count($candles) < $minBars) {
-            return [
+            $validation = [
                 'ema_fast'  => 0.0,
                 'ema_slow'  => 0.0,
-                'adx14'     => 0.0,
                 'rsi14'     => 0.0,
-                'macd'      => ['macd'=>0.0,'signal'=>0.0,'hist'=>0.0,'diff'=>0.0,'prev_diff'=>0.0],
-                'bollinger' => ['upper'=>0.0,'lower'=>0.0,'middle'=>0.0,'width'=>0.0],
-                'ichimoku'  => ['tenkan'=>0.0,'kijun'=>0.0,'senkou_a'=>0.0,'senkou_b'=>0.0],
-                'regime'    => 'neutral',
+                'macd'      => ['macd'=>0.0,'signal'=>0.0,'hist'=>0.0],
+                'stochrsi'  => ['k'=>0.0,'d'=>0.0,'cross'=>'none'],
+                'donchian'  => ['upper'=>0.0,'lower'=>0.0,'mid'=>0.0],
+                'choppiness'=> 100.0,
+                'bollinger' => ['upper'=>0.0,'lower'=>0.0,'middle'=>0.0,'width'=>0.0,'width_pct'=>0.0],
                 'path'      => 'neutral',
                 'trigger'   => '',
                 'signal'    => 'NONE',
                 'status'    => 'insufficient_data',
             ];
+
+            $this->signalsLogger->info('signals.tick', $validation);
+            $this->validationLogger->warning('validation.violation', $validation);
+            return $validation;
         }
 
         // 3) Séries OHLC
@@ -110,69 +127,61 @@ final class Signal15mService
         // 4) Indicateurs
         $emaFast = $this->ema->calculate($closes, $emaFastPeriod);
         $emaSlow = $this->ema->calculate($closes, $emaSlowPeriod);
-        $adx14   = $this->adx->calculate($highs, $lows, $closes, 14);
 
-        $ich = $this->ichimoku->calculateFull($highs, $lows, $closes, 9, 26, 52, 26, true);
-        if (!isset($ich['senkou_a']) && isset($ich['tenkan'], $ich['kijun'])) {
-            $ich['senkou_a'] = ($ich['tenkan'] + $ich['kijun']) / 2.0;
-        }
+        $rsi14   = $this->rsi->calculate($closes, 14);
 
-        // RSI (valeur courante + précédente via recalc sur N-1 barres)
-        $rsiNow  = $this->rsi->calculate($closes, 14);
-        $rsiPrev = $this->rsi->calculate(array_slice($closes, 0, -1), 14);
-
-        // MACD séries si dispo, sinon fallback point + recalc N-1
-        $macdNow = 0.0; $sigNow = 0.0; $histNow = 0.0; $diffNow = 0.0; $diffPrev = 0.0;
+        // MACD (séries)
+        $macdNow = 0.0; $sigNow = 0.0; $histNow = 0.0;
         if (method_exists($this->macd, 'calculateFull')) {
-            $m = $this->macd->calculateFull($closes, 12, 26, 9);
+            $m = $this->macd->calculateFull($closes, $macdFast, $macdSlow, $macdSignal);
             if (!empty($m['macd']) && !empty($m['signal'])) {
                 $macdNow = (float) end($m['macd']);
                 $sigNow  = (float) end($m['signal']);
                 $histNow = isset($m['hist']) && !empty($m['hist']) ? (float) end($m['hist']) : ($macdNow - $sigNow);
-                // diff précédent
-                $nMacd = count($m['macd']); $nSig = count($m['signal']);
-                if ($nMacd > 1 && $nSig > 1) {
-                    $prevMacd = (float) $m['macd'][$nMacd - 2];
-                    $prevSig  = (float) $m['signal'][$nSig - 2];
-                    $diffPrev = $prevMacd - $prevSig;
-                }
             }
-            $diffNow = $macdNow - $sigNow;
         } else {
-            $m = $this->macd->calculate($closes, 12, 26, 9);
+            $m = $this->macd->calculate($closes, $macdFast, $macdSlow, $macdSignal);
             $macdNow = (float) ($m['macd'] ?? 0.0);
             $sigNow  = (float) ($m['signal'] ?? 0.0);
             $histNow = (float) ($m['hist'] ?? ($macdNow - $sigNow));
-            $diffNow = $macdNow - $sigNow;
-            $m2 = $this->macd->calculate(array_slice($closes, 0, -1), 12, 26, 9);
-            $diffPrev = (float) (($m2['macd'] ?? 0.0) - ($m2['signal'] ?? 0.0));
         }
 
-        // Bollinger (séries si possible pour la pente de width)
-        $bb = ['upper'=>0.0,'lower'=>0.0,'middle'=>0.0,'width'=>0.0];
-        $bbWidthSeries = [];
+        // StochRSI
+        $sr = $this->stochRsi->calculateFull($closes, $srsiPeriod, $srsiK, $srsiD);
+        $kNow = isset($sr['k']) && !empty($sr['k']) ? (float) end($sr['k']) : 0.0;
+        $dNow = isset($sr['d']) && !empty($sr['d']) ? (float) end($sr['d']) : 0.0;
+        $kPrev = $kNow; $dPrev = $dNow;
+        if (!empty($sr['k']) && count($sr['k']) > 1) { $kPrev = (float) $sr['k'][count($sr['k']) - 2]; }
+        if (!empty($sr['d']) && count($sr['d']) > 1) { $dPrev = (float) $sr['d'][count($sr['d']) - 2]; }
+        $srsiCrossUp   = ($kPrev <= $dPrev + $eps) && ($kNow > $dNow + $eps);
+        $srsiCrossDown = ($kPrev >= $dPrev - $eps) && ($kNow < $dNow - $eps);
+        $srsiCross = $srsiCrossUp ? 'k_cross_up_d' : ($srsiCrossDown ? 'k_cross_down_d' : 'none');
+
+        // Donchian (20) + médiane
+        $dc = $this->donchian->calculateFull($highs, $lows, $donchianPeriod);
+        $dcUpper = (float) ($dc['upper'] ?? 0.0);
+        $dcLower = (float) ($dc['lower'] ?? 0.0);
+        $dcMid   = ($dcUpper + $dcLower) / 2.0;
+
+        // Choppiness
+        $chop = $this->choppiness->calculate($highs, $lows, $closes, $chopPeriod);
+
+        // Bollinger (optionnel : contrôle d’environnement)
+        $bb = ['upper'=>0.0,'lower'=>0.0,'middle'=>0.0,'width'=>0.0,'width_pct'=>0.0];
         if (method_exists($this->bollinger, 'calculateFull')) {
-            $b = $this->bollinger->calculateFull($closes, 20, 2.0);
+            $b = $this->bollinger->calculateFull($closes, $bbPeriod, $bbStd);
             if (!empty($b['upper']) && !empty($b['lower'])) {
-                $n = min(count($b['upper']), count($b['lower']));
-                for ($i = 0; $i < $n; $i++) {
-                    $bbWidthSeries[] = (float) ($b['upper'][$i] - $b['lower'][$i]);
-                }
                 $bb['upper']  = (float) end($b['upper']);
                 $bb['lower']  = (float) end($b['lower']);
                 $bb['middle'] = !empty($b['middle']) ? (float) end($b['middle']) : ($bb['upper'] + $bb['lower']) / 2.0;
-                $bb['width']  = $bbWidthSeries ? (float) end($bbWidthSeries) : ($bb['upper'] - $bb['lower']);
+                $bb['width']  = $bb['upper'] - $bb['lower'];
+                $priceRef     = (float) end($closes);
+                $bb['width_pct'] = ($priceRef > 0.0) ? ($bb['width'] / $priceRef) * 100.0 : 0.0;
             }
-        } else {
-            $b = $this->bollinger->calculate($closes, 20, 2.0);
-            $bb['upper']  = (float) ($b['upper']  ?? 0.0);
-            $bb['lower']  = (float) ($b['lower']  ?? 0.0);
-            $bb['middle'] = (float) ($b['middle'] ?? (($bb['upper'] + $bb['lower']) / 2.0));
-            $bb['width']  = (float) ($b['width']  ?? ($bb['upper'] - $bb['lower']));
         }
 
         // 5) Close de référence (dernier close clôturé si demandé)
-        $lastClose = end($closes);
+        $lastClose = (float) end($closes);
         $prevClose = $lastClose;
         if ($useLastClosed && count($closes) > 1) {
             $tmp = $closes; array_pop($tmp);
@@ -182,96 +191,76 @@ final class Signal15mService
             $prevClose = (float) $closes[count($closes) - 2];
         }
 
-        // 6) Régime
-        $regime = 'neutral';
-        if ($adx14 >= $trendMinAdx)      { $regime = 'trend'; }
-        elseif ($adx14 <= $rangeMaxAdx)  { $regime = 'range'; }
-
-        // 7) Triggers rapides
+        // 6) Règles d'exécution 15m (YML v1.2)
+        // Long: ema_fast>ema_slow && macd_hist>0 && StochRSI K cross up D && choppiness < 61 && close > Donchian mid
+        // Short: ema_fast<ema_slow && macd_hist<0 && StochRSI K cross down D && choppiness < 61 && close < Donchian mid
+        // Optionnel : vérifier un minimum d'ouverture (Bollinger width_pct) si vous souhaitez filtrer marchés ultra-calmes.
         $emaTrendUp   = ($emaFast > $emaSlow + $eps);
         $emaTrendDown = ($emaSlow > $emaFast + $eps);
 
-        $macdCrossUp   = ($diffPrev <= 0 + $eps) && ($diffNow > 0 + $eps);
-        $macdCrossDown = ($diffPrev >= 0 - $eps) && ($diffNow < 0 - $eps);
+        $macdHistUp   = ($histNow > 0 + $eps);
+        $macdHistDown = ($histNow < 0 - $eps);
 
-        $rsiCrossUp   = ($rsiPrev <= 50 + $eps) && ($rsiNow > 50 + $eps);
-        $rsiCrossDown = ($rsiPrev >= 50 - $eps) && ($rsiNow < 50 - $eps);
+        $closeAboveDcMid = ($lastClose > $dcMid + $eps);
+        $closeBelowDcMid = ($lastClose < $dcMid - $eps);
 
-        $kijun   = $ich['kijun']    ?? 0.0;
-        $senkouA = $ich['senkou_a'] ?? 0.0;
-        $priceAboveCloudLine = ($lastClose > $kijun + $eps) || ($lastClose > $senkouA + $eps);
-        $priceBelowCloudLine = ($kijun > $lastClose + $eps) || ($senkouA > $lastClose + $eps);
+        $chopOk = ($chop < $chopMax - $eps);
 
-        $kijunBreakUp   = ($prevClose <= $kijun + $eps) && ($lastClose > $kijun + $eps);
-        $kijunBreakDown = ($prevClose >= $kijun - $eps) && ($lastClose < $kijun - $eps);
-
-        // Pente de la width (expansion) sur lookback
-        $bbWidthUp = false;
-        if ($bbWidthSeries && count($bbWidthSeries) > $bbLookback) {
-            $nowW   = (float) end($bbWidthSeries);
-            $prevW  = $bbWidthSeries[count($bbWidthSeries) - 1 - $bbLookback];
-            $bbWidthUp = ($nowW > $prevW + $eps);
+        $bbOk = true;
+        if ($bb['width_pct'] > 0.0 && $bbMinWidthPct > 0.0) {
+            $bbOk = ($bb['width_pct'] >= $bbMinWidthPct - $eps);
         }
 
-        // 8) Règles chemin
-        $path = 'neutral';
-        $trigger = '';
         $signal = 'NONE';
+        $trigger = '';
+        $path = 'execution_15m';
 
-        if ($regime === 'trend') {
-            $path = 'trend';
-            $long  = $emaTrendUp   && ($macdCrossUp   || $rsiCrossUp   || $kijunBreakUp   || $priceAboveCloudLine);
-            $short = $emaTrendDown && ($macdCrossDown || $rsiCrossDown || $kijunBreakDown || $priceBelowCloudLine);
+        $long  = $emaTrendUp   && $macdHistUp   && $srsiCrossUp   && $chopOk && $closeAboveDcMid && $bbOk;
+        $short = $emaTrendDown && $macdHistDown && $srsiCrossDown && $chopOk && $closeBelowDcMid && $bbOk;
 
-            if ($long) {
-                $signal = 'LONG';
-                $trigger = $macdCrossUp ? 'macd_cross_up' : ($rsiCrossUp ? 'rsi_cross_up' : ($kijunBreakUp ? 'kijun_break_up' : 'ichi_price_above'));
-            } elseif ($short) {
-                $signal = 'SHORT';
-                $trigger = $macdCrossDown ? 'macd_cross_down' : ($rsiCrossDown ? 'rsi_cross_down' : ($kijunBreakDown ? 'kijun_break_down' : 'ichi_price_below'));
-            }
-        } elseif ($regime === 'range') {
-            $path = 'range';
-            $long  = ($rsiNow > 50 + $eps) && $bbWidthUp;   // momentum léger + expansion
-            $short = ($rsiNow < 50 - $eps) && $bbWidthUp;
-
-            if ($long) { $signal = 'LONG';  $trigger = 'range_momentum_up'; }
-            elseif ($short) { $signal = 'SHORT'; $trigger = 'range_momentum_down'; }
-        } else {
-            // neutral : on accepte une validation par au moins un déclencheur cohérent avec l'EMA
-            if ($emaTrendUp && ($macdCrossUp || $rsiCrossUp || $kijunBreakUp)) {
-                $path = 'trend'; $signal = 'LONG'; $trigger = $macdCrossUp ? 'macd_cross_up' : ($rsiCrossUp ? 'rsi_cross_up' : 'kijun_break_up');
-            } elseif ($emaTrendDown && ($macdCrossDown || $rsiCrossDown || $kijunBreakDown)) {
-                $path = 'trend'; $signal = 'SHORT'; $trigger = $macdCrossDown ? 'macd_cross_down' : ($rsiCrossDown ? 'rsi_cross_down' : 'kijun_break_down');
-            } else {
-                $signal = 'NONE';
-            }
+        if ($long) {
+            $signal  = 'LONG';
+            $trigger = 'ema_fast_gt_slow & macd_hist_gt_0 & stochrsi_k_cross_up_d & choppiness_below_max & close_above_donchian_mid';
+        } elseif ($short) {
+            $signal  = 'SHORT';
+            $trigger = 'ema_fast_lt_slow & macd_hist_lt_0 & stochrsi_k_cross_down_d & choppiness_below_max & close_below_donchian_mid';
         }
 
-        // 9) Retour
-        return [
+        // 7) Retour
+        $validation = [
             'ema_fast'  => $emaFast,
             'ema_slow'  => $emaSlow,
-            'adx14'     => $adx14,
-            'rsi14'     => $rsiNow,
+            'rsi14'     => $rsi14,
             'macd'      => [
-                'macd' => $macdNow,
+                'macd'   => $macdNow,
                 'signal' => $sigNow,
-                'hist' => $histNow,
-                'diff' => $diffNow,
-                'prev_diff' => $diffPrev,
+                'hist'   => $histNow,
             ],
-            'bollinger' => $bb,
-            'ichimoku'  => [
-                'tenkan'   => $ich['tenkan']   ?? 0.0,
-                'kijun'    => $ich['kijun']    ?? 0.0,
-                'senkou_a' => $ich['senkou_a'] ?? 0.0,
-                'senkou_b' => $ich['senkou_b'] ?? 0.0,
+            'stochrsi' => [
+                'k'     => $kNow,
+                'd'     => $dNow,
+                'cross' => $srsiCross,
             ],
-            'regime'  => $regime,
-            'path'    => $path,
-            'trigger' => $trigger,
-            'signal'  => $signal,
+            'donchian' => [
+                'upper' => $dcUpper,
+                'lower' => $dcLower,
+                'mid'   => $dcMid,
+            ],
+            'choppiness' => $chop,
+            'bollinger'  => $bb,
+            'path'       => $path,
+            'trigger'    => $trigger,
+            'signal'     => $signal,
         ];
+
+
+        $this->signalsLogger->info('signals.tick', $validation);
+        if ($signal == 'NONE') {
+            $this->validationLogger->warning('validation.violation', $validation);
+        } else {
+            $this->validationLogger->info('validation.ok', $validation);
+        }
+
+        return $validation;
     }
 }

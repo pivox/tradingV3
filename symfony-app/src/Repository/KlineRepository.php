@@ -19,7 +19,7 @@ class KlineRepository extends ServiceEntityRepository
     /**
      * Trouve les derniers Klines par symbol et interval, triés par timestamp DESC
      */
-    public function findRecentKlines(string $symbol, int $step, int $limit): array
+    public function fetchRecent(string $symbol, int $step, int $limit): array
     {
         return $this->createQueryBuilder('k')
             ->innerJoin('k.contract', 'contract')
@@ -51,26 +51,40 @@ class KlineRepository extends ServiceEntityRepository
 
     public function findRecentBySymbolAndTimeframe(string $symbol, string $timeframe, int $limit)
     {
-        return $this->createQueryBuilder('k')
+        $x = $this->createQueryBuilder('k')
             ->innerJoin('k.contract', 'contract')
             ->where('contract.symbol = :symbol')->setParameter('symbol', $symbol)
             ->andWhere('k.step = :step')->setParameter('step', $this->stepFor($timeframe))
             ->orderBy('k.timestamp', 'DESC')
             ->setMaxResults($limit)
-            ->getQuery()
-            ->getResult();
+            ->getQuery();
+            return $x->getResult();
     }
 
     private function stepFor(string $timeframe): int
     {
         return match($timeframe) {
-            '1m'  => 60,
-            '5m'  => 300,
-            '15m' => 900,
-            '1h'  => 3600,
-            '4h'  => 14400,
-            '1d'  => 86400,
+            '1m'  => 1,
+            '5m'  => 5,
+            '15m' => 15,
+            '1h'  => 60,
+            '4h'  => 240,
             default => throw new \InvalidArgumentException("Unsupported timeframe: $timeframe"),
         };
+    }
+
+    public function findLastKline(mixed $contract, int $int)
+    {
+        $result = $this->createQueryBuilder('k')
+            ->where('k.contract = :contract')
+            ->andWhere('k.step = :step')
+            ->setParameter('contract', $contract)
+            ->setParameter('step', $int)
+            ->select('k.timestamp')
+            ->orderBy('k.timestamp', 'DESC')
+            ->setMaxResults(1)
+            ->getQuery()
+            ->getOneOrNullResult();
+        return $result['timestamp'] ?? null;
     }
 }

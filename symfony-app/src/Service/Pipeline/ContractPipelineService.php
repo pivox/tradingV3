@@ -5,6 +5,7 @@ namespace App\Service\Pipeline;
 use App\Entity\Contract;
 use App\Entity\ContractPipeline;
 use App\Repository\ContractPipelineRepository;
+use App\Repository\ContractRepository;
 use Doctrine\ORM\EntityManagerInterface;
 
 final class ContractPipelineService
@@ -12,6 +13,7 @@ final class ContractPipelineService
     public function __construct(
         private readonly ContractPipelineRepository $repo,
         private readonly EntityManagerInterface $em,
+        private readonly ContractRepository $contractRepo,
     ) {}
 
     /**
@@ -44,6 +46,9 @@ final class ContractPipelineService
     public function markAttempt(ContractPipeline $pipe): ContractPipeline
     {
         $pipe->markAttempt();
+        $contract = $pipe->getContract();
+        $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
+        $pipe->setContract($contract);
         $this->em->flush();
         return $pipe;
     }
@@ -52,6 +57,9 @@ final class ContractPipelineService
     public function incrementRetries(ContractPipeline $pipe): ContractPipeline
     {
         $pipe->incRetries()->setStatus(ContractPipeline::STATUS_PENDING);
+        $contract = $pipe->getContract();
+        $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
+        $pipe->setContract($contract);
         $this->em->flush();
         return $pipe;
     }
@@ -60,6 +68,9 @@ final class ContractPipelineService
     public function resetRetries(ContractPipeline $pipe): ContractPipeline
     {
         $pipe->resetRetries();
+        $contract = $pipe->getContract();
+        $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
+        $pipe->setContract($contract);
         $this->em->flush();
         return $pipe;
     }
@@ -68,6 +79,9 @@ final class ContractPipelineService
     public function promoteTo(ContractPipeline $pipe, string $nextTf, int $maxRetries): ContractPipeline
     {
         $pipe->promoteTo($nextTf, $maxRetries);
+        $contract = $pipe->getContract();
+        $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
+        $pipe->setContract($contract);
         $this->em->flush();
         return $pipe;
     }
@@ -76,6 +90,9 @@ final class ContractPipelineService
     public function demoteTo(ContractPipeline $pipe, string $parentTf): ContractPipeline
     {
         $pipe->demoteTo($parentTf);
+        $contract = $pipe->getContract();
+        $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
+        $pipe->setContract($contract);
         $this->em->flush();
         return $pipe;
     }
@@ -98,9 +115,8 @@ final class ContractPipelineService
      *  - valid=false :
      *      retries++ ; si retries >= maxRetries -> rétrograde d’un cran (sauf 4h)
      */
-    public function applyDecision(ContractPipeline $pipe, string $timeframe, array $decision): ContractPipeline
+    public function applyDecision(ContractPipeline $pipe, string $timeframe, bool $valid): ContractPipeline
     {
-        $valid = (bool)($decision['valid'] ?? false);
 
         if ($valid) {
             // Promotion
@@ -145,6 +161,9 @@ final class ContractPipelineService
                     ->setStatus(ContractPipeline::STATUS_PENDING)
                     ->touchUpdatedAt();
             }
+            $contract = $pipe->getContract();
+            $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
+            $pipe->setContract($contract);
 
             $this->em->flush();
         }
