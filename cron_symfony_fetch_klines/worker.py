@@ -10,7 +10,7 @@ from workflows.cron_symfony_1m import CronSymfony1mWorkflow
 from activities.symfony_http import call_symfony_endpoint  # ici c'est OK (hors sandbox)
 
 TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
-TASK_QUEUE = os.getenv("TASK_QUEUE_NAME", "cron_symfony_refresh")
+TASK_QUEUE = os.getenv("TASK_QUEUE_NAME", "cron_symfony")
 
 async def main():
     client = await Client.connect(TEMPORAL_ADDRESS)

@@ -3,12 +3,14 @@
 namespace App\Controller\Bitmart;
 
 use App\Entity\Contract;
+use App\Entity\ContractPipeline;
 use App\Entity\Position;
-use App\Repository\ContractPipelineRepository;
+use App\Repository\KlineRepository;
+use App\Service\ContractSignalWriter;
 use App\Service\Exchange\Bitmart\BitmartFetcher;
-use App\Service\Indicator\IndicatorValidatorClient;
 use App\Service\Persister\KlinePersister;
 use App\Service\Pipeline\ContractPipelineService;
+use App\Service\Signals\Timeframe\SignalService;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -16,104 +18,118 @@ use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Annotation\Route;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 
-/**
- * Callback “get-kline” appelé par le workflow rate-limiter.
- * Étapes :
- *  - Parse l’enveloppe
- *  - Fetch des klines Bitmart (via BitmartFetcher) sur la fenêtre demandée
- *  - Persistence des klines
- *  - Appel à l’API indicateur /validate (avec klines)
- *  - Application de la décision (promotion/rétrogradation)
- *  - Si timeframe=1m et valid=true -> ouverture Position(100 USDT)
- */
 final class BitmartKlinesCallbackController extends AbstractController
 {
     public function __construct(
-        private readonly IndicatorValidatorClient $indicatorClient
+        private readonly SignalService $signalService
+        // NOTE: IndicatorValidatorClient non utilisé ici : garde-le si tu l’emploies dans une autre méthode
     ) {}
 
     #[Route('/api/callback/bitmart/get-kline', name: 'bitmart_klines_callback', methods: ['POST'])]
     public function __invoke(
         Request $request,
         EntityManagerInterface $em,
-        ContractPipelineRepository $pipelineRepo,
         ContractPipelineService $pipelineService,
         BitmartFetcher $bitmartFetcher,
         KlinePersister $persister,
         LoggerInterface $logger,
+        ContractSignalWriter $contractSignalWriter,
+        KlineRepository $klineRepository,
     ): JsonResponse {
 
-        // 1) Lire l’enveloppe envoyée par le workflow
+        // 1) Enveloppe
         $envelope = json_decode($request->getContent(), true) ?? [];
         $payload  = $envelope['payload'] ?? [];
 
         $symbol    = (string) ($payload['contract']  ?? '');
         $timeframe = (string) ($payload['timeframe'] ?? '4h');
-        $limit     = (int)    ($payload['limit']     ?? 100);
+        $limit     = (int)    ($payload['limit']     ?? 220);
         $sinceTs   = isset($payload['since_ts']) ? (int) $payload['since_ts'] : null;
 
         if ($symbol === '') {
             return $this->json(['status' => 'error', 'message' => 'Missing contract symbol'], 400);
         }
 
-        // 2) Récupérer le Contract
         /** @var Contract|null $contract */
         $contract = $em->getRepository(Contract::class)->find($symbol);
         if (!$contract) {
             return $this->json(['status' => 'error', 'message' => 'Contract not found: '.$symbol], 404);
         }
 
-        // 3) Timeframe mapping
+        // 2) Mapping TF → minutes
         $tfToMinutes = [
             '1m'=>1,'3m'=>3,'5m'=>5,'15m'=>15,'30m'=>30,
-            '1h'=>60,'2h'=>120,'4h'=>240,'6h'=>360,'12h'=>720,
-            '1d'=>1440,'3d'=>4320,'1w'=>10080,
+            '1h'=>60,'2h'=>120,'4h'=>240,
         ];
         $stepMinutes = $tfToMinutes[$timeframe] ?? 240;
-        $stepSeconds = $stepMinutes * 60;
 
-        // 4) Fenêtre temporelle
-        $now   = new \DateTimeImmutable();
-        $start = $sinceTs
-            ? (new \DateTimeImmutable())->setTimestamp($sinceTs)
-            : $now->sub(new \DateInterval('PT'.($limit * $stepMinutes).'M'));
-        $end   = $now;
+        // 3) Fenêtre temporelle
+        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $minSince = $now->sub(new \DateInterval('PT'.max(0, ($limit - 1) * $stepMinutes).'M'));
 
-        // 5) Fetch klines via BitmartFetcher (amont rate-limiter)
-        $dtos = $bitmartFetcher->fetchKlines($symbol, $start, $end, $stepMinutes);
-
-        // 6) Persistance klines
-        $persisted = $persister->persistMany($contract, $dtos, $stepSeconds);
-
-        // 7) Construire la payload pour l’API indicateur à partir des DTOs
-        //    On garde l’ordre chronologique ascendant.
-        $klinesPayload = array_map(function ($dto) {
-            // On suppose que le DTO expose : getTimestamp(), getOpen(), getHigh(), getLow(), getClose(), getVolume()
-            return [
-                'timestamp' => (int)    $dto->getTimestamp()->getTimestamp(),
-                'open'      => (float)  $dto->getOpen(),
-                'high'      => (float)  $dto->getHigh(),
-                'low'       => (float)  $dto->getLow(),
-                'close'     => (float)  $dto->getClose(),
-                'volume'    => (float)  $dto->getVolume(),
-            ];
-        }, $dtos);
-
-        // 8) Appel API indicateur /validate via le client dédié
-        $decision = $this->indicatorClient->validate($symbol, $timeframe, $klinesPayload); // ex: ['valid'=>bool, 'side'=>'LONG'|'SHORT', ...]
-
-        // 9) Appliquer la décision au pipeline (si ligne trouvée)
-        $pipe = $pipelineRepo->findOneBy(['contract' => $contract]);
-        if ($pipe) {
-            $pipelineService->markAttempt($pipe);
-            if (is_array($decision) && array_key_exists('valid', $decision)) {
-                $pipelineService->applyDecision($pipe, $timeframe, $decision);
-            }
+        $since = $sinceTs === null
+            ? $minSince
+            : (new \DateTimeImmutable('@'.$sinceTs))->setTimezone(new \DateTimeZone('UTC'));
+        if ($since < $minSince) {
+            $since = $minSince;
         }
 
-        // 10) Si timeframe = 1m et valid = true → ouvrir une position 100 USDT
-        if (is_array($decision) && !empty($decision['valid']) && $timeframe === '1m') {
-            $side = strtoupper((string)($decision['side'] ?? Position::SIDE_LONG));
+        // 4) Fetch klines (BitmartFetcher prend DateTimeInterface)
+        $dtos = $bitmartFetcher->fetchKlines($symbol, $since, $now, $stepMinutes);
+
+        // 5) Persistance
+        $persistedDtos = $persister->persistMany($contract, $dtos, $stepMinutes, true);
+        $persistedCount = is_countable($persistedDtos) ? count($persistedDtos) : 0;
+
+        // 6) Récup données récentes pour le TF demandé (PAS '4h' en dur)
+        $klines = $klineRepository->findRecentBySymbolAndTimeframe($contract->getSymbol(), $timeframe, max(220, $limit));
+
+        // 7) Évaluation signaux
+        $signals = $this->signalService->evaluate($klines, $timeframe);
+
+        // 8) Upsert + décision
+        $pipeline = $contractSignalWriter->saveAttempt(
+            contract: $contract,
+            tf: $timeframe,
+            signals: $signals,
+            flush: false
+        );
+
+        if (!$pipeline) {
+            $logger->warning('⚠️ No pipeline found for contract', ['symbol' => $symbol, 'timeframe' => $timeframe]);
+            return $this->json([
+                'status'    => 'ok',
+                'symbol'    => $symbol,
+                'timeframe' => $timeframe,
+                'persisted' => $persistedCount,
+                'decision'  => null,
+            ]);
+        }
+
+        if ($pipeline->isToDelete()) {
+            $em->remove($pipeline);
+            $em->flush();
+            $logger->info('🗑️ Pipeline deleted after decision', [
+                'symbol' => $symbol,
+                'timeframe' => $timeframe,
+                'step_minutes' => $stepMinutes,
+                'persisted' => $persistedCount,
+            ]);
+            return $this->json([
+                'status'    => 'ok',
+                'symbol'    => $symbol,
+                'timeframe' => $timeframe,
+                'persisted' => $persistedCount,
+                'decision'  => null,
+            ]);
+        }
+
+        $pipelineService->markAttempt($pipeline);
+        $pipelineService->applyDecision($pipeline, $timeframe, $pipeline->isValid());
+
+        // 9) Ouverture position sur 1m (actuel) — ⚠️ simplifié
+        if ($pipeline->isValid() && $timeframe === '1m') {
+            $side = strtoupper((string)$pipeline->getSignalLongOrShortOrNone());
             if (!in_array($side, [Position::SIDE_LONG, Position::SIDE_SHORT], true)) {
                 $side = Position::SIDE_LONG;
             }
@@ -123,9 +139,9 @@ final class BitmartKlinesCallbackController extends AbstractController
                 ->setExchange('bitmart')
                 ->setSide($side)
                 ->setStatus(Position::STATUS_OPEN)
-                ->setAmountUsdt('100') // 100 USDT
+                ->setAmountUsdt('100') // TODO: remplace par PositionSizer (voir bloc ci-dessous)
                 ->setOpenedAt(new \DateTimeImmutable())
-                ->setMeta($decision);
+                ->setMeta($pipeline->getSignals());
 
             $em->persist($pos);
             $em->flush();
@@ -135,11 +151,13 @@ final class BitmartKlinesCallbackController extends AbstractController
             ]);
         }
 
+        $decision = $pipeline->getSignals()[$timeframe] ?? null;
+
         $logger->info('✅ Klines persisted + decision processed', [
             'symbol' => $symbol,
             'timeframe' => $timeframe,
             'step_minutes' => $stepMinutes,
-            'persisted' => $persisted,
+            'persisted' => $persistedCount,
             'decision' => $decision,
         ]);
 
@@ -147,7 +165,7 @@ final class BitmartKlinesCallbackController extends AbstractController
             'status'    => 'ok',
             'symbol'    => $symbol,
             'timeframe' => $timeframe,
-            'persisted' => $persisted,
+            'persisted' => $persistedCount,
             'decision'  => $decision,
         ]);
     }

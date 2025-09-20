@@ -1,67 +1,95 @@
 monolog:
-    channels:
-        - deprecation # Deprecations are logged in the dedicated "deprecation" channel when it exists
+    channels: ['validation', 'signals', 'indicators', 'deprecation']
+
     handlers:
+        # === Validation ===
+        validation_rotating:
+            type: rotating_file
+            path: '%kernel.logs_dir%/validation.log'
+            level: info
+            max_files: 14
+            channels: ['validation']
+            formatter: monolog.formatter.json
+
+        # (option) n’écrit que si WARNING+ (utile en prod haute volumétrie)
+        validation_buffered:
+            type: fingers_crossed
+            action_level: warning
+            handler: validation_rotating
+            channels: ['validation']
+
+        # === Signals ===
+        signals_rotating:
+            type: rotating_file
+            path: '%kernel.logs_dir%/signals.log'
+            level: info
+            max_files: 14
+            channels: ['signals']
+            formatter: monolog.formatter.json
+
+        # === Indicators ===
+        indicators_rotating:
+            type: rotating_file
+            path: '%kernel.logs_dir%/indicators.log'
+            level: info
+            max_files: 14
+            channels: ['indicators']
+            formatter: monolog.formatter.json
+
+        # handler “main” par défaut (stderr) — garde ta stack actuelle
         main:
             type: stream
-            path: '%kernel.logs_dir%/%kernel.environment%.log'
-            level: debug
-            channels: ["!event"]
+            path: "php://stderr"
+            level: info
+
         console:
             type: console
 when@dev:
     monolog:
         handlers:
+            # fichiers verbeux en dev
+            validation_rotating:
+                level: debug
+            signals_rotating:
+                level: debug
+            indicators_rotating:
+                level: debug
+
             main:
                 type: stream
                 path: "%kernel.logs_dir%/%kernel.environment%.log"
                 level: debug
                 channels: ["!event"]
-            # uncomment to get logging in your browser
-            # you may have to allow bigger header sizes in your Web server configuration
-            #firephp:
-            #    type: firephp
-            #    level: info
-            #chromephp:
-            #    type: chromephp
-            #    level: info
+
             console:
                 type: console
                 process_psr_3_messages: false
                 channels: ["!event", "!doctrine", "!console"]
-
-when@test:
-    monolog:
-        handlers:
-            main:
-                type: fingers_crossed
-                action_level: error
-                handler: nested
-                excluded_http_codes: [404, 405]
-                channels: ["!event"]
-            nested:
-                type: stream
-                path: "%kernel.logs_dir%/%kernel.environment%.log"
-                level: debug
-
 when@prod:
     monolog:
         handlers:
+            # on met un buffer sur validation pour n’écrire qu’en cas de warning+
+            validation_buffered:
+                action_level: warning
+                buffer_size: 200
+
             main:
                 type: fingers_crossed
                 action_level: error
                 handler: nested
                 excluded_http_codes: [404, 405]
-                buffer_size: 50 # How many messages should be saved? Prevent memory leaks
+                buffer_size: 50
             nested:
                 type: stream
                 path: php://stderr
                 level: debug
                 formatter: monolog.formatter.json
+
             console:
                 type: console
                 process_psr_3_messages: false
                 channels: ["!event", "!doctrine"]
+
             deprecation:
                 type: stream
                 channels: [deprecation]

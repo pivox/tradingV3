@@ -35,7 +35,8 @@ final class BitmartOrchestrator
         string $contract,
         string $timeframe = '4h',
         int $limit = 100,
-        ?int $sinceTs = null
+        ?int $sinceTs = null,
+        string $note = null,
     ): array {
         $envelope = [
             'url_type'     => 'get kline',

@@ -49,8 +49,20 @@ class BitmartFetcher implements ExchangeFetcherInterface
         return $contracts;
     }
 
-    public function fetchKlines(string $symbol, \DateTimeInterface $startTime, \DateTimeInterface $endTime, int $step = 1): array
+    public function fetchKlines(
+        string $symbol,
+        \DateTimeInterface|int $startTime,
+        \DateTimeInterface|int $endTime,
+        int $step = 1
+    ): array
     {
+        $start = is_int($startTime)
+            ? (new \DateTimeImmutable())->setTimestamp(strlen((string)$startTime) > 10 ? intdiv($startTime, 1000) : $startTime)
+            : \DateTimeImmutable::createFromInterface($startTime);
+
+        $end = is_int($endTime)
+            ? (new \DateTimeImmutable())->setTimestamp(strlen((string)$endTime) > 10 ? intdiv($endTime, 1000) : $endTime)
+            : \DateTimeImmutable::createFromInterface($endTime);
         $maxCount = 500;
         $stepMinutes = $step;
         $chunkDuration = $stepMinutes * $maxCount; // durée maximale d'un appel en minutes

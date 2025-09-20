@@ -1,111 +1,91 @@
 <?php
-
 declare(strict_types=1);
-
 
 namespace App\Service\Risk;
 
-
-use App\Service\Indicator\AtrCalculator;
-
-
-/**
- * Position sizing with fixed risk %, ATR-based stop, leverage derived (not input).
- * Includes quantization (tick/step), TP1 2R split, and a liquidation guard.
- */
 final class PositionSizer
 {
-    public function __construct(
-        private readonly AtrCalculator $atrCalculator,
-        private readonly float         $tickSize = 0.01,
-        private readonly float         $stepSize = 0.001,
-        private readonly float         $fallbackMaxLeverage = 10.0,
-        private readonly float         $minLiqRatio = 3.0,
-    )
-    {
-    }
-
     /**
-     * @param 'long'|'short' $side
-     * @param array<int, array{high: float, low: float, close: float}> $ohlcExecutionTF recent candles for ATR
+     * Calcule la taille à partir d’un risque fixe (%) et d’un SL donné.
+     *
      * @return array{
-     * qty: float, stop: float, tp1: float, leverage: float, risk_amount: float, r_multiple: float
+     *   qty: float,
+     *   nominal: float,
+     *   stopPct: float,
+     *   leverage: float,
+     *   riskAmount: float
      * }
      */
-    public function size(
-        string $side,
-        float  $equity,
-        float  $riskPct, float $entry,
-        array  $ohlcExecutionTF,
-        int    $atrPeriod = 14,
-        string $atrMethod = 'wilder',
-        float  $atrK = 1.5,
-        ?float $liqPrice = null
-    ): array
-    {
-        if ($equity <= 0 || $entry <= 0) {
-            throw new \InvalidArgumentException('Equity and entry must be > 0');
+    public function sizeFromFixedRisk(
+        string $symbol,
+        string $side,            // 'LONG' | 'SHORT' (non utilisé ici mais conservé pour logs/cohérence)
+        float $entryPrice,
+        float $stopPrice,
+        float $equity,
+        float $riskPct,
+        float $maxLeverageCap,
+        float $stepSize
+    ): array {
+        if ($entryPrice <= 0.0) {
+            throw new \InvalidArgumentException('entryPrice must be > 0');
         }
+        if ($equity <= 0.0) {
+            throw new \InvalidArgumentException('equity must be > 0');
+        }
+        if ($riskPct <= 0.0 || $riskPct >= 100.0) {
+            throw new \InvalidArgumentException('riskPct must be in (0, 100)');
+        }
+
+        // 1) % distance du stop (R en % du prix d’entrée)
+        $stopPct = abs($entryPrice - $stopPrice) / $entryPrice; // ex.: 0.01 = 1%
+        if ($stopPct <= 0.0) {
+            throw new \InvalidArgumentException('stopPct computed as 0; check entry/stop');
+        }
+
+        // 2) Montant risqué en devise
         $riskAmount = $equity * ($riskPct / 100.0);
-        $atr = $this->atrCalculator->compute($ohlcExecutionTF, $atrPeriod, $atrMethod);
-        $stop = $this->atrCalculator->stopFromAtr($entry, $atr, $atrK, $side);
 
+        // 3) Taille "brute" (contrats / coins) pour risquer riskAmount si SL touché
+        // Perte par unité ≈ stopPct * entryPrice  =>  qty = riskAmount / (stopPct * entryPrice)
+        $qtyRaw = $riskAmount / ($stopPct * $entryPrice);
 
-        $stopDist = abs($entry - $stop);
-        if ($stopDist <= 0) {
-            throw new \RuntimeException('Invalid stop distance');
+        // 4) Levier implicite et cap
+        // leverage_implicit = (riskPct/100) / stopPct   (comme demandé)
+        $levImplicit = ($riskPct / 100.0) / $stopPct;
+
+        if ($maxLeverageCap > 0.0 && $levImplicit > $maxLeverageCap) {
+            // On downsize la quantité pour respecter le cap de levier
+            $scale = $maxLeverageCap / $levImplicit;
+            $qtyRaw *= $scale;
+            $levImplicit = $maxLeverageCap;
         }
 
-
-// qty from risk = qty * stopDist
-        $qty = $riskAmount / $stopDist;
-
-
-// Quantize quantity
-        $qty = floor($qty / $this->stepSize) * $this->stepSize;
-        if ($qty <= 0) {
-            throw new \RuntimeException('Quantity quantized to zero; increase equity or reduce risk');
+        // 5) Quantization de la quantité par stepSize (floor)
+        $qty = $qtyRaw;
+        if ($stepSize > 0.0) {
+            $steps = floor($qtyRaw / $stepSize);
+            $qty   = $steps * $stepSize;
         }
 
-
-// Derived leverage (rough: notional/ equity)
-        $notional = $qty * $entry;
-        $leverage = $notional / max(1e-12, $equity);
-
-
-// Liquidation guard: prefer geometric definition if liqPrice provided, else fallback cap
-        if ($liqPrice !== null && $liqPrice > 0.0) {
-            $distToLiq = abs($entry - $liqPrice);
-            $ratio = $distToLiq / $stopDist; // must be >= minLiqRatio
-            if ($ratio < $this->minLiqRatio) {
-// Downsize to satisfy ratio
-                $scale = max(0.1, $ratio / $this->minLiqRatio);
-                $qty = floor(($qty * $scale) / $this->stepSize) * $this->stepSize;
-                $notional = $qty * $entry;
-                $leverage = $notional / max(1e-12, $equity);
-            }
-        } else {
-            if ($leverage > $this->fallbackMaxLeverage) {
-                $scale = $this->fallbackMaxLeverage / $leverage;
-                $qty = floor(($qty * $scale) / $this->stepSize) * $this->stepSize;
-                $notional = $qty * $entry;
-                $leverage = $notional / max(1e-12, $equity);
-            }
+        // Si arrondi à 0, on ne peut pas trader proprement
+        if ($qty <= 0.0) {
+            return [
+                'qty'        => 0.0,
+                'nominal'    => 0.0,
+                'stopPct'    => $stopPct,
+                'leverage'   => $levImplicit,
+                'riskAmount' => $riskAmount,
+            ];
         }
 
-
-// TP1 = entry +/- 2R
-        $r = $stopDist; // 1R
-        $tp1 = $side === 'long' ? $entry + 2.0 * $r : $entry - 2.0 * $r;
-
+        $nominal = $qty * $entryPrice;
 
         return [
-            'qty' => $qty,
-            'stop' => $stop,
-            'tp1' => $tp1,
-            'leverage' => $leverage,
-            'risk_amount' => $riskAmount,
-            'r_multiple' => 2.0,
+            'qty'        => $qty,
+            'nominal'    => $nominal,
+            'stopPct'    => $stopPct,
+            'leverage'   => $levImplicit,
+            'riskAmount' => $riskAmount,
         ];
     }
 }

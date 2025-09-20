@@ -5,7 +5,7 @@ namespace App\Service\Exchange\Bitmart\Dto;
 class KlineDto
 {
     public function __construct(
-        public readonly int $timestamp,
+        public  int|\DateTimeImmutable $timestamp,
         public readonly float $open,
         public readonly float $high,
         public readonly float $low,

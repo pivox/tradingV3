@@ -64,17 +64,44 @@ services:
         public: true
 
     App\Service\Indicator\AtrCalculator: ~
-    App\Service\Risk\PositionSizer:
+#    App\Service\Risk\PositionSizer:
+#        arguments:
+#            $tickSize: '%quantization.tick_size%'
+#            $stepSize: '%quantization.step_size%'
+#            $fallbackMaxLeverage: '%liquidation_guard.fallback_max_leverage%'
+#            $minLiqRatio: '%liquidation_guard.min_ratio%'
+
+    App\Service\Temporal\ApiRateLimiterWorkflowClient:
         arguments:
-            $tickSize: '%quantization.tick_size%'
-            $stepSize: '%quantization.step_size%'
-            $fallbackMaxLeverage: '%liquidation_guard.fallback_max_leverage%'
-            $minLiqRatio: '%liquidation_guard.min_ratio%'
+            $temporalHttpBase: 'http://temporal:8080'
+            $namespace: 'default'
+            $signalName: 'submit'
+    App\Service\Trading\InMemoryExchangeClient:
+        autowire: true
+        autoconfigure: true
+        public: true
+    App\Service\Risk\PositionSizer:
+        autowire: true
+        autoconfigure: true
+        public: true
 
+    # Alias d’autowiring : injecte le bouchon quand un constructeur demande ExchangeClient
+    App\Service\Trading\ExchangeClient: '@App\Service\Trading\InMemoryExchangeClient'
     # App\Service\Signals\SignalScalpingService: ~
-
     # Expose YAML config as container parameters (optional)
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
+
+    Psr\Log\LoggerInterface $validationLogger:
+        factory: ['@monolog.logger.validation', 'get'] # alias auto
+    Psr\Log\LoggerInterface $signalsLogger:
+        factory: ['@monolog.logger.signals', 'get']
+    Psr\Log\LoggerInterface $indicatorsLogger:
+        factory: ['@monolog.logger.indicators', 'get']
+
+    App\Service\Signals\Timeframe\Signal1hService:
+        arguments:
+            $validationLogger: '@monolog.logger.validation'
+            $signalsLogger: '@monolog.logger.signals'

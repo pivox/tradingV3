@@ -1,241 +1,221 @@
 <?php
-// src/Service/Signals/Timeframe/Signal1hService.php
+declare(strict_types=1);
 
 namespace App\Service\Signals\Timeframe;
 
 use App\Entity\Kline;
 use App\Service\Config\TradingParameters;
-use App\Service\Indicator\Trend\Ema;
 use App\Service\Indicator\Trend\Adx;
-use App\Service\Indicator\Trend\Ichimoku;
 use App\Service\Indicator\Momentum\Rsi;
-use App\Service\Indicator\Momentum\Macd;
-use App\Service\Indicator\Volatility\Bollinger;
+use App\Service\Indicator\Volume\Obv;
+use Psr\Log\LoggerInterface;
 
 /**
- * Service de signal pour le timeframe 1H (régime-aware).
+ * Contexte SCALPING v1.2 — Timeframe 1H
  *
- * Régime :
- *  - Tendance (ADX >= trend_min_adx) : on privilégie un setup trend-following
- *    (EMA50 > EMA200) ET (MACD > Signal OU Close > Kijun/SenkouA)
- *  - Range (ADX <= range_max_adx) : on privilégie un setup momentum/mean-reversion
- *    (RSI > 50) ET (expansion de volatilité via Bollinger width en hausse)
+ * Règles YAML attendues :
+ *  LONG  : ADX(14) >= 18  AND  RSI(14) > 50  AND  OBV slope >= 0
+ *  SHORT : ADX(14) >= 18  AND  RSI(14) < 50  AND  OBV slope <= 0
  *
- * Remarques :
- *  - On applique une petite tolérance EPS sur les comparaisons
- *  - On peut ignorer la dernière bougie non clôturée pour les comparaisons de prix
- *  - Garde-fou de données : minBars (par défaut 220)
- *
- * Sortie :
- *  - ema50, ema200, adx14
- *  - rsi14
- *  - macd { macd, signal, hist }
- *  - bollinger { upper, lower, middle, width }
- *  - ichimoku { tenkan, kijun, senkou_a, senkou_b }
- *  - regime: 'trend'|'range'|'neutral'
- *  - path  : 'trend'|'range'|'neutral' (chemin logique utilisé)
- *  - signal: 'LONG'|'SHORT'|'NONE'
- *  - status?: 'insufficient_data' si historique insuffisant
+ * Injection des loggers (services.yaml) :
+ *  App\Service\Signals\Timeframe\Signal1hService:
+ *      arguments:
+ *          $validationLogger: '@monolog.logger.validation'
+ *          $signalsLogger:    '@monolog.logger.signals'
  */
 final class Signal1hService
 {
+    private const TIMEFRAME = '1h';
+
     public function __construct(
-        private Ema        $ema,
-        private Adx        $adx,
-        private Ichimoku   $ichimoku,
-        private Rsi        $rsi,
-        private Macd       $macd,
-        private Bollinger  $bollinger,
+        private LoggerInterface   $validationLogger, // canal 'validation'
+        private LoggerInterface   $signalsLogger,    // canal 'signals'
+        private Adx               $adx,
+        private Rsi               $rsi,
+        private Obv               $obv,
         private TradingParameters $params,
 
-        // Défauts robustes si non définis dans le YAML
-        private float $defaultEps           = 1.0e-6,
-        private bool  $defaultUseLastClosed = true,
-        private int   $defaultMinBars       = 220,
-        private int   $defaultTrendMinAdx   = 25,  // ADX >= 25 => tendance
-        private int   $defaultRangeMaxAdx   = 20,  // ADX <= 20 => range
-        private int   $defaultBbLookback    = 3    // pente de width sur N barres
+        // Défauts si non précisés en YAML
+        private float $defaultEps              = 1.0e-6,
+        private bool  $defaultUseLastClosed    = true,
+        private int   $defaultMinBars          = 220,
+        private int   $defaultAdxPeriod        = 14,
+        private int   $defaultAdxMin           = 18,
+        private int   $defaultRsiPeriod        = 14,
+        private float $defaultRsiBull          = 50.0,
+        private float $defaultRsiBear          = 50.0,
+        private int   $defaultObvSlopeLookback = 5
     ) {}
 
     /**
-     * @param Kline[] $candles  Bougies dans l'ordre chronologique (ancienne -> récente)
+     * @param Kline[] $candles  Bougies du plus ancien au plus récent.
+     * @return array{
+     *   adx14: float,
+     *   rsi14: float,
+     *   obv: float,
+     *   obv_slope: float,
+     *   thresholds: array{adx_min:int,rsi_bull:float,rsi_bear:float,obv_lookback:int},
+     *   context_long_ok: bool,
+     *   context_short_ok: bool,
+     *   signal: string,               // LONG|SHORT|NONE
+     *   k_from?: string|null,         // ISO 8601
+     *   k_to?: string|null,           // ISO 8601
+     *   k_from_ts?: int|null,         // epoch
+     *   k_to_ts?: int|null,           // epoch
+     *   k_used_count: int,
+     *   k_total_count: int,
+     *   symbol?: string|null,
+     *   step?: int|null,
+     *   timeframe: string,
+     *   status?: string
+     * }
      */
     public function evaluate(array $candles): array
     {
-        // 1) Lecture de la config YAML (sécurisée)
+        // 1) Configuration
         $cfg = $this->params->getConfig();
-        $tf  = $cfg['timeframes']['1h'] ?? [];
 
-        $eps           = $cfg['runtime']['eps']            ?? $this->defaultEps;
-        $useLastClosed = $cfg['runtime']['use_last_closed']?? $this->defaultUseLastClosed;
-        $minBars       = $tf['guards']['min_bars']         ?? $this->defaultMinBars;
+        $eps           = $cfg['runtime']['eps']             ?? $this->defaultEps;
+        $useLastClosed = $cfg['runtime']['use_last_closed'] ?? $this->defaultUseLastClosed;
+        $minBars       = $cfg['timeframes'][self::TIMEFRAME]['guards']['min_bars'] ?? $this->defaultMinBars;
 
-        $trendMinAdx   = $tf['regime']['trend_min_adx']    ?? $this->defaultTrendMinAdx;
-        $rangeMaxAdx   = $tf['regime']['range_max_adx']    ?? $this->defaultRangeMaxAdx;
-        $bbLookback    = $tf['regime']['bb_lookback']      ?? $this->defaultBbLookback;
+        $adxPeriod     = $cfg['indicators']['adx']['period'] ?? $this->defaultAdxPeriod;
+        $adxMin        = $cfg['indicators']['adx']['min']    ?? $this->defaultAdxMin;
 
-        // 2) Garde-fou de données
-        if (count($candles) < $minBars) {
-            return [
-                'ema50'    => 0.0,
-                'ema200'   => 0.0,
-                'adx14'    => 0.0,
-                'rsi14'    => 0.0,
-                'macd'     => ['macd' => 0.0, 'signal' => 0.0, 'hist' => 0.0],
-                'bollinger'=> ['upper'=>0.0,'lower'=>0.0,'middle'=>0.0,'width'=>0.0],
-                'ichimoku' => ['tenkan'=>0.0,'kijun'=>0.0,'senkou_a'=>0.0,'senkou_b'=>0.0],
-                'regime'   => 'neutral',
-                'path'     => 'neutral',
-                'signal'   => 'NONE',
-                'status'   => 'insufficient_data',
+        $rsiPeriod     = $cfg['indicators']['rsi']['period'] ?? $this->defaultRsiPeriod;
+        $rsiBull       = $cfg['indicators']['rsi']['bull']   ?? $this->defaultRsiBull;
+        $rsiBear       = $cfg['indicators']['rsi']['bear']   ?? $this->defaultRsiBear;
+
+        $obvLookback   = $cfg['indicators']['obv']['slope_lookback'] ?? $this->defaultObvSlopeLookback;
+
+        $totalCount = \count($candles);
+
+        // 2) Garde-fou de quantité
+        if ($totalCount < $minBars) {
+            $first = $candles[0] ?? null;
+            $last  = $candles[$totalCount - 1] ?? null;
+
+            $payload = [
+                'adx14' => 0.0,
+                'rsi14' => 0.0,
+                'obv'   => 0.0,
+                'obv_slope' => 0.0,
+                'thresholds' => [
+                    'adx_min' => $adxMin,
+                    'rsi_bull'=> $rsiBull,
+                    'rsi_bear'=> $rsiBear,
+                    'obv_lookback' => $obvLookback,
+                ],
+                'context_long_ok'  => false,
+                'context_short_ok' => false,
+                'signal' => 'NONE',
+                'k_from'        => $first?->getTimestamp()?->format(DATE_ATOM),
+                'k_to'          => $last?->getTimestamp()?->format(DATE_ATOM),
+                'k_from_ts'     => $first?->getTimestamp()?->getTimestamp(),
+                'k_to_ts'       => $last?->getTimestamp()?->getTimestamp(),
+                'k_used_count'  => 0,
+                'k_total_count' => $totalCount,
+                'symbol'        => $last?->getContract()?->getSymbol(),
+                'step'          => $last?->getStep(),
+                'timeframe'     => self::TIMEFRAME,
+                'status'        => 'insufficient_data',
             ];
+
+            $this->signalsLogger->info('signals.tick', $payload);
+            $this->validationLogger->warning('validation.violation', $payload);
+
+            return $payload;
         }
 
-        // 3) Extraction des séries OHLC
-        $closes = array_map(fn(Kline $k) => $k->getClose(), $candles);
-        $highs  = array_map(fn(Kline $k) => $k->getHigh(),  $candles);
-        $lows   = array_map(fn(Kline $k) => $k->getLow(),   $candles);
-
-        // 4) Indicateurs principaux
-        $ema50   = $this->ema->calculate($closes, 50);
-        $ema200  = $this->ema->calculate($closes, 200);
-        $adx14   = $this->adx->calculate($highs, $lows, $closes, 14); // Wilder + init first DX
-
-        // Ichimoku (full) – ignore la dernière bougie non close en interne
-        $ich = $this->ichimoku->calculateFull($highs, $lows, $closes, 9, 26, 52, 26, true);
-        if (!isset($ich['senkou_a']) && isset($ich['tenkan'], $ich['kijun'])) {
-            $ich['senkou_a'] = ($ich['tenkan'] + $ich['kijun']) / 2.0; // secours
+        // 3) Préparation des séries + fenêtre "used"
+        $usedCandles = $candles;
+        if ($useLastClosed && \count($usedCandles) > 0) {
+            array_pop($usedCandles); // retire la bougie en cours
         }
+        $usedCount = \count($usedCandles);
 
-        // Momentum (RSI)
-        $rsi14 = $this->rsi->calculate($closes, 14);
+        $closes  = array_map(fn(Kline $k) => $k->getClose(),  $usedCandles);
+        $highs   = array_map(fn(Kline $k) => $k->getHigh(),   $usedCandles);
+        $lows    = array_map(fn(Kline $k) => $k->getLow(),    $usedCandles);
+        $volumes = array_map(fn(Kline $k) => $k->getVolume(), $usedCandles);
 
-        // MACD (12,26,9) – on accepte calculateFull() ou calculate()
-        $macdOut = ['macd' => 0.0, 'signal' => 0.0, 'hist' => 0.0];
-        if (method_exists($this->macd, 'calculateFull')) {
-            $m = $this->macd->calculateFull($closes, 12, 26, 9);
-            // On suppose que calculateFull renvoie des séries ; on prend la dernière
-            if (!empty($m['macd']) && !empty($m['signal'])) {
-                $macdOut['macd']   = (float) end($m['macd']);
-                $macdOut['signal'] = (float) end($m['signal']);
-                $macdOut['hist']   = isset($m['hist']) && !empty($m['hist']) ? (float) end($m['hist']) : ($macdOut['macd'] - $macdOut['signal']);
-            }
-        } elseif (method_exists($this->macd, 'calculate')) {
-            $m = $this->macd->calculate($closes, 12, 26, 9);
-            $macdOut['macd']   = (float) ($m['macd']   ?? 0.0);
-            $macdOut['signal'] = (float) ($m['signal'] ?? 0.0);
-            $macdOut['hist']   = (float) ($m['hist']   ?? ($macdOut['macd'] - $macdOut['signal']));
+        $firstUsed = $usedCandles[0] ?? null;
+        $lastUsed  = $usedCandles[$usedCount - 1] ?? null;
+
+        // 4) Indicateurs requis
+        $adx14 = (float) $this->adx->calculate($highs, $lows, $closes, $adxPeriod);
+        $rsi14 = (float) $this->rsi->calculate($closes, $rsiPeriod);
+
+        // OBV série + pente simple
+        $obvSeries = $this->obv->calculateFull($closes, $volumes);
+        if (empty($obvSeries)) {
+            $obvSeries = [0.0];
         }
+        $obvNow     = (float) end($obvSeries);
+        $obvPrevIdx = max(\count($obvSeries) - 1 - $obvLookback, 0);
+        $obvPrev    = (float) $obvSeries[$obvPrevIdx];
+        $obvSlope   = $obvNow - $obvPrev;
 
-        // Bollinger (20,2) – width = upper - lower ; essayer séries, sinon dernier point
-        $bb = ['upper'=>0.0,'lower'=>0.0,'middle'=>0.0,'width'=>0.0];
-        $bbWidthSeries = [];
-        if (method_exists($this->bollinger, 'calculateFull')) {
-            $b = $this->bollinger->calculateFull($closes, 20, 2.0);
-            // On suppose que calculateFull renvoie des séries 'upper','lower','middle'
-            if (!empty($b['upper']) && !empty($b['lower'])) {
-                $nU = count($b['upper']); $nL = count($b['lower']);
-                $n  = min($nU, $nL);
-                for ($i = 0; $i < $n; $i++) {
-                    $bbWidthSeries[] = (float) ($b['upper'][$i] - $b['lower'][$i]);
-                }
-                // Dernier point
-                $bb['upper']  = (float) end($b['upper']);
-                $bb['lower']  = (float) end($b['lower']);
-                $bb['middle'] = !empty($b['middle']) ? (float) end($b['middle']) : ($bb['upper'] + $bb['lower']) / 2.0;
-                $bb['width']  = $bbWidthSeries ? (float) end($bbWidthSeries) : ($bb['upper'] - $bb['lower']);
-            }
-        } elseif (method_exists($this->bollinger, 'calculate')) {
-            $b = $this->bollinger->calculate($closes, 20, 2.0);
-            $bb['upper']  = (float) ($b['upper']  ?? 0.0);
-            $bb['lower']  = (float) ($b['lower']  ?? 0.0);
-            $bb['middle'] = (float) ($b['middle'] ?? (($bb['upper'] + $bb['lower']) / 2.0));
-            $bb['width']  = (float) ($b['width']  ?? ($bb['upper'] - $bb['lower']));
-            // pas de séries => pas de slope test robuste
-        }
+        // 5) Règles de contexte
+        $adxOk   = ($adx14 >= $adxMin - $eps);
+        $longOk  = $adxOk && ($rsi14 > $rsiBull + $eps) && ($obvSlope >= -$eps);
+        $shortOk = $adxOk && ($rsi14 < $rsiBear - $eps) && ($obvSlope <= +$eps);
 
-        // 5) Close de référence (dernier close clôturé si demandé)
-        $lastClose = end($closes);
-        if ($useLastClosed && count($closes) > 1) {
-            $tmp = $closes; array_pop($tmp);
-            $lastClose = (float) end($tmp);
-        }
-
-        // 6) Définition du régime
-        $regime = 'neutral';
-        if ($adx14 >= $trendMinAdx)      { $regime = 'trend'; }
-        elseif ($adx14 <= $rangeMaxAdx)  { $regime = 'range'; }
-
-        // 7) Conditions par chemin
-        // Trend path (LONG/SHORT)
-        $emaTrendUp   = ($ema50 > $ema200 + $eps);
-        $emaTrendDown = ($ema200 > $ema50 + $eps);
-
-        $macdUp   = ($macdOut['macd'] > $macdOut['signal'] + $eps);
-        $macdDown = ($macdOut['signal'] > $macdOut['macd'] + $eps);
-
-        $ichiBull = ($lastClose > ($ich['kijun'] ?? 0) + $eps) || ($lastClose > ($ich['senkou_a'] ?? 0) + $eps);
-        $ichiBear = (($ich['kijun'] ?? PHP_FLOAT_MIN) > $lastClose + $eps) || (($ich['senkou_a'] ?? PHP_FLOAT_MIN) > $lastClose + $eps);
-
-        $trendLong  = $emaTrendUp   && ($macdUp   || $ichiBull);
-        $trendShort = $emaTrendDown && ($macdDown || $ichiBear);
-
-        // Range path (LONG/SHORT)
-        $rsiAbove50 = ($rsi14 > 50 + $eps);
-        $rsiBelow50 = ((50 - $eps) > $rsi14);
-
-        // Pente de la width sur lookback barres (approx : width_now - width_prev > 0)
-        $bbWidthUp = false;
-        if ($bbWidthSeries && count($bbWidthSeries) > $bbLookback) {
-            $now   = (float) end($bbWidthSeries);
-            $prevN = $bbWidthSeries[count($bbWidthSeries) - 1 - $bbLookback];
-            $bbWidthUp = ($now > $prevN + $eps);
-        }
-        // Si on n'a pas de séries, on ne bloque pas : on n'utilise pas bbWidthUp comme hard rule.
-
-        $rangeLong  = $rsiAbove50 && $bbWidthUp;
-        $rangeShort = $rsiBelow50 && $bbWidthUp;
-
-        // 8) Sélection du chemin selon le régime
-        $path   = 'neutral';
         $signal = 'NONE';
-
-        if ($regime === 'trend') {
-            $path   = 'trend';
-            $signal = $trendLong ? 'LONG' : ($trendShort ? 'SHORT' : 'NONE');
-        } elseif ($regime === 'range') {
-            $path   = 'range';
-            $signal = $rangeLong ? 'LONG' : ($rangeShort ? 'SHORT' : 'NONE');
-        } else {
-            // neutral : on accepte une validation par l'un OU l'autre chemin
-            if ($trendLong || $rangeLong) {
-                $path = $trendLong ? 'trend' : 'range';
-                $signal = 'LONG';
-            } elseif ($trendShort || $rangeShort) {
-                $path = $trendShort ? 'trend' : 'range';
-                $signal = 'SHORT';
-            } else {
-                $signal = 'NONE';
-            }
+        if ($longOk && !$shortOk) {
+            $signal = 'LONG';
+        } elseif ($shortOk && !$longOk) {
+            $signal = 'SHORT';
         }
 
-        // 9) Retour structuré
-        return [
-            'ema50'    => $ema50,
-            'ema200'   => $ema200,
-            'adx14'    => $adx14,
-            'rsi14'    => $rsi14,
-            'macd'     => $macdOut,
-            'bollinger'=> $bb,
-            'ichimoku' => [
-                'tenkan'   => $ich['tenkan']   ?? 0.0,
-                'kijun'    => $ich['kijun']    ?? 0.0,
-                'senkou_a' => $ich['senkou_a'] ?? 0.0,
-                'senkou_b' => $ich['senkou_b'] ?? 0.0,
+        // 6) Charge utile + logs
+        $payload = [
+            'adx14' => $adx14,
+            'rsi14' => $rsi14,
+            'obv'   => $obvNow,
+            'obv_slope' => $obvSlope,
+            'thresholds' => [
+                'adx_min' => $adxMin,
+                'rsi_bull'=> $rsiBull,
+                'rsi_bear'=> $rsiBear,
+                'obv_lookback' => $obvLookback,
             ],
-            'regime'   => $regime,
-            'path'     => $path,
-            'signal'   => $signal,
+            'context_long_ok'  => $longOk,
+            'context_short_ok' => $shortOk,
+            'signal'           => $signal,
+
+            // bornes de la fenêtre utilisée
+            'k_from'        => $firstUsed?->getTimestamp()?->format(DATE_ATOM),
+            'k_to'          => $lastUsed?->getTimestamp()?->format(DATE_ATOM),
+            'k_from_ts'     => $firstUsed?->getTimestamp()?->getTimestamp(),
+            'k_to_ts'       => $lastUsed?->getTimestamp()?->getTimestamp(),
+            'k_used_count'  => $usedCount,
+            'k_total_count' => $totalCount,
+
+            // méta pratiques
+            'symbol'    => $lastUsed?->getContract()?->getSymbol(),
+            'step'      => $lastUsed?->getStep(),
+            'timeframe' => self::TIMEFRAME,
         ];
+
+        $this->signalsLogger->info('signals.tick', $payload);
+        if ($signal === 'NONE') {
+            $this->validationLogger->warning('validation.violation', $payload);
+        } else {
+            $this->validationLogger->info('validation.ok', $payload);
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Validation binaire : vrai si au moins un contexte (long ou short) est valide.
+     *
+     * @param Kline[] $candles
+     */
+    public function validateContext(array $candles): bool
+    {
+        $r = $this->evaluate($candles);
+        return (bool) (($r['context_long_ok'] ?? false) || ($r['context_short_ok'] ?? false));
     }
 }
