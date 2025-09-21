@@ -11,6 +11,7 @@ parameters:
     quantization.step_size: 0.001
     liquidation_guard.min_ratio: 3.0
     liquidation_guard.fallback_max_leverage: 10.0
+    bitmart.base_url: '%env(default::BITMART_BASE_URL)%'
 
 
     # Path to strategy YAML (also set in packages/scalping.yaml)
@@ -37,6 +38,7 @@ services:
             $httpClient: '@http_client'
             $logger: '@logger'
             $clock: '@clock'
+            $baseUrl: '%bitmart.base_url%'
         tags: [ 'mon.exchange.fetcher' ]
 
     App\Service\Indicator\IndicatorValidatorClient:

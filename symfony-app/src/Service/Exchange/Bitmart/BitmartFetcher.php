@@ -11,17 +11,17 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 class BitmartFetcher implements ExchangeFetcherInterface
 {
-    const BASE_URL="https://api-cloud-v2.bitmart.com";
 
     public function __construct(
         private HttpClientInterface $httpClient,
         private LoggerInterface $logger,
         private ClockInterface $clock,
+        private $baseUrl,
     ) {}
 
     public function fetchContracts(): array
     {
-        $response = $this->httpClient->request('GET', self::BASE_URL .'/contract/public/details');
+        $response = $this->httpClient->request('GET', $this->baseUrl .'/contract/public/details');
         $data = $response->toArray(false);
 
         $contracts = [];
@@ -91,7 +91,7 @@ class BitmartFetcher implements ExchangeFetcherInterface
             ]);
 
             try {
-                $response = $this->httpClient->request('GET', self::BASE_URL . '/contract/public/kline', [
+                $response = $this->httpClient->request('GET', $this->baseUrl . '/contract/public/kline', [
                     'query' => $parameters,
                 ]);
 
