@@ -1,6 +1,5 @@
 <?php
 // src/Service/Signals/Timeframe/Signal5mService.php
-declare(strict_types=1);
 
 namespace App\Service\Signals\Timeframe;
 
@@ -14,12 +13,12 @@ use Psr\Log\LoggerInterface;
 /**
  * Service de signal pour le timeframe 5m (exécution fine, très réactif).
  *
- * Conformité YML v1.2 (branche 5m) :
+ * Conformité YML scalping (branche 5m) :
  *  - LONG  : ema_fast > ema_slow  && macd_hist > 0 && close > vwap(daily)
  *  - SHORT : ema_fast < ema_slow  && macd_hist < 0 && close < vwap(daily)
  *
  * Hypothèses :
- *  - Le contexte MTF (4H/1H/15m) est validé en amont (ex: SignalScalpingService).
+ *  - Le contexte MTF (4H/1H/15m) est validé en amont (ex: SignalService).
  *  - Ici, on ne fait que le TRIGGER 5m, sans ADX/RSI/Ichimoku/Bollinger/Donchian.
  */
 final class Signal5mService
@@ -32,20 +31,20 @@ final class Signal5mService
         private Vwap $vwap,
         private TradingParameters $params,
 
-        // Défauts cohérents avec le YML v1.2
-        private float  $defaultEps           = 1.0e-6,
-        private bool   $defaultUseLastClosed = true,
-        private int    $defaultMinBars       = 220,
-        private int    $defaultEmaFastPeriod = 20,
-        private int    $defaultEmaSlowPeriod = 50,
-        private int    $defaultMacdFast      = 12,
-        private int    $defaultMacdSlow      = 26,
-        private int    $defaultMacdSignal    = 9,
-        private string $defaultVwapSession   = 'daily'
+        // Défauts cohérents avec le YML
+        private float $defaultEps           = 1.0e-6,
+        private bool  $defaultUseLastClosed = true,
+        private int   $defaultMinBars       = 220,
+        private int   $defaultEmaFastPeriod = 20,
+        private int   $defaultEmaSlowPeriod = 50,
+        private int   $defaultMacdFast      = 12,
+        private int   $defaultMacdSlow      = 26,
+        private int   $defaultMacdSignal    = 9,
+        private string $defaultVwapSession  = 'daily'
     ) {}
 
     /**
-     * @param Kline[] $candles Bougies dans l'ordre chronologique (ancienne -> récente)
+     * @param Kline[] $candles  Bougies dans l'ordre chronologique (ancienne -> récente)
      * @return array{
      *   ema_fast: float,
      *   ema_slow: float,
@@ -63,21 +62,20 @@ final class Signal5mService
         // 1) Config YAML (défensive)
         $cfg = $this->params->getConfig();
 
-        $eps           = $cfg['runtime']['eps']             ?? $this->defaultEps;
-        $useLastClosed = $cfg['runtime']['use_last_closed'] ?? $this->defaultUseLastClosed;
+        $eps           = $cfg['runtime']['eps']              ?? $this->defaultEps;
+        $useLastClosed = $cfg['runtime']['use_last_closed']  ?? $this->defaultUseLastClosed;
 
-        // On peut prévoir une section spécifique timeframes->5m->guards si vous l'ajoutez plus tard
         $minBars       = $cfg['timeframes']['5m']['guards']['min_bars'] ?? $this->defaultMinBars;
 
-        // Indicateurs (YML v1.2)
-        $emaFastPeriod = $cfg['indicators']['ema']['fast']    ?? $this->defaultEmaFastPeriod; // 20
-        $emaSlowPeriod = $cfg['indicators']['ema']['slow']    ?? $this->defaultEmaSlowPeriod; // 50
+        // Indicateurs
+        $emaFastPeriod = $cfg['indicators']['ema']['fast']   ?? $this->defaultEmaFastPeriod; // 20
+        $emaSlowPeriod = $cfg['indicators']['ema']['slow']   ?? $this->defaultEmaSlowPeriod; // 50
 
-        $macdFast      = $cfg['indicators']['macd']['fast']   ?? $this->defaultMacdFast;      // 12
-        $macdSlow      = $cfg['indicators']['macd']['slow']   ?? $this->defaultMacdSlow;      // 26
-        $macdSignal    = $cfg['indicators']['macd']['signal'] ?? $this->defaultMacdSignal;    // 9
+        $macdFast      = $cfg['indicators']['macd']['fast']  ?? $this->defaultMacdFast;      // 12
+        $macdSlow      = $cfg['indicators']['macd']['slow']  ?? $this->defaultMacdSlow;      // 26
+        $macdSignal    = $cfg['indicators']['macd']['signal']?? $this->defaultMacdSignal;    // 9
 
-        $vwapSession   = $cfg['indicators']['vwap']['session'] ?? $this->defaultVwapSession;   // daily
+        $vwapSession   = $cfg['indicators']['vwap']['session'] ?? $this->defaultVwapSession;  // daily
 
         // 2) Garde-fou data
         if (count($candles) < $minBars) {
@@ -100,8 +98,6 @@ final class Signal5mService
         // 3) Séries OHLCV
         $closes  = array_map(fn(Kline $k) => $k->getClose(),  $candles);
         $volumes = array_map(fn(Kline $k) => $k->getVolume(), $candles);
-        $highs   = array_map(fn(Kline $k) => $k->getHigh(),   $candles);
-        $lows    = array_map(fn(Kline $k) => $k->getLow(),    $candles);
 
         // 4) Indicateurs
         $emaFast = $this->ema->calculate($closes, $emaFastPeriod);
@@ -124,17 +120,13 @@ final class Signal5mService
         }
 
         // VWAP (session = daily)
-        // Plusieurs signatures possibles selon votre implémentation.
         $vwapVal = 0.0;
         if (method_exists($this->vwap, 'calculateSession')) {
-            // Signature suggérée : calculateSession(Kline[] $candles, string $session = 'daily'): float
             $vwapVal = (float) $this->vwap->calculateSession($candles, $vwapSession);
         } elseif (method_exists($this->vwap, 'calculateFull')) {
-            // Signature attendue : calculateFull(array $highs, array $lows, array $closes, array $volumes): array
-            $v = $this->vwap->calculateFull($highs, $lows, $closes, $volumes);
+            $v = $this->vwap->calculateFull($candles, $vwapSession);
             $vwapVal = is_array($v) && !empty($v) ? (float) end($v) : 0.0;
         } elseif (method_exists($this->vwap, 'calculate')) {
-            // Ex: calculate(array $closes, array $volumes, string $session): float
             $vwapVal = (float) $this->vwap->calculate($closes, $volumes, $vwapSession);
         }
 
@@ -145,7 +137,7 @@ final class Signal5mService
             $lastClose = (float) end($tmp);
         }
 
-        // 6) Logique d'exécution 5m (YML v1.2)
+        // 6) Logique d'exécution 5m (YML)
         $emaTrendUp   = ($emaFast > $emaSlow + $eps);
         $emaTrendDown = ($emaSlow > $emaFast + $eps);
 
@@ -155,9 +147,9 @@ final class Signal5mService
         $closeAboveVwap = ($lastClose > $vwapVal + $eps);
         $closeBelowVwap = ($lastClose < $vwapVal - $eps);
 
-        $signal  = 'NONE';
+        $signal = 'NONE';
         $trigger = '';
-        $path    = 'execution_5m';
+        $path = 'execution_5m';
 
         $long  = $emaTrendUp   && $macdHistUp   && $closeAboveVwap;
         $short = $emaTrendDown && $macdHistDown && $closeBelowVwap;
@@ -187,7 +179,7 @@ final class Signal5mService
         ];
 
         $this->signalsLogger->info('signals.tick', $validation);
-        if ($signal === 'NONE') {
+        if ($signal == 'NONE') {
             $this->validationLogger->warning('validation.violation', $validation);
         } else {
             $this->validationLogger->info('validation.ok', $validation);
