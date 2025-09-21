@@ -1,221 +1,143 @@
 <?php
-declare(strict_types=1);
+// src/Service/Signals/Timeframe/Signal1hService.php
 
 namespace App\Service\Signals\Timeframe;
 
 use App\Entity\Kline;
 use App\Service\Config\TradingParameters;
-use App\Service\Indicator\Trend\Adx;
-use App\Service\Indicator\Momentum\Rsi;
-use App\Service\Indicator\Volume\Obv;
+use App\Service\Indicator\Trend\Ema;
+use App\Service\Indicator\Momentum\Macd;
 use Psr\Log\LoggerInterface;
 
 /**
- * Contexte SCALPING v1.2 — Timeframe 1H
+ * Contexte MTF 1h (biais opérationnel).
  *
- * Règles YAML attendues :
- *  LONG  : ADX(14) >= 18  AND  RSI(14) > 50  AND  OBV slope >= 0
- *  SHORT : ADX(14) >= 18  AND  RSI(14) < 50  AND  OBV slope <= 0
- *
- * Injection des loggers (services.yaml) :
- *  App\Service\Signals\Timeframe\Signal1hService:
- *      arguments:
- *          $validationLogger: '@monolog.logger.validation'
- *          $signalsLogger:    '@monolog.logger.signals'
+ * YML scalping (lecture minimale, sûre) :
+ *  - LONG  : ema_20 > ema_50 && macd_hist > 0
+ *  - SHORT : ema_20 < ema_50 && macd_hist < 0
  */
 final class Signal1hService
 {
-    private const TIMEFRAME = '1h';
-
     public function __construct(
-        private LoggerInterface   $validationLogger, // canal 'validation'
-        private LoggerInterface   $signalsLogger,    // canal 'signals'
-        private Adx               $adx,
-        private Rsi               $rsi,
-        private Obv               $obv,
+        private LoggerInterface $validationLogger, // canal 'validation'
+        private LoggerInterface $signalsLogger,    // canal 'signals'
+        private Ema $ema,
+        private Macd $macd,
         private TradingParameters $params,
-
-        // Défauts si non précisés en YAML
-        private float $defaultEps              = 1.0e-6,
-        private bool  $defaultUseLastClosed    = true,
-        private int   $defaultMinBars          = 220,
-        private int   $defaultAdxPeriod        = 14,
-        private int   $defaultAdxMin           = 18,
-        private int   $defaultRsiPeriod        = 14,
-        private float $defaultRsiBull          = 50.0,
-        private float $defaultRsiBear          = 50.0,
-        private int   $defaultObvSlopeLookback = 5
+        // Defaults
+        private float $defaultEps           = 1.0e-6,
+        private bool  $defaultUseLastClosed = true,
+        private int   $defaultMinBars       = 220,
+        private int   $defaultEmaFastPeriod = 20,
+        private int   $defaultEmaSlowPeriod = 50,
+        private int   $defaultMacdFast      = 12,
+        private int   $defaultMacdSlow      = 26,
+        private int   $defaultMacdSignal    = 9,
     ) {}
 
     /**
-     * @param Kline[] $candles  Bougies du plus ancien au plus récent.
+     * @param Kline[] $candles  Bougies dans l'ordre chronologique (ancienne -> récente)
      * @return array{
-     *   adx14: float,
-     *   rsi14: float,
-     *   obv: float,
-     *   obv_slope: float,
-     *   thresholds: array{adx_min:int,rsi_bull:float,rsi_bear:float,obv_lookback:int},
-     *   context_long_ok: bool,
-     *   context_short_ok: bool,
-     *   signal: string,               // LONG|SHORT|NONE
-     *   k_from?: string|null,         // ISO 8601
-     *   k_to?: string|null,           // ISO 8601
-     *   k_from_ts?: int|null,         // epoch
-     *   k_to_ts?: int|null,           // epoch
-     *   k_used_count: int,
-     *   k_total_count: int,
-     *   symbol?: string|null,
-     *   step?: int|null,
-     *   timeframe: string,
+     *   ema_fast: float,
+     *   ema_slow: float,
+     *   macd: array{macd:float,signal:float,hist:float},
+     *   close: float,
+     *   path: string,
+     *   trigger: string,
+     *   signal: string,
      *   status?: string
      * }
      */
     public function evaluate(array $candles): array
     {
-        // 1) Configuration
         $cfg = $this->params->getConfig();
 
         $eps           = $cfg['runtime']['eps']             ?? $this->defaultEps;
         $useLastClosed = $cfg['runtime']['use_last_closed'] ?? $this->defaultUseLastClosed;
-        $minBars       = $cfg['timeframes'][self::TIMEFRAME]['guards']['min_bars'] ?? $this->defaultMinBars;
+        $minBars       = $cfg['timeframes']['1h']['guards']['min_bars'] ?? $this->defaultMinBars;
 
-        $adxPeriod     = $cfg['indicators']['adx']['period'] ?? $this->defaultAdxPeriod;
-        $adxMin        = $cfg['indicators']['adx']['min']    ?? $this->defaultAdxMin;
+        $emaFastPeriod = $cfg['indicators']['ema']['fast']  ?? $this->defaultEmaFastPeriod; // 20
+        $emaSlowPeriod = $cfg['indicators']['ema']['slow']  ?? $this->defaultEmaSlowPeriod; // 50
 
-        $rsiPeriod     = $cfg['indicators']['rsi']['period'] ?? $this->defaultRsiPeriod;
-        $rsiBull       = $cfg['indicators']['rsi']['bull']   ?? $this->defaultRsiBull;
-        $rsiBear       = $cfg['indicators']['rsi']['bear']   ?? $this->defaultRsiBear;
+        $macdFast   = $cfg['indicators']['macd']['fast']   ?? $this->defaultMacdFast;
+        $macdSlow   = $cfg['indicators']['macd']['slow']   ?? $this->defaultMacdSlow;
+        $macdSignal = $cfg['indicators']['macd']['signal'] ?? $this->defaultMacdSignal;
 
-        $obvLookback   = $cfg['indicators']['obv']['slope_lookback'] ?? $this->defaultObvSlopeLookback;
-
-        $totalCount = \count($candles);
-
-        // 2) Garde-fou de quantité
-        if ($totalCount < $minBars) {
-            $first = $candles[0] ?? null;
-            $last  = $candles[$totalCount - 1] ?? null;
-
-            $payload = [
-                'adx14' => 0.0,
-                'rsi14' => 0.0,
-                'obv'   => 0.0,
-                'obv_slope' => 0.0,
-                'thresholds' => [
-                    'adx_min' => $adxMin,
-                    'rsi_bull'=> $rsiBull,
-                    'rsi_bear'=> $rsiBear,
-                    'obv_lookback' => $obvLookback,
-                ],
-                'context_long_ok'  => false,
-                'context_short_ok' => false,
-                'signal' => 'NONE',
-                'k_from'        => $first?->getTimestamp()?->format(DATE_ATOM),
-                'k_to'          => $last?->getTimestamp()?->format(DATE_ATOM),
-                'k_from_ts'     => $first?->getTimestamp()?->getTimestamp(),
-                'k_to_ts'       => $last?->getTimestamp()?->getTimestamp(),
-                'k_used_count'  => 0,
-                'k_total_count' => $totalCount,
-                'symbol'        => $last?->getContract()?->getSymbol(),
-                'step'          => $last?->getStep(),
-                'timeframe'     => self::TIMEFRAME,
-                'status'        => 'insufficient_data',
+        if (count($candles) < $minBars) {
+            $validation = [
+                'ema_fast' => 0.0,
+                'ema_slow' => 0.0,
+                'macd'     => ['macd'=>0.0,'signal'=>0.0,'hist'=>0.0],
+                'close'    => 0.0,
+                'path'     => 'context_1h',
+                'trigger'  => '',
+                'signal'   => 'NONE',
+                'status'   => 'insufficient_data',
             ];
-
-            $this->signalsLogger->info('signals.tick', $payload);
-            $this->validationLogger->warning('validation.violation', $payload);
-
-            return $payload;
+            $this->signalsLogger->info('signals.tick', $validation);
+            $this->validationLogger->warning('validation.violation', $validation);
+            return $validation;
         }
 
-        // 3) Préparation des séries + fenêtre "used"
-        $usedCandles = $candles;
-        if ($useLastClosed && \count($usedCandles) > 0) {
-            array_pop($usedCandles); // retire la bougie en cours
+        $closes = array_map(fn(Kline $k) => $k->getClose(), $candles);
+
+        $emaFast = $this->ema->calculate($closes, $emaFastPeriod);
+        $emaSlow = $this->ema->calculate($closes, $emaSlowPeriod);
+
+        $macdNow = 0.0; $sigNow = 0.0; $histNow = 0.0;
+        if (method_exists($this->macd, 'calculateFull')) {
+            $m = $this->macd->calculateFull($closes, $macdFast, $macdSlow, $macdSignal);
+            if (!empty($m['macd']) && !empty($m['signal'])) {
+                $macdNow = (float) end($m['macd']);
+                $sigNow  = (float) end($m['signal']);
+                $histNow = isset($m['hist']) && !empty($m['hist']) ? (float) end($m['hist']) : ($macdNow - $sigNow);
+            }
+        } else {
+            $m = $this->macd->calculate($closes, $macdFast, $macdSlow, $macdSignal);
+            $macdNow = (float) ($m['macd'] ?? 0.0);
+            $sigNow  = (float) ($m['signal'] ?? 0.0);
+            $histNow = (float) ($m['hist'] ?? ($macdNow - $sigNow));
         }
-        $usedCount = \count($usedCandles);
 
-        $closes  = array_map(fn(Kline $k) => $k->getClose(),  $usedCandles);
-        $highs   = array_map(fn(Kline $k) => $k->getHigh(),   $usedCandles);
-        $lows    = array_map(fn(Kline $k) => $k->getLow(),    $usedCandles);
-        $volumes = array_map(fn(Kline $k) => $k->getVolume(), $usedCandles);
-
-        $firstUsed = $usedCandles[0] ?? null;
-        $lastUsed  = $usedCandles[$usedCount - 1] ?? null;
-
-        // 4) Indicateurs requis
-        $adx14 = (float) $this->adx->calculate($highs, $lows, $closes, $adxPeriod);
-        $rsi14 = (float) $this->rsi->calculate($closes, $rsiPeriod);
-
-        // OBV série + pente simple
-        $obvSeries = $this->obv->calculateFull($closes, $volumes);
-        if (empty($obvSeries)) {
-            $obvSeries = [0.0];
+        $lastClose = (float) end($closes);
+        if ($useLastClosed && count($closes) > 1) {
+            $tmp = $closes; array_pop($tmp);
+            $lastClose = (float) end($tmp);
         }
-        $obvNow     = (float) end($obvSeries);
-        $obvPrevIdx = max(\count($obvSeries) - 1 - $obvLookback, 0);
-        $obvPrev    = (float) $obvSeries[$obvPrevIdx];
-        $obvSlope   = $obvNow - $obvPrev;
 
-        // 5) Règles de contexte
-        $adxOk   = ($adx14 >= $adxMin - $eps);
-        $longOk  = $adxOk && ($rsi14 > $rsiBull + $eps) && ($obvSlope >= -$eps);
-        $shortOk = $adxOk && ($rsi14 < $rsiBear - $eps) && ($obvSlope <= +$eps);
+        $emaUp   = ($emaFast > $emaSlow + $eps);
+        $emaDown = ($emaSlow > $emaFast + $eps);
+        $macdUp  = ($histNow > 0 + $eps);
+        $macdDown= ($histNow < 0 - $eps);
 
         $signal = 'NONE';
-        if ($longOk && !$shortOk) {
-            $signal = 'LONG';
-        } elseif ($shortOk && !$longOk) {
-            $signal = 'SHORT';
+        $trigger = '';
+        $path = 'context_1h';
+
+        if ($emaUp && $macdUp) {
+            $signal  = 'LONG';
+            $trigger = 'ema_20_gt_50 & macd_hist_gt_0';
+        } elseif ($emaDown && $macdDown) {
+            $signal  = 'SHORT';
+            $trigger = 'ema_20_lt_50 & macd_hist_lt_0';
         }
 
-        // 6) Charge utile + logs
-        $payload = [
-            'adx14' => $adx14,
-            'rsi14' => $rsi14,
-            'obv'   => $obvNow,
-            'obv_slope' => $obvSlope,
-            'thresholds' => [
-                'adx_min' => $adxMin,
-                'rsi_bull'=> $rsiBull,
-                'rsi_bear'=> $rsiBear,
-                'obv_lookback' => $obvLookback,
-            ],
-            'context_long_ok'  => $longOk,
-            'context_short_ok' => $shortOk,
-            'signal'           => $signal,
-
-            // bornes de la fenêtre utilisée
-            'k_from'        => $firstUsed?->getTimestamp()?->format(DATE_ATOM),
-            'k_to'          => $lastUsed?->getTimestamp()?->format(DATE_ATOM),
-            'k_from_ts'     => $firstUsed?->getTimestamp()?->getTimestamp(),
-            'k_to_ts'       => $lastUsed?->getTimestamp()?->getTimestamp(),
-            'k_used_count'  => $usedCount,
-            'k_total_count' => $totalCount,
-
-            // méta pratiques
-            'symbol'    => $lastUsed?->getContract()?->getSymbol(),
-            'step'      => $lastUsed?->getStep(),
-            'timeframe' => self::TIMEFRAME,
+        $validation = [
+            'ema_fast' => $emaFast,
+            'ema_slow' => $emaSlow,
+            'macd'     => ['macd'=>$macdNow, 'signal'=>$sigNow, 'hist'=>$histNow],
+            'close'    => $lastClose,
+            'path'     => $path,
+            'trigger'  => $trigger,
+            'signal'   => $signal,
         ];
 
-        $this->signalsLogger->info('signals.tick', $payload);
+        $this->signalsLogger->info('signals.tick', $validation);
         if ($signal === 'NONE') {
-            $this->validationLogger->warning('validation.violation', $payload);
+            $this->validationLogger->warning('validation.violation', $validation);
         } else {
-            $this->validationLogger->info('validation.ok', $payload);
+            $this->validationLogger->info('validation.ok', $validation);
         }
-
-        return $payload;
-    }
-
-    /**
-     * Validation binaire : vrai si au moins un contexte (long ou short) est valide.
-     *
-     * @param Kline[] $candles
-     */
-    public function validateContext(array $candles): bool
-    {
-        $r = $this->evaluate($candles);
-        return (bool) (($r['context_long_ok'] ?? false) || ($r['context_short_ok'] ?? false));
+        return $validation;
     }
 }

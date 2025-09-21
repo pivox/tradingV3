@@ -6,140 +6,141 @@ namespace App\Service\Signals\Timeframe;
 use App\Entity\Kline;
 use App\Service\Config\TradingParameters;
 use App\Service\Indicator\Trend\Ema;
-use App\Service\Indicator\Trend\Ichimoku;
+use App\Service\Indicator\Momentum\Macd;
 use Psr\Log\LoggerInterface;
 
+/**
+ * Contexte MTF 4h (biais de fond).
+ *
+ * YML scalping (lecture minimale, sûre) :
+ *  - LONG  : ema_50 > ema_200 && macd_hist > 0
+ *  - SHORT : ema_50 < ema_200 && macd_hist < 0
+ *
+ * On reste volontairement sobre (EMA/MACD). Les autres filtres (ADX/RSI/Ichimoku…)
+ * peuvent être ajoutés plus tard sans casser l’API.
+ */
 final class Signal4hService
 {
     public function __construct(
         private LoggerInterface $validationLogger, // canal 'validation'
         private LoggerInterface $signalsLogger,    // canal 'signals'
         private Ema $ema,
-        private Ichimoku $ichimoku,
+        private Macd $macd,
         private TradingParameters $params,
-
-        // Défauts conformes v1.2
-        private float $defaultEps = 1.0e-6,
-        private bool  $defaultUseLastClosed = true,
-        private int   $defaultMinBars = 220,
-        private int   $defaultEmaTrendPeriod = 200,
-        private int   $defaultTenkan = 9,
-        private int   $defaultKijun = 26,
-        private int   $defaultSenkouB = 52,
-        private int   $defaultDisplacement = 26
+        // Defaults au cas où des clés YAML manquent
+        private float $defaultEps             = 1.0e-6,
+        private bool  $defaultUseLastClosed   = true,
+        private int   $defaultMinBars         = 260,  // >= 200 + marge
+        private int   $defaultEmaMidPeriod    = 50,
+        private int   $defaultEmaTrendPeriod  = 200,
+        private int   $defaultMacdFast        = 12,
+        private int   $defaultMacdSlow        = 26,
+        private int   $defaultMacdSignal      = 9,
     ) {}
 
     /**
-     * @param Kline[] $candles  anciennes -> récentes
+     * @param Kline[] $candles  Bougies dans l'ordre chronologique (ancienne -> récente)
      * @return array{
-     *   ema200: float,
-     *   ichimoku: array{tenkan:float,kijun:float,senkou_a:float,senkou_b:float},
-     *   context_long_ok: bool,
-     *   context_short_ok: bool,
-     *   signal: string,   // LONG|SHORT|NONE
+     *   ema_mid: float,
+     *   ema_trend: float,
+     *   macd: array{macd:float,signal:float,hist:float},
+     *   close: float,
+     *   path: string,
+     *   trigger: string,
+     *   signal: string,
      *   status?: string
      * }
      */
     public function evaluate(array $candles): array
     {
-        // 1) Config YAML (défensive)
         $cfg = $this->params->getConfig();
 
-        $eps           = $cfg['runtime']['eps']              ?? $this->defaultEps;
-        $useLastClosed = $cfg['runtime']['use_last_closed']  ?? $this->defaultUseLastClosed;
+        $eps           = $cfg['runtime']['eps']             ?? $this->defaultEps;
+        $useLastClosed = $cfg['runtime']['use_last_closed'] ?? $this->defaultUseLastClosed;
         $minBars       = $cfg['timeframes']['4h']['guards']['min_bars'] ?? $this->defaultMinBars;
 
-        $emaTrendPeriod = $cfg['indicators']['ema']['trend'] ?? $this->defaultEmaTrendPeriod; // 200
-        $tenkan         = $cfg['indicators']['ichimoku']['tenkan']   ?? $this->defaultTenkan;  // 9
-        $kijun          = $cfg['indicators']['ichimoku']['kijun']    ?? $this->defaultKijun;   // 26
-        $senkouB        = $cfg['indicators']['ichimoku']['senkou_b'] ?? $this->defaultSenkouB; // 52
-        $disp           = $cfg['indicators']['ichimoku']['displacement'] ?? $this->defaultDisplacement; // 26
+        $emaMidPeriod   = $cfg['indicators']['ema']['slow']   ?? $this->defaultEmaMidPeriod;   // 50
+        $emaTrendPeriod = $cfg['indicators']['ema']['trend']  ?? $this->defaultEmaTrendPeriod; // 200
 
-        // 2) Garde-fou data
+        $macdFast   = $cfg['indicators']['macd']['fast']   ?? $this->defaultMacdFast;
+        $macdSlow   = $cfg['indicators']['macd']['slow']   ?? $this->defaultMacdSlow;
+        $macdSignal = $cfg['indicators']['macd']['signal'] ?? $this->defaultMacdSignal;
+
         if (count($candles) < $minBars) {
-            $validation =  [
-                'ema200'   => 0.0,
-                'ichimoku' => ['tenkan'=>0.0,'kijun'=>0.0,'senkou_a'=>0.0,'senkou_b'=>0.0],
-                'context_long_ok'  => false,
-                'context_short_ok' => false,
+            $validation = [
+                'ema_mid'  => 0.0,
+                'ema_trend'=> 0.0,
+                'macd'     => ['macd'=>0.0,'signal'=>0.0,'hist'=>0.0],
+                'close'    => 0.0,
+                'path'     => 'context_4h',
+                'trigger'  => '',
                 'signal'   => 'NONE',
                 'status'   => 'insufficient_data',
             ];
             $this->signalsLogger->info('signals.tick', $validation);
             $this->validationLogger->warning('validation.violation', $validation);
             return $validation;
-
         }
 
-        // 3) Séries
         $closes = array_map(fn(Kline $k) => $k->getClose(), $candles);
-        $highs  = array_map(fn(Kline $k) => $k->getHigh(),  $candles);
-        $lows   = array_map(fn(Kline $k) => $k->getLow(),   $candles);
 
-        // 4) Valeur de close de référence (bougie clôturée si demandé)
+        $emaMid   = $this->ema->calculate($closes, $emaMidPeriod);
+        $emaTrend = $this->ema->calculate($closes, $emaTrendPeriod);
+
+        $macdNow = 0.0; $sigNow = 0.0; $histNow = 0.0;
+        if (method_exists($this->macd, 'calculateFull')) {
+            $m = $this->macd->calculateFull($closes, $macdFast, $macdSlow, $macdSignal);
+            if (!empty($m['macd']) && !empty($m['signal'])) {
+                $macdNow = (float) end($m['macd']);
+                $sigNow  = (float) end($m['signal']);
+                $histNow = isset($m['hist']) && !empty($m['hist']) ? (float) end($m['hist']) : ($macdNow - $sigNow);
+            }
+        } else {
+            $m = $this->macd->calculate($closes, $macdFast, $macdSlow, $macdSignal);
+            $macdNow = (float) ($m['macd'] ?? 0.0);
+            $sigNow  = (float) ($m['signal'] ?? 0.0);
+            $histNow = (float) ($m['hist'] ?? ($macdNow - $sigNow));
+        }
+
         $lastClose = (float) end($closes);
         if ($useLastClosed && count($closes) > 1) {
             $tmp = $closes; array_pop($tmp);
             $lastClose = (float) end($tmp);
         }
 
-        // 5) Indicateurs requis (v1.2)
-        $ema200 = $this->ema->calculate($closes, $emaTrendPeriod);
+        $emaUp   = ($emaMid > $emaTrend + $eps);
+        $emaDown = ($emaTrend > $emaMid + $eps);
+        $macdUp  = ($histNow > 0 + $eps);
+        $macdDown= ($histNow < 0 - $eps);
 
-        // Ichimoku complet
-        $ich = $this->ichimoku->calculateFull($highs, $lows, $closes, $tenkan, $kijun, $senkouB, $disp, true);
-        // secours senkou_a si absent
-        if (!isset($ich['senkou_a']) && isset($ich['tenkan'], $ich['kijun'])) {
-            $ich['senkou_a'] = ($ich['tenkan'] + $ich['kijun']) / 2.0;
+        $signal = 'NONE';
+        $trigger = '';
+        $path = 'context_4h';
+
+        if ($emaUp && $macdUp) {
+            $signal  = 'LONG';
+            $trigger = 'ema_50_gt_200 & macd_hist_gt_0';
+        } elseif ($emaDown && $macdDown) {
+            $signal  = 'SHORT';
+            $trigger = 'ema_50_lt_200 & macd_hist_lt_0';
         }
 
-        $spanA = (float) ($ich['senkou_a'] ?? 0.0);
-        $spanB = (float) ($ich['senkou_b'] ?? 0.0);
-        $cloudTop    = max($spanA, $spanB);
-        $cloudBottom = min($spanA, $spanB);
-
-        // 6) Règles YML
-        // LONG  : price_above_ema:200 && ichimoku_bull (close > nuage ET spanA > spanB)
-        // SHORT : price_below_ema:200 && ichimoku_bear (close < nuage ET spanA < spanB)
-        $priceAboveEma200 = ($lastClose > $ema200 + $eps);
-        $priceBelowEma200 = ($ema200 > $lastClose + $eps);
-
-        $ichiBull = ($spanA > $spanB + $eps) && ($lastClose > $cloudTop + $eps);
-        $ichiBear = ($spanB > $spanA + $eps) && ($lastClose < $cloudBottom - $eps);
-
-        $longOk  = $priceAboveEma200 && $ichiBull;
-        $shortOk = $priceBelowEma200 && $ichiBear;
-
-        $signal = $longOk && !$shortOk ? 'LONG' : ($shortOk && !$longOk ? 'SHORT' : 'NONE');
-
         $validation = [
-            'ema200' => $ema200,
-            'ichimoku' => [
-                'tenkan'   => (float) ($ich['tenkan']   ?? 0.0),
-                'kijun'    => (float) ($ich['kijun']    ?? 0.0),
-                'senkou_a' => $spanA,
-                'senkou_b' => $spanB,
-            ],
-            'context_long_ok'  => $longOk,
-            'context_short_ok' => $shortOk,
-            'signal' => $signal,
+            'ema_mid'   => $emaMid,
+            'ema_trend' => $emaTrend,
+            'macd'      => ['macd'=>$macdNow, 'signal'=>$sigNow, 'hist'=>$histNow],
+            'close'     => $lastClose,
+            'path'      => $path,
+            'trigger'   => $trigger,
+            'signal'    => $signal,
         ];
+
         $this->signalsLogger->info('signals.tick', $validation);
-        if ($signal == 'NONE') {
-                $this->validationLogger->warning('validation.violation', $validation);
+        if ($signal === 'NONE') {
+            $this->validationLogger->warning('validation.violation', $validation);
         } else {
             $this->validationLogger->info('validation.ok', $validation);
         }
-
         return $validation;
-    }
-
-    /**
-     * Validation binaire du contexte 4H (vrai si LONG ou SHORT valide).
-     */
-    public function validateContext(array $candles): bool
-    {
-        $r = $this->evaluate($candles);
-        return (bool) (($r['context_long_ok'] ?? false) || ($r['context_short_ok'] ?? false));
     }
 }
