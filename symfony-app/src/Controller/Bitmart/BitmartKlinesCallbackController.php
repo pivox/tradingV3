@@ -4,25 +4,28 @@ namespace App\Controller\Bitmart;
 
 use App\Entity\Contract;
 use App\Entity\ContractPipeline;
-use App\Entity\Position;
 use App\Repository\KlineRepository;
 use App\Service\ContractSignalWriter;
 use App\Service\Exchange\Bitmart\BitmartFetcher;
 use App\Service\Persister\KlinePersister;
 use App\Service\Pipeline\ContractPipelineService;
 use App\Service\Signals\Timeframe\SignalService;
+use App\Util\TimeframeHelper;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Annotation\Route;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use App\Service\Trading\PositionOpener;
+
 
 final class BitmartKlinesCallbackController extends AbstractController
 {
+    public const LIMIT_KLINES = 260;
+
     public function __construct(
         private readonly SignalService $signalService
-        // NOTE: IndicatorValidatorClient non utilisé ici : garde-le si tu l’emploies dans une autre méthode
     ) {}
 
     #[Route('/api/callback/bitmart/get-kline', name: 'bitmart_klines_callback', methods: ['POST'])]
@@ -35,138 +38,183 @@ final class BitmartKlinesCallbackController extends AbstractController
         LoggerInterface $logger,
         ContractSignalWriter $contractSignalWriter,
         KlineRepository $klineRepository,
+        PositionOpener $positionOpener,
     ): JsonResponse {
-
-        // 1) Enveloppe
         $envelope = json_decode($request->getContent(), true) ?? [];
         $payload  = $envelope['payload'] ?? [];
 
-        $symbol    = (string) ($payload['contract']  ?? '');
-        $timeframe = (string) ($payload['timeframe'] ?? '4h');
-        $limit     = (int)    ($payload['limit']     ?? 220);
-        $sinceTs   = isset($payload['since_ts']) ? (int) $payload['since_ts'] : null;
+        $symbol     = (string) ($payload['contract']   ?? '');
+        $timeframe  = strtolower((string) ($payload['timeframe'] ?? '4h'));
+        $limit      = (int)    ($payload['limit']      ?? self::LIMIT_KLINES);
+        $startTs    = isset($payload['start_ts']) ? (int)$payload['start_ts'] : null;
+        $endTs      = isset($payload['end_ts'])   ? (int)$payload['end_ts']   : null;
+
+        if ($startTs !== null && $endTs !== null) {
+            $stepMinutes = TimeframeHelper::parseTimeframeToMinutes($timeframe);
+            $count = 0;
+            $dates = [];
+            $listDatesTimestamp = [];
+            $current = (new \DateTimeImmutable('@'.$startTs))->setTimezone(new \DateTimeZone('UTC'));
+            $endDate = (new \DateTimeImmutable('@'.$endTs))->setTimezone(new \DateTimeZone('UTC'));
+            while ($current <= $endDate) {
+                $dates[] = $current->format('Y-m-d H:i:s');
+                $listDatesTimestamp[] = $current;
+                $current = $current->modify("+{$stepMinutes} minutes");
+                $count++;
+            }
+            $logger->info("Expected klines slots", [
+                'symbol' => $symbol,
+                'timeframe' => $timeframe,
+                'step_minutes' => $stepMinutes,
+                'start' => (new \DateTimeImmutable('@'.$startTs))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+                'end' => (new \DateTimeImmutable('@'.$endTs))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+                'count' => $count,
+                'dates' => $dates,
+            ]);
+        }
 
         if ($symbol === '') {
             return $this->json(['status' => 'error', 'message' => 'Missing contract symbol'], 400);
         }
 
         /** @var Contract|null $contract */
-        $contract = $em->getRepository(Contract::class)->find($symbol);
+        // ✅ chercher par symbol (la PK peut ne pas être le symbol)
+        $contract = $em->getRepository(Contract::class)->findOneBy(['symbol' => $symbol]);
         if (!$contract) {
             return $this->json(['status' => 'error', 'message' => 'Contract not found: '.$symbol], 404);
         }
-
-        // 2) Mapping TF → minutes
-        $tfToMinutes = [
-            '1m'=>1,'3m'=>3,'5m'=>5,'15m'=>15,'30m'=>30,
-            '1h'=>60,'2h'=>120,'4h'=>240,
-        ];
-        $stepMinutes = $tfToMinutes[$timeframe] ?? 240;
-
-        // 3) Fenêtre temporelle
-        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
-        $minSince = $now->sub(new \DateInterval('PT'.max(0, ($limit - 1) * $stepMinutes).'M'));
-
-        $since = $sinceTs === null
-            ? $minSince
-            : (new \DateTimeImmutable('@'.$sinceTs))->setTimezone(new \DateTimeZone('UTC'));
-        if ($since < $minSince) {
-            $since = $minSince;
+        $listDatesTimestamp = $klineRepository->removeExistingKlines($contract->getSymbol(), $listDatesTimestamp, TimeframeHelper::parseTimeframeToMinutes($timeframe));
+        // Si fenêtre vide, on sort proprement (idempotent)
+        if ($startTs >= $endTs) {
+            $logger->info('No klines to fetch (start >= end)', [
+                'symbol' => $symbol,
+                'tf' => $timeframe,
+                'start' => $payload['start'],
+                'end' => $payload['end']
+            ]);
+            return $this->json([
+                'status'    => 'ok',
+                'symbol'    => $symbol,
+                'timeframe' => $timeframe,
+                'persisted' => 0,
+                'window'    => ['start'=>$payload['start'], 'end'=>$payload['end']],
+                'signals'   => ['status'=>'NOOP','final'=>['signal'=>'NONE']],
+                'decision'  => null,
+            ]);
         }
+        // =====================================================
 
-        // 4) Fetch klines (BitmartFetcher prend DateTimeInterface)
-        $dtos = $bitmartFetcher->fetchKlines($symbol, $since, $now, $stepMinutes);
+        // Fetch & persist STRICTEMENT sur [start, end)
+        $listDatesTimestamp = array_map(fn($dt) => $dt->getTimestamp(), $listDatesTimestamp);
+        $dtos = $bitmartFetcher->fetchKlines($symbol, $startTs, $endTs, $stepMinutes);
 
-        // 5) Persistance
-        $persistedDtos = $persister->persistMany($contract, $dtos, $stepMinutes, true);
+        foreach ($dtos as $key => $dto) {
+            if (!in_array($dto->timestamp, $listDatesTimestamp)) {
+                unset($dtos[$key]);
+            }
+        }
+        $persistedDtos  = $persister->persistMany($contract, $dtos, $stepMinutes, true); // true: flush
         $persistedCount = is_countable($persistedDtos) ? count($persistedDtos) : 0;
 
-        // 6) Récup données récentes pour le TF demandé (PAS '4h' en dur)
-        $klines = $klineRepository->findRecentBySymbolAndTimeframe($contract->getSymbol(), $timeframe, max(220, $limit));
+        // Rechargement des klines (closes uniquement)
+        $lookback = max(260, $limit);
+        $klines = $klineRepository->findRecentBySymbolAndTimeframe($contract->getSymbol(), $timeframe, $lookback);
+//        $klines = array_values(array_filter($klines, fn($k) => $k->getTimestamp() < $cutoff));
 
-        // 7) Évaluation signaux
-        $signals = $this->signalService->evaluate($klines, $timeframe);
+        // Signaux connus (pipeline) pour ne pas recalculer les TF supérieurs
+        $existingPipeline = $em->getRepository(ContractPipeline::class)
+            ->findOneBy(['contract' => $contract]);
 
-        // 8) Upsert + décision
+        $knownSignals = [];
+        if ($existingPipeline) {
+            $sig = $existingPipeline->getSignals() ?? [];
+            foreach (['4h','1h','15m','5m'] as $tf) {
+                if (isset($sig[$tf]['signal'])) { $knownSignals[$tf] = $sig[$tf]; }
+            }
+            $mapCompat = ['context_4h'=>'4h','context_1h'=>'1h','exec_15m'=>'15m','exec_5m'=>'5m','micro_1m'=>'1m'];
+            foreach ($mapCompat as $k => $tf) {
+                if (!isset($knownSignals[$tf]) && isset($sig[$k]['signal'])) { $knownSignals[$tf] = $sig[$k]; }
+            }
+        }
+
+        // Évaluation du TF courant
+        $result = $this->signalService->evaluate($timeframe, $klines, $knownSignals);
+
+        $signalsPayload = $result['signals'] ?? [];
+        $signalsPayload[$timeframe] = $signalsPayload[$timeframe] ?? ['signal' => 'NONE'];
+        $signalsPayload['final']  = $result['final']  ?? ['signal' => 'NONE'];
+        $signalsPayload['status'] = $result['status'] ?? 'UNKNOWN';
+
         $pipeline = $contractSignalWriter->saveAttempt(
             contract: $contract,
             tf: $timeframe,
-            signals: $signals,
+            signals: $signalsPayload,
             flush: false
         );
-
-        if (!$pipeline) {
-            $logger->warning('⚠️ No pipeline found for contract', ['symbol' => $symbol, 'timeframe' => $timeframe]);
-            return $this->json([
-                'status'    => 'ok',
-                'symbol'    => $symbol,
-                'timeframe' => $timeframe,
-                'persisted' => $persistedCount,
-                'decision'  => null,
-            ]);
+        if ($pipeline && !($timeframe == '4h' && $signalsPayload['signal'] === 'NONE')) {
+            $isValid = strtoupper($signalsPayload[$timeframe]['signal'] ?? 'NONE') !== 'NONE';
+            $pipelineService->markAttempt($pipeline);
+            if ($isValid && in_array($timeframe, ['15m','5m','1m'], true)) {
+                $finalSide = strtoupper($signalsPayload['final']['signal'] ?? 'NONE');
+                if (in_array($finalSide, ['LONG','SHORT'], true)) {
+                    $positionOpener->open(
+                        symbol: $symbol,
+                        finalSideUpper: $finalSide,
+                        timeframe: $timeframe,
+                        tfSignal: $signalsPayload[$timeframe] ?? []
+                    );
+                }
+            }
+            $pipelineService->applyDecision($pipeline, $timeframe, $isValid);
         }
-
-        if ($pipeline->isToDelete()) {
+        if ($pipeline && $pipeline->isToDelete()) {
             $em->remove($pipeline);
-            $em->flush();
-            $logger->info('🗑️ Pipeline deleted after decision', [
+            $logger->info('Pipeline deleted after decision', [
                 'symbol' => $symbol,
                 'timeframe' => $timeframe,
-                'step_minutes' => $stepMinutes,
-                'persisted' => $persistedCount,
-            ]);
-            return $this->json([
-                'status'    => 'ok',
-                'symbol'    => $symbol,
-                'timeframe' => $timeframe,
-                'persisted' => $persistedCount,
-                'decision'  => null,
             ]);
         }
 
-        $pipelineService->markAttempt($pipeline);
-        $pipelineService->applyDecision($pipeline, $timeframe, $pipeline->isValid());
 
-        // 9) Ouverture position sur 1m (actuel) — ⚠️ simplifié
-        if ($pipeline->isValid() && $timeframe === '1m') {
-            $side = strtoupper((string)$pipeline->getSignalLongOrShortOrNone());
-            if (!in_array($side, [Position::SIDE_LONG, Position::SIDE_SHORT], true)) {
-                $side = Position::SIDE_LONG;
-            }
+        $em->flush();
 
-            $pos = (new Position())
-                ->setContract($contract)
-                ->setExchange('bitmart')
-                ->setSide($side)
-                ->setStatus(Position::STATUS_OPEN)
-                ->setAmountUsdt('100') // TODO: remplace par PositionSizer (voir bloc ci-dessous)
-                ->setOpenedAt(new \DateTimeImmutable())
-                ->setMeta($pipeline->getSignals());
-
-            $em->persist($pos);
-            $em->flush();
-
-            $logger->info('[Position] Opened 100 USDT', [
-                'symbol' => $symbol, 'timeframe' => $timeframe, 'side' => $side, 'position_id' => $pos->getId(),
-            ]);
-        }
-
-        $decision = $pipeline->getSignals()[$timeframe] ?? null;
-
-        $logger->info('✅ Klines persisted + decision processed', [
+        $logger->info('Klines persisted + evaluated', [
             'symbol' => $symbol,
             'timeframe' => $timeframe,
             'step_minutes' => $stepMinutes,
             'persisted' => $persistedCount,
-            'decision' => $decision,
+            'status' => $signalsPayload['status'] ?? null,
+            'start' => (new \DateTimeImmutable('@'.$startTs))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+            'end' => (new \DateTimeImmutable('@'.$endTs))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
         ]);
+
+        // Si tu préfères retourner KO quand signal = NONE, laisse comme avant :
+        if (($signalsPayload[$timeframe]['signal'] ?? 'NONE') === 'NONE') {
+            return $this->json([
+                'status'    => 'KO',
+                'symbol'    => $symbol,
+                'timeframe' => $timeframe,
+                'persisted' => $persistedCount,
+                'window'    => [
+                    'start' => (new \DateTimeImmutable('@'.$startTs))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+                    'end' => (new \DateTimeImmutable('@'.$endTs))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+                ],
+                'signals'   => $signalsPayload,
+                'decision'  => $signalsPayload['final'],
+            ]);
+        }
 
         return $this->json([
             'status'    => 'ok',
             'symbol'    => $symbol,
             'timeframe' => $timeframe,
             'persisted' => $persistedCount,
-            'decision'  => $decision,
+            'window'    => [
+                'start' => (new \DateTimeImmutable('@'.$startTs))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+                'end' => (new \DateTimeImmutable('@'.$endTs))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+            ],
+            'signals'   => $signalsPayload,
+            'decision'  => $signalsPayload['final'] ?? null,
         ]);
     }
 }

@@ -53,7 +53,8 @@ class BitmartFetcher implements ExchangeFetcherInterface
         string $symbol,
         \DateTimeInterface|int $startTime,
         \DateTimeInterface|int $endTime,
-        int $step = 1
+        int $step = 1,
+        array $listDates = []
     ): array
     {
         $start = is_int($startTime)
@@ -68,12 +69,11 @@ class BitmartFetcher implements ExchangeFetcherInterface
         $chunkDuration = $stepMinutes * $maxCount; // durée maximale d'un appel en minutes
         $results = [];
 
-        $cursor = \DateTimeImmutable::createFromInterface($startTime);
-
-        while ($cursor < $endTime) {
+        $cursor = \DateTimeImmutable::createFromInterface($start);
+        while ($cursor < $end) {
             $chunkEnd = $cursor->add(new \DateInterval("PT{$chunkDuration}M"));
-            if ($chunkEnd > $endTime) {
-                $chunkEnd = \DateTimeImmutable::createFromInterface($endTime);
+            if ($chunkEnd > $end) {
+                $chunkEnd = \DateTimeImmutable::createFromInterface($end);
             }
 
             $parameters = [
@@ -112,7 +112,7 @@ class BitmartFetcher implements ExchangeFetcherInterface
             }
 
             $cursor = $chunkEnd;
-            sleep(1); // respect du taux limite
+            sleep(0.3); // respect du taux limite
         }
         $dtos = [];
         foreach ($results as $result) {

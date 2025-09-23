@@ -2,20 +2,24 @@
 // src/Controller/TradingController.php
 namespace App\Controller;
 
-use App\Repository\ContractPipelineRepository;
+use App\Entity\Kline;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Service\Config\TradingParameters;
-use App\Service\ContractSignalWriter;
+use App\Service\Exchange\Bitmart\BitmartFetcher;
 use App\Service\Indicator\AtrCalculator;
 use App\Service\Risk\PositionSizer;
+use App\Service\Signals\Timeframe\Signal15mService;
+use App\Service\Signals\Timeframe\Signal1hService;
+use App\Service\Signals\Timeframe\Signal1mService;
 use App\Service\Signals\Timeframe\Signal4hService;
+use App\Service\Signals\Timeframe\Signal5mService;
 use App\Service\Signals\Timeframe\SignalService;
 use App\Service\Trading\TradingService;
-use Doctrine\ORM\EntityManagerInterface;
+use App\Util\TimeframeHelper;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Annotation\Route;
 use Symfony\Component\Yaml\Yaml;
 
@@ -28,10 +32,12 @@ final class TradingController extends AbstractController
         private KlineRepository $klineRepository,
         private ContractRepository $contractRepository,
         private PositionSizer $positionSizer,
-    ) {}
+    ) {
+        set_time_limit(120);
+    }
 
     #[Route('/api/signal', name: 'api_signal', methods: ['GET'])]
-    public function signa(Request $request, ContractRepository $contractRepository): JsonResponse
+    public function signal(Request $request, ContractRepository $contractRepository): JsonResponse
     {
         // 0) Charger la config YAML (trading.scalping.yml v1.2)
         $cfg = $this->loadScalpingConfig();
@@ -64,11 +70,7 @@ final class TradingController extends AbstractController
 
         // Sélection des symboles
         $symbol = $request->query->get('symbol');
-        if (!$symbol) {
-            $symbols = array_column($contractRepository->allActiveSymbols(), 'symbol');
-        } else {
-            $symbols = [$symbol];
-        }
+        $symbols = $symbol ? [$symbol] : array_column($contractRepository->allActiveSymbols(), 'symbol');
 
         // 1) Cascade MTF 4h -> 1m
         $data = ['4h'=>[], '1h'=>[], '15m'=>[], '5m'=>[], '1m'=>[]];
@@ -104,10 +106,10 @@ final class TradingController extends AbstractController
             }
         }
 
-        // 2) Respecter max_concurrent_positions (si dispo côté broker)
+        // 2) Respecter max_concurrent_positions
         $opened = [];
         $maxConcurrent = (int)($cfg['risk']['max_concurrent_positions'] ?? 4);
-        $alreadyOpen = (int)($this->tradingService->countOpenPositions()); // TODO: implémenter côté service
+        $alreadyOpen = (int)($this->tradingService->countOpenPositions());
         $slotsLeft = max(0, $maxConcurrent - $alreadyOpen);
         if ($slotsLeft <= 0) {
             return $this->json([
@@ -125,19 +127,18 @@ final class TradingController extends AbstractController
         foreach (array_slice(array_keys($data['1m']), 0, $slotsLeft) as $sym) {
             try {
                 $lastPrice = $this->tradingService->getLastPrice($sym);
-                // Le YAML dit wilder|simple
                 $atrMethod = strtolower($cfg['atr']['method'] ?? 'wilder');
 
-// Il faut au moins ($atrPeriod + 1) bougies pour TR ; on en prend un peu plus
+                // 🔒 1m : on exclut la bougie en cours (cutoff = open aligné actuel)
+                $cutoff1m = TimeframeHelper::getAlignedOpen('1m');
                 $lookback = max($atrPeriod + 2, 100);
+                $candlesRaw = $this->klineRepository->findRecentBySymbolAndTimeframe($sym, '1m', $lookback + 5);
+                $candlesRaw = array_values(array_filter($candlesRaw, fn($c) =>
+                    ($c instanceof Kline ? $c->getTimestamp() : new \DateTimeImmutable('@'.(int)$c['ts']))
+                    < $cutoff1m
+                ));
 
-// Récupère des candles sur 1m (ou 5m en fallback si tu préfères)
-                $candlesRaw = $this->klineRepository->findRecentBySymbolAndTimeframe($sym, '1m', $lookback);
-
-// Normalise au format attendu par AtrCalculator::compute()
-// array<int, array{high: float, low: float, close: float}>
                 $ohlc = $this->normalizeCandles($candlesRaw);
-
                 $atr = $this->atrCalculator->compute($ohlc, $atrPeriod, $atrMethod);
 
                 if ($lastPrice <= 0 || $atr <= 0) {
@@ -145,7 +146,6 @@ final class TradingController extends AbstractController
                     continue;
                 }
 
-                // Sens de trade: essayer d’extraire du signal 1m ; fallback: decideSide()
                 $rawDir = strtoupper($data['1m'][$sym]['result']['direction'] ?? $data['1m'][$sym]['result']['signal'] ?? 'AUTO');
                 $side = match ($rawDir) {
                     'LONG','BUY'  => 'LONG',
@@ -153,18 +153,15 @@ final class TradingController extends AbstractController
                     default       => $this->tradingService->decideSide($sym),
                 };
 
-                // SL via ATR
                 $slPrice = ($side === 'LONG')
                     ? $lastPrice - $atrK * $atr
                     : $lastPrice + $atrK * $atr;
 
-                // Garde-fou liquidation (distance(liq) ≥ min_ratio * distance(stop))
                 if (!$this->tradingService->passesLiquidationGuard($sym, $side, $lastPrice, $slPrice, $minLiqRatio)) {
                     $opened[] = ['symbol'=>$sym,'status'=>'SKIPPED','reason'=>'Liquidation guard'];
                     continue;
                 }
 
-                // Sizing risque fixe (levier dérivé, capé)
                 $sizing = $this->positionSizer->sizeFromFixedRisk(
                     symbol: $sym,
                     side: $side,
@@ -181,7 +178,6 @@ final class TradingController extends AbstractController
                     continue;
                 }
 
-                // Cibles TP: TP1 à tpR*R + trailing ATR (si activé après TP1)
                 $rDist = abs($lastPrice - $slPrice);
                 $tp1   = ($side === 'LONG')
                     ? $lastPrice + $tpR * $rDist
@@ -195,23 +191,16 @@ final class TradingController extends AbstractController
                 $tp1Qty = $this->tradingService->quantizeQty($qQty * $tp1Frac, $stepSize);
                 $tp2Qty = $this->tradingService->quantizeQty($qQty - $tp1Qty,  $stepSize);
 
-                // Routing à partir du YAML
                 $entryType = $preferLimit ? 'LIMIT_MAKER' : ($fallbackMkt ? 'MARKET_OR_LIMIT' : 'LIMIT');
-                $orderPlan = [
+
+                $providerResp = $this->tradingService->placeOrderPlan([
                     'symbol' => $sym,
                     'side'   => $side,
-                    'entry'  => [
-                        'type'      => $entryType,
-                        'price'     => $qEntry,
-                        'qty'       => $qQty,
-                        'post_only' => $postOnly,
-                    ],
-                    'protect' => [
-                        'sl' => ['price' => $qSL],
-                    ],
+                    'entry'  => ['type'=>$entryType,'price'=>$qEntry,'qty'=>$qQty,'post_only'=>$postOnly],
+                    'protect'=> ['sl'=>['price'=>$qSL]],
                     'take_profit' => array_values(array_filter([
-                        ['price' => $qTP1, 'qty' => $tp1Qty],
-                        $trailAfter ? ['trailing' => ['mode'=>'ATR','atr_k'=>$trailK,'step_pct'=>$trailStep], 'qty'=>$tp2Qty] : null,
+                        ['price'=>$qTP1,'qty'=>$tp1Qty],
+                        $trailAfter ? ['trailing'=>['mode'=>'ATR','atr_k'=>$trailK,'step_pct'=>$trailStep], 'qty'=>$tp2Qty] : null,
                     ])),
                     'meta' => [
                         'risk_amount'   => $sizing['riskAmount'] ?? null,
@@ -227,15 +216,11 @@ final class TradingController extends AbstractController
                             'min_progress_r' => $timeStopMinR,
                         ],
                     ],
-                ];
-
-                // Placement des ordres
-                $providerResp = $this->tradingService->placeOrderPlan($orderPlan);
+                ]);
 
                 $opened[] = [
                     'symbol'            => $sym,
                     'status'            => 'PLACED',
-                    'order_plan'        => $orderPlan,
                     'provider_response' => $providerResp,
                 ];
             } catch (\Throwable $e) {
@@ -243,196 +228,162 @@ final class TradingController extends AbstractController
             }
         }
 
-        // 4) Réponse JSON (signaux + positions)
         return new JsonResponse($opened);
     }
+
+    /**
+     * ⚙️ VALIDATE ROUTES (sans persistance) — on renvoie uniquement le résultat du TF courant.
+     */
 
     #[Route('/api/validate/4h', name: 'api_4h_validate', methods: ['GET'])]
     public function validate4h(
         Request $request,
-        SignalService $signalService,
+        Signal4hService $signal4h,
         ContractRepository $contractRepository,
         KlineRepository $klineRepository,
-        ContractSignalWriter $writer,
-        EntityManagerInterface $em
-    ): JsonResponse
-    {
-        $symbol = $request->query->get('symbol');
+    ): JsonResponse {
+        $symbol  = $request->query->get('symbol');
+        $addNoneSignal = (bool) $request->query->get('signal');
+        $symbols = $symbol ? [$symbol] : array_column($contractRepository->allActiveSymbols(), 'symbol');
 
-        // Récupère la liste des symboles à traiter
-        $symbols = $symbol
-            ? [$symbol]
-            : array_column($contractRepository->allActiveSymbols(), 'symbol');
+        $out = [
+            'timeframe' => '4h',
+            'results'   => [],
+        ];
 
-        $results = [];
         foreach ($symbols as $sym) {
-            // 1) Données récentes 4h
-            $klines = $klineRepository->findRecentBySymbolAndTimeframe($sym, '4h', 221);
+            $klines = $klineRepository->findRecentBySymbolAndTimeframe($sym, '4h', 261);
 
-            // 2) Évaluation des signaux (retourne p.ex. ['ema50'=>..., 'ichimoku'=>..., 'signal'=>'LONG|NONE'])
-            $sig4h = $signalService->evaluate($klines, '4h');
-
-            // 3) Upsert + statut (validated si signal != NONE, sinon failed). Toujours persist.
-            $contract = $contractRepository->findOneBy(['symbol' => $sym]);
-            if (!$contract) {
-                $results[] = [
-                    'symbol'  => $sym,
-                    'status'  => 'skipped',
-                    'reason'  => 'contract_not_found',
-                    'signal'  => $sig4h['signal'] ?? 'NONE',
-                ];
+            $sig4h = $signal4h->evaluate($klines);
+            $norm  = $this->extractSignal($sig4h);
+            if (!$addNoneSignal && $norm == 'NONE') {
                 continue;
             }
-            if ($sig4h['signal'] != 'NONE') {
-                /** @var ContractPipeline $pipeline */
-                $pipeline = $writer->saveAttempt($contract, '4h', $sig4h);
-                $results[] = [
-                    'symbol'     => $sym,
-                    'timeframe'  => '4h',
-                    'status'     => $pipeline->getStatus(),           // validated | failed
-                    'retries'    => $pipeline->getRetries(),
-                    'updated_at' => $pipeline->getUpdatedAt()->format(\DateTimeInterface::ATOM),
-                    'signals'    => $pipeline->getSignals()['4h'] ?? $sig4h,
-                ];
-            }
 
+            $out['results'][] = [
+                'symbol'   => $sym,
+                'signal'   => $norm,
+                'raw'      => $sig4h,
+                'count'    => count($klines),
+            ];
         }
+        $out['count']    = count($out['results']);
 
-        // 4) Flush en batch (meilleures perfs si beaucoup de symboles)
-        $em->flush();
-
-        return new JsonResponse([
-            'timeframe' => '4h',
-            'count'     => count($results),
-            'results'   => $results,
-        ]);
+        return new JsonResponse($out);
     }
 
     #[Route('/api/validate/1h', name: 'api_1h_validate', methods: ['GET'])]
     public function validate1h(
         Request $request,
-        SignalService $signalService,
+        Signal1hService $signal1hService,
         ContractRepository $contractRepository,
         KlineRepository $klineRepository,
-        ContractSignalWriter $writer,
-        ContractPipelineRepository $contractPipelineRepository,
-        EntityManagerInterface $em
-    ): JsonResponse
-    {
-        $symbol = $request->query->get('symbol');
+    ): JsonResponse {
+        $symbol  = $request->query->get('symbol');
+        $addNoneSignal = (bool) $request->query->get('signal');
+        $symbols = $symbol ? [$symbol] : array_column($contractRepository->allActiveSymbols(), 'symbol');
 
-        // Récupère la liste des symboles à traiter
-        $symbols = $symbol
-            ? [$symbol]
-            : array_column($contractPipelineRepository->getAllSymbolsWithActive4h(), 'symbol');
-        $results = [];
-        $symbols = $contractPipelineRepository->getAllSymbolsWithActive4h();
+        $out = [
+            'timeframe' => '1h',
+            'results'   => [],
+        ];
+
         foreach ($symbols as $sym) {
-            // 1) Données récentes 1h
             $klines = $klineRepository->findRecentBySymbolAndTimeframe($sym, '1h', 221);
-            // 2) Évaluation des signaux (retourne p.ex. ['ema50'=>..., 'ichimoku'=>..., 'signal'=>'LONG|NONE'])
-            $sig1h = $signalService->evaluate($klines, '1h');
-            dd($sig1h);
 
-            // 3) Upsert + statut (validated si signal != NONE, sinon failed). Toujours persist.
-            $contract = $contractRepository->findOneBy(['symbol' => $sym]);
-            if (!$contract) {
-                $results[] = [
-                    'symbol'  => $sym,
-                    'status'  => 'skipped',
-                    'reason'  => 'contract_not_found',
-                    'signal'  => $sig1h['signal'] ?? 'NONE',
-                ];
+            $sig1h = $signal1hService->evaluate($klines, '1h');
+            $norm  = $this->extractSignal($sig1h);
+
+            if (!$addNoneSignal && $norm == 'NONE') {
                 continue;
             }
-            if ($sig1h['signal'] != 'NONE') {
-                /** @var ContractPipeline $pipeline */
-                $pipeline = $writer->saveAttempt($contract, '1h', $sig1h);
-                $results[] = [
-                    'symbol'     => $sym,
-                    'timeframe'  => '1h',
-                    'status'     => $pipeline->getStatus(),           // validated | failed
-                    'retries'    => $pipeline->getRetries(),
-                    'updated_at' => $pipeline->getUpdatedAt()->format(\DateTimeInterface::ATOM),
-                    'signals'    => $pipeline->getSignals()['1h'] ?? $sig1h,
-                ];
-            }
 
+            $out['results'][] = [
+                'symbol' => $sym,
+                'signal' => $norm,
+                'raw'    => $sig1h,
+                'count'  => count($klines),
+            ];
         }
+        $out['count']    = count($out['results']);
 
-        // 4) Flush en batch (meilleures perfs si beaucoup de symboles)
-        $em->flush();
-
-        return new JsonResponse([
-            'timeframe' => '1h',
-            'count'     => count($results),
-            'results'   => $results,
-        ]);
+        return new JsonResponse($out);
     }
 
     #[Route('/api/validate/15m', name: 'api_15m_validate', methods: ['GET'])]
     public function validate15m(
         Request $request,
-        SignalService $signalService,
+        Signal15mService $signal15mService,
         ContractRepository $contractRepository,
         KlineRepository $klineRepository,
-        ContractSignalWriter $writer,
-        EntityManagerInterface $em
-    ): JsonResponse
-    {
-        //@TODO en priorité, télécharger les klines pour test, puis appliquer le signalService
-        $symbol = $request->query->get('symbol');
+    ): JsonResponse {
+        $symbol  = $request->query->get('symbol');
+        $addNoneSignal = (bool) $request->query->get('signal');
+        $symbols = $symbol ? [$symbol] : array_column($contractRepository->allActiveSymbols(), 'symbol');
 
-        // Récupère la liste des symboles à traiter
-        $symbols = $symbol
-            ? [$symbol]
-            : array_column($contractRepository->allActiveSymbols(), 'symbol');
+        $out = [
+            'timeframe' => '15m',
+            'results'   => [],
+        ];
 
-        $results = [];
         foreach ($symbols as $sym) {
-            // 1) Données récentes 15m
             $klines = $klineRepository->findRecentBySymbolAndTimeframe($sym, '15m', 300);
 
+            $sig15m = $signal15mService->evaluate($klines);
+            $norm   = $this->extractSignal($sig15m);
 
-            // 2) Évaluation des signaux (retourne p.ex. ['ema50'=>..., 'ichimoku'=>..., 'signal'=>'LONG|NONE'])
-            $sig15m = $signalService->evaluate($klines, '15m');
-
-            // 3) Upsert + statut (validated si signal != NONE, sinon failed). Toujours persist.
-            $contract = $contractRepository->findOneBy(['symbol' => $sym]);
-            if (!$contract) {
-                $results[] = [
-                    'symbol'  => $sym,
-                    'status'  => 'skipped',
-                    'reason'  => 'contract_not_found',
-                    'signal'  => $sig15m['signal'] ?? 'NONE',
-                ];
+            if (!$addNoneSignal && $norm == 'NONE') {
                 continue;
             }
-            if ($sig15m['signal'] != 'NONE') {
-                /** @var ContractPipeline $pipeline */
-                $pipeline = $writer->saveAttempt($contract, '15m', $sig15m);
-                $results[] = [
-                    'symbol'     => $sym,
-                    'timeframe'  => '15m',
-                    'status'     => $pipeline->getStatus(),           // validated | failed
-                    'retries'    => $pipeline->getRetries(),
-                    'updated_at' => $pipeline->getUpdatedAt()->format(\DateTimeInterface::ATOM),
-                    'signals'    => $pipeline->getSignals()['15m'] ?? $sig15m,
-                ];
-            }
-
+            $out['results'][] = [
+                'symbol' => $sym,
+                'signal' => $norm,
+                'raw'    => $sig15m,
+                'count'  => count($klines),
+            ];
         }
+        $out['count']    = count($out['results']);
 
-        // 4) Flush en batch (meilleures perfs si beaucoup de symboles)
-        $em->flush();
-
-        return new JsonResponse([
-            'timeframe' => '15m',
-            'count'     => count($results),
-            'results'   => $results,
-        ]);
+        return new JsonResponse($out);
     }
 
+    #[Route('/api/validate/5m', name: 'api_5m_validate', methods: ['GET'])]
+    public function validate5m(
+        Request $request,
+        Signal5mService $signal5mService,
+        ContractRepository $contractRepository,
+        KlineRepository $klineRepository,
+    ): JsonResponse {
+        $symbol  = $request->query->get('symbol');
+        $addNoneSignal = (bool) $request->query->get('signal');
+        $symbols = $symbol ? [$symbol] : array_column($contractRepository->allActiveSymbols(), 'symbol');
+
+        $out = [
+            'timeframe' => '5m',
+            'results'   => [],
+        ];
+
+        foreach ($symbols as $sym) {
+            $klines = $klineRepository->findRecentBySymbolAndTimeframe($sym, '5m', 300);
+
+            $sig5m = $signal5mService->evaluate($klines);
+            $norm  = $this->extractSignal($sig5m);
+
+            if (!$addNoneSignal && $norm == 'NONE') {
+                continue;
+            }
+
+            $out['results'][] = [
+                'symbol' => $sym,
+                'signal' => $norm,
+                'raw'    => $sig5m,
+                'count'  => count($klines),
+            ];
+        }
+        $out['count']    = count($out['results']);
+
+        return new JsonResponse($out);
+    }
 
     /**
      * Charge config/trading.scalping.yml
@@ -458,7 +409,6 @@ final class TradingController extends AbstractController
     {
         $out = [];
         foreach ($candles as $c) {
-            // Si c'est une entité Doctrine avec getters :
             if (is_object($c) && method_exists($c, 'getHigh') && method_exists($c, 'getLow') && method_exists($c, 'getClose')) {
                 $out[] = [
                     'high'  => (float) $c->getHigh(),
@@ -467,7 +417,6 @@ final class TradingController extends AbstractController
                 ];
                 continue;
             }
-            // Si c'est un array associatif :
             if (is_array($c) && isset($c['high'], $c['low'], $c['close'])) {
                 $out[] = [
                     'high'  => (float) $c['high'],
@@ -476,12 +425,79 @@ final class TradingController extends AbstractController
                 ];
                 continue;
             }
-            // Sinon : ignorer / lever une exception selon ta tolérance
         }
 
         if (count($out) < 2) {
-            throw new \RuntimeException('Candles insuffisantes ou invalide pour calculer ATR');
+            throw new \RuntimeException('Candles insuffisantes ou invalides pour calculer ATR');
         }
         return $out;
+    }
+
+    #[Route('/api/validate/mtf', name: 'api_validate_mtf', methods: ['GET'])]
+    public function validateMtf(
+        Request $request,
+        Signal4hService $signal4h,
+        Signal1hService $signal1h,
+        Signal15mService $signal15m,
+        Signal5mService $signal5m,
+        Signal1mService $signal1m,
+        SignalService $signalService,
+        ContractRepository $contractRepository,
+        KlineRepository $klineRepository,
+    ): JsonResponse {
+        $symbol  = $request->query->get('symbol');
+        $symbols = $symbol ? [$symbol] : array_column($contractRepository->allActiveSymbols(), 'symbol');
+
+        $results = [];
+        foreach ($symbols as $sym) {
+            $klines4h  = $klineRepository->findRecentBySymbolAndTimeframe($sym, '4h', 261);
+            $klines1h  = $klineRepository->findRecentBySymbolAndTimeframe($sym, '1h', 221);
+            $klines15m = $klineRepository->findRecentBySymbolAndTimeframe($sym, '15m', 300);
+            $klines5m  = $klineRepository->findRecentBySymbolAndTimeframe($sym, '5m', 300);
+            $klines1m  = $klineRepository->findRecentBySymbolAndTimeframe($sym, '1m', 300);
+            $d = $signalService->evaluateAll([
+                    '4h'  => $klines4h,
+                    '1h'  => $klines1h,
+                    '15m' => $klines15m,
+                    '5m'  => $klines5m,
+                    '1m'  => $klines1m,
+                ]
+            );
+            $results[] = $d;
+//            $sig4h  = $this->extractSignal($signal4h->evaluate($klines4h));
+//            $sig1h  = $this->extractSignal($signal1h->evaluate($klines1h));
+//            $sig15m = $this->extractSignal($signal15m->evaluate($klines15m));
+//            $sig5m  = $this->extractSignal($signal5m->evaluate($klines5m));
+//            $sig1m  = $this->extractSignal($signal1m->evaluate($klines1m));
+
+//            if (in_array('NONE', [$sig4h, $sig1h, $sig15m, $sig5m, $sig1m], true)) {
+//                continue;
+//            }
+
+//            $results[] = [
+//                'symbol' => $sym,
+//                'signals' => [
+//                    '4h'  => $sig4h,
+//                    '1h'  => $sig1h,
+//                    '15m' => $sig15m,
+//                    '5m'  => $sig5m,
+//                    '1m'  => $sig1m,
+//                ],
+//            ];
+        }
+
+        return new JsonResponse([
+            'count' => count($results),
+            'results' => $results,
+        ]);
+    }
+
+
+    /** @param array<int,mixed> $sig */
+    private function extractSignal(array $sig): string
+    {
+        if (isset($sig['final']['signal'])) return strtoupper((string)$sig['final']['signal']);
+        if (isset($sig['signal'])) return strtoupper((string)$sig['signal']);
+        return 'NONE';
     }
 }

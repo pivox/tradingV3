@@ -31,6 +31,10 @@ use Doctrine\ORM\Mapping as ORM;
     'step' => 'exact',
     'contract.exchange.name' => 'exact',
 ])]
+#[ORM\UniqueConstraint(
+    name: 'uniq_kline_contract_step_ts',
+    columns: ['contract_id', 'step', 'timestamp']
+)]
 class Kline
 {
     #[ORM\Id]
