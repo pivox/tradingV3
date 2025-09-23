@@ -156,7 +156,8 @@ final class BitmartKlinesCallbackController extends AbstractController
             signals: $signalsPayload,
             flush: false
         );
-        if ($pipeline && !($timeframe == '4h' && $signalsPayload['signal'] === 'NONE')) {
+        $signal = $signalsPayload['signal'] ?? $signalsPayload["final"]['signal'];
+        if ($pipeline && !($timeframe == '4h' &&  $signal === 'NONE')) {
             $isValid = strtoupper($signalsPayload[$timeframe]['signal'] ?? 'NONE') !== 'NONE';
             $pipelineService->markAttempt($pipeline);
             if ($isValid && in_array($timeframe, ['15m','5m','1m'], true)) {
@@ -174,6 +175,7 @@ final class BitmartKlinesCallbackController extends AbstractController
         }
         if ($pipeline && $pipeline->isToDelete()) {
             $em->remove($pipeline);
+            $em->flush();
             $logger->info('Pipeline deleted after decision', [
                 'symbol' => $symbol,
                 'timeframe' => $timeframe,
@@ -181,7 +183,6 @@ final class BitmartKlinesCallbackController extends AbstractController
         }
 
 
-        $em->flush();
 
         $logger->info('Klines persisted + evaluated', [
             'symbol' => $symbol,

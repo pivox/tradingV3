@@ -50,6 +50,7 @@ final class ContractPipelineService
         $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
         $pipe->setContract($contract);
         $this->em->flush();
+        $this->em->clear();
         return $pipe;
     }
 
@@ -61,6 +62,7 @@ final class ContractPipelineService
         $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
         $pipe->setContract($contract);
         $this->em->flush();
+        $this->em->clear();
         return $pipe;
     }
 
@@ -141,7 +143,10 @@ final class ContractPipelineService
                 default:
                     // Timeframe inconnu : on ne fait rien
                     $pipe->touchUpdatedAt();
+//                    $contract = $this->contractRepo->findOneBy(['symbol' => $pipe->getContract()->getSymbol()]);
+//                    $pipe->setContract($contract);
                     $this->em->flush();
+                    $this->em->clear();
             }
         } else {
             // Échec
@@ -166,6 +171,7 @@ final class ContractPipelineService
             $pipe->setContract($contract);
 
             $this->em->flush();
+            $this->em->clear();
         }
 
         return $pipe;

@@ -18,6 +18,15 @@ class Position
     public const STATUS_CLOSED    = 'CLOSED';
     public const STATUS_CANCELLED = 'CANCELLED';
 
+    public const STATUS_EXPIRED    = 'EXPIRED';   //  TTL interne atteint
+    public const STATUS_REJECTED   = 'REJECTED';  //  refusée par exchange
+
+    // TIF (durée de vie côté exchange)
+    public const TIF_GTC = 'GTC'; // Good-Till-Cancel
+    public const TIF_IOC = 'IOC';
+    public const TIF_FOK = 'FOK';
+
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: 'bigint')]
@@ -92,14 +101,6 @@ class Position
     #[ORM\Column(type: 'datetime_immutable')]
     private \DateTimeImmutable $updatedAt;
 
-    #[ORM\PrePersist]
-    public function onPrePersist(): void
-    {
-        $now = new \DateTimeImmutable();
-        $this->createdAt = $now;
-        $this->updatedAt = $now;
-    }
-
     #[ORM\PreUpdate]
     public function onPreUpdate(): void
     {
@@ -160,5 +161,44 @@ class Position
 
     public function getUpdatedAt(): \DateTimeImmutable { return $this->updatedAt; }
     public function setUpdatedAt(\DateTimeImmutable $updatedAt): self { $this->updatedAt = $updatedAt; return $this; }
+
+    #[ORM\Column(length: 8, options: ['default' => self::TIF_GTC])]
+    private string $timeInForce = self::TIF_GTC;  // ✅ reflète la durée côté exchange
+
+    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
+    private ?\DateTimeImmutable $expiresAt = null; // ✅ TTL interne (ex: created+2min si PENDING)
+
+    #[ORM\Column(length: 32, nullable: true)]
+    private ?string $externalStatus = null; // ✅ NEW/OPEN/CANCELED/REJECTED (copie exchange)
+
+    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
+    private ?\DateTimeImmutable $lastSyncAt = null; // ✅ dernière synchro avec l’API
+
+    // --- lifecycle: initialise created/updated, et TTL par défaut si PENDING ---
+    #[ORM\PrePersist]
+    public function onPrePersist(): void
+    {
+        $now = new \DateTimeImmutable();
+        $this->createdAt = $now;
+        $this->updatedAt = $now;
+
+        // TTL soft par défaut : par ex. 2 minutes pour les PENDING sans ordre exchange
+        if ($this->status === self::STATUS_PENDING && $this->expiresAt === null) {
+            $this->expiresAt = $now->modify('+2 minutes'); // ajuste selon ta politique
+        }
+    }
+
+    // --- getters/setters additionnels ---
+    public function getTimeInForce(): string { return $this->timeInForce; }
+    public function setTimeInForce(string $tif): self { $this->timeInForce = $tif; return $this; }
+
+    public function getExpiresAt(): ?\DateTimeImmutable { return $this->expiresAt; }
+    public function setExpiresAt(?\DateTimeImmutable $dt): self { $this->expiresAt = $dt; return $this; }
+
+    public function getExternalStatus(): ?string { return $this->externalStatus; }
+    public function setExternalStatus(?string $s): self { $this->externalStatus = $s; return $this; }
+
+    public function getLastSyncAt(): ?\DateTimeImmutable { return $this->lastSyncAt; }
+    public function setLastSyncAt(?\DateTimeImmutable $dt): self { $this->lastSyncAt = $dt; return $this; }
 }
 
