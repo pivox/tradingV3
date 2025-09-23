@@ -5,6 +5,7 @@ namespace App\Controller\Bitmart;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Repository\ContractPipelineRepository;
+use App\Repository\RuntimeGuardRepository;
 use App\Service\Pipeline\ContractPipelineService;
 use App\Service\Temporal\Dto\WorkflowRef;
 use App\Service\Temporal\Orchestrators\BitmartOrchestrator;
@@ -21,6 +22,7 @@ final class BitmartCronController extends AbstractController
         private readonly BitmartOrchestrator $bitmartOrchestrator,
         private readonly ContractRepository $contractRepository,
         private readonly KlineRepository $klineRepository,
+        private readonly RuntimeGuardRepository $runtimeGuardRepository,
     ) {}
 
     private const BASE_URL     = 'http://nginx';
@@ -36,6 +38,10 @@ final class BitmartCronController extends AbstractController
         LoggerInterface $logger,
         Request $request
     ): JsonResponse {
+        $runGuard = $this->guard();
+        if ($runGuard !== null) {
+            return $runGuard;
+        }
         $tf        = '4h';
         $tfMinutes = TimeframeHelper::parseTimeframeToMinutes($tf);
         $cutoff    = TimeframeHelper::getAlignedOpenByMinutes($tfMinutes); // open de la bougie EN COURS (exclue)
@@ -107,6 +113,10 @@ final class BitmartCronController extends AbstractController
         LoggerInterface $logger,
         Request $request,
     ): JsonResponse {
+        $runGuard = $this->guard();
+        if ($runGuard !== null) {
+            return $runGuard;
+        }
         $symbols = ($request->query->has('all') && $request->query->get('all'))
             ? array_map(fn($c) => $c->getSymbol(), $this->contractRepository->findBy(['exchange' => 'bitmart']))
             : $contractPipelineRepository->getAllSymbolsWithActive1h();
@@ -181,6 +191,10 @@ final class BitmartCronController extends AbstractController
         LoggerInterface $logger,
         Request $request,
     ): JsonResponse {
+        $runGuard = $this->guard();
+        if ($runGuard !== null) {
+            return $runGuard;
+        }
         $symbols = ($request->query->has('all') && $request->query->get('all'))
             ? array_map(fn($c) => $c->getSymbol(), $this->contractRepository->findBy(['exchange' => 'bitmart']))
             : $contractPipelineRepository->getAllSymbolsWithActive15m();
@@ -255,6 +269,10 @@ final class BitmartCronController extends AbstractController
         LoggerInterface $logger,
         Request $request,
     ): JsonResponse {
+        $runGuard = $this->guard();
+        if ($runGuard !== null) {
+            return $runGuard;
+        }
         $symbols = ($request->query->has('all') && $request->query->get('all'))
             ? array_map(fn($c) => $c->getSymbol(), $this->contractRepository->findBy(['exchange' => 'bitmart']))
             : $contractPipelineRepository->getAllSymbolsWithActive5m();
@@ -329,6 +347,10 @@ final class BitmartCronController extends AbstractController
         LoggerInterface $logger,
         Request $request,
     ): JsonResponse {
+        $runGuard = $this->guard();
+        if ($runGuard !== null) {
+            return $runGuard;
+        }
         $symbols = ($request->query->has('all') && $request->query->get('all'))
             ? array_map(fn($c) => $c->getSymbol(), $this->contractRepository->findBy(['exchange' => 'bitmart']))
             : $contractPipelineRepository->getAllSymbolsWithActive1m();
@@ -407,5 +429,14 @@ final class BitmartCronController extends AbstractController
             '1m' => 60,
             default => throw new \InvalidArgumentException("Timeframe inconnu: $tf"),
         };
+    }
+
+    private function guard(): ?JsonResponse
+    {
+        if ($this->runtimeGuardRepository->isPaused()) {
+            return new JsonResponse(['status' => 'paused'], 200);
+        }
+
+        return null;
     }
 }
