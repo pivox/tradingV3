@@ -12,7 +12,7 @@ symbols:
     blacklist: []
 
 risk:
-    fixed_risk_pct: 2.0           # % de l'equity par trade
+    fixed_risk_pct: 5.0           # % de l'equity par trade
     daily_max_loss_pct: 6.0       # stop journalier
     max_concurrent_positions: 4
     correlation:
@@ -23,7 +23,7 @@ atr:
     period: 14
     method: wilder               # wilder|simple
     sl_multiplier: 1.5           # SL = k * ATR
-    trailing_multiplier: 2.5     # trailing ATR après TP1
+    trailing_multiplier: null     # trailing ATR après TP1
     trail_after_tp1: true
     trail_step_pct: 0.10         # facultatif, pas de trail si <10% d'un ATR (débounce)
 
@@ -47,7 +47,7 @@ order_plan:
         slippage_bps_max: 5
     brackets:
         tp_split:
-            tp1_r_multiple: 2.0
+#            tp1_r_multiple: 2.0
             tp1_size_pct: 60
             tp2_trailing: atr
     time_stop:
@@ -89,7 +89,8 @@ indicators:
         k: 3
         d: 3
     vwap:
-        session: daily
+        daily: true        # true = reset chaque jour (préféré pour 5m)
+        timezone: 'UTC'    # ou 'Europe/Paris', 'America/New_York', etc.
 
 long:
     context:
@@ -128,7 +129,7 @@ long:
         k: 1.5
     take_profit:
         tp1_r: 2.0
-        tp1_size_pct: 60
+#        tp1_size_pct: 60
         remainder_trailing: atr
     invalidations:
         any_of:
