@@ -5,6 +5,7 @@ namespace App\Controller\Bitmart;
 use App\Entity\Contract;
 use App\Entity\ContractPipeline;
 use App\Repository\KlineRepository;
+use App\Repository\RuntimeGuardRepository;
 use App\Service\ContractSignalWriter;
 use App\Service\Exchange\Bitmart\BitmartFetcher;
 use App\Service\Persister\KlinePersister;
@@ -39,7 +40,11 @@ final class BitmartKlinesCallbackController extends AbstractController
         ContractSignalWriter $contractSignalWriter,
         KlineRepository $klineRepository,
         PositionOpener $positionOpener,
+        RuntimeGuardRepository $runtimeGuardRepository,
     ): JsonResponse {
+        if ($runtimeGuardRepository->isPaused()) {
+            return new JsonResponse(['status' => 'paused'], 200);
+        }
         $envelope = json_decode($request->getContent(), true) ?? [];
         $payload  = $envelope['payload'] ?? [];
 
