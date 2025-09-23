@@ -1,5 +1,5 @@
 <?php
-// src/Service/Signals/Timeframe/Signal5mService.php
+declare(strict_types=1);
 
 namespace App\Service\Signals\Timeframe;
 
@@ -10,100 +10,72 @@ use App\Service\Indicator\Momentum\Macd;
 use App\Service\Indicator\Volume\Vwap;
 use Psr\Log\LoggerInterface;
 
-/**
- * Service de signal pour le timeframe 5m (exécution fine, très réactif).
- *
- * Conformité YML scalping (branche 5m) :
- *  - LONG  : ema_fast > ema_slow  && macd_hist > 0 && close > vwap(daily)
- *  - SHORT : ema_fast < ema_slow  && macd_hist < 0 && close < vwap(daily)
- *
- * Hypothèses :
- *  - Le contexte MTF (4H/1H/15m) est validé en amont (ex: SignalService).
- *  - Ici, on ne fait que le TRIGGER 5m, sans ADX/RSI/Ichimoku/Bollinger/Donchian.
- */
 final class Signal5mService
 {
     public function __construct(
-        private LoggerInterface $validationLogger, // canal 'validation'
-        private LoggerInterface $signalsLogger,    // canal 'signals'
+        private LoggerInterface $validationLogger,
+        private LoggerInterface $signalsLogger,
         private Ema $ema,
         private Macd $macd,
         private Vwap $vwap,
         private TradingParameters $params,
-
-        // Défauts cohérents avec le YML
-        private float $defaultEps           = 1.0e-6,
-        private bool  $defaultUseLastClosed = true,
-        private int   $defaultMinBars       = 220,
-        private int   $defaultEmaFastPeriod = 20,
-        private int   $defaultEmaSlowPeriod = 50,
-        private int   $defaultMacdFast      = 12,
-        private int   $defaultMacdSlow      = 26,
-        private int   $defaultMacdSignal    = 9,
-        private string $defaultVwapSession  = 'daily'
+        private float $defaultEps = 1.0e-6,
+        private bool $defaultUseLastClosed = true,
+        private int $defaultMinBars = 220,
+        private int $defaultEmaFastPeriod = 20,
+        private int $defaultEmaSlowPeriod = 50,
+        private int $defaultMacdFast = 12,
+        private int $defaultMacdSlow = 26,
+        private int $defaultMacdSignal = 9,
+        private string $defaultVwapTz = 'UTC',
+        private bool $defaultVwapDaily = true
     ) {}
 
     /**
-     * @param Kline[] $candles  Bougies dans l'ordre chronologique (ancienne -> récente)
-     * @return array{
-     *   ema_fast: float,
-     *   ema_slow: float,
-     *   macd: array{macd:float,signal:float,hist:float},
-     *   vwap: float,
-     *   close: float,
-     *   path: string,
-     *   trigger: string,
-     *   signal: string,
-     *   status?: string
-     * }
+     * @param Kline[] $candles (ancienne -> récente)
      */
     public function evaluate(array $candles): array
     {
-        // 1) Config YAML (défensive)
         $cfg = $this->params->getConfig();
 
-        $eps           = $cfg['runtime']['eps']              ?? $this->defaultEps;
-        $useLastClosed = $cfg['runtime']['use_last_closed']  ?? $this->defaultUseLastClosed;
+        $eps           = (float)($cfg['runtime']['eps'] ?? $this->defaultEps);
+        $useLastClosed = (bool) ($cfg['runtime']['use_last_closed'] ?? $this->defaultUseLastClosed);
+        $minBars       = (int)  ($cfg['timeframes']['5m']['guards']['min_bars'] ?? $this->defaultMinBars);
 
-        $minBars       = $cfg['timeframes']['5m']['guards']['min_bars'] ?? $this->defaultMinBars;
+        $emaFastPeriod = (int)($cfg['indicators']['ema']['fast'] ?? $this->defaultEmaFastPeriod);
+        $emaSlowPeriod = (int)($cfg['indicators']['ema']['slow'] ?? $this->defaultEmaSlowPeriod);
+        $macdFast      = (int)($cfg['indicators']['macd']['fast'] ?? $this->defaultMacdFast);
+        $macdSlow      = (int)($cfg['indicators']['macd']['slow'] ?? $this->defaultMacdSlow);
+        $macdSignal    = (int)($cfg['indicators']['macd']['signal'] ?? $this->defaultMacdSignal);
 
-        // Indicateurs
-        $emaFastPeriod = $cfg['indicators']['ema']['fast']   ?? $this->defaultEmaFastPeriod; // 20
-        $emaSlowPeriod = $cfg['indicators']['ema']['slow']   ?? $this->defaultEmaSlowPeriod; // 50
+        $vwapDaily     = (bool) ($cfg['indicators']['vwap']['daily']    ?? $this->defaultVwapDaily);
+        $vwapTimezone  = (string)($cfg['indicators']['vwap']['timezone'] ?? $this->defaultVwapTz);
 
-        $macdFast      = $cfg['indicators']['macd']['fast']  ?? $this->defaultMacdFast;      // 12
-        $macdSlow      = $cfg['indicators']['macd']['slow']  ?? $this->defaultMacdSlow;      // 26
-        $macdSignal    = $cfg['indicators']['macd']['signal']?? $this->defaultMacdSignal;    // 9
-
-        $vwapSession   = $cfg['indicators']['vwap']['session'] ?? $this->defaultVwapSession;  // daily
-
-        // 2) Garde-fou data
         if (count($candles) < $minBars) {
             $validation = [
-                'ema_fast' => 0.0,
-                'ema_slow' => 0.0,
-                'macd'     => ['macd'=>0.0,'signal'=>0.0,'hist'=>0.0],
-                'vwap'     => 0.0,
-                'close'    => 0.0,
-                'path'     => 'execution_5m',
-                'trigger'  => '',
-                'signal'   => 'NONE',
-                'status'   => 'insufficient_data',
+                'ema_fast' => 0.0, 'ema_slow' => 0.0,
+                'macd' => ['macd'=>0.0,'signal'=>0.0,'hist'=>0.0],
+                'vwap' => 0.0, 'close' => 0.0,
+                'path' => 'execution_5m', 'trigger' => '',
+                'signal' => 'NONE', 'status' => 'insufficient_data',
             ];
             $this->signalsLogger->info('signals.tick', $validation);
             $this->validationLogger->warning('validation.violation', $validation);
             return $validation;
         }
 
-        // 3) Séries OHLCV
-        $closes  = array_map(fn(Kline $k) => $k->getClose(),  $candles);
-        $volumes = array_map(fn(Kline $k) => $k->getVolume(), $candles);
+        // --- Séries OHLCV + timestamps (via getTimestamp()) ---
+        $highs   = array_map(fn(Kline $k) => (float)$k->getHigh(),   $candles);
+        $lows    = array_map(fn(Kline $k) => (float)$k->getLow(),    $candles);
+        $closes  = array_map(fn(Kline $k) => (float)$k->getClose(),  $candles);
+        $volumes = array_map(fn(Kline $k) => (float)$k->getVolume(), $candles);
+        $times   = array_map(fn(Kline $k) => $k->getTimestamp()->getTimestamp(), $candles);
 
-        // 4) Indicateurs
-        $emaFast = $this->ema->calculate($closes, $emaFastPeriod);
-        $emaSlow = $this->ema->calculate($closes, $emaSlowPeriod);
+        // EMA
+        $emaFast = (float)$this->ema->calculate($closes, $emaFastPeriod);
+        $emaSlow = (float)$this->ema->calculate($closes, $emaSlowPeriod);
 
-        // MACD (séries si dispo)
+        // MACD
         $macdNow = 0.0; $sigNow = 0.0; $histNow = 0.0;
         if (method_exists($this->macd, 'calculateFull')) {
             $m = $this->macd->calculateFull($closes, $macdFast, $macdSlow, $macdSignal);
@@ -114,76 +86,50 @@ final class Signal5mService
             }
         } else {
             $m = $this->macd->calculate($closes, $macdFast, $macdSlow, $macdSignal);
-            $macdNow = (float) ($m['macd'] ?? 0.0);
-            $sigNow  = (float) ($m['signal'] ?? 0.0);
-            $histNow = (float) ($m['hist'] ?? ($macdNow - $sigNow));
+            $macdNow = (float)($m['macd'] ?? 0.0);
+            $sigNow  = (float)($m['signal'] ?? 0.0);
+            $histNow = (float)($m['hist'] ?? ($macdNow - $sigNow));
         }
 
-        // VWAP (session = daily)
-        $vwapVal = 0.0;
-        if (method_exists($this->vwap, 'calculateSession')) {
-            $vwapVal = (float) $this->vwap->calculateSession($candles, $vwapSession);
-        } elseif (method_exists($this->vwap, 'calculateFull')) {
-            $v = $this->vwap->calculateFull($candles, $vwapSession);
-            $vwapVal = is_array($v) && !empty($v) ? (float) end($v) : 0.0;
-        } elseif (method_exists($this->vwap, 'calculate')) {
-            $vwapVal = (float) $this->vwap->calculate($closes, $volumes, $vwapSession);
-        }
+        // VWAP : daily (si activé) sinon cumulatif
+        $vwapVal = $vwapDaily
+            ? (float)$this->vwap->calculateLastDailyWithTimestamps($times, $highs, $lows, $closes, $volumes, $vwapTimezone)
+            : (float)$this->vwap->calculate($highs, $lows, $closes, $volumes);
 
-        // 5) Close de référence (dernier close clôturé si demandé)
+        // Close de référence (dernier close clôturé si demandé)
         $lastClose = (float) end($closes);
         if ($useLastClosed && count($closes) > 1) {
             $tmp = $closes; array_pop($tmp);
             $lastClose = (float) end($tmp);
         }
 
-        // 6) Logique d'exécution 5m (YML)
-        $emaTrendUp   = ($emaFast > $emaSlow + $eps);
-        $emaTrendDown = ($emaSlow > $emaFast + $eps);
-
-        $macdHistUp   = ($histNow > 0 + $eps);
-        $macdHistDown = ($histNow < 0 - $eps);
-
+        // Règles
+        $emaTrendUp     = ($emaFast > $emaSlow + $eps);
+        $emaTrendDown   = ($emaSlow > $emaFast + $eps);
+        $macdHistUp     = ($histNow > 0.0 + $eps);
+        $macdHistDown   = ($histNow < 0.0 - $eps);
         $closeAboveVwap = ($lastClose > $vwapVal + $eps);
         $closeBelowVwap = ($lastClose < $vwapVal - $eps);
 
-        $signal = 'NONE';
-        $trigger = '';
-        $path = 'execution_5m';
-
-        $long  = $emaTrendUp   && $macdHistUp   && $closeAboveVwap;
-        $short = $emaTrendDown && $macdHistDown && $closeBelowVwap;
-
-        if ($long) {
+        $signal = 'NONE'; $trigger = ''; $path = 'execution_5m';
+        if ($emaTrendUp && $macdHistUp && $closeAboveVwap) {
             $signal  = 'LONG';
-            $trigger = 'ema_fast_gt_slow & macd_hist_gt_0 & close_above_vwap';
-        } elseif ($short) {
+            $trigger = 'ema_fast_gt_slow & macd_hist_gt_0 & close_above_vwap_daily';
+        } elseif ($emaTrendDown && $macdHistDown && $closeBelowVwap) {
             $signal  = 'SHORT';
-            $trigger = 'ema_fast_lt_slow & macd_hist_lt_0 & close_below_vwap';
+            $trigger = 'ema_fast_lt_slow & macd_hist_lt_0 & close_below_vwap_daily';
         }
 
-        // 7) Retour
         $validation = [
-            'ema_fast' => $emaFast,
-            'ema_slow' => $emaSlow,
-            'macd'     => [
-                'macd'   => $macdNow,
-                'signal' => $sigNow,
-                'hist'   => $histNow,
-            ],
-            'vwap'     => $vwapVal,
-            'close'    => $lastClose,
-            'path'     => $path,
-            'trigger'  => $trigger,
-            'signal'   => $signal,
+            'ema_fast' => $emaFast, 'ema_slow' => $emaSlow,
+            'macd' => ['macd'=>$macdNow,'signal'=>$sigNow,'hist'=>$histNow],
+            'vwap' => $vwapVal, 'close' => $lastClose,
+            'path' => $path, 'trigger' => $trigger, 'signal' => $signal,
         ];
 
         $this->signalsLogger->info('signals.tick', $validation);
-        if ($signal == 'NONE') {
-            $this->validationLogger->warning('validation.violation', $validation);
-        } else {
-            $this->validationLogger->info('validation.ok', $validation);
-        }
+        if ($signal === 'NONE') $this->validationLogger->warning('validation.violation', $validation);
+        else                   $this->validationLogger->info('validation.ok', $validation);
 
         return $validation;
     }

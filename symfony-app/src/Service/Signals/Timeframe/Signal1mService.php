@@ -83,14 +83,36 @@ final class Signal1mService
         $emaFast = $this->ema->calculate($closes, $emaFastPeriod);
         $emaSlow = $this->ema->calculate($closes, $emaSlowPeriod);
 
+        // APRÈS (à coller)
+        $timestamps = array_map(fn(Kline $k) => $k->getTimestamp(), $candles);
+        $highs      = array_map(fn(Kline $k) => $k->getHigh(),      $candles);
+        $lows       = array_map(fn(Kline $k) => $k->getLow(),       $candles);
+// $closes et $volumes existent déjà plus haut
+
         $vwapVal = 0.0;
-        if (method_exists($this->vwap, 'calculateSession')) {
-            $vwapVal = (float) $this->vwap->calculateSession($candles, $vwapSession);
-        } elseif (method_exists($this->vwap, 'calculateFull')) {
-            $v = $this->vwap->calculateFull($candles, $vwapSession);
-            $vwapVal = is_array($v) && !empty($v) ? (float) end($v) : 0.0;
-        } elseif (method_exists($this->vwap, 'calculate')) {
-            $vwapVal = (float) $this->vwap->calculate($closes, $volumes, $vwapSession);
+        if (strtolower((string)$vwapSession) === 'daily') {
+            // VWAP journalier (reset chaque jour)
+            if (method_exists($this->vwap, 'calculateLastDailyWithTimestamps')) {
+                $vwapVal = (float) $this->vwap->calculateLastDailyWithTimestamps(
+                    $timestamps, $highs, $lows, $closes, $volumes, 'UTC'
+                );
+            } else {
+                // fallback: calcul plein puis dernier point
+                if (method_exists($this->vwap, 'calculateFull')) {
+                    $series = $this->vwap->calculateFull($highs, $lows, $closes, $volumes);
+                    $vwapVal = !empty($series) ? (float) end($series) : 0.0;
+                } elseif (method_exists($this->vwap, 'calculate')) {
+                    $vwapVal = (float) $this->vwap->calculate($highs, $lows, $closes, $volumes);
+                }
+            }
+        } else {
+            // Session non journalière : on prend le VWAP "classique" (cumulé)
+            if (method_exists($this->vwap, 'calculateFull')) {
+                $series = $this->vwap->calculateFull($highs, $lows, $closes, $volumes);
+                $vwapVal = !empty($series) ? (float) end($series) : 0.0;
+            } elseif (method_exists($this->vwap, 'calculate')) {
+                $vwapVal = (float) $this->vwap->calculate($highs, $lows, $closes, $volumes);
+            }
         }
 
         $lastClose = (float) end($closes);

@@ -2,16 +2,15 @@
 
 namespace App\Controller\Bitmart;
 
-use App\Entity\Contract;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Repository\ContractPipelineRepository;
-use App\Service\ContractSignalWriter;
 use App\Service\Pipeline\ContractPipelineService;
-use App\Service\Signals\Timeframe\Signal1hService;
 use App\Service\Temporal\Dto\WorkflowRef;
 use App\Service\Temporal\Orchestrators\BitmartOrchestrator;
+use App\Util\TimeframeHelper;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Annotation\Route;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -22,13 +21,11 @@ final class BitmartCronController extends AbstractController
         private readonly BitmartOrchestrator $bitmartOrchestrator,
         private readonly ContractRepository $contractRepository,
         private readonly KlineRepository $klineRepository,
-    )
-    {
-    }
+    ) {}
 
     private const BASE_URL     = 'http://nginx';
     private const CALLBACK     = 'api/callback/bitmart/get-kline';
-    private const LIMIT_KLINES = 221;
+    private const LIMIT_KLINES = 260;
 
     #[Route('/api/cron/bitmart/refresh-4h', name: 'bitmart_cron_refresh_4h', methods: ['POST'])]
     public function refresh4h(
@@ -37,52 +34,29 @@ final class BitmartCronController extends AbstractController
         BitmartOrchestrator $orchestrator,
         ContractPipelineService $pipelineService,
         LoggerInterface $logger,
+        Request $request
     ): JsonResponse {
-        $contracts = $this->contractRepository->findBy(['exchange' => 'bitmart']);
-        $stepMinutes = 240;
-        $ref = new WorkflowRef(
-            id: 'api-rate-limiter-workflow',
-            type: 'ApiRateLimiterClient',
-            taskQueue: 'api_rate_limiter_queue');
-        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
-        $minSince = $now->sub(new \DateInterval('PT'.((self::LIMIT_KLINES - 1) * $stepMinutes).'M'));
+        $tf        = '4h';
+        $tfMinutes = TimeframeHelper::parseTimeframeToMinutes($tf);
+        $cutoff    = TimeframeHelper::getAlignedOpenByMinutes($tfMinutes); // open de la bougie EN COURS (exclue)
+        $end       = $cutoff;
+        $endTs     = $end->getTimestamp();
 
-        foreach ($contracts as $contract) {
-            $sinceTs = $this->klineRepository->findLastKline($contract, $stepMinutes);
-//            if ($sinceTs) {
-//                $sinceTs = $sinceTs->setTimezone(new \DateTimeZone('UTC'));
-//                if ($sinceTs > $minSince) {
-//                    $sinceTs = $minSince;
-//                }
-//            } else {
-//                $sinceTs = $minSince;
-//            }
-            $this->bitmartOrchestrator->requestGetKlines(
-                $ref,
-                baseUrl: self::BASE_URL,
-                callback: self::CALLBACK,
-                contract: $contract->getSymbol(),
-                timeframe: '4h',
-                limit: self::LIMIT_KLINES,
-                sinceTs: $sinceTs?->getTimestamp(),
-                note: 'cron 4h',
-            );
+        // backfill max côté cron
+        $windowMinutes = (self::LIMIT_KLINES - 1) * $tfMinutes;
+        $start = $end->modify("-{$windowMinutes} minutes");
+        $startTs = $start->getTimestamp();
+
+        if ($request->query->has('symbol')) {
+            $contract = $this->contractRepository->find($request->query->get('symbol'));
+            if (!$contract) {
+                return new JsonResponse(['status' => 'error', 'message' => 'Contract not found: '.$request->query->get('symbol')], 404);
+            }
+            $contracts = [$contract];
+        } else {
+            $contracts = $this->contractRepository->findBy(['exchange' => 'bitmart']);
         }
-        $logger->info('Bitmart cron 4h executed');
-        return new JsonResponse(['status' => 'ok', 'cron' => '4h']);
-    }
 
-    #[Route('/api/cron/bitmart/refresh-1h', name: 'bitmart_cron_refresh_1h', methods: ['GET','POST'])]
-    public function refresh1h(
-        ContractPipelineRepository $pipelineRepo,
-        ContractPipelineService $pipelineService,
-        KlineRepository $klines,
-        BitmartOrchestrator $orchestrator,
-        LoggerInterface $logger,
-        ContractPipelineRepository $contractPipelineRepository,
-    ): JsonResponse {
-        $contracts = $contractPipelineRepository->getAllSymbolsWithActive1h();
-        // $contracts = array_map(fn($contract) => $contract->getSymbol(), $this->contractRepository->findBy(['exchange' => 'bitmart']));
         $ref = new WorkflowRef(
             id: 'api-rate-limiter-workflow',
             type: 'ApiRateLimiterClient',
@@ -90,29 +64,113 @@ final class BitmartCronController extends AbstractController
         );
 
         $sent = 0;
-        $step = $this->stepFor('1h');
-
         foreach ($contracts as $contract) {
-            // Seed/assure présence en pipeline 1h (idempotent)
 
-            $last = $klines->findOneBy(['contract' => $contract, 'step' => $step], ['timestamp' => 'DESC']);
-            $sinceTs = $last ? $last->getTimestamp()->getTimestamp() : null;
+
+            $this->bitmartOrchestrator->requestGetKlines(
+                $ref,
+                baseUrl: self::BASE_URL,
+                callback: self::CALLBACK,
+                contract: $contract->getSymbol(),
+                timeframe: $tf,
+                limit: self::LIMIT_KLINES,
+                start: $start,
+                end: $end,
+                note: 'cron '.$tf
+            );
+            $sent++;
+        }
+
+        $logger->info('Bitmart cron 4h dispatched', [
+            'tf'             => $tf,
+            'end'         => $end->format('Y-m-d H:i:s'),
+            'endTs'       => $endTs,
+            'start'  => $start->format('Y-m-d H:i:s'),
+            'count'          => $sent,
+        ]);
+
+        return $this->json([
+            'status'      => 'ok',
+            'timeframe'   => $tf,
+            'end'         => $end->format('Y-m-d H:i:s'),
+            'endTs'       => $endTs,
+            'start'  => $start->format('Y-m-d H:i:s'),
+            'sent'        => $sent,
+        ]);
+    }
+
+    #[Route('/api/cron/bitmart/refresh-1h', name: 'bitmart_cron_refresh_1h', methods: ['GET','POST'])]
+    public function refresh1h(
+        ContractPipelineRepository $contractPipelineRepository,
+        KlineRepository $klines,
+        BitmartOrchestrator $orchestrator,
+        LoggerInterface $logger,
+        Request $request,
+    ): JsonResponse {
+        $symbols = ($request->query->has('all') && $request->query->get('all'))
+            ? array_map(fn($c) => $c->getSymbol(), $this->contractRepository->findBy(['exchange' => 'bitmart']))
+            : $contractPipelineRepository->getAllSymbolsWithActive1h();
+
+        $tf        = '1h';
+        $tfMinutes = TimeframeHelper::parseTimeframeToMinutes($tf); // 60
+        $cutoff    = TimeframeHelper::getAlignedOpenByMinutes($tfMinutes);
+        $end       = $cutoff;
+        $endTs     = $end->getTimestamp();
+
+        $windowMinutes = (self::LIMIT_KLINES - 1) * $tfMinutes;
+        $minBackfillTs = $end->modify("-{$windowMinutes} minutes")->getTimestamp();
+
+        $ref = new WorkflowRef(
+            id: 'api-rate-limiter-workflow',
+            type: 'ApiRateLimiterClient',
+            taskQueue: 'api_rate_limiter_queue'
+        );
+
+        $sent = 0;
+        $step = $this->stepFor($tf); // 3600
+
+        foreach ($symbols as $symbol) {
+            $last = $klines->findOneBy(['contract' => $symbol, 'step' => $step], ['timestamp' => 'DESC']);
+
+            $startTs = $minBackfillTs;
+            if ($last) {
+                $lastTs = $last->getTimestamp()->getTimestamp();
+                $nextAlignedTs = $lastTs + $tfMinutes * 60;
+                $startTs = max($nextAlignedTs, $minBackfillTs);
+            }
+
+            if ($startTs >= $endTs) { continue; }
+
+            $start = (new \DateTimeImmutable('@'.$startTs))->setTimezone(new \DateTimeZone('UTC'));
+            $endDT = (new \DateTimeImmutable('@'.$endTs))->setTimezone(new \DateTimeZone('UTC'));
 
             $orchestrator->requestGetKlines(
                 $ref,
                 baseUrl: self::BASE_URL,
                 callback: self::CALLBACK,
-                contract: $contract,
-                timeframe: '1h',
+                contract: $symbol,
+                timeframe: $tf,
                 limit: self::LIMIT_KLINES,
-                sinceTs: $sinceTs
+                start: $start,
+                end: $endDT,
+                note: 'cron '.$tf
             );
             $sent++;
         }
 
-        $logger->info('[BitmartCron] Signals envoyés', ['tf' => '1h', 'count' => $sent]);
+        $logger->info('[BitmartCron] 1h dispatched', [
+            'cutoff'        => $end->format(\DateTimeInterface::RFC3339_EXTENDED),
+            'cutoffTs'      => $endTs,
+            'minBackfillTs' => $minBackfillTs,
+            'sent'          => $sent,
+        ]);
 
-        return $this->json(['status' => 'ok', 'timeframe' => '1h', 'sent_signals' => $sent]);
+        return $this->json([
+            'status'       => 'ok',
+            'timeframe'    => $tf,
+            'cutoff_open'  => $end->format('c'),
+            'sent_signals' => $sent,
+        ]);
     }
 
     #[Route('/api/cron/bitmart/refresh-15m', name: 'bitmart_cron_refresh_15m', methods: ['POST'])]
@@ -121,9 +179,20 @@ final class BitmartCronController extends AbstractController
         KlineRepository $klines,
         BitmartOrchestrator $orchestrator,
         LoggerInterface $logger,
+        Request $request,
     ): JsonResponse {
-       $contracts = $contractPipelineRepository->getAllSymbolsWithActive15m();
-       // $contracts = array_map(fn($contract) => $contract->getSymbol(), $this->contractRepository->findBy(['exchange' => 'bitmart']));
+        $symbols = ($request->query->has('all') && $request->query->get('all'))
+            ? array_map(fn($c) => $c->getSymbol(), $this->contractRepository->findBy(['exchange' => 'bitmart']))
+            : $contractPipelineRepository->getAllSymbolsWithActive15m();
+
+        $tf        = '15m';
+        $tfMinutes = TimeframeHelper::parseTimeframeToMinutes($tf); // 15
+        $cutoff    = TimeframeHelper::getAlignedOpenByMinutes($tfMinutes);
+        $end       = $cutoff;
+        $endTs     = $end->getTimestamp();
+
+        $windowMinutes = (self::LIMIT_KLINES - 1) * $tfMinutes;
+        $minBackfillTs = $end->modify("-{$windowMinutes} minutes")->getTimestamp();
 
         $ref = new WorkflowRef(
             id: 'api-rate-limiter-workflow',
@@ -132,29 +201,50 @@ final class BitmartCronController extends AbstractController
         );
 
         $sent = 0;
-        $step = $this->stepFor('15m');
+        $step = $this->stepFor($tf); // 900
 
-        foreach ($contracts as $contract) {
-            // Seed/assure présence en pipeline 15m (idempotent)
+        foreach ($symbols as $symbol) {
+            $last = $klines->findOneBy(['contract' => $symbol, 'step' => $step], ['timestamp' => 'DESC']);
 
-            $last = $klines->findOneBy(['contract' => $contract, 'step' => $step], ['timestamp' => 'DESC']);
-            $sinceTs = $last ? $last->getTimestamp()->getTimestamp() : null;
+            $startTs = $minBackfillTs;
+            if ($last) {
+                $lastTs = $last->getTimestamp()->getTimestamp();
+                $nextAlignedTs = $lastTs + $tfMinutes * 60;
+                $startTs = max($nextAlignedTs, $minBackfillTs);
+            }
+
+            if ($startTs >= $endTs) { continue; }
+
+            $start = (new \DateTimeImmutable('@'.$startTs))->setTimezone(new \DateTimeZone('UTC'));
+            $endDT = (new \DateTimeImmutable('@'.$endTs))->setTimezone(new \DateTimeZone('UTC'));
 
             $orchestrator->requestGetKlines(
                 $ref,
                 baseUrl: self::BASE_URL,
                 callback: self::CALLBACK,
-                contract: $contract,
-                timeframe: '5m',
+                contract: $symbol,
+                timeframe: $tf,
                 limit: self::LIMIT_KLINES,
-                sinceTs: $sinceTs
+                start: $start,
+                end: $endDT,
+                note: 'cron '.$tf
             );
             $sent++;
         }
 
-        $logger->info('[BitmartCron] Signals envoyés', ['tf' => '15m', 'count' => $sent]);
+        $logger->info('[BitmartCron] 15m dispatched', [
+            'cutoff'        => $end->format(\DateTimeInterface::RFC3339_EXTENDED),
+            'cutoffTs'      => $endTs,
+            'minBackfillTs' => $minBackfillTs,
+            'sent'          => $sent,
+        ]);
 
-        return $this->json(['status' => 'ok', 'timeframe' => '15m', 'sent_signals' => $sent]);
+        return $this->json([
+            'status'       => 'ok',
+            'timeframe'    => $tf,
+            'cutoff_open'  => $end->format('c'),
+            'sent_signals' => $sent,
+        ]);
     }
 
     #[Route('/api/cron/bitmart/refresh-5m', name: 'bitmart_cron_refresh_5m', methods: ['POST'])]
@@ -163,9 +253,20 @@ final class BitmartCronController extends AbstractController
         KlineRepository $klines,
         BitmartOrchestrator $orchestrator,
         LoggerInterface $logger,
+        Request $request,
     ): JsonResponse {
-        $contracts = $contractPipelineRepository->getAllSymbolsWithActive5m();
-        //$contracts = array_map(fn($contract) => $contract->getSymbol(), $this->contractRepository->findBy(['exchange' => 'bitmart']));
+        $symbols = ($request->query->has('all') && $request->query->get('all'))
+            ? array_map(fn($c) => $c->getSymbol(), $this->contractRepository->findBy(['exchange' => 'bitmart']))
+            : $contractPipelineRepository->getAllSymbolsWithActive5m();
+
+        $tf        = '5m';
+        $tfMinutes = TimeframeHelper::parseTimeframeToMinutes($tf); // 5
+        $cutoff    = TimeframeHelper::getAlignedOpenByMinutes($tfMinutes);
+        $end       = $cutoff;
+        $endTs     = $end->getTimestamp();
+
+        $windowMinutes = (self::LIMIT_KLINES - 1) * $tfMinutes;
+        $minBackfillTs = $end->modify("-{$windowMinutes} minutes")->getTimestamp();
 
         $ref = new WorkflowRef(
             id: 'api-rate-limiter-workflow',
@@ -174,29 +275,50 @@ final class BitmartCronController extends AbstractController
         );
 
         $sent = 0;
-        $step = $this->stepFor('5m');
+        $step = $this->stepFor($tf); // 300
 
-        foreach ($contracts as $contract) {
-            // Seed/assure présence en pipeline 5m (idempotent)
+        foreach ($symbols as $symbol) {
+            $last = $klines->findOneBy(['contract' => $symbol, 'step' => $step], ['timestamp' => 'DESC']);
 
-            $last = $klines->findOneBy(['contract' => $contract, 'step' => $step], ['timestamp' => 'DESC']);
-            $sinceTs = $last ? $last->getTimestamp()->getTimestamp() : null;
+            $startTs = $minBackfillTs;
+            if ($last) {
+                $lastTs = $last->getTimestamp()->getTimestamp();
+                $nextAlignedTs = $lastTs + $tfMinutes * 60;
+                $startTs = max($nextAlignedTs, $minBackfillTs);
+            }
+
+            if ($startTs >= $endTs) { continue; }
+
+            $start = (new \DateTimeImmutable('@'.$startTs))->setTimezone(new \DateTimeZone('UTC'));
+            $endDT = (new \DateTimeImmutable('@'.$endTs))->setTimezone(new \DateTimeZone('UTC'));
 
             $orchestrator->requestGetKlines(
                 $ref,
                 baseUrl: self::BASE_URL,
                 callback: self::CALLBACK,
-                contract: $contract,
-                timeframe: '5m',
+                contract: $symbol,
+                timeframe: $tf,
                 limit: self::LIMIT_KLINES,
-                sinceTs: $sinceTs
+                start: $start,
+                end: $endDT,
+                note: 'cron '.$tf
             );
             $sent++;
         }
 
-        $logger->info('[BitmartCron] Signals envoyés', ['tf' => '5m', 'count' => $sent]);
+        $logger->info('[BitmartCron] 5m dispatched', [
+            'cutoff'        => $end->format(\DateTimeInterface::RFC3339_EXTENDED),
+            'cutoffTs'      => $endTs,
+            'minBackfillTs' => $minBackfillTs,
+            'sent'          => $sent,
+        ]);
 
-        return $this->json(['status' => 'ok', 'timeframe' => '5m', 'sent_signals' => $sent]);
+        return $this->json([
+            'status'       => 'ok',
+            'timeframe'    => $tf,
+            'cutoff_open'  => $end->format('c'),
+            'sent_signals' => $sent,
+        ]);
     }
 
     #[Route('/api/cron/bitmart/refresh-1m', name: 'bitmart_cron_refresh_1m', methods: ['POST'])]
@@ -205,8 +327,21 @@ final class BitmartCronController extends AbstractController
         KlineRepository $klines,
         BitmartOrchestrator $orchestrator,
         LoggerInterface $logger,
+        Request $request,
     ): JsonResponse {
-        $contracts = $contractPipelineRepository->getAllSymbolsWithActive1m();
+        $symbols = ($request->query->has('all') && $request->query->get('all'))
+            ? array_map(fn($c) => $c->getSymbol(), $this->contractRepository->findBy(['exchange' => 'bitmart']))
+            : $contractPipelineRepository->getAllSymbolsWithActive1m();
+
+        $tf        = '1m';
+        $tfMinutes = TimeframeHelper::parseTimeframeToMinutes($tf); // 1
+        $cutoff    = TimeframeHelper::getAlignedOpenByMinutes($tfMinutes);
+        $end       = $cutoff;
+        $endTs     = $end->getTimestamp();
+
+        $windowMinutes = (self::LIMIT_KLINES - 1) * $tfMinutes;
+        $minBackfillTs = $end->modify("-{$windowMinutes} minutes")->getTimestamp();
+
         $ref = new WorkflowRef(
             id: 'api-rate-limiter-workflow',
             type: 'ApiRateLimiterClient',
@@ -214,29 +349,50 @@ final class BitmartCronController extends AbstractController
         );
 
         $sent = 0;
-        $step = $this->stepFor('1m');
+        $step = $this->stepFor($tf); // 60
 
-        foreach ($contracts as $contract) {
-            // Seed/assure présence en pipeline 1m (idempotent)
+        foreach ($symbols as $symbol) {
+            $last = $klines->findOneBy(['contract' => $symbol, 'step' => $step], ['timestamp' => 'DESC']);
 
-            $last = $klines->findOneBy(['contract' => $contract, 'step' => $step], ['timestamp' => 'DESC']);
-            $sinceTs = $last ? $last->getTimestamp()->getTimestamp() : null;
+            $startTs = $minBackfillTs;
+            if ($last) {
+                $lastTs = $last->getTimestamp()->getTimestamp();
+                $nextAlignedTs = $lastTs + $tfMinutes * 60;
+                $startTs = max($nextAlignedTs, $minBackfillTs);
+            }
+
+            if ($startTs >= $endTs) { continue; }
+
+            $start = (new \DateTimeImmutable('@'.$startTs))->setTimezone(new \DateTimeZone('UTC'));
+            $endDT = (new \DateTimeImmutable('@'.$endTs))->setTimezone(new \DateTimeZone('UTC'));
 
             $orchestrator->requestGetKlines(
                 $ref,
                 baseUrl: self::BASE_URL,
                 callback: self::CALLBACK,
-                contract: $contract,
-                timeframe: '1m',
+                contract: $symbol,
+                timeframe: $tf,
                 limit: self::LIMIT_KLINES,
-                sinceTs: $sinceTs
+                start: $start,
+                end: $endDT,
+                note: 'cron '.$tf
             );
             $sent++;
         }
 
-        $logger->info('[BitmartCron] Signals envoyés', ['tf' => '1m', 'count' => $sent]);
+        $logger->info('[BitmartCron] 1m dispatched', [
+            'cutoff'        => $end->format(\DateTimeInterface::RFC3339_EXTENDED),
+            'cutoffTs'      => $endTs,
+            'minBackfillTs' => $minBackfillTs,
+            'sent'          => $sent,
+        ]);
 
-        return $this->json(['status' => 'ok', 'timeframe' => '1m', 'sent_signals' => $sent]);
+        return $this->json([
+            'status'       => 'ok',
+            'timeframe'    => $tf,
+            'cutoff_open'  => $end->format('c'),
+            'sent_signals' => $sent,
+        ]);
     }
 
     // ================== Helpers ==================
@@ -251,38 +407,5 @@ final class BitmartCronController extends AbstractController
             '1m' => 60,
             default => throw new \InvalidArgumentException("Timeframe inconnu: $tf"),
         };
-    }
-
-    private function dispatchForEligible(
-        string $timeframe,
-        ContractPipelineRepository $pipelineRepo,
-        KlineRepository $klines,
-        BitmartOrchestrator $orchestrator
-    ): int {
-        $ref  = new WorkflowRef('default', 'api_rate_limiter_queue', 'ApiRateLimiterClient', 'api_rate_limiter_queue');
-        $step = $this->stepFor($timeframe);
-        $sent = 0;
-
-        $eligible = $pipelineRepo->findEligibleFor($timeframe);
-
-        foreach ($eligible as $pipe) {
-            $contract = $pipe->getContract();
-
-            $last = $klines->findOneBy(['contract' => $contract, 'step' => $step], ['timestamp' => 'DESC']);
-            $sinceTs = $last ? $last->getTimestamp()->getTimestamp() : null;
-
-            $orchestrator->requestGetKlines(
-                $ref,
-                baseUrl: self::BASE_URL,
-                callback: self::CALLBACK,
-                contract: $contract->getSymbol(),
-                timeframe: $timeframe,
-                limit: self::LIMIT_KLINES,
-                sinceTs: $sinceTs
-            );
-            $sent++;
-        }
-
-        return $sent;
     }
 }

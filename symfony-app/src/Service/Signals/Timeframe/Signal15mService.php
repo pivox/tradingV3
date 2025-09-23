@@ -22,8 +22,8 @@ use Psr\Log\LoggerInterface;
 final class Signal15mService
 {
     public function __construct(
-        private LoggerInterface $validationLogger, // canal 'validation'
-        private LoggerInterface $signalsLogger,    // canal 'signals'
+        private LoggerInterface $validationLogger,
+        private LoggerInterface $signalsLogger,
         private Ema $ema,
         private Macd $macd,
         private Vwap $vwap,
@@ -37,23 +37,10 @@ final class Signal15mService
         private int   $defaultMacdFast      = 12,
         private int   $defaultMacdSlow      = 26,
         private int   $defaultMacdSignal    = 9,
-        private string $defaultVwapSession  = 'daily'
+        private string $defaultTimezone     = 'UTC'   // ← remplace l’ancienne notion de "session"
     ) {}
 
-    /**
-     * @param Kline[] $candles  Bougies dans l'ordre chronologique (ancienne -> récente)
-     * @return array{
-     *   ema_fast: float,
-     *   ema_slow: float,
-     *   macd: array{macd:float,signal:float,hist:float},
-     *   vwap: float,
-     *   close: float,
-     *   path: string,
-     *   trigger: string,
-     *   signal: string,
-     *   status?: string
-     * }
-     */
+    /** @param Kline[] $candles */
     public function evaluate(array $candles): array
     {
         $cfg = $this->params->getConfig();
@@ -62,35 +49,38 @@ final class Signal15mService
         $useLastClosed = $cfg['runtime']['use_last_closed'] ?? $this->defaultUseLastClosed;
         $minBars       = $cfg['timeframes']['15m']['guards']['min_bars'] ?? $this->defaultMinBars;
 
-        $emaFastPeriod = $cfg['indicators']['ema']['fast']  ?? $this->defaultEmaFastPeriod; // 20
-        $emaSlowPeriod = $cfg['indicators']['ema']['slow']  ?? $this->defaultEmaSlowPeriod; // 50
+        $emaFastPeriod = $cfg['indicators']['ema']['fast']  ?? $this->defaultEmaFastPeriod;
+        $emaSlowPeriod = $cfg['indicators']['ema']['slow']  ?? $this->defaultEmaSlowPeriod;
 
         $macdFast   = $cfg['indicators']['macd']['fast']   ?? $this->defaultMacdFast;
         $macdSlow   = $cfg['indicators']['macd']['slow']   ?? $this->defaultMacdSlow;
         $macdSignal = $cfg['indicators']['macd']['signal'] ?? $this->defaultMacdSignal;
 
-        $vwapSession = $cfg['indicators']['vwap']['session'] ?? $this->defaultVwapSession;
+        // 🔁 Nouvelle lecture de conf VWAP (compatible avec ton YAML v1.2)
+        $vwapDaily   = (bool)($cfg['indicators']['vwap']['daily'] ?? true);
+        $vwapTz      = (string)($cfg['indicators']['vwap']['timezone'] ?? $this->defaultTimezone);
 
         if (count($candles) < $minBars) {
             $validation = [
-                'ema_fast' => 0.0,
-                'ema_slow' => 0.0,
-                'macd'     => ['macd'=>0.0,'signal'=>0.0,'hist'=>0.0],
-                'vwap'     => 0.0,
-                'close'    => 0.0,
-                'path'     => 'execution_15m',
-                'trigger'  => '',
-                'signal'   => 'NONE',
-                'status'   => 'insufficient_data',
+                'ema_fast' => 0.0, 'ema_slow' => 0.0,
+                'macd' => ['macd'=>0.0,'signal'=>0.0,'hist'=>0.0],
+                'vwap' => 0.0, 'close' => 0.0,
+                'path' => 'execution_15m', 'trigger' => '',
+                'signal' => 'NONE', 'status' => 'insufficient_data',
             ];
             $this->signalsLogger->info('signals.tick', $validation);
             $this->validationLogger->warning('validation.violation', $validation);
             return $validation;
         }
 
-        $closes  = array_map(fn(Kline $k) => $k->getClose(),  $candles);
-        $volumes = array_map(fn(Kline $k) => $k->getVolume(), $candles);
+        // 🧩 Décomposition des bougies → tableaux scalaires
+        $timestamps = array_map(fn(Kline $k) => (int)$k->getTimestamp()->getTimestamp(), $candles); // adapte si tu as getOpenTimeMs()
+        $highs      = array_map(fn(Kline $k) => (float)$k->getHigh(),   $candles);
+        $lows       = array_map(fn(Kline $k) => (float)$k->getLow(),    $candles);
+        $closes     = array_map(fn(Kline $k) => (float)$k->getClose(),  $candles);
+        $volumes    = array_map(fn(Kline $k) => (float)$k->getVolume(), $candles);
 
+        // 📈 EMA / MACD inchangés
         $emaFast = $this->ema->calculate($closes, $emaFastPeriod);
         $emaSlow = $this->ema->calculate($closes, $emaSlowPeriod);
 
@@ -109,16 +99,20 @@ final class Signal15mService
             $histNow = (float) ($m['hist'] ?? ($macdNow - $sigNow));
         }
 
+        // ✅ VWAP : compat "daily reset" OU "continu"
         $vwapVal = 0.0;
-        if (method_exists($this->vwap, 'calculateSession')) {
-            $vwapVal = (float) $this->vwap->calculateSession($candles, $vwapSession);
-        } elseif (method_exists($this->vwap, 'calculateFull')) {
-            $v = $this->vwap->calculateFull($candles, $vwapSession);
-            $vwapVal = is_array($v) && !empty($v) ? (float) end($v) : 0.0;
-        } elseif (method_exists($this->vwap, 'calculate')) {
-            $vwapVal = (float) $this->vwap->calculate($closes, $volumes, $vwapSession);
+
+        if ($vwapDaily) {
+            // VWAP avec reset quotidien (plus fidèle à un "session/daily VWAP")
+            $vwapVal = (float) $this->vwap->calculateLastDailyWithTimestamps(
+                $timestamps, $highs, $lows, $closes, $volumes, $vwapTz
+            );
+        } else {
+            // VWAP continu cumulé
+            $vwapVal = (float) $this->vwap->calculate($highs, $lows, $closes, $volumes);
         }
 
+        // close utilisé
         $lastClose = (float) end($closes);
         if ($useLastClosed && count($closes) > 1) {
             $tmp = $closes; array_pop($tmp);

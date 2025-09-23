@@ -1,33 +1,38 @@
 <?php
 // src/Service/Signals/Timeframe/SignalService.php
 
+declare(strict_types=1);
+
+
 namespace App\Service\Signals\Timeframe;
+
 
 use App\Entity\Kline;
 use Psr\Log\LoggerInterface;
+
 
 /**
  * Orchestrateur MTF pour la stratégie "scalping" (trading.scalping.yml).
  *
  * API proposée :
- *   evaluate([
- *     '4h' => Kline[],
- *     '1h' => Kline[],
- *     '15m'=> Kline[],
- *     '5m' => Kline[],
- *     '1m' => Kline[],
- *   ]): array
+ * evaluate([
+ * '4h' => Kline[],
+ * '1h' => Kline[],
+ * '15m'=> Kline[],
+ * '5m' => Kline[],
+ * '1m' => Kline[],
+ * ]): array
  *
  * Règle générale :
- *   - On exige l'ALIGNEMENT contexte (4h + 1h).
- *   - Exécution si 15m OU 5m donne le même sens.
- *   - 1m sert d'affinage : s'il contredit, on annule l'entrée.
+ * - On exige l'ALIGNEMENT contexte (4h + 1h).
+ * - Exécution si 15m OU 5m donne le même sens.
+ * - 1m sert d'affinage : s'il contredit, on annule l'entrée.
  */
 final class SignalService
 {
     public function __construct(
         private LoggerInterface $validationLogger, // canal 'validation'
-        private LoggerInterface $signalsLogger,    // canal 'signals'
+        private LoggerInterface $signalsLogger, // canal 'signals'
         private Signal4hService $signal4h,
         private Signal1hService $signal1h,
         private Signal15mService $signal15m,
@@ -35,76 +40,103 @@ final class SignalService
         private Signal1mService $signal1m,
     ) {}
 
+
     /**
-     * @param array{
-     *   4h: Kline[],
-     *   1h: Kline[],
-     *   15m: Kline[],
-     *   5m: Kline[],
-     *   1m: Kline[]
-     * } $candlesByTf
-     * @return array{
-     *   context_4h: array,
-     *   context_1h: array,
-     *   exec_15m: array,
-     *   exec_5m: array,
-     *   micro_1m: array,
-     *   final: array{signal:string,trigger:string,path:string},
-     * }
+     * Ne calcule **que** le timeframe courant et renvoie uniquement:
+     * - `signals[tf]` (bloc du TF courant),
+     * - `final.signal` (copie du signal du TF courant),
+     * - `status` (PENDING/VALIDATED/FAILED) selon vos règles MTF.
+     *
+     * @param string  $tf           '4h'|'1h'|'15m'|'5m'|'1m'
+     * @param Kline[] $candles      Bougies du TF courant uniquement
+     * @param array<string,array{signal:string}> $knownSignals  Signaux déjà connus (4h,1h,15m,5m selon le cas)
+     * @return array{signals: array<string,array>, final: array{signal:string}, status: string}
      */
-    public function evaluate(array $candlesByTf): array
+    public function evaluate(string $tf, array $candles, array $knownSignals = []): array
     {
-        $eval4h = $this->signal4h->evaluate($candlesByTf['4h'] ?? []);
-        $eval1h = $this->signal1h->evaluate($candlesByTf['1h'] ?? []);
+        // 1) Calcul du TF courant uniquement
+        $currentEval = match ($tf) {
+            '4h'  => $this->signal4h->evaluate($candles),
+            '1h'  => $this->signal1h->evaluate($candles),
+            '15m' => $this->signal15m->evaluate($candles),
+            '5m'  => $this->signal5m->evaluate($candles),
+            '1m'  => $this->signal1m->evaluate($candles),
+            default => ['signal' => 'NONE', 'trigger' => 'unsupported_tf', 'path' => $tf],
+        };
 
-        // Contexte : on impose même sens non-NONE
-        $contextSignal = 'NONE';
-        $contextTrigger = '';
-        if ($eval4h['signal'] !== 'NONE' && $eval4h['signal'] === $eval1h['signal']) {
-            $contextSignal = $eval4h['signal'];
-            $contextTrigger = 'context_4h_1h_align';
-        }
+        $curr = strtoupper((string)($currentEval['signal'] ?? 'NONE'));
+        $get  = static fn(string $k): string => strtoupper((string)($knownSignals[$k]['signal'] ?? 'NONE'));
 
-        $eval15m = $this->signal15m->evaluate($candlesByTf['15m'] ?? []);
-        $eval5m  = $this->signal5m->evaluate($candlesByTf['5m']  ?? []);
+        // 2) Statut selon vos règles (correction d’un petit typo : pour 1m on compare 4h,1h,15m,5m et 1m)
+        // 4h : LONG/SHORT => PENDING ; sinon FAILED
+        // 1h : si 1h == 4h (≠ NONE) => PENDING ; sinon FAILED
+        // 15m : si 15m == 4h == 1h => PENDING ; sinon FAILED
+        // 5m : si 5m == 15m == 1h == 4h => PENDING ; sinon FAILED
+        // 1m : si 1m == 5m == 15m == 1h == 4h => VALIDATED ; sinon FAILED
+        $status = 'FAILED';
+        switch ($tf) {
+            case '4h':
+                $status = in_array($curr, ['LONG','SHORT'], true) ? 'PENDING' : 'FAILED';
+                break;
 
-        // Exécution : 15m ou 5m dans le même sens que le contexte
-        $execSignal = 'NONE'; $execTrigger = '';
-        if ($contextSignal !== 'NONE') {
-            if ($eval15m['signal'] === $contextSignal) {
-                $execSignal = $contextSignal;
-                $execTrigger = '15m_confirms_' . strtolower($contextSignal);
-            } elseif ($eval5m['signal'] === $contextSignal) {
-                $execSignal = $contextSignal;
-                $execTrigger = '5m_confirms_' . strtolower($contextSignal);
-            }
-        }
+            case '1h':
+                $s4 = $get('4h');
+                $status = ($curr !== 'NONE' && $curr === $s4) ? 'PENDING' : 'FAILED';
+                break;
 
-        // Micro-structure 1m : si elle contredit l'exécution, on annule
-        $eval1m = $this->signal1m->evaluate($candlesByTf['1m'] ?? []);
-        $finalSignal = $execSignal; $finalTrigger = $execTrigger; $finalPath = 'mtf_scalping';
+            case '15m':
+                $s4 = $get('4h'); $s1 = $get('1h');
+                $status = ($curr !== 'NONE' && $curr === $s4 && $s4 === $s1) ? 'PENDING' : 'FAILED';
+                break;
 
-        if ($execSignal !== 'NONE' && $eval1m['signal'] !== 'NONE' && $eval1m['signal'] !== $execSignal) {
-            $finalSignal = 'NONE';
-            $finalTrigger = '1m_contradicts';
+            case '5m':
+                $s4 = $get('4h'); $s1 = $get('1h'); $s15 = $get('15m');
+                $status = ($curr !== 'NONE' && $curr === $s15 && $s15 === $s1 && $s1 === $s4) ? 'PENDING' : 'FAILED';
+                break;
+
+            case '1m':
+                $s4 = $get('4h'); $s1 = $get('1h'); $s15 = $get('15m'); $s5 = $get('5m');
+                $status = ($curr !== 'NONE' && $curr === $s5 && $s5 === $s15 && $s15 === $s1 && $s1 === $s4)
+                    ? 'VALIDATED'
+                    : 'FAILED';
+                break;
         }
 
         $out = [
-            'context_4h' => $eval4h,
-            'context_1h' => $eval1h,
-            'exec_15m'   => $eval15m,
-            'exec_5m'    => $eval5m,
-            'micro_1m'   => $eval1m,
-            'final'      => ['signal' => $finalSignal, 'trigger' => $finalTrigger, 'path' => $finalPath],
+            'signals' => [ $tf => $currentEval ],
+            'final'   => [ 'signal' => $curr ],
+            'status'  => $status,
         ];
 
-        $this->signalsLogger->info('signals.tick', $out);
-        if ($finalSignal === 'NONE') {
-            $this->validationLogger->warning('validation.violation', $out);
-        } else {
-            $this->validationLogger->info('validation.ok', $out);
-        }
+        // Logs ciblés
+        $this->signalsLogger->info('signals.tick', ['tf' => $tf, 'current' => $currentEval, 'status' => $status]);
+        ($status === 'FAILED' ? $this->validationLogger->warning(...) : $this->validationLogger->info(...))(
+            'validation.status', ['tf' => $tf, 'status' => $status]
+        );
 
         return $out;
     }
+
+    /**
+     * Évalue tous les timeframes en cascade et retourne les résultats pour chaque TF.
+     *
+     * @param array<string, Kline[]> $allCandles Tableau associatif des bougies par TF
+     * @return array<string, array{signals: array, final: array, status: string}>
+     */
+    public function evaluateAll(array $allCandles): array
+    {
+        $results = [];
+        $knownSignals = [];
+        foreach (['4h', '1h', '15m', '5m', '1m'] as $tf) {
+            if (!isset($allCandles[$tf])) {
+                continue;
+            }
+            $res = $this->evaluate($tf, $allCandles[$tf], $knownSignals);
+            $results[$tf] = $res;
+            $knownSignals[$tf] = $res['final'];
+        }
+        return $results;
+    }
+
+
 }

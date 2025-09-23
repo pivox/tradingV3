@@ -4,6 +4,7 @@ namespace App\Repository;
 
 use App\Entity\Kline;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
@@ -15,6 +16,33 @@ class KlineRepository extends ServiceEntityRepository
     {
         parent::__construct($registry, Kline::class);
     }
+
+    /**
+     * @return int[]  Liste des timestamps (epoch seconds) déjà présents pour (symbol, step) sur [minTs, maxTs]
+     */
+    public function fetchOpenTimestampsRange(string $symbol, \DateTimeInterface|int $step, \DateTimeInterface|int $minTs, int $maxTs): array
+    {
+        $qb = $this->createQueryBuilder('k')
+            ->select('k.timestamp')
+            ->join('k.contract', 'c')
+            ->where('c.symbol = :symbol')
+            ->andWhere('k.step = :step')
+            ->andWhere('k.timestamp >= :from')
+            ->andWhere('k.timestamp <= :to')
+            ->setParameter('symbol', $symbol)
+            ->setParameter('step', $step)
+            ->setParameter('from', is_int($minTs) ? (new \DateTimeImmutable('@'.$minTs))->setTimezone(new \DateTimeZone('UTC')) : $minTs)
+            ->setParameter('to', is_int($maxTs) ? (new \DateTimeImmutable('@'.$maxTs + 1))->setTimezone(new \DateTimeZone('UTC')): $maxTs);
+
+        $rows = $qb->getQuery()->getArrayResult();
+        $out = [];
+        foreach ($rows as $r) {
+            // $r['timestamp'] est un objet DateTime
+            $out[] = $r['timestamp']->getTimestamp();
+        }
+        return $out;
+    }
+
 
     /**
      * Trouve les derniers Klines par symbol et interval, triés par timestamp DESC
@@ -86,5 +114,23 @@ class KlineRepository extends ServiceEntityRepository
             ->getQuery()
             ->getOneOrNullResult();
         return $result['timestamp'] ?? null;
+    }
+
+    public function removeExistingKlines(string $symbol, array $listDatesTimestamp, int $parseTimeframeToMinutes)
+    {
+        if (empty($listDatesTimestamp)) {
+            return [];
+        }
+        $minTs = min($listDatesTimestamp);
+        $maxTs = max($listDatesTimestamp);
+
+        $existing = $this->fetchOpenTimestampsRange($symbol, $parseTimeframeToMinutes, $minTs->getTimestamp(), $maxTs->getTimestamp());
+        foreach ($listDatesTimestamp as $key => $date) {
+            if (in_array($date->getTimestamp(), $existing)) {
+                unset($listDatesTimestamp[$key]);
+            }
+        }
+        // On retire les timestamps déjà existants
+        return array_values($listDatesTimestamp);
     }
 }
