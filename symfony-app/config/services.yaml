@@ -41,11 +41,6 @@ services:
             $baseUrl: '%bitmart.base_url%'
         tags: [ 'mon.exchange.fetcher' ]
 
-    App\Service\Indicator\IndicatorValidatorClient:
-        arguments:
-            $baseUrl: '%indicator_base%'
-            $timeout: '%indicator_timeout%'
-            $maxRetries: '%indicator_retries%'
     App\Service\Config\TradingParameters:
         arguments:
             $projectDir: '%kernel.project_dir%'

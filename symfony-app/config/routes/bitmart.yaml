@@ -1,7 +1,7 @@
-bitmart_kline:
-    path: /api/bitmart/kline
-    controller: App\Controller\Bitmart\KlineController
-    methods: [POST]
+#bitmart_kline:
+#    path: /api/bitmart/kline
+#    controller: App\Controller\Bitmart\KlineController
+#    methods: [POST]
 
 bitmart_contracts:
     path: /api/bitmart/contracts
