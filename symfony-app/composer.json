@@ -11,6 +11,7 @@
         "api-platform/metadata": "^4.1",
         "api-platform/state": "^4.1",
         "api-platform/symfony": "^4.1",
+        "bitmartexchange/bitmart-php-sdk-api": "*",
         "doctrine/dbal": "^3",
         "doctrine/doctrine-bundle": "^2.15",
         "doctrine/doctrine-migrations-bundle": "^3.4",

@@ -147,6 +147,161 @@ class Contract
     public function setVolPrecision(?float $volPrecision): self { $this->volPrecision = $volPrecision; return $this; }
     public function setLastPrice(?float $lastPrice): self { $this->lastPrice = $lastPrice; return $this; }
 
+    public function getProductType(): ?string
+    {
+        return $this->productType;
+    }
+
+    public function getOpenTimestamp(): ?\DateTimeInterface
+    {
+        return $this->openTimestamp;
+    }
+
+    public function getExpireTimestamp(): ?\DateTimeInterface
+    {
+        return $this->expireTimestamp;
+    }
+
+    public function getSettleTimestamp(): ?\DateTimeInterface
+    {
+        return $this->settleTimestamp;
+    }
+
+    public function getBaseCurrency(): ?string
+    {
+        return $this->baseCurrency;
+    }
+
+    public function getQuoteCurrency(): ?string
+    {
+        return $this->quoteCurrency;
+    }
+
+    public function getLastPrice(): ?float
+    {
+        return $this->lastPrice;
+    }
+
+    public function getVolume24h(): ?int
+    {
+        return $this->volume24h;
+    }
+
+    public function getTurnover24h(): ?float
+    {
+        return $this->turnover24h;
+    }
+
+    public function getIndexPrice(): ?float
+    {
+        return $this->indexPrice;
+    }
+
+    public function getIndexName(): ?string
+    {
+        return $this->indexName;
+    }
+
+    public function getContractSize(): ?float
+    {
+        return $this->contractSize;
+    }
+
+    public function getMinLeverage(): ?int
+    {
+        return $this->minLeverage;
+    }
+
+    public function getMaxLeverage(): ?int
+    {
+        return $this->maxLeverage;
+    }
+
+    public function getPricePrecision(): ?float
+    {
+        return $this->pricePrecision;
+    }
+
+    public function getVolPrecision(): ?float
+    {
+        return $this->volPrecision;
+    }
+
+    public function getMaxVolume(): ?int
+    {
+        return $this->maxVolume;
+    }
+
+    public function getMinVolume(): ?int
+    {
+        return $this->minVolume;
+    }
+
+    public function getFundingRate(): ?float
+    {
+        return $this->fundingRate;
+    }
+
+    public function getExpectedFundingRate(): ?float
+    {
+        return $this->expectedFundingRate;
+    }
+
+    public function getOpenInterest(): ?int
+    {
+        return $this->openInterest;
+    }
+
+    public function getOpenInterestValue(): ?float
+    {
+        return $this->openInterestValue;
+    }
+
+    public function getHigh24h(): ?float
+    {
+        return $this->high24h;
+    }
+
+    public function getLow24h(): ?float
+    {
+        return $this->low24h;
+    }
+
+    public function getChange24h(): ?float
+    {
+        return $this->change24h;
+    }
+
+    public function getFundingTime(): ?\DateTimeInterface
+    {
+        return $this->fundingTime;
+    }
+
+    public function getMarketMaxVolume(): ?int
+    {
+        return $this->marketMaxVolume;
+    }
+
+    public function getFundingIntervalHours(): ?int
+    {
+        return $this->fundingIntervalHours;
+    }
+
+    public function getStatus(): ?string
+    {
+        return $this->status;
+    }
+
+    public function getDelistTime(): ?\DateTimeInterface
+    {
+        return $this->delistTime;
+    }
+
+    public function getNextSchedule(): ?\DateTimeInterface
+    {
+        return $this->nextSchedule;
+    }
+
     public function getSymbol(): string
     {
         return $this->symbol;

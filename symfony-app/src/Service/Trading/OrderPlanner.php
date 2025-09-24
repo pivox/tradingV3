@@ -1,111 +1,97 @@
 <?php
 
-
-declare(strict_types=1);
-
-
 namespace App\Service\Trading;
 
+use App\Dto\OrderPlan;
+use Psr\Log\LoggerInterface;
 
-/**
- * Construit un plan d'ordres pour le scalping à partir des éléments calculés par PositionSizer.
- * - Quantization prix (tick) & quantité (step)
- * - Split TP1 (portion) + runner
- * - Respect postOnly / reduceOnly
- */
 final class OrderPlanner
 {
-    public function __construct(
-        private readonly float $tickSize = 0.01, // granularité de prix
-        private readonly float $stepSize = 0.001 // granularité de quantité
-    )
-    {
-    }
+    public function __construct(private readonly LoggerInterface $logger, private readonly TradingPort $trading) {}
 
 
-    /**
-     * Construit le plan OCO (TP1 + SL) avec split de la position.
-     * @param 'long'|'short' $side
-     */
     public function buildScalpingPlan(
         string $symbol,
-        string $side,
-        float  $entry,
-        float  $qty,
-        float  $stop,
-        float  $tp1,
-        float  $tp1Portion = 0.60,
-        bool   $postOnly = true,
-        bool   $reduceOnly = true,
-    ): ScalpingPlan
-    {
-        if ($qty <= 0) {
-            throw new \InvalidArgumentException('Qty must be > 0');
-        }
-        if (!in_array($side, ['long', 'short'], true)) {
-            throw new \InvalidArgumentException('Side must be long|short');
-        }
+        string $side, // 'long' | 'short'
+        float $entry,
+        float $qty,
+        float $stop,
+        float $tp1,
+        float $tp1Portion = 0.60,
+        bool $postOnly = true,
+        bool $reduceOnly = true,
+        array $meta = [],
+    ): OrderPlan {
+        //dd($symbol, $side, $entry, $qty, $stop, $tp1, $tp1Portion, $postOnly, $reduceOnly, $meta);
+        if ($entry <= 0.0) throw new \InvalidArgumentException('entry must be > 0');
+        if ($qty <= 0.0) throw new \InvalidArgumentException('qty must be > 0');
 
 
-// Quantization prix selon le tick size
-        $qEntry = $this->quantizePrice($entry);
-        $qStop = $this->quantizePrice($stop);
-        $qTp1 = $this->quantizePrice($tp1);
+        $filters = $this->trading->getFilters($symbol);
+        $qz = new Quantizer($filters);
+        $isLong = ($side === 'long');
 
 
-// Quantization quantité + split TP1/Runner
-        $qQty = $this->quantizeQty($qty);
-        $rawTpQty = $qQty * $tp1Portion;
-        $tp1Qty = $this->quantizeQty(max(0.0, min($qQty, $rawTpQty)));
-        $runner = $this->quantizeQty(max(0.0, $qQty - $tp1Qty));
+// Quantization directionnelle
+        $qEntry = $isLong ? $qz->qPriceFloor($entry) : $qz->qPriceCeil($entry);
+        $qTp1 = $isLong ? $qz->qPriceCeil($tp1) : $qz->qPriceFloor($tp1);
+        $qStop = $isLong ? $qz->qPriceFloor($stop) : $qz->qPriceCeil($stop);
 
 
-        if ($tp1Qty + $runner <= 0.0) {
-            throw new \RuntimeException('Quantities collapsed to zero after quantization');
-        }
-
-
-// Sécurité directionnelle: SL et TP doivent être du bon côté de l'entrée
-        if ($side === 'long') {
-            if (!($qStop < $qEntry && $qTp1 > $qEntry)) {
-                throw new \RuntimeException('Long: stop must be < entry and TP1 > entry');
-            }
-        } else { // short
-            if (!($qStop > $qEntry && $qTp1 < $qEntry)) {
-                throw new \RuntimeException('Short: stop must be > entry and TP1 < entry');
-            }
+// Écart minimal 1 tick
+        $tick = max($filters->tickSize, 0.0);
+        if ($isLong) {
+            if (!($qStop < $qEntry)) { $qStop = $qEntry - $tick; }
+            if (!($qTp1 > $qEntry)) { $qTp1 = $qEntry + $tick; }
+        } else {
+            if (!($qStop > $qEntry)) { $qStop = $qEntry + $tick; }
+            if (!($qTp1 < $qEntry)) { $qTp1 = $qEntry - $tick; }
         }
 
 
-        return new ScalpingPlan(
+// Quantités
+        $qQtyTotal = $qz->qQtyFloor(max($qty, 0.0));
+        if ($qQtyTotal <= 0.0) throw new \RuntimeException('Quantity after quantization is zero');
+        $qTp1Qty = max($qz->qQtyFloor($qQtyTotal * $tp1Portion), $filters->minQty ?? 0.0);
+        $qRunnerQty = $qz->qQtyFloor(max($qQtyTotal - $qTp1Qty, 0.0));
+        if ($qTp1Qty + $qRunnerQty > $qQtyTotal) $qRunnerQty = $qQtyTotal - $qTp1Qty;
+        if ($qTp1Qty <= 0.0 || $qRunnerQty <= 0.0) { $qTp1Qty = $qQtyTotal; $qRunnerQty = 0.0; }
+
+
+// Notional min
+        $notional = $qEntry * $qQtyTotal;
+        if (($filters->minNotional ?? 0.0) > 0.0 && $notional < $filters->minNotional) {
+            $need = ($filters->minNotional / max($qEntry, 1e-12));
+            $qQtyTotal = $qz->qQtyCeil($need);
+            $qTp1Qty = $qz->qQtyFloor($qQtyTotal * $tp1Portion);
+            $qRunnerQty= $qz->qQtyFloor(max($qQtyTotal - $qTp1Qty, 0.0));
+        }
+
+
+// Intégrité finale
+        if ($isLong && !($qStop < $qEntry && $qTp1 > $qEntry)) {
+            throw new \RuntimeException("Long: stop must be {$qStop} < {$qEntry} and {$qTp1} > entry {$qEntry}");
+        }
+        if (!$isLong && !($qStop > $qEntry && $qTp1 < $qEntry)) {
+            throw new \RuntimeException("Short: stop must be {$qStop} > {$qEntry} and {$qTp1} < entry {$qEntry}");
+        }
+
+
+        $this->logger->debug('OrderPlanner plan built', compact('symbol','side','qEntry','qStop','qTp1','qQtyTotal','qTp1Qty','qRunnerQty','tick'));
+
+
+        return new OrderPlan(
             symbol: $symbol,
             side: $side,
             entryPrice: $qEntry,
-            totalQty: $qQty,
+            totalQty: $qQtyTotal,
             tp1Price: $qTp1,
             stopPrice: $qStop,
-            tp1Qty: $tp1Qty,
-            runnerQty: $runner,
+            tp1Qty: $qTp1Qty,
+            runnerQty: $qRunnerQty,
             postOnly: $postOnly,
             reduceOnly: $reduceOnly,
+            meta: $meta,
         );
-    }
-
-
-    private function quantizePrice(float $price): float
-    {
-        if ($this->tickSize <= 0) {
-            return $price;
-        }
-        return floor($price / $this->tickSize) * $this->tickSize;
-    }
-
-
-    private function quantizeQty(float $qty): float
-    {
-        if ($this->stepSize <= 0) {
-            return $qty;
-        }
-        return floor($qty / $this->stepSize) * $this->stepSize;
     }
 }

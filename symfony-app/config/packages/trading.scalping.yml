@@ -8,7 +8,7 @@ meta:
     created_at: '2025-09-03'
 
 symbols:
-    allowed_quotes: [USDT, USD]
+    allowed_quotes: [USDT]
     blacklist: []
 
 risk:

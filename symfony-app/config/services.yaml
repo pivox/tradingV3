@@ -15,7 +15,7 @@ parameters:
 
 
     # Path to strategy YAML (also set in packages/scalping.yaml)
-    trading.scalping.file: '%kernel.project_dir%/config/trading.scalping.yml'
+    trading.scalping.file: '%kernel.project_dir%/config/packages/trading.scalping.yml'
 services:
     # default configuration for services in *this* file
     _defaults:
@@ -43,7 +43,7 @@ services:
 
     App\Service\Config\TradingParameters:
         arguments:
-            $projectDir: '%kernel.project_dir%'
+            $configFile: '%trading.scalping.file%'
     App\Service\ExchangeFetcherInterface: '@App\Service\Exchange\Bitmart\BitmartFetcher'
     Symfony\Component\Clock\NativeClock: ~
     Symfony\Component\Clock\ClockInterface: '@Symfony\Component\Clock\NativeClock'
@@ -102,3 +102,19 @@ services:
         arguments:
             $validationLogger: '@monolog.logger.validation'
             $signalsLogger: '@monolog.logger.signals'
+
+
+    App\Service\Account\Bitmart\BitmartBalanceService:
+        arguments:
+            $bitmartApiKey: '%env(BITMART_API_KEY)%'
+    App\Service\Account\Bitmart\BitmartSdkAdapter:
+        arguments:
+            $apiKey: '%env(BITMART_API_KEY)%'
+            $secretKey: '%env(BITMART_SECRET_KEY)%'
+            $memo: '%env(BITMART_API_MEMO)%'
+
+    App\Service\Account\Bitmart\BitmartFuturesClient:
+        arguments:
+            $apiKey: '%env(BITMART_API_KEY)%'
+            $apiSecret: '%env(BITMART_SECRET_KEY)%'
+            $apiMemo: '%env(BITMART_API_MEMO)%'

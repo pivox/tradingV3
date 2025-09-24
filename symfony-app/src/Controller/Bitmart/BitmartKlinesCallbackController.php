@@ -41,6 +41,7 @@ final class BitmartKlinesCallbackController extends AbstractController
         KlineRepository $klineRepository,
         PositionOpener $positionOpener,
         RuntimeGuardRepository $runtimeGuardRepository,
+        LoggerInterface $positionsLogger, //todo
     ): JsonResponse {
         if ($runtimeGuardRepository->isPaused()) {
             return new JsonResponse(['status' => 'paused'], 200);
@@ -160,9 +161,24 @@ final class BitmartKlinesCallbackController extends AbstractController
         if ($pipeline && !($timeframe == '4h' &&  $signal === 'NONE')) {
             $isValid = strtoupper($signalsPayload[$timeframe]['signal'] ?? 'NONE') !== 'NONE';
             $pipelineService->markAttempt($pipeline);
-            if ($isValid && in_array($timeframe, ['15m','5m','1m'], true)) {
+//            if ($isValid && in_array($timeframe, ['15m','5m','1m'], true)) {
+            $isValid = $pipelineService->applyDecision($pipeline, $timeframe);
+            $positionsLogger->info('Position decision', [
+                'symbol' => $symbol,
+                'timeframe' => $timeframe,
+                'is_valid' => $isValid,
+                'signal' => $signalsPayload[$timeframe]['signal'] ?? 'NONE',
+                'final_signal' => $signalsPayload['final']['signal'] ?? 'NONE',
+                'status' => $signalsPayload['status'] ?? null,
+            ]);
+            if ($isValid && $timeframe === '1m') {
                 $finalSide = strtoupper($signalsPayload['final']['signal'] ?? 'NONE');
                 if (in_array($finalSide, ['LONG','SHORT'], true)) {
+                    $positionsLogger->info('Opening position', [
+                        'symbol' => $symbol,
+                        'final_side' => $finalSide,
+                        'signal' => $signalsPayload[$timeframe]
+                    ]);
                     $positionOpener->open(
                         symbol: $symbol,
                         finalSideUpper: $finalSide,
@@ -171,17 +187,20 @@ final class BitmartKlinesCallbackController extends AbstractController
                     );
                 }
             }
-            $pipelineService->applyDecision($pipeline, $timeframe, $isValid);
-        }
-        if ($pipeline && $pipeline->isToDelete()) {
-            $em->remove($pipeline);
-            $em->flush();
-            $logger->info('Pipeline deleted after decision', [
-                'symbol' => $symbol,
-                'timeframe' => $timeframe,
-            ]);
-        }
 
+        }
+        if ($pipeline && $pipeline->isToDelete() && $pipeline->getId()) {
+            $pipelineId = $pipeline->getId();
+            $pipeline = $em->getRepository(ContractPipeline::class)->find($pipelineId);
+            if ($pipeline) {
+                $em->remove($pipeline);
+                $em->flush();
+                $logger->info('Pipeline deleted after decision', [
+                    'symbol' => $symbol,
+                    'timeframe' => $timeframe,
+                ]);
+            }
+        }
 
 
         $logger->info('Klines persisted + evaluated', [

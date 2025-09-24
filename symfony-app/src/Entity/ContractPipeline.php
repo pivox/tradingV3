@@ -240,6 +240,7 @@ class ContractPipeline
 
     public function isToDelete(): bool
     {
-        return $this->getStatus() === self::STATUS_FAILED && $this->getRetries() == $this->getMaxRetries();
+        return $this->getCurrentTimeframe() == self::TF_4H ;
+          // a voir pourquoi je l'ai mise cette condition  ||  $this->getStatus() === self::STATUS_FAILED && $this->getRetries() == $this->getMaxRetries();
     }
 }
