@@ -48,9 +48,10 @@ class ContractSignalWriter
 
         if ($status === ContractPipeline::STATUS_FAILED) {
             $pipeline->incRetries();
-        } else {
-            $pipeline->resetRetries();
         }
+//        else {
+//            $pipeline->resetRetries();
+//        }
 
         $this->em->persist($pipeline);
         if ($flush) {

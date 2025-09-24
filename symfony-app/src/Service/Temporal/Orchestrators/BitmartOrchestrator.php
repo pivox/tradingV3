@@ -8,7 +8,12 @@ use App\Service\Temporal\Dto\SignalPayload;
 
 final class BitmartOrchestrator
 {
-    public function __construct(private readonly TemporalGatewayInterface $gateway) {}
+    private ?WorkflowRef $workflowRef = null;
+    public function __construct(
+        private readonly TemporalGatewayInterface $gateway,
+        private array $envelopes = [], // pour stocker les résultats intermédiaires
+    ) {
+    }
 
     /** Déclenche le fetch de tous les contrats */
     public function requestGetAllContracts(
@@ -16,7 +21,7 @@ final class BitmartOrchestrator
         string $baseUrl,
         string $callback,
         ?string $note = null
-    ): array {
+    ): void {
         $envelope = [
             'url_type'     => 'get all contracts',
             'url_callback' => $callback,
@@ -27,7 +32,7 @@ final class BitmartOrchestrator
             ],
         ];
         $this->gateway->ensureWorkflowRunning($ref);
-        return $this->gateway->sendSignal($ref, new SignalPayload('submit', $envelope));
+        $this->gateway->sendSignal($ref, new SignalPayload('submit', $envelope));
     }
 
     /**
@@ -46,11 +51,11 @@ final class BitmartOrchestrator
         ?\DateTimeInterface $start = null,
         ?\DateTimeInterface $end   = null,
         ?string $note = null,
-    ): array {
+    ): void {
         $startTs = $start->getTimestamp();
         $endTs   = $end->getTimestamp();
 
-        $envelope = [
+        $this->envelopes[] = [
             'url_type'     => 'get kline',
             'url_callback' => $callback,
             'base_url'     => $baseUrl,
@@ -67,8 +72,17 @@ final class BitmartOrchestrator
                 'note'       => $note,
             ],
         ];
-        $this->gateway->ensureWorkflowRunning($ref);
-        return $this->gateway->sendSignal($ref, new SignalPayload('submit', $envelope));
+        if (!$this->workflowRef) {
+            $this->workflowRef = $ref;
+        }
+
+    }
+
+    public function go() {
+        $this->gateway->ensureWorkflowRunning($this->workflowRef);
+        $this->gateway->sendSignal($this->workflowRef, new SignalPayload('submit', $this->envelopes));
+        $this->envelopes = [];
+        $this->workflowRef = null;
     }
 
     /**

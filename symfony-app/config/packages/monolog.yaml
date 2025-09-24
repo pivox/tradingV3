@@ -1,5 +1,5 @@
 monolog:
-    channels: ['validation', 'signals', 'indicators', 'deprecation']
+    channels: ['validation', 'signals', 'indicators', 'deprecation', 'positions']  # <- remplacez 'position' par 'positions'
 
     handlers:
         # === Validation ===
@@ -11,7 +11,6 @@ monolog:
             channels: ['validation']
             formatter: monolog.formatter.json
 
-        # (option) n’écrit que si WARNING+ (utile en prod haute volumétrie)
         validation_buffered:
             type: fingers_crossed
             action_level: warning
@@ -27,6 +26,15 @@ monolog:
             channels: ['signals']
             formatter: monolog.formatter.json
 
+        # === Positions ===
+        positions_rotating:
+            type: rotating_file
+            path: '%kernel.logs_dir%/positions.log'
+            level: info
+            max_files: 14
+            channels: ['positions']
+            formatter: monolog.formatter.json
+
         # === Indicators ===
         indicators_rotating:
             type: rotating_file
@@ -36,7 +44,6 @@ monolog:
             channels: ['indicators']
             formatter: monolog.formatter.json
 
-        # handler “main” par défaut (stderr) — garde ta stack actuelle
         main:
             type: stream
             path: "php://stderr"

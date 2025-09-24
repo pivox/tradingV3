@@ -50,7 +50,6 @@ final class ContractPipelineService
         $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
         $pipe->setContract($contract);
         $this->em->flush();
-        $this->em->clear();
         return $pipe;
     }
 
@@ -102,23 +101,20 @@ final class ContractPipelineService
     /**
      * Applique la décision renvoyée par le validateur et transitionne le pipeline.
      *
-     * @param array{
-     *   valid: bool,
-     *   side?: 'LONG'|'SHORT'|null
-     * } $decision
-     *
-     * Règles (par défaut) :
-     *  - valid=true :
-     *      4h  -> 1h  (maxRetries=3)
-     *      1h  -> 15m (maxRetries=3)
-     *      15m -> 5m  (maxRetries=2)
-     *      5m  -> 1m  (maxRetries=4)
-     *      1m  -> ( laisser au caller ouvrir position ; ici on se contente de reset en 4h )
-     *  - valid=false :
-     *      retries++ ; si retries >= maxRetries -> rétrograde d’un cran (sauf 4h)
+     * @param ContractPipeline $pipe
+     * @param string $timeframe
+     * @return boolean
      */
-    public function applyDecision(ContractPipeline $pipe, string $timeframe, bool $valid): ContractPipeline
+    public function applyDecision(ContractPipeline $pipe, string $timeframe): bool
     {
+        $signals   = $pipe->getSignals() ?? [];
+        $sides = array_map(fn (array $signal) => $signal['signal'], $signals);
+        $sides = array_values(array_unique($sides));
+        if (count($sides) > 1 || in_array('NONE', $sides, true) || !in_array($sides[0], ['LONG', 'SHORT'])) {
+            $valid = false;
+        } else {
+            $valid = true;
+        }
 
         if ($valid) {
             // Promotion
@@ -143,12 +139,11 @@ final class ContractPipelineService
                 default:
                     // Timeframe inconnu : on ne fait rien
                     $pipe->touchUpdatedAt();
-//                    $contract = $this->contractRepo->findOneBy(['symbol' => $pipe->getContract()->getSymbol()]);
-//                    $pipe->setContract($contract);
                     $this->em->flush();
                     $this->em->clear();
             }
         } else {
+//            dump($pipe->getId(), $pipe->getRetries(), $pipe->getRetries(), $pipe->getMaxRetries());
             // Échec
             $pipe->incRetries()->setStatus(ContractPipeline::STATUS_PENDING);
 
@@ -160,8 +155,12 @@ final class ContractPipelineService
                 default => null, // 4h : pas de parent
             };
 
+
             if ($parent && $pipe->getRetries() >= $pipe->getMaxRetries()) {
-                $pipe->setRetries(0)
+                $signals = $pipe->getSignals() ?? [];
+                unset($signals[$timeframe]);
+                $pipe->setSignals($signals)
+                    ->setRetries(0)
                     ->setCurrentTimeframe($parent)
                     ->setStatus(ContractPipeline::STATUS_PENDING)
                     ->touchUpdatedAt();
@@ -172,8 +171,9 @@ final class ContractPipelineService
 
             $this->em->flush();
             $this->em->clear();
+//            dd($pipe->getRetries());
         }
 
-        return $pipe;
+        return $valid;
     }
 }

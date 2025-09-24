@@ -52,7 +52,7 @@ class ContractPipelineRepository extends ServiceEntityRepository
         return $this->getAllSymbolsWithActiveTimeframe('1m');
     }
 
-    private function getAllSymbolsWithActiveTimeframe(string $timeframe, int $limit = 221): array
+    public function getAllSymbolsWithActiveTimeframe(string $timeframe, int $limit = 221): array
     {
         $result = $this->createQueryBuilder('p')
             ->innerJoin('p.contract', 'c')
@@ -61,13 +61,6 @@ class ContractPipelineRepository extends ServiceEntityRepository
             ->setMaxResults($limit)
             ->getQuery()
             ->getResult();
-//        $query = $this->createQueryBuilder('p')
-//            ->innerJoin('p.contract', 'c')
-//            ->select('c.symbol AS contractSymbol')
-//            ->where('p.currentTimeframe = :tf')->setParameter('tf', $timeframe)
-//            ->setMaxResults($limit)
-//            ->getQuery();
-//        dd($query->getSQL(), $query->getParameters());
         return array_map(fn($item) => $item['contractSymbol'], $result) ?? [];
     }
 }
