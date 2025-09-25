@@ -24,8 +24,8 @@ atr:
     method: wilder               # wilder|simple
     sl_multiplier: 1.5           # SL = k * ATR
     trailing_multiplier: null     # trailing ATR après TP1
-    trail_after_tp1: true
-    trail_step_pct: 0.10         # facultatif, pas de trail si <10% d'un ATR (débounce)
+    trail_after_tp1: false
+    trail_step_pct: null         # facultatif, pas de trail si <10% d'un ATR (débounce)
 
 mtf:
     context: [4h, 1h]
@@ -129,8 +129,8 @@ long:
         k: 1.5
     take_profit:
         tp1_r: 2.0
-#        tp1_size_pct: 60
-        remainder_trailing: atr
+        tp1_size_pct: 100
+        remainder_trailing: null
     invalidations:
         any_of:
             - '15m':
