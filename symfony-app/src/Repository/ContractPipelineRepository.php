@@ -63,4 +63,16 @@ class ContractPipelineRepository extends ServiceEntityRepository
             ->getResult();
         return array_map(fn($item) => $item['contractSymbol'], $result) ?? [];
     }
+
+    public function getAllSymbols(): array
+    {
+        $result = $this->createQueryBuilder('p')
+            ->join('p.contract', 'c')
+            ->select('c.symbol AS contractId')
+            ->where('p.currentTimeframe != :tf')->setParameter('tf', '4h')
+            ->getQuery()
+            ->getResult();
+
+        return array_map(fn($item) => $item['contractId'], $result) ?? [];
+    }
 }

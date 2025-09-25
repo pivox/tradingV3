@@ -41,10 +41,11 @@ final class BitmartCronController extends AbstractController
         $start = $cutoff->modify('-' . (self::LIMIT_KLINES - 1) * $tfMinutes . ' minutes');
 
         $symbols = $this->getSymbols($tf, $request, $contractPipelineRepository, $tradingParams);
-        $ref = new WorkflowRef('api-rate-limiter-workflow', 'ApiRateLimiterClient', 'api_rate_limiter_queue');
+        $workflowRef = new WorkflowRef('api-rate-limiter-workflow', 'ApiRateLimiterClient', 'api_rate_limiter_queue');
+        $this->bitmartOrchestrator->setWorkflowRef($workflowRef);
         foreach ($symbols as $symbol) {
             $this->bitmartOrchestrator->requestGetKlines(
-                $ref,
+                $workflowRef,
                 baseUrl: self::BASE_URL,
                 callback: self::CALLBACK,
                 contract: $symbol,
@@ -91,7 +92,14 @@ final class BitmartCronController extends AbstractController
 
         $contracts = $this->contractRepository->findBy(['exchange' => 'bitmart']);
         if ($tf == '4h') {
-            return array_map(fn($c) => $c->getSymbol(), array_filter($contracts, fn($c) => $this->filterContracts($c, $allowedQuotes, $blacklist)));
+            $excluded = $contractPipelineRepository->getAllSymbols();
+            return array_map(fn($c) => $c->getSymbol(),
+                array_filter($contracts,
+                    fn($c) =>
+                    $this->filterContracts($c, $allowedQuotes, $blacklist)
+                    && !in_array($c->getSymbol(), $excluded, true)
+                )
+            );
         }
         return $contractPipelineRepository->getAllSymbolsWithActiveTimeframe($tf);
     }
