@@ -125,4 +125,10 @@ final class BitmartOrchestrator
         $this->gateway->ensureWorkflowRunning($ref);
         return $this->gateway->sendSignal($ref, new SignalPayload('submit', $envelopes));
     }
+
+    public function setWorkflowRef(WorkflowRef $workflowRef): self
+    {
+        $this->workflowRef = $workflowRef;
+        return $this;
+    }
 }
