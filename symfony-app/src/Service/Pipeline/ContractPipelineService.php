@@ -108,8 +108,18 @@ final class ContractPipelineService
     public function applyDecision(ContractPipeline $pipe, string $timeframe): bool
     {
         $signals   = $pipe->getSignals() ?? [];
-        $sides = array_map(fn (array $signal) => $signal['signal'], $signals);
-        $sides = array_values(array_unique($sides));
+        $relevant = match ($timeframe) {
+            ContractPipeline::TF_4H  => [ContractPipeline::TF_4H],
+            ContractPipeline::TF_1H  => [ContractPipeline::TF_4H, ContractPipeline::TF_1H],
+            ContractPipeline::TF_15M => [ContractPipeline::TF_4H, ContractPipeline::TF_1H, ContractPipeline::TF_15M],
+            ContractPipeline::TF_5M  => [ContractPipeline::TF_4H, ContractPipeline::TF_1H, ContractPipeline::TF_15M, ContractPipeline::TF_5M],
+            ContractPipeline::TF_1M  => [ContractPipeline::TF_4H, ContractPipeline::TF_1H, ContractPipeline::TF_15M, ContractPipeline::TF_5M, ContractPipeline::TF_1M],
+            default => array_keys($signals),
+        };
+
+        $filtered = array_intersect_key($signals, array_flip($relevant));
+        $sides    = array_map(fn(array $s) => $s['signal'] ?? 'NONE', $filtered);
+        $sides    = array_values(array_unique($sides));
         if (count($sides) > 1 || in_array('NONE', $sides, true) || !in_array($sides[0], ['LONG', 'SHORT'])) {
             $valid = false;
         } else {
