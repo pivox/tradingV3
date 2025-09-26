@@ -18,36 +18,39 @@ SCHEDULES: Dict[str, Dict[str, Any]] = {
         "schedule_id": "cron-symfony-1m",
         "workflow_type": "CronSymfony1mWorkflow",
         "workflow_id": "cron-symfony-1m-runner",
-        "cron": "*/1 * * * *",
-        "url": os.getenv("SYM_CRON_URL_1M", "http://nginx/api/cron/bitmart/refresh-1m"),
+        "cron": "*/1 * * * *",  
+        "urls": [
+            os.getenv("SYM_CRON_URL_1M", "http://nginx/api/cron/bitmart/refresh-1m"),
+            "http://localhost:8080/api/refresh-opened-locked"
+            ],
     },
     "5m": {
         "schedule_id": "cron-symfony-5m",
         "workflow_type": "CronSymfony5mWorkflow",
         "workflow_id": "cron-symfony-5m-runner",
         "cron": "*/5 * * * *",
-        "url": os.getenv("SYM_CRON_URL_5M", "http://nginx/api/cron/bitmart/refresh-5m"),
+        "urls": [os.getenv("SYM_CRON_URL_5M", "http://nginx/api/cron/bitmart/refresh-5m")],
     },
     "15m": {
         "schedule_id": "cron-symfony-15m",
         "workflow_type": "CronSymfony15mWorkflow",
         "workflow_id": "cron-symfony-15m-runner",
         "cron": "*/15 * * * *",
-        "url": os.getenv("SYM_CRON_URL_15M", "http://nginx/api/cron/bitmart/refresh-15m"),
+        "urls": [os.getenv("SYM_CRON_URL_15M", "http://nginx/api/cron/bitmart/refresh-15m")],
     },
     "1h": {
         "schedule_id": "symfony-cron-1h",
         "workflow_type": "CronSymfony1hWorkflow",
         "workflow_id": "symfony-cron-1h-runner",
         "cron": "0 */1 * * *",
-        "url": os.getenv("SYM_CRON_URL_1H", "http://nginx/api/cron/bitmart/refresh-1h"),
+        "urls": [os.getenv("SYM_CRON_URL_1H", "http://nginx/api/cron/bitmart/refresh-1h")],
     },
     "4h": {
         "schedule_id": "symfony-cron-4h",
         "workflow_type": "CronSymfony4hWorkflow",
         "workflow_id": "symfony-cron-4h-runner",
         "cron": "0 */4 * * *",
-        "url": os.getenv("SYM_CRON_URL_4H", "http://nginx/api/cron/bitmart/refresh-4h"),
+        "urls": [os.getenv("SYM_CRON_URL_4H", "http://nginx/api/cron/bitmart/refresh-4h")],
     },
 }
 
