@@ -14,7 +14,7 @@ class CronSymfony5mWorkflow:
             try:
                 result = await workflow.execute_activity(
                     "call_symfony_endpoint",
-                    args=[url],
+                    args=[job.url],
                     start_to_close_timeout=timedelta(seconds=60),
                 )
                 workflow.logger.info(f"[Cron5m] Réponse {job.url}: {result}")
