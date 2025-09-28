@@ -1,7 +1,8 @@
 <?php
-// src/Service/Temporal/Orchestrators/BitmartOrchestrator.php
 namespace App\Service\Temporal\Orchestrators;
 
+use App\Service\Temporal\Dto\PrioInTemporal;
+use App\Service\Temporal\Dto\UrlType;
 use App\Service\Temporal\TemporalGatewayInterface;
 use App\Service\Temporal\Dto\WorkflowRef;
 use App\Service\Temporal\Dto\SignalPayload;
@@ -32,7 +33,7 @@ final class BitmartOrchestrator
             ],
         ];
         $this->gateway->ensureWorkflowRunning($ref);
-        $this->gateway->sendSignal($ref, new SignalPayload('submit', $envelope));
+        $this->gateway->sendSignal($ref, new SignalPayload('submit', [PrioInTemporal::REGULAR->value => $envelope]));
     }
 
     /**
@@ -79,8 +80,22 @@ final class BitmartOrchestrator
     }
 
     public function go() {
+        if (count($this->envelopes) == 0) {
+            $this->workflowRef = null;
+            return;
+        }
+        $envelopes = [];
+        foreach ($this->envelopes as $envelope) {
+            $key = $this->getPrioKey($envelope['payload']['timeframe'] ?? '4h');
+            if (!isset($envelopes[$key])) {
+                $envelopes[$key] = [];
+            }
+            $envelopes[$key][] = $envelope;
+        }
+       // dd($envelopes, $this->envelopes);
+
         $this->gateway->ensureWorkflowRunning($this->workflowRef);
-        $this->gateway->sendSignal($this->workflowRef, new SignalPayload('submit', $this->envelopes));
+        $this->gateway->sendSignal($this->workflowRef, new SignalPayload('submit', $envelopes));
         $this->envelopes = [];
         $this->workflowRef = null;
     }
@@ -123,7 +138,7 @@ final class BitmartOrchestrator
             ];
         }
         $this->gateway->ensureWorkflowRunning($ref);
-        return $this->gateway->sendSignal($ref, new SignalPayload('submit', $envelopes));
+        return $this->gateway->sendSignal($ref, new SignalPayload('submit', [$this->getPrioKey($timeframe) => $envelopes]));
     }
 
     public function setWorkflowRef(WorkflowRef $workflowRef): self
@@ -131,4 +146,17 @@ final class BitmartOrchestrator
         $this->workflowRef = $workflowRef;
         return $this;
     }
+
+    private function getPrioKey(string $timeframe): string
+    {
+        return match ($timeframe) {
+            '1m' => PrioInTemporal::ONE_MINUTE_CRON->value,
+            '5m' => PrioInTemporal::FIVE_MINUTES_CRON->value,
+            '15m' => PrioInTemporal::FIFTEEN_MINUTES_CRON->value,
+            '1h' => PrioInTemporal::ONE_HOUR_CRON->value,
+            '4h' => PrioInTemporal::FOUR_HOURS_CRON->value,
+            default => PrioInTemporal::REGULAR->value,
+        };
+    }
+
 }

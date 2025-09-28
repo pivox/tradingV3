@@ -8,6 +8,9 @@ async def post_callback(envelope: Dict[str, Any]) -> Dict[str, Any]:
     url_cb = envelope.get("url_callback")
     base = envelope.get("base_url", "")
     method = envelope.get("method", "POST").upper()
+    print(f"post_callback called with envelope: {envelope}")
+    print(f"Base URL: {base}, Method: {method}")
+    print(f"URL Callback: {url_cb}")
     if not url_cb:
         return {"status": "error", "message": "url_callback manquant"}
 
@@ -15,6 +18,7 @@ async def post_callback(envelope: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         async with httpx.AsyncClient() as client:
+            print(f"Calling {method} {full_url} with envelope: {envelope}")
             if method == "GET":
                 resp = await client.get(full_url, params=envelope, timeout=10)
             else:

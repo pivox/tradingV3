@@ -1,95 +1,67 @@
-# workflows/api_rate_limiter_workflow.py
 # -*- coding: utf-8 -*-
-"""
-Workflow Temporal : Client de rate limiting par file et signaux.
-- File interne (_queue) drainée à cadence contrôlée.
-- Accepte dict ou list[dict] via queue_init et signal 'submit'.
-- Continue-As-New pour compacter l'historique.
-- Seul effet de bord : activité HTTP 'post_callback'.
-"""
-
 from __future__ import annotations
-
 from datetime import timedelta, datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 from temporalio import workflow
 
-# ---------------- Paramètres cadence & rotation ----------------
-TICK = timedelta(seconds=0.2)       # tick d'attente
-MIN_SPACING = timedelta(seconds=1)  # espacement minimal entre envois
-DRAIN_BATCH = 1                     # nb max d'éléments par tick
-MAX_ITEMS_PER_RUN = 400             # seuil rotation Continue-As-New
-MAX_RUN_SECONDS = 15 * 60           # seuil temps max par run
+# modèles
+from models.api_call_request import ApiCallRequest  # doit fournir from_dict() et to_activity_payload()
+from models.priority_config import PriorityConfig
 
-Envelope = Dict[str, Any]
-Envelopes = List[Envelope]
-
-
-def _normalize_batch(maybe: Any) -> Envelopes:
-    """
-    Normalise l'entrée vers une liste d'enveloppes.
-      None       -> []
-      dict       -> [dict]
-      list[dict] -> list[dict]
-    """
-    if maybe is None:
-        return []
-    if isinstance(maybe, dict):
-        return [maybe]
-    if isinstance(maybe, list):
-        for i, item in enumerate(maybe):
-            if not isinstance(item, dict):
-                raise TypeError(f"Batch item #{i} is not a dict (got {type(item).__name__})")
-        return list(maybe)
-    raise TypeError(f"Expected dict or list[dict], got {type(maybe).__name__}")
-
+# ---------------- Cadence & rotation ----------------
+TICK = timedelta(seconds=0.2)
+MIN_SPACING = timedelta(seconds=1)      # ≈ 1 req/s
+DRAIN_BATCH = 1
+MAX_ITEMS_PER_RUN = 400
+MAX_RUN_SECONDS = 15 * 60
 
 @workflow.defn(name="ApiRateLimiterClient")
 class ApiRateLimiterClient:
     """
-    Workflow de rate limiting alimenté par signaux 'submit'.
-    - La file (_queue) vit en mémoire et est bornée par la rotation CAN.
-    - L'activité 'post_callback' appelle votre service externe.
+    Rate-limiter prioritaire. Entrée unique attendue :
+      { "<bucket>": [ {..item..}, ... ], ... }
     """
 
-    def __init__(self, queue_init: Optional[Envelopes] = None):
-        self._queue: Envelopes = list(queue_init or [])
+    def __init__(self, queue_init: Optional[Dict[str, List[Dict[str, Any]]]] = None):
+        self._prio = PriorityConfig()
+        self._queues: Dict[str, List[ApiCallRequest]] = {b: [] for b in self._prio.order}
+        self._paused: Set[str] = set()  # optionnel : buckets mis en pause
         self._closed: bool = False
         self._processed_in_run: int = 0
         self._started_at: datetime = workflow.now()
         self._last_dispatch_at: Optional[datetime] = None
 
-    # ---------------- Signals ----------------
-    @workflow.signal
-    def submit(self, envelope_or_batch: Any) -> None:
-        """
-        Ajoute une enveloppe (dict) ou un batch (list[dict]) à la file.
-        Type-hint en Any pour éviter l'échec de désérialisation si l'appelant envoie une liste.
-        """
-        if self._closed:
-            return
-        self._queue.extend(_normalize_batch(envelope_or_batch))
+        if queue_init:
+            self._enqueue_bucket_map(queue_init)
 
-    @workflow.signal
-    def close(self) -> None:
-        """Marque la file comme fermée; le workflow termine une fois la file vidée."""
-        self._closed = True
+    # ---------- utils ----------
+    def _enqueue_bucket_map(self, bucket_map: Dict[str, List[Dict[str, Any]]]) -> None:
+        if not isinstance(bucket_map, dict):
+            raise TypeError("Queue must be a dict: {bucket: [items]}")
 
-    # ---------------- Queries ----------------
-    @workflow.query
-    def queue_size(self) -> int:
-        return len(self._queue)
+        known = self._prio.known_buckets()
+        # Garantir l'existence des clés dans _queues si l'ordre actif est un sous-ensemble
+        for b in known:
+            if b not in self._queues:
+                self._queues[b] = []
 
-    @workflow.query
-    def stats(self) -> Tuple[int, int, int]:
-        """
-        Retourne (processed_in_run, elapsed_seconds, queue_size).
-        """
-        elapsed = int((workflow.now() - self._started_at).total_seconds())
-        return self._processed_in_run, elapsed, len(self._queue)
+        for bucket, items in bucket_map.items():
+            if bucket not in known:
+                raise ValueError(f"Unknown bucket '{bucket}'. Allowed: {sorted(known)}")
+            if not isinstance(items, list):
+                raise TypeError(f"Bucket '{bucket}' must map to a list of items")
 
-    # ---------------- Helpers internes ----------------
+            q = self._queues[bucket]
+            for i, env in enumerate(items):
+                if not isinstance(env, dict):
+                    raise TypeError(f"Item #{i} in bucket '{bucket}' must be a dict")
+                req = ApiCallRequest.from_dict(env)
+                q.append(req)
+
+    def _total_queue_size(self) -> int:
+        return sum(len(v) for v in self._queues.values())
+
     def _must_continue_as_new(self) -> bool:
         if self._processed_in_run >= MAX_ITEMS_PER_RUN:
             return True
@@ -98,58 +70,120 @@ class ApiRateLimiterClient:
         return False
 
     async def _rotate_if_needed(self) -> None:
-        if self._must_continue_as_new():
-            # Redémarre avec la file restante; les signaux pendant la fermeture seront rejoués.
-            await workflow.continue_as_new(self._queue)
+        if not self._must_continue_as_new():
+            return
+        # Reconstruire l'état restant au format {bucket: [dicts]}
+        flat: Dict[str, List[Dict[str, Any]]] = {}
+        for bucket, q in self._queues.items():
+            if not q:
+                continue
+            # on suppose que req.payload est sérialisable via to_dict() si nécessaire
+            items: List[Dict[str, Any]] = []
+            for req in q:
+                # On passe l’enveloppe « brute » attendue par from_dict()
+                # Si ApiCallRequest conserve l'original, exposez-le (ex. req.raw) ; sinon, adaptez.
+                if hasattr(req, "raw") and isinstance(req.raw, dict):
+                    items.append(req.raw)  # meilleur cas : brut d'origine
+                else:
+                    # fallback minimal : reconstruire depuis l'objet (à adapter à votre modèle)
+                    items.append({"payload": getattr(req, "payload", None)})
+            flat[bucket] = items
 
-    # ---------------- Run ----------------
+        await workflow.continue_as_new(flat)
+
+    # ---------- Signals ----------
+    @workflow.signal
+    def submit(self, bucket_map: Dict[str, List[Dict[str, Any]]]) -> None:
+        if self._closed:
+            return
+        self._enqueue_bucket_map(bucket_map)
+
+    @workflow.signal
+    def close(self) -> None:
+        self._closed = True
+
+    @workflow.signal
+    def pause_buckets(self, buckets: List[str]) -> None:
+        """Met en pause certains buckets (optionnel)."""
+        for b in buckets or []:
+            if self._prio.is_known(b):
+                self._paused.add(b)
+
+    @workflow.signal
+    def resume_buckets(self, buckets: List[str]) -> None:
+        for b in buckets or []:
+            self._paused.discard(b)
+
+    # ---------- Updates (synchro) ----------
+    @workflow.update
+    def set_priority_order(self, new_order: List[str]) -> str:
+        """Change l’ordre actif SANS redémarrer le worker."""
+        self._prio.set_order(new_order)
+        # S'assurer que _queues possède toutes les clés
+        for b in self._prio.known_buckets():
+            self._queues.setdefault(b, [])
+        return "ok"
+
+    # ---------- Queries ----------
+    @workflow.query
+    def queue_size(self) -> int:
+        return self._total_queue_size()
+
+    @workflow.query
+    def stats(self) -> Dict[str, Any]:
+        elapsed = int((workflow.now() - self._started_at).total_seconds())
+        return {
+            "processed_in_run": self._processed_in_run,
+            "elapsed_seconds": elapsed,
+            "per_bucket": {b: len(self._queues.get(b, [])) for b in self._prio.order},
+            "paused": sorted(list(self._paused)),
+            "active_order": list(self._prio.order),
+        }
+
+    # ---------- Run ----------
     @workflow.run
-    async def run(self, queue_init: Optional[Any] = None) -> None:
-        """
-        Démarre/relance le workflow.
-        - queue_init : dict, list[dict] ou None.
-        """
-        if queue_init is not None:
-            self._queue = _normalize_batch(queue_init)
-
+    async def run(self, queue_init: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> None:
+        if queue_init:
+            self._enqueue_bucket_map(queue_init)
+        print ("ApiRateLimiterClient started with queues:", {b: len(q) for b, q in self._queues.items()})
         self._started_at = workflow.now()
         self._processed_in_run = 0
-        self._last_dispatch_at = workflow.now() - MIN_SPACING  # premier envoi possible immédiat
+        self._last_dispatch_at = workflow.now() - MIN_SPACING
 
         while True:
-            # Fin propre si file vide
-            if not self._queue:
+            if self._total_queue_size() == 0 or self._closed:
                 break
-            # (couvert par la condition ci-dessus)
-            if self._closed and not self._queue:
-                break
+            print("Current queue sizes:", {b: len(q) for b, q in self._queues.items()})
+
+            if self._total_queue_size() == 0:
+                await workflow.sleep(TICK)
+                continue
 
             now = workflow.now()
-            can_dispatch = (now - (self._last_dispatch_at or now)) >= MIN_SPACING
-
-            if self._queue and can_dispatch:
-                to_process = min(DRAIN_BATCH, len(self._queue))
-                for _ in range(to_process):
-                    if not self._queue:
-                        break
-
-                    envelope = self._queue.pop(0)
-
-                    # Appel de l'activité externe
-                    await workflow.execute_activity(
-                        "post_callback",
-                        args=[envelope],
-                        start_to_close_timeout=timedelta(seconds=30),
-                        schedule_to_close_timeout=timedelta(seconds=60),
-                    )
-
-                    self._processed_in_run += 1
-                    self._last_dispatch_at = workflow.now()
-
-                    # Rotation périodique pour compacter l'historique
-                    await self._rotate_if_needed()
-
-                # Laisse la main même si la cadence autorise immédiatement
+            if (now - (self._last_dispatch_at or now)) < MIN_SPACING:
                 await workflow.sleep(TICK)
-            else:
+                continue
+
+            bucket = self._prio.next_non_empty_bucket(self._queues, paused=self._paused)
+            print("Next bucket to process:", bucket)
+            if not bucket:
                 await workflow.sleep(TICK)
+                continue
+
+            # Draine au plus DRAIN_BATCH dans le bucket courant
+            for _ in range(min(DRAIN_BATCH, len(self._queues[bucket]))):
+                req = self._queues[bucket].pop(0)
+                print(f"Dispatching request from bucket '{bucket}':", req)
+
+                await workflow.execute_activity(
+                    "post_callback",
+                    args=[req.to_activity_payload()],
+                    start_to_close_timeout=timedelta(seconds=30),
+                    schedule_to_close_timeout=timedelta(seconds=60),
+                )
+
+                self._processed_in_run += 1
+                self._last_dispatch_at = workflow.now()
+                await self._rotate_if_needed()
+
+            await workflow.sleep(TICK)
