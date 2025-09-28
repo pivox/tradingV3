@@ -2,6 +2,7 @@
 
 namespace App\Service\Exchange\Bitmart;
 
+use App\Service\Account\Bitmart\BitmartFuturesClient;
 use App\Service\Exchange\Bitmart\Dto\ContractDto;
 use App\Service\Exchange\Bitmart\Dto\KlineDto;
 use App\Service\Exchange\ExchangeFetcherInterface;
@@ -17,6 +18,7 @@ class BitmartFetcher implements ExchangeFetcherInterface
         private LoggerInterface $logger,
         private ClockInterface $clock,
         private $baseUrl,
+        private BitmartFuturesClient $futuresClient, // <-- injection du client authentifié
     ) {}
 
     public function fetchContracts(): array
@@ -129,5 +131,75 @@ class BitmartFetcher implements ExchangeFetcherInterface
 
         return $this->fetchKlines($symbol, $start, $end, $step);
     }
+
+
+    public function fetchPosition(string $symbol): ?array
+    {
+        try {
+            $rawList = $this->futuresClient->getPositions();
+            $raw = null;
+            foreach ($rawList['data'] ?? [] as $p) {
+                if (($p['symbol'] ?? '') === strtoupper($symbol)) {
+                    $raw = $p;
+                    break;
+                }
+            }
+            if (!$raw) return null;
+
+            // 1) Détails du contrat (taille de lot)
+            $details = $this->httpClient->request('GET', $this->baseUrl.'/contract/public/details', [
+                'query' => ['symbol' => strtoupper($symbol)]
+            ])->toArray(false);
+
+            $sym = $details['data']['symbols'][0] ?? [];
+            $contractSize = isset($sym['contract_size']) ? (float)$sym['contract_size']
+                : (isset($sym['contract_value']) ? (float)$sym['contract_value'] : 1.0);
+            if ($contractSize <= 0) $contractSize = 1.0;
+
+            // 2) Conversion en quantité réelle
+            $lots = (float)($raw['current_amount'] ?? 0);
+            $positionUnits = $lots * $contractSize;
+
+            // 3) Normalisation
+            $side = ((int)($raw['position_type'] ?? 0) === 1) ? 'LONG'
+                : (((int)($raw['position_type'] ?? 0) === 2) ? 'SHORT' : 'UNKNOWN');
+
+            return [
+                'symbol'       => strtoupper($symbol),
+                'side'         => $side,
+                'quantity'     => $positionUnits,        // taille normalisée (units)
+                'size'         => $positionUnits,        // <-- alias pour l’ancien code
+                'entryPrice'   => (float)($raw['entry_price'] ?? 0),
+                'markPrice'    => (float)($raw['mark_price'] ?? 0),
+                'leverage'     => (float)($raw['leverage'] ?? 0),
+                'margin'       => isset($raw['position_value'], $raw['leverage'])
+                    ? ((float)$raw['position_value']) / max((float)$raw['leverage'], 1)
+                    : null,
+                'liqPrice'     => isset($raw['liq_price']) ? (float)$raw['liq_price'] : null,
+                'openTime'     => isset($raw['open_timestamp']) ? (int)$raw['open_timestamp'] : null,
+                '_lots'        => (float)($raw['current_amount'] ?? 0),
+                '_contractSize'=> $contractSize,
+            ];
+        } catch (\Throwable $e) {
+            $this->logger->error('fetchPosition failed', [
+                'symbol' => $symbol,
+                'err' => $e->getMessage()
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Map BitMart position_type vers un côté exploitable (LONG/SHORT).
+     */
+    private function mapPositionType(int $type): string
+    {
+        return match ($type) {
+            1 => 'LONG',
+            2 => 'SHORT',
+            default => 'UNKNOWN',
+        };
+    }
+
 
 }
