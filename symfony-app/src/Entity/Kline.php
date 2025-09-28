@@ -67,6 +67,14 @@ class Kline
     #[ORM\Column(type: 'integer', options: ['default' => '900'])]
     private int $step = 900;
 
+    #[ORM\ManyToOne(targetEntity: Kline::class)]
+    #[ORM\JoinColumn(name: 'from_kline_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
+    private ?Kline $fromKline = null;
+
+    #[ORM\ManyToOne(targetEntity: Kline::class)]
+    #[ORM\JoinColumn(name: 'to_kline_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
+    private ?Kline $toKline = null;
+
     public function getContract(): Contract { return $this->contract; }
     public function setContract(Contract $contract): self { $this->contract = $contract; return $this; }
 
@@ -122,6 +130,29 @@ class Kline
     public function getStep(): int
     {
         return $this->step;
+    }
+
+    // ---- Getters/Setters ----
+    public function getFromKline(): ?Kline { return $this->fromKline; }
+    public function setFromKline(?Kline $kline): self { $this->fromKline = $kline; return $this->touchUpdatedAt(); }
+
+    public function getToKline(): ?Kline { return $this->toKline; }
+    public function setToKline(?Kline $kline): self { $this->toKline = $kline; return $this->touchUpdatedAt(); }
+
+    public function setKlineRange(?Kline $from, ?Kline $to): self
+    {
+        $this->fromKline = $from;
+        $this->toKline   = $to;
+        return $this->touchUpdatedAt();
+    }
+
+    // (optionnel) petit helper pratique pour audit/logs
+    public function getKlineRangeAsArray(): array
+    {
+        return [
+            'from' => $this->fromKline?->getId(),
+            'to'   => $this->toKline?->getId(),
+        ];
     }
 
     public function toArray(): array

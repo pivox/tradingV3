@@ -22,6 +22,10 @@ class ContractPipeline
     public const STATUS_FAILED    = 'failed';
     public const STATUS_BACK      = 'back_to_parent';
 
+    public const STATUS_OPENED_LOCKED = 'OPENED_LOCKED';
+
+
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: 'bigint')]
@@ -79,6 +83,14 @@ class ContractPipeline
      */
     #[ORM\Column(type: 'json', nullable: true)]
     private ?array $signals = null;
+
+    #[ORM\ManyToOne(targetEntity: Kline::class)]
+    #[ORM\JoinColumn(name: 'from_kline_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
+    private ?Kline $fromKline = null;
+
+    #[ORM\ManyToOne(targetEntity: Kline::class)]
+    #[ORM\JoinColumn(name: 'to_kline_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
+    private ?Kline $toKline = null;
 
     #[ORM\PrePersist]
     public function onPrePersist(): void
@@ -238,6 +250,28 @@ class ContractPipeline
         return $base;
     }
 
+    // ---- Getters/Setters ----
+    public function getFromKline(): ?Kline { return $this->fromKline; }
+    public function setFromKline(?Kline $kline): self { $this->fromKline = $kline; return $this->touchUpdatedAt(); }
+
+    public function getToKline(): ?Kline { return $this->toKline; }
+    public function setToKline(?Kline $kline): self { $this->toKline = $kline; return $this->touchUpdatedAt(); }
+
+    public function setKlineRange(?Kline $from, ?Kline $to): self
+    {
+        $this->fromKline = $from;
+        $this->toKline   = $to;
+        return $this->touchUpdatedAt();
+    }
+
+    // (optionnel) petit helper pratique pour audit/logs
+    public function getKlineRangeAsArray(): array
+    {
+        return [
+            'from' => $this->fromKline?->getId(),
+            'to'   => $this->toKline?->getId(),
+        ];
+    }
     public function isToDelete(): bool
     {
         return $this->getCurrentTimeframe() == self::TF_4H ;
