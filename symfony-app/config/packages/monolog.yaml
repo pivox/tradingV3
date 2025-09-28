@@ -9,7 +9,7 @@ monolog:
             level: info
             max_files: 14
             channels: ['validation']
-            formatter: monolog.formatter.json
+            formatter: App\Logging\CustomLineFormatter
 
         validation_buffered:
             type: fingers_crossed
@@ -24,7 +24,7 @@ monolog:
             level: info
             max_files: 14
             channels: ['signals']
-            formatter: monolog.formatter.json
+            formatter: App\Logging\CustomLineFormatter
 
         # === Positions ===
         positions_rotating:
@@ -33,7 +33,7 @@ monolog:
             level: info
             max_files: 14
             channels: ['positions']
-            formatter: monolog.formatter.json
+            formatter: App\Logging\CustomLineFormatter
 
         # === Indicators ===
         indicators_rotating:
@@ -42,7 +42,7 @@ monolog:
             level: info
             max_files: 14
             channels: ['indicators']
-            formatter: monolog.formatter.json
+            formatter: App\Logging\CustomLineFormatter
 
         main:
             type: stream
@@ -90,7 +90,7 @@ when@prod:
                 type: stream
                 path: php://stderr
                 level: debug
-                formatter: monolog.formatter.json
+                formatter: App\Logging\CustomLineFormatter
 
             console:
                 type: console
@@ -101,4 +101,4 @@ when@prod:
                 type: stream
                 channels: [deprecation]
                 path: php://stderr
-                formatter: monolog.formatter.json
+                formatter: App\Logging\CustomLineFormatter
