@@ -11,7 +11,7 @@ final class RefreshOpenedLockedController extends AbstractController
 {
     public function __construct(private readonly OpenedLockedSyncService $svc) {}
 
-    #[Route('/api/refresh-opened-locked', name: 'api_refresh_opened_locked', methods: ['GET'])]
+    #[Route('/api/refresh-opened-locked', name: 'api_refresh_opened_locked', methods: ['POST'])]
     public function __invoke(): JsonResponse
     {
         $payload = $this->svc->sync();
