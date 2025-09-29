@@ -4,6 +4,7 @@ namespace App\Controller\Bitmart;
 
 use App\Entity\Contract;
 use App\Entity\ContractPipeline;
+use App\Repository\ContractPipelineRepository;
 use App\Repository\KlineRepository;
 use App\Repository\RuntimeGuardRepository;
 use App\Service\ContractSignalWriter;
@@ -21,7 +22,7 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use App\Service\Trading\PositionOpener;
 
 
-final class BitmartKlinesCallbackController extends AbstractController
+final class KlinesCallbackController extends AbstractController
 {
     public const LIMIT_KLINES = 260;
 
@@ -41,13 +42,14 @@ final class BitmartKlinesCallbackController extends AbstractController
         KlineRepository $klineRepository,
         PositionOpener $positionOpener,
         RuntimeGuardRepository $runtimeGuardRepository,
-        LoggerInterface $positionsLogger, //todo
+        LoggerInterface $positionsLogger,
+        ContractPipelineRepository $contractPipelineRepository
     ): JsonResponse {
         if ($runtimeGuardRepository->isPaused()) {
             return new JsonResponse(['status' => 'paused'], 200);
         }
         $envelope = json_decode($request->getContent(), true) ?? [];
-        $payload  = $envelope['payload'] ?? [];
+        $payload  = $envelope['params'] ?? [];
 
         $symbol     = (string) ($payload['contract']   ?? '');
         $timeframe  = strtolower((string) ($payload['timeframe'] ?? '4h'));
@@ -157,21 +159,37 @@ final class BitmartKlinesCallbackController extends AbstractController
             signals: $signalsPayload,
             flush: false
         );
+        $klines = array_values($klines); // s'assurer d'un index 0..n-1
+        $fromKline = $klines ? $klines[0] : null;
+        $toKline   = $klines ? $klines[count($klines)-1] : null;
+
+        // Enregistrer la plage dans le pipeline si dispo
+        if ($pipeline && $fromKline && $toKline) {
+            $pipeline->setKlineRange($fromKline, $toKline);
+        }
         $signal = $signalsPayload['signal'] ?? $signalsPayload["final"]['signal'];
         if ($pipeline && !($timeframe == '4h' &&  $signal === 'NONE')) {
-            $isValid = strtoupper($signalsPayload[$timeframe]['signal'] ?? 'NONE') !== 'NONE';
             $pipelineService->markAttempt($pipeline);
-//            if ($isValid && in_array($timeframe, ['15m','5m','1m'], true)) {
             $isValid = $pipelineService->applyDecision($pipeline, $timeframe);
             $positionsLogger->info('Position decision', [
                 'symbol' => $symbol,
                 'timeframe' => $timeframe,
                 'is_valid' => $isValid,
                 'signal' => $signalsPayload[$timeframe]['signal'] ?? 'NONE',
+                'signals' => array_map(
+                     function ($signal, $key) {
+                         return "$key => " . $signal['signal'];
+                     },
+                     $pipeline->getSignals(),
+                     array_keys($pipeline->getSignals())
+                 ),
                 'final_signal' => $signalsPayload['final']['signal'] ?? 'NONE',
                 'status' => $signalsPayload['status'] ?? null,
             ]);
-            if ($isValid && $timeframe === '1m') {
+         // $tfOpenable = ['15m','5m','1m']; // il va entré toujours en 15m, a voir après comment renforcer la position avec plus d'argent
+            // $tfOpenable = ['5m','1m']; // il va entré toujours en 15m, a voir après comment renforcer la position avec plus d'argent
+             $tfOpenable = ['1m']; // il va entré toujours en 15m, a voir après comment renforcer la position avec plus d'argent
+            if ($isValid && in_array($timeframe, $tfOpenable, true)) {
                 $finalSide = strtoupper($signalsPayload['final']['signal'] ?? 'NONE');
                 if (in_array($finalSide, ['LONG','SHORT'], true)) {
                     $positionsLogger->info('Opening position', [
@@ -179,13 +197,39 @@ final class BitmartKlinesCallbackController extends AbstractController
                         'final_side' => $finalSide,
                         'signal' => $signalsPayload[$timeframe]
                     ]);
-                    $positionOpener->open(
+                    $ohlc = array_map(static function ($k) {
+                        return [
+                            'high'  => (float)$k->getHigh(),
+                            'low'   => (float)$k->getLow(),
+                            'close' => (float)$k->getClose(),
+                        ];
+                    }, $klines);
+
+                    //$p = $contractPipelineRepository->findBy(['status' => ContractPipeline::STATUS_OPENED_LOCKED]);
+                   // if ((is_null($p)) || (is_object($p)) ||  (is_array($p) && count($p) <= 2)) {//
+                    $positionOpener->openLimitAutoLevWithTpSlPct(
                         symbol: $symbol,
-                        finalSideUpper: $finalSide,
+                        finalSideUpper: $finalSide,   // 'LONG' | 'SHORT'
+                        marginUsdt: 50,
+                        slPct: 0.05,
+                        tpPct: 0.10,
                         timeframe: $timeframe,
-                        tfSignal: $signalsPayload[$timeframe] ?? []
+                        meta: ['from' => 'callback', 'signal' => $signalsPayload[$timeframe] ?? []]
                     );
+                    //}
                 }
+            }
+            if ($pipeline) {
+                $pipeline->setStatus(ContractPipeline::STATUS_OPENED_LOCKED);
+//                $contract = $em->getRepository(Contract::class)->findOneBy(['symbol' => $contract->getSymbol()]);
+                // Ré-associer l'entité "fraîche" pour éviter un problème de proxy
+//                $pipeline->setContract($contract);
+               // $em->persist($pipeline);
+                $em->flush();
+                $positionsLogger->info('Pipeline locked (OPENED_LOCKED)', [
+                    'pipeline_id' => $pipeline->getId(),
+                    'symbol' => $symbol,
+                ]);
             }
 
         }
