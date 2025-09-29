@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Service\Account\Bitmart;
 
+use Psr\Log\LoggerInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 final class BitmartFuturesClient
@@ -12,8 +13,9 @@ final class BitmartFuturesClient
 
     public function __construct(
         private readonly HttpClientInterface $http,
+        private readonly LoggerInterface $positionsLogger,
         private readonly string $apiKey,    // %env(BITMART_API_KEY)%
-        private readonly string $apiSecret, // %env(BITMART_API_SECRET)%
+        private readonly string $secretKey, // %env(BITMART_API_SECRET)%
         private readonly string $apiMemo,   // %env(BITMART_API_MEMO)%  (a.k.a uid/memo)
     ) {}
 
@@ -190,7 +192,7 @@ final class BitmartFuturesClient
         [$payload, $options] = $this->buildPayload($method, $query, $body);
 
         // Signature: HMAC-SHA256(secret, TIMESTAMP + '#' + MEMO + '#' + payload)
-        $sign = \hash_hmac('sha256', $ts . '#' . $this->apiMemo . '#' . $payload, $this->apiSecret);
+        $sign = \hash_hmac('sha256', $ts . '#' . $this->apiMemo . '#' . $payload, $this->secretKey);
 
         $headers = [
             'X-BM-KEY'       => $this->apiKey,
@@ -250,4 +252,82 @@ final class BitmartFuturesClient
         }
         return $data['data'] ?? [];
     }
+
+    public function getLastPrice(string $symbol): ?float
+    {
+        $symbol = strtoupper($symbol);
+
+        // 1) Essai via /contract/public/details (champ last_price)
+//        try {
+//            $res = $this->requestPublic('GET', '/contract/public/details', ['symbol' => $symbol]);
+//            $this->positionsLogger->info("BitmartFuturesClient::getLastPrice details", ['response' => $res]);
+//            $this->positionsLogger->info("**************************************");
+//            $this->positionsLogger->info("**************************************");
+//            if (isset($res['symbols'][0]['last_price']) && is_numeric($res['symbols'][0]['last_price'])) {
+//                $this->positionsLogger->info("**************************************");
+//                $this->positionsLogger->info("**************************************");
+//                $this->positionsLogger->info($res['symbols'][0]['last_price']);
+//
+//                $this->positionsLogger->info("**************************************");
+//                $this->positionsLogger->info("**************************************");
+//                return (float)$res['symbols'][0]['last_price'];
+//            }
+//        } catch (\Throwable $e) {
+//            // on tente le fallback
+//        }
+
+        // 2) Fallback via /contract/public/market-trade (dernier trade)
+        try {
+            // decode() renvoie directement le contenu de "data" → ici un tableau de trades
+            $trades = $this->requestPublic('GET', '/contract/public/market-trade', [
+                'symbol' => $symbol,
+                'limit'  => 1,
+            ]);
+            $this->positionsLogger->info("***************trades*****************", $trades);
+//                $this->positionsLogger->info("**************************************");
+//                $this->positionsLogger->info($res['symbols'][0]['last_price']);
+//
+
+            if (is_array($trades) && isset($trades[0]['price']) && is_numeric($trades[0]['price'])) {
+                return (float)$trades[0]['price'];
+            }
+        } catch (\Throwable $e) {
+            // ignore → retournera null
+        }
+
+        return null;
+    }
+
+    /**
+     * Récupère toutes les positions ouvertes Futures.
+     * @return array payload brut BitMart
+     */
+    public function getPositions(): array
+    {
+        $path = '/contract/private/position';
+        $method = 'GET';
+        $timestamp = (string)(int)(microtime(true) * 1000);
+
+        $signStr = $timestamp . strtoupper($method) . $path;
+        $sign = hash_hmac('sha256', $signStr, $this->secretKey);
+
+        $headers = [
+            'X-BM-KEY'       => $this->apiKey,
+            'X-BM-TIMESTAMP' => $timestamp,
+            'X-BM-SIGN'      => $sign,
+            'Content-Type'   => 'application/json',
+        ];
+
+        $response = $this->http->request($method, $this->base . $path, [
+            'headers' => $headers,
+        ]);
+
+        $data = $response->toArray(false);
+
+        if (($data['code'] ?? 0) !== 1000) {
+            throw new \RuntimeException('BitMart getPositions failed: ' . json_encode($data));
+        }
+        return $data;
+    }
+
 }
