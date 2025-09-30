@@ -3,7 +3,9 @@
 namespace App\Service\Trading;
 
 use App\Dto\ExchangeFilters;
+use App\Repository\ContractPipelineRepository;
 use App\Service\Account\Bitmart\BitmartBalanceService;
+use App\Service\Account\Bitmart\BitmartFuturesClient;
 use App\Service\Account\Bitmart\BitmartSdkAdapter;
 use App\Service\Config\TradingParameters;
 use Psr\Log\LoggerInterface;
@@ -15,6 +17,9 @@ final class TradingService implements TradingPort
         private readonly LoggerInterface $logger,
         private readonly BitmartBalanceService $balance,
         private readonly TradingParameters $tradingParameters,
+        private readonly LoggerInterface $positionsLogger,
+        private readonly ContractPipelineRepository $contracts,
+        private readonly BitmartFuturesClient $bitmartClient
     )
     {
     }
@@ -73,7 +78,7 @@ final class TradingService implements TradingPort
         // Si impossible d’estimer la liq → fallback: borne sur le levier
         if (!$this->canComputeLiquidation($symbol)) {
             $lev   = $this->currentLeverageFor($symbol) ?? 1;
-            $maxLv = (int)($this->params->getConfig()['liquidation_guard']['fallback_max_leverage'] ?? 10);
+            $maxLv = (int)($this->tradingParameters->getConfig()['liquidation_guard']['fallback_max_leverage'] ?? 10);
             return $lev <= max(1, $maxLv);
         }
 
@@ -81,7 +86,7 @@ final class TradingService implements TradingPort
 
         // Taux de maintenance (approx). Tu peux raffiner par symbole / palier.
         $mmr = 0.005;
-        $cfg = $this->params->getConfig();
+        $cfg = $this->tradingParameters->getConfig();
         if (isset($cfg['risk']['maintenance_rate'])) {
             $mmr = max(0.0, (float)$cfg['risk']['maintenance_rate']);
         }
@@ -162,6 +167,7 @@ final class TradingService implements TradingPort
             mode:     $mode,
             clientOid:$clientOidEntry
         );
+        $this->positionsLogger->info("Order Entry Response", ['response' => $entryResp]);
 
         $entryOrderId = (string)($entryResp['order_id'] ?? '');
         if ($entryOrderId === '') {
@@ -282,7 +288,7 @@ final class TradingService implements TradingPort
             return (int)$this->perSymbolLeverage[$s];
         }
         // fallback conservateur: borne max autorisée par la conf (on ne "sait" pas le levier exact)
-        $maxLev = (int)($this->params->getConfig()['liquidation_guard']['fallback_max_leverage'] ?? 10);
+        $maxLev = (int)($this->tradingParameters->getConfig()['liquidation_guard']['fallback_max_leverage'] ?? 10);
         return $maxLev > 0 ? $maxLev : null;
     }
 
@@ -311,7 +317,14 @@ final class TradingService implements TradingPort
             $minVol = $c->getMinVolume();
             if ($minVol !== null && $tick !== null) {
                 // Notionnel mini (approx) = minVol * dernier prix connu (si dispo)
-                $last = $c->getLastPrice();
+                $last = $this->bitmartClient->getLastPrice($symbol); // ← dernier prix live (ou null)
+                $this->positionsLogger->info("************************************************************************************************" );
+                $this->positionsLogger->info("************************************************************************************************" );
+                $this->positionsLogger->info("************************************************************************************************" );
+                $this->positionsLogger->info("Last price for $symbol is " . ($last ?? 'null'));
+                $this->positionsLogger->info("************************************************************************************************" );
+                $this->positionsLogger->info("************************************************************************************************" );
+                $this->positionsLogger->info("************************************************************************************************" );
                 if ($last !== null) {
                     $minNotional = (float)$minVol * (float)$last;
                 }
@@ -327,7 +340,7 @@ final class TradingService implements TradingPort
         }
 
         // Fallback YAML
-        $cfg  = $this->params->getConfig();
+        $cfg  = $this->tradingParameters->getConfig();
         $tick = (float)($cfg['quantization']['tick_size'] ?? 0.01);
         $step = (float)($cfg['quantization']['step_size'] ?? 0.001);
 

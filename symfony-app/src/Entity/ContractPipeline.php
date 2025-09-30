@@ -23,6 +23,7 @@ class ContractPipeline
     public const STATUS_BACK      = 'back_to_parent';
 
     public const STATUS_OPENED_LOCKED = 'OPENED_LOCKED';
+    public const STATUS_ORDER_OPENED = 'ORDER_OPENED';
 
 
 

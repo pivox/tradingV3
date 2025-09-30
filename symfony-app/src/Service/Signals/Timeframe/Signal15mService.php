@@ -43,6 +43,7 @@ final class Signal15mService
     /** @param Kline[] $candles */
     public function evaluate(array $candles): array
     {
+        $this->validationLogger->info(' --- Evaluating signal 15m --- ');
         $cfg = $this->params->getConfig();
 
         $eps           = $cfg['runtime']['eps']             ?? $this->defaultEps;
@@ -70,6 +71,7 @@ final class Signal15mService
             ];
             $this->signalsLogger->info('signals.tick', $validation);
             $this->validationLogger->warning('validation.violation', $validation);
+            $this->validationLogger->info(' --- END Evaluating signal 15m --- ');
             return $validation;
         }
 
@@ -156,6 +158,8 @@ final class Signal15mService
         } else {
             $this->validationLogger->info('validation.ok', $validation);
         }
+
+        $this->validationLogger->info(' --- END Evaluating signal 15m --- ');
         return $validation;
     }
 }

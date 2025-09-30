@@ -92,7 +92,7 @@ final class BitmartOrchestrator
             }
             $envelopes[$key][] = $envelope;
         }
-       // dd($envelopes, $this->envelopes);
+//        dd($envelopes, $this->envelopes);
 
         $this->gateway->ensureWorkflowRunning($this->workflowRef);
         $this->gateway->sendSignal($this->workflowRef, new SignalPayload('submit', $envelopes));

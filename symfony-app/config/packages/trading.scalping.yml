@@ -26,6 +26,10 @@ atr:
     trailing_multiplier: null     # trailing ATR après TP1
     trail_after_tp1: false
     trail_step_pct: null         # facultatif, pas de trail si <10% d'un ATR (débounce)
+    lookback: 14
+    k_stop: 1.5
+    r_multiple: 1.0
+
 
 mtf:
     context: [4h, 1h]
@@ -56,42 +60,49 @@ order_plan:
         min_progress_r: 0.5        # si <0.5R au bout de 90 min -> sortie
 
 indicators:
-    ema:
+    ema: #
         fast: 20
         slow: 50
         trend: 200
-    adx:
+    adx: #
         period: 14
         min: 18
-    rsi:
+    rsi: #
         period: 14
         bull: 50
         bear: 50
-    macd:
+    macd: #
         fast: 12
         slow: 26
         signal: 9
-    donchian:
+    donchian: #
         period: 20
-    bollinger:
+    bollinger: #
         period: 20
         std: 2
         min_width_pct: 0.3
-    ichimoku:
+    ichimoku: #
         tenkan: 9
         kijun: 26
         senkou_b: 52
-    choppiness:
+    choppiness: #
         period: 14
         max: 61
-    stochrsi:
+    stochrsi: #
         period: 14
         k: 3
         d: 3
     vwap:
         daily: true        # true = reset chaque jour (préféré pour 5m)
         timezone: 'UTC'    # ou 'Europe/Paris', 'America/New_York', etc.
-
+    # OBV, Vwap
+#    obv:
+#        slope_window: 20        # fenêtre (en barres) pour estimer la pente
+#        smooth_ma: 5            # lissage (MA simple) de l’OBV pour réduire le bruit
+#        eps: 0.0                # tolérance : 0 => pente ≥0 (non-négative) suffit
+        # Exemples d’usage (déjà présents dans tes règles):
+        # - obv_slope_non_negative: true   (LONG contexte 1h)
+        # - obv_slope_non_positive: true   (SHORT contexte 1h)
 long:
     context:
         '4h':

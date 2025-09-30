@@ -63,7 +63,6 @@ final class TemporalWorkflowGateway implements TemporalGatewayInterface
             '%s/namespaces/%s/workflows/%s/signal/%s',
             $this->temporalHttpBase, $ref->namespace, $ref->id, $signal->signalName
         );
-        //dd($url, ['json' => $signal->data]);
 
 
         $res = $this->http->request('POST', $url, ['json' => $payload])->toArray(false);

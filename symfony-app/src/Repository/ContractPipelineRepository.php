@@ -13,6 +13,37 @@ class ContractPipelineRepository extends ServiceEntityRepository
         parent::__construct($registry, ContractPipeline::class);
     }
 
+
+    /**
+     * Retourne tous les pipelines au statut OPENED_LOCKED.
+     * @return ContractPipeline[]
+     */
+    public function findAllOpenedLocked(): array
+    {
+        return $this->createQueryBuilder('p')
+            ->andWhere('p.status = :st')->setParameter('st', ContractPipeline::STATUS_OPENED_LOCKED)
+            ->getQuery()
+            ->getResult();
+    }
+
+    /**
+     * Retourne les symboles (string[]) au statut OPENED_LOCKED.
+     * Utilise la relation vers Contract(symbol).
+     * @return string[]
+     */
+    public function getAllSymbolsOpenedLocked(): array
+    {
+        $rows = $this->createQueryBuilder('p')
+            ->innerJoin('p.contract', 'c')
+            ->select('c.symbol AS symbol')
+            ->andWhere('p.status = :st')->setParameter('st', ContractPipeline::STATUS_OPENED_LOCKED)
+            ->getQuery()
+            ->getResult();
+
+        return array_map(static fn(array $r) => $r['symbol'], $rows) ?? [];
+    }
+
+
     /**
      * Retourne les contrats éligibles à un timeframe donné (pending) avec un cap de résultats.
      */
@@ -58,6 +89,8 @@ class ContractPipelineRepository extends ServiceEntityRepository
             ->innerJoin('p.contract', 'c')
             ->select('c.symbol AS contractSymbol')
             ->where('p.currentTimeframe = :tf')->setParameter('tf', $timeframe)
+            ->andWhere('p.status != :locked')->setParameter('locked', ContractPipeline::STATUS_OPENED_LOCKED)
+            ->andWhere('p.status != :locked2')->setParameter('locked2', ContractPipeline::STATUS_ORDER_OPENED)
             ->setMaxResults($limit)
             ->getQuery()
             ->getResult();
@@ -75,4 +108,17 @@ class ContractPipelineRepository extends ServiceEntityRepository
 
         return array_map(fn($item) => $item['contractId'], $result) ?? [];
     }
+
+    public function updateStatusBySymbol(string $symbol, string $status): int
+    {
+        return $this->createQueryBuilder('p')
+            ->update()
+            ->set('p.status', ':status')
+            ->setParameter('status', $status)
+            ->where('p.contract = :symbol')
+            ->setParameter('symbol', $symbol)
+            ->getQuery()
+            ->execute();
+    }
+
 }
