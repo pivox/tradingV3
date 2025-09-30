@@ -116,5 +116,21 @@ services:
     App\Service\Account\Bitmart\BitmartFuturesClient:
         arguments:
             $apiKey: '%env(BITMART_API_KEY)%'
-            $apiSecret: '%env(BITMART_SECRET_KEY)%'
+            $secretKey: '%env(BITMART_SECRET_KEY)%'
             $apiMemo: '%env(BITMART_API_MEMO)%'
+
+    App\Service\Trading\PositionOpener:
+        arguments:
+            $apiKey: '%env(BITMART_API_KEY)%'
+            $secretKey: '%env(BITMART_SECRET_KEY)%'
+            $apiMemo: '%env(BITMART_API_MEMO)%'
+
+    App\Service\Config\BitmartConfig:
+        arguments:
+            $apiKey: '%env(BITMART_API_KEY)%'
+            $secretKey: '%env(BITMART_SECRET_KEY)%'
+            $apiMemo: '%env(BITMART_API_MEMO)%'
+
+    App\Logging\CustomLineFormatter:
+        class: App\Logging\CustomLineFormatter
+        public: false

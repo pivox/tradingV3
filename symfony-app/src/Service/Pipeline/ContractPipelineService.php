@@ -79,6 +79,9 @@ final class ContractPipelineService
     /** Promotion vers le timeframe suivant avec maxRetries donné. */
     public function promoteTo(ContractPipeline $pipe, string $nextTf, int $maxRetries): ContractPipeline
     {
+        if ($pipe->getStatus() === ContractPipeline::STATUS_VALIDATED) {
+            return $pipe;
+        }
         $pipe->promoteTo($nextTf, $maxRetries);
         $contract = $pipe->getContract();
         $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
@@ -125,6 +128,9 @@ final class ContractPipelineService
         } else {
             $valid = true;
         }
+        if (in_array($timeframe, ['1m']) && $valid) {
+            $pipe->setStatus(ContractPipeline::STATUS_VALIDATED);
+        }
 
         if ($valid) {
             // Promotion
@@ -153,9 +159,15 @@ final class ContractPipelineService
                     $this->em->clear();
             }
         } else {
-//            dump($pipe->getId(), $pipe->getRetries(), $pipe->getRetries(), $pipe->getMaxRetries());
             // Échec
             $pipe->incRetries()->setStatus(ContractPipeline::STATUS_PENDING);
+            $signals = $pipe->getSignals() ?? [];
+            foreach ($signals as $tf => $signal) {
+                if (!in_array($tf, $relevant)) {
+                    unset($signals[$tf]);
+                }
+            }
+            $pipe->setSignals($signals);
 
             $parent = match ($timeframe) {
                 ContractPipeline::TF_1H  => ContractPipeline::TF_4H,
@@ -181,7 +193,6 @@ final class ContractPipelineService
 
             $this->em->flush();
             $this->em->clear();
-//            dd($pipe->getRetries());
         }
 
         return $valid;

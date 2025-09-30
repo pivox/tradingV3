@@ -77,7 +77,7 @@ final class OrderPlanner
         }
 
 
-        $this->logger->debug('OrderPlanner plan built', compact('symbol','side','qEntry','qStop','qTp1','qQtyTotal','qTp1Qty','qRunnerQty','tick'));
+        $this->logger->info('OrderPlanner plan built', compact('symbol','side','qEntry','qStop','qTp1','qQtyTotal','qTp1Qty','qRunnerQty','tick'));
 
 
         return new OrderPlan(

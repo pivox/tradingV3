@@ -36,6 +36,7 @@ final class Signal5mService
      */
     public function evaluate(array $candles): array
     {
+        $this->validationLogger->info(' --- Evaluating signal 5m --- ');
         $cfg = $this->params->getConfig();
 
         $eps           = (float)($cfg['runtime']['eps'] ?? $this->defaultEps);
@@ -61,6 +62,8 @@ final class Signal5mService
             ];
             $this->signalsLogger->info('signals.tick', $validation);
             $this->validationLogger->warning('validation.violation', $validation);
+            $this->validationLogger->info(' --- END Evaluating signal 5m --- ');
+
             return $validation;
         }
 
@@ -130,6 +133,8 @@ final class Signal5mService
         $this->signalsLogger->info('signals.tick', $validation);
         if ($signal === 'NONE') $this->validationLogger->warning('validation.violation', $validation);
         else                   $this->validationLogger->info('validation.ok', $validation);
+
+        $this->validationLogger->info(' --- END Evaluating signal 5m --- ');
 
         return $validation;
     }

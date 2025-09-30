@@ -12,6 +12,10 @@ class TradingParameters
     {
         return Yaml::parseFile($this->configFile);
     }
+    public function all(): array
+    {
+        return Yaml::parseFile($this->configFile);
+    }
 
     public function riskPct(): float { return (float)($this->cfg['risk']['fixed_risk_pct'] ?? 5.0) / 100.0; }
     public function atrPeriod(): int { return (int)($this->cfg['atr']['period'] ?? 14); }

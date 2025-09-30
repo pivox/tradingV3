@@ -133,4 +133,61 @@ class KlineRepository extends ServiceEntityRepository
         // On retire les timestamps déjà existants
         return array_values($listDatesTimestamp);
     }
+
+
+
+    /**
+     * Charge les klines d’un contrat et d’un pas donné entre deux timestamps (UNIX).
+     * Hypothèse : Contract::symbol est la PK référencée par Kline::contract (JoinColumn sur symbol).
+     */
+    public function findByContractSymbolAndRangeAndStep(string $symbol, int $startTs, int $endTs, int $step): array
+    {
+        // On filtre via BETWEEN sur la colonne datetime en base (convertie côté PHP en \DateTimeInterface)
+        $start = (new \DateTimeImmutable())->setTimestamp($startTs);
+        $end   = (new \DateTimeImmutable())->setTimestamp($endTs);
+
+        return $this->createQueryBuilder('k')
+            ->join('k.contract', 'c')
+            ->andWhere('c.symbol = :symbol')
+            ->andWhere('k.step = :step')
+            ->andWhere('k.timestamp >= :start AND k.timestamp <= :end')
+            ->setParameter('symbol', $symbol)
+            ->setParameter('step', $step)
+            ->setParameter('start', $start)
+            ->setParameter('end', $end)
+            ->orderBy('k.timestamp', 'ASC')
+            ->getQuery()
+            ->getResult();
+    }
+
+    /**
+     * Récupère les dernières klines pour un symbole et un timeframe.
+     *
+     * @param string $symbol
+     * @param string $timeframe ex: "15m"
+     * @param int    $limit     nombre de bougies
+     * @return array<int, array{open:float,high:float,low:float,close:float}>
+     */
+    public function findLastKlines(string $symbol, string $timeframe, int $limit = 200): array
+    {
+        $qb = $this->createQueryBuilder('k')
+            ->join('k.contract', 'c')
+            ->where('c.symbol = :sym')
+            ->andWhere('k.step = :step')->setParameter('step', $this->stepFor($timeframe))
+            ->setParameter('sym', $symbol)
+            ->orderBy('k.timestamp', 'DESC')
+            ->setMaxResults($limit);
+
+        $rows = $qb->getQuery()->getResult();
+
+        // Tri ascendant par temps et normalisation format
+        $klines = array_map(fn(Kline $r) => [
+            'open'  => (float)$r->getOpen(),
+            'high'  => (float)$r->getHigh(),
+            'low'   => (float)$r->getLow(),
+            'close' => (float)$r->getClose(),
+        ], array_reverse($rows));
+
+        return $klines;
+    }
 }

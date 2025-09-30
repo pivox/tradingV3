@@ -63,6 +63,7 @@ final class SignalService
             '1m'  => $this->signal1m->evaluate($candles),
             default => ['signal' => 'NONE', 'trigger' => 'unsupported_tf', 'path' => $tf],
         };
+        $this->validationLogger->info(" --- Evaluated signal $tf --- ", ['result' => $currentEval]);
 
         $curr = strtoupper((string)($currentEval['signal'] ?? 'NONE'));
         $get  = static fn(string $k): string => strtoupper((string)($knownSignals[$k]['signal'] ?? 'NONE'));
@@ -91,7 +92,7 @@ final class SignalService
 
             case '5m':
                 $s4 = $get('4h'); $s1 = $get('1h'); $s15 = $get('15m');
-                $status = ($curr !== 'NONE' && $curr === $s15 && $s15 === $s1 && $s1 === $s4) ? 'PENDING' : 'FAILED';
+                $status = ($curr !== 'NONE' && $curr === $s15 && $s15 === $s1 && $s1 === $s4) ? 'VALIDATED' : 'FAILED';
                 break;
 
             case '1m':
