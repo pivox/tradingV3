@@ -5,9 +5,33 @@ framework:
     session: true
     http_client:
         scoped_clients:
-            python.client:
-                base_uri: '%env(INDICATOR_BASE)%'
-                timeout: 30
+            http_client.bitmart_futures_v2:
+                base_uri: 'https://api-cloud-v2.bitmart.com'
+                headers:
+                    Accept: 'application/json'
+                    User-Agent: 'YourApp/1.0 (+https://example.com)'
+                timeout: 10
+                retry_failed:
+                    enabled: true
+                    max_retries: 3
+                    delay: 500
+                    multiplier: 2
+                    max_delay: 5000
+                    jitter: 0.1
+
+            http_client.bitmart_system:
+                base_uri: 'https://api-cloud.bitmart.com'   # ← domaine “classique” (Spot/System)
+                headers:
+                    Accept: 'application/json'
+                    User-Agent: 'YourApp/1.0 (+https://example.com)'
+                timeout: 10
+                retry_failed:
+                    enabled: true
+                    max_retries: 3
+                    delay: 500
+                    multiplier: 2
+                    max_delay: 5000
+                    jitter: 0.1
 
     #esi: true
     #fragments: true

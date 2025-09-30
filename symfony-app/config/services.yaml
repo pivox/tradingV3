@@ -134,3 +134,9 @@ services:
     App\Logging\CustomLineFormatter:
         class: App\Logging\CustomLineFormatter
         public: false
+
+    App\Bitmart\Http\BitmartHttpClientPublic:
+        arguments:
+            $bitmartFuturesV2: '@http_client.bitmart_futures_v2'
+            $bitmartSystem: '@http_client.bitmart_system'
+
