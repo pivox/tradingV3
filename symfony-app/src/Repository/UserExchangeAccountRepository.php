@@ -26,17 +26,17 @@ class UserExchangeAccountRepository extends ServiceEntityRepository
 
     public function save(UserExchangeAccount $account, bool $flush = true): void
     {
-        $this->_em->persist($account);
+        $this->getEntityManager()->persist($account);
         if ($flush) {
-            $this->_em->flush();
+            $this->getEntityManager()->flush();
         }
     }
 
     public function remove(UserExchangeAccount $account, bool $flush = true): void
     {
-        $this->_em->remove($account);
+        $this->getEntityManager()->remove($account);
         if ($flush) {
-            $this->_em->flush();
+            $this->getEntityManager()->flush();
         }
     }
 }
