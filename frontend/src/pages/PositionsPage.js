@@ -137,6 +137,7 @@ const PositionsPage = () => {
             };
 
             socket.onmessage = (event) => {
+            console.log('[WS] Message brut reçu:', event.data);
                 try {
                     const payload = JSON.parse(event.data);
                     handleRealtimePayload(payload);
@@ -146,11 +147,12 @@ const PositionsPage = () => {
             };
 
             socket.onerror = (event) => {
-                console.error('Erreur WebSocket', event);
+            console.error('[WS] Erreur WebSocket', event);
                 setError('Erreur de communication temps réel');
             };
 
             socket.onclose = () => {
+            console.log('[WS] Connexion fermée');
                 const nextState = shouldReconnectRef.current ? 'disconnected' : 'inactive';
                 setConnectionState(nextState);
                 if (shouldReconnectRef.current) {
@@ -158,7 +160,7 @@ const PositionsPage = () => {
                 }
             };
         } catch (err) {
-            console.error('Impossible de créer la connexion WebSocket', err);
+        console.error('[WS] Impossible de créer la connexion WebSocket', err);
             setError("Impossible d'ouvrir la connexion temps réel");
             scheduleReconnect();
         }
@@ -180,9 +182,12 @@ const PositionsPage = () => {
 
     const handleRealtimePayload = (payload) => {
         if (!payload) {
+                    console.log('[WS] Payload vide ignoré');
+
             return;
         }
         if (payload.type === 'snapshot') {
+        console.log('[WS] Snapshot reçu avec', (payload.positions || []).length, 'positions');
             const map = new Map();
             (payload.positions || []).forEach((item) => {
                 const enriched = enrichPosition(item);
