@@ -69,10 +69,9 @@ class ContractPipelineRepository extends ServiceEntityRepository
     public function updateOrderIdBySymbol(string $symbol, string $orderId): void
     {
         $this->createQueryBuilder('p')
-            ->innerJoin('p.contract', 'c')
             ->update()
             ->set('p.orderId', ':orderId')
-            ->where('c.symbol = :symbol')
+            ->where('IDENTITY(p.contract) = :symbol')
             ->setParameter('orderId', $orderId)
             ->setParameter('symbol', $symbol)
             ->getQuery()
@@ -131,8 +130,8 @@ class ContractPipelineRepository extends ServiceEntityRepository
         return $this->createQueryBuilder('p')
             ->update()
             ->set('p.status', ':status')
+            ->where('IDENTITY(p.contract) = :symbol')
             ->setParameter('status', $status)
-            ->where('p.contract = :symbol')
             ->setParameter('symbol', $symbol)
             ->getQuery()
             ->execute();

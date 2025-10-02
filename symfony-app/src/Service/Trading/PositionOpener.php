@@ -137,6 +137,8 @@ final class PositionOpener
             ],
         ]);
 
+        $orderId = null;
+
         try {
             /* ------------------ 1) Config ------------------ */
             $cfg = $this->tradingParameters->all();
@@ -349,6 +351,8 @@ final class PositionOpener
                 'side'   => $side ?? null,
             ]);
             throw $e;
+        } finally {
+            $this->persistOrderId($symbol, $orderId, '[Market]');
         }
     }
 
@@ -362,129 +366,118 @@ final class PositionOpener
         string $timeframe,
         array $meta = []
     ): array {
-        $side = strtolower($finalSideUpper);           // 'long'|'short'
-        $this->positionsLogger->info('=== PositionOpener:openLimit ===', compact(
-            'symbol','side','timeframe','marginUsdt','leverage','slPct','tpPct','meta'
-        ));
+        $orderId = null;
 
-        /* 1) Détails contrat */
-        $details = $this->getContractDetails($symbol);
-        $tick    = (float)($details['price_precision'] ?? 0.0);
-        $qtyStep = (float)($details['vol_precision']   ?? 0.0);
-        $ctSize  = (float)($details['contract_size']   ?? 0.0);
-        $minVol  = (int)  ($details['min_volume']      ?? 1);
-        $maxVol  = (int)  ($details['max_volume']      ?? PHP_INT_MAX);
-        $marketCap = isset($details['market_max_volume']) && (int)$details['market_max_volume'] > 0
-            ? (int)$details['market_max_volume'] : null;
-
-        if ($tick<=0 || $qtyStep<=0 || $ctSize<=0 || $minVol<=0) {
-            throw new \RuntimeException("Invalid contract details");
-        }
-
-        /* 2) Mark & limite arrondie au tick */
-        $mark  = $this->getMarkClose($symbol);
-        $limit = $this->quantizeToStep($mark, $tick);  // même logique que ta commande
-
-        /* 3) Levier = 1 (fail suave si déjà réglé) */
-        try { $this->bitmartPositions->setLeverage($symbol, $leverage, 'isolated'); } catch (\Throwable) {}
-
-        /* 4) Sizing : notional = marge×levier → contrats */
-        $notional     = $marginUsdt * $leverage;
-        $contractsRaw = $notional / max(1e-12, $limit * $ctSize);
-        $contractsQ   = (int) $this->quantizeQty($contractsRaw, max(1e-9, $qtyStep));
-        $upper        = $marketCap !== null ? min($maxVol, $marketCap) : $maxVol;
-
-        if ($contractsQ < $minVol) {
-            throw new \RuntimeException(sprintf(
-                "Budget insuffisant pour %s @levier=%dx : %.6f < minVol=%d (valeur 1 contrat≈%.4f USDT)",
-                $symbol, $leverage, $contractsRaw, $minVol, $ctSize * $limit
-            ));
-        }
-        $contracts = (int) max($minVol, min($contractsQ, $upper));
-
-        /* 5) SL/TP % (sur prix limite) puis quantize */
-        if ($side === 'long') {
-            $slRaw = $limit * (1.0 - $slPct);
-            $tpRaw = $limit * (1.0 + $tpPct);
-        } else {
-            $slRaw = $limit * (1.0 + $slPct);
-            $tpRaw = $limit * (1.0 - $tpPct);
-        }
-        $slQ = $this->quantizeToStep($slRaw, $tick);
-        $tpQ = $this->quantizeToStep($tpRaw, $tick);
-
-        /* 6) LIMIT avec presets TP/SL (price_type=2 mark) + stp_mode optionnel */
-        $clientOrderId = 'LIM_' . bin2hex(random_bytes(6));
-        $payload = [
-            'symbol'                        => $symbol,
-            'client_order_id'               => $clientOrderId,
-            'side'                          => $this->mapSideOpen($side), // 1/4 oneway
-            'mode'                          => 1,                          // GTC
-            'type'                          => 'limit',
-            'open_type'                     => 'isolated',
-            'leverage'                      => (string)$leverage,
-            'size'                          => $contracts,
-            'price'                         => (string)$limit,
-            'preset_take_profit_price_type' => 2, // 1=last, 2=fair/mark
-            'preset_stop_loss_price_type'   => 2,
-            'preset_take_profit_price'      => (string)$tpQ,
-            'preset_stop_loss_price'        => (string)$slQ,
-            'stp_mode'                      => 1, // cancel_maker (optionnel)
-        ];
-        $res = $this->ordersService->create($payload);
-        if (($res['code'] ?? 0) !== 1000) {
-            throw new \RuntimeException('submit-order error: ' . json_encode($res, JSON_UNESCAPED_SLASHES));
-        }
-        $orderId = $res['data']['order_id'] ?? null;
-
-        // Persister l'orderId dans ContractPipeline
-        if ($orderId) {
-            try {
-                $this->pipelineRepository->updateOrderIdBySymbol($symbol, $orderId);
-                $this->positionsLogger->info('OrderId persisted in ContractPipeline', [
-                    'symbol' => $symbol,
-                    'order_id' => $orderId
-                ]);
-            } catch (\Throwable $e) {
-                $this->positionsLogger->warning('Failed to persist orderId in ContractPipeline', [
-                    'symbol' => $symbol,
-                    'order_id' => $orderId,
-                    'error' => $e->getMessage()
-                ]);
-            }
-        }
-
-        /* 7) (Optionnel) Position TP/SL “plan_category=2” */
-        // Si tu veux la couche position en plus des presets:
         try {
-            $reduceSide = $this->mapSideReduce($side); // 3: close long | 2: close short
-            $this->submitPositionTpSl(
-                symbol: $symbol, orderType: 'take_profit', side: $reduceSide,
-                triggerPrice: (string)$tpQ, priceType: 2, executivePrice: (string)$tpQ, category: 'limit'
-            );
-            $this->submitPositionTpSl(
-                symbol: $symbol, orderType: 'stop_loss', side: $reduceSide,
-                triggerPrice: (string)$slQ, priceType: 2, executivePrice: (string)$slQ, category: 'limit'
-            );
-        } catch (\Throwable $e) {
-            $this->positionsLogger->warning('submitPositionTpSl failed; presets still active', ['error' => $e->getMessage()]);
-        }
+            $side = strtolower($finalSideUpper);           // 'long'|'short'
+            $this->positionsLogger->info('=== PositionOpener:openLimit ===', compact(
+                'symbol','side','timeframe','marginUsdt','leverage','slPct','tpPct','meta'
+            ));
 
-        $out = [
-            'symbol'     => $symbol,
-            'side'       => $side,
-            'timeframe'  => $timeframe,
-            'order_id'   => $orderId,
-            'limit'      => $limit,
-            'sl'         => $slQ,
-            'tp'         => $tpQ,
-            'contracts'  => $contracts,
-            'leverage'   => $leverage,
-            'notional'   => $notional,
-            'client_order_id' => $clientOrderId,
-        ];
-        $this->positionsLogger->info('=== PositionOpener:openLimit:end ===', $out);
-        return $out;
+            /* 1) Détails contrat */
+            $details = $this->getContractDetails($symbol);
+            $tick    = (float)($details['price_precision'] ?? 0.0);
+            $qtyStep = (float)($details['vol_precision']   ?? 0.0);
+            $ctSize  = (float)($details['contract_size']   ?? 0.0);
+            $minVol  = (int)  ($details['min_volume']      ?? 1);
+            $maxVol  = (int)  ($details['max_volume']      ?? PHP_INT_MAX);
+            $marketCap = isset($details['market_max_volume']) && (int)$details['market_max_volume'] > 0
+                ? (int)$details['market_max_volume'] : null;
+
+            if ($tick<=0 || $qtyStep<=0 || $ctSize<=0 || $minVol<=0) {
+                throw new \RuntimeException("Invalid contract details");
+            }
+
+            /* 2) Mark & limite arrondie au tick */
+            $mark  = $this->getMarkClose($symbol);
+            $limit = $this->quantizeToStep($mark, $tick);  // même logique que ta commande
+
+            /* 3) Levier = 1 (fail suave si déjà réglé) */
+            try { $this->bitmartPositions->setLeverage($symbol, $leverage, 'isolated'); } catch (\Throwable) {}
+
+            /* 4) Sizing : notional = marge×levier → contrats */
+            $notional     = $marginUsdt * $leverage;
+            $contractsRaw = $notional / max(1e-12, $limit * $ctSize);
+            $contractsQ   = (int) $this->quantizeQty($contractsRaw, max(1e-9, $qtyStep));
+            $upper        = $marketCap !== null ? min($maxVol, $marketCap) : $maxVol;
+
+            if ($contractsQ < $minVol) {
+                throw new \RuntimeException(sprintf(
+                    "Budget insuffisant pour %s @levier=%dx : %.6f < minVol=%d (valeur 1 contrat≈%.4f USDT)",
+                    $symbol, $leverage, $contractsRaw, $minVol, $ctSize * $limit
+                ));
+            }
+            $contracts = (int) max($minVol, min($contractsQ, $upper));
+
+            /* 5) SL/TP % (sur prix limite) puis quantize */
+            if ($side === 'long') {
+                $slRaw = $limit * (1.0 - $slPct);
+                $tpRaw = $limit * (1.0 + $tpPct);
+            } else {
+                $slRaw = $limit * (1.0 + $slPct);
+                $tpRaw = $limit * (1.0 - $tpPct);
+            }
+            $slQ = $this->quantizeToStep($slRaw, $tick);
+            $tpQ = $this->quantizeToStep($tpRaw, $tick);
+
+            /* 6) LIMIT avec presets TP/SL (price_type=2 mark) + stp_mode optionnel */
+            $clientOrderId = 'LIM_' . bin2hex(random_bytes(6));
+            $payload = [
+                'symbol'                        => $symbol,
+                'client_order_id'               => $clientOrderId,
+                'side'                          => $this->mapSideOpen($side), // 1/4 oneway
+                'mode'                          => 1,                          // GTC
+                'type'                          => 'limit',
+                'open_type'                     => 'isolated',
+                'leverage'                      => (string)$leverage,
+                'size'                          => $contracts,
+                'price'                         => (string)$limit,
+                'preset_take_profit_price_type' => 2, // 1=last, 2=fair/mark
+                'preset_stop_loss_price_type'   => 2,
+                'preset_take_profit_price'      => (string)$tpQ,
+                'preset_stop_loss_price'        => (string)$slQ,
+                'stp_mode'                      => 1, // cancel_maker (optionnel)
+            ];
+            $res = $this->ordersService->create($payload);
+            if (($res['code'] ?? 0) !== 1000) {
+                throw new \RuntimeException('submit-order error: ' . json_encode($res, JSON_UNESCAPED_SLASHES));
+            }
+            $orderId = $res['data']['order_id'] ?? null;
+
+            /* 7) (Optionnel) Position TP/SL “plan_category=2” */
+            // Si tu veux la couche position en plus des presets:
+            try {
+                $reduceSide = $this->mapSideReduce($side); // 3: close long | 2: close short
+                $this->submitPositionTpSl(
+                    symbol: $symbol, orderType: 'take_profit', side: $reduceSide,
+                    triggerPrice: (string)$tpQ, priceType: 2, executivePrice: (string)$tpQ, category: 'limit'
+                );
+                $this->submitPositionTpSl(
+                    symbol: $symbol, orderType: 'stop_loss', side: $reduceSide,
+                    triggerPrice: (string)$slQ, priceType: 2, executivePrice: (string)$slQ, category: 'limit'
+                );
+            } catch (\Throwable $e) {
+                $this->positionsLogger->warning('submitPositionTpSl failed; presets still active', ['error' => $e->getMessage()]);
+            }
+
+            $out = [
+                'symbol'     => $symbol,
+                'side'       => $side,
+                'timeframe'  => $timeframe,
+                'order_id'   => $orderId,
+                'limit'      => $limit,
+                'sl'         => $slQ,
+                'tp'         => $tpQ,
+                'contracts'  => $contracts,
+                'leverage'   => $leverage,
+                'notional'   => $notional,
+                'client_order_id' => $clientOrderId,
+            ];
+            $this->positionsLogger->info('=== PositionOpener:openLimit:end ===', $out);
+            return $out;
+        } finally {
+            $this->persistOrderId($symbol, $orderId, '[LimitPct]');
+        }
     }
 
     public function openLimitAutoLevWithTpSlPct(
@@ -497,150 +490,156 @@ final class PositionOpener
         array  $meta       = [],
         ?int   $expireAfterSec = null
     ): array {
-        $side = strtolower($finalSideUpper);
+        $orderId = null;
 
-        // 1) Détails contrat
-        $details = $this->getContractDetails($symbol);
-        $tick    = (float)($details['price_precision'] ?? 0.0);
-        $qtyStep = (float)($details['vol_precision']   ?? 0.0);
-        $ctSize  = (float)($details['contract_size']   ?? 0.0);
-        $minVol  = (int)  ($details['min_volume']      ?? 1);
-        $maxVol  = (int)  ($details['max_volume']      ?? PHP_INT_MAX);
-        $maxLev  = (int)  ($details['max_leverage']    ?? 50);
-        $marketCap = isset($details['market_max_volume']) && (int)$details['market_max_volume'] > 0
-            ? (int)$details['market_max_volume'] : null;
+        try {
+            $side = strtolower($finalSideUpper);
 
-        if ($tick<=0 || $qtyStep<=0 || $ctSize<=0 || $minVol<=0) {
-            throw new \RuntimeException("Invalid contract details");
-        }
+            // 1) Détails contrat
+            $details = $this->getContractDetails($symbol);
+            $tick    = (float)($details['price_precision'] ?? 0.0);
+            $qtyStep = (float)($details['vol_precision']   ?? 0.0);
+            $ctSize  = (float)($details['contract_size']   ?? 0.0);
+            $minVol  = (int)  ($details['min_volume']      ?? 1);
+            $maxVol  = (int)  ($details['max_volume']      ?? PHP_INT_MAX);
+            $maxLev  = (int)  ($details['max_leverage']    ?? 50);
+            $marketCap = isset($details['market_max_volume']) && (int)$details['market_max_volume'] > 0
+                ? (int)$details['market_max_volume'] : null;
 
-        // 2) Prix limite ~= mark arrondi au tick
-        $mark  = $this->getMarkClose($symbol);
-        $limit = $this->quantizeToStep($mark, $tick);
+            if ($tick<=0 || $qtyStep<=0 || $ctSize<=0 || $minVol<=0) {
+                throw new \RuntimeException("Invalid contract details");
+            }
 
-        // 3) Config (risque absolu)
-        $cfg          = $this->tradingParameters->all();
-        $riskAbsUsdt  = (float)($cfg['risk']['abs_usdt'] ?? 3.0);
+            // 2) Prix limite ~= mark arrondi au tick
+            $mark  = $this->getMarkClose($symbol);
+            $limit = $this->quantizeToStep($mark, $tick);
+
+            // 3) Config (risque absolu)
+            $cfg          = $this->tradingParameters->all();
+            $riskAbsUsdt  = (float)($cfg['risk']['abs_usdt'] ?? 3.0);
 
 // 4) Levier cible (ta règle actuelle) + contrainte minVol/budget
-        $leverageTarget = max(4, (int)floor($maxLev / 2)); // ou ta règle dynamique variation_pct
-        $leverage = min($maxLev, $leverageTarget);
+            $leverageTarget = max(4, (int)floor($maxLev / 2)); // ou ta règle dynamique variation_pct
+            $leverage = min($maxLev, $leverageTarget);
 
 // 5) S'assure que minVol est réalisable dans le budget souhaité (marge<=marginUsdt)
-        $notionalForMinVol = $minVol * $limit * $ctSize;
-        $leverageNeededForMinVol = (int)ceil($notionalForMinVol / max(1e-12, $marginUsdt));
-        if ($leverageNeededForMinVol > $maxLev) {
-            throw new \RuntimeException(sprintf(
-                "Budget insuffisant: minVol=%d nécessite levier≥%dx pour marge=%g USDT (maxLev=%dx).",
-                $minVol, $leverageNeededForMinVol, $marginUsdt, $maxLev
-            ));
-        }
-        $leverage = max($leverage, $leverageNeededForMinVol);
+            $notionalForMinVol = $minVol * $limit * $ctSize;
+            $leverageNeededForMinVol = (int)ceil($notionalForMinVol / max(1e-12, $marginUsdt));
+            if ($leverageNeededForMinVol > $maxLev) {
+                throw new \RuntimeException(sprintf(
+                    "Budget insuffisant: minVol=%d nécessite levier≥%dx pour marge=%g USDT (maxLev=%dx).",
+                    $minVol, $leverageNeededForMinVol, $marginUsdt, $maxLev
+                ));
+            }
+            $leverage = max($leverage, $leverageNeededForMinVol);
 
 // 6) Calcul budget dur (notional max autorisé par la marge visée)
-        $notionalMax = $marginUsdt * $leverage;
+            $notionalMax = $marginUsdt * $leverage;
 
 // 7) Sizing par le risque avec le LEVIER RÉEL
 //    stopDist = %mouvement prix correspondant à slRoi/leverage
-        $slPct   = abs($slRoi) / max(1e-12, $leverage);
-        $stopDist = $limit * $slPct;
-        $contractsRiskF = $riskAbsUsdt / max(1e-12, $stopDist * $ctSize);
-        $contractsRiskQ = $this->quantizeQty($contractsRiskF, max(1e-9, $qtyStep));
+            $slPct   = abs($slRoi) / max(1e-12, $leverage);
+            $stopDist = $limit * $slPct;
+            $contractsRiskF = $riskAbsUsdt / max(1e-12, $stopDist * $ctSize);
+            $contractsRiskQ = $this->quantizeQty($contractsRiskF, max(1e-9, $qtyStep));
 
 // 8) Sizing par BUDGET (cap dur) et bornes exchange
-        $contractsBud = $this->quantizeQty(
-            $notionalMax / max(1e-12, $limit * $ctSize),
-            max(1e-9, $qtyStep)
-        );
-        $upperCap = $marketCap !== null ? min($maxVol, $marketCap) : $maxVol;
+            $contractsBud = $this->quantizeQty(
+                $notionalMax / max(1e-12, $limit * $ctSize),
+                max(1e-9, $qtyStep)
+            );
+            $upperCap = $marketCap !== null ? min($maxVol, $marketCap) : $maxVol;
 
 // 9) Candidat sans dépasser le budget (ni caps), mais ≥ minVol
-        $candidate = max($minVol, min($contractsRiskQ, $contractsBud, $upperCap));
+            $candidate = max($minVol, min($contractsRiskQ, $contractsBud, $upperCap));
 
 // Si le risque demande plus que le budget, tente d'augmenter le levier (jusqu'à maxLev)
-        if ($candidate < max($minVol, min($contractsRiskQ, $upperCap))) {
-            $contractsNeeded = max($minVol, min($contractsRiskQ, $upperCap));
-            $notionalNeeded  = $contractsNeeded * $limit * $ctSize;
-            $levNeeded       = (int)ceil($notionalNeeded / max(1e-12, $marginUsdt));
-            if ($levNeeded <= $maxLev) {
-                $leverage = max($leverage, $levNeeded);
-                $notionalMax = $marginUsdt * $leverage;
-                $contractsBud = $this->quantizeQty(
-                    $notionalMax / max(1e-12, $limit * $ctSize),
-                    max(1e-9, $qtyStep)
-                );
-                $candidate = max($minVol, min($contractsRiskQ, $contractsBud, $upperCap));
-            } else {
-                // On reste dans le budget: on acceptera une taille < risque idéal
-                $candidate = max($minVol, min($contractsBud, $upperCap));
+            if ($candidate < max($minVol, min($contractsRiskQ, $upperCap))) {
+                $contractsNeeded = max($minVol, min($contractsRiskQ, $upperCap));
+                $notionalNeeded  = $contractsNeeded * $limit * $ctSize;
+                $levNeeded       = (int)ceil($notionalNeeded / max(1e-12, $marginUsdt));
+                if ($levNeeded <= $maxLev) {
+                    $leverage = max($leverage, $levNeeded);
+                    $notionalMax = $marginUsdt * $leverage;
+                    $contractsBud = $this->quantizeQty(
+                        $notionalMax / max(1e-12, $limit * $ctSize),
+                        max(1e-9, $qtyStep)
+                    );
+                    $candidate = max($minVol, min($contractsRiskQ, $contractsBud, $upperCap));
+                } else {
+                    // On reste dans le budget: on acceptera une taille < risque idéal
+                    $candidate = max($minVol, min($contractsBud, $upperCap));
+                }
             }
-        }
 
-        $contracts = (int)$candidate;
+            $contracts = (int)$candidate;
 
 // 10) Recalcule TP/SL avec le levier réel (déjà fait ci-dessus pour slPct)
-        $tpPct = abs($tpRoi) / max(1e-12, $leverage);
-        if ($side === 'long') {
-            $slRaw = $limit * (1.0 - $slPct);
-            $tpRaw = $limit * (1.0 + $tpPct);
-        } else {
-            $slRaw = $limit * (1.0 + $slPct);
-            $tpRaw = $limit * (1.0 - $tpPct);
-        }
-        $slQ = $this->quantizeToStep($slRaw, $tick);
-        $tpQ = $this->quantizeToStep($tpRaw, $tick);
+            $tpPct = abs($tpRoi) / max(1e-12, $leverage);
+            if ($side === 'long') {
+                $slRaw = $limit * (1.0 - $slPct);
+                $tpRaw = $limit * (1.0 + $tpPct);
+            } else {
+                $slRaw = $limit * (1.0 + $slPct);
+                $tpRaw = $limit * (1.0 - $tpPct);
+            }
+            $slQ = $this->quantizeToStep($slRaw, $tick);
+            $tpQ = $this->quantizeToStep($tpRaw, $tick);
 
 // 11) Estimations honnêtes pour retour et contrôle
-        $notionalReal = $contracts * $limit * $ctSize;
-        $marginEst    = $notionalReal / max(1e-12, $leverage);
+            $notionalReal = $contracts * $limit * $ctSize;
+            $marginEst    = $notionalReal / max(1e-12, $leverage);
 
 // 12) Met à jour le payload + setLeverage
-        $clientOrderId = 'LIM_' . bin2hex(random_bytes(6));
-        $payload = [
-            'symbol'                        => $symbol,
-            'client_order_id'               => $clientOrderId,
-            'side'                          => $this->mapSideOpen($side),
-            'mode'                          => 1,
-            'type'                          => 'limit',
-            'open_type'                     => 'isolated',
-            'leverage'                      => (string)$leverage,
-            'size'                          => $contracts,
-            'price'                         => (string)$limit,
-            'preset_take_profit_price_type' => 2,
-            'preset_stop_loss_price_type'   => 2,
-            'preset_take_profit_price'      => (string)$tpQ,
-            'preset_stop_loss_price'        => (string)$slQ,
-            'stp_mode'                      => 1,
-        ];
-        $this->bitmartPositions->setLeverage($symbol, $leverage, 'isolated');
-        $res = $this->ordersService->create($payload);
-        if (($res['code'] ?? 0) !== 1000) {
-            throw new \RuntimeException('submit-order error: ' . json_encode($res, JSON_UNESCAPED_SLASHES));
-        }
-        $orderId = $res['data']['order_id'] ?? null;
-
-        if ($expireAfterSec !== null) {
-            try { $this->scheduleCancelAllAfter($symbol, $expireAfterSec); } catch (\Throwable $e) {
-                $this->positionsLogger->warning('scheduleCancelAllAfter failed', [
-                    'symbol' => $symbol, 'timeout' => $expireAfterSec, 'error' => $e->getMessage()
-                ]);
+            $clientOrderId = 'LIM_' . bin2hex(random_bytes(6));
+            $payload = [
+                'symbol'                        => $symbol,
+                'client_order_id'               => $clientOrderId,
+                'side'                          => $this->mapSideOpen($side),
+                'mode'                          => 1,
+                'type'                          => 'limit',
+                'open_type'                     => 'isolated',
+                'leverage'                      => (string)$leverage,
+                'size'                          => $contracts,
+                'price'                         => (string)$limit,
+                'preset_take_profit_price_type' => 2,
+                'preset_stop_loss_price_type'   => 2,
+                'preset_take_profit_price'      => (string)$tpQ,
+                'preset_stop_loss_price'        => (string)$slQ,
+                'stp_mode'                      => 1,
+            ];
+            $this->bitmartPositions->setLeverage($symbol, $leverage, 'isolated');
+            $res = $this->ordersService->create($payload);
+            if (($res['code'] ?? 0) !== 1000) {
+                throw new \RuntimeException('submit-order error: ' . json_encode($res, JSON_UNESCAPED_SLASHES));
             }
-        }
+            $orderId = $res['data']['order_id'] ?? null;
 
-        return [
-            'symbol'     => $symbol,
-            'side'       => $side,
-            'timeframe'  => $timeframe,
-            'order_id'   => $orderId,
-            'limit'      => $limit,
-            'sl'         => $slQ,
-            'tp'         => $tpQ,
-            'contracts'  => $contracts,
-            'leverage'   => $leverage,
-            'notional'   => $notionalMax,
-            'client_order_id' => $clientOrderId,
-            'meta'       => $meta,
-        ];
+            if ($expireAfterSec !== null) {
+                try { $this->scheduleCancelAllAfter($symbol, $expireAfterSec); } catch (\Throwable $e) {
+                    $this->positionsLogger->warning('scheduleCancelAllAfter failed', [
+                        'symbol' => $symbol, 'timeout' => $expireAfterSec, 'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            return [
+                'symbol'     => $symbol,
+                'side'       => $side,
+                'timeframe'  => $timeframe,
+                'order_id'   => $orderId,
+                'limit'      => $limit,
+                'sl'         => $slQ,
+                'tp'         => $tpQ,
+                'contracts'  => $contracts,
+                'leverage'   => $leverage,
+                'notional'   => $notionalMax,
+                'client_order_id' => $clientOrderId,
+                'meta'       => $meta,
+            ];
+        } finally {
+            $this->persistOrderId($symbol, $orderId, '[AutoLev]');
+        }
     }
 
 
@@ -1010,7 +1009,10 @@ final class PositionOpener
         array  $meta = [],
         ?int   $expireAfterSec = 120   // annule les ordres après 2 minutes
     ): array {
-        $side = strtoupper($finalSideUpper);
+        $orderId = null;
+
+        try {
+            $side = strtoupper($finalSideUpper);
 
         $this->positionsLogger->info('[SR] Étape 1: Récupération des détails du contrat', [
             'symbol' => $symbol
@@ -1192,23 +1194,6 @@ final class PositionOpener
         }
         $orderId = $res['data']['order_id'] ?? null;
 
-        // Persister l'orderId dans ContractPipeline
-        if ($orderId) {
-            try {
-                $this->pipelineRepository->updateOrderIdBySymbol($symbol, $orderId);
-                $this->positionsLogger->info('[SR] OrderId persisted in ContractPipeline', [
-                    'symbol' => $symbol,
-                    'order_id' => $orderId
-                ]);
-            } catch (\Throwable $e) {
-                $this->positionsLogger->warning('[SR] Failed to persist orderId in ContractPipeline', [
-                    'symbol' => $symbol,
-                    'order_id' => $orderId,
-                    'error' => $e->getMessage()
-                ]);
-            }
-        }
-
         if ($expireAfterSec !== null) {
             $this->positionsLogger->info('[SR] Étape 11: Programmation de l\'expiration auto', [
                 'expireAfterSec' => $expireAfterSec
@@ -1251,6 +1236,9 @@ final class PositionOpener
             'metrics'    => $sr,
             'meta'       => $meta,
         ];
+        } finally {
+            $this->persistOrderId($symbol, $orderId, '[SR]');
+        }
     }
 
 
@@ -1270,7 +1258,10 @@ final class PositionOpener
         array  $meta           = [],
         ?int   $expireAfterSec = self::HC_DEFAULT_EXPIRE_SEC
     ): array {
-        $side = strtoupper($finalSideUpper);
+        $orderId = null;
+
+        try {
+            $side = strtoupper($finalSideUpper);
 
         // 1) Détails contrat
         $this->positionsLogger->info('[HC] Étape 1: Détails du contrat', ['symbol' => $symbol]);
@@ -1459,6 +1450,35 @@ final class PositionOpener
 
         $this->positionsLogger->info('[HC] Retour final', $out);
         return $out;
+        } finally {
+            $this->persistOrderId($symbol, $orderId, '[HC]');
+        }
+    }
+
+    private function persistOrderId(string $symbol, string|int|null $orderId, string $context): void
+    {
+        if ($orderId === null) {
+            return;
+        }
+
+        $orderIdAsString = trim((string) $orderId);
+        if ($orderIdAsString === '') {
+            return;
+        }
+
+        try {
+            $this->pipelineRepository->updateOrderIdBySymbol($symbol, $orderIdAsString);
+            $this->positionsLogger->info("$context OrderId persisted in ContractPipeline", [
+                'symbol' => $symbol,
+                'order_id' => $orderIdAsString,
+            ]);
+        } catch (Throwable $error) {
+            $this->positionsLogger->warning("$context Failed to persist orderId in ContractPipeline", [
+                'symbol' => $symbol,
+                'order_id' => $orderIdAsString,
+                'error' => $error->getMessage(),
+            ]);
+        }
     }
 
     /**

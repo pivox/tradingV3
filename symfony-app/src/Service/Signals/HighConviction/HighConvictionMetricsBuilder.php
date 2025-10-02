@@ -5,7 +5,10 @@ namespace App\Service\Signals\HighConviction;
 use App\Repository\KlineRepository;
 use App\Service\Indicator\AtrCalculator;
 use App\Service\Indicator\Volume\Vwap;
+use App\Service\Strategy\MacroCalendarService;
 use App\Util\SrRiskHelper;
+use DateTimeImmutable;
+use DateTimeZone;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -36,6 +39,7 @@ final class HighConvictionMetricsBuilder
     private const R_MULTIPLE       = 2.0;   // TP = entry +/- R * (entry - SL)
     private const RISK_MAX_PCT     = 0.07;  // 7% sur la marge (comme ton openLimitAutoLevWithSr)
     private const VWAP_FALLBACK    = true;  // si entry non fourni, on utilise VWAP(15m) comme proxy
+    private const MACRO_LOOKAHEAD_MINUTES = 120;
 
     public function __construct(
         private readonly KlineRepository $klineRepository,
@@ -43,6 +47,7 @@ final class HighConvictionMetricsBuilder
         private readonly SrRiskHelper $srRiskHelper,
         private readonly AtrCalculator $atrCalculator,
         private readonly Vwap $vwap,
+        private readonly MacroCalendarService $macroCalendar,
         private readonly LoggerInterface $highconviction // canal monolog "highconviction"
     ) {}
 
@@ -175,6 +180,10 @@ final class HighConvictionMetricsBuilder
             leverage: $levOpt
         );
 
+        $nowUtc = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $macroWindow = $this->macroCalendar->evaluateWindow($nowUtc, self::MACRO_LOOKAHEAD_MINUTES, $symbol);
+        $metrics['macro_no_event'] = $macroWindow['no_event'];
+
         $this->highconviction->info('[HC] Metrics construits', [
             'symbol'   => $symbol,
             'metrics'  => $metrics
@@ -194,6 +203,11 @@ final class HighConvictionMetricsBuilder
                 'risk_max%' => $riskMaxPct,
                 'r_multiple'=> $rMultiple,
                 'sr'        => array_merge($sr, ['atr_tf' => self::ATR_TIMEFRAME]),
+                'macro'     => [
+                    'checked_at' => $nowUtc->format(DateTimeImmutable::ATOM),
+                    'lookahead_minutes' => self::MACRO_LOOKAHEAD_MINUTES,
+                    'blocking_event' => $macroWindow['blocking_event'],
+                ],
             ],
         ];
     }

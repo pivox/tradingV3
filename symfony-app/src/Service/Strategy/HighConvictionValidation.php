@@ -3,6 +3,9 @@ declare(strict_types=1);
 
 namespace App\Service\Strategy;
 
+use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+
 /**
  * HighConvictionValidation
  *
@@ -30,11 +33,12 @@ namespace App\Service\Strategy;
  * Sortie :
  *  - ['ok'=>bool, 'flags'=>['high_conviction'=>bool, 'leverage_cap'=>int], 'reasons'=>string[]]
  */
+
 final class HighConvictionValidation
 {
     // ==== Seuils (constantes) =================================================
     private const ADX_THRESHOLD           = 25.0;
-    private const RR_MIN                  = 5.0;
+    private const RR_MIN                  = 2.0;
     private const LIQUIDATION_MIN         = 3.0;   // liquidation ≥ 3x le stop
     private const LEVERAGE_CAP            = 50;    // plafond du levier autorisé si validé
     private const USE_PROXY_IF_MISSING    = true;  // autoriser les proxys si métriques manquantes
@@ -44,6 +48,10 @@ final class HighConvictionValidation
     private const PROXY_ALIGN_REQ         = true;  // exige ema_fast > ema_slow
     private const PROXY_BREAKOUT_REQ_VWAP = true;  // exige close > vwap (15m & 5m)
     private const PROXY_EXPANSION_MIN_DIF = 0.0;   // ema_fast - ema_slow en hausse
+
+    public function __construct(
+        #[Autowire(service: 'monolog.logger.highconviction')] private readonly LoggerInterface $logger,
+    ) {}
 
     // ==== API =================================================================
 
@@ -55,6 +63,8 @@ final class HighConvictionValidation
     public function validate(array $ctx, array $metrics = []): array
     {
         $reasons = [];
+
+        $this->logMissingSignalFields($ctx);
 
         // 1) Confluence MTF : 4h, 1h, 15m doivent être alignés (LONG/SHORT identiques)
         $s4  = $this->signal($ctx, '4h');
@@ -140,19 +150,40 @@ final class HighConvictionValidation
         }
         if (!self::USE_PROXY_IF_MISSING) return false;
 
-        $p1h  = $this->proxyTrendOk($ctx['1h']  ?? []);
-        $p15m = $this->proxyTrendOk($ctx['15m'] ?? []);
+        $p1h  = $this->proxyTrendOk($ctx['1h']  ?? [], '1h');
+        $p15m = $this->proxyTrendOk($ctx['15m'] ?? [], '15m');
         return $p1h && $p15m;
     }
 
     /** Proxy de “tendance forte” : EMA fast>slow & MACD hist>0 */
-    private function proxyTrendOk(array $node): bool
+    private function proxyTrendOk(array $node, string $tf): bool
     {
         $emaF = $this->toFloat($node['ema_fast'] ?? null);
         $emaS = $this->toFloat($node['ema_slow'] ?? null);
         $hist = $this->toFloat($node['macd']['hist'] ?? null);
-        return (\is_finite($emaF) && \is_finite($emaS) && $emaF > $emaS)
-            && (\is_finite($hist) && $hist > self::PROXY_ADX_MIN_HIST);
+
+        $hasEma  = \is_finite($emaF) && \is_finite($emaS);
+        $hasHist = \is_finite($hist);
+
+        if ($hasEma && $hasHist) {
+            return $emaF > $emaS && $hist > self::PROXY_ADX_MIN_HIST;
+        }
+
+        $fallbackSide = strtoupper((string)($node['signal'] ?? 'NONE'));
+        if ($this->validSide($fallbackSide)) {
+            $this->logger->notice('HC proxyTrend fallback on signal', [
+                'tf' => $tf,
+                'side' => $fallbackSide,
+                'missing' => $this->collectMissingFields($node, ['ema_fast','ema_slow','macd.hist']),
+            ]);
+            return true;
+        }
+
+        $this->logger->warning('HC proxyTrend failed: insufficient data', [
+            'tf' => $tf,
+            'missing' => $this->collectMissingFields($node, ['ema_fast','ema_slow','macd.hist']),
+        ]);
+        return false;
     }
 
     /** Cassure + volume : direct via metrics, sinon proxy close>VWAP & MACD hist>0 sur 15m et 5m */
@@ -168,6 +199,19 @@ final class HighConvictionValidation
             $vwap  = $this->toFloat($node['vwap']  ?? null);
             $hist  = $this->toFloat($node['macd']['hist'] ?? null);
             if (!(\is_finite($close) && \is_finite($vwap) && \is_finite($hist))) {
+                $side = strtoupper((string)($node['signal'] ?? 'NONE'));
+                if ($this->validSide($side)) {
+                    $this->logger->notice('HC breakout proxy fallback on signal', [
+                        'tf' => $tf,
+                        'side' => $side,
+                        'missing' => $this->collectMissingFields($node, ['close','vwap','macd.hist']),
+                    ]);
+                    continue;
+                }
+                $this->logger->warning('HC breakout proxy failed: insufficient data', [
+                    'tf' => $tf,
+                    'missing' => $this->collectMissingFields($node, ['close','vwap','macd.hist']),
+                ]);
                 return false;
             }
             if (!($close > $vwap && $hist > 0.0)) {
@@ -202,16 +246,33 @@ final class HighConvictionValidation
 
         if ($s5 !== $side15m || $s1 !== $side15m) return false;
 
-        $ok5 = $this->vwapSideOk($ctx['5m'] ?? [], $side15m);
-        $ok1 = $this->vwapSideOk($ctx['1m'] ?? [], $side15m);
+        $ok5 = $this->vwapSideOk($ctx['5m'] ?? [], $side15m, '5m');
+        $ok1 = $this->vwapSideOk($ctx['1m'] ?? [], $side15m, '1m');
         return $ok5 && $ok1;
     }
 
-    private function vwapSideOk(array $node, string $side): bool
+    private function vwapSideOk(array $node, string $side, string $tf): bool
     {
         $close = $this->toFloat($node['close'] ?? null);
         $vwap  = $this->toFloat($node['vwap']  ?? null);
-        if (!(\is_finite($close) && \is_finite($vwap))) return false;
+        if (!(\is_finite($close) && \is_finite($vwap))) {
+            $fallbackSide = strtoupper((string)($node['signal'] ?? 'NONE'));
+            if ($fallbackSide === $side) {
+                $this->logger->notice('HC VWAP proxy fallback on signal', [
+                    'tf' => $tf,
+                    'side' => $fallbackSide,
+                    'missing' => $this->collectMissingFields($node, ['close','vwap']),
+                ]);
+                return true;
+            }
+
+            $this->logger->warning('HC VWAP proxy failed: insufficient data', [
+                'tf' => $tf,
+                'side' => $side,
+                'missing' => $this->collectMissingFields($node, ['close','vwap']),
+            ]);
+            return false;
+        }
 
         return $side === 'LONG' ? ($close >= $vwap) : ($close <= $vwap);
     }
@@ -219,5 +280,62 @@ final class HighConvictionValidation
     private function toFloat(mixed $v): float
     {
         return \is_numeric($v) ? (float)$v : \NAN;
+    }
+
+    private function logMissingSignalFields(array $ctx): void
+    {
+        $requirements = [
+            '4h'  => ['signal','ema_fast','ema_slow','macd.hist'],
+            '1h'  => ['signal','ema_fast','ema_slow','macd.hist'],
+            '15m' => ['signal','ema_fast','ema_slow','macd.hist','close','vwap'],
+            '5m'  => ['signal','ema_fast','ema_slow','macd.hist','close','vwap'],
+            '1m'  => ['signal','ema_fast','ema_slow','close','vwap'],
+        ];
+
+        $report = [];
+        foreach ($requirements as $tf => $fields) {
+            $missing = $this->collectMissingFields($ctx[$tf] ?? [], $fields);
+            if ($missing !== []) {
+                $report[$tf] = $missing;
+            }
+        }
+
+        if ($report !== []) {
+            $this->logger->info('HC signal inputs missing fields', [
+                'missing' => $report,
+            ]);
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $node
+     * @param array<int,string> $fields
+     * @return array<int,string>
+     */
+    private function collectMissingFields(array $node, array $fields): array
+    {
+        $missing = [];
+        foreach ($fields as $field) {
+            if ($this->hasField($node, $field)) {
+                continue;
+            }
+            $missing[] = $field;
+        }
+
+        return $missing;
+    }
+
+    private function hasField(array $node, string $field): bool
+    {
+        if (!str_contains($field, '.')) {
+            return array_key_exists($field, $node) && $node[$field] !== null && $node[$field] !== '';
+        }
+
+        [$parent, $child] = explode('.', $field, 2);
+        if (!isset($node[$parent]) || !is_array($node[$parent])) {
+            return false;
+        }
+
+        return array_key_exists($child, $node[$parent]) && $node[$parent][$child] !== null && $node[$parent][$child] !== '';
     }
 }

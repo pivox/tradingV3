@@ -11,10 +11,12 @@ use App\Service\Persister\KlinePersister;
 use App\Service\Pipeline\ContractPipelineService;
 use App\Service\Signals\Timeframe\SignalService;
 use App\Service\Trading\PositionOpener;
+use App\Service\Trading\BitmartAccountGateway;
 use App\Service\Bitmart\BitmartRefreshService;
 use App\Service\ContractSignalWriter;
 use App\Service\Signals\HighConviction\HighConvictionMetricsBuilder;
 use App\Service\Strategy\HighConvictionValidation;
+use App\Service\Strategy\HighConvictionTraceWriter;
 use App\Repository\RuntimeGuardRepository;
 use App\Util\TimeframeHelper;
 use Doctrine\ORM\EntityManagerInterface;
@@ -28,6 +30,10 @@ final class KlinesCallbackController extends AbstractController
 {
     private const LIMIT_KLINES = 270; // fallback si non fourni
 
+    private readonly HighConvictionValidation $highConviction;
+    private readonly BitmartAccountGateway $bitmartAccount;
+    private readonly HighConvictionTraceWriter $hcTraceWriter;
+
     public function __construct(
         // Services et repos conservés
         private readonly EntityManagerInterface $em,
@@ -38,7 +44,9 @@ final class KlinesCallbackController extends AbstractController
         private readonly RuntimeGuardRepository $runtimeGuardRepository,
         private readonly ContractPipelineRepository $contractPipelineRepository,
         private readonly HighConvictionMetricsBuilder $hcMetricsBuilder,
-        private readonly HighConvictionValidation $highConviction,
+        HighConvictionValidation $highConviction,
+        HighConvictionTraceWriter $hcTraceWriter,
+        BitmartAccountGateway $bitmartAccount,
 
         // ⬇️ Remplacement BitmartFetcher → client public REST
         private readonly BitmartHttpClientPublic $bitmart,
@@ -53,7 +61,11 @@ final class KlinesCallbackController extends AbstractController
         // Ton service d’évaluation (existant)
         private readonly SignalService $signalService,
         private readonly BitmartRefreshService $refreshService,
-    ) {}
+    ) {
+        $this->highConviction = $highConviction;
+        $this->bitmartAccount = $bitmartAccount;
+        $this->hcTraceWriter = $hcTraceWriter;
+    }
 
     #[Route('/api/callback/bitmart/get-kline', name: 'bitmart_klines_callback', methods: ['POST'])]
     public function __invoke(Request $request): JsonResponse
@@ -278,7 +290,39 @@ final class KlinesCallbackController extends AbstractController
                         'trail'   => $contextTrail,
                     ]);
 
+                    $this->hcTraceWriter->record([
+                        'symbol'       => $symbol,
+                        'timeframe'    => $timeframe,
+                        'evaluated_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format(DATE_ATOM),
+                        'signals'      => $ctx,
+                        'metrics'      => $metrics,
+                        'validation'   => $hc,
+                        'trail'        => $contextTrail,
+                    ]);
+                    $this->validationLogger->info('HighConviction trace recorded', [
+                        'symbol' => $symbol,
+                        'timeframe' => $timeframe,
+                    ]);
+
                     if ($isHigh && $levCap > 0) {
+                        $availableUsdt = $this->bitmartAccount->getAvailableUSDT();
+                        $marginBudget  = max(0.0, $availableUsdt * 0.5);
+                        $contextTrail[] = [
+                            'step' => 'budget_high_conviction',
+                            'available_usdt' => $availableUsdt,
+                            'margin_usdt' => $marginBudget,
+                        ];
+
+                        if ($marginBudget <= 0.0) {
+                            $contextTrail[] = ['step' => 'budget_insufficient'];
+                            $this->validationLogger->warning('Skipping HC opening: available balance is zero', [
+                                'symbol' => $symbol,
+                                'available_usdt' => $availableUsdt,
+                                'trail' => $contextTrail,
+                            ]);
+                            goto pipeline_lock;
+                        }
+
                         $contextTrail[] = ['step' => 'opening_high_conviction'];
                         $this->validationLogger->info('Opening position [HIGH_CONVICTION]', [
                             'symbol'       => $symbol,
@@ -293,7 +337,7 @@ final class KlinesCallbackController extends AbstractController
                                 symbol:         $symbol,
                                 finalSideUpper: $finalSide,
                                 leverageCap:    $levCap,
-                                marginUsdt:     60,
+                                marginUsdt:     $marginBudget,
                                 riskMaxPct:     0.07,
                                 rMultiple:      2.0,
                                 meta:           ['ctx' => 'HC'],
@@ -306,12 +350,29 @@ final class KlinesCallbackController extends AbstractController
                                 'trail' => $contextTrail,
                             ]);
                         } catch (\Throwable $e) {
-                            $contextTrail[] = ['step' => 'order_failed', 'type' => 'high_conviction', 'error' => $e->getMessage()];
-                            $this->validationLogger->error('Order submission failed [HIGH_CONVICTION]', [
+                            $insufficient = $this->isInsufficientBalanceError($e);
+                            $contextTrail[] = [
+                                'step' => 'order_failed',
+                                'type' => 'high_conviction',
+                                'error' => $e->getMessage(),
+                                'insufficient_balance' => $insufficient,
+                                'available_usdt' => $availableUsdt,
+                                'margin_usdt' => $marginBudget,
+                            ];
+
+                            $loggerContext = [
                                 'symbol' => $symbol,
                                 'error' => $e->getMessage(),
+                                'available_usdt' => $availableUsdt,
+                                'margin_usdt' => $marginBudget,
                                 'trail' => $contextTrail,
-                            ]);
+                            ];
+
+                            if ($insufficient) {
+                                $this->validationLogger->warning('Insufficient balance, skipping order [HIGH_CONVICTION]', $loggerContext);
+                            } else {
+                                $this->validationLogger->error('Order submission failed [HIGH_CONVICTION]', $loggerContext);
+                            }
                         }
                     } else {
                         $contextTrail[] = ['step' => 'opening_scalping'];
@@ -326,7 +387,7 @@ final class KlinesCallbackController extends AbstractController
                             $this->positionOpener->openLimitAutoLevWithSr(
                                 symbol:         $symbol,
                                 finalSideUpper: $finalSide,
-                                marginUsdt:     60,
+                                marginUsdt:     70,
                                 riskMaxPct:     0.07,
                                 rMultiple:      2.0
                             );
@@ -421,6 +482,20 @@ pipeline_lock:
             'signals'   => $signalsPayload,
             'decision'  => $signalsPayload['final'] ?? null,
         ]);
+    }
+
+    private function isInsufficientBalanceError(\Throwable $error): bool
+    {
+        $message = strtolower($error->getMessage());
+        if ($message === '') {
+            return false;
+        }
+
+        return str_contains($message, 'insufficient balance')
+            || str_contains($message, 'balance not sufficient')
+            || str_contains($message, 'balance not enough')
+            || str_contains($message, 'insufficient margin')
+            || str_contains($message, 'margin not enough');
     }
 
     private function jsonError(string $message, int $status): JsonResponse
