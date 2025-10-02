@@ -22,6 +22,7 @@ risk:
 atr:
     period: 14
     method: wilder               # wilder|simple
+    timeframe: '5m'
     sl_multiplier: 1.5           # SL = k * ATR
     trailing_multiplier: null     # trailing ATR après TP1
     trail_after_tp1: false

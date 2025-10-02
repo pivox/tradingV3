@@ -85,6 +85,9 @@ class ContractPipeline
     #[ORM\Column(type: 'json', nullable: true)]
     private ?array $signals = null;
 
+    #[ORM\Column(type: 'string', length: 50, nullable: true)]
+    private ?string $orderId = null;
+
     #[ORM\ManyToOne(targetEntity: Kline::class)]
     #[ORM\JoinColumn(name: 'from_kline_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
     private ?Kline $fromKline = null;
@@ -183,6 +186,9 @@ class ContractPipeline
 
     public function getSignals(): ?array { return $this->signals; }
     public function setSignals(?array $signals): self { $this->signals = $signals; return $this; }
+
+    public function getOrderId(): ?string { return $this->orderId; }
+    public function setOrderId(?string $orderId): self { $this->orderId = $orderId; return $this->touchUpdatedAt(); }
 
     public function getSignalLongOrShortOrNone(): string
     {

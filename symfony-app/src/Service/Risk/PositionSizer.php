@@ -3,12 +3,11 @@ declare(strict_types=1);
 
 namespace App\Service\Risk;
 
-use App\Service\Trading\TradingPort;
-use App\Service\Trading\TradingService;
+use App\Service\Trading\BitmartAccountGateway;
 
 final class PositionSizer
 {
-    public function __construct(private readonly TradingPort $trading) {}
+    public function __construct(private readonly BitmartAccountGateway $trading) {}
 
     /**
      * @return array{qty: float, leverage: int, stop_pct: float, risk_used: float, caps: array<string, float>}

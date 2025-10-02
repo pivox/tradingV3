@@ -21,6 +21,8 @@ use Symfony\Contracts\HttpClient\ResponseInterface;
 final class BitmartHttpClientPublic
 {
     private const TIMEOUT  = 10.0; // seconds
+    private const RETRY_COUNT = 1;
+    private const RETRY_DELAY_MS = 200;
 
     public function __construct(
         private readonly HttpClientInterface $bitmartFuturesV2, // http_client.bitmart_futures_v2
@@ -33,12 +35,27 @@ final class BitmartHttpClientPublic
      */
     public function getSystemTimeMs(): int
     {
-        $resp = $this->bitmartSystem->request('GET', '/system/time');
-        $json = $resp->toArray(false);
-        if (($json['code'] ?? null) !== 1000 || !isset($json['data']['server_time'])) {
-            throw new \RuntimeException('BitMart: /system/time invalide');
-        }
-        return (int) $json['data']['server_time'];
+        $attempt = 0;
+        do {
+            try {
+                $resp = $this->bitmartSystem->request('GET', '/system/time', [
+                    'timeout' => self::TIMEOUT,
+                ]);
+                $json = $resp->toArray(false);
+                if (($json['code'] ?? null) !== 1000 || !isset($json['data']['server_time'])) {
+                    throw new \RuntimeException('BitMart: /system/time invalide');
+                }
+                return (int) $json['data']['server_time'];
+            } catch (TransportExceptionInterface|ServerExceptionInterface|TimeoutExceptionInterface $e) {
+                if ($attempt >= self::RETRY_COUNT) {
+                    throw $e;
+                }
+                usleep(self::RETRY_DELAY_MS * 1000);
+            }
+            $attempt++;
+        } while ($attempt <= self::RETRY_COUNT);
+
+        throw new \RuntimeException('BitMart: /system/time unreachable after retries');
     }
 
     /**
@@ -65,17 +82,32 @@ final class BitmartHttpClientPublic
         int $limit   = 100
     ): FuturesKlineCollection {
         $stepMinutes = GranularityHelper::normalizeToMinutes($step);
-        $stepSec     = $stepMinutes * 60;
         $nowSec      = (int) floor($this->getSystemTimeMs() / 1000);
 
-        // borne supérieure alignée = début tranche courante
-        $currentOpen = intdiv($nowSec, $stepSec) * $stepSec;
+        [$defaultFrom, $computedLastClose, $stepSec] = $this->computeWindow($nowSec, $stepMinutes, $limit);
 
-        if ($toTs === null) {
-            $toTs = $currentOpen; // par défaut jusqu'à maintenant aligné
+        $targetLastClose = $computedLastClose;
+        if ($toTs !== null) {
+            $alignedTo = $this->alignDown($toTs, $stepSec);
+            $targetLastClose = min($alignedTo, $computedLastClose);
         }
+
         if ($fromTs === null) {
-            $fromTs = $toTs - $limit * $stepSec;
+            $fromTs = $defaultFrom;
+        } else {
+            if ($fromTs > $targetLastClose) {
+                $fromTs = $targetLastClose - ($limit * $stepSec);
+            }
+            $fromTs = $this->alignDown($fromTs, $stepSec);
+        }
+
+        if ($fromTs < 0) {
+            $fromTs = 0;
+        }
+
+        $requestEnd = $targetLastClose + $stepSec;
+        if ($requestEnd <= $fromTs) {
+            $requestEnd = $fromTs + $stepSec;
         }
 
         $payload = $this->bitmartFuturesV2->request('GET', '/contract/public/kline', [
@@ -83,17 +115,31 @@ final class BitmartHttpClientPublic
                 'symbol'     => $symbol,
                 'step'       => $stepMinutes,
                 'start_time' => $fromTs,
-                'end_time'   => $toTs,
+                'end_time'   => $requestEnd,
             ],
         ])->toArray(false);
 
         if (($payload['code'] ?? null) !== 1000 || !isset($payload['data']) || !\is_array($payload['data'])) {
-            throw new \RuntimeException('BitMart: réponse kline invalide');
+            $code   = $payload['code'] ?? 'unknown';
+            $msg    = $payload['message'] ?? 'unknown';
+            $count  = \is_array($payload['data'] ?? null) ? \count($payload['data']) : 0;
+            $detail = sprintf(
+                'BitMart: réponse kline invalide (symbol=%s, step=%s, start_time=%d, end_time=%d, targetLastClose=%d, data_count=%d, code=%s, message=%s)',
+                $symbol,
+                (string) $stepMinutes,
+                (int) $fromTs,
+                (int) $requestEnd,
+                (int) $targetLastClose,
+                $count,
+                (string) $code,
+                (string) $msg,
+            );
+            throw new \RuntimeException($detail);
         }
 
         // ⚠️ Filtrage : enlève la bougie courante non close
-        $filtered = array_filter($payload['data'], function (array $row) use ($currentOpen) {
-            return (int) $row['timestamp'] < $currentOpen;
+        $filtered = array_filter($payload['data'], static function (array $row) use ($targetLastClose) {
+            return (int) $row['timestamp'] <= $targetLastClose;
         });
 
         $items = array_map(
@@ -140,6 +186,49 @@ final class BitmartHttpClientPublic
             'limit'  => $limit,
         ]);
         return $payload['data'] ?? [];
+    }
+
+    /**
+     * GET /contract/public/markprice-kline
+     * Retourne la liste des mark price klines (non typée).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getMarkPriceKline(string $symbol, int $step = 1, int $limit = 1, ?int $startTime = null, ?int $endTime = null): array
+    {
+        $query = [
+            'symbol' => $symbol,
+            'step'   => $step,
+            'limit'  => $limit,
+        ];
+        if ($startTime !== null) {
+            $query['start_time'] = $startTime;
+        }
+        if ($endTime !== null) {
+            $query['end_time'] = $endTime;
+        }
+
+        $payload = $this->requestJson('GET', '/contract/public/markprice-kline', $query);
+        $data = $payload['data'] ?? [];
+        return \is_array($data) ? $data : [];
+    }
+
+    /**
+     * GET /contract/public/leverage-bracket
+     * @return array<int, array<string, mixed>>
+     */
+    public function getLeverageBrackets(string $symbol): array
+    {
+        $payload = $this->requestJson('GET', '/contract/public/leverage-bracket', [
+            'symbol' => $symbol,
+        ]);
+
+        $data = $payload['data'] ?? [];
+        if (isset($data['brackets']) && \is_array($data['brackets'])) {
+            return $data['brackets'];
+        }
+
+        return \is_array($data) ? $data : [];
     }
 
     public function getContractDetails(?string $symbol = null): ContractDetailsCollection
@@ -205,5 +294,30 @@ final class BitmartHttpClientPublic
         }
 
         return $json;
+    }
+
+    /**
+     * Calque computeWindow() pour déterminer la dernière clôture terminée.
+     */
+    private function computeWindow(int $nowTs, int $stepMinutes, int $limit): array
+    {
+        $stepSec   = $stepMinutes * 60;
+        $lastClose = intdiv($nowTs, $stepSec) * $stepSec;
+        if ($nowTs === $lastClose) {
+            $lastClose -= $stepSec;
+        }
+
+        $count = max(1, $limit);
+        $firstOpen = $lastClose - ($count * $stepSec);
+        if ($count > 1) {
+            $firstOpen += $stepSec;
+        }
+
+        return [$firstOpen, $lastClose, $stepSec];
+    }
+
+    private function alignDown(int $timestamp, int $stepSec): int
+    {
+        return intdiv($timestamp, $stepSec) * $stepSec;
     }
 }

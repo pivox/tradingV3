@@ -79,14 +79,16 @@ class KlineRepository extends ServiceEntityRepository
 
     public function findRecentBySymbolAndTimeframe(string $symbol, string $timeframe, int $limit)
     {
-        $x = $this->createQueryBuilder('k')
+        $query = $this->createQueryBuilder('k')
             ->innerJoin('k.contract', 'contract')
             ->where('contract.symbol = :symbol')->setParameter('symbol', $symbol)
             ->andWhere('k.step = :step')->setParameter('step', $this->stepFor($timeframe))
             ->orderBy('k.timestamp', 'DESC')
             ->setMaxResults($limit)
             ->getQuery();
-            return $x->getResult();
+
+        // Remonte les dernières bougies puis remet l'ordre chronologique croissant.
+        return array_reverse($query->getResult());
     }
 
     private function stepFor(string $timeframe): int

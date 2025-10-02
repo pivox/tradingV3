@@ -52,6 +52,7 @@ final class BitmartOrchestrator
         ?\DateTimeInterface $start = null,
         ?\DateTimeInterface $end   = null,
         ?string $note = null,
+        ?string $batchId = null,
     ): void {
         $startTs = $start->getTimestamp();
         $endTs   = $end->getTimestamp();
@@ -65,18 +66,24 @@ final class BitmartOrchestrator
                 'contract'   => $contract,
                 'timeframe'  => $timeframe,
                 'limit'      => $limit,
-                // ⬇️ nouvelle stratégie: fenêtre explicite
                 'start'   => $start->format('Y-m-d H:i:s'),
                  'end'     => $end->format('Y-m-d H:i:s'),
                 'start_ts'   => $startTs,
                 'end_ts'     => $endTs,
                 'note'       => $note,
+                'batch_id'   => $batchId,
             ],
         ];
         if (!$this->workflowRef) {
             $this->workflowRef = $ref;
         }
 
+    }
+
+    public function reset(): void
+    {
+        $this->envelopes = [];
+        $this->workflowRef = null;
     }
 
     public function go() {
@@ -92,53 +99,11 @@ final class BitmartOrchestrator
             }
             $envelopes[$key][] = $envelope;
         }
-//        dd($envelopes, $this->envelopes);
 
         $this->gateway->ensureWorkflowRunning($this->workflowRef);
         $this->gateway->sendSignal($this->workflowRef, new SignalPayload('submit', $envelopes));
         $this->envelopes = [];
         $this->workflowRef = null;
-    }
-
-    /**
-     * Déclenche le fetch de klines pour plusieurs contrats (même fenêtre pour tous).
-     *
-     * @param \DateTimeInterface|int $start
-     * @param \DateTimeInterface|int $end
-     */
-    public function requestGetKlinesForManyContracts(
-        WorkflowRef $ref,
-        string $baseUrl,
-        string $callback,
-        array $contracts,
-        string $timeframe = '4h',
-        int $limit = 100,
-        \DateTimeInterface|int $start = 0,
-        \DateTimeInterface|int $end   = 0,
-        ?string $note = null,
-    ): array {
-        $startTs = is_int($start) ? $start : $start->getTimestamp();
-        $endTs   = is_int($end)   ? $end   : $end->getTimestamp();
-
-        $envelopes = [];
-        foreach ($contracts as $contract) {
-            $envelopes[] = [
-                'url_type'     => 'get kline',
-                'url_callback' => $callback,
-                'base_url'     => $baseUrl,
-                'payload'      => [
-                    'source'     => 'bitmart',
-                    'contract'   => $contract,
-                    'timeframe'  => $timeframe,
-                    'limit'      => $limit,
-                    'start_ts'   => $startTs,
-                    'end_ts'     => $endTs,
-                    'note'       => $note,
-                ],
-            ];
-        }
-        $this->gateway->ensureWorkflowRunning($ref);
-        return $this->gateway->sendSignal($ref, new SignalPayload('submit', [$this->getPrioKey($timeframe) => $envelopes]));
     }
 
     public function setWorkflowRef(WorkflowRef $workflowRef): self

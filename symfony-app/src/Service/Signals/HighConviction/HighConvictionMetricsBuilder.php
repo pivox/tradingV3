@@ -31,6 +31,7 @@ final class HighConvictionMetricsBuilder
     // Paramètres par défaut
     private const ATR_LOOKBACK     = 14;
     private const ATR_METHOD       = 'wilder';
+    private const ATR_TIMEFRAME    = '5m';
     private const K_STOP           = 1.5;   // SL = entry +/- K * ATR
     private const R_MULTIPLE       = 2.0;   // TP = entry +/- R * (entry - SL)
     private const RISK_MAX_PCT     = 0.07;  // 7% sur la marge (comme ton openLimitAutoLevWithSr)
@@ -83,6 +84,18 @@ final class HighConvictionMetricsBuilder
             return ['metrics' => [], 'context' => []];
         }
 
+        $atrSeries = $this->selectAtrSeries($ohlc1h, $ohlc15m, $ohlc5m, $ohlc1m);
+        if (count($atrSeries) <= self::ATR_LOOKBACK) {
+            $this->highconviction->error('Série ATR insuffisante', [
+                'symbol'   => $symbol,
+                'tf'       => self::ATR_TIMEFRAME,
+                'count'    => count($atrSeries),
+                'lookback' => self::ATR_LOOKBACK
+            ]);
+            return ['metrics' => [], 'context' => []];
+        }
+        $atrValue = $this->atrCalculator->compute($atrSeries, self::ATR_LOOKBACK, self::ATR_METHOD);
+
         // 2) Entry (si absent) : fallback sur VWAP 15m
         if ($entry === null) {
             if (self::VWAP_FALLBACK) {
@@ -105,6 +118,7 @@ final class HighConvictionMetricsBuilder
         // 3) SL depuis S/R + ATR (comme dans ta logique SR)
         //    On récupère S/R via SrRiskHelper (sur 15m), ATR pour la sécurité.
         $sr = $this->srRiskHelper::findSupportResistance($ohlc15m);
+        $sr['atr'] = $atrValue;
         $slRaw = $this->srRiskHelper::chooseSlFromSr(
             $sideUpper,
             $entry,
@@ -113,13 +127,12 @@ final class HighConvictionMetricsBuilder
             $sr['atr'] ?? null // ton helper peut déjà intégrer l’ATR interne
         );
 
-        // Sécurité si helper ne renvoie rien : SL = entry +/- K*ATR(15m)
+        // Sécurité si helper ne renvoie rien : SL = entry +/- K*ATR (tf dédié)
         if (!is_finite($slRaw)) {
-            $atr15 = $this->atrCalculator->compute($ohlc15m, self::ATR_LOOKBACK, self::ATR_METHOD);
             $k = self::K_STOP;
-            $slRaw = ($sideUpper === 'LONG') ? ($entry - $k * $atr15) : ($entry + $k * $atr15);
+            $slRaw = ($sideUpper === 'LONG') ? ($entry - $k * $atrValue) : ($entry + $k * $atrValue);
             $this->highconviction->warning('[HC] SL fallback ATR', [
-                'symbol' => $symbol, 'entry' => $entry, 'atr15' => $atr15, 'k' => $k, 'sl' => $slRaw
+                'symbol' => $symbol, 'entry' => $entry, 'atr' => $atrValue, 'atr_tf' => self::ATR_TIMEFRAME, 'k' => $k, 'sl' => $slRaw
             ]);
         }
         $sl = $slRaw;
@@ -144,6 +157,8 @@ final class HighConvictionMetricsBuilder
             'lev_opt'    => $levOpt,
             'risk_max%'  => $riskMaxPct,
             'r_multiple' => $rMultiple,
+            'atr'        => $atrValue,
+            'atr_tf'     => self::ATR_TIMEFRAME,
         ]);
 
         // 6) Construction finale des métriques via HighConvictionMetrics
@@ -178,7 +193,7 @@ final class HighConvictionMetricsBuilder
                 'lev_opt'   => $levOpt,
                 'risk_max%' => $riskMaxPct,
                 'r_multiple'=> $rMultiple,
-                'sr'        => $sr,
+                'sr'        => array_merge($sr, ['atr_tf' => self::ATR_TIMEFRAME]),
             ],
         ];
     }
@@ -208,6 +223,24 @@ final class HighConvictionMetricsBuilder
             $out[] = compact('open','high','low','close','volume','timestamp');
         }
         return $out;
+    }
+
+    /**
+     * @param array<int, array{open:float,high:float,low:float,close:float,volume:float,timestamp:int}> $ohlc1h
+     * @param array<int, array{open:float,high:float,low:float,close:float,volume:float,timestamp:int}> $ohlc15m
+     * @param array<int, array{open:float,high:float,low:float,close:float,volume:float,timestamp:int}> $ohlc5m
+     * @param array<int, array{open:float,high:float,low:float,close:float,volume:float,timestamp:int}> $ohlc1m
+     * @return array<int, array{open:float,high:float,low:float,close:float,volume:float,timestamp:int}>
+     */
+    private function selectAtrSeries(array $ohlc1h, array $ohlc15m, array $ohlc5m, array $ohlc1m): array
+    {
+        return match (self::ATR_TIMEFRAME) {
+            '1h'  => $ohlc1h,
+            '15m' => $ohlc15m,
+            '5m'  => $ohlc5m,
+            '1m'  => $ohlc1m,
+            default => $ohlc15m,
+        };
     }
 
     private function lastOrNan(array $series): float

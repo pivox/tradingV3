@@ -2,12 +2,11 @@
 
 namespace App\Command;
 
+use App\Entity\ContractPipeline;
 use App\Repository\ContractPipelineRepository;
-use App\Service\Account\Bitmart\BitmartFuturesClient;
+use App\Service\Trading\OpenedLockedSyncService;
 use App\Service\Trading\PositionEvaluator;
 use App\Service\Trading\PositionFetcher;
-use Doctrine\ORM\EntityManagerInterface;
-use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -24,27 +23,33 @@ class EvaluateOpenPositionsCommand extends Command
         private readonly ContractPipelineRepository $pipelineRepo,
         private readonly PositionFetcher $positionFetcher,
         private readonly PositionEvaluator $positionEvaluator,
-        private readonly EntityManagerInterface $em,
-        private BitmartFuturesClient $futuresClient, // <-- injection du client authentifié
+        private readonly OpenedLockedSyncService $openedLockedSync
     ) {
         parent::__construct();
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-
         $io = new SymfonyStyle($input, $output);
 
+        $syncResult = $this->openedLockedSync->sync();
+        if (!empty($syncResult['removed_symbols']) || !empty($syncResult['cleared_order_ids'])) {
+            $io->comment(sprintf(
+                'Sync unlocked %d pipelines; cleared order ids for %d symbol(s).',
+                count($syncResult['removed_symbols']),
+                count($syncResult['cleared_order_ids'])
+            ));
+        }
+
         // 1) Récupérer les pipelines "lockés" (OPENED_LOCKED)
-        $openPipes = $this->pipelineRepo->findBy(['status' => 'OPENED_LOCKED']);
+        $openPipes = $this->pipelineRepo->findBy(['status' => ContractPipeline::STATUS_OPENED_LOCKED]);
         if (!$openPipes) {
             $io->success('Aucune position ouverte trouvée dans le pipeline.');
             return Command::SUCCESS;
         }
 
         foreach ($openPipes as $pipe) {
-            $contract = $pipe->getContract();
-            $symbol   = $contract->getSymbol();
+            $symbol = $pipe->getContract()->getSymbol();
 
             $io->section("Contrat $symbol");
 
@@ -54,6 +59,27 @@ class EvaluateOpenPositionsCommand extends Command
             if (!$position) {
                 $io->warning("Pas de position trouvée pour $symbol (peut-être fermée).");
                 continue;
+            }
+
+            $contractSize = (float) ($pipe->getContract()->getContractSize() ?? 1.0);
+            if ($contractSize <= 0) {
+                $contractSize = 1.0;
+            }
+
+            $contractsQty = (float)($position->quantity ?? 0.0);
+            $baseQty = $contractsQty * $contractSize;
+
+            $position->contractSize = $contractSize;
+            $position->contractsQty = $contractsQty;
+            $position->baseQuantity = $baseQty;
+
+            if ((!isset($position->margin) || $position->margin === null || $position->margin === 0.0)
+                && ($position->entryPrice ?? 0) > 0 && ($position->leverage ?? 0) > 0
+            ) {
+                $notional = $baseQty * (float)$position->entryPrice;
+                if ($notional > 0) {
+                    $position->margin = $notional / (float)$position->leverage;
+                }
             }
 
             // 3) Évaluer la position (PnL, risque, invalidation…)
@@ -86,6 +112,11 @@ class EvaluateOpenPositionsCommand extends Command
             $marge = $position->margin ?? null; // ex: notional/leverage
             $roiOnMargin = ($marge && $marge > 0) ? $fmtPct(($eval['pnl'] / $marge) * 100) : 'n/a';
 
+            $qtyDisplay = $fmtNum($baseQty, $baseQty >= 1 ? 0 : 4);
+            if ($contractSize !== 1.0) {
+                $qtyDisplay .= sprintf(' (%s cts)', $fmtNum($contractsQty, $contractsQty >= 1 ? 0 : 4));
+            }
+
 // temps en position formaté
             $time = 'n/a';
             if (!empty($eval['time_in_position_s'])) {
@@ -107,7 +138,7 @@ class EvaluateOpenPositionsCommand extends Command
                 ],
                 [[
                     $position->side,
-                    $position->quantity,
+                    $qtyDisplay,
                     $fmtNum($position->entryPrice, $position->entryPrice > 100 ? 2 : 4),
                     $fmtNum($position->markPrice,  $position->markPrice  > 100 ? 2 : 4),
 

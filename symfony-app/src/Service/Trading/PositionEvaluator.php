@@ -8,10 +8,16 @@ class PositionEvaluator
     {
         // Sécurité: valeurs attendues
         $side     = strtoupper($position->side ?? 'UNKNOWN'); // LONG | SHORT
-        $qty      = (float)($position->quantity ?? 0);
+        $qtyContracts = (float)($position->quantity ?? 0);
         $entry    = (float)($position->entryPrice ?? 0);
         $mark     = (float)($position->markPrice ?? 0);
         $lev      = (float)($position->leverage ?? 1.0);
+        $contractSize = (float)($position->contractSize ?? 1.0);
+        if ($contractSize <= 0) {
+            $contractSize = 1.0;
+        }
+
+        $qty = $qtyContracts * $contractSize;
 
         // 1) PnL absolu (contrats * variation) en tenant compte du côté
         $direction = ($side === 'LONG') ? 1 : (($side === 'SHORT') ? -1 : 0);

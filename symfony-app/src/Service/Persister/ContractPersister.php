@@ -26,6 +26,7 @@ class ContractPersister
             $contract = (new Contract())->setSymbol($dto->symbol);
             $this->em->persist($contract);
         }
+        // TODO: ne pas persister en base les contrats dont le volume 24h est nul (volume24h == 0)
 
         // 3) Conversions helpers
         $msToDate = function (?int $ms): ?\DateTimeImmutable {
