@@ -106,10 +106,6 @@ const PipelinePage = () => {
         return enriched;
     };
 
-    const toggleViewMode = () => {
-        setViewMode((current) => (current === 'cards' ? 'table' : 'cards'));
-    };
-
     const pipelinesForDisplay = useMemo(() => pipelines, [pipelines]);
 
     return (
