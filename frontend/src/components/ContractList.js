@@ -57,12 +57,18 @@ const ContractList = ({ contracts, onSelect, selectedContract }) => {
                 </button>
             </div>
             <ul className="contract-list">
-                {sortedContracts.map(contract => (
-                    <li
-                        key={contract.id}
-                        onClick={() => onSelect(contract)}
-                        className={selectedContract && selectedContract.id === contract.id ? 'selected' : ''}
-                    >
+                {sortedContracts.map(contract => {
+                    const contractKey = contract.id ?? contract.symbol;
+                    const isSelected = selectedContract
+                        ? (selectedContract.id ?? selectedContract.symbol) === contractKey
+                        : false;
+
+                    return (
+                        <li
+                            key={contractKey}
+                            onClick={() => onSelect(contract)}
+                            className={isSelected ? 'selected' : ''}
+                        >
                         <div className="contract-item">
                             <span className="contract-symbol">{contract.symbol}</span>
                             <span className="contract-details">
@@ -70,8 +76,9 @@ const ContractList = ({ contracts, onSelect, selectedContract }) => {
                 <span className="contract-score">Score: {contract.score}</span>
               </span>
                         </div>
-                    </li>
-                ))}
+                        </li>
+                    );
+                })}
             </ul>
         </div>
     );

@@ -8,50 +8,100 @@ const ContractDetailPage = () => {
     const { id } = useParams();
     const [contract, setContract] = useState(null);
     const [positions, setPositions] = useState([]);
-    const [chartData, setChartData] = useState([]);
     const [timeframe, setTimeframe] = useState('1h');
-    const [setups, setSetups] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [chartData, setChartData] = useState([]);
+    const [chartLoading, setChartLoading] = useState(false);
+    const [chartError, setChartError] = useState(null);
 
-    // Charger les détails du contrat
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                setLoading(true);
-                const contractData = await api.getContract(id);
-                setContract(contractData);
+        let cancelled = false;
 
-                // Charger données additionnelles
-                const [positionsData, klinesData, setupsData] = await Promise.all([
-                    api.getPositions({ contract: id }),
-                    api.getKlines(id, timeframe),
-                    api.getSetups(id)
+        const fetchDetails = async () => {
+            setLoading(true);
+            try {
+                const [contractData, positionsData] = await Promise.all([
+                    api.getContract(id),
+                    api.getPositions({ contract: id })
                 ]);
 
-                setPositions(positionsData);
-                setChartData(klinesData);
-                setSetups(setupsData);
+                if (cancelled) {
+                    return;
+                }
+
+                setContract(contractData);
+                setPositions(Array.isArray(positionsData) ? positionsData : []);
                 setError(null);
             } catch (err) {
-                setError(`Erreur de chargement des données: ${err.message}`);
-                console.error(err);
+                if (!cancelled) {
+                    setError(`Erreur de chargement des données: ${err.message}`);
+                    console.error(err);
+                }
             } finally {
-                setLoading(false);
+                if (!cancelled) {
+                    setLoading(false);
+                }
             }
         };
 
-        fetchData();
+        fetchDetails();
+
+        return () => {
+            cancelled = true;
+        };
     }, [id]);
 
-    // Recharger les klines quand le timeframe change
     useEffect(() => {
-        if (contract) {
-            api.getKlines(id, timeframe)
-                .then(data => setChartData(data))
-                .catch(err => console.error('Erreur lors du chargement des klines:', err));
+        const contractId = contract ? (contract.id ?? contract.symbol) : id;
+        if (!contractId) {
+            setChartData([]);
+            setChartLoading(false);
+            setChartError(null);
+            return;
         }
-    }, [timeframe, id, contract]);
+
+        let cancelled = false;
+        setChartLoading(true);
+        setChartError(null);
+
+        api.getKlines(contractId, timeframe)
+            .then(data => {
+                if (!cancelled) {
+                    setChartData(Array.isArray(data) ? data : []);
+                }
+            })
+            .catch(err => {
+                if (!cancelled) {
+                    console.error('Erreur lors du chargement des klines:', err);
+                    setChartData([]);
+                    setChartError('Impossible de charger les données du graphique');
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setChartLoading(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [id, contract, timeframe]);
+
+    const formatNumber = (value, options = {}) => {
+        if (value === null || value === undefined || Number.isNaN(Number(value))) {
+            return '-';
+        }
+        const {
+            maximumFractionDigits = 4,
+            minimumFractionDigits = 0
+        } = options;
+        return new Intl.NumberFormat('fr-FR', {
+            minimumFractionDigits,
+            maximumFractionDigits
+        }).format(Number(value));
+    };
 
     if (loading) {
         return <div className="loading">Chargement des données...</div>;
@@ -71,13 +121,13 @@ const ContractDetailPage = () => {
 
             <div className="contract-info">
                 <div>
-                    <strong>Prix:</strong> {contract.price}
+                    <strong>Prix:</strong> {formatNumber(contract.price, { maximumFractionDigits: 6 })}
                 </div>
                 <div>
-                    <strong>Volume:</strong> {contract.volume}
+                    <strong>Volume:</strong> {formatNumber(contract.volume)}
                 </div>
                 <div>
-                    <strong>Score:</strong> {contract.score}
+                    <strong>Score:</strong> {contract.score ?? '-'}
                 </div>
                 <div>
                     <strong>Exchange:</strong> {contract.exchange}
@@ -85,23 +135,15 @@ const ContractDetailPage = () => {
             </div>
 
             <div className="chart-container">
-                <div className="timeframe-selector">
-                    {['15m', '1h', '4h', '1d'].map(tf => (
-                        <button
-                            key={tf}
-                            className={timeframe === tf ? 'active' : ''}
-                            onClick={() => setTimeframe(tf)}
-                        >
-                            {tf}
-                        </button>
-                    ))}
-                </div>
-
-                {chartData.length > 0 ? (
-                    <CandleChart data={chartData} setups={setups} />
-                ) : (
-                    <div className="no-data">Pas de données disponibles pour ce graphique</div>
-                )}
+                {chartError && <div className="error">{chartError}</div>}
+                <CandleChart
+                    contractId={contract.id ?? contract.symbol}
+                    data={chartData}
+                    timeframe={timeframe}
+                    onTimeframeChange={setTimeframe}
+                    loading={chartLoading}
+                    emptyMessage="Pas de données disponibles pour ce graphique"
+                />
             </div>
 
             <h2>Positions</h2>
@@ -109,31 +151,53 @@ const ContractDetailPage = () => {
                 <table className="positions-table">
                     <thead>
                     <tr>
+                        <th>Source</th>
                         <th>Type</th>
+                        <th>Quantité</th>
                         <th>Prix d'entrée</th>
-                        <th>Prix de sortie</th>
+                        <th>Mark</th>
                         <th>Date d'ouverture</th>
-                        <th>Date de fermeture</th>
                         <th>Statut</th>
+                        <th>ROI</th>
                         <th>P&L</th>
                     </tr>
                     </thead>
                     <tbody>
                     {positions.map(position => (
                         <tr
-                            key={position.id}
-                            className={position.type === 'long' ? 'long' : 'short'}
+                            key={`${position.source || 'db'}-${position.id}`}
+                            className={position.type === 'long' ? 'long' : position.type === 'short' ? 'short' : ''}
                         >
-                            <td>{position.type === 'long' ? 'LONG' : 'SHORT'}</td>
-                            <td>{position.entry_price}</td>
-                            <td>{position.exit_price || '-'}</td>
-                            <td>{new Date(position.open_date).toLocaleString()}</td>
-                            <td>{position.close_date ? new Date(position.close_date).toLocaleString() : '-'}</td>
-                            <td className={`status-${position.status}`}>
-                                {position.status === 'open' ? 'Ouverte' : 'Fermée'}
+                            <td className={`badge badge-${position.source || 'database'}`}>
+                                {position.source === 'exchange' ? 'Exchange' : 'Historique'}
                             </td>
-                            <td className={position.pnl > 0 ? 'profit' : position.pnl < 0 ? 'loss' : ''}>
-                                {position.pnl ? `${position.pnl.toFixed(2)}%` : '-'}
+                            <td>{position.type ? position.type.toUpperCase() : '-'}</td>
+                            <td>
+                                {formatNumber(position.qty_base ?? position.qty_contract, { maximumFractionDigits: 3 })}
+                                {position.qty_contract && position.qty_base && position.qty_base !== position.qty_contract && (
+                                    <span className="contract-sub-info"> ({formatNumber(position.qty_contract, { maximumFractionDigits: 3 })} cts)</span>
+                                )}
+                            </td>
+                            <td>{formatNumber(position.entry_price)}</td>
+                            <td>{formatNumber(position.mark_price)}</td>
+                            <td>{position.open_date ? new Date(position.open_date).toLocaleString() : '-'}</td>
+                            <td className={`status-${position.status}`}>
+                                {position.status ? position.status.toUpperCase() : '-'}
+                            </td>
+                            <td title={position.price_change_pct !== undefined ? `Δ prix: ${formatNumber(position.price_change_pct, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}%` : undefined}>
+                                {position.roi_pct !== null && position.roi_pct !== undefined
+                                    ? `${formatNumber(position.roi_pct, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}%`
+                                    : '-'}
+                            </td>
+                            <td
+                                className={position.pnl > 0 ? 'profit' : position.pnl < 0 ? 'loss' : ''}
+                                title={position.pnl_usdt !== null && position.pnl_usdt !== undefined
+                                    ? `${formatNumber(position.pnl_usdt, { maximumFractionDigits: 2, minimumFractionDigits: 2 })} USDT`
+                                    : undefined}
+                            >
+                                {position.pnl !== null && position.pnl !== undefined
+                                    ? `${formatNumber(position.pnl, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}%`
+                                    : '-'}
                             </td>
                         </tr>
                     ))}
