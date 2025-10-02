@@ -12,6 +12,9 @@ parameters:
     liquidation_guard.min_ratio: 3.0
     liquidation_guard.fallback_max_leverage: 10.0
     bitmart.base_url: '%env(default::BITMART_BASE_URL)%'
+    trading.account.default_user: 'system'
+    trading.account.exchange: 'bitmart'
+    high_conviction.trace_path: '%kernel.project_dir%/var/log/high_conviction_traces.jsonl'
 
 
     # Path to strategy YAML (also set in packages/scalping.yaml)
@@ -107,6 +110,11 @@ services:
             $contractRepository: '@App\Repository\ContractRepository'
 
     App\Service\Trading\BitmartAccountGateway: '@App\Service\Trading\BitmartAccountService'
+
+    App\Service\Trading\BitmartAccountService:
+        arguments:
+            $defaultUserId: '%trading.account.default_user%'
+            $exchangeName: '%trading.account.exchange%'
 
     App\Service\Config\BitmartConfig:
         arguments:
