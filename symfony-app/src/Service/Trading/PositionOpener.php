@@ -5,19 +5,22 @@ namespace App\Service\Trading;
 
 use App\Entity\ContractPipeline;
 use App\Repository\ContractPipelineRepository;
+use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Service\Config\TradingParameters;
 use App\Service\Indicator\AtrCalculator;
 use App\Util\SrRiskHelper;
 use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
-use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Throwable;
 use RuntimeException;
+use App\Bitmart\Http\BitmartHttpClientPublic;
+use App\Service\Bitmart\Private\OrdersService;
+use App\Service\Bitmart\Private\PositionsService as BitmartPositionsService;
+use App\Service\Bitmart\Private\TrailOrdersService;
 
 final class PositionOpener
 {
-    private const BASE = 'https://api-cloud-v2.bitmart.com';
 
     // --- Constantes spécifiques High Conviction ---
     private const HC_DEFAULT_LEV_CAP     = 50;   // levier max autorisé par la stratégie HC
@@ -26,16 +29,16 @@ final class PositionOpener
     private const HC_DEFAULT_EXPIRE_SEC  = 120;  // annulation auto (2 minutes)
 
     public function __construct(
-        private readonly HttpClientInterface $http,
-        private readonly string $apiKey,           // env: BITMART_ACCESS_KEY
-        private readonly string $secretKey,        // env: BITMART_SECRET_KEY
-        private readonly string $apiMemo,          // env: BITMART_API_MEMO
         private readonly AtrCalculator $atrCalculator,
         private readonly TradingParameters $tradingParameters,
         private readonly LoggerInterface $positionsLogger, // channel "positions"
         private readonly ContractPipelineRepository $pipelineRepository,
+        private readonly ContractRepository $contractRepository,
         private readonly KlineRepository $klineRepository,
-
+        private readonly OrdersService $ordersService,
+        private readonly BitmartPositionsService $bitmartPositions,
+        private readonly TrailOrdersService $trailOrders,
+        private readonly BitmartHttpClientPublic $bitmartPublic,
     ) {}
 
     /**
@@ -146,12 +149,27 @@ final class PositionOpener
             $riskPct       = (float)($cfg['risk']['pct'] ?? 0.02);
             $atrLookback   = (int)  ($cfg['atr']['lookback'] ?? 14);
             $atrMethod     = (string)($cfg['atr']['method'] ?? 'wilder');
+            $atrTimeframe  = (string)($cfg['atr']['timeframe'] ?? '15m');
             $atrKStop      = (float)($cfg['atr']['k_stop'] ?? 1.5);
             $tpRMultiple   = (float)($cfg['tp']['r_multiple'] ?? 2.0);
             $openType      = (string)($cfg['margin']['open_type'] ?? 'isolated');
 
+            if (\count($ohlc) === 0) {
+                $needed = max($atrLookback + 1, 120);
+                $ohlc = $this->klineRepository->findLastKlines(
+                    symbol: $symbol,
+                    timeframe: $atrTimeframe,
+                    limit: $needed
+                );
+                $this->positionsLogger->info('ATR OHLC source loaded', [
+                    'timeframe' => $atrTimeframe,
+                    'requested' => $needed,
+                    'actual'    => \count($ohlc)
+                ]);
+            }
+
             if (\count($ohlc) <= $atrLookback) {
-                throw new InvalidArgumentException("OHLC insuffisant pour ATR (lookback=$atrLookback)");
+                throw new InvalidArgumentException("OHLC insuffisant pour ATR (tf=$atrTimeframe, lookback=$atrLookback)");
             }
 
             /* ------------------ 2) Contract details ------------------ */
@@ -190,6 +208,7 @@ final class PositionOpener
             $this->positionsLogger->info('ATR preview SL/TP (will be overridden by absolute USDT after sizing)', [
                 'entry'     => $mark,
                 'atr'       => $atr,
+                'atr_tf'    => $atrTimeframe,
                 'k_stop'    => $atrKStop,
                 'stop_dist' => $stopDist,
                 'stop_pct'  => $stopPct,
@@ -214,7 +233,7 @@ final class PositionOpener
                 'factor_vs_current' => $factor,
             ]);
 
-            $this->setLeverage($symbol, $targetLev, $openType);
+            $this->bitmartPositions->setLeverage($symbol, $targetLev, $openType);
             $this->positionsLogger->info('Leverage set', [
                 'symbol'   => $symbol,
                 'leverage' => $targetLev,
@@ -285,7 +304,7 @@ final class PositionOpener
             ];
             $this->positionsLogger->info('Submitting market order', $bodyOpen);
 
-            $submit = $this->signedPost('/contract/private/submit-order', $bodyOpen);
+            $submit = $this->ordersService->create($bodyOpen);
             $this->positionsLogger->info('Market order response', $submit);
 
             if (($submit['code'] ?? 0) !== 1000) {
@@ -367,7 +386,7 @@ final class PositionOpener
         $limit = $this->quantizeToStep($mark, $tick);  // même logique que ta commande
 
         /* 3) Levier = 1 (fail suave si déjà réglé) */
-        try { $this->setLeverage($symbol, $leverage, 'isolated'); } catch (\Throwable) {}
+        try { $this->bitmartPositions->setLeverage($symbol, $leverage, 'isolated'); } catch (\Throwable) {}
 
         /* 4) Sizing : notional = marge×levier → contrats */
         $notional     = $marginUsdt * $leverage;
@@ -412,11 +431,28 @@ final class PositionOpener
             'preset_stop_loss_price'        => (string)$slQ,
             'stp_mode'                      => 1, // cancel_maker (optionnel)
         ];
-        $res = $this->signedPost('/contract/private/submit-order', $payload);
+        $res = $this->ordersService->create($payload);
         if (($res['code'] ?? 0) !== 1000) {
             throw new \RuntimeException('submit-order error: ' . json_encode($res, JSON_UNESCAPED_SLASHES));
         }
         $orderId = $res['data']['order_id'] ?? null;
+
+        // Persister l'orderId dans ContractPipeline
+        if ($orderId) {
+            try {
+                $this->pipelineRepository->updateOrderIdBySymbol($symbol, $orderId);
+                $this->positionsLogger->info('OrderId persisted in ContractPipeline', [
+                    'symbol' => $symbol,
+                    'order_id' => $orderId
+                ]);
+            } catch (\Throwable $e) {
+                $this->positionsLogger->warning('Failed to persist orderId in ContractPipeline', [
+                    'symbol' => $symbol,
+                    'order_id' => $orderId,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
 
         /* 7) (Optionnel) Position TP/SL “plan_category=2” */
         // Si tu veux la couche position en plus des presets:
@@ -576,8 +612,8 @@ final class PositionOpener
             'preset_stop_loss_price'        => (string)$slQ,
             'stp_mode'                      => 1,
         ];
-        $this->setLeverage($symbol, $leverage, 'isolated');
-        $res = $this->signedPost('/contract/private/submit-order', $payload);
+        $this->bitmartPositions->setLeverage($symbol, $leverage, 'isolated');
+        $res = $this->ordersService->create($payload);
         if (($res['code'] ?? 0) !== 1000) {
             throw new \RuntimeException('submit-order error: ' . json_encode($res, JSON_UNESCAPED_SLASHES));
         }
@@ -667,55 +703,39 @@ final class PositionOpener
 
     // ================= HTTP BitMart =================
 
-    /** Détails contrat — gère structure data[] vs data.symbols[] */
+    /** Détails contrat — récupère depuis la BDD (entité Contract) */
     private function getContractDetails(string $symbol): array
     {
-        $r = $this->http->request('GET', self::BASE . '/contract/public/details', [
-            'query' => ['symbol' => $symbol],
-        ])->toArray(false);
-
-        if (($r['code'] ?? 0) !== 1000) {
-            throw new RuntimeException('details error: ' . json_encode($r, JSON_UNESCAPED_SLASHES));
+        $contract = $this->contractRepository->find($symbol);
+        if (!$contract) {
+            throw new RuntimeException("Contract $symbol not found in database");
         }
-        $data = $r['data'] ?? [];
-        $rows = $data['symbols'] ?? $data;
 
-        if (is_array($rows)) {
-            foreach ($rows as $row) {
-                if (($row['symbol'] ?? null) === $symbol) {
-                    return $row;
-                }
-            }
-            // si un seul symbole est renvoyé
-            if (isset($rows['symbol'])) {
-                return $rows;
-            }
-            // fallback premier
-            $first = is_array($rows) ? reset($rows) : null;
-            if (is_array($first)) {
-                return $first;
-            }
-        }
-        throw new RuntimeException("details: symbole $symbol introuvable");
+        return [
+            'symbol' => $contract->getSymbol(),
+            'status' => $contract->getStatus(),
+            'price_precision' => $contract->getPricePrecision(),
+            'vol_precision' => $contract->getVolPrecision(),
+            'contract_size' => $contract->getContractSize(),
+            'min_volume' => $contract->getMinVolume(),
+            'max_volume' => $contract->getMaxVolume(),
+            'market_max_volume' => $contract->getMarketMaxVolume(),
+            'max_leverage' => $contract->getMaxLeverage(),
+            'min_leverage' => $contract->getMinLeverage(),
+        ];
     }
 
     /** MarkPrice K-line (step=1) → close_price de la dernière bougie */
     private function getMarkClose(string $symbol): float
     {
         $now = time();
-        $resp = $this->http->request('GET', self::BASE . '/contract/public/markprice-kline', [
-            'query' => [
-                'symbol'     => $symbol,
-                'step'       => 1,
-                'start_time' => $now - 120,
-                'end_time'   => $now,
-            ],
-        ])->toArray(false);
-
-        if (($resp['code'] ?? 0) !== 1000) {
-            throw new RuntimeException('markprice-kline error: ' . json_encode($resp, JSON_UNESCAPED_SLASHES));
-        }
-        $rows = $resp['data'] ?? [];
+        $rows = $this->bitmartPublic->getMarkPriceKline(
+            symbol: $symbol,
+            step: 1,
+            limit: 2,
+            startTime: $now - 120,
+            endTime: $now
+        );
         if (!$rows || !is_array($rows)) {
             throw new RuntimeException('markprice-kline: pas de données');
         }
@@ -731,13 +751,7 @@ final class PositionOpener
     private function getMaxLeverageFromBracketSafe(string $symbol, float $notional): ?int
     {
         try {
-            $r = $this->http->request('GET', self::BASE . '/contract/public/leverage-bracket', [
-                'query' => ['symbol' => $symbol],
-            ])->toArray(false);
-            if (($r['code'] ?? 0) !== 1000) {
-                return null;
-            }
-            $brackets = $r['data']['brackets'] ?? $r['data'] ?? [];
+            $brackets = $this->bitmartPublic->getLeverageBrackets($symbol);
             $maxLev = null;
             foreach ($brackets as $b) {
                 $cap = (float)($b['notional_cap'] ?? INF);
@@ -755,90 +769,18 @@ final class PositionOpener
     /** Règle le levier côté exchange (SIGNED) */
     private function setLeverage(string $symbol, int $leverage, string $openType = 'isolated'): void
     {
-        $payload = [
-            'symbol'    => $symbol,
-            'leverage'  => (string)$leverage,
+        $this->positionsLogger->info('submit-leverage payload', [
+            'symbol' => $symbol,
+            'leverage' => $leverage,
             'open_type' => $openType,
-        ];
-        $this->positionsLogger->info('submit-leverage payload', $payload);
+        ]);
 
-        $resp = $this->signedPost('/contract/private/submit-leverage', $payload);
+        $resp = $this->bitmartPositions->setLeverage($symbol, $leverage, $openType);
         $this->positionsLogger->info('submit-leverage response', $resp);
 
         if (($resp['code'] ?? 0) !== 1000) {
             throw new RuntimeException('submit-leverage error: ' . json_encode($resp, JSON_UNESCAPED_SLASHES));
         }
-    }
-
-    /** POST SIGNED (body JSON) */
-    private function signedPost(string $path, array $body): array
-    {
-        $json      = json_encode($body, JSON_UNESCAPED_SLASHES);
-        $timestamp = (string)round(microtime(true) * 1000);
-        $payload   = $timestamp . '#' . $this->apiMemo . '#' . $json;
-        $sign      = hash_hmac('sha256', $payload, $this->secretKey);
-
-        $this->positionsLogger->info('HTTP POST', [
-            'path'      => $path,
-            'body'      => $body,
-            'timestamp' => $timestamp,
-        ]);
-
-        $r = $this->http->request('POST', self::BASE . $path, [
-            'headers' => [
-                'Content-Type'   => 'application/json',
-                'X-BM-KEY'       => $this->apiKey,
-                'X-BM-TIMESTAMP' => $timestamp,
-                'X-BM-SIGN'      => $sign,
-            ],
-            'body' => $json,
-        ])->toArray(false);
-
-        if (($r['code'] ?? 0) !== 1000) {
-            $this->positionsLogger->error('HTTP POST API error', [
-                'path'   => $path,
-                'code'   => $r['code'] ?? null,
-                'resp'   => $r,
-            ]);
-        }
-        if (isset($body['symbol'])) {
-            $this->pipelineRepository->updateStatusBySymbol($body['symbol'], ContractPipeline::STATUS_FAILED);
-        }
-        return $r;
-    }
-
-    /** GET KEYED (sans body, signature courte) */
-    private function keyedGet(string $path, array $query): array
-    {
-        $timestamp = (string)round(microtime(true) * 1000);
-        $payload   = $timestamp . '#' . $this->apiMemo . '#';
-        $sign      = hash_hmac('sha256', $payload, $this->secretKey);
-
-        $this->positionsLogger->info('HTTP GET', [
-            'path'      => $path,
-            'query'     => $query,
-            'timestamp' => $timestamp,
-        ]);
-
-        $r = $this->http->request('GET', self::BASE . $path, [
-            'headers' => [
-                'X-BM-KEY'       => $this->apiKey,
-                'X-BM-TIMESTAMP' => $timestamp,
-                'X-BM-SIGN'      => $sign,
-            ],
-            'query' => $query,
-        ])->toArray(false);
-
-        if (($r['code'] ?? 0) !== 1000) {
-            $this->positionsLogger->error('HTTP GET API error', [
-                'path'   => $path,
-                'code'   => $r['code'] ?? null,
-                'resp'   => $r,
-                'symbol' => $query['symbol'] ?? null,
-                'order_id' => $query['order_id'] ?? null,
-            ]);
-        }
-        return $r;
     }
 
     /** Valide et normalise un plan-order TP/SL avant envoi */
@@ -891,7 +833,7 @@ final class PositionOpener
     {
         // essai #1 : tel quel
         $this->positionsLogger->info('PlanOrder try#1 JSON', ['json' => json_encode($payload, JSON_UNESCAPED_SLASHES)]);
-        $res = $this->signedPost('/contract/private/submit-plan-order', $payload);
+        $res = $this->trailOrders->create($payload);
         if (($res['code'] ?? 0) === 1000) return $res;
 
         $code = (int)($res['code'] ?? 0);
@@ -900,7 +842,7 @@ final class PositionOpener
         // essai #2 : switch category -> 'limit'
         $p2 = $payload; $p2['category'] = 'limit';
         $this->positionsLogger->info('PlanOrder try#2 JSON', ['json' => json_encode($p2, JSON_UNESCAPED_SLASHES)]);
-        $res2 = $this->signedPost('/contract/private/submit-plan-order', $p2);
+        $res2 = $this->trailOrders->create($p2);
         if (($res2['code'] ?? 0) === 1000) return $res2;
 
         $code2 = (int)($res2['code'] ?? 0);
@@ -909,7 +851,7 @@ final class PositionOpener
         // essai #3 : switch price_type -> 1 (last_price)
         $p3 = $p2; $p3['price_type'] = 1;
         $this->positionsLogger->info('PlanOrder try#3 JSON', ['json' => json_encode($p3, JSON_UNESCAPED_SLASHES)]);
-        $res3 = $this->signedPost('/contract/private/submit-plan-order', $p3);
+        $res3 = $this->trailOrders->create($p3);
         if (($res3['code'] ?? 0) === 1000) return $res3;
 
         $code3 = (int)($res3['code'] ?? 0);
@@ -918,7 +860,7 @@ final class PositionOpener
         // essai #4 : enlever plan_category
         $p4 = $p3; unset($p4['plan_category']);
         $this->positionsLogger->info('PlanOrder try#4 JSON', ['json' => json_encode($p4, JSON_UNESCAPED_SLASHES)]);
-        $res4 = $this->signedPost('/contract/private/submit-plan-order', $p4);
+        $res4 = $this->trailOrders->create($p4);
         if (($res4['code'] ?? 0) === 1000) return $res4;
 
         $this->positionsLogger->error('PlanOrder all tries failed', [
@@ -930,8 +872,19 @@ final class PositionOpener
     private function getCurrentLeverageSafe(string $symbol): int
     {
         try {
-            $pos = $this->keyedGet('/contract/private/position-v2', ['symbol' => $symbol]);
-            $lev = (int)($pos['data']['leverage'] ?? 0);
+            $resp = $this->bitmartPositions->list(['symbol' => $symbol]);
+            $data = $resp['data'] ?? null;
+
+            $leverage = null;
+            if (\is_array($data)) {
+                if (isset($data['leverage'])) {
+                    $leverage = (int)$data['leverage'];
+                } elseif (isset($data[0]['leverage'])) {
+                    $leverage = (int)$data[0]['leverage'];
+                }
+            }
+
+            $lev = $leverage ?? 0;
             return $lev > 0 ? $lev : 1;
         } catch (Throwable $e) {
             $this->positionsLogger->warning('getCurrentLeverageSafe failed, defaulting to 1', [
@@ -956,13 +909,12 @@ final class PositionOpener
             throw new \InvalidArgumentException('timeoutSeconds doit être >= 5 (ou 0 pour annuler le réglage)');
         }
 
-        $payload = [
+        $this->positionsLogger->info('Submitting cancel-all-after', [
+            'symbol' => $symbol,
             'timeout' => $timeoutSeconds,
-            'symbol'  => $symbol,
-        ];
-        $this->positionsLogger->info('Submitting cancel-all-after', $payload);
+        ]);
 
-        $res = $this->signedPost('/contract/private/cancel-all-after', $payload);
+        $res = $this->trailOrders->cancelAllAfter($symbol, $timeoutSeconds);
         $this->positionsLogger->info('cancel-all-after response', $res);
 
         if (($res['code'] ?? 0) !== 1000) {
@@ -1084,23 +1036,47 @@ final class PositionOpener
             'limit' => $limit
         ]);
 
+        $cfg = $this->tradingParameters->all();
+        $atrLookback  = (int)($cfg['atr']['lookback'] ?? 14);
+        $atrMethod    = (string)($cfg['atr']['method'] ?? 'wilder');
+        $atrTimeframe = (string)($cfg['atr']['timeframe'] ?? '5m');
+        $atrSeries = $this->klineRepository->findLastKlines(
+            symbol: $symbol,
+            timeframe: $atrTimeframe,
+            limit: max($atrLookback + 1, 200)
+        );
+        if (count($atrSeries) <= $atrLookback) {
+            $this->positionsLogger->error('[SR] Pas assez de bougies pour l\'ATR', [
+                'timeframe' => $atrTimeframe,
+                'count'     => count($atrSeries),
+                'lookback'  => $atrLookback
+            ]);
+            throw new \RuntimeException("Not enough OHLC for ATR ($symbol tf=$atrTimeframe)");
+        }
+        $atrValue = $this->atrCalculator->compute($atrSeries, $atrLookback, $atrMethod);
+        $this->positionsLogger->info('[SR] ATR source', [
+            'timeframe' => $atrTimeframe,
+            'lookback'  => $atrLookback,
+            'atr'       => $atrValue
+        ]);
+
         $this->positionsLogger->info('[SR] Étape 3: Chargement des klines pour S/R', [
             'symbol' => $symbol
         ]);
-        $klines = $this->klineRepository->findLastKlines(
+        $klines15m = $this->klineRepository->findLastKlines(
             symbol: $symbol,
             timeframe: '15m',
             limit: 200
         );
 
-        if (count($klines) < 50) {
+        if (count($klines15m) < 50) {
             $this->positionsLogger->error('[SR] Pas assez de klines pour la détection S/R', [
-                'count' => count($klines)
+                'count' => count($klines15m)
             ]);
             throw new \RuntimeException("Not enough klines for SR detection ($symbol)");
         }
         // Log de la date du dernier kline et de la date courante alignée
-        $lastKline = end($klines);
+        $lastKline = end($klines15m);
         $lastOpen  = $lastKline['open_time'] ?? null; // adapte si ta BDD stocke différemment
         if ($lastOpen !== null) {
             $lastOpenDt = (new \DateTimeImmutable())->setTimestamp((int)$lastOpen)->setTimezone(new \DateTimeZone('UTC'));
@@ -1115,14 +1091,16 @@ final class PositionOpener
 
 
         $this->positionsLogger->info('[SR] Étape 4: Détection S/R');
-        $sr = SrRiskHelper::findSupportResistance($klines);
+        $sr = SrRiskHelper::findSupportResistance($klines15m);
+        $sr['atr'] = $atrValue;
 
         $this->positionsLogger->info('[SR] Étape 5: Calcul du Stop Loss via S/R + ATR', [
             'side' => $side,
             'limit' => $limit,
             'supports' => $sr['supports'],
             'resistances' => $sr['resistances'],
-            'atr' => $sr['atr']
+            'atr' => $sr['atr'],
+            'atr_tf' => $atrTimeframe
         ]);
         $slRaw = SrRiskHelper::chooseSlFromSr($side, $limit, $sr['supports'], $sr['resistances'], $sr['atr']);
         $slQ   = $this->quantizeToStep($slRaw, $tick);
@@ -1164,7 +1142,7 @@ final class PositionOpener
         $this->positionsLogger->info('[SR] Étape 9: Fixe le levier', [
             'levOpt' => ceil($levFinal)
         ]);
-        $this->setLeverage($symbol, $levFinal, 'isolated');
+        $this->bitmartPositions->setLeverage($symbol, $levFinal, 'isolated');
         $this->waitLeverageSynchronized($symbol, $levFinal, 'isolated');
 
         $clientOrderId = 'SR_' . bin2hex(random_bytes(6));
@@ -1175,7 +1153,7 @@ final class PositionOpener
             'mode'                          => 1,
             'type'                          => 'limit',
             'open_type'                     => 'isolated',
-            'leverage'                      => (string)$levOpt,
+            'leverage'                      => (string)$levFinal,
             'size'                          => $contracts,
             'price'                         => (string)$limit,
             'preset_take_profit_price_type' => 2,
@@ -1186,7 +1164,7 @@ final class PositionOpener
         ];
 
         $this->positionsLogger->info('[SR] Étape 10: Soumission de l\'ordre', $payload);
-        $res = $this->signedPost('/contract/private/submit-order', $payload);
+        $res = $this->ordersService->create($payload);
         // Mise à jour du pipeline
         try {
             $this->pipelineRepository->updateStatusBySymbol(
@@ -1214,12 +1192,29 @@ final class PositionOpener
         }
         $orderId = $res['data']['order_id'] ?? null;
 
+        // Persister l'orderId dans ContractPipeline
+        if ($orderId) {
+            try {
+                $this->pipelineRepository->updateOrderIdBySymbol($symbol, $orderId);
+                $this->positionsLogger->info('[SR] OrderId persisted in ContractPipeline', [
+                    'symbol' => $symbol,
+                    'order_id' => $orderId
+                ]);
+            } catch (\Throwable $e) {
+                $this->positionsLogger->warning('[SR] Failed to persist orderId in ContractPipeline', [
+                    'symbol' => $symbol,
+                    'order_id' => $orderId,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
+
         if ($expireAfterSec !== null) {
             $this->positionsLogger->info('[SR] Étape 11: Programmation de l\'expiration auto', [
                 'expireAfterSec' => $expireAfterSec
             ]);
             try {
-                $this->scheduleCancelAllAfter($symbol, $expireAfterSec);
+                $this->trailOrders->cancelAllAfter($symbol, $expireAfterSec);
             } catch (\Throwable $e) {
                 $this->positionsLogger->warning('scheduleCancelAllAfter failed', [
                     'symbol' => $symbol,
@@ -1238,7 +1233,7 @@ final class PositionOpener
             'sl'         => $slQ,
             'tp'         => $tpQ,
             'contracts'  => $contracts,
-            'leverage'   => $levOpt,
+            'leverage'   => $levFinal,
             'metrics'    => $sr,
             'meta'       => $meta,
         ]);
@@ -1252,7 +1247,7 @@ final class PositionOpener
             'sl'         => $slQ,
             'tp'         => $tpQ,
             'contracts'  => $contracts,
-            'leverage'   => $levOpt,
+            'leverage'   => $levFinal,
             'metrics'    => $sr,
             'meta'       => $meta,
         ];
@@ -1296,21 +1291,47 @@ final class PositionOpener
         $limit = $this->quantizeToStep($mark, $tick);
         $this->positionsLogger->info('[HC] Prix d\'entrée arrondi', ['mark' => $mark, 'limit' => $limit]);
 
+        $cfg = $this->tradingParameters->all();
+        $atrLookback  = (int)($cfg['atr']['lookback'] ?? 14);
+        $atrMethod    = (string)($cfg['atr']['method'] ?? 'wilder');
+        $atrTimeframe = (string)($cfg['atr']['timeframe'] ?? '5m');
+        $atrSeries = $this->klineRepository->findLastKlines(
+            symbol: $symbol,
+            timeframe: $atrTimeframe,
+            limit: max($atrLookback + 1, 200)
+        );
+        if (\count($atrSeries) <= $atrLookback) {
+            $this->positionsLogger->error('[HC] Pas assez de bougies pour l\'ATR', [
+                'timeframe' => $atrTimeframe,
+                'count'     => \count($atrSeries),
+                'lookback'  => $atrLookback
+            ]);
+            throw new \RuntimeException("Not enough OHLC for ATR ($symbol tf=$atrTimeframe)");
+        }
+        $atrValue = $this->atrCalculator->compute($atrSeries, $atrLookback, $atrMethod);
+        $this->positionsLogger->info('[HC] ATR source', [
+            'timeframe' => $atrTimeframe,
+            'lookback'  => $atrLookback,
+            'atr'       => $atrValue
+        ]);
+
         // 3) Klines pour S/R 15m
         $this->positionsLogger->info('[HC] Étape 3: Chargement des klines (S/R)', ['symbol' => $symbol]);
-        $klines = $this->klineRepository->findLastKlines(symbol: $symbol, timeframe: '15m', limit: 200);
-        if (\count($klines) < 50) {
-            $this->positionsLogger->error('[HC] Pas assez de klines pour S/R', ['count' => \count($klines)]);
+        $klines15m = $this->klineRepository->findLastKlines(symbol: $symbol, timeframe: '15m', limit: 200);
+        if (\count($klines15m) < 50) {
+            $this->positionsLogger->error('[HC] Pas assez de klines pour S/R', ['count' => \count($klines15m)]);
             throw new \RuntimeException("Not enough klines for SR detection ($symbol)");
         }
 
         // 4) Détection S/R & SL basé S/R + ATR
         $this->positionsLogger->info('[HC] Étape 4: Détection S/R');
-        $sr = \App\Util\SrRiskHelper::findSupportResistance($klines);
+        $sr = \App\Util\SrRiskHelper::findSupportResistance($klines15m);
+        $sr['atr'] = $atrValue;
 
         $this->positionsLogger->info('[HC] Étape 5: Calcul SL via S/R + ATR', [
             'side' => $side, 'limit' => $limit,
-            'supports' => $sr['supports'], 'resistances' => $sr['resistances'], 'atr' => $sr['atr']
+            'supports' => $sr['supports'], 'resistances' => $sr['resistances'], 'atr' => $sr['atr'],
+            'atr_tf' => $atrTimeframe
         ]);
         $slRaw = \App\Util\SrRiskHelper::chooseSlFromSr($side, $limit, $sr['supports'], $sr['resistances'], $sr['atr']);
         $slQ   = $this->quantizeToStep($slRaw, $tick);
@@ -1364,7 +1385,7 @@ final class PositionOpener
 
         // 9) Fixe le levier (côté exchange)
         $this->positionsLogger->info('[HC] Étape 9: Fixe levier (exchange)', ['lev' => (int)\ceil($levOpt)]);
-        $this->setLeverage($symbol, (int)\ceil($levOpt), 'isolated');
+        $this->bitmartPositions->setLeverage($symbol, (int)\ceil($levOpt), 'isolated');
 
         // 10) Soumission LIMIT + presets TP/SL
         $clientOrderId = 'HC_' . bin2hex(random_bytes(6));
@@ -1386,7 +1407,7 @@ final class PositionOpener
         ];
 
         $this->positionsLogger->info('[HC] Étape 10: Soumission ordre', $payload);
-        $res = $this->signedPost('/contract/private/submit-order', $payload);
+        $res = $this->ordersService->create($payload);
         if (($res['code'] ?? 0) !== 1000) {
             $this->positionsLogger->error('[HC] submit-order error', ['response' => $res]);
             throw new RuntimeException('submit-order error: ' . json_encode($res, JSON_UNESCAPED_SLASHES));
@@ -1469,9 +1490,9 @@ final class PositionOpener
     private function waitLeverageSynchronized(string $symbol, int $expected, string $openType = 'isolated', int $tries = 3, int $sleepMs = 150): void {
         for ($i = 0; $i < $tries; $i++) {
             try {
-                $pos = $this->signedGet('/contract/private/position', ['symbol' => $symbol]);
-                // Selon le schéma BitMart, récupérer la ligne du symbole et lire 'leverage' si présent
-                $lev = (int)($pos['data'][0]['leverage'] ?? 0); // adapte à ta structure
+                $resp = $this->bitmartPositions->list(['symbol' => $symbol]);
+                $data = $resp['data'] ?? [];
+                $lev = (int)($data['leverage'] ?? ($data[0]['leverage'] ?? 0));
                 if ($lev === $expected) return;
             } catch (\Throwable $e) {
                 // ignore et retry

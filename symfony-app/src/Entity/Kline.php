@@ -70,7 +70,7 @@ class Kline
     public function getContract(): Contract { return $this->contract; }
     public function setContract(Contract $contract): self { $this->contract = $contract; return $this; }
 
-    public function fillFromDto(KlineDto $dto, Contract $contract, int $step): self
+    public function fillFromDto(KlineDto $dto, Contract $contract, int $stepMinutes): self
     {
         $this->timestamp = (new \DateTimeImmutable())->setTimestamp($dto->timestamp);
         $this->open = $dto->open;
@@ -79,7 +79,7 @@ class Kline
         $this->low = $dto->low;
         $this->volume = $dto->volume;
         $this->contract = $contract;
-        $this->step = $step;
+        $this->step = $stepMinutes;
 
         return $this;
     }

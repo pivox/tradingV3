@@ -34,11 +34,6 @@ services:
 
 
     App\Service\Exchange\Bitmart\BitmartFetcher:
-        arguments:
-            $httpClient: '@http_client'
-            $logger: '@logger'
-            $clock: '@clock'
-            $baseUrl: '%bitmart.base_url%'
         tags: [ 'mon.exchange.fetcher' ]
 
     App\Service\Config\TradingParameters:
@@ -104,26 +99,14 @@ services:
             $signalsLogger: '@monolog.logger.signals'
 
 
-    App\Service\Account\Bitmart\BitmartBalanceService:
-        arguments:
-            $bitmartApiKey: '%env(BITMART_API_KEY)%'
-    App\Service\Account\Bitmart\BitmartSdkAdapter:
-        arguments:
-            $apiKey: '%env(BITMART_API_KEY)%'
-            $secretKey: '%env(BITMART_SECRET_KEY)%'
-            $memo: '%env(BITMART_API_MEMO)%'
-
-    App\Service\Account\Bitmart\BitmartFuturesClient:
-        arguments:
-            $apiKey: '%env(BITMART_API_KEY)%'
-            $secretKey: '%env(BITMART_SECRET_KEY)%'
-            $apiMemo: '%env(BITMART_API_MEMO)%'
-
     App\Service\Trading\PositionOpener:
         arguments:
-            $apiKey: '%env(BITMART_API_KEY)%'
-            $secretKey: '%env(BITMART_SECRET_KEY)%'
-            $apiMemo: '%env(BITMART_API_MEMO)%'
+            $ordersService: '@App\Service\Bitmart\Private\OrdersService'
+            $bitmartPositions: '@App\Service\Bitmart\Private\PositionsService'
+            $trailOrders: '@App\Service\Bitmart\Private\TrailOrdersService'
+            $contractRepository: '@App\Repository\ContractRepository'
+
+    App\Service\Trading\BitmartAccountGateway: '@App\Service\Trading\BitmartAccountService'
 
     App\Service\Config\BitmartConfig:
         arguments:
@@ -140,3 +123,13 @@ services:
             $bitmartFuturesV2: '@http_client.bitmart_futures_v2'
             $bitmartSystem: '@http_client.bitmart_system'
 
+    App\Bitmart\Http\BitmartRequestSigner:
+        arguments:
+            $apiSecret: '%env(BITMART_SECRET_KEY)%'
+            $apiMemo: '%env(BITMART_API_MEMO)%'
+
+    App\Bitmart\Http\BitmartHttpClientPrivate:
+        arguments:
+            $bitmartFuturesV2: '@http_client.bitmart_futures_v2_private'
+            $signer: '@App\Bitmart\Http\BitmartRequestSigner'
+            $apiKey: '%env(BITMART_API_KEY)%'

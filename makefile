@@ -69,3 +69,13 @@ latest:
 		exit 1; \
 	fi
 	$(PHP_EXEC) bin/console bitmart:kline:latest $(symbol) $(step)
+
+
+show-positions: ## Affiche l'état actuel des positions ouvertes
+	docker-compose exec php php bin/console app:evaluate:positions
+
+show-orders: ## Affiche l'état actuel des ordres ouvertes
+	docker-compose exec php php bin/console app:bitmart:orders:open
+
+show-pipeline: ## Affiche en continu le pipeline des contrats
+	docker-compose exec php php bin/console app:monitor:contract-pipeline --interval=2

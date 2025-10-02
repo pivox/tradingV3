@@ -35,6 +35,11 @@ final class FuturesKlineDto
         );
     }
 
+    public function getDateString(): string
+    {
+        return date('d-m-Y H:i:s', $this->timestamp);
+    }
+
     public function __toString(): string
     {
         return sprintf(

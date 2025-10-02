@@ -40,8 +40,20 @@ final class BitmartCronController extends AbstractController
         $cutoff = TimeframeHelper::getAlignedOpenByMinutes($tfMinutes);
         $start = $cutoff->modify('-' . (self::LIMIT_KLINES - 1) * $tfMinutes . ' minutes');
 
-        $symbols = $this->getSymbols($tf, $request, $contractPipelineRepository, $tradingParams);
+        $symbols = array_values(array_unique($this->getSymbols($tf, $request, $contractPipelineRepository, $tradingParams)));
+        if (!$symbols) {
+            $logger->warning("Bitmart cron $tf: aucun symbole sélectionné", ['tf' => $tf]);
+            return $this->json([
+                'status' => 'empty',
+                'timeframe' => $tf,
+                'sent' => 0,
+                'list' => [],
+            ]);
+        }
+
+        $batchId = sprintf('cron-%s-%s', strtolower($tf), (new \DateTimeImmutable())->format('YmdHisv'));
         $workflowRef = new WorkflowRef('api-rate-limiter-workflow', 'ApiRateLimiterClient', 'api_rate_limiter_queue');
+        $this->bitmartOrchestrator->reset();
         $this->bitmartOrchestrator->setWorkflowRef($workflowRef);
         foreach ($symbols as $symbol) {
             $this->bitmartOrchestrator->requestGetKlines(
@@ -53,7 +65,8 @@ final class BitmartCronController extends AbstractController
                 limit: self::LIMIT_KLINES,
                 start: $start,
                 end: $cutoff,
-                note: "cron $tf"
+                note: "cron $tf",
+                batchId: $batchId
             );
         }
         $this->bitmartOrchestrator->go();
@@ -64,6 +77,7 @@ final class BitmartCronController extends AbstractController
             'end' => $cutoff->format('Y-m-d H:i:s'),
             'count' => count($symbols),
             'list' => $symbols,
+            'batch_id' => $batchId,
         ]);
 
         return $this->json([
@@ -73,6 +87,7 @@ final class BitmartCronController extends AbstractController
             'end' => $cutoff->format('Y-m-d H:i:s'),
             'sent' => count($symbols),
             'list' => $symbols,
+            'batch_id' => $batchId,
         ]);
     }
 
@@ -82,13 +97,17 @@ final class BitmartCronController extends AbstractController
         ContractPipelineRepository $contractPipelineRepository,
         TradingParameters $tradingParams
     ): array {
-        if ($request->query->has('symbol')) {
-            return [$request->query->get('symbol')];
-        }
-
         $cfg = $tradingParams->getConfig();
         $allowedQuotes = array_map('strtoupper', $cfg['symbols']['allowed_quotes'] ?? []);
         $blacklist = array_map('strtoupper', $cfg['symbols']['blacklist'] ?? []);
+
+        if ($request->query->has('symbol')) {
+            $symbol = (string) $request->query->get('symbol');
+            $contract = $this->contractRepository->find($symbol);
+            return ($contract && $this->filterContracts($contract, $allowedQuotes, $blacklist) && $this->hasSufficientVolume($contract))
+                ? [$symbol]
+                : [];
+        }
 
         $contracts = $this->contractRepository->findBy(['exchange' => 'bitmart']);
         if ($tf == '4h') {
@@ -97,11 +116,20 @@ final class BitmartCronController extends AbstractController
                 array_filter($contracts,
                     fn($c) =>
                     $this->filterContracts($c, $allowedQuotes, $blacklist)
+                    && $this->hasSufficientVolume($c)
                     && !in_array($c->getSymbol(), $excluded, true)
                 )
             );
         }
-        return $contractPipelineRepository->getAllSymbolsWithActiveTimeframe($tf);
+        $symbols = $contractPipelineRepository->getAllSymbolsWithActiveTimeframe($tf);
+        return array_values(array_filter($symbols, function (string $symbol) use ($allowedQuotes, $blacklist): bool {
+            $contract = $this->contractRepository->find($symbol);
+            if (!$contract) {
+                return false;
+            }
+            return $this->filterContracts($contract, $allowedQuotes, $blacklist)
+                && $this->hasSufficientVolume($contract);
+        }));
     }
 
     private function filterContracts($contract, array $allowedQuotes, array $blacklist): bool {
@@ -109,6 +137,12 @@ final class BitmartCronController extends AbstractController
         $quote = strtoupper($contract->getQuoteCurrency());
         return !in_array($symbol, $blacklist, true) &&
             (empty($allowedQuotes) || in_array($quote, $allowedQuotes, true));
+    }
+
+    private function hasSufficientVolume($contract): bool
+    {
+        $volume = $contract->getVolume24h();
+        return $volume !== null && $volume > 0;
     }
 
     private function guard(): ?JsonResponse {

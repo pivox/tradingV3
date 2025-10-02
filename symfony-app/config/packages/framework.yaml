@@ -12,12 +12,17 @@ framework:
                     User-Agent: 'YourApp/1.0 (+https://example.com)'
                 timeout: 10
                 retry_failed:
-                    enabled: true
-                    max_retries: 3
-                    delay: 500
-                    multiplier: 2
-                    max_delay: 5000
-                    jitter: 0.1
+                    enabled: false
+
+            # Client privé signé: même base_uri que futures_v2, mais utilisé avec headers dynamiques
+            http_client.bitmart_futures_v2_private:
+                base_uri: 'https://api-cloud-v2.bitmart.com'
+                headers:
+                    Accept: 'application/json'
+                    User-Agent: 'YourApp/1.0 (+https://example.com)'
+                timeout: 10
+                retry_failed:
+                    enabled: false
 
             http_client.bitmart_system:
                 base_uri: 'https://api-cloud.bitmart.com'   # ← domaine “classique” (Spot/System)
@@ -26,12 +31,7 @@ framework:
                     User-Agent: 'YourApp/1.0 (+https://example.com)'
                 timeout: 10
                 retry_failed:
-                    enabled: true
-                    max_retries: 3
-                    delay: 500
-                    multiplier: 2
-                    max_delay: 5000
-                    jitter: 0.1
+                    enabled: false
 
     #esi: true
     #fragments: true

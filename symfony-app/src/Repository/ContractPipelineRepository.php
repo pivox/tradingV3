@@ -63,6 +63,22 @@ class ContractPipelineRepository extends ServiceEntityRepository
         return $this->getAllSymbolsWithActiveTimeframe('4h');
     }
 
+    /**
+     * Met à jour l'orderId pour un symbole donné
+     */
+    public function updateOrderIdBySymbol(string $symbol, string $orderId): void
+    {
+        $this->createQueryBuilder('p')
+            ->innerJoin('p.contract', 'c')
+            ->update()
+            ->set('p.orderId', ':orderId')
+            ->where('c.symbol = :symbol')
+            ->setParameter('orderId', $orderId)
+            ->setParameter('symbol', $symbol)
+            ->getQuery()
+            ->execute();
+    }
+
     public function getAllSymbolsWithActive1h(): array
     {
         return $this->getAllSymbolsWithActiveTimeframe('1h');
@@ -91,6 +107,7 @@ class ContractPipelineRepository extends ServiceEntityRepository
             ->where('p.currentTimeframe = :tf')->setParameter('tf', $timeframe)
             ->andWhere('p.status != :locked')->setParameter('locked', ContractPipeline::STATUS_OPENED_LOCKED)
             ->andWhere('p.status != :locked2')->setParameter('locked2', ContractPipeline::STATUS_ORDER_OPENED)
+            ->andWhere('p.orderId IS NULL')
             ->setMaxResults($limit)
             ->getQuery()
             ->getResult();
