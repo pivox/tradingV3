@@ -1,5 +1,5 @@
 // src/pages/PositionsPage.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
 
 const PositionsPage = () => {
@@ -20,20 +20,63 @@ const PositionsPage = () => {
             .catch(err => console.error('Erreur lors du chargement des contrats:', err));
     }, []);
 
-    // Charger les positions avec filtres
+    const isFetchingRef = useRef(false);
+
+    // Charger les positions avec rafraîchissement périodique
     useEffect(() => {
-        setLoading(true);
-        api.getPositions(filters)
-            .then(data => {
-                setPositions(data);
-                setError(null);
-            })
-            .catch(err => {
-                setError(`Erreur de chargement des positions: ${err.message}`);
-                console.error(err);
-            })
-            .finally(() => setLoading(false));
+        let isCancelled = false;
+
+        const fetchPositions = async (withSpinner = false) => {
+            if (isFetchingRef.current) {
+                return;
+            }
+
+            isFetchingRef.current = true;
+            if (withSpinner) {
+                setLoading(true);
+            }
+
+            try {
+                const data = await api.getPositions(filters);
+                if (!isCancelled) {
+                    setPositions(data);
+                    setError(null);
+                }
+            } catch (err) {
+                console.error('Erreur de chargement des positions:', err);
+                if (!isCancelled) {
+                    setError(`Erreur de chargement des positions: ${err.message}`);
+                }
+            } finally {
+                if (!isCancelled && withSpinner) {
+                    setLoading(false);
+                }
+                isFetchingRef.current = false;
+            }
+        };
+
+        fetchPositions(true);
+        const intervalId = setInterval(() => fetchPositions(false), 4000);
+
+        return () => {
+            isCancelled = true;
+            clearInterval(intervalId);
+        };
     }, [filters]);
+
+    const formatNumber = (value, options = {}) => {
+        if (value === null || value === undefined || Number.isNaN(Number(value))) {
+            return '-';
+        }
+        const {
+            maximumFractionDigits = 4,
+            minimumFractionDigits = 0,
+        } = options;
+        return new Intl.NumberFormat('fr-FR', {
+            minimumFractionDigits,
+            maximumFractionDigits
+        }).format(Number(value));
+    };
 
     const handleFilterChange = (name, value) => {
         setFilters(prev => ({ ...prev, [name]: value }));
@@ -52,11 +95,14 @@ const PositionsPage = () => {
                         onChange={e => handleFilterChange('contract', e.target.value)}
                     >
                         <option value="">Tous</option>
-                        {contracts.map(contract => (
-                            <option key={contract.id} value={contract.id}>
-                                {contract.symbol}
-                            </option>
-                        ))}
+                        {contracts.map(contract => {
+                            const value = contract.id ?? contract.symbol;
+                            return (
+                                <option key={value} value={value}>
+                                    {contract.symbol ?? value}
+                                </option>
+                            );
+                        })}
                     </select>
                 </div>
 
@@ -96,12 +142,14 @@ const PositionsPage = () => {
                     <thead>
                     <tr>
                         <th>Contrat</th>
+                        <th>Source</th>
                         <th>Type</th>
+                        <th>Quantité</th>
                         <th>Prix d'entrée</th>
-                        <th>Prix de sortie</th>
+                        <th>Mark</th>
                         <th>Date d'ouverture</th>
-                        <th>Date de fermeture</th>
                         <th>Statut</th>
+                        <th>ROI</th>
                         <th>P&L</th>
                     </tr>
                     </thead>
@@ -111,17 +159,45 @@ const PositionsPage = () => {
                             key={position.id}
                             className={position.type === 'long' ? 'long' : 'short'}
                         >
-                            <td>{position.contract.symbol}</td>
-                            <td>{position.type === 'long' ? 'LONG' : 'SHORT'}</td>
-                            <td>{position.entry_price}</td>
-                            <td>{position.exit_price || '-'}</td>
-                            <td>{new Date(position.open_date).toLocaleString()}</td>
-                            <td>{position.close_date ? new Date(position.close_date).toLocaleString() : '-'}</td>
-                            <td className={`status-${position.status}`}>
-                                {position.status === 'open' ? 'Ouverte' : 'Fermée'}
+                            <td>
+                                <div className="contract-symbol">{position.contract.symbol}</div>
+                                {position.pipeline && (
+                                    <div className="contract-sub-info">
+                                        TF: {position.pipeline.current_timeframe}
+                                        {position.pipeline.order_id ? ` · Order ${position.pipeline.order_id}` : ''}
+                                    </div>
+                                )}
                             </td>
-                            <td className={position.pnl > 0 ? 'profit' : position.pnl < 0 ? 'loss' : ''}>
-                                {position.pnl ? `${position.pnl.toFixed(2)}%` : '-'}
+                            <td className={`badge badge-${position.source || 'database'}`}>
+                                {position.source === 'exchange' ? 'Exchange' : 'Historique'}
+                            </td>
+                            <td>{position.type === 'long' ? 'LONG' : position.type === 'short' ? 'SHORT' : position.type}</td>
+                            <td>
+                                {formatNumber(position.qty_base ?? position.qty_contract, { maximumFractionDigits: 3 })}
+                                {position.qty_contract && position.qty_base && position.qty_base !== position.qty_contract && (
+                                    <span className="contract-sub-info"> ({formatNumber(position.qty_contract, { maximumFractionDigits: 3 })} cts)</span>
+                                )}
+                            </td>
+                            <td>{formatNumber(position.entry_price)}</td>
+                            <td>{formatNumber(position.mark_price)}</td>
+                            <td>{position.open_date ? new Date(position.open_date).toLocaleString() : '-'}</td>
+                            <td className={`status-${position.status}`}>
+                                {position.status ? position.status.toUpperCase() : '-'}
+                            </td>
+                            <td title={position.price_change_pct !== undefined ? `Δ prix: ${formatNumber(position.price_change_pct, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}%` : undefined}>
+                                {position.roi_pct !== null && position.roi_pct !== undefined
+                                    ? `${formatNumber(position.roi_pct, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}%`
+                                    : '-'}
+                            </td>
+                            <td
+                                className={position.pnl > 0 ? 'profit' : position.pnl < 0 ? 'loss' : ''}
+                                title={position.pnl_usdt !== null && position.pnl_usdt !== undefined
+                                    ? `${formatNumber(position.pnl_usdt, { maximumFractionDigits: 2, minimumFractionDigits: 2 })} USDT`
+                                    : undefined}
+                            >
+                                {position.pnl !== null && position.pnl !== undefined
+                                    ? `${formatNumber(position.pnl, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}%`
+                                    : '-'}
                             </td>
                         </tr>
                     ))}

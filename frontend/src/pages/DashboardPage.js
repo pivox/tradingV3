@@ -9,23 +9,29 @@ const DashboardPage = () => {
     const [selectedContract, setSelectedContract] = useState(null);
     const [chartData, setChartData] = useState([]);
     const [timeframe, setTimeframe] = useState('1h');
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
+    const [contractsLoading, setContractsLoading] = useState(true);
+    const [chartLoading, setChartLoading] = useState(false);
+    const [contractsError, setContractsError] = useState(null);
+    const [chartError, setChartError] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
 
     // Charger les contrats
     useEffect(() => {
         const fetchContracts = async () => {
             try {
-                setLoading(true);
+                setContractsLoading(true);
                 const data = await api.getContracts(searchTerm);
                 setContracts(data);
-                setError(null);
+                setContractsError(null);
+
+                if (!selectedContract && data.length > 0) {
+                    setSelectedContract(data[0]);
+                }
             } catch (err) {
-                setError(`Erreur de chargement des contrats: ${err.message}`);
+                setContractsError(`Erreur de chargement des contrats: ${err.message}`);
                 console.error(err);
             } finally {
-                setLoading(false);
+                setContractsLoading(false);
             }
         };
 
@@ -34,18 +40,27 @@ const DashboardPage = () => {
 
     // Charger les données du graphique quand un contrat est sélectionné
     useEffect(() => {
-        if (selectedContract) {
-            setLoading(true);
-            api.getKlines(selectedContract.id, timeframe)
+        const contractId = selectedContract ? (selectedContract.id ?? selectedContract.symbol) : null;
+
+        if (contractId) {
+            setChartLoading(true);
+            setChartError(null);
+            setChartData([]);
+
+            api.getKlines(contractId, timeframe)
                 .then(data => {
                     setChartData(data);
-                    setError(null);
+                    setChartError(null);
                 })
                 .catch(err => {
-                    setError(`Erreur de chargement des données du graphique: ${err.message}`);
+                    setChartError(`Erreur de chargement des données du graphique: ${err.message}`);
                     console.error(err);
                 })
-                .finally(() => setLoading(false));
+                .finally(() => setChartLoading(false));
+        } else {
+            setChartData([]);
+            setChartLoading(false);
+            setChartError(null);
         }
     }, [selectedContract, timeframe]);
 
@@ -63,12 +78,12 @@ const DashboardPage = () => {
                 />
             </div>
 
-            {error && <div className="error">{error}</div>}
+            {contractsError && <div className="error">{contractsError}</div>}
 
             <div className="contract-grid">
                 <div className="contracts-panel">
                     <h2>Contrats</h2>
-                    {loading && !selectedContract ? (
+                    {contractsLoading && !selectedContract ? (
                         <div className="loading">Chargement des contrats...</div>
                     ) : (
                         <ContractList
@@ -84,25 +99,15 @@ const DashboardPage = () => {
 
                     {selectedContract ? (
                         <>
-                            <div className="timeframe-selector">
-                                {['15m', '1h', '4h', '1d'].map(tf => (
-                                    <button
-                                        key={tf}
-                                        className={timeframe === tf ? 'active' : ''}
-                                        onClick={() => setTimeframe(tf)}
-                                    >
-                                        {tf}
-                                    </button>
-                                ))}
-                            </div>
-
-                            {loading ? (
-                                <div className="chart-loading">Chargement du graphique...</div>
-                            ) : chartData.length > 0 ? (
-                                <CandleChart data={chartData} />
-                            ) : (
-                                <div className="no-data">Aucune donnée disponible</div>
-                            )}
+                            {chartError && <div className="error">{chartError}</div>}
+                            <CandleChart
+                                contractId={selectedContract.id ?? selectedContract.symbol}
+                                data={chartData}
+                                timeframe={timeframe}
+                                onTimeframeChange={setTimeframe}
+                                loading={chartLoading}
+                                emptyMessage="Aucune donnée disponible"
+                            />
                         </>
                     ) : (
                         <div className="select-prompt">Sélectionnez un contrat pour afficher le graphique</div>

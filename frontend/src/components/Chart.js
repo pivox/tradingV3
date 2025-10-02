@@ -1,6 +1,6 @@
 // src/components/Chart.js
-import React, { useState, useEffect } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import React, { useState, useEffect, useMemo } from 'react';
+import ReactApexChart from 'react-apexcharts';
 
 const Chart = ({ contractId }) => {
     const [chartData, setChartData] = useState([]);
@@ -30,6 +30,40 @@ const Chart = ({ contractId }) => {
             });
     }, [contractId, timeframe]);
 
+    const series = useMemo(() => [{
+        name: 'Prix',
+        data: chartData.map(point => ({
+            x: point.timestamp,
+            y: Number(point.close)
+        }))
+    }], [chartData]);
+
+    const options = useMemo(() => ({
+        chart: {
+            type: 'line',
+            zoom: { enabled: false },
+            toolbar: { show: false }
+        },
+        stroke: {
+            curve: 'smooth',
+            width: 2
+        },
+        dataLabels: { enabled: false },
+        xaxis: {
+            type: 'datetime',
+            labels: { datetimeUTC: false }
+        },
+        yaxis: {
+            decimalsInFloat: 2
+        },
+        tooltip: {
+            x: { format: 'dd MMM HH:mm' },
+            y: {
+                formatter: (value) => Number(value).toFixed(2)
+            }
+        }
+    }), []);
+
     if (!contractId) return <div className="chart-placeholder">Sélectionnez un contrat pour afficher le graphique</div>;
     if (loading) return <div className="chart-loading">Chargement du graphique...</div>;
     if (error) return <div className="chart-error">Erreur: {error}</div>;
@@ -48,25 +82,9 @@ const Chart = ({ contractId }) => {
                 ))}
             </div>
 
-            <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                        dataKey="timestamp"
-                        tickFormatter={(timestamp) => {
-                            const date = new Date(timestamp);
-                            return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
-                        }}
-                    />
-                    <YAxis domain={['auto', 'auto']} />
-                    <Tooltip
-                        labelFormatter={(timestamp) => new Date(timestamp).toLocaleString()}
-                        formatter={(value) => [parseFloat(value).toFixed(2), '']}
-                    />
-                    <Legend />
-                    <Line type="monotone" dataKey="close" stroke="#8884d8" dot={false} name="Prix" />
-                </LineChart>
-            </ResponsiveContainer>
+            <div className="chart-wrapper">
+                <ReactApexChart options={options} series={series} type="line" height={400} />
+            </div>
         </div>
     );
 };

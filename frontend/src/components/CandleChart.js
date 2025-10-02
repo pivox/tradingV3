@@ -1,37 +1,131 @@
 // src/components/CandleChart.js
-import React, { useState, useEffect } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import React, { useState, useEffect, useMemo } from 'react';
+import ReactApexChart from 'react-apexcharts';
 
-const CandleChart = ({ contractId }) => {
-    const [chartData, setChartData] = useState([]);
-    const [timeframe, setTimeframe] = useState('1h');
-    const [loading, setLoading] = useState(true);
+const DEFAULT_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d'];
+
+const CandleChart = ({
+    contractId,
+    data,
+    timeframe: controlledTimeframe,
+    onTimeframeChange,
+    loading: externalLoading = false,
+    timeframes = DEFAULT_TIMEFRAMES,
+    height = 400,
+    emptyMessage = 'Aucune donnée disponible'
+}) => {
+    const [internalTimeframe, setInternalTimeframe] = useState(controlledTimeframe || '1h');
+    const [internalData, setInternalData] = useState([]);
+    const [internalLoading, setInternalLoading] = useState(false);
+    const [error, setError] = useState(null);
+
+    const usingExternalData = Array.isArray(data);
+    const timeframe = controlledTimeframe ?? internalTimeframe;
+    const effectiveData = usingExternalData ? data : internalData;
+    const loading = usingExternalData ? externalLoading : internalLoading;
 
     useEffect(() => {
-        setLoading(true);
-        fetch(`/api/chart-data/${contractId}?timeframe=${timeframe}`)
-            .then(res => res.json())
-            .then(data => {
-                setChartData(data);
-                setLoading(false);
-            })
-            .catch(error => {
-                console.error('Erreur de chargement des données du graphique:', error);
-                setLoading(false);
-            });
-    }, [contractId, timeframe]);
+        if (usingExternalData) {
+            setInternalLoading(false);
+            setError(null);
+            return;
+        }
 
-    if (loading) {
-        return <div>Chargement du graphique...</div>;
-    }
+        if (!contractId) {
+            setInternalData([]);
+            setInternalLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+        setInternalLoading(true);
+        setError(null);
+
+        fetch(`/api/chart-data/${contractId}?timeframe=${timeframe}`)
+            .then(res => {
+                if (!res.ok) {
+                    throw new Error(`Erreur ${res.status}`);
+                }
+                return res.json();
+            })
+            .then(dataPoints => {
+                if (!cancelled) {
+                    setInternalData(Array.isArray(dataPoints) ? dataPoints : []);
+                }
+            })
+            .catch(err => {
+                if (!cancelled) {
+                    console.error('Erreur de chargement des données du graphique:', err);
+                    setError('Impossible de charger les données du graphique');
+                    setInternalData([]);
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setInternalLoading(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [contractId, timeframe, usingExternalData]);
+
+    const handleTimeframeClick = (tf) => {
+        if (tf === timeframe) {
+            return;
+        }
+
+        if (controlledTimeframe && onTimeframeChange) {
+            onTimeframeChange(tf);
+        } else {
+            setInternalTimeframe(tf);
+        }
+    };
+
+    const series = useMemo(() => [{
+        data: (effectiveData ?? []).map(point => {
+            const timestamp = point.timestamp;
+            const x = typeof timestamp === 'number'
+                ? timestamp
+                : new Date(timestamp).getTime();
+
+            return {
+                x,
+                y: [Number(point.open), Number(point.high), Number(point.low), Number(point.close)]
+            };
+        })
+    }], [effectiveData]);
+
+    const options = useMemo(() => ({
+        chart: {
+            type: 'candlestick',
+            toolbar: { show: false }
+        },
+        plotOptions: {
+            candlestick: {
+                colors: {
+                    upward: '#00b746',
+                    downward: '#ef403c'
+                }
+            }
+        },
+        xaxis: {
+            type: 'datetime',
+            labels: { datetimeUTC: false }
+        },
+        yaxis: {
+            tooltip: { enabled: true }
+        }
+    }), []);
 
     return (
         <div className="candlestick-chart">
             <div className="timeframe-selector">
-                {['5m', '15m', '1h', '4h', '1d'].map(tf => (
+                {timeframes.map(tf => (
                     <button
                         key={tf}
-                        onClick={() => setTimeframe(tf)}
+                        onClick={() => handleTimeframeClick(tf)}
                         className={timeframe === tf ? 'active' : ''}
                     >
                         {tf}
@@ -39,22 +133,17 @@ const CandleChart = ({ contractId }) => {
                 ))}
             </div>
 
-            <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                        dataKey="timestamp"
-                        tickFormatter={(timestamp) => new Date(timestamp).toLocaleDateString()}
-                    />
-                    <YAxis domain={['auto', 'auto']} />
-                    <Tooltip
-                        labelFormatter={(timestamp) => new Date(timestamp).toLocaleString()}
-                        formatter={(value) => [parseFloat(value).toFixed(2), '']}
-                    />
-                    <Legend />
-                    <Line type="monotone" dataKey="close" stroke="#8884d8" dot={false} name="Prix" />
-                </LineChart>
-            </ResponsiveContainer>
+            {error && <div className="chart-error">{error}</div>}
+
+            {loading ? (
+                <div className="chart-loading">Chargement du graphique...</div>
+            ) : (effectiveData && effectiveData.length > 0) ? (
+                <div className="chart-wrapper">
+                    <ReactApexChart options={options} series={series} type="candlestick" height={height} />
+                </div>
+            ) : (
+                <div className="no-data">{emptyMessage}</div>
+            )}
         </div>
     );
 };

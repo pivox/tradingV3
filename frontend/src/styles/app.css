@@ -271,6 +271,30 @@ h1, h2, h3, h4, h5, h6 {
     color: var(--dark-gray);
 }
 
+.contract-sub-info {
+    font-size: 0.75rem;
+    color: var(--dark-gray);
+}
+
+.badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    background-color: var(--mid-gray);
+    color: white;
+}
+
+.badge-exchange {
+    background-color: var(--primary-color);
+}
+
+.badge-database {
+    background-color: var(--dark-gray);
+}
+
 .contract-volume, .contract-score {
     margin-left: 15px;
     font-size: 0.9em;
@@ -461,6 +485,33 @@ h1, h2, h3, h4, h5, h6 {
     border-top: 4px solid var(--danger-color);
 }
 
+.view-toggle {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+}
+
+.view-toggle button {
+    background-color: var(--light-gray);
+    border: 1px solid var(--mid-gray);
+    border-radius: 20px;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.view-toggle button.active {
+    background-color: var(--primary-color);
+    color: #fff;
+    border-color: var(--primary-color);
+}
+
+.last-updated {
+    font-size: 0.85rem;
+    color: var(--dark-gray);
+    margin-bottom: 12px;
+}
+
 .pipeline-stages {
     display: flex;
     margin: 20px 0;
@@ -499,6 +550,81 @@ h1, h2, h3, h4, h5, h6 {
 
 .pipeline-details {
     margin-top: 20px;
+}
+
+.pipeline-table-wrapper {
+    overflow-x: auto;
+    background-color: white;
+    border-radius: var(--border-radius);
+    box-shadow: var(--box-shadow);
+}
+
+.pipeline-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.pipeline-table thead {
+    background-color: var(--light-gray);
+}
+
+.pipeline-table th,
+.pipeline-table td {
+    padding: 12px;
+    border-bottom: 1px solid var(--mid-gray);
+    text-align: left;
+    white-space: nowrap;
+}
+
+.pipeline-stages-inline {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.stage-pill {
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+}
+
+.stage-pill.completed {
+    background-color: rgba(46, 204, 113, 0.15);
+    color: var(--success-color);
+}
+
+.stage-pill.in-progress {
+    background-color: rgba(52, 152, 219, 0.15);
+    color: var(--primary-color);
+}
+
+.stage-pill.pending {
+    background-color: rgba(243, 156, 18, 0.15);
+    color: var(--warning-color);
+}
+
+.stage-pill.failed {
+    background-color: rgba(231, 76, 60, 0.15);
+    color: var(--danger-color);
+}
+
+@keyframes move-up-highlight {
+    from { background-color: rgba(46, 204, 113, 0.2); }
+    to { background-color: transparent; }
+}
+
+@keyframes move-down-highlight {
+    from { background-color: rgba(231, 76, 60, 0.2); }
+    to { background-color: transparent; }
+}
+
+.pipeline-row.movement-up {
+    animation: move-up-highlight 1.2s ease;
+}
+
+.pipeline-row.movement-down {
+    animation: move-down-highlight 1.2s ease;
 }
 
 .detail-group {
