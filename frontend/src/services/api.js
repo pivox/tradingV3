@@ -59,6 +59,54 @@ const api = {
         return handleResponse(response);
     },
 
+    // Trading configuration
+    async getTradingConfigurations() {
+        const response = await fetch(`${config.apiUrl}${config.endpoints.tradingConfigurations}`);
+        return handleResponse(response);
+    },
+
+    async createTradingConfiguration(payload) {
+        const response = await fetch(`${config.apiUrl}${config.endpoints.tradingConfigurations}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return handleResponse(response);
+    },
+
+    async updateTradingConfiguration(id, payload) {
+        const response = await fetch(`${config.apiUrl}${config.endpoints.tradingConfigurations}/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return handleResponse(response);
+    },
+
+    // Exchange accounts
+    async getExchangeAccounts() {
+        const response = await fetch(`${config.apiUrl}${config.endpoints.exchangeAccounts}`);
+        return handleResponse(response);
+    },
+
+    async createExchangeAccount(payload) {
+        const response = await fetch(`${config.apiUrl}${config.endpoints.exchangeAccounts}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return handleResponse(response);
+    },
+
+    async updateExchangeAccount(id, payload) {
+        const response = await fetch(`${config.apiUrl}${config.endpoints.exchangeAccounts}/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return handleResponse(response);
+    },
+
     // Indicateurs (API Python)
     async calculateIndicators(symbol, interval, indicators = []) {
         const response = await fetch(`${config.pythonApiUrl}/indicators/calculate`, {

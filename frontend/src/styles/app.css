@@ -150,6 +150,38 @@ h1, h2, h3, h4, h5, h6 {
     box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
 }
 
+.config-form label,
+.accounts-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 14px;
+}
+
+.config-form input,
+.config-form select,
+.config-form textarea,
+.accounts-form input,
+.accounts-form select,
+.accounts-form textarea {
+    padding: 10px 12px;
+    border: 1px solid var(--mid-gray);
+    border-radius: 4px;
+    font-size: 15px;
+    transition: var(--transition);
+}
+
+.config-form input:focus,
+.config-form select:focus,
+.config-form textarea:focus,
+.accounts-form input:focus,
+.accounts-form select:focus,
+.accounts-form textarea:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
+
 /* Tableaux */
 .data-table, .positions-table {
     width: 100%;
@@ -371,6 +403,48 @@ h1, h2, h3, h4, h5, h6 {
 /* Positions */
 .positions-page {
     padding: 10px 0;
+}
+
+.realtime-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.realtime-controls button {
+    padding: 8px 16px;
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.realtime-controls button:hover {
+    opacity: 0.85;
+}
+
+.realtime-controls .connection-state {
+    font-weight: 500;
+}
+
+.realtime-controls .state-connected {
+    color: var(--success-color);
+}
+
+.realtime-controls .state-connecting {
+    color: var(--warning-color);
+}
+
+.realtime-controls .state-disconnected {
+    color: var(--danger-color);
+}
+
+.realtime-controls .state-inactive {
+    color: var(--dark-gray);
 }
 
 .filters {

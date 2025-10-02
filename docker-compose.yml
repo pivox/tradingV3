@@ -16,6 +16,7 @@ services:
     environment:
       - CHOKIDAR_USEPOLLING=true
       - REACT_APP_API_URL=http://localhost:8080
+      - REACT_APP_POSITIONS_WS_BASE_URL=http://localhost:9000
     command: sh -c "npm install --legacy-peer-deps && npm start"
     networks:
       - frontend-net
@@ -194,6 +195,31 @@ services:
         condition: service_healthy
     networks:
       - temporal-net
+      - shared-net
+
+  bitmart-position-sync:
+    build: ./bitmart_positions_sync
+    container_name: bitmart_position_sync
+    ports:
+      - "9000:9000"
+    environment:
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=symfony_db
+      - DB_USER=symfony
+      - DB_PASSWORD=symfony
+      - BITMART_API_KEY=afdc00c7ea826a230afc307ed8bf8a8eabff4448
+      - BITMART_SECRET_KEY=1737627899f7735994cee455c0c78d21f95b14ae07b79006a330e6cc33233623
+      - BITMART_API_MEMO=tradingDemo
+      - BITMART_WS_CHANNELS=futures/position
+      - BITMART_POLL_SECONDS=180
+      - BITMART_SYNC_PORT=9000
+      - BITMART_AUTO_START=1
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend-net
       - shared-net
 
   cron-symfony-fetch-klines-worker:
