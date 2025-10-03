@@ -66,7 +66,7 @@ final class OpenedLockedSyncService
 
             if (!in_array($sym, $openSymbols, true) && !$orderStillOpen) {
                 // ⇒ position fermée et aucun ordre actif : on relâche la pipeline
-                $pipeline->setStatus(ContractPipeline::STATUS_PENDING)->setOrderId(null);
+                $pipeline->setStatus(ContractPipeline::STATUS_PENDING)->setCurrentTimeframe('15m');
                 $this->em->persist($pipeline);
                 $removed[] = $sym;
                 if ($orderId !== null) {
