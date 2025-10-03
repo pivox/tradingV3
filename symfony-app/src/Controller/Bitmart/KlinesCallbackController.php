@@ -7,6 +7,7 @@ use App\Entity\Contract;
 use App\Entity\ContractPipeline;
 use App\Repository\ContractPipelineRepository;
 use App\Repository\KlineRepository;
+use App\Service\Exception\Trade\Position\LeverageLowException;
 use App\Service\Persister\KlinePersister;
 use App\Service\Pipeline\ContractPipelineService;
 use App\Service\Signals\Timeframe\SignalService;
@@ -389,7 +390,7 @@ final class KlinesCallbackController extends AbstractController
                                 finalSideUpper: $finalSide,
                                 marginUsdt:     70,
                                 riskMaxPct:     0.07,
-                                rMultiple:      2.0
+                                rMultiple:      3.0
                             );
                             $contextTrail[] = ['step' => 'order_submitted', 'type' => 'scalping'];
                             $this->validationLogger->info('Order submitted [SCALPING]', [
@@ -397,7 +398,16 @@ final class KlinesCallbackController extends AbstractController
                                 'type' => 'scalping',
                                 'trail' => $contextTrail,
                             ]);
-                        } catch (\Throwable $e) {
+                        }
+                        catch (LeverageLowException $exception)
+                        {
+                            $this->validationLogger->error('Leverage balance [SCALPING]', [
+                                'symbol' => $symbol,
+                                'error' => $exception->getMessage(),
+                                'trail' => $contextTrail,
+                            ]);
+                        }
+                        catch (\Throwable $e) {
                             $contextTrail[] = ['step' => 'order_failed', 'type' => 'scalping', 'error' => $e->getMessage()];
                             $this->validationLogger->error('Order submission failed [SCALPING]', [
                                 'symbol' => $symbol,

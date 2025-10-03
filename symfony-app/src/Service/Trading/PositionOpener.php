@@ -8,6 +8,7 @@ use App\Repository\ContractPipelineRepository;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Service\Config\TradingParameters;
+use App\Service\Exception\Trade\Position\LeverageLowException;
 use App\Service\Indicator\AtrCalculator;
 use App\Util\SrRiskHelper;
 use InvalidArgumentException;
@@ -225,7 +226,17 @@ final class PositionOpener
             $levFromSizing= max(1, $levFloor);
 
             $currentLev = $this->getCurrentLeverageSafe($symbol);
-            $targetLev  = max(4, min($maxLev, $levFromSizing));
+            $targetLev = (int)($maxLev * 0.2);
+            $this->positionsLogger->info("Leverage calculation", [
+                'lev_from_budget' => $levFromSizing,
+                'lev_floor_2x'    => $levFloor,
+                'max_lev_contract'=> $maxLev,
+                'current_lev'     => $currentLev,
+            ]);
+            if ($levFromSizing < $targetLev) {
+                $this->positionsLogger->info("Leverage calculation => no need to open leverage too low ");
+                throw LeverageLowException::trigger($symbol, $maxLev,  $levFromSizing);
+            }
             $factor     = $currentLev > 0 ? $targetLev / $currentLev : $targetLev;
 
             $this->positionsLogger->info('Leverage adjust', [
