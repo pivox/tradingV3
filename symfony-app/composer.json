@@ -27,6 +27,7 @@
         "symfony/flex": "^2",
         "symfony/framework-bundle": "7.3.*",
         "symfony/http-client": "7.3.*",
+        "symfony/lock": "7.3.*",
         "symfony/maker-bundle": "^1.63",
         "symfony/monolog-bundle": "^3.10",
         "symfony/property-access": "7.3.*",

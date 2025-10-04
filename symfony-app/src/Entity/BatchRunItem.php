@@ -1,57 +1,63 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Entity;
 
-
-use ApiPlatform\Doctrine\Orm\Filter\SearchFilter;
-use ApiPlatform\Metadata\ApiFilter;
-use ApiPlatform\Metadata\ApiResource;
-use ApiPlatform\Metadata\Get;
-use ApiPlatform\Metadata\GetCollection;
-use ApiPlatform\Metadata\Post;
 use Doctrine\ORM\Mapping as ORM;
-use Doctrine\Common\Collections\ArrayCollection;
-use Doctrine\Common\Collections\Collection;
 
-
-#[ORM\Entity]
-#[ORM\Table(name: 'batch_run_item')]
-#[ORM\UniqueConstraint(name: 'uniq_run_symbol', columns: [ 'run_key', 'symbol'])]
+#[ORM\Entity(repositoryClass: \App\Repository\BatchRunItemRepository::class)]
+#[ORM\Table(name: 'batch_run_items')]
+#[ORM\Index(name: 'idx_batch_symbol', columns: ['batch_run_id','symbol'])]
 class BatchRunItem
 {
-    public const S_PENDING   = 'PENDING';
-    public const S_PERSISTED = 'PERSISTED';
-    public const S_VALIDATED = 'VALIDATED';
-    public const S_FAILED    = 'FAILED';
+    public const STATUS_PENDING  = 'pending';
+    public const STATUS_ENQUEUED = 'enqueued';
+    public const STATUS_DONE     = 'done';
+    public const STATUS_FAILED   = 'failed';
+    public const STATUS_SKIPPED  = 'skipped';
 
     #[ORM\Id]
     #[ORM\GeneratedValue]
-    #[ORM\Column(type: 'bigint')]
-    private ?int $id = null;
+    #[ORM\Column(type:'integer')]
+    private int $id;
 
-    #[ORM\Column(type: 'string', length: 64)]
-    private string $runKey;
+    #[ORM\ManyToOne(targetEntity: BatchRun::class)]
+    #[ORM\JoinColumn(name:'batch_run_id', referencedColumnName:'id', nullable:false, onDelete:'CASCADE')]
+    private BatchRun $batchRun;
 
-    #[ORM\Column(type: 'string', length: 64)]
+    #[ORM\Column(type:'string', length:50)]
     private string $symbol;
 
-    #[ORM\Column(type: 'string', length: 16)]
-    private string $status = self::S_PENDING;
+    #[ORM\Column(type:'string', length:12)]
+    private string $status = self::STATUS_PENDING;
 
-    #[ORM\Column(type: 'json', nullable: true)]
-    private ?array $meta = null; // logs, counts…
+    #[ORM\Column(type:'smallint', options:['unsigned'=>true])]
+    private int $attempts = 0;
 
-    #[ORM\Column(type: 'datetime_immutable')]
+    #[ORM\Column(type:'string', length:255, nullable:true)]
+    private ?string $lastError = null;
+
+    #[ORM\Column(type:'datetime_immutable')]
     private \DateTimeImmutable $createdAt;
 
-    #[ORM\Column(type: 'datetime_immutable')]
-    private \DateTimeImmutable $updatedAt;
+    #[ORM\Column(type:'datetime_immutable', nullable:true)]
+    private ?\DateTimeImmutable $updatedAt = null;
 
-    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
-    private ?\DateTimeImmutable $persistedAt = null;
+    public function __construct(BatchRun $run, string $symbol)
+    {
+        $this->batchRun = $run;
+        $this->symbol   = strtoupper($symbol);
+        $this->createdAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+    }
 
-    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
-    private ?\DateTimeImmutable $validatedAt = null;
+    public function getId(): int { return $this->id; }
+    public function getBatchRun(): BatchRun { return $this->batchRun; }
+    public function getSymbol(): string { return $this->symbol; }
+    public function getStatus(): string { return $this->status; }
 
-    // getters/setters ...
+    public function markEnqueued(): void     { $this->status = self::STATUS_ENQUEUED; $this->updatedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC')); }
+    public function markDone(): void         { $this->status = self::STATUS_DONE;     $this->updatedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC')); }
+    public function markFailed(?string $e): void { $this->status = self::STATUS_FAILED; $this->lastError = $e; $this->attempts++; $this->updatedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC')); }
+    public function markSkipped(?string $why = null): void { $this->status = self::STATUS_SKIPPED; $this->lastError = $why; $this->updatedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC')); }
 }
