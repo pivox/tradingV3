@@ -141,3 +141,7 @@ services:
             $bitmartFuturesV2: '@http_client.bitmart_futures_v2_private'
             $signer: '@App\Bitmart\Http\BitmartRequestSigner'
             $apiKey: '%env(BITMART_API_KEY)%'
+    App\Service\Indicator\SupportResistanceService:
+        public: false
+        autowire: true
+        autoconfigure: true

@@ -16,7 +16,7 @@ class ContractRepository extends ServiceEntityRepository
         parent::__construct($registry, Contract::class);
     }
 
-    public function allActiveSymbols()
+    public function allActiveSymbols(): array
     {
         $date = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
             ->modify('-1080 hours')
@@ -41,6 +41,56 @@ class ContractRepository extends ServiceEntityRepository
         ));
 
         return $qb->getQuery()->getResult();
+    }
+
+    public function allActiveSymbolNames(): array
+    {
+        $date = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+            ->modify('-1080 hours')
+            ->getTimestamp();
+
+        $qb = $this->createQueryBuilder('contract');
+        $qb->select('contract.symbol')
+            ->andWhere('contract.quoteCurrency = :quoteCurrency')
+            ->andWhere('contract.status = :status')
+            ->andWhere('contract.volume24h > :volume24h')
+            ->andWhere('contract.openInterest <= :openInterest')
+            ->setParameter('quoteCurrency', 'USDT')
+            ->setParameter('status', 'Trading')
+            ->setParameter('volume24h', 2_000_000)
+            ->setParameter('openInterest', $date);
+
+        $qb->andWhere($qb->expr()->notIn(
+            'contract.symbol',
+            $this->getEntityManager()->createQueryBuilder()
+                ->select('b.symbol')
+                ->from('App\Entity\BlacklistedContract', 'b')
+                ->getDQL()
+        ));
+
+        return array_column($qb->getQuery()->getResult(), 'symbol');
+    }
+
+    public function findTopByVolumeOrOI(int $limit = 100): array
+    {
+        $qb = $this->createQueryBuilder('contract');
+        $qb->select('contract.symbol')
+            ->where('contract.quoteCurrency = :quoteCurrency')
+            ->andWhere('contract.status = :status')
+            ->setParameter('quoteCurrency', 'USDT')
+            ->setParameter('status', 'Trading')
+            ->orderBy('contract.volume24h', 'DESC')
+            ->setMaxResults($limit);
+
+        $qb->andWhere($qb->expr()->notIn(
+            'contract.symbol',
+            $this->getEntityManager()->createQueryBuilder()
+                ->select('b.symbol')
+                ->from('App\Entity\BlacklistedContract', 'b')
+                ->getDQL()
+        ));
+
+        return array_column($qb->getQuery()->getResult(), 'symbol');
     }
 
 
