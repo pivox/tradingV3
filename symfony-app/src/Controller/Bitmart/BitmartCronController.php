@@ -104,20 +104,17 @@ final class BitmartCronController extends AbstractController
         if ($request->query->has('symbol')) {
             $symbol = (string) $request->query->get('symbol');
             $contract = $this->contractRepository->find($symbol);
-            return ($contract && $this->filterContracts($contract, $allowedQuotes, $blacklist) && $this->hasSufficientVolume($contract))
+            return ($contract && $this->filterContracts($contract, $allowedQuotes, $blacklist))
                 ? [$symbol]
                 : [];
         }
 
-        $contracts = $this->contractRepository->findBy(['exchange' => 'bitmart']);
+        $contracts = $this->contractRepository->allActiveSymbols();
         if ($tf == '4h') {
             $excluded = $contractPipelineRepository->getAllSymbols();
             return array_map(fn($c) => $c->getSymbol(),
                 array_filter($contracts,
-                    fn($c) =>
-                    $this->filterContracts($c, $allowedQuotes, $blacklist)
-                    && $this->hasSufficientVolume($c)
-                    && !in_array($c->getSymbol(), $excluded, true)
+                    fn($c) =>!in_array($c->getSymbol(), $excluded, true)
                 )
             );
         }
@@ -127,8 +124,7 @@ final class BitmartCronController extends AbstractController
             if (!$contract) {
                 return false;
             }
-            return $this->filterContracts($contract, $allowedQuotes, $blacklist)
-                && $this->hasSufficientVolume($contract);
+            return $this->filterContracts($contract, $allowedQuotes, $blacklist);
         }));
     }
 
@@ -137,12 +133,6 @@ final class BitmartCronController extends AbstractController
         $quote = strtoupper($contract->getQuoteCurrency());
         return !in_array($symbol, $blacklist, true) &&
             (empty($allowedQuotes) || in_array($quote, $allowedQuotes, true));
-    }
-
-    private function hasSufficientVolume($contract): bool
-    {
-        $volume = $contract->getVolume24h();
-        return $volume !== null && $volume > 0;
     }
 
     private function guard(): ?JsonResponse {

@@ -18,10 +18,14 @@ class ContractRepository extends ServiceEntityRepository
 
     public function allActiveSymbols()
     {
-        return $this->createQueryBuilder('contract')
-            ->andWhere('contract.symbol like :likeT')
-            ->setParameter('likeT', '%USDT%')
-            ->select('contract.symbol')
+        $date = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+            ->modify('-1080 hours')
+            ->getTimestamp(); // timestamp UNIX (bigint)
+        return  $this->createQueryBuilder('contract')
+            ->andWhere('contract.quoteCurrency = :quoteCurrency')->setParameter('quoteCurrency', 'USDT')
+            ->andWhere('contract.status = :status')->setParameter('status', 'Trading')
+            ->andWhere('contract.volume24h > :volume24h')->setParameter('volume24h', 50_000_000)
+            ->andWhere('contract.openInterest <= :openInterest')->setParameter('openInterest', $date)
             ->getQuery()->getResult();
     }
 
