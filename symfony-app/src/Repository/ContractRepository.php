@@ -20,14 +20,29 @@ class ContractRepository extends ServiceEntityRepository
     {
         $date = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
             ->modify('-1080 hours')
-            ->getTimestamp(); // timestamp UNIX (bigint)
-        return  $this->createQueryBuilder('contract')
-            ->andWhere('contract.quoteCurrency = :quoteCurrency')->setParameter('quoteCurrency', 'USDT')
-            ->andWhere('contract.status = :status')->setParameter('status', 'Trading')
-            ->andWhere('contract.volume24h > :volume24h')->setParameter('volume24h', 50_000_000)
-            ->andWhere('contract.openInterest <= :openInterest')->setParameter('openInterest', $date)
-            ->getQuery()->getResult();
+            ->getTimestamp();
+
+        $qb = $this->createQueryBuilder('contract');
+        $qb->andWhere('contract.quoteCurrency = :quoteCurrency')
+            ->andWhere('contract.status = :status')
+            ->andWhere('contract.volume24h > :volume24h')
+            ->andWhere('contract.openInterest <= :openInterest')
+            ->setParameter('quoteCurrency', 'USDT')
+            ->setParameter('status', 'Trading')
+            ->setParameter('volume24h', 2_000_000)
+            ->setParameter('openInterest', $date);
+
+        $qb->andWhere($qb->expr()->notIn(
+            'contract.symbol',
+            $this->getEntityManager()->createQueryBuilder()
+                ->select('b.symbol')
+                ->from('App\Entity\BlacklistedContract', 'b')
+                ->getDQL()
+        ));
+
+        return $qb->getQuery()->getResult();
     }
+
 
     public function normalizeSubset(array $subset): array
     {
