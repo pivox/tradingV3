@@ -57,7 +57,7 @@ class ContractRepository extends ServiceEntityRepository
             ->andWhere('contract.openInterest <= :openInterest')
             ->setParameter('quoteCurrency', 'USDT')
             ->setParameter('status', 'Trading')
-            ->setParameter('volume24h', 2_000_000)
+            ->setParameter('volume24h', 300_000)
             ->setParameter('openInterest', $date);
 
         $qb->andWhere($qb->expr()->notIn(
