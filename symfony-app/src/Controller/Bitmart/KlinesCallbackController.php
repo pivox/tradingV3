@@ -19,6 +19,7 @@ use App\Service\Signals\HighConviction\HighConvictionMetricsBuilder;
 use App\Service\Strategy\HighConvictionValidation;
 use App\Service\Strategy\HighConvictionTraceWriter;
 use App\Repository\RuntimeGuardRepository;
+use App\Repository\UserConfigRepository;
 use App\Util\TimeframeHelper;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
@@ -45,6 +46,7 @@ final class KlinesCallbackController extends AbstractController
         private readonly RuntimeGuardRepository $runtimeGuardRepository,
         private readonly ContractPipelineRepository $contractPipelineRepository,
         private readonly HighConvictionMetricsBuilder $hcMetricsBuilder,
+        private readonly UserConfigRepository $userConfigRepository,
         HighConvictionValidation $highConviction,
         HighConvictionTraceWriter $hcTraceWriter,
         BitmartAccountGateway $bitmartAccount,
@@ -59,7 +61,7 @@ final class KlinesCallbackController extends AbstractController
         private readonly LoggerInterface $logger,
         private readonly LoggerInterface $validationLogger,
 
-        // Ton service d’évaluation (existant)
+        // Ton service d'évaluation (existant)
         private readonly SignalService $signalService,
         private readonly BitmartRefreshService $refreshService,
     ) {
@@ -306,12 +308,14 @@ final class KlinesCallbackController extends AbstractController
                     ]);
 
                     if ($isHigh && $levCap > 0) {
+                        $config = $this->userConfigRepository->getOrCreateDefault();
                         $availableUsdt = $this->bitmartAccount->getAvailableUSDT();
-                        $marginBudget  = max(0.0, $availableUsdt * 0.5);
+                        $marginBudget  = max(0.0, $availableUsdt * $config->getHcMarginPct());
                         $contextTrail[] = [
                             'step' => 'budget_high_conviction',
                             'available_usdt' => $availableUsdt,
                             'margin_usdt' => $marginBudget,
+                            'margin_pct' => $config->getHcMarginPct(),
                         ];
 
                         if ($marginBudget <= 0.0) {
@@ -330,6 +334,12 @@ final class KlinesCallbackController extends AbstractController
                             'final_side'   => $finalSide,
                             'leverage_cap' => $levCap,
                             'signal'       => $signalsPayload[$timeframe] ?? null,
+                            'config'       => [
+                                'margin_pct' => $config->getHcMarginPct(),
+                                'risk_max_pct' => $config->getHcRiskMaxPct(),
+                                'r_multiple' => $config->getHcRMultiple(),
+                                'expire_after_sec' => $config->getHcExpireAfterSec(),
+                            ],
                             'trail'        => $contextTrail,
                         ]);
 
@@ -339,10 +349,10 @@ final class KlinesCallbackController extends AbstractController
                                 finalSideUpper: $finalSide,
                                 leverageCap:    $levCap,
                                 marginUsdt:     $marginBudget,
-                                riskMaxPct:     0.07,
-                                rMultiple:      2.0,
+                                riskMaxPct:     $config->getHcRiskMaxPct(),
+                                rMultiple:      $config->getHcRMultiple(),
                                 meta:           ['ctx' => 'HC'],
-                                expireAfterSec: 120
+                                expireAfterSec: $config->getHcExpireAfterSec()
                             );
                             $contextTrail[] = ['step' => 'order_submitted', 'type' => 'high_conviction'];
                             $this->validationLogger->info('Order submitted [HIGH_CONVICTION]', [
@@ -376,11 +386,17 @@ final class KlinesCallbackController extends AbstractController
                             }
                         }
                     } else {
+                        $config = $this->userConfigRepository->getOrCreateDefault();
                         $contextTrail[] = ['step' => 'opening_scalping'];
                         $this->validationLogger->info('Opening position [SCALPING]', [
                             'symbol'     => $symbol,
                             'final_side' => $finalSide,
                             'signal'     => $signalsPayload[$timeframe] ?? null,
+                            'config'     => [
+                                'margin_usdt' => $config->getScalpMarginUsdt(),
+                                'risk_max_pct' => $config->getScalpRiskMaxPct(),
+                                'r_multiple' => $config->getScalpRMultiple(),
+                            ],
                             'trail'      => $contextTrail,
                         ]);
 
@@ -388,9 +404,9 @@ final class KlinesCallbackController extends AbstractController
                             $this->positionOpener->openLimitAutoLevWithSr(
                                 symbol:         $symbol,
                                 finalSideUpper: $finalSide,
-                                marginUsdt:     70,
-                                riskMaxPct:     0.07,
-                                rMultiple:      3.0
+                                marginUsdt:     $config->getScalpMarginUsdt(),
+                                riskMaxPct:     $config->getScalpRiskMaxPct(),
+                                rMultiple:      $config->getScalpRMultiple()
                             );
                             $contextTrail[] = ['step' => 'order_submitted', 'type' => 'scalping'];
                             $this->validationLogger->info('Order submitted [SCALPING]', [
