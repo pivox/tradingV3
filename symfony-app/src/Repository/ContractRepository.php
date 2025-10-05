@@ -29,7 +29,7 @@ class ContractRepository extends ServiceEntityRepository
             ->andWhere('contract.openInterest <= :openInterest')
             ->setParameter('quoteCurrency', 'USDT')
             ->setParameter('status', 'Trading')
-            ->setParameter('volume24h', 2_000_000)
+            ->setParameter('volume24h', 500_000)
             ->setParameter('openInterest', $date);
 
         $qb->andWhere($qb->expr()->notIn(
@@ -45,21 +45,31 @@ class ContractRepository extends ServiceEntityRepository
 
     public function allActiveSymbolNames(): array
     {
+
         $date = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
             ->modify('-1080 hours')
             ->getTimestamp();
 
-        $qb = $this->createQueryBuilder('contract');
-        $qb->select('contract.symbol')
-            ->andWhere('contract.quoteCurrency = :quoteCurrency')
-            ->andWhere('contract.status = :status')
-            ->andWhere('contract.volume24h > :volume24h')
-            ->andWhere('contract.openInterest <= :openInterest')
-            ->setParameter('quoteCurrency', 'USDT')
-            ->setParameter('status', 'Trading')
-            ->setParameter('volume24h', 300_000)
-            ->setParameter('openInterest', $date);
+        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
 
+        $qb = $this->createQueryBuilder('contract');
+        $qb
+            ->andWhere('contract.status = :status')
+            ->andWhere('contract.quoteCurrency = :quoteCurrency')
+            ->andWhere('(contract.expireTimestamp IS NULL OR contract.expireTimestamp > :now)')
+            ->andWhere('(contract.delistTime IS NULL OR contract.delistTime > :now)')
+            ->andWhere('contract.maxLeverage > 0')
+            ->andWhere('contract.openInterest > 0')
+            ->andWhere('contract.productType IN (:types)')
+            ->andWhere('contract.indexPrice BETWEEN contract.low24h AND contract.high24h')
+            ->andWhere('contract.openInterest <= :openInterest')
+            ->setParameter('openInterest', $date)
+            ->setParameter('status', 'Trading')
+            ->setParameter('quoteCurrency', 'USDT')
+            ->setParameter('now', $now)
+            ->setParameter('types', ['perpetual', 'future']);
+
+        // Exclure les contrats blacklistés
         $qb->andWhere($qb->expr()->notIn(
             'contract.symbol',
             $this->getEntityManager()->createQueryBuilder()
@@ -97,7 +107,7 @@ class ContractRepository extends ServiceEntityRepository
     public function normalizeSubset(array $subset): array
     {
         return array_column($this->createQueryBuilder('contract')
-            ->where('contract.symbol in (\''.implode('\',\'', $subset).'\')')
+            ->where('contract.symbol in (\'' . implode('\',\'', $subset) . '\')')
             ->select('contract.symbol')
             ->getQuery()
             ->getResult(), 'symbol');
