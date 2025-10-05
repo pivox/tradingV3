@@ -111,12 +111,7 @@ final class BitmartCronController extends AbstractController
 
         $contracts = $this->contractRepository->allActiveSymbols();
         if ($tf == '4h') {
-            $excluded = $contractPipelineRepository->getAllSymbols();
-            return array_map(fn($c) => $c->getSymbol(),
-                array_filter($contracts,
-                    fn($c) =>!in_array($c->getSymbol(), $excluded, true)
-                )
-            );
+            return array_map(fn($c) => $c->getSymbol(), $contracts);
         }
         $symbols = $contractPipelineRepository->getAllSymbolsWithActiveTimeframe($tf);
         return array_values(array_filter($symbols, function (string $symbol) use ($allowedQuotes, $blacklist): bool {
