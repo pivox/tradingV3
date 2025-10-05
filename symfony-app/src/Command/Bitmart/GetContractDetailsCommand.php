@@ -112,16 +112,15 @@ final class GetContractDetailsCommand extends Command
                 $io->section($d->symbol);
                 $io->listing([
                     sprintf('Base / Quote            : %s / %s', $d->baseCurrency ?? '-', $d->quoteCurrency ?? '-'),
-                    sprintf('Tick (price_precision)  : %s', $d->pricePrecision ?? '-'),
-                    sprintf('Step (vol_precision)    : %s', $d->volPrecision ?? '-'),
+                    sprintf('Précision du prix       : %s', $d->pricePrecision ?? '-'),
+                    sprintf('Précision du volume     : %s', $d->volPrecision ?? '-'),
                     sprintf('Contract size           : %s', $d->contractSize ?? '-'),
-                    sprintf('Maker / Taker fee       : %s / %s', $d->minLeverage ?? '-', $d->maxLeverage ?? '-'), // (si tu veux les fees exactes, mappe-les si dispo)
+                    sprintf('Levier Min / Max        : %s / %s', $d->minLeverage ?? '-', $d->maxLeverage ?? '-'),
                     sprintf('Min / Max volume        : %s / %s', $d->minVolume ?? '-', $d->maxVolume ?? '-'),
                     sprintf('Market max volume       : %s', $d->marketMaxVolume ?? '-'),
                     sprintf('Funding interval (h)    : %s', $d->fundingIntervalHours ?? '-'),
                     sprintf('Status                  : %s', $d->status ?? '-'),
                     sprintf('Open time               : %s', $fmtMs($d->openTimestampMs)),
-                    sprintf('Funding time (prochain) : %s', $fmtMs($d->fundingTimeMs ?? null)), // si tu l’as ajouté au DTO
                     sprintf('Delist time             : %s', $fmtSec($d->delistTimeSec ?? null)),
                 ]);
             }
