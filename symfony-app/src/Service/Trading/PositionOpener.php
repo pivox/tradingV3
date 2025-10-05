@@ -1385,9 +1385,10 @@ final class PositionOpener
             throw $e;
         }
 
-        // 9) Fixe le levier (côté exchange)
+        // 9) Fixe le levier (côté exchange) + attend synchronisation
         $this->positionsLogger->info('[HC] Étape 9: Fixe levier (exchange)', ['lev' => (int)\ceil($levOpt)]);
         $this->bitmartPositions->setLeverage($symbol, (int)\ceil($levOpt), 'isolated');
+        $this->waitLeverageSynchronized($symbol, (int)\ceil($levOpt), 'isolated');
 
         // 10) Soumission LIMIT + presets TP/SL
         $clientOrderId = 'HC_' . bin2hex(random_bytes(6));
@@ -1518,20 +1519,70 @@ final class PositionOpener
     }
 
 
-    private function waitLeverageSynchronized(string $symbol, int $expected, string $openType = 'isolated', int $tries = 3, int $sleepMs = 150): void {
+    private function waitLeverageSynchronized(string $symbol, int $expected, string $openType = 'isolated', int $tries = 5, int $sleepMs = 200): void {
+        $this->positionsLogger->info('[LEVERAGE_SYNC] Attente de la synchronisation du levier', [
+            'symbol' => $symbol,
+            'expected' => $expected,
+            'tries' => $tries,
+            'sleep_ms' => $sleepMs
+        ]);
+
         for ($i = 0; $i < $tries; $i++) {
             try {
                 $resp = $this->bitmartPositions->list(['symbol' => $symbol]);
                 $data = $resp['data'] ?? [];
                 $lev = (int)($data['leverage'] ?? ($data[0]['leverage'] ?? 0));
-                if ($lev === $expected) return;
+
+                $this->positionsLogger->info('[LEVERAGE_SYNC] Tentative ' . ($i + 1) . '/' . $tries, [
+                    'symbol' => $symbol,
+                    'current_leverage' => $lev,
+                    'expected' => $expected,
+                    'synced' => $lev === $expected
+                ]);
+
+                if ($lev === $expected) {
+                    $this->positionsLogger->info('[LEVERAGE_SYNC] Levier synchronisé avec succès', [
+                        'symbol' => $symbol,
+                        'leverage' => $lev,
+                        'attempts' => $i + 1
+                    ]);
+                    return;
+                }
             } catch (\Throwable $e) {
-                // ignore et retry
+                $this->positionsLogger->warning('[LEVERAGE_SYNC] Erreur lors de la vérification', [
+                    'symbol' => $symbol,
+                    'attempt' => $i + 1,
+                    'error' => $e->getMessage()
+                ]);
             }
             usleep($sleepMs * 1000);
         }
-        // En cas d’incertitude, on retente submit-leverage puis on continue
+
+        // En cas d'incertitude, on retente submit-leverage puis on continue
+        $this->positionsLogger->warning('[LEVERAGE_SYNC] Levier non synchronisé après ' . $tries . ' tentatives, re-soumission', [
+            'symbol' => $symbol,
+            'expected' => $expected
+        ]);
         $this->setLeverage($symbol, $expected, $openType);
+
+        // Dernière vérification après re-soumission
+        usleep($sleepMs * 2000);
+        try {
+            $resp = $this->bitmartPositions->list(['symbol' => $symbol]);
+            $data = $resp['data'] ?? [];
+            $lev = (int)($data['leverage'] ?? ($data[0]['leverage'] ?? 0));
+            $this->positionsLogger->info('[LEVERAGE_SYNC] État final après re-soumission', [
+                'symbol' => $symbol,
+                'final_leverage' => $lev,
+                'expected' => $expected,
+                'synced' => $lev === $expected
+            ]);
+        } catch (\Throwable $e) {
+            $this->positionsLogger->error('[LEVERAGE_SYNC] Impossible de vérifier l\'état final', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage()
+            ]);
+        }
     }
 
 
