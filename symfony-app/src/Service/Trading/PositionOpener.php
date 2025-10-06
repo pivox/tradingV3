@@ -33,6 +33,7 @@ final class PositionOpener
         private readonly AtrCalculator $atrCalculator,
         private readonly TradingParameters $tradingParameters,
         private readonly LoggerInterface $positionsLogger, // channel "positions"
+        private readonly LoggerInterface $validationLogger, // channel "positions"
         private readonly ContractPipelineRepository $pipelineRepository,
         private readonly ContractRepository $contractRepository,
         private readonly KlineRepository $klineRepository,
@@ -460,11 +461,11 @@ final class PositionOpener
             try {
                 $reduceSide = $this->mapSideReduce($side); // 3: close long | 2: close short
                 $this->submitPositionTpSl(
-                    symbol: $symbol, orderType: 'take_profit', side: $reduceSide,
+                    symbol: $symbol, orderType: 'take_profit', sideReduce: $reduceSide,
                     triggerPrice: (string)$tpQ, priceType: 2, executivePrice: (string)$tpQ, category: 'limit'
                 );
                 $this->submitPositionTpSl(
-                    symbol: $symbol, orderType: 'stop_loss', side: $reduceSide,
+                    symbol: $symbol, orderType: 'stop_loss', sideReduce: $reduceSide,
                     triggerPrice: (string)$slQ, priceType: 2, executivePrice: (string)$slQ, category: 'limit'
                 );
             } catch (\Throwable $e) {
@@ -1261,211 +1262,260 @@ final class PositionOpener
      */
     public function openLimitHighConvWithSr(
         string $symbol,
-        string $finalSideUpper,           // 'LONG' | 'SHORT'
-        int    $leverageCap    = self::HC_DEFAULT_LEV_CAP,  // CAP HC (e.g. 50)
-        float  $marginUsdt     = 60.0,                      // ton budget d’ouverture
-        float  $riskMaxPct     = 0.07,                      // 7% risque max sur la marge (identique à SR)
-        float  $rMultiple      = self::HC_DEFAULT_R_MULTIPLE,
+        string $finalSideUpper,            // 'LONG' | 'SHORT'
+        int    $leverageCap    = self::HC_DEFAULT_LEV_CAP,
+        float  $marginUsdt     = 60.0,
+        ?float $riskMaxPct     = null,     // si null => YAML risk.fixed_risk_pct
+        ?float $rMultiple      = null,     // si null => YAML atr.r_multiple ou long.take_profit.tp1_r
         array  $meta           = [],
         ?int   $expireAfterSec = self::HC_DEFAULT_EXPIRE_SEC
     ): array {
-        $orderId = null;
-
-        try {
-            $side = strtoupper($finalSideUpper);
-
-        // 1) Détails contrat
-        $this->positionsLogger->info('[HC] Étape 1: Détails du contrat', ['symbol' => $symbol]);
-        $details = $this->getContractDetails($symbol);
-        $tick    = (float)($details['price_precision'] ?? 0.0);
-        $qtyStep = (float)($details['vol_precision']   ?? 0.0);
-        $ctSize  = (float)($details['contract_size']   ?? 0.0);
-        $maxLev  = (int)  ($details['max_leverage']    ?? 50);
-
-        if ($tick <= 0 || $qtyStep <= 0 || $ctSize <= 0) {
-            $this->positionsLogger->error('[HC] Détails contrat invalides', compact('tick','qtyStep','ctSize'));
-            throw new \RuntimeException("Invalid contract details for $symbol");
-        }
-
-        // 2) Prix (mark) & entrée
-        $this->positionsLogger->info('[HC] Étape 2: Mark price', ['symbol' => $symbol]);
-        $mark  = $this->getMarkClose($symbol);
-        $limit = $this->quantizeToStep($mark, $tick);
-        $this->positionsLogger->info('[HC] Prix d\'entrée arrondi', ['mark' => $mark, 'limit' => $limit]);
-
-        $cfg = $this->tradingParameters->all();
-        $atrLookback  = (int)($cfg['atr']['lookback'] ?? 14);
-        $atrMethod    = (string)($cfg['atr']['method'] ?? 'wilder');
-        $atrTimeframe = (string)($cfg['atr']['timeframe'] ?? '5m');
-        $atrSeries = $this->klineRepository->findLastKlines(
-            symbol: $symbol,
-            timeframe: $atrTimeframe,
-            limit: max($atrLookback + 1, 200)
-        );
-        if (\count($atrSeries) <= $atrLookback) {
-            $this->positionsLogger->error('[HC] Pas assez de bougies pour l\'ATR', [
-                'timeframe' => $atrTimeframe,
-                'count'     => \count($atrSeries),
-                'lookback'  => $atrLookback
-            ]);
-            throw new \RuntimeException("Not enough OHLC for ATR ($symbol tf=$atrTimeframe)");
-        }
-        $atrValue = $this->atrCalculator->compute($atrSeries, $atrLookback, $atrMethod);
-        $this->positionsLogger->info('[HC] ATR source', [
-            'timeframe' => $atrTimeframe,
-            'lookback'  => $atrLookback,
-            'atr'       => $atrValue
-        ]);
-
-        // 3) Klines pour S/R 15m
-        $this->positionsLogger->info('[HC] Étape 3: Chargement des klines (S/R)', ['symbol' => $symbol]);
-        $klines15m = $this->klineRepository->findLastKlines(symbol: $symbol, timeframe: '15m', limit: 200);
-        if (\count($klines15m) < 50) {
-            $this->positionsLogger->error('[HC] Pas assez de klines pour S/R', ['count' => \count($klines15m)]);
-            throw new \RuntimeException("Not enough klines for SR detection ($symbol)");
-        }
-
-        // 4) Détection S/R & SL basé S/R + ATR
-        $this->positionsLogger->info('[HC] Étape 4: Détection S/R');
-        $sr = \App\Util\SrRiskHelper::findSupportResistance($klines15m);
-        $sr['atr'] = $atrValue;
-
-        $this->positionsLogger->info('[HC] Étape 5: Calcul SL via S/R + ATR', [
-            'side' => $side, 'limit' => $limit,
-            'supports' => $sr['supports'], 'resistances' => $sr['resistances'], 'atr' => $sr['atr'],
-            'atr_tf' => $atrTimeframe
-        ]);
-        $slRaw = \App\Util\SrRiskHelper::chooseSlFromSr($side, $limit, $sr['supports'], $sr['resistances'], $sr['atr']);
-        $slQ   = $this->quantizeToStep($slRaw, $tick);
-
-        // 5) Levier optimal basé risque ⇒ borné par CAP HC et par maxLev exchange
-        $this->positionsLogger->info('[HC] Étape 6: Calcul du levier optimal (cap HC)', [
-            'riskMaxPct' => $riskMaxPct, 'maxLev' => $maxLev, 'capHC' => $leverageCap
-        ]);
-        $levOptRaw = \App\Util\SrRiskHelper::leverageFromRisk($limit, $slQ, $riskMaxPct, $maxLev);
-        $levOpt    = min($levOptRaw, max(1, $leverageCap)); // bornage par CAP HC
-        if ($levOpt <= 0.0) {
-            throw new \RuntimeException("[HC] leverageFromRisk returned non-positive leverage.");
-        }
-
-        // 6) TP à R-multiple de la distance de stop
-        $this->positionsLogger->info('[HC] Étape 7: Calcul TP (R-multiple)', ['rMultiple' => $rMultiple]);
-        $stopPct  = abs($slQ - $limit) / max(1e-12, $limit);
-        $tpTarget = $stopPct * $rMultiple;
-        $tpRaw    = ($side === 'LONG') ? $limit * (1.0 + $tpTarget) : $limit * (1.0 - $tpTarget);
-        $tpQ      = $this->quantizeToStep($tpRaw, $tick);
-
-        // 7) Sizing par budget (marge × levier) → contrats
-        $this->positionsLogger->info('[HC] Étape 8: Sizing (budget & cap)', [
-            'marginUsdt' => $marginUsdt, 'levOptRaw' => $levOptRaw, 'levOptCapped' => $levOpt
-        ]);
-        $notionalMax = $marginUsdt * $levOpt;
-        $contractsBud = $this->quantizeQty(
-            $notionalMax / max(1e-12, $limit * $ctSize),
-            max(1e-9, $qtyStep)
-        );
-        $contracts = (int)max(1, $contractsBud);
-
-        // 8) (Optionnel) Garde liquidation locale (≥ 3× distance SL)
-        try {
-            $liqRatio = $this->estimateLiquidationDistanceRatio(
-                entry: $limit,
-                sl: $slQ,
-                sideUpper: $side,
-                leverage: (float)$levOpt,
-                symbol: $symbol
-            );
-            if ($liqRatio < self::HC_MIN_LIQ_RATIO) {
-                $this->positionsLogger->error('[HC] Liquidation guard KO', ['liq_ratio' => $liqRatio]);
-                throw new \RuntimeException("[HC] liquidation ratio {$liqRatio} < " . self::HC_MIN_LIQ_RATIO);
-            }
-        } catch (\Throwable $e) {
-            // Si tu préfères soft-fail, remplace par un warning :
-            // $this->positionsLogger->warning('[HC] Liquidation guard check failed', ['error' => $e->getMessage()]);
-            throw $e;
-        }
-
-        // 9) Fixe le levier (côté exchange) + attend synchronisation
-        $this->positionsLogger->info('[HC] Étape 9: Fixe levier (exchange)', ['lev' => (int)\ceil($levOpt)]);
-        $this->bitmartPositions->setLeverage($symbol, (int)\ceil($levOpt), 'isolated');
-        $this->waitLeverageSynchronized($symbol, (int)\ceil($levOpt), 'isolated');
-
-        // 10) Soumission LIMIT + presets TP/SL
+        $orderId       = null;
         $clientOrderId = 'HC_' . bin2hex(random_bytes(6));
-        $payload = [
-            'symbol'                        => $symbol,
-            'client_order_id'               => $clientOrderId,
-            'side'                          => $this->mapSideOpen(strtolower($side)),
-            'mode'                          => 1,
-            'type'                          => 'limit',
-            'open_type'                     => 'isolated',
-            'leverage'                      => (string)$levOpt,
-            'size'                          => $contracts,
-            'price'                         => (string)$limit,
-            'preset_take_profit_price_type' => 2, // mark/fair
-            'preset_stop_loss_price_type'   => 2,
-            'preset_take_profit_price'      => (string)$tpQ,
-            'preset_stop_loss_price'        => (string)$slQ,
-            'stp_mode'                      => 1,
-        ];
+        $contextTrail  = [];
+        $sideUpper     = strtoupper($finalSideUpper);
+        $sideLower     = strtolower($finalSideUpper); // 'long'|'short'
 
-        $this->positionsLogger->info('[HC] Étape 10: Soumission ordre', $payload);
-        $res = $this->ordersService->create($payload);
-        if (($res['code'] ?? 0) !== 1000) {
-            $this->positionsLogger->error('[HC] submit-order error', ['response' => $res]);
-            throw new RuntimeException('submit-order error: ' . json_encode($res, JSON_UNESCAPED_SLASHES));
-        }
-        $orderId = $res['data']['order_id'] ?? null;
+        // ==== Charger toute la config (YAML + overrides DB) ====
+        $params = $this->tradingParameters->all();
 
-        // 11) Expiration auto (facultatif)
-        if ($expireAfterSec !== null) {
-            $this->positionsLogger->info('[HC] Étape 11: Expiration auto', ['expireAfterSec' => $expireAfterSec]);
-            try { $this->scheduleCancelAllAfter($symbol, $expireAfterSec); }
-            catch (\Throwable $e) {
-                $this->positionsLogger->warning('[HC] scheduleCancelAllAfter failed', [
-                    'symbol' => $symbol, 'timeout' => $expireAfterSec, 'error' => $e->getMessage()
-                ]);
+        // Helpers sûrs pour lire l’array config
+        $aget = static function(array $a, string $path, $default = null) {
+            $cur = $a;
+            foreach (explode('.', $path) as $key) {
+                if (!\is_array($cur) || !\array_key_exists($key, $cur)) {
+                    return $default;
+                }
+                $cur = $cur[$key];
             }
-        }
+            return $cur;
+        };
 
-        // 12) Mise à jour du pipeline (optionnel)
+        // ---- Risque & R multiple depuis YAML (fallbacks) ----
+        // risk.fixed_risk_pct (en %) -> fraction (0..1)
+        $riskPctYaml = (float)$aget($params, 'risk.fixed_risk_pct', 5.0) / 100.0;
+        $riskPct     = $riskMaxPct !== null ? (float)$riskMaxPct : $riskPctYaml;
+
+        // Si une valeur absolue override existe :
+        $riskAbsYaml = $aget($params, 'risk.abs_usdt', null);
+        $riskAbsExec = $aget($params, 'execution.risk_abs_usdt', null);
+        $riskAbsUsdt = null;
+        if (\is_numeric($riskAbsExec)) {
+            $riskAbsUsdt = (float)$riskAbsExec;
+        } elseif (\is_numeric($riskAbsYaml)) {
+            $riskAbsUsdt = (float)$riskAbsYaml;
+        }
+        // rMultiple : priorité atr.r_multiple, sinon long.take_profit.tp1_r, sinon param reçu, sinon 2.0
+        $rMultipleYaml = $aget($params, 'atr.r_multiple', null);
+        if (!\is_numeric($rMultipleYaml)) {
+            $rMultipleYaml = $aget($params, 'long.take_profit.tp1_r', 2.0);
+        }
+        $rMultiple = $rMultiple !== null ? (float)$rMultiple : (float)$rMultipleYaml;
+
+        // ATR params
+        $atrTimeframe = (string)$aget($params, 'atr.timeframe', '5m');
+        $atrPeriod    = (int)$aget($params, 'atr.period', 14);
+        $atrMethod    = (string)$aget($params, 'atr.method', 'wilder'); // 'wilder'|'simple'
+        $slMult       = (float)$aget($params, 'atr.sl_multiplier', 1.5);
+
         try {
-            $this->pipelineRepository->updateStatusBySymbol(
-                symbol: $symbol,
-                status: ContractPipeline::STATUS_ORDER_OPENED
+            // ========== Étape 1: Détails contrat ==========
+            $this->positionsLogger->info('[HC] Étape 1: Détails du contrat', ['symbol' => $symbol]);
+            $details = $this->getContractDetails($symbol);
+            $tick    = (float)($details['price_precision'] ?? 0.0);
+            $qtyStep = (float)($details['vol_precision']   ?? 0.0);
+            $ctSize  = (float)($details['contract_size']   ?? 0.0);
+            $maxLev  = (int)  ($details['max_leverage']    ?? 50);
+
+            if ($tick <= 0 || $qtyStep <= 0 || $ctSize <= 0) {
+                $this->positionsLogger->error('[HC] Détails contrat invalides', compact('tick','qtyStep','ctSize'));
+                throw new \RuntimeException("Invalid contract details for $symbol");
+            }
+            $contextTrail[] = ['step' => 'contract_details', 'tick' => $tick, 'qty_step' => $qtyStep, 'ct_size' => $ctSize, 'maxLev' => $maxLev];
+
+            // ========== Étape 2: Prix mark & LIMIT proche ==========
+            $mark = $this->getMarkPrice($symbol);
+            if ($mark <= 0) {
+                throw new \RuntimeException("Invalid mark price for $symbol");
+            }
+            $slippageTicks = 1;
+            $limit = $this->quantizeToStep($mark, $tick);
+            if ($sideLower === 'long') {
+                $limit = $this->quantizeToStep($limit - $slippageTicks * $tick, $tick);
+            } else {
+                $limit = $this->quantizeToStep($limit + $slippageTicks * $tick, $tick);
+            }
+            $contextTrail[] = ['step' => 'pricing', 'mark' => $mark, 'limit' => $limit];
+
+            // ========== Étape 3: ATR depuis YAML ==========
+            $this->positionsLogger->info('[HC] Étape 3: ATR source', [
+                'timeframe' => $atrTimeframe, 'period' => $atrPeriod, 'method' => $atrMethod
+            ]);
+            $atrSeries = $this->klineRepository->findLastKlines(
+                symbol: $symbol, timeframe: $atrTimeframe, limit: max($atrPeriod + 1, 200)
             );
-            $this->positionsLogger->info('[HC] Pipeline -> STATUS_ORDER_OPENED', [
-                'symbol' => $symbol, 'order_id' => $orderId
+            if (\count($atrSeries) <= $atrPeriod) {
+                throw new \RuntimeException("Not enough OHLC for ATR ($symbol tf=$atrTimeframe)");
+            }
+            $atr = $this->atrCalculator->compute($atrSeries, $atrPeriod, $atrMethod);
+            $contextTrail[] = ['step' => 'atr', 'atr' => $atr, 'tf' => $atrTimeframe, 'period' => $atrPeriod];
+
+            // ========== Étape 4: S/R & SL basé S/R ± k*ATR ==========
+            $this->positionsLogger->info('[HC] Étape 4: Détection S/R', ['symbol' => $symbol]);
+            $klines15m = $this->klineRepository->findLastKlines(symbol: $symbol, timeframe: '15m', limit: 200);
+            if (\count($klines15m) < 50) {
+                throw new \RuntimeException("Not enough klines for SR detection ($symbol)");
+            }
+            $sr = \App\Util\SrRiskHelper::findSupportResistance($klines15m);
+
+            $kAtr = $slMult; // cohérent avec atr.sl_multiplier
+            if ($sideLower === 'long') {
+                $slRaw = max($sr['support'] ?? ($mark - $kAtr * $atr), $mark - 5 * $atr);
+            } else {
+                $slRaw = min($sr['resistance'] ?? ($mark + $kAtr * $atr), $mark + 5 * $atr);
+            }
+            $slQ = $this->quantizeToStep($slRaw, $tick);
+            $contextTrail[] = ['step' => 'sr_stop', 'sr' => $sr, 'sl' => $slQ];
+
+            // ========== Étape 5: Sizing & risque ==========
+            // Montant risqué : priorité au risque absolu si défini, sinon % de la marge
+            $riskAbsEffective = $riskAbsUsdt !== null ? (float)$riskAbsUsdt : max(0.0, $marginUsdt * $riskPct);
+
+            // Taille (contrats) en respectant levier & pas de qty
+            // notional ≈ qty * (price * contract_size)
+            $contracts = (int)max(1, floor(($marginUsdt * $leverageCap) / ($limit * $ctSize)));
+            if ($qtyStep > 0.0) {
+                $contracts = (int)max(1, floor($contracts / $qtyStep) * $qtyStep);
+            }
+
+            $stopDist = abs($limit - $slQ);
+            if ($stopDist <= 0.0) {
+                throw new \RuntimeException('Stop distance is zero/negative');
+            }
+
+            // TP à R-multiple
+            $tpQ = $this->computeTpPrice($sideLower, $limit, $stopDist, $rMultiple);
+            $tpQ = $this->quantizeToStep($tpQ, $tick);
+
+            $contextTrail[] = [
+                'step'       => 'sizing',
+                'contracts'  => $contracts,
+                'risk_usdt'  => $riskAbsEffective,
+                'risk_pct'   => $riskPct,
+                'stop_dist'  => $stopDist,
+                'tp'         => $tpQ,
+            ];
+
+            // ========== Étape 6: Levier final & sync exchange ==========
+            $levOpt = (int)min($leverageCap, $maxLev);
+            $openType = 'isolated'; // lis depuis YAML plus tard si tu veux le rendre dynamique
+            $this->positionsLogger->info('[HC] Étape 6: Fixe levier côté exchange', ['lev' => $levOpt, 'open_type' => $openType]);
+
+            $this->bitmartPositions->setLeverage($symbol, $levOpt, $openType);  // POST /submit-leverage
+            $this->waitLeverageSynchronized($symbol, $levOpt, $openType, tries: 5, sleepMs: 250);
+            $contextTrail[] = ['step' => 'leverage_synced', 'lev' => $levOpt, 'openType' => $openType];
+
+            // ========== Étape 7: Payload LIMIT + presets (mark price) ==========
+            $payload = [
+                'symbol'                        => $symbol,
+                'client_order_id'               => $clientOrderId,
+                'side'                          => $this->mapSideOpen($sideLower), // buy/sell
+                'mode'                          => 1,            // one-way
+                'type'                          => 'limit',
+                'open_type'                     => $openType,
+                'leverage'                      => (string)$levOpt,
+                'size'                          => $contracts,
+                'price'                         => (string)$limit,
+                'preset_take_profit_price_type' => 2,            // 2 = mark
+                'preset_stop_loss_price_type'   => 2,            // 2 = mark
+                'preset_take_profit_price'      => (string)$tpQ,
+                'preset_stop_loss_price'        => (string)$slQ,
+                'stp_mode'                      => 1,
+            ];
+
+            // Respect éventuel de order_plan.routing.post_only
+            $postOnly = (bool)$aget($params, 'order_plan.routing.post_only', true);
+            if ($postOnly === true) {
+                $payload['force'] = 'post_only';
+            }
+
+            $this->positionsLogger->info('[HC] Étape 7: Payload ordre', $payload);
+
+            // ========== Étape 8: Submit + retry contrôlé 40012 ==========
+            $submitOnce = function(array $p): array { return $this->ordersService->create($p); };
+
+            $res = $submitOnce($payload);
+            if ((int)($res['code'] ?? 0) !== 1000) {
+                $msg = json_encode($res, JSON_UNESCAPED_SLASHES);
+                $this->positionsLogger->warning('[HC] submit-order non 1000', ['response' => $res]);
+
+                // 40012: leverage not synchronized
+                if (strpos($msg, '"code":40012') !== false || strpos($msg, 'Leverage info not synchronized') !== false) {
+                    $this->positionsLogger->warning('[HC] 40012 → Re-sync levier + backoff + 2e tentative', [
+                        'symbol' => $symbol, 'lev' => $levOpt
+                    ]);
+                    $this->bitmartPositions->setLeverage($symbol, $levOpt, $openType);
+                    $this->waitLeverageSynchronized($symbol, $levOpt, $openType, tries: 3, sleepMs: 300);
+                    usleep(300_000);
+
+                    $res = $submitOnce($payload);
+                    if ((int)($res['code'] ?? 0) !== 1000) {
+                        $this->positionsLogger->error('[HC] submit-order error après retry', ['response' => $res]);
+                        throw new \RuntimeException('submit-order error: ' . json_encode($res, JSON_UNESCAPED_SLASHES));
+                    }
+                } else {
+                    throw new \RuntimeException('submit-order error: ' . $msg);
+                }
+            }
+
+            $orderId = $res['data']['order_id'] ?? null;
+
+            // ========== Étape 9: Expiration auto ==========
+            if ($expireAfterSec !== null) {
+                $this->positionsLogger->info('[HC] Étape 9: Expiration auto', ['expireAfterSec' => $expireAfterSec]);
+                try { $this->scheduleCancelAllAfter($symbol, $expireAfterSec); }
+                catch (\Throwable $e) {
+                    $this->positionsLogger->warning('[HC] scheduleCancelAllAfter erreur (ignorée)', ['error' => $e->getMessage()]);
+                }
+            }
+
+            // ========== OK ==========
+            $contextTrail[] = ['step' => 'order_submitted', 'order_id' => $orderId, 'client_order_id' => $clientOrderId];
+            $this->positionsLogger->info('[HC] Order submitted', [
+                'symbol' => $symbol, 'order_id' => $orderId, 'client_order_id' => $clientOrderId, 'trail' => $contextTrail
             ]);
+
+            return [
+                'success'          => true,
+                'order_id'         => $orderId,
+                'client_order_id'  => $clientOrderId,
+                'payload'          => $payload,
+                'context_trail'    => $contextTrail,
+                'meta'             => $meta,
+            ];
         } catch (\Throwable $e) {
-            $this->positionsLogger->error('[HC] Pipeline update failed', [
-                'symbol' => $symbol, 'error' => $e->getMessage()
+            $contextTrail[] = [
+                'step'           => 'order_failed',
+                'type'           => 'high_conviction',
+                'error'          => $e->getMessage(),
+                'available_usdt' =>  null,
+                'margin_usdt'    => $marginUsdt
+            ];
+            $this->validationLogger->error('Order submission failed [HIGH_CONVICTION]', [
+                'symbol' => $symbol,
+                'error'  => $e->getMessage(),
+                'trail'  => $contextTrail
             ]);
-        }
 
-        $out = [
-            'symbol'     => $symbol,
-            'side'       => $side,
-            'order_id'   => $orderId,
-            'client_order_id' => $clientOrderId,
-            'limit'      => $limit,
-            'sl'         => $slQ,
-            'tp'         => $tpQ,
-            'contracts'  => $contracts,
-            'leverage'   => $levOpt,
-            'metrics'    => $sr,
-            'meta'       => array_merge($meta, [
-                'high_conviction' => true,
-                'leverage_cap'    => $leverageCap,
-            ]),
-        ];
-
-        $this->positionsLogger->info('[HC] Retour final', $out);
-        return $out;
-        } finally {
-            $this->persistOrderId($symbol, $orderId, '[HC]');
+            return [
+                'success'       => false,
+                'error'         => $e->getMessage(),
+                'context_trail' => $contextTrail,
+            ];
         }
     }
+
+
 
     private function persistOrderId(string $symbol, string|int|null $orderId, string $context): void
     {
@@ -1583,6 +1633,58 @@ final class PositionOpener
                 'error' => $e->getMessage()
             ]);
         }
+    }
+
+    /** BC alias: certains appels utilisent encore getMarkPrice() */
+    private function getMarkPrice(string $symbol): float
+    {
+        return $this->getMarkClose($symbol);
+    }
+
+    /**
+     * Enveloppe conviviale pour soumettre un TP/SL "position" (plan_category=2) avec fallback.
+     * $orderType: 'take_profit' | 'stop_loss'
+     * $sideReduce: 3 = close long (sell), 2 = close short (buy)  -> cf. mapSideReduce()
+     * $priceType:  2 = mark/fair (recommandé), 1 = last_price
+     * $category:   'market' (par défaut) ou 'limit'
+     *
+     * Retourne la réponse finale du submit (celle qui a réussi après fallback).
+     */
+    private function submitPositionTpSl(
+        string $symbol,
+        string $orderType,
+        int    $sideReduce,
+        string $triggerPrice,
+        int    $priceType = 2,
+        string $executivePrice = '0',
+        string $category = 'market',
+        ?int   $size = null,
+        ?int   $planCategory = 2   // 2 = TP/SL de position
+    ): array {
+        // Récupère les pas & tailles pour quantiser size si besoin
+        $details = $this->getContractDetails($symbol);
+        $qtyStep = (float)($details['vol_precision'] ?? 0.0);
+        $ctSize  = (float)($details['contract_size'] ?? 0.0);
+        $size    = $size ?? (int)max(1, $qtyStep > 0.0 ? $qtyStep : 1);
+
+        // Normalise les prix (stringifiés) -> build du payload
+        $triggerQ = (float)$triggerPrice;
+        $execQ    = (float)$executivePrice;
+
+        $payload = $this->buildPlanPayload(
+            symbol: $symbol,
+            sideReduce: $sideReduce,
+            type: $orderType,      // 'stop_loss' | 'take_profit'
+            size: $size,
+            triggerQ: $triggerQ,
+            execQ: $execQ,
+            priceType: $priceType, // 2 = mark
+            planCategory: $planCategory,
+            category: $category    // 'market' (par défaut) avec fallback vers 'limit'
+        );
+
+        // Envoi avec fallback intégré (market→limit→price_type→sans plan_category)
+        return $this->submitPlanOrderWithFallback($payload);
     }
 
 

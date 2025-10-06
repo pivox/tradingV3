@@ -150,6 +150,7 @@ final class Signal15mService
             'path'     => $path,
             'trigger'  => $trigger,
             'signal'   => $signal,
+            'date' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
         ];
 
         $this->signalsLogger->info('signals.tick', $validation);
