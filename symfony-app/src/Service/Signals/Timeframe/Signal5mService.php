@@ -128,6 +128,7 @@ final class Signal5mService
             'macd' => ['macd'=>$macdNow,'signal'=>$sigNow,'hist'=>$histNow],
             'vwap' => $vwapVal, 'close' => $lastClose,
             'path' => $path, 'trigger' => $trigger, 'signal' => $signal,
+            'date' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
         ];
 
         $this->signalsLogger->info('signals.tick', $validation);

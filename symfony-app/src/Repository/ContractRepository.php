@@ -60,14 +60,13 @@ class ContractRepository extends ServiceEntityRepository
             ->andWhere('(contract.delistTime IS NULL OR contract.delistTime > :now)')
             ->andWhere('contract.maxLeverage > 0')
             ->andWhere('contract.openInterest > 0')
-            ->andWhere('contract.productType IN (:types)')
             ->andWhere('contract.indexPrice BETWEEN contract.low24h AND contract.high24h')
             ->andWhere('contract.openInterest <= :openInterest')
             ->setParameter('openInterest', $date)
             ->setParameter('status', 'Trading')
             ->setParameter('quoteCurrency', 'USDT')
             ->setParameter('now', $now)
-            ->setParameter('types', ['perpetual', 'future']);
+        ;
 
         // Exclure les contrats blacklistés
         $qb->andWhere($qb->expr()->notIn(
@@ -78,7 +77,7 @@ class ContractRepository extends ServiceEntityRepository
                 ->getDQL()
         ));
 
-        return array_column($qb->getQuery()->getResult(), 'symbol');
+        return array_map(fn($contract) => $contract->getSymbol(), $qb->getQuery()->getResult());
     }
 
     public function findTopByVolumeOrOI(int $limit = 100): array

@@ -216,7 +216,7 @@ final class KlinesCallbackController extends AbstractController
 
             // a) Marque tentative & applique décision
             $this->pipelineService->markAttempt($pipeline);
-            $isValid = $this->pipelineService->applyDecision($pipeline, $timeframe);
+            list($isValid, $canEnter) = $this->pipelineService->applyDecision($pipeline, $timeframe);
             $contextTrail[] = ['step' => 'decision_applied', 'timeframe' => $timeframe, 'is_valid' => $isValid];
 
             // b) Logs décision
@@ -306,7 +306,7 @@ final class KlinesCallbackController extends AbstractController
                         'symbol' => $symbol,
                         'timeframe' => $timeframe,
                     ]);
-
+                    $isHigh = false;//TODO à enlever pour réactiver HC
                     if ($isHigh && $levCap > 0) {
                         $config = $this->userConfigRepository->getOrCreateDefault();
                         $availableUsdt = $this->bitmartAccount->getAvailableUSDT();

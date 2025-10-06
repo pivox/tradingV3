@@ -106,9 +106,9 @@ final class ContractPipelineService
      *
      * @param ContractPipeline $pipe
      * @param string $timeframe
-     * @return boolean
+     * @return array
      */
-    public function applyDecision(ContractPipeline $pipe, string $timeframe): bool
+    public function applyDecision(ContractPipeline $pipe, string $timeframe): array
     {
         $signals   = $pipe->getSignals() ?? [];
         $relevant = match ($timeframe) {
@@ -128,6 +128,19 @@ final class ContractPipelineService
         } else {
             $valid = true;
         }
+            // --- Nouveau : calcul can_enter (sans toucher au reste)
+            // Règle : 4h et 1h doivent être valides et du même side,
+            // et au moins un des 3 TF d'exécution (15m/5m/1m) doit avoir ce même side.
+        $canEnter = false;
+        $side4h = $signals[ContractPipeline::TF_4H]['signal'] ?? null;
+        $side1h = $signals[ContractPipeline::TF_1H]['signal'] ?? null;
+        if (in_array($side4h, ['LONG','SHORT'], true) && $side4h === $side1h) {
+            foreach ([ContractPipeline::TF_15M, ContractPipeline::TF_5M, ContractPipeline::TF_1M] as $execTf) {
+                $sideExec = $signals[$execTf]['signal'] ?? null;
+                if ($sideExec === $side4h) { $canEnter = true; break; }
+            }
+        }
+
         if (in_array($timeframe, ['1m']) && $valid) {
             $pipe->setStatus(ContractPipeline::STATUS_VALIDATED);
         }
@@ -194,7 +207,7 @@ final class ContractPipelineService
             $this->em->flush();
             $this->em->clear();
         }
-
-        return $valid;
+        return [$valid, $canEnter];
+        //return ['valid' => $valid, 'can_enter' => $canEnter];
     }
 }

@@ -133,6 +133,7 @@ final class Signal4hService
             'path'      => $path,
             'trigger'   => $trigger,
             'signal'    => $signal,
+            'date' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
         ];
 
         $this->signalsLogger->info('signals.tick', $validation);
