@@ -11,20 +11,24 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\HasLifecycleCallbacks]
 class ContractPipeline
 {
-    public const TF_4H  = '4h';
-    public const TF_1H  = '1h';
+    public const TF_4H = '4h';
+    public const TF_1H = '1h';
     public const TF_15M = '15m';
-    public const TF_5M  = '5m';
-    public const TF_1M  = '1m';
+    public const TF_5M = '5m';
+    public const TF_1M = '1m';
 
-    public const STATUS_PENDING   = 'pending';
+    public const STATUS_PENDING = 'pending';
     public const STATUS_VALIDATED = 'validated';
-    public const STATUS_FAILED    = 'failed';
-    public const STATUS_BACK      = 'back_to_parent';
+    public const STATUS_FAILED = 'failed';
+    public const STATUS_BACK = 'back_to_parent';
 
     public const STATUS_OPENED_LOCKED = 'OPENED_LOCKED';
     public const STATUS_ORDER_OPENED = 'ORDER_OPENED';
 
+    public const DONT_INC = 'DONT_INC';
+    public const DONT_DEC = 'DONT_INC';
+    public const DONT_INC_DEC = 'DONT_INC_DEC';
+    public const DONT_INC_DEC_DEL = 'DONT_INC_DEC_DEL';
 
 
     #[ORM\Id]
@@ -35,13 +39,8 @@ class ContractPipeline
     /**
      * FK vers Contract(symbol) — Contract a une PK string 'symbol'
      */
-    #[ORM\ManyToOne(targetEntity: Contract::class)]
-    #[ORM\JoinColumn(
-        name: 'contract_symbol',
-        referencedColumnName: 'symbol',
-        nullable: false,
-        onDelete: 'CASCADE'
-    )]
+    #[ORM\OneToOne(targetEntity: Contract::class, inversedBy: 'contractPipeline')]
+    #[ORM\JoinColumn(name: 'contract_symbol', referencedColumnName: 'symbol', nullable: false, onDelete: 'CASCADE')]
     private Contract $contract;
 
     #[ORM\Column(type: 'string', length: 10)]
@@ -96,6 +95,33 @@ class ContractPipeline
     #[ORM\JoinColumn(name: 'to_kline_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
     private ?Kline $toKline = null;
 
+    #[ORM\Column(nullable: true)]
+    private ?\DateTimeImmutable $lastAttempted1hAt = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?\DateTimeImmutable $lastAttempted15mAt = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?\DateTimeImmutable $lastAttempted5mAt = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?\DateTimeImmutable $lastAttempted1mAt = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?bool $isValid4h = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?bool $isValid1h = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?bool $isValid15m = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?bool $isValid5m = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?bool $isValid1m = null;
+
     #[ORM\PrePersist]
     public function onPrePersist(): void
     {
@@ -116,9 +142,15 @@ class ContractPipeline
 
     // ---------- Helpers métier (facultatifs) ----------
 
-    public function markAttempt(): self
+    public function markAttempt(?string $meta = null): self
     {
-        $this->lastAttemptAt = new \DateTimeImmutable();
+        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $this->setLastAttemptAt($now);
+        if ($this->currentTimeframe === self::TF_4H) {
+            $this->contract->setLastAttemptedAt($now);
+        } else {
+            $this->setLastAttemptedAtTimeframe($this->currentTimeframe, $now);
+        }
         return $this->touchUpdatedAt();
     }
 
@@ -137,27 +169,46 @@ class ContractPipeline
     public function promoteTo(string $nextTf, int $maxRetries): self
     {
         $this->currentTimeframe = $nextTf;
-        $this->maxRetries       = $maxRetries;
-        $this->status           = self::STATUS_PENDING;
+        $this->maxRetries = $maxRetries;
+        $this->status = self::STATUS_PENDING;
         return $this->resetRetries();
     }
 
     public function demoteTo(string $parentTf): self
     {
         $this->currentTimeframe = $parentTf;
-        $this->status           = self::STATUS_PENDING;
+        $this->status = self::STATUS_PENDING;
         return $this->resetRetries();
     }
 
     // ---------- Getters / Setters ----------
 
-    public function getId(): ?int { return $this->id; }
+    public function getId(): ?int
+    {
+        return $this->id;
+    }
 
-    public function getContract(): Contract { return $this->contract; }
-    public function setContract(Contract $contract): self { $this->contract = $contract; return $this; }
+    public function getContract(): Contract
+    {
+        return $this->contract;
+    }
 
-    public function getCurrentTimeframe(): string { return $this->currentTimeframe; }
-    public function setCurrentTimeframe(string $tf): self {
+    public function setContract(Contract $contract): self
+    {
+        $this->contract = $contract;
+        if ($contract->getContractPipeline() !== $this) {
+            $contract->setContractPipeline($this);
+        }
+        return $this;
+    }
+
+    public function getCurrentTimeframe(): string
+    {
+        return $this->currentTimeframe;
+    }
+
+    public function setCurrentTimeframe(string $tf): self
+    {
         $this->currentTimeframe = $tf;
         $this->maxRetries = match ($this->currentTimeframe) {
             self::TF_4H => 1,
@@ -169,26 +220,83 @@ class ContractPipeline
         return $this;
     }
 
-    public function getRetries(): int { return $this->retries; }
-    public function setRetries(int $r): self { $this->retries = $r; return $this; }
+    public function getRetries(): int
+    {
+        return $this->retries;
+    }
 
-    public function getMaxRetries(): int { return $this->maxRetries; }
-    public function setMaxRetries(int $m): self { $this->maxRetries = $m; return $this; }
+    public function setRetries(int $r): self
+    {
+        $this->retries = $r;
+        return $this;
+    }
 
-    public function getLastAttemptAt(): ?\DateTimeImmutable { return $this->lastAttemptAt; }
-    public function setLastAttemptAt(?\DateTimeImmutable $dt): self { $this->lastAttemptAt = $dt; return $this; }
+    public function getMaxRetries(): int
+    {
+        return $this->maxRetries;
+    }
 
-    public function getStatus(): string { return $this->status; }
-    public function setStatus(string $s): self { $this->status = $s; return $this; }
+    public function setMaxRetries(int $m): self
+    {
+        $this->maxRetries = $m;
+        return $this;
+    }
 
-    public function getUpdatedAt(): \DateTimeImmutable { return $this->updatedAt; }
-    public function setUpdatedAt(\DateTimeImmutable $dt): self { $this->updatedAt = $dt; return $this; }
+    public function getLastAttemptAt(): ?\DateTimeImmutable
+    {
+        return $this->lastAttemptAt;
+    }
 
-    public function getSignals(): ?array { return $this->signals; }
-    public function setSignals(?array $signals): self { $this->signals = $signals; return $this; }
+    public function setLastAttemptAt(?\DateTimeImmutable $dt): self
+    {
 
-    public function getOrderId(): ?string { return $this->orderId; }
-    public function setOrderId(?string $orderId): self { $this->orderId = $orderId; return $this->touchUpdatedAt(); }
+        $this->lastAttemptAt = $this->removeSeconds($dt);
+        return $this; // on ne touche pas updatedAt ici pour rester cohérent avec l'ancien comportement
+    }
+
+    public function getStatus(): string
+    {
+        return $this->status;
+    }
+
+    public function setStatus(string $s): self
+    {
+        $this->status = $s;
+        return $this;
+    }
+
+    public function getUpdatedAt(): \DateTimeImmutable
+    {
+        return $this->updatedAt;
+    }
+
+    public function setUpdatedAt(\DateTimeImmutable $dt): self
+    {
+        $this->updatedAt = $dt;
+        return $this;
+    }
+
+    public function getSignals(): ?array
+    {
+        return $this->signals;
+    }
+
+    public function setSignals(?array $signals): self
+    {
+        $this->signals = $signals;
+        return $this;
+    }
+
+    public function getOrderId(): ?string
+    {
+        return $this->orderId;
+    }
+
+    public function setOrderId(?string $orderId): self
+    {
+        $this->orderId = $orderId;
+        return $this->touchUpdatedAt();
+    }
 
     public function getSignalLongOrShortOrNone(): string
     {
@@ -207,6 +315,7 @@ class ContractPipeline
     {
         return $this->getSignalLongOrShortOrNone() != 'NONE';
     }
+
     /**
      * Ajoute ou met à jour les signaux d'un timeframe en fusionnant récursivement.
      * Exemple d'appel : $pipeline->addOrMergeSignal('4h', ['ema50'=>..., 'ichimoku'=>['tenkan'=>...], 'signal'=>'LONG']);
@@ -258,16 +367,32 @@ class ContractPipeline
     }
 
     // ---- Getters/Setters ----
-    public function getFromKline(): ?Kline { return $this->fromKline; }
-    public function setFromKline(?Kline $kline): self { $this->fromKline = $kline; return $this->touchUpdatedAt(); }
+    public function getFromKline(): ?Kline
+    {
+        return $this->fromKline;
+    }
 
-    public function getToKline(): ?Kline { return $this->toKline; }
-    public function setToKline(?Kline $kline): self { $this->toKline = $kline; return $this->touchUpdatedAt(); }
+    public function setFromKline(?Kline $kline): self
+    {
+        $this->fromKline = $kline;
+        return $this->touchUpdatedAt();
+    }
+
+    public function getToKline(): ?Kline
+    {
+        return $this->toKline;
+    }
+
+    public function setToKline(?Kline $kline): self
+    {
+        $this->toKline = $kline;
+        return $this->touchUpdatedAt();
+    }
 
     public function setKlineRange(?Kline $from, ?Kline $to): self
     {
         $this->fromKline = $from;
-        $this->toKline   = $to;
+        $this->toKline = $to;
         return $this->touchUpdatedAt();
     }
 
@@ -276,12 +401,178 @@ class ContractPipeline
     {
         return [
             'from' => $this->fromKline?->getId(),
-            'to'   => $this->toKline?->getId(),
+            'to' => $this->toKline?->getId(),
         ];
     }
-    public function isToDelete(): bool
+
+    public function isToDelete(?string $metaForPipeLine = null): bool
     {
-        return $this->getCurrentTimeframe() == self::TF_4H ;
-          // a voir pourquoi je l'ai mise cette condition  ||  $this->getStatus() === self::STATUS_FAILED && $this->getRetries() == $this->getMaxRetries();
+        if ($metaForPipeLine == ContractPipeline::DONT_INC_DEC_DEL) {
+            return false;
+        }
+        return $this->getCurrentTimeframe() == self::TF_4H;
+        // a voir pourquoi je l'ai mise cette condition  ||  $this->getStatus() === self::STATUS_FAILED && $this->getRetries() == $this->getMaxRetries();
+    }
+
+    public function getLastAttempted1hAt(): ?\DateTimeImmutable
+    {
+        return $this->lastAttempted1hAt;
+    }
+
+    public function setLastAttempted1hAt(?\DateTimeImmutable $lastAttempted1hAt): static
+    {
+        $this->lastAttempted1hAt = $this->removeSeconds($lastAttempted1hAt);
+
+        return $this;
+    }
+
+    public function getLastAttempted15mAt(): ?\DateTimeImmutable
+    {
+        return $this->lastAttempted15mAt;
+    }
+
+    public function setLastAttempted15mAt(?\DateTimeImmutable $lastAttempted15mAt): static
+    {
+        $this->lastAttempted15mAt = $this->removeSeconds($lastAttempted15mAt);
+
+        return $this;
+    }
+
+    public function getLastAttempted5mAt(): ?\DateTimeImmutable
+    {
+        return $this->lastAttempted5mAt;
+    }
+
+    public function setLastAttempted5mAt(?\DateTimeImmutable $lastAttempted5mAt): static
+    {
+        $this->lastAttempted5mAt = $this->removeSeconds($lastAttempted5mAt);
+
+        return $this;
+    }
+
+    public function getLastAttempted1mAt(): ?\DateTimeImmutable
+    {
+        return $this->lastAttempted1mAt;
+    }
+
+    public function setLastAttempted1mAt(?\DateTimeImmutable $lastAttempted1mAt): static
+    {
+        $this->lastAttempted1mAt = $this->removeSeconds($lastAttempted1mAt);
+
+        return $this;
+    }
+
+    public function setLastAttemptedAtTimeframe(string $tf, ?\DateTimeImmutable $dt): void
+    {
+        $dt = $this->removeSeconds($dt);
+        match ($tf) {
+            self::TF_1H => $this->setLastAttempted1hAt($dt),
+            self::TF_15M => $this->setLastAttempted15mAt($dt),
+            self::TF_5M => $this->setLastAttempted5mAt($dt),
+            self::TF_1M => $this->setLastAttempted1mAt($dt),
+            default => null,
+        };
+    }
+
+    public function getLastAttemptedAtTimeframe(string $tf): ?\DateTimeImmutable
+    {
+        return match ($tf) {
+            self::TF_1H => $this->lastAttempted1hAt,
+            self::TF_15M => $this->lastAttempted15mAt,
+            self::TF_5M => $this->lastAttempted5mAt,
+            self::TF_1M => $this->lastAttempted1mAt,
+            default => null,
+        };
+    }
+
+    private function removeSeconds(?\DateTimeImmutable $dt): ?\DateTimeImmutable
+    {
+        if (!$dt) {
+            return null;
+        }
+
+        // Conserve les secondes pour refléter l'heure réelle de la tentative et éviter les replays immédiats.
+        return $dt
+            ->setTime(
+                (int)$dt->format('H'),
+                (int)$dt->format('i'),
+                (int)$dt->format('s'),
+                0
+            );
+    }
+
+    public function isValid4h(): ?bool
+    {
+        return $this->isValid4h;
+    }
+
+    public function setIsValid4h(?bool $isValid4h): static
+    {
+        $this->isValid4h = $isValid4h;
+
+        return $this;
+    }
+
+    public function isValid1h(): ?bool
+    {
+        return $this->isValid1h;
+    }
+
+    public function setIsValid1h(?bool $isValid1h): static
+    {
+        $this->isValid1h = $isValid1h;
+
+        return $this;
+    }
+
+    public function isValid15m(): ?bool
+    {
+        return $this->isValid15m;
+    }
+
+    public function setIsValid15m(?bool $isValid15m): static
+    {
+        $this->isValid15m = $isValid15m;
+
+        return $this;
+    }
+
+    public function isValid5m(): ?bool
+    {
+        return $this->isValid5m;
+    }
+
+    public function setIsValid5m(?bool $isValid5m): static
+    {
+        $this->isValid5m = $isValid5m;
+
+        return $this;
+    }
+
+    public function isValid1m(): ?bool
+    {
+        return $this->isValid1m;
+    }
+
+    public function setIsValid1m(?bool $isValid1m): static
+    {
+        $this->isValid1m = $isValid1m;
+
+        return $this;
+    }
+
+    /**
+     * @return bool|null
+     */
+    public function isValidTf(string $tf): ?bool
+    {
+        if ($tf == '15m') {
+            return $this->isValid15m();
+        }  elseif ($tf == '5m') {
+            return $this->isValid5m();
+        } elseif ($tf == '1m') {
+            return $this->isValid1m();
+        }
+        return false;
     }
 }

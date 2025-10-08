@@ -44,7 +44,6 @@ final class KlinesCallbackController extends AbstractController
         private readonly KlineRepository $klineRepository,
         private readonly PositionOpener $positionOpener,
         private readonly RuntimeGuardRepository $runtimeGuardRepository,
-        private readonly ContractPipelineRepository $contractPipelineRepository,
         private readonly HighConvictionMetricsBuilder $hcMetricsBuilder,
         private readonly UserConfigRepository $userConfigRepository,
         HighConvictionValidation $highConviction,
@@ -83,6 +82,8 @@ final class KlinesCallbackController extends AbstractController
         $symbol    = (string) ($payload['contract']  ?? '');
         $timeframe = strtolower((string) ($payload['timeframe'] ?? '4h'));
         $limit     = (int)    ($payload['limit']     ?? self::LIMIT_KLINES);
+        $meta = $payload['meta'] ?? [];
+        $metaForPipeLine = $payload['meta']['pipeline'] ?? null;
 
         if ($symbol === '') {
             return $this->jsonError('Missing contract symbol', 400);
@@ -215,15 +216,16 @@ final class KlinesCallbackController extends AbstractController
             $contextTrail = [];
 
             // a) Marque tentative & applique décision
-            $this->pipelineService->markAttempt($pipeline);
-            list($isValid, $canEnter) = $this->pipelineService->applyDecision($pipeline, $timeframe);
-            $contextTrail[] = ['step' => 'decision_applied', 'timeframe' => $timeframe, 'is_valid' => $isValid];
+            $this->pipelineService->markAttempt($pipeline, $metaForPipeLine);
+            list($isValid, $canEnter) = $this->pipelineService->applyDecision($pipeline, $timeframe, $metaForPipeLine);
+            $contextTrail[] = ['step' => 'decision_applied', 'timeframe' => $timeframe, 'is_valid' => $isValid, 'can_enter' => $canEnter];
 
             // b) Logs décision
             $this->validationLogger->info('Position decision', [
                 'symbol' => $symbol,
                 'timeframe' => $timeframe,
                 'is_valid' => $isValid,
+                'can_enter' => $canEnter,
                 'signal' => $signalsPayload[$timeframe]['signal'] ?? 'NONE',
                 'signals' => array_map(
                     static fn($signal, $key) => "$key => " . ($signal['signal'] ?? 'NONE'),
@@ -235,9 +237,18 @@ final class KlinesCallbackController extends AbstractController
                 'trail'  => $contextTrail,
             ]);
 
-            // c) Fenêtre d'ouverture (dernier TF seulement)
-            $tfOpenable = ['1m'];
-            if ($isValid && in_array($timeframe, $tfOpenable, true)) {
+            // c) Fenêtre d'ouverture (5m ou 1m après nouvelle règle d'alignement stricte)
+            $tfOpenable = ['5m','1m'];
+            if ($canEnter && in_array($timeframe, $tfOpenable, true)) {
+                // Empêcher double ouverture si déjà marquée
+                if ($pipeline->getStatus() === ContractPipeline::STATUS_ORDER_OPENED || $pipeline->getStatus() === ContractPipeline::STATUS_OPENED_LOCKED) {
+                    $this->validationLogger->info('Skipping opening: pipeline already opened/locked', [
+                        'symbol' => $symbol,
+                        'timeframe' => $timeframe,
+                        'status' => $pipeline->getStatus(),
+                    ]);
+                    goto pipeline_lock; // conserve comportement existant plus bas
+                }
                 $contextTrail[] = ['step' => 'window_eligible'];
                 $this->validationLogger->info('Window eligible for order opening', [
                     'symbol' => $symbol,
@@ -404,7 +415,7 @@ final class KlinesCallbackController extends AbstractController
                             $this->positionOpener->openLimitAutoLevWithSr(
                                 symbol:         $symbol,
                                 finalSideUpper: $finalSide,
-                                marginUsdt:     $config->getScalpMarginUsdt(),
+                                marginUsdt:     50,//$config->getScalpMarginUsdt(),
                                 riskMaxPct:     $config->getScalpRiskMaxPct(),
                                 rMultiple:      $config->getScalpRMultiple()
                             );
@@ -455,7 +466,7 @@ pipeline_lock:
                 }
             } elseif ($isValid) {
                 $contextTrail[] = ['step' => 'window_not_eligible'];
-                $this->validationLogger->info('Window not eligible for opening despite valid decision', [
+                $this->validationLogger->info('Window not eligible for opening malgré une décision valide', [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe,
                     'final_signal' => $signalsPayload['final']['signal'] ?? 'NONE',
@@ -465,10 +476,11 @@ pipeline_lock:
         }
 
         // 8) Nettoyage pipeline si demandé
-        if ($pipeline && $pipeline->isToDelete() && $pipeline->getId()) {
+        if ($pipeline && $pipeline->isToDelete($metaForPipeLine) && $pipeline->getId()) {
             $pipelineId = $pipeline->getId();
             $pipeline = $this->em->getRepository(\App\Entity\ContractPipeline::class)->find($pipelineId);
             if ($pipeline) {
+                $pipeline->getContract()->setLastAttemptedAt();
                 $this->em->remove($pipeline);
                 $this->em->flush();
                 $this->logger->info('Pipeline deleted after decision', [

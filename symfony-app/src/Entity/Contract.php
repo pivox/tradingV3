@@ -136,11 +136,18 @@ class Contract
     #[ORM\Column(type: 'string', nullable: true)]
     private ?string $status = null;
 
+
+    #[ORM\OneToOne(mappedBy: 'contract', targetEntity: ContractPipeline::class, cascade: ['persist', 'remove'])]
+    private ?ContractPipeline $contractPipeline = null;
+
     #[ORM\Column(type: 'datetime', nullable: true)]
     private ?\DateTimeInterface $delistTime = null;
 
     #[ORM\Column(type: 'datetime', nullable: true)]
     private ?\DateTimeInterface $nextSchedule = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?\DateTimeImmutable $lastAttemptedAt = null;
 
     /* ============================================================
      * Constructeur
@@ -393,5 +400,40 @@ class Contract
     public function isInverse(): bool
     {
         return (int) $this->productType === self::PRODUCT_TYPE_INVERSE;
+    }
+
+    public function getLastAttemptedAt(): ?\DateTimeImmutable
+    {
+        return $this->lastAttemptedAt;
+    }
+
+    public function setLastAttemptedAt(
+        ?\DateTimeImmutable $lastAttemptedAt = new \DateTimeImmutable(
+            'now',
+            new \DateTimeZone('UTC'))
+    ): static
+    {
+        $this->lastAttemptedAt = $lastAttemptedAt->setTime(
+            (int)$lastAttemptedAt->format('H'),
+            (int)$lastAttemptedAt->format('i'),
+            0,
+            0
+        );;
+
+        return $this;
+    }
+
+    public function getContractPipeline(): ?ContractPipeline
+    {
+        return $this->contractPipeline;
+    }
+
+    public function setContractPipeline(?ContractPipeline $contractPipeline): self
+    {
+        $this->contractPipeline = $contractPipeline;
+        if ($contractPipeline && $contractPipeline->getContract() !== $this) {
+            $contractPipeline->setContract($this);
+        }
+        return $this;
     }
 }

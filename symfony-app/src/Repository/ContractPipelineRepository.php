@@ -2,6 +2,7 @@
 
 namespace App\Repository;
 
+use App\Entity\Contract;
 use App\Entity\ContractPipeline;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
@@ -22,6 +23,7 @@ class ContractPipelineRepository extends ServiceEntityRepository
     {
         return $this->createQueryBuilder('p')
             ->andWhere('p.status = :st')->setParameter('st', ContractPipeline::STATUS_OPENED_LOCKED)
+            ->orWhere('p.status = :st')->setParameter('st', ContractPipeline::STATUS_ORDER_OPENED)
             ->getQuery()
             ->getResult();
     }
@@ -100,9 +102,10 @@ class ContractPipelineRepository extends ServiceEntityRepository
 
     public function getAllSymbolsWithActiveTimeframe(string $timeframe, int $limit = 221): array
     {
-        $result = $this->createQueryBuilder('p')
-            ->innerJoin('p.contract', 'c')
-            ->select('c.symbol AS contractSymbol')
+        return $this->createQueryBuilder('cp')
+            ->from(Contract::class, 'c') // root supplémentaire
+            ->innerJoin('c.contractPipeline', 'p')
+            ->select('c')
             ->where('p.currentTimeframe = :tf')->setParameter('tf', $timeframe)
             ->andWhere('p.status != :locked')->setParameter('locked', ContractPipeline::STATUS_OPENED_LOCKED)
             ->andWhere('p.status != :locked2')->setParameter('locked2', ContractPipeline::STATUS_ORDER_OPENED)
@@ -110,7 +113,6 @@ class ContractPipelineRepository extends ServiceEntityRepository
             ->setMaxResults($limit)
             ->getQuery()
             ->getResult();
-        return array_map(fn($item) => $item['contractSymbol'], $result) ?? [];
     }
 
     public function getAllSymbols(): array
@@ -135,6 +137,10 @@ class ContractPipelineRepository extends ServiceEntityRepository
             ->setParameter('symbol', $symbol)
             ->getQuery()
             ->execute();
+    }
+
+    public function isValidByTimeframe(string $string, true $true)
+    {
     }
 
 }
