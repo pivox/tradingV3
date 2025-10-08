@@ -18,7 +18,8 @@ final class OpenedLockedSyncService
         private readonly ContractPipelineRepository $repo,
         private readonly EntityManagerInterface $em,
         private readonly ContractRepository $contractRepository,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $logger,
+        private readonly bool $dryRun = false,
     ) {}
     /** @var array<string, array<int, array<string, mixed>>> */
     private array $openOrdersCache = [];
@@ -283,7 +284,7 @@ final class OpenedLockedSyncService
 
     /**
      * Crée un ordre plan (TP ou SL) et retourne un tableau avec order_id et client_order_id si succès.
-     * @return array{order_id?:string, client_order_id?:string}|null
+     * @return array{order_id?:string, client_order_id?:string, dry_run?:bool}|null
      */
     private function createPlanOrderSafe(string $symbol, string $type, int $sideReduce, float $price, int $size): ?array
     {
@@ -300,6 +301,16 @@ final class OpenedLockedSyncService
             'client_order_id' => strtoupper(substr($type,0,2)) . '_AUTO_' . bin2hex(random_bytes(4)),
         ];
         try {
+            if ($this->dryRun) {
+                $this->logger->info('[OpenedLockedSync] Dry-run plan order (skip API call)', [
+                    'symbol' => $symbol,
+                    'type' => $type,
+                    'price' => $price,
+                    'size' => $size,
+                    'payload' => $payload,
+                ]);
+                return ['dry_run' => true];
+            }
             $this->logger->info('[OpenedLockedSync] Création plan order auto TP/SL', [
                 'symbol' => $symbol,
                 'type' => $type,

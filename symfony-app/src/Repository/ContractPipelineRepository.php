@@ -70,6 +70,20 @@ class ContractPipelineRepository extends ServiceEntityRepository
      */
     public function updateOrderIdBySymbol(string $symbol, string $orderId): void
     {
+        $pipeline = $this->createQueryBuilder('p')
+            ->innerJoin('p.contract', 'c')
+            ->where('c.symbol = :symbol')
+            ->setParameter('symbol', $symbol)
+            ->getQuery()
+            ->getOneOrNullResult();
+
+        if ($pipeline instanceof ContractPipeline) {
+            $pipeline->setOrderId($orderId);
+            $this->_em->flush();
+            return;
+        }
+
+        // fallback: mise à jour directe si la ligne n'est pas encore matérialisée
         $this->createQueryBuilder('p')
             ->update()
             ->set('p.orderId', ':orderId')
