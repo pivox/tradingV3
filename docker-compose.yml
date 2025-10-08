@@ -157,7 +157,7 @@ services:
       - shared-net
     restart: always
     healthcheck:
-      test: [ "CMD-SHELL", "temporal operator cluster health --address=$(hostname -i):7233 >/dev/null 2>&1 || tctl --address=$(hostname -i):7233 cluster health >/dev/null 2>&1" ]
+      test: [ "CMD-SHELL", "ADDR=$$(ifconfig eth0 | awk '/inet addr/ {print $$2}' | cut -d: -f2); temporal operator cluster health --address $${ADDR}:7233 >/dev/null 2>&1 || tctl --address $${ADDR}:7233 cluster health >/dev/null 2>&1" ]
       interval: 10s
       timeout: 5s
       retries: 60
