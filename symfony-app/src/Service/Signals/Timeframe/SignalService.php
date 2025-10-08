@@ -8,6 +8,7 @@ namespace App\Service\Signals\Timeframe;
 
 
 use App\Entity\Kline;
+use App\Repository\ContractPipelineRepository;
 use Psr\Log\LoggerInterface;
 
 
@@ -38,6 +39,7 @@ final class SignalService
         private Signal15mService $signal15m,
         private Signal5mService $signal5m,
         private Signal1mService $signal1m,
+        private readonly ContractPipelineRepository $contractPipelineRepository,
     ) {}
 
 
