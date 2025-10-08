@@ -22,6 +22,9 @@ use App\Service\Bitmart\Private\TrailOrdersService;
 
 final class PositionOpener
 {
+    private const LARGE_CAP_ASSETS                = ['BTC', 'ETH', 'BNB'];
+    private const MIN_LEVERAGE_THRESHOLD          = 3.0;
+    private const LARGE_CAP_MIN_LEVERAGE_RATIO    = 0.10; // 10% du levier max contrat
 
     // --- Constantes spécifiques High Conviction ---
     private const HC_DEFAULT_LEV_CAP     = 50;   // levier max autorisé par la stratégie HC
@@ -247,7 +250,8 @@ final class PositionOpener
                 'factor_vs_current' => $factor,
             ]);
 
-            $this->bitmartPositions->setLeverage($symbol, $targetLev, $openType);
+            // (remplace appel direct -> fallback interne gérant 40012)
+            $this->setLeverage($symbol, $targetLev, $openType);
             $this->positionsLogger->info('Leverage set', [
                 'symbol'   => $symbol,
                 'leverage' => $targetLev,
@@ -405,7 +409,7 @@ final class PositionOpener
             $limit = $this->quantizeToStep($mark, $tick);  // même logique que ta commande
 
             /* 3) Levier = 1 (fail suave si déjà réglé) */
-            try { $this->bitmartPositions->setLeverage($symbol, $leverage, 'isolated'); } catch (\Throwable) {}
+            try { $this->setLeverage($symbol, $leverage, 'isolated'); } catch (\Throwable) {}
 
             /* 4) Sizing : notional = marge×levier → contrats */
             $notional     = $marginUsdt * $leverage;
@@ -530,11 +534,11 @@ final class PositionOpener
             $cfg          = $this->tradingParameters->all();
             $riskAbsUsdt  = (float)($cfg['risk']['abs_usdt'] ?? 3.0);
 
-// 4) Levier cible (ta règle actuelle) + contrainte minVol/budget
+            // 4) Levier cible (ta règle actuelle) + contrainte minVol/budget
             $leverageTarget = max(4, (int)floor($maxLev / 2)); // ou ta règle dynamique variation_pct
             $leverage = min($maxLev, $leverageTarget);
 
-// 5) S'assure que minVol est réalisable dans le budget souhaité (marge<=marginUsdt)
+            // 5) S'assure que minVol est réalisable dans le budget souhaité (marge<=marginUsdt)
             $notionalForMinVol = $minVol * $limit * $ctSize;
             $leverageNeededForMinVol = (int)ceil($notionalForMinVol / max(1e-12, $marginUsdt));
             if ($leverageNeededForMinVol > $maxLev) {
@@ -545,27 +549,27 @@ final class PositionOpener
             }
             $leverage = max($leverage, $leverageNeededForMinVol);
 
-// 6) Calcul budget dur (notional max autorisé par la marge visée)
+            // 6) Calcul budget dur (notional max autorisé par la marge visée)
             $notionalMax = $marginUsdt * $leverage;
 
-// 7) Sizing par le risque avec le LEVIER RÉEL
-//    stopDist = %mouvement prix correspondant à slRoi/leverage
+            // 7) Sizing par le risque avec le LEVIER RÉEL
+            //    stopDist = %mouvement prix correspondant à slRoi/leverage
             $slPct   = abs($slRoi) / max(1e-12, $leverage);
             $stopDist = $limit * $slPct;
             $contractsRiskF = $riskAbsUsdt / max(1e-12, $stopDist * $ctSize);
             $contractsRiskQ = $this->quantizeQty($contractsRiskF, max(1e-9, $qtyStep));
 
-// 8) Sizing par BUDGET (cap dur) et bornes exchange
+            // 8) Sizing par BUDGET (cap dur) et bornes exchange
             $contractsBud = $this->quantizeQty(
                 $notionalMax / max(1e-12, $limit * $ctSize),
                 max(1e-9, $qtyStep)
             );
             $upperCap = $marketCap !== null ? min($maxVol, $marketCap) : $maxVol;
 
-// 9) Candidat sans dépasser le budget (ni caps), mais ≥ minVol
+            // 9) Candidat sans dépasser le budget (ni caps), mais ≥ minVol
             $candidate = max($minVol, min($contractsRiskQ, $contractsBud, $upperCap));
 
-// Si le risque demande plus que le budget, tente d'augmenter le levier (jusqu'à maxLev)
+            // Si le risque demande plus que le budget, tente d'augmenter le levier (jusqu'à maxLev)
             if ($candidate < max($minVol, min($contractsRiskQ, $upperCap))) {
                 $contractsNeeded = max($minVol, min($contractsRiskQ, $upperCap));
                 $notionalNeeded  = $contractsNeeded * $limit * $ctSize;
@@ -586,7 +590,7 @@ final class PositionOpener
 
             $contracts = (int)$candidate;
 
-// 10) Recalcule TP/SL avec le levier réel (déjà fait ci-dessus pour slPct)
+            // 10) Recalcule TP/SL avec le levier réel (déjà fait ci-dessus pour slPct)
             $tpPct = abs($tpRoi) / max(1e-12, $leverage);
             if ($side === 'long') {
                 $slRaw = $limit * (1.0 - $slPct);
@@ -598,11 +602,11 @@ final class PositionOpener
             $slQ = $this->quantizeToStep($slRaw, $tick);
             $tpQ = $this->quantizeToStep($tpRaw, $tick);
 
-// 11) Estimations honnêtes pour retour et contrôle
+            // 11) Estimations honnêtes pour retour et contrôle
             $notionalReal = $contracts * $limit * $ctSize;
             $marginEst    = $notionalReal / max(1e-12, $leverage);
 
-// 12) Met à jour le payload + setLeverage
+            // 12) Met à jour le payload + setLeverage
             $clientOrderId = 'LIM_' . bin2hex(random_bytes(6));
             $payload = [
                 'symbol'                        => $symbol,
@@ -620,7 +624,7 @@ final class PositionOpener
                 'preset_stop_loss_price'        => (string)$slQ,
                 'stp_mode'                      => 1,
             ];
-            $this->bitmartPositions->setLeverage($symbol, $leverage, 'isolated');
+            $this->setLeverage($symbol, $leverage, 'isolated');
             $res = $this->ordersService->create($payload);
             if (($res['code'] ?? 0) !== 1000) {
                 throw new \RuntimeException('submit-order error: ' . json_encode($res, JSON_UNESCAPED_SLASHES));
@@ -647,7 +651,6 @@ final class PositionOpener
                 'leverage'   => $leverage,
                 'notional'   => $notionalMax,
                 'client_order_id' => $clientOrderId,
-                'meta'       => $meta,
             ];
         } finally {
             $this->persistOrderId($symbol, $orderId, '[AutoLev]');
@@ -733,29 +736,56 @@ final class PositionOpener
             'market_max_volume' => $contract->getMarketMaxVolume(),
             'max_leverage' => $contract->getMaxLeverage(),
             'min_leverage' => $contract->getMinLeverage(),
+            // Ajouts pour réutiliser le dernier prix sans requête externe immédiate
+            'last_price' => $contract->getLastPrice(),
+            'index_price' => $contract->getIndexPrice(),
         ];
     }
 
-    /** MarkPrice K-line (step=1) → close_price de la dernière bougie */
+    /** Mark price: tente d'utiliser d'abord les données locales Contract (last_price puis index_price)
+     *  fallback sur l'appel Bitmart mark price kline si non disponible. */
     private function getMarkClose(string $symbol): float
     {
-        $now = time();
-        $rows = $this->bitmartPublic->getMarkPriceKline(
-            symbol: $symbol,
-            step: 1,
-            limit: 2,
-            startTime: $now - 120,
-            endTime: $now
-        );
-        if (!$rows || !is_array($rows)) {
-            throw new RuntimeException('markprice-kline: pas de données');
+        // Nouvelle implémentation : on ignore les valeurs locales potentiellement anciennes
+        // et on interroge directement l'API publique (mark price kline). On ne tombe en
+        // fallback local qu'en ultime recours (et on log explicitement).
+        try {
+            $now = time();
+            // On demande 2 points (sécurité) sur les ~2 dernières minutes
+            $rows = $this->bitmartPublic->getMarkPriceKline(
+                symbol: $symbol,
+                step: 1,
+                limit: 2,
+                startTime: $now - 120,
+                endTime: $now
+            );
+            if (!\is_array($rows) || empty($rows)) {
+                throw new RuntimeException('markprice-kline: réponse vide');
+            }
+            $lastRow = end($rows);
+            $close  = (float)($lastRow['close_price'] ?? 0.0);
+            if ($close <= 0.0) {
+                throw new RuntimeException('markprice-kline: close_price invalide');
+            }
+            return $close;
+        } catch (Throwable $e) {
+            $this->positionsLogger->warning('getMarkClose remote fetch failed, fallback local (deprecated path)', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+            ]);
+            // Fallback minimal : on NE fait PAS confiance à l'ancien last_price pour une entrée précise.
+            // On tente index_price; si absent on relance l'exception.
+            try {
+                $details = $this->getContractDetails($symbol);
+                $index = (float)($details['index_price'] ?? 0.0);
+                if ($index > 0.0) {
+                    return $index;
+                }
+            } catch (Throwable $inner) {
+                // ignore, on relèvera l'erreur initiale après
+            }
+            throw new RuntimeException('Impossible d\'obtenir un mark price frais pour ' . $symbol . ' : ' . $e->getMessage());
         }
-        $last  = end($rows);
-        $close = (float)($last['close_price'] ?? 0.0);
-        if ($close <= 0.0) {
-            throw new RuntimeException('markprice-kline: close_price invalide');
-        }
-        return $close;
     }
 
     /** (optionnel) Cap du levier par bracket ; retourne null si échec silencieux */
@@ -777,7 +807,7 @@ final class PositionOpener
         }
     }
 
-    /** Règle le levier côté exchange (SIGNED) */
+    /** Règle le levier côté exchange (SIGNED) avec fallback code=40012 (margin mode non modifiable). */
     private function setLeverage(string $symbol, int $leverage, string $openType = 'isolated'): void
     {
         $this->positionsLogger->info('submit-leverage payload', [
@@ -786,12 +816,80 @@ final class PositionOpener
             'open_type' => $openType,
         ]);
 
-        $resp = $this->bitmartPositions->setLeverage($symbol, $leverage, $openType);
-        $this->positionsLogger->info('submit-leverage response', $resp);
-
-        if (($resp['code'] ?? 0) !== 1000) {
-            throw new RuntimeException('submit-leverage error: ' . json_encode($resp, JSON_UNESCAPED_SLASHES));
+        try {
+            $resp = $this->bitmartPositions->setLeverage($symbol, $leverage, $openType);
+        } catch (\Throwable $e) {
+            $this->positionsLogger->warning('submit-leverage transport exception (continue)', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+            ]);
+            return; // on continue malgré tout
         }
+
+        $code = (int)($resp['code'] ?? 0);
+        $this->positionsLogger->info('submit-leverage response', ['code' => $code, 'resp' => $resp]);
+
+        if ($code === 1000) {
+            return; // OK
+        }
+
+        if ($code === 40012) { // "There are currently positions or orders, the modification of margin mode is not supported"
+            $this->positionsLogger->warning('submit-leverage margin mode change refused (40012) — tentative fallback', [
+                'symbol' => $symbol,
+                'requested_open_type' => $openType,
+            ]);
+
+            // On tente de détecter l'open_type actuel pour réessayer uniquement avec levier
+            $existingType = null;
+            try {
+                $posResp = $this->bitmartPositions->list(['symbol' => $symbol]);
+                $rows = $posResp['data'] ?? [];
+                if (\is_array($rows)) {
+                    foreach ($rows as $row) {
+                        if (!\is_array($row)) continue;
+                        $sym = strtoupper((string)($row['symbol'] ?? ''));
+                        if ($sym === strtoupper($symbol)) {
+                            $existingType = $row['open_type'] ?? $row['margin_mode'] ?? $row['position_mode'] ?? null;
+                            break;
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->positionsLogger->warning('Impossible de récupérer les positions pour détecter open_type', [
+                    'symbol' => $symbol,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            if ($existingType && $existingType !== $openType) {
+                $this->positionsLogger->info('Retry submit-leverage avec open_type existant', [
+                    'symbol' => $symbol,
+                    'existing_open_type' => $existingType,
+                ]);
+                try {
+                    $resp2 = $this->bitmartPositions->setLeverage($symbol, $leverage, (string)$existingType);
+                    $code2 = (int)($resp2['code'] ?? 0);
+                    $this->positionsLogger->info('submit-leverage fallback response', ['code' => $code2, 'resp' => $resp2]);
+                    if ($code2 === 1000) {
+                        return; // succès fallback
+                    }
+                } catch (\Throwable $e) {
+                    $this->positionsLogger->warning('Fallback submit-leverage exception', [
+                        'symbol' => $symbol,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            // On continue sans lever d'exception : on utilisera le levier/mode existant.
+            $this->positionsLogger->warning('Continuation sans modification de leverage/margin mode (code 40012)', [
+                'symbol' => $symbol,
+            ]);
+            return;
+        }
+
+        // Autre code d'erreur: on lève pour diagnostic
+        throw new RuntimeException('submit-leverage error: ' . json_encode($resp, JSON_UNESCAPED_SLASHES));
     }
 
     /** Valide et normalise un plan-order TP/SL avant envoi */
@@ -1044,10 +1142,22 @@ final class PositionOpener
             'symbol' => $symbol
         ]);
         $mark  = $this->getMarkClose($symbol);
-        $limit = $this->quantizeToStep($mark, $tick);
-        $this->positionsLogger->info('[SR] Prix d\'entrée arrondi', [
+        // FIX: Pour un ordre LIMIT, on doit orienter le prix dans le sens compatible avec l'échange.
+        // LONG => prix <= mark (on arrondit vers le bas). SHORT => prix >= mark (on arrondit vers le haut).
+        if (strtoupper($side) === 'LONG') {
+            $limit = $this->quantizeDown($mark, $tick);
+        } else {
+            $limit = $this->quantizeUp($mark, $tick);
+        }
+        // Si pour une raison (mark exactement sur tick) limit == 0, fallback sur mark quantized neutre
+        if ($limit <= 0) {
+            $limit = $this->quantizeToStep($mark, $tick);
+        }
+        $this->positionsLogger->info('[SR] Prix d\'entrée directionnel', [
             'mark' => $mark,
-            'limit' => $limit
+            'limit' => $limit,
+            'side' => $side,
+            'tick' => $tick
         ]);
 
         $cfg = $this->tradingParameters->all();
@@ -1118,21 +1228,55 @@ final class PositionOpener
         ]);
         $slRaw = SrRiskHelper::chooseSlFromSr($side, $limit, $sr['supports'], $sr['resistances'], $sr['atr']);
         $slQ   = $this->quantizeToStep($slRaw, $tick);
+        $stopPct = abs($slQ - $limit) / max(1e-12, $limit);
 
         $this->positionsLogger->info('[SR] Étape 6: Calcul du levier optimal', [
-            'limit' => $limit,
-            'slQ' => $slQ,
+            'limit'      => $limit,
+            'slQ'        => $slQ,
+            'stop_pct'   => $stopPct,
+            'atr'        => $sr['atr'],
             'riskMaxPct' => $riskMaxPct,
-            'maxLev' => $maxLev
+            'maxLev'     => $maxLev,
         ]);
         $levOptFloat = SrRiskHelper::leverageFromRisk($limit, $slQ, $riskMaxPct, $maxLev);
         $levFinal    = max(1, min($maxLev, (int)ceil($levOptFloat)));
+
+        $sr['stop_pct'] = $stopPct;
+        $sr['lev_opt']  = $levOptFloat;
+
+        if ($levOptFloat <= self::MIN_LEVERAGE_THRESHOLD) {
+            $this->positionsLogger->warning('[SR] Levier trop faible, abandon de l\'ouverture', [
+                'symbol'     => $symbol,
+                'lev_opt'    => $levOptFloat,
+                'lev_final'  => $levFinal,
+                'threshold'  => self::MIN_LEVERAGE_THRESHOLD,
+                'stop_pct'   => $stopPct,
+                'riskMaxPct' => $riskMaxPct,
+            ]);
+            throw LeverageLowException::trigger($symbol, $levOptFloat, self::MIN_LEVERAGE_THRESHOLD);
+        }
+
+        $baseAsset = substr(strtoupper($symbol), 0, 3);
+        if (in_array($baseAsset, self::LARGE_CAP_ASSETS, true)) {
+            $minLevFromMax = $maxLev * self::LARGE_CAP_MIN_LEVERAGE_RATIO;
+            if ($levOptFloat < $minLevFromMax) {
+                $this->positionsLogger->warning('[SR] Levier insuffisant pour large cap, abandon', [
+                    'symbol'         => $symbol,
+                    'base_asset'     => $baseAsset,
+                    'lev_opt'        => $levOptFloat,
+                    'lev_final'      => $levFinal,
+                    'min_from_max'   => $minLevFromMax,
+                    'contract_max'   => $maxLev,
+                    'ratio_required' => self::LARGE_CAP_MIN_LEVERAGE_RATIO,
+                ]);
+                throw LeverageLowException::trigger($symbol, $levOptFloat, $minLevFromMax);
+            }
+        }
 
 
         $this->positionsLogger->info('[SR] Étape 7: Calcul du Take Profit (R-multiple)', [
             'rMultiple' => $rMultiple
         ]);
-        $stopPct = abs($slQ - $limit) / $limit;
         $tpTarget = $stopPct * $rMultiple;
         $tpRaw = ($side === 'LONG')
             ? $limit * (1.0 + $tpTarget)
@@ -1179,6 +1323,57 @@ final class PositionOpener
 
         $this->positionsLogger->info('[SR] Étape 10: Soumission de l\'ordre', $payload);
         $res = $this->ordersService->create($payload);
+        // RETRY logique si erreur de prix limite rejeté par l'échange
+        if ((int)($res['code'] ?? 0) !== 1000) {
+            $rawMsg = json_encode($res, JSON_UNESCAPED_SLASHES);
+            $this->positionsLogger->warning('[SR] submit-order rejet initial', ['response' => $res]);
+            $adjusted = false;
+            $allowedPrice = null;
+            $constraintType = null; // 'max' | 'min'
+            // Pattern: "should not exceed X" (borne max)
+            if (preg_match('/should not exceed ([0-9.]+)/i', $rawMsg, $m)) {
+                $allowedPrice = (float)$m[1];
+                $constraintType = 'max';
+                if ($limit > $allowedPrice) {
+                    $adjusted = true;
+                }
+            } elseif (preg_match('/should not be lower than ([0-9.]+)/i', $rawMsg, $m)) {
+                // Borne min
+                $allowedPrice = (float)$m[1];
+                $constraintType = 'min';
+                if ($limit < $allowedPrice) {
+                    $adjusted = true;
+                }
+            }
+            if ($adjusted && $allowedPrice !== null) {
+                $safetyTicks = 1; // marge de sécurité
+                if ($constraintType === 'max') {
+                    $proposed = $allowedPrice - $safetyTicks * $tick;
+                    if ($proposed <= 0) { // garde-fou
+                        $proposed = $allowedPrice; // on ne peut pas soustraire
+                    }
+                    $limit = $this->quantizeDown($proposed, $tick);
+                } elseif ($constraintType === 'min') {
+                    $proposed = $allowedPrice + $safetyTicks * $tick;
+                    $limit = $this->quantizeUp($proposed, $tick);
+                }
+                // Assure sens logique LONG/SHORT (optionnel, sans rejet si diff minime)
+                if ($side === 'LONG' && $limit > $mark) {
+                    $limit = $this->quantizeDown(min($limit, $mark), $tick);
+                } elseif ($side === 'SHORT' && $limit < $mark) {
+                    $limit = $this->quantizeUp(max($limit, $mark), $tick);
+                }
+                $payload['price'] = (string)$limit;
+                $this->positionsLogger->info('[SR] Réajustement du prix limite avec marge de sécurité', [
+                    'constraint' => $constraintType,
+                    'allowed_price' => $allowedPrice,
+                    'new_limit' => $limit,
+                    'tick' => $tick,
+                    'safety_ticks' => $safetyTicks,
+                ]);
+                $res = $this->ordersService->create($payload);
+            }
+        }
         // Mise à jour du pipeline
         try {
             $this->pipelineRepository->updateStatusBySymbol(

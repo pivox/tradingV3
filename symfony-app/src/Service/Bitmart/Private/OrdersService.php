@@ -24,6 +24,28 @@ final class OrdersService
     }
 
     /**
+     * Créer un ordre planifié (TP / SL / trailing etc.).
+     * Bitmart endpoint attendu: POST /contract/private/submit-plan-order
+     * @param array<string,mixed> $params
+     * @return array<mixed>
+     */
+    public function createPlan(array $params): array
+    {
+        return $this->client->request('POST', '/contract/private/submit-plan-order', [], $params);
+    }
+
+    /**
+     * Créer ou mettre à jour un ordre TP/SL lié à une position.
+     * Bitmart endpoint attendu: POST /contract/private/submit-tp-sl-order
+     * @param array<string,mixed> $params
+     * @return array<mixed>
+     */
+    public function createTpSl(array $params): array
+    {
+        return $this->client->request('POST', '/contract/private/submit-tp-sl-order', [], $params);
+    }
+
+    /**
      * Annuler un ordre par order_id ou client_order_id.
      * @param array<string,mixed> $params
      */
@@ -44,8 +66,9 @@ final class OrdersService
     }
 
     /**
-     * Liste les ordres ouverts (GET /contract/private/get-open-orders)
+     * Liste les ordres ouverts (GET /contract/private/get-open-orders) + ordres plan (GET /contract/private/current-plan-order)
      * @param array<string,mixed> $query
+     * @return array{orders: array<mixed>, plan_orders: array<mixed>}
      */
     public function open(array $query = []): array
     {
