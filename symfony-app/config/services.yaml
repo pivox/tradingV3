@@ -19,6 +19,7 @@ parameters:
 
     # Path to strategy YAML (also set in packages/scalping.yaml)
     trading.scalping.file: '%kernel.project_dir%/config/packages/trading.scalping.yml'
+    opened_locked_sync.dry_run: true
 services:
     # default configuration for services in *this* file
     _defaults:
@@ -101,6 +102,10 @@ services:
             $validationLogger: '@monolog.logger.validation'
             $signalsLogger: '@monolog.logger.signals'
 
+
+    App\Service\Trading\OpenedLockedSyncService:
+        arguments:
+            $dryRun: '%opened_locked_sync.dry_run%'
 
     App\Service\Trading\PositionOpener:
         arguments:
