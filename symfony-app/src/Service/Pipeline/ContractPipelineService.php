@@ -43,9 +43,9 @@ final class ContractPipelineService
     }
 
     /** Marque une tentative (met à jour lastAttemptAt + updatedAt). */
-    public function markAttempt(ContractPipeline $pipe): ContractPipeline
+    public function markAttempt(ContractPipeline $pipe, ?string $meta = null): ContractPipeline
     {
-        $pipe->markAttempt();
+        $pipe->markAttempt($meta);
         $contract = $pipe->getContract();
         $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
         $pipe->setContract($contract);
@@ -108,7 +108,7 @@ final class ContractPipelineService
      * @param string $timeframe
      * @return array
      */
-    public function applyDecision(ContractPipeline $pipe, string $timeframe): array
+    public function applyDecision(ContractPipeline $pipe, string $timeframe, ?string $metaForPipeLine = null): array
     {
         $signals   = $pipe->getSignals() ?? [];
         $relevant = match ($timeframe) {
@@ -128,69 +128,71 @@ final class ContractPipelineService
         } else {
             $valid = true;
         }
-            // --- Nouveau : calcul can_enter (sans toucher au reste)
-            // Règle : 4h et 1h doivent être valides et du même side,
-            // et au moins un des 3 TF d'exécution (15m/5m/1m) doit avoir ce même side.
+
+        // Nouvelle règle stricte d'alignement pour l'entrée :
+        // - Sur 5m: 4h,1h,15m,5m doivent exister et avoir le même side LONG/SHORT
+        // - Sur 1m: 4h,1h,15m,5m,1m doivent exister et avoir le même side LONG/SHORT
         $canEnter = false;
-        $side4h = $signals[ContractPipeline::TF_4H]['signal'] ?? null;
-        $side1h = $signals[ContractPipeline::TF_1H]['signal'] ?? null;
-        if (in_array($side4h, ['LONG','SHORT'], true) && $side4h === $side1h) {
-            foreach ([ContractPipeline::TF_15M, ContractPipeline::TF_5M, ContractPipeline::TF_1M] as $execTf) {
-                $sideExec = $signals[$execTf]['signal'] ?? null;
-                if ($sideExec === $side4h) { $canEnter = true; break; }
+        $getSide = static function(array $sig, string $tf): ?string {
+            return isset($sig[$tf]['signal']) ? strtoupper((string)$sig[$tf]['signal']) : null;
+        };
+        $side4h  = $getSide($signals, ContractPipeline::TF_4H);
+        $side1h  = $getSide($signals, ContractPipeline::TF_1H);
+        $side15m = $getSide($signals, ContractPipeline::TF_15M);
+        $side5m  = $getSide($signals, ContractPipeline::TF_5M);
+        $side1m  = $getSide($signals, ContractPipeline::TF_1M);
+
+        $allLongShort = static function(array $arr): bool {
+            foreach ($arr as $s) { if (!in_array($s, ['LONG','SHORT'], true)) return false; } return true; };
+
+        if ($timeframe === ContractPipeline::TF_5M) {
+            if ($allLongShort([$side4h,$side1h,$side15m,$side5m]) && $side4h === $side1h && $side4h === $side15m && $side4h === $side5m) {
+                $canEnter = true;
+            }
+        } elseif ($timeframe === ContractPipeline::TF_1M) {
+            if ($allLongShort([$side4h,$side1h,$side15m,$side5m,$side1m]) && $side4h === $side1h && $side4h === $side15m && $side4h === $side5m && $side4h === $side1m) {
+                $canEnter = true;
             }
         }
 
         if (in_array($timeframe, ['1m']) && $valid) {
             $pipe->setStatus(ContractPipeline::STATUS_VALIDATED);
         }
+        if ($metaForPipeLine == ContractPipeline::DONT_INC_DEC_DEL) {
+            return [$valid, $canEnter];
+        }
 
         if ($valid) {
-            // Promotion
             switch ($timeframe) {
                 case ContractPipeline::TF_4H:
-                    $this->promoteTo($pipe, ContractPipeline::TF_1H, 3);
-                    break;
+                    $this->promoteTo($pipe, ContractPipeline::TF_1H, 3); break;
                 case ContractPipeline::TF_1H:
-                    $this->promoteTo($pipe, ContractPipeline::TF_15M, 3);
-                    break;
+                    $this->promoteTo($pipe, ContractPipeline::TF_15M, 3); break;
                 case ContractPipeline::TF_15M:
-                    $this->promoteTo($pipe, ContractPipeline::TF_5M, 2);
-                    break;
+                    $this->promoteTo($pipe, ContractPipeline::TF_5M, 2); break;
                 case ContractPipeline::TF_5M:
-                    $this->promoteTo($pipe, ContractPipeline::TF_1M, 4);
-                    break;
+                    $this->promoteTo($pipe, ContractPipeline::TF_1M, 4); break;
                 case ContractPipeline::TF_1M:
-                    // À ce stade, la position sera ouverte ailleurs (callback),
-                    // puis on réamorce en 4h.
-                    $this->promoteTo($pipe, ContractPipeline::TF_4H, 1);
-                    break;
+                    $this->promoteTo($pipe, ContractPipeline::TF_4H, 1); break;
                 default:
-                    // Timeframe inconnu : on ne fait rien
                     $pipe->touchUpdatedAt();
                     $this->em->flush();
                     $this->em->clear();
             }
         } else {
-            // Échec
             $pipe->incRetries()->setStatus(ContractPipeline::STATUS_PENDING);
             $signals = $pipe->getSignals() ?? [];
             foreach ($signals as $tf => $signal) {
-                if (!in_array($tf, $relevant)) {
-                    unset($signals[$tf]);
-                }
+                if (!in_array($tf, $relevant)) { unset($signals[$tf]); }
             }
             $pipe->setSignals($signals);
-
             $parent = match ($timeframe) {
                 ContractPipeline::TF_1H  => ContractPipeline::TF_4H,
                 ContractPipeline::TF_15M => ContractPipeline::TF_1H,
                 ContractPipeline::TF_5M  => ContractPipeline::TF_15M,
                 ContractPipeline::TF_1M  => ContractPipeline::TF_5M,
-                default => null, // 4h : pas de parent
+                default => null,
             };
-
-
             if ($parent && $pipe->getRetries() >= $pipe->getMaxRetries()) {
                 $signals = $pipe->getSignals() ?? [];
                 unset($signals[$timeframe]);
@@ -203,11 +205,9 @@ final class ContractPipelineService
             $contract = $pipe->getContract();
             $contract = $this->contractRepo->findOneBy(['symbol' => $contract->getSymbol()]);
             $pipe->setContract($contract);
-
             $this->em->flush();
             $this->em->clear();
         }
         return [$valid, $canEnter];
-        //return ['valid' => $valid, 'can_enter' => $canEnter];
     }
 }
