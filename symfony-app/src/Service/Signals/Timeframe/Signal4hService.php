@@ -13,8 +13,8 @@ use Psr\Log\LoggerInterface;
  * Contexte MTF 4h (biais de fond).
  *
  * YML scalping (lecture minimale, sûre) :
- *  - LONG  : ema_50 > ema_200 && macd_hist > 0
- *  - SHORT : ema_50 < ema_200 && macd_hist < 0
+ *  - LONG  : ema_50 > ema_200 && macd_hist > 0 && close > ema_200
+ *  - SHORT : ema_50 < ema_200 && macd_hist < 0 && close < ema_200
  *
  * On reste volontairement sobre (EMA/MACD). Les autres filtres (ADX/RSI/Ichimoku…)
  * peuvent être ajoutés plus tard sans casser l’API.
@@ -112,17 +112,19 @@ final class Signal4hService
         $emaDown = ($emaTrend > $emaMid + $eps);
         $macdUp  = ($histNow > 0 + $eps);
         $macdDown= ($histNow < 0 - $eps);
+        $closeAboveTrend = ($lastClose > $emaTrend + $eps);
+        $closeBelowTrend = ($lastClose < $emaTrend - $eps);
 
         $signal = 'NONE';
         $trigger = '';
         $path = 'context_4h';
 
-        if ($emaUp && $macdUp) {
+        if ($emaUp && $macdUp && $closeAboveTrend) {
             $signal  = 'LONG';
-            $trigger = 'ema_50_gt_200 & macd_hist_gt_0';
-        } elseif ($emaDown && $macdDown) {
+            $trigger = 'ema_50_gt_200 & macd_hist_gt_0 & close_above_ema_200';
+        } elseif ($emaDown && $macdDown && $closeBelowTrend) {
             $signal  = 'SHORT';
-            $trigger = 'ema_50_lt_200 & macd_hist_lt_0';
+            $trigger = 'ema_50_lt_200 & macd_hist_lt_0 & close_below_ema_200';
         }
 
         $validation = [
@@ -130,6 +132,8 @@ final class Signal4hService
             'ema_trend' => $emaTrend,
             'macd'      => ['macd'=>$macdNow, 'signal'=>$sigNow, 'hist'=>$histNow],
             'close'     => $lastClose,
+            'close_above_ema_trend' => $closeAboveTrend,
+            'close_below_ema_trend' => $closeBelowTrend,
             'path'      => $path,
             'trigger'   => $trigger,
             'signal'    => $signal,

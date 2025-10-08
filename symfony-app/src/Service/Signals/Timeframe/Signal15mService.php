@@ -7,6 +7,7 @@ use App\Entity\Kline;
 use App\Service\Config\TradingParameters;
 use App\Service\Indicator\Trend\Ema;
 use App\Service\Indicator\Momentum\Macd;
+use App\Service\Indicator\Momentum\Rsi;
 use App\Service\Indicator\Volume\Vwap;
 use Psr\Log\LoggerInterface;
 
@@ -14,8 +15,8 @@ use Psr\Log\LoggerInterface;
  * Exécution 15m (plus propre que 5m, moins de bruit).
  *
  * YML scalping (lecture minimale, sûre) :
- *  - LONG  : ema_20 > ema_50 && macd_hist > 0 && close > vwap(daily)
- *  - SHORT : ema_20 < ema_50 && macd_hist < 0 && close < vwap(daily)
+ *  - LONG  : ema_20 > ema_50 && macd_hist > 0 && close > vwap(daily) && rsi < 70
+ *  - SHORT : ema_20 < ema_50 && macd_hist < 0 && close < vwap(daily) && rsi > 30
  *
  * NB: Donchian/StochRSI/Choppiness peuvent être ajoutés plus tard de façon optionnelle.
  */
@@ -26,6 +27,7 @@ final class Signal15mService
         private LoggerInterface $signalsLogger,
         private Ema $ema,
         private Macd $macd,
+        private Rsi $rsi,
         private Vwap $vwap,
         private TradingParameters $params,
         // Defaults
@@ -37,6 +39,9 @@ final class Signal15mService
         private int   $defaultMacdFast      = 12,
         private int   $defaultMacdSlow      = 26,
         private int   $defaultMacdSignal    = 9,
+        private int   $defaultRsiPeriod     = 14,
+        private float $defaultRsiLongMax    = 70.0,
+        private float $defaultRsiShortMin   = 30.0,
         private string $defaultTimezone     = 'UTC'   // ← remplace l’ancienne notion de "session"
     ) {}
 
@@ -56,6 +61,15 @@ final class Signal15mService
         $macdFast   = $cfg['indicators']['macd']['fast']   ?? $this->defaultMacdFast;
         $macdSlow   = $cfg['indicators']['macd']['slow']   ?? $this->defaultMacdSlow;
         $macdSignal = $cfg['indicators']['macd']['signal'] ?? $this->defaultMacdSignal;
+
+        $rsiPeriod  = $cfg['indicators']['rsi']['period']  ?? $this->defaultRsiPeriod;
+        $rsiGuard   = $cfg['timeframes']['15m']['guards']['rsi'] ?? [];
+        $rsiLongMax  = is_array($rsiGuard) && array_key_exists('long_max', $rsiGuard)
+            ? (float)$rsiGuard['long_max']
+            : $this->defaultRsiLongMax;
+        $rsiShortMin = is_array($rsiGuard) && array_key_exists('short_min', $rsiGuard)
+            ? (float)$rsiGuard['short_min']
+            : $this->defaultRsiShortMin;
 
         // 🔁 Nouvelle lecture de conf VWAP (compatible avec ton YAML v1.2)
         $vwapDaily   = (bool)($cfg['indicators']['vwap']['daily'] ?? true);
@@ -126,6 +140,15 @@ final class Signal15mService
         $macdUp  = ($histNow > 0 + $eps);
         $macdDown= ($histNow < 0 - $eps);
 
+        $rsiCloses = $closes;
+        if ($useLastClosed && count($rsiCloses) > 1) {
+            array_pop($rsiCloses);
+        }
+        $rsiSeries = $this->rsi->calculateFull($rsiCloses, (int)$rsiPeriod);
+        $rsiNow = !empty($rsiSeries['rsi']) ? (float) end($rsiSeries['rsi']) : 50.0;
+        $rsiBelowCap = ($rsiNow <= $rsiLongMax - $eps);
+        $rsiAboveFloor = ($rsiNow >= $rsiShortMin + $eps);
+
         $closeAboveVwap = ($lastClose > $vwapVal + $eps);
         $closeBelowVwap = ($lastClose < $vwapVal - $eps);
 
@@ -133,12 +156,12 @@ final class Signal15mService
         $trigger = '';
         $path = 'execution_15m';
 
-        if ($emaUp && $macdUp && $closeAboveVwap) {
+        if ($emaUp && $macdUp && $closeAboveVwap && $rsiBelowCap) {
             $signal  = 'LONG';
-            $trigger = 'ema_fast_gt_slow & macd_hist_gt_0 & close_above_vwap';
-        } elseif ($emaDown && $macdDown && $closeBelowVwap) {
+            $trigger = 'ema_20_gt_50 & macd_hist_gt_0 & close_above_vwap & rsi_lt_70';
+        } elseif ($emaDown && $macdDown && $closeBelowVwap && $rsiAboveFloor) {
             $signal  = 'SHORT';
-            $trigger = 'ema_fast_lt_slow & macd_hist_lt_0 & close_below_vwap';
+            $trigger = 'ema_20_lt_50 & macd_hist_lt_0 & close_below_vwap & rsi_gt_30';
         }
 
         $validation = [
@@ -147,6 +170,7 @@ final class Signal15mService
             'macd'     => ['macd'=>$macdNow, 'signal'=>$sigNow, 'hist'=>$histNow],
             'vwap'     => $vwapVal,
             'close'    => $lastClose,
+            'rsi'      => $rsiNow,
             'path'     => $path,
             'trigger'  => $trigger,
             'signal'   => $signal,

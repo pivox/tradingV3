@@ -30,6 +30,7 @@ final class Signal1hService
         private int   $defaultMinBars       = 220,
         private int   $defaultEmaFastPeriod = 20,
         private int   $defaultEmaSlowPeriod = 50,
+        private int   $defaultEmaTrendPeriod = 200,
         private int   $defaultMacdFast      = 12,
         private int   $defaultMacdSlow      = 26,
         private int   $defaultMacdSignal    = 9,
@@ -56,8 +57,9 @@ final class Signal1hService
         $useLastClosed = $cfg['runtime']['use_last_closed'] ?? $this->defaultUseLastClosed;
         $minBars       = $cfg['timeframes']['1h']['guards']['min_bars'] ?? $this->defaultMinBars;
 
-        $emaFastPeriod = $cfg['indicators']['ema']['fast']  ?? $this->defaultEmaFastPeriod; // 20
-        $emaSlowPeriod = $cfg['indicators']['ema']['slow']  ?? $this->defaultEmaSlowPeriod; // 50
+        $emaFastPeriod  = $cfg['indicators']['ema']['fast']  ?? $this->defaultEmaFastPeriod; // 20
+        $emaSlowPeriod  = $cfg['indicators']['ema']['slow']  ?? $this->defaultEmaSlowPeriod; // 50
+        $emaTrendPeriod = $cfg['indicators']['ema']['trend'] ?? $this->defaultEmaTrendPeriod; // 200
 
         $macdFast   = $cfg['indicators']['macd']['fast']   ?? $this->defaultMacdFast;
         $macdSlow   = $cfg['indicators']['macd']['slow']   ?? $this->defaultMacdSlow;
@@ -81,8 +83,9 @@ final class Signal1hService
 
         $closes = array_map(fn(Kline $k) => $k->getClose(), $candles);
 
-        $emaFast = $this->ema->calculate($closes, $emaFastPeriod);
-        $emaSlow = $this->ema->calculate($closes, $emaSlowPeriod);
+        $emaFast  = $this->ema->calculate($closes, $emaFastPeriod);
+        $emaSlow  = $this->ema->calculate($closes, $emaSlowPeriod);
+        $emaTrend = $this->ema->calculate($closes, $emaTrendPeriod);
 
         $macdNow = 0.0; $sigNow = 0.0; $histNow = 0.0;
         if (method_exists($this->macd, 'calculateFull')) {
@@ -109,27 +112,32 @@ final class Signal1hService
         $emaDown = ($emaSlow > $emaFast + $eps);
         $macdUp  = ($histNow > 0 + $eps);
         $macdDown= ($histNow < 0 - $eps);
+        $closeAboveTrend = ($lastClose > $emaTrend + $eps);
+        $closeBelowTrend = ($lastClose < $emaTrend - $eps);
 
         $signal = 'NONE';
         $trigger = '';
         $path = 'context_1h';
 
-        if ($emaUp && $macdUp) {
+        if ($emaUp && $macdUp && $closeAboveTrend) {
             $signal  = 'LONG';
-            $trigger = 'ema_20_gt_50 & macd_hist_gt_0';
-        } elseif ($emaDown && $macdDown) {
+            $trigger = 'ema_20_gt_50 & macd_hist_gt_0 & close_above_ema_200';
+        } elseif ($emaDown && $macdDown && $closeBelowTrend) {
             $signal  = 'SHORT';
-            $trigger = 'ema_20_lt_50 & macd_hist_lt_0';
+            $trigger = 'ema_20_lt_50 & macd_hist_lt_0 & close_below_ema_200';
         }
 
         $validation = [
-            'ema_fast' => $emaFast,
-            'ema_slow' => $emaSlow,
-            'macd'     => ['macd'=>$macdNow, 'signal'=>$sigNow, 'hist'=>$histNow],
-            'close'    => $lastClose,
-            'path'     => $path,
-            'trigger'  => $trigger,
-            'signal'   => $signal,
+            'ema_fast'  => $emaFast,
+            'ema_slow'  => $emaSlow,
+            'ema_trend' => $emaTrend,
+            'macd'      => ['macd'=>$macdNow, 'signal'=>$sigNow, 'hist'=>$histNow],
+            'close'     => $lastClose,
+            'close_above_ema_trend' => $closeAboveTrend,
+            'close_below_ema_trend' => $closeBelowTrend,
+            'path'      => $path,
+            'trigger'   => $trigger,
+            'signal'    => $signal,
             'date' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
         ];
 
