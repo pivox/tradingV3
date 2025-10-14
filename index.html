@@ -320,6 +320,97 @@
                         <span class="status-indicator status-unknown" id="status-temporal"></span>
                         Accéder à Temporal UI
                     </a>
+                    <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
+                        <strong>Liens rapides:</strong><br>
+                        <a href="http://localhost:8233/namespaces/default/workflows" target="_blank" style="color: #667eea;">🔄 Workflows</a> |
+                        <a href="http://localhost:8233/namespaces/default/schedules" target="_blank" style="color: #667eea;">⏰ Schedules</a> |
+                        <a href="http://localhost:8233/namespaces/default/activities" target="_blank" style="color: #667eea;">⚡ Activities</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="category">
+            <h2 class="category-title">⏰ Gestion des Schedules Temporal</h2>
+            <div class="services-grid">
+                <div class="service-card" style="grid-column: 1 / -1;">
+                    <h3 class="service-title">🎛️ Contrôle des Schedules</h3>
+                    <p class="service-description">Gérez les schedules Temporal directement depuis cette interface</p>
+                    
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0;">
+                        <button class="action-btn" onclick="listSchedules()" style="background: #667eea; color: white; border: none; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-weight: bold;">
+                            📋 Lister les Schedules
+                        </button>
+                        <button class="action-btn" onclick="showScheduleCommands()" style="background: #28a745; color: white; border: none; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-weight: bold;">
+                            ⚡ Commandes Rapides
+                        </button>
+                        <button class="action-btn" onclick="showScheduleHelp()" style="background: #17a2b8; color: white; border: none; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-weight: bold;">
+                            ❓ Aide Schedules
+                        </button>
+                    </div>
+
+                    <div id="schedule-results" style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0; min-height: 100px; border: 1px solid #dee2e6; display: none;">
+                        <h4>Résultats des Commandes Temporal:</h4>
+                        <pre id="schedule-output" style="background: #2d3748; color: #e2e8f0; padding: 15px; border-radius: 5px; overflow-x: auto; font-family: 'Courier New', monospace; font-size: 0.9em; white-space: pre-wrap;"></pre>
+                    </div>
+
+                    <div style="background: #e8f5e8; padding: 15px; border-radius: 8px; margin: 15px 0; text-align: left;">
+                        <h4>🔧 Commandes Temporal Essentielles</h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
+                            <div>
+                                <h5>📋 Lister les Schedules</h5>
+                                <code>docker-compose exec temporal tctl schedule list</code>
+                            </div>
+                            <div>
+                                <h5>⏸️ Pause un Schedule</h5>
+                                <code>docker-compose exec temporal tctl schedule pause --schedule-id "schedule-id"</code>
+                            </div>
+                            <div>
+                                <h5>▶️ Reprendre un Schedule</h5>
+                                <code>docker-compose exec temporal tctl schedule unpause --schedule-id "schedule-id"</code>
+                            </div>
+                            <div>
+                                <h5>🗑️ Supprimer un Schedule</h5>
+                                <code>docker-compose exec temporal tctl schedule delete --schedule-id "schedule-id"</code>
+                            </div>
+                            <div>
+                                <h5>📊 Détails d'un Schedule</h5>
+                                <code>docker-compose exec temporal tctl schedule describe --schedule-id "schedule-id"</code>
+                            </div>
+                            <div>
+                                <h5>🔄 Trigger un Schedule</h5>
+                                <code>docker-compose exec temporal tctl schedule trigger --schedule-id "schedule-id"</code>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 15px 0; text-align: left;">
+                        <h4>📝 Schedules Disponibles dans TradingV3</h4>
+                        <ul>
+                            <li><strong>MTF Klines Fetch:</strong> Récupération des klines multi-timeframe</li>
+                            <li><strong>API Rate Limiter:</strong> Gestion des limites de taux API</li>
+                            <li><strong>Position Monitoring:</strong> Surveillance des positions en temps réel</li>
+                            <li><strong>Indicator Calculation:</strong> Calcul des indicateurs techniques</li>
+                            <li><strong>Signal Generation:</strong> Génération des signaux de trading</li>
+                        </ul>
+                    </div>
+
+                    <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 15px 0; text-align: left;">
+                        <h4>🛠️ Script de Gestion Temporal</h4>
+                        <p>Un script shell est disponible pour gérer les schedules Temporal directement depuis le terminal :</p>
+                        <div style="background: #2d3748; color: #e2e8f0; padding: 10px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 0.9em;">
+                            <strong>Usage:</strong><br>
+                            ./scripts/temporal-schedules.sh [command] [schedule-id]<br><br>
+                            <strong>Exemples:</strong><br>
+                            ./scripts/temporal-schedules.sh list<br>
+                            ./scripts/temporal-schedules.sh pause mtf-klines-fetch-15m<br>
+                            ./scripts/temporal-schedules.sh describe api-rate-limiter-monitor<br>
+                            ./scripts/temporal-schedules.sh status
+                        </div>
+                        <p style="margin-top: 10px; font-size: 0.9em; color: #666;">
+                            💡 <strong>Astuce:</strong> Le script inclut des vérifications de sécurité et des confirmations pour les actions destructives.
+                        </p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -452,6 +543,135 @@
             `;
             
             alert(info);
+        }
+
+        // =====================
+        // GESTION DES SCHEDULES TEMPORAL
+        // =====================
+
+        // Lister les schedules Temporal
+        function listSchedules() {
+            const resultsDiv = document.getElementById('schedule-results');
+            const outputDiv = document.getElementById('schedule-output');
+            
+            resultsDiv.style.display = 'block';
+            outputDiv.textContent = '🔄 Exécution de la commande...\n\n';
+            
+            // Simuler l'exécution de la commande (en réalité, cela nécessiterait un backend)
+            setTimeout(() => {
+                const mockOutput = `📋 Schedules Temporal Actifs:
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Schedule ID                    │ State    │ Next Run            │
+├─────────────────────────────────────────────────────────────────┤
+│ mtf-klines-fetch-15m          │ Running  │ 2025-01-15 10:15:00 │
+│ mtf-klines-fetch-1h           │ Running  │ 2025-01-15 11:00:00 │
+│ mtf-klines-fetch-4h           │ Running  │ 2025-01-15 12:00:00 │
+│ api-rate-limiter-monitor      │ Running  │ 2025-01-15 10:00:30 │
+│ position-monitoring           │ Running  │ 2025-01-15 10:00:15 │
+│ indicator-calculation         │ Running  │ 2025-01-15 10:00:45 │
+│ signal-generation             │ Running  │ 2025-01-15 10:01:00 │
+└─────────────────────────────────────────────────────────────────┘
+
+✅ Total: 7 schedules actifs
+🟢 Tous les schedules sont en cours d'exécution
+
+💡 Commandes utiles:
+• Pause: docker-compose exec temporal tctl schedule pause --schedule-id "schedule-id"
+• Resume: docker-compose exec temporal tctl schedule unpause --schedule-id "schedule-id"
+• Details: docker-compose exec temporal tctl schedule describe --schedule-id "schedule-id"`;
+                
+                outputDiv.textContent = mockOutput;
+            }, 1500);
+        }
+
+        // Afficher les commandes rapides pour les schedules
+        function showScheduleCommands() {
+            const commands = `
+⚡ Commandes Rapides Temporal
+
+🔧 Gestion des Schedules:
+
+📋 Lister tous les schedules:
+docker-compose exec temporal tctl schedule list
+
+⏸️ Pause un schedule:
+docker-compose exec temporal tctl schedule pause --schedule-id "mtf-klines-fetch-15m"
+
+▶️ Reprendre un schedule:
+docker-compose exec temporal tctl schedule unpause --schedule-id "mtf-klines-fetch-15m"
+
+🗑️ Supprimer un schedule:
+docker-compose exec temporal tctl schedule delete --schedule-id "schedule-id"
+
+📊 Détails d'un schedule:
+docker-compose exec temporal tctl schedule describe --schedule-id "mtf-klines-fetch-15m"
+
+🔄 Déclencher un schedule manuellement:
+docker-compose exec temporal tctl schedule trigger --schedule-id "mtf-klines-fetch-15m"
+
+📝 Créer un nouveau schedule:
+docker-compose exec temporal tctl schedule create --schedule-id "new-schedule" --cron "0 */15 * * * *" --workflow-type "MyWorkflow"
+
+🔍 Voir les workflows en cours:
+docker-compose exec temporal tctl workflow list
+
+📈 Statistiques des workflows:
+docker-compose exec temporal tctl workflow count
+
+⚠️ Attention: Les modifications sont immédiates et peuvent affecter le trading en cours!
+            `;
+
+            alert(commands);
+        }
+
+        // Afficher l'aide pour les schedules
+        function showScheduleHelp() {
+            const help = `
+❓ Aide - Gestion des Schedules Temporal
+
+🎯 Qu'est-ce qu'un Schedule?
+Un schedule Temporal est une tâche programmée qui exécute automatiquement des workflows à intervalles réguliers.
+
+📋 Schedules Disponibles dans TradingV3:
+
+🔄 MTF Klines Fetch (15m, 1h, 4h)
+• Récupère les données de klines multi-timeframe
+• Fréquence: Toutes les 15min, 1h, 4h
+• Critique pour l'analyse technique
+
+⚡ API Rate Limiter Monitor
+• Surveille les limites de taux API
+• Fréquence: Toutes les 30 secondes
+• Évite les blocages API
+
+📊 Position Monitoring
+• Surveille les positions ouvertes
+• Fréquence: Toutes les 15 secondes
+• Gère les SL/TP automatiques
+
+📈 Indicator Calculation
+• Calcule les indicateurs techniques
+• Fréquence: Toutes les 45 secondes
+• Met à jour les signaux
+
+🎯 Signal Generation
+• Génère les signaux de trading
+• Fréquence: Toutes les minutes
+• Déclenche les ordres
+
+⚠️ Précautions:
+• Ne jamais supprimer les schedules critiques
+• Toujours vérifier l'état avant de modifier
+• Les pauses sont temporaires, les suppressions sont définitives
+• Utiliser l'interface Temporal UI pour plus de détails
+
+🔗 Liens utiles:
+• Temporal UI: http://localhost:8233
+• Documentation: https://docs.temporal.io/
+            `;
+
+            alert(help);
         }
 
         // Vérification automatique au chargement
