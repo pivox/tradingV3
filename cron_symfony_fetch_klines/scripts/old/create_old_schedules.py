@@ -23,8 +23,7 @@ SCHEDULES: Dict[str, Dict[str, Any]] = {
         "workflow_id": "cron-symfony-1m-runner",
         "cron": "*/1 * * * *",
         "jobs": [
-            EndpointJob(url="http://nginx/api/cron/bitmart/refresh-1m"),
-            EndpointJob(url="http://nginx/api/refresh-opened-locked"),
+            EndpointJob(url="http://nginx/api/cron/bitmart/refresh-1m")
         ],
     },
     "5m": {

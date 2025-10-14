@@ -64,4 +64,36 @@ class PositionRepository extends ServiceEntityRepository
             ->setMaxResults($limit)
             ->getQuery()->getResult();
     }
+
+    public function findWithFilters(?string $status = null, ?string $side = null, ?string $contract = null, ?string $exchange = null): array
+    {
+        $qb = $this->createQueryBuilder('p')
+            ->leftJoin('p.contract', 'c')
+            ->addSelect('c')
+            ->leftJoin('c.exchange', 'e')
+            ->addSelect('e')
+            ->orderBy('p.createdAt', 'DESC');
+
+        if ($status) {
+            $qb->andWhere('p.status = :status')
+                ->setParameter('status', $status);
+        }
+
+        if ($side) {
+            $qb->andWhere('p.side = :side')
+                ->setParameter('side', $side);
+        }
+
+        if ($contract) {
+            $qb->andWhere('c.symbol LIKE :contract')
+                ->setParameter('contract', '%' . $contract . '%');
+        }
+
+        if ($exchange) {
+            $qb->andWhere('e.name = :exchange')
+                ->setParameter('exchange', $exchange);
+        }
+
+        return $qb->getQuery()->getResult();
+    }
 }

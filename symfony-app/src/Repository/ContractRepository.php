@@ -65,7 +65,7 @@ class ContractRepository extends ServiceEntityRepository
             ->setParameter('openInterest', $date)
             ->setParameter('status', 'Trading')
             ->setParameter('quoteCurrency', 'USDT')
-            ->setParameter('now', $now)
+            ->setParameter('now', $now);
         ;
 
         // Exclure les contrats blacklistés
@@ -110,5 +110,30 @@ class ContractRepository extends ServiceEntityRepository
             ->select('contract.symbol')
             ->getQuery()
             ->getResult(), 'symbol');
+    }
+
+    public function findWithFilters(?string $exchange = null, ?string $status = null, ?string $symbol = null): array
+    {
+        $qb = $this->createQueryBuilder('c')
+            ->leftJoin('c.exchange', 'e')
+            ->addSelect('e')
+            ->orderBy('c.symbol', 'ASC');
+
+        if ($exchange) {
+            $qb->andWhere('e.name = :exchange')
+                ->setParameter('exchange', $exchange);
+        }
+
+        if ($status) {
+            $qb->andWhere('c.status = :status')
+                ->setParameter('status', $status);
+        }
+
+        if ($symbol) {
+            $qb->andWhere('c.symbol LIKE :symbol')
+                ->setParameter('symbol', '%' . $symbol . '%');
+        }
+
+        return $qb->getQuery()->getResult();
     }
 }

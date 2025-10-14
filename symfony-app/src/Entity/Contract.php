@@ -14,7 +14,10 @@ use Doctrine\Common\Collections\Collection;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity]
-#[ApiFilter(SearchFilter::class, properties: ['exchange.name' => 'exact'])]
+#[ApiFilter(SearchFilter::class, properties: [
+    'exchange.name' => 'exact',
+    'symbol' => 'partial',
+])]
 #[ApiResource(
     operations: [
         new GetCollection(),
@@ -136,9 +139,6 @@ class Contract
     #[ORM\Column(type: 'string', nullable: true)]
     private ?string $status = null;
 
-
-    #[ORM\OneToOne(mappedBy: 'contract', targetEntity: ContractPipeline::class, cascade: ['persist', 'remove'])]
-    private ?ContractPipeline $contractPipeline = null;
 
     #[ORM\Column(type: 'datetime', nullable: true)]
     private ?\DateTimeInterface $delistTime = null;
@@ -423,17 +423,4 @@ class Contract
         return $this;
     }
 
-    public function getContractPipeline(): ?ContractPipeline
-    {
-        return $this->contractPipeline;
-    }
-
-    public function setContractPipeline(?ContractPipeline $contractPipeline): self
-    {
-        $this->contractPipeline = $contractPipeline;
-        if ($contractPipeline && $contractPipeline->getContract() !== $this) {
-            $contractPipeline->setContract($this);
-        }
-        return $this;
-    }
 }

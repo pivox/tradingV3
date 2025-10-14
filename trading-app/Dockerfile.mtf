@@ -1,0 +1,55 @@
+FROM php:8.2-fpm
+
+# Installer les dépendances système
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    libpng-dev \
+    libonig-dev \
+    libxml2-dev \
+    libpq-dev \
+    zip \
+    unzip \
+    supervisor \
+    && docker-php-ext-install pdo pdo_pgsql mbstring exif pcntl bcmath gd \
+    && pecl install xdebug \
+    && docker-php-ext-enable xdebug
+
+# Installer Composer (via installeur officiel)
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+# Définir le répertoire de travail
+WORKDIR /var/www/html
+
+# Copier les fichiers de configuration
+COPY composer.json composer.lock ./
+
+# Installer les dépendances PHP (sans exécuter les scripts)
+RUN composer install --no-dev --no-scripts --optimize-autoloader --no-interaction
+
+# Copier le code source
+COPY . .
+
+# Créer les répertoires nécessaires
+RUN mkdir -p var/log var/run var/cache
+
+# Configurer les permissions
+RUN chown -R www-data:www-data var/
+RUN chmod -R 755 var/
+
+# Configuration Supervisor pour le worker MTF
+COPY docker/supervisor/mtf-worker.conf /etc/supervisor/conf.d/mtf-worker.conf
+
+# Script de démarrage
+COPY docker/scripts/start-mtf-worker.sh /usr/local/bin/start-mtf-worker.sh
+RUN chmod +x /usr/local/bin/start-mtf-worker.sh
+
+# Exposer le port (si nécessaire pour l'API)
+EXPOSE 8082
+
+# Commande par défaut (FPM)
+CMD ["php-fpm"]
+
+
+
+

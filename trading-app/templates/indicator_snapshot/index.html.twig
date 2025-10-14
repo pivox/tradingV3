@@ -1,0 +1,269 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Snapshots d'Indicateurs - Trading{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="bi bi-camera"></i> Snapshots d'Indicateurs
+            </h1>
+            <div>
+                <button class="btn btn-primary" onclick="refreshTable()">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filtres -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-funnel"></i> Filtres
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-2">
+                        <label for="filterSymbol" class="form-label">Symbole</label>
+                        <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterTimeframe" class="form-label">Timeframe</label>
+                        <select class="form-select" id="filterTimeframe">
+                            <option value="">Tous</option>
+                            <option value="1m">1 minute</option>
+                            <option value="5m">5 minutes</option>
+                            <option value="15m">15 minutes</option>
+                            <option value="1h">1 heure</option>
+                            <option value="4h">4 heures</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterIndicator" class="form-label">Indicateur</label>
+                        <input type="text" class="form-control" id="filterIndicator" placeholder="Ex: RSI, MACD">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterDateFrom" class="form-label">Date Début</label>
+                        <input type="date" class="form-control" id="filterDateFrom">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterDateTo" class="form-label">Date Fin</label>
+                        <input type="date" class="form-control" id="filterDateTo">
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button class="btn btn-outline-secondary" onclick="clearFilters()">
+                            <i class="bi bi-x-circle"></i> Effacer
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Statistiques -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card bg-primary text-white">
+            <div class="card-body text-center">
+                <h5>{{ snapshots|length }}</h5>
+                <small>Total Snapshots</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-info text-white">
+            <div class="card-body text-center">
+                <h5>{{ snapshots|map(s => s.symbol)|unique|length }}</h5>
+                <small>Symboles Uniques</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-success text-white">
+            <div class="card-body text-center">
+                <h5>{{ snapshots|map(s => s.indicatorName)|unique|length }}</h5>
+                <small>Indicateurs Uniques</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-white">
+            <div class="card-body text-center">
+                <h5>{{ snapshots|map(s => s.timeframe)|unique|length }}</h5>
+                <small>Timeframes Uniques</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Table des snapshots -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-table"></i> Liste des Snapshots d'Indicateurs ({{ snapshots|length }})
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table id="snapshotsTable" class="table table-striped table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>ID</th>
+                                <th>Symbole</th>
+                                <th>Timeframe</th>
+                                <th>Indicateur</th>
+                                <th>Valeurs</th>
+                                <th>Créé le</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for snapshot in snapshots %}
+                            <tr>
+                                <td>
+                                    <code>{{ snapshot.id }}</code>
+                                </td>
+                                <td>
+                                    <strong>{{ snapshot.symbol }}</strong>
+                                </td>
+                                <td>
+                                    {% if snapshot.timeframe == '1m' %}
+                                        <span class="badge bg-primary">1m</span>
+                                    {% elseif snapshot.timeframe == '5m' %}
+                                        <span class="badge bg-info">5m</span>
+                                    {% elseif snapshot.timeframe == '15m' %}
+                                        <span class="badge bg-warning">15m</span>
+                                    {% elseif snapshot.timeframe == '1h' %}
+                                        <span class="badge bg-success">1h</span>
+                                    {% elseif snapshot.timeframe == '4h' %}
+                                        <span class="badge bg-danger">4h</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ snapshot.timeframe }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="indicator-name">{{ snapshot.indicatorName }}</span>
+                                </td>
+                                <td>
+                                    {% if snapshot.values and snapshot.values|length > 0 %}
+                                        <button class="btn btn-sm btn-outline-info" onclick="viewValues({{ snapshot.id }})">
+                                            <i class="bi bi-eye"></i> Voir
+                                        </button>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {{ snapshot.createdAt|date('d/m/Y H:i:s') }}
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-primary" onclick="viewChart('{{ snapshot.symbol }}', '{{ snapshot.timeframe }}')" title="Voir graphique">
+                                            <i class="bi bi-graph-up"></i>
+                                        </button>
+                                        <button class="btn btn-outline-info" onclick="viewValues({{ snapshot.id }})" title="Voir valeurs">
+                                            <i class="bi bi-eye"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal pour les valeurs -->
+<div class="modal fade" id="valuesModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Valeurs de l'Indicateur</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <pre id="valuesContent" class="bg-light p-3"></pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+$(document).ready(function() {
+    // Initialisation de DataTables
+    $('#snapshotsTable').DataTable({
+        pageLength: 25,
+        order: [[5, 'desc']], // Trier par date de création
+        columnDefs: [
+            { orderable: false, targets: [4, 6] } // Valeurs et Actions columns
+        ]
+    });
+
+    // Filtres
+    $('#filterSymbol, #filterTimeframe, #filterIndicator, #filterDateFrom, #filterDateTo').on('change keyup', function() {
+        applyFilters();
+    });
+});
+
+function applyFilters() {
+    const table = $('#snapshotsTable').DataTable();
+    const symbol = $('#filterSymbol').val();
+    const timeframe = $('#filterTimeframe').val();
+    const indicator = $('#filterIndicator').val();
+
+    // Réinitialiser les filtres
+    table.search('').columns().search('').draw();
+
+    // Appliquer les filtres
+    if (symbol) {
+        table.column(1).search(symbol, false, false);
+    }
+    if (timeframe) {
+        table.column(2).search(timeframe, false, false);
+    }
+    if (indicator) {
+        table.column(3).search(indicator, false, false);
+    }
+
+    table.draw();
+}
+
+function clearFilters() {
+    $('#filterSymbol, #filterTimeframe, #filterIndicator, #filterDateFrom, #filterDateTo').val('');
+    $('#snapshotsTable').DataTable().search('').columns().search('').draw();
+}
+
+function refreshTable() {
+    location.reload();
+}
+
+function viewChart(symbol, timeframe) {
+    // Rediriger vers les graphiques avec le symbole et timeframe
+    window.location.href = '{{ path('graph_index') }}?symbol=' + symbol + '&interval=' + timeframe;
+}
+
+function viewValues(id) {
+    // Récupérer les valeurs du snapshot (à implémenter côté serveur)
+    const valuesContent = document.getElementById('valuesContent');
+    valuesContent.textContent = 'Valeurs du snapshot ' + id + '\n\n' + 
+        'Cette fonctionnalité sera implémentée pour afficher les valeurs de l\'indicateur.';
+    
+    const modal = new bootstrap.Modal(document.getElementById('valuesModal'));
+    modal.show();
+}
+</script>
+{% endblock %}

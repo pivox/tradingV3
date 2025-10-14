@@ -8,7 +8,7 @@ use Symfony\Component\Routing\Annotation\Route;
 
 class GraphController extends AbstractController
 {
-    #[Route('/', name: 'graph_index')]
+    #[Route('/graph', name: 'graph_index')]
     public function index(): Response
     {
         return $this->render('graph/index.html.twig');

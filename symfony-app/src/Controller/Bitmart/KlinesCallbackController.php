@@ -4,23 +4,28 @@ namespace App\Controller\Bitmart;
 
 use App\Bitmart\Http\BitmartHttpClientPublic;
 use App\Entity\Contract;
-use App\Entity\ContractPipeline;
-use App\Repository\ContractPipelineRepository;
+use App\Repository\BlacklistedContractRepository;
 use App\Repository\KlineRepository;
 use App\Service\Exception\Trade\Position\LeverageLowException;
 use App\Service\Persister\KlinePersister;
-use App\Service\Pipeline\ContractPipelineService;
+use App\Service\Pipeline\CallbackEvalService;
+use App\Service\Pipeline\MtfDecisionService;
+use App\Service\Pipeline\MtfSignalStore;
+use App\Service\Pipeline\MtfStateService;
+use App\Service\Pipeline\PipelineMeta;
+use App\Service\Pipeline\SlotService;
 use App\Service\Signals\Timeframe\SignalService;
 use App\Service\Trading\PositionOpener;
+use App\Service\Trading\ScalpModeTriggerService;
 use App\Service\Trading\BitmartAccountGateway;
 use App\Service\Bitmart\BitmartRefreshService;
-use App\Service\ContractSignalWriter;
 use App\Service\Signals\HighConviction\HighConvictionMetricsBuilder;
 use App\Service\Strategy\HighConvictionValidation;
 use App\Service\Strategy\HighConvictionTraceWriter;
 use App\Repository\RuntimeGuardRepository;
 use App\Repository\UserConfigRepository;
 use App\Util\TimeframeHelper;
+use Doctrine\DBAL\Connection;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -37,32 +42,29 @@ final class KlinesCallbackController extends AbstractController
     private readonly HighConvictionTraceWriter $hcTraceWriter;
 
     public function __construct(
-        // Services et repos conservés
         private readonly EntityManagerInterface $em,
-        private readonly ContractPipelineService $pipelineService,
-        private readonly ContractSignalWriter $contractSignalWriter,
+        private readonly MtfSignalStore $signalStore,
+        private readonly MtfDecisionService $decisionService,
+        private readonly MtfStateService $mtfStateService,
         private readonly KlineRepository $klineRepository,
         private readonly PositionOpener $positionOpener,
+        private readonly ScalpModeTriggerService $scalpModeTrigger,
         private readonly RuntimeGuardRepository $runtimeGuardRepository,
         private readonly HighConvictionMetricsBuilder $hcMetricsBuilder,
         private readonly UserConfigRepository $userConfigRepository,
+        private readonly Connection $connection,
         HighConvictionValidation $highConviction,
         HighConvictionTraceWriter $hcTraceWriter,
         BitmartAccountGateway $bitmartAccount,
-
-        // ⬇️ Remplacement BitmartFetcher → client public REST
         private readonly BitmartHttpClientPublic $bitmart,
-
-        // Persistance klines via upsert bulk MySQL
         private readonly KlinePersister $persister,
-
-        // Logs
+        private readonly CallbackEvalService $callbackEval,
+        private readonly SlotService $slotService,
         private readonly LoggerInterface $logger,
         private readonly LoggerInterface $validationLogger,
-
-        // Ton service d'évaluation (existant)
         private readonly SignalService $signalService,
         private readonly BitmartRefreshService $refreshService,
+        private readonly BlacklistedContractRepository $blacklistedContractRepository,
     ) {
         $this->highConviction = $highConviction;
         $this->bitmartAccount = $bitmartAccount;
@@ -82,8 +84,14 @@ final class KlinesCallbackController extends AbstractController
         $symbol    = (string) ($payload['contract']  ?? '');
         $timeframe = strtolower((string) ($payload['timeframe'] ?? '4h'));
         $limit     = (int)    ($payload['limit']     ?? self::LIMIT_KLINES);
-        $meta = $payload['meta'] ?? [];
-        $metaForPipeLine = $payload['meta']['pipeline'] ?? null;
+
+        $meta              = is_array($payload['meta'] ?? null) ? $payload['meta'] : [];
+        $metaForPipeline   = $meta['pipeline'] ?? null;
+        $metaBatchId       = (string)($meta['batch_id']   ?? '');
+        $metaRequestId     = (string)($meta['request_id'] ?? '');
+        $metaRootTf        = (string)($meta['root_tf']    ?? $timeframe);
+        $metaParentTf      = $meta['parent_tf'] ?? null;
+        $metaSource        = (string)($meta['source'] ?? 'unknown');
 
         if ($symbol === '') {
             return $this->jsonError('Missing contract symbol', 400);
@@ -98,7 +106,7 @@ final class KlinesCallbackController extends AbstractController
         // Normalise le pas → minutes (Futures V2 attend des minutes côté REST)
         $stepMinutes = TimeframeHelper::parseTimeframeToMinutes($timeframe);
 
-        // 1) Fetch : N DERNIÈRES bougies CLÔTURÉES (exclut la bougie en cours)
+        // Fetch des dernières bougies clôturées
         $klinesDto = $this->bitmart->getFuturesKlines(
             symbol: $symbol,
             step:   $stepMinutes,
@@ -107,10 +115,10 @@ final class KlinesCallbackController extends AbstractController
             limit:  $limit
         );
 
-        // 2) Persist (upsert bulk, clé unique (contract_id, timestamp, step))
+        // Persist
         $affected = $this->persister->upsertMany($contract, $stepMinutes, $klinesDto);
 
-        // 3) Recharge un lookback suffisant (closes) pour l’évaluation
+        // Lookback suffisant pour évaluation
         $lookback = max(260, $limit);
         $klines   = $this->klineRepository->findRecentBySymbolAndTimeframe(
             $contract->getSymbol(),
@@ -119,7 +127,7 @@ final class KlinesCallbackController extends AbstractController
         );
         $klines   = array_values($klines);
 
-        // Log de contrôle: compare la dernière kline persistée à l'ouverture de l'intervalle courant (cutoff)
+        // Cutoff debug
         $cutoff = TimeframeHelper::getAlignedOpenByMinutes($stepMinutes);
         $lastPersisted = null;
         if ($klines) {
@@ -136,17 +144,27 @@ final class KlinesCallbackController extends AbstractController
             'last_persisted' => $lastPersisted ? $lastPersisted->format('Y-m-d H:i:s') : null,
             'has_non_closed' => $lastPersisted ? ($lastPersisted->getTimestamp() >= $cutoff->getTimestamp()) : null,
             'persisted_count' => count($klines),
+            'meta' => [
+                'batch_id' => $metaBatchId,
+                'request_id' => $metaRequestId,
+                'root_tf' => $metaRootTf,
+                'parent_tf' => $metaParentTf,
+                'source' => $metaSource,
+                'pipeline' => $metaForPipeline,
+            ],
         ]);
 
-        // Si la dernière kline persistée est plus vieille que now - timeframe, on relance un refresh et on skip
+        // Stale \=\> re\-refresh
         $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
         $staleThreshold = $now->modify('-'.$stepMinutes.' minutes');
-        if ($lastPersisted && $lastPersisted < $staleThreshold) {
+        $isBlacklisted = $this->blacklistedContractRepository->isBlacklisted($symbol);
+        if ($lastPersisted && $lastPersisted < $staleThreshold && !$isBlacklisted) {
             $this->logger->warning('Last kline is stale, triggering refresh and skipping evaluation', [
                 'symbol' => $symbol,
                 'timeframe' => $timeframe,
                 'last_persisted' => $lastPersisted->format('Y-m-d H:i:s'),
                 'threshold' => $staleThreshold->format('Y-m-d H:i:s'),
+                'meta' => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
             ]);
             $this->refreshService->refreshSingle($symbol, $timeframe, $limit);
             return new JsonResponse([
@@ -154,27 +172,24 @@ final class KlinesCallbackController extends AbstractController
                 'reason' => 'stale_last_kline',
                 'symbol' => $symbol,
                 'timeframe' => $timeframe,
+                'meta' => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
             ], 202);
         }
 
-        // 4) Récupère signaux existants (compat avec anciens champs)
-        $existingPipeline = $this->em
-            ->getRepository(ContractPipeline::class)
-            ->findOneBy(['contract' => $contract]);
-
-        $knownSignals = [];
-        if ($existingPipeline) {
-            $sig = $existingPipeline->getSignals() ?? [];
-            foreach (['4h','1h','15m','5m'] as $tf) {
-                if (isset($sig[$tf]['signal'])) { $knownSignals[$tf] = $sig[$tf]; }
-            }
-            $mapCompat = ['context_4h'=>'4h','context_1h'=>'1h','exec_15m'=>'15m','exec_5m'=>'5m','micro_1m'=>'1m'];
-            foreach ($mapCompat as $k => $tf) {
-                if (!isset($knownSignals[$tf]) && isset($sig[$k]['signal'])) { $knownSignals[$tf] = $sig[$k]; }
-            }
+        $slot = $this->slotService->currentSlot($timeframe, $now);
+        if (!$this->callbackEval->ensureParentFresh($symbol, $timeframe, $slot)) {
+            return new JsonResponse([
+                'status' => 'pending_parent',
+                'symbol' => $symbol,
+                'timeframe' => $timeframe,
+                'meta' => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
+            ], 202);
         }
 
-        // 5) Évalue le TF courant
+        $previousSnapshot = $this->signalStore->fetchLatestSignals($symbol);
+        $knownSignals = $this->buildKnownSignals($previousSnapshot);
+
+        // Évaluation TF courant
         $result = $this->signalService->evaluate($timeframe, $klines, $knownSignals);
 
         $signalsPayload = $result['signals'] ?? [];
@@ -182,19 +197,31 @@ final class KlinesCallbackController extends AbstractController
         $signalsPayload['final']  = $result['final']  ?? ['signal' => 'NONE'];
         $signalsPayload['status'] = $result['status'] ?? 'UNKNOWN';
 
-        // 6) Sauvegarde des signaux + plage (from/to klines présents)
-        $pipeline = $this->contractSignalWriter->saveAttempt(
-            contract: $contract,
-            tf: $timeframe,
-            signals: $signalsPayload,
-            flush: false
+        // Enrichit les faits avec le meta d’enveloppe
+        $facts = $this->buildFactsFromSignals(
+            $signalsPayload,
+            $timeframe,
+            $knownSignals,
+            [
+                'envelope_meta' => [
+                    'batch_id' => $metaBatchId,
+                    'request_id' => $metaRequestId,
+                    'root_tf' => $metaRootTf,
+                    'parent_tf' => $metaParentTf,
+                    'source' => $metaSource,
+                    'pipeline' => $metaForPipeline,
+                ],
+            ]
         );
+        $this->callbackEval->persistEvaluation($symbol, $timeframe, $slot, $facts);
 
-        $fromKline = $klines ? $klines[0] : null;
-        $toKline   = $klines ? $klines[\count($klines)-1] : null;
-        if ($pipeline && $fromKline && $toKline) {
-            $pipeline->setKlineRange($fromKline, $toKline);
-        }
+        $latestSnapshot = $this->signalStore->fetchLatestSignals($symbol);
+        $eligibility    = $this->signalStore->fetchEligibility($symbol);
+        $decisionSignals = $this->buildDecisionSignals($latestSnapshot);
+        $decision       = $this->decisionService->decide($timeframe, $decisionSignals);
+        $isValid        = $decision['is_valid'];
+        $canEnter       = $decision['can_enter'];
+        $contextSignals = $this->buildContextSignals($latestSnapshot, $signalsPayload);
 
         $this->validationLogger->info(' --- END Evaluating signal '.$timeframe.' --- ');
         $this->validationLogger->info('signals.payload', [
@@ -203,265 +230,58 @@ final class KlinesCallbackController extends AbstractController
             'signal' => $signalsPayload[$timeframe]['signal'] ?? 'NONE',
             'signals' => array_map(
                 static fn($signal, $key) => "$key => " . ($signal['signal'] ?? 'NONE'),
-                $pipeline ? $pipeline->getSignals() : [],
-                array_keys($pipeline ? $pipeline->getSignals() : [])
+                $contextSignals,
+                array_keys($contextSignals)
             ),
             'final_signal' => $signalsPayload['final']['signal'] ?? 'NONE',
             'status' => $signalsPayload['status'] ?? null,
+            'meta' => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
         ]);
 
-        // 7) Décision MTF + ouverture éventuelle
-        $signal = $signalsPayload['signal'] ?? $signalsPayload['final']['signal'] ?? 'NONE';
-        if ($pipeline && !($timeframe === '4h' && $signal === 'NONE')) {
+        // Décision \+ ouverture potentielle
+        $finalSide = strtoupper($signalsPayload['final']['signal'] ?? $signalsPayload[$timeframe]['signal'] ?? 'NONE');
+        if (!($timeframe === '4h' && $finalSide === 'NONE')) {
             $contextTrail = [];
-
-            // a) Marque tentative & applique décision
-            $this->pipelineService->markAttempt($pipeline, $metaForPipeLine);
-            list($isValid, $canEnter) = $this->pipelineService->applyDecision($pipeline, $timeframe, $metaForPipeLine);
             $contextTrail[] = ['step' => 'decision_applied', 'timeframe' => $timeframe, 'is_valid' => $isValid, 'can_enter' => $canEnter];
 
-            // b) Logs décision
-            $this->validationLogger->info('Position decision', [
-                'symbol' => $symbol,
-                'timeframe' => $timeframe,
-                'is_valid' => $isValid,
-                'can_enter' => $canEnter,
-                'signal' => $signalsPayload[$timeframe]['signal'] ?? 'NONE',
-                'signals' => array_map(
-                    static fn($signal, $key) => "$key => " . ($signal['signal'] ?? 'NONE'),
-                    $pipeline->getSignals(),
-                    array_keys($pipeline->getSignals())
-                ),
-                'final_signal' => $signalsPayload['final']['signal'] ?? 'NONE',
-                'status' => $signalsPayload['status'] ?? null,
-                'trail'  => $contextTrail,
-            ]);
-
-            // c) Fenêtre d'ouverture (5m ou 1m après nouvelle règle d'alignement stricte)
             $tfOpenable = ['5m','1m'];
-            if ($canEnter && in_array($timeframe, $tfOpenable, true)) {
-                // Empêcher double ouverture si déjà marquée
-                if ($pipeline->getStatus() === ContractPipeline::STATUS_ORDER_OPENED || $pipeline->getStatus() === ContractPipeline::STATUS_OPENED_LOCKED) {
-                    $this->validationLogger->info('Skipping opening: pipeline already opened/locked', [
-                        'symbol' => $symbol,
-                        'timeframe' => $timeframe,
-                        'status' => $pipeline->getStatus(),
-                    ]);
-                    goto pipeline_lock; // conserve comportement existant plus bas
-                }
+            $eligibilityLocked = $this->isExecutionLocked($eligibility, $this->executionTimeframes($timeframe));
+            if ($metaForPipeline === PipelineMeta::DONT_INC_DEC_DEL) {
+                $contextTrail[] = ['step' => 'meta_skip'];
+                $this->validationLogger->info('Skipping window due to meta flag', [
+                    'symbol' => $symbol,
+                    'timeframe' => $timeframe,
+                    'trail' => $contextTrail,
+                    'meta' => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
+                ]);
+            } elseif ($canEnter && in_array($timeframe, $tfOpenable, true) && !$eligibilityLocked) {
                 $contextTrail[] = ['step' => 'window_eligible'];
                 $this->validationLogger->info('Window eligible for order opening', [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe,
                     'trail' => $contextTrail,
+                    'meta' => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
                 ]);
-                $finalSide = strtoupper($signalsPayload['final']['signal'] ?? 'NONE');
-
                 if (\in_array($finalSide, ['LONG','SHORT'], true)) {
                     $contextTrail[] = ['step' => 'final_side', 'side' => $finalSide];
-                    $this->validationLogger->info('Final decision side confirmed', [
-                        'symbol' => $symbol,
-                        'timeframe' => $timeframe,
-                        'side' => $finalSide,
-                        'trail' => $contextTrail,
-                    ]);
-                    $ctx = $pipeline->getSignals() ?? [];
-
-                    try {
-                        $built = $this->hcMetricsBuilder->buildForSymbol(
-                            symbol:     $symbol,
-                            signals:    $ctx,
-                            sideUpper:  $finalSide,
-                            entry:      $limit ?? null,   // si tu utilises déjà un prix/limit ailleurs
-                            riskMaxPct: 0.07,
-                            rMultiple:  2.0
-                        );
-                        $metrics = $built['metrics'];
-                    } catch (\Throwable $e) {
-                        $this->validationLogger->warning('HC metrics builder failed, skipping order', [
-                            'symbol' => $symbol,
-                            'timeframe' => $timeframe,
-                            'error' => $e->getMessage(),
-                            'trail' => $contextTrail,
-                        ]);
-                        $metrics = null;
-                    }
-
-                    if ($metrics === null) {
-                        $contextTrail[] = ['step' => 'metrics_failed'];
-                        goto pipeline_lock;
-                    }
-
-                    $hc       = $this->highConviction->validate($ctx, $metrics);
-                    $isHigh   = (bool)($hc['ok'] ?? false);
-                    $levCap   = (int)($hc['flags']['leverage_cap'] ?? 0);
-                    $contextTrail[] = ['step' => 'hc_result', 'is_high' => $isHigh, 'leverage_cap' => $levCap];
-
-                    $this->validationLogger->info('HighConviction evaluation', [
-                        'ok'      => $isHigh,
-                        'flags'   => $hc['flags']   ?? null,
-                        'reasons' => $hc['reasons'] ?? null,
-                        'trail'   => $contextTrail,
-                    ]);
-
-                    $this->hcTraceWriter->record([
-                        'symbol'       => $symbol,
-                        'timeframe'    => $timeframe,
-                        'evaluated_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format(DATE_ATOM),
-                        'signals'      => $ctx,
-                        'metrics'      => $metrics,
-                        'validation'   => $hc,
-                        'trail'        => $contextTrail,
-                    ]);
-                    $this->validationLogger->info('HighConviction trace recorded', [
-                        'symbol' => $symbol,
-                        'timeframe' => $timeframe,
-                    ]);
-                    $isHigh = false;//TODO à enlever pour réactiver HC
-                    if ($isHigh && $levCap > 0) {
-                        $config = $this->userConfigRepository->getOrCreateDefault();
-                        $availableUsdt = $this->bitmartAccount->getAvailableUSDT();
-                        $marginBudget  = max(0.0, $availableUsdt * $config->getHcMarginPct());
-                        $contextTrail[] = [
-                            'step' => 'budget_high_conviction',
-                            'available_usdt' => $availableUsdt,
-                            'margin_usdt' => $marginBudget,
-                            'margin_pct' => $config->getHcMarginPct(),
-                        ];
-
-                        if ($marginBudget <= 0.0) {
-                            $contextTrail[] = ['step' => 'budget_insufficient'];
-                            $this->validationLogger->warning('Skipping HC opening: available balance is zero', [
-                                'symbol' => $symbol,
-                                'available_usdt' => $availableUsdt,
-                                'trail' => $contextTrail,
-                            ]);
-                            goto pipeline_lock;
-                        }
-
-                        $contextTrail[] = ['step' => 'opening_high_conviction'];
-                        $this->validationLogger->info('Opening position [HIGH_CONVICTION]', [
-                            'symbol'       => $symbol,
-                            'final_side'   => $finalSide,
-                            'leverage_cap' => $levCap,
-                            'signal'       => $signalsPayload[$timeframe] ?? null,
-                            'config'       => [
-                                'margin_pct' => $config->getHcMarginPct(),
-                                'risk_max_pct' => $config->getHcRiskMaxPct(),
-                                'r_multiple' => $config->getHcRMultiple(),
-                                'expire_after_sec' => $config->getHcExpireAfterSec(),
-                            ],
-                            'trail'        => $contextTrail,
-                        ]);
-
-                        try {
-                            $this->positionOpener->openLimitHighConvWithSr(
-                                symbol:         $symbol,
-                                finalSideUpper: $finalSide,
-                                leverageCap:    $levCap,
-                                marginUsdt:     $marginBudget,
-                                riskMaxPct:     $config->getHcRiskMaxPct(),
-                                rMultiple:      $config->getHcRMultiple(),
-                                meta:           ['ctx' => 'HC'],
-                                expireAfterSec: $config->getHcExpireAfterSec()
-                            );
-                            $contextTrail[] = ['step' => 'order_submitted', 'type' => 'high_conviction'];
-                            $this->validationLogger->info('Order submitted [HIGH_CONVICTION]', [
-                                'symbol' => $symbol,
-                                'type' => 'high_conviction',
-                                'trail' => $contextTrail,
-                            ]);
-                        } catch (\Throwable $e) {
-                            $insufficient = $this->isInsufficientBalanceError($e);
-                            $contextTrail[] = [
-                                'step' => 'order_failed',
-                                'type' => 'high_conviction',
-                                'error' => $e->getMessage(),
-                                'insufficient_balance' => $insufficient,
-                                'available_usdt' => $availableUsdt,
-                                'margin_usdt' => $marginBudget,
-                            ];
-
-                            $loggerContext = [
-                                'symbol' => $symbol,
-                                'error' => $e->getMessage(),
-                                'available_usdt' => $availableUsdt,
-                                'margin_usdt' => $marginBudget,
-                                'trail' => $contextTrail,
-                            ];
-
-                            if ($insufficient) {
-                                $this->validationLogger->warning('Insufficient balance, skipping order [HIGH_CONVICTION]', $loggerContext);
-                            } else {
-                                $this->validationLogger->error('Order submission failed [HIGH_CONVICTION]', $loggerContext);
-                            }
-                        }
-                    } else {
-                        $config = $this->userConfigRepository->getOrCreateDefault();
-                        $contextTrail[] = ['step' => 'opening_scalping'];
-                        $this->validationLogger->info('Opening position [SCALPING]', [
-                            'symbol'     => $symbol,
-                            'final_side' => $finalSide,
-                            'signal'     => $signalsPayload[$timeframe] ?? null,
-                            'config'     => [
-                                'margin_usdt' => $config->getScalpMarginUsdt(),
-                                'risk_max_pct' => $config->getScalpRiskMaxPct(),
-                                'r_multiple' => $config->getScalpRMultiple(),
-                            ],
-                            'trail'      => $contextTrail,
-                        ]);
-
-                        try {
-                            $this->positionOpener->openLimitAutoLevWithSr(
-                                symbol:         $symbol,
-                                finalSideUpper: $finalSide,
-                                marginUsdt:     50,//$config->getScalpMarginUsdt(),
-                                riskMaxPct:     $config->getScalpRiskMaxPct(),
-                                rMultiple:      $config->getScalpRMultiple()
-                            );
-                            $contextTrail[] = ['step' => 'order_submitted', 'type' => 'scalping'];
-                            $this->validationLogger->info('Order submitted [SCALPING]', [
-                                'symbol' => $symbol,
-                                'type' => 'scalping',
-                                'trail' => $contextTrail,
-                            ]);
-                        }
-                        catch (LeverageLowException $exception)
-                        {
-                            $this->validationLogger->error('Leverage balance [SCALPING]', [
-                                'symbol' => $symbol,
-                                'error' => $exception->getMessage(),
-                                'trail' => $contextTrail,
-                            ]);
-                        }
-                        catch (\Throwable $e) {
-                            $contextTrail[] = ['step' => 'order_failed', 'type' => 'scalping', 'error' => $e->getMessage()];
-                            $this->validationLogger->error('Order submission failed [SCALPING]', [
-                                'symbol' => $symbol,
-                                'error' => $e->getMessage(),
-                                'trail' => $contextTrail,
-                            ]);
-                        }
-                    }
+                    $this->handleExecutionWindow(
+                        symbol: $symbol,
+                        timeframe: $timeframe,
+                        finalSide: $finalSide,
+                        signalsPayload: $signalsPayload,
+                        contextSignals: $contextSignals,
+                        meta: $meta,
+                        eligibility: $eligibility,
+                        contextTrail: $contextTrail
+                    );
                 } else {
-                    $contextTrail[] = ['step' => 'final_side_none', 'signal' => $signalsPayload['final']['signal'] ?? 'NONE'];
+                    $contextTrail[] = ['step' => 'final_side_none'];
                     $this->validationLogger->info('Final decision not actionable', [
                         'symbol' => $symbol,
                         'timeframe' => $timeframe,
                         'final_signal' => $signalsPayload['final']['signal'] ?? 'NONE',
                         'trail' => $contextTrail,
-                    ]);
-                }
-
-pipeline_lock:
-                if ($pipeline) {
-                    $contextTrail[] = ['step' => 'pipeline_locked'];
-                    $pipeline->setStatus(\App\Entity\ContractPipeline::STATUS_OPENED_LOCKED);
-                    $this->em->flush();
-                    $this->validationLogger->info('Pipeline locked (OPENED_LOCKED)', [
-                        'pipeline_id' => $pipeline->getId(),
-                        'symbol'      => $symbol,
-                        'trail'       => $contextTrail,
+                        'meta' => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
                     ]);
                 }
             } elseif ($isValid) {
@@ -471,34 +291,19 @@ pipeline_lock:
                     'timeframe' => $timeframe,
                     'final_signal' => $signalsPayload['final']['signal'] ?? 'NONE',
                     'trail' => $contextTrail,
+                    'meta' => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
                 ]);
             }
         }
 
-        // 8) Nettoyage pipeline si demandé
-        if ($pipeline && $pipeline->isToDelete($metaForPipeLine) && $pipeline->getId()) {
-            $pipelineId = $pipeline->getId();
-            $pipeline = $this->em->getRepository(\App\Entity\ContractPipeline::class)->find($pipelineId);
-            if ($pipeline) {
-                $pipeline->getContract()->setLastAttemptedAt();
-                $this->em->remove($pipeline);
-                $this->em->flush();
-                $this->logger->info('Pipeline deleted after decision', [
-                    'symbol' => $symbol,
-                    'timeframe' => $timeframe,
-                ]);
-            }
-        }
-
-        // Log final (pas de start/end désormais)
         $this->logger->info('Klines persisted + evaluated', [
             'symbol'       => $symbol,
             'timeframe'    => $timeframe,
             'step_minutes' => $stepMinutes,
             'affected'     => $affected,
+            'meta'         => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
         ]);
 
-        // Réponse
         if (($signalsPayload[$timeframe]['signal'] ?? 'NONE') === 'NONE') {
             return new JsonResponse([
                 'status'    => 'KO',
@@ -508,6 +313,31 @@ pipeline_lock:
                 'window'    => ['limit' => $limit],
                 'signals'   => $signalsPayload,
                 'decision'  => $signalsPayload['final'] ?? null,
+                'meta'      => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
+            ]);
+        }
+
+        // Auto\-réparation post\-callback
+        $hasOpenOrder     = method_exists($this->mtfStateService, 'hasOpenOrder')     ? (int) $this->mtfStateService->hasOpenOrder($symbol)     : 0;
+        $hasOpenPosition  = method_exists($this->mtfStateService, 'hasOpenPosition')  ? (int) $this->mtfStateService->hasOpenPosition($symbol)  : 0;
+
+        try {
+            $this->em->getConnection()->beginTransaction();
+            $this->em->getConnection()->executeStatement(
+                'CALL sp_post_callback_fix(?, ?, ?, ?)',
+                [$symbol, $timeframe, $hasOpenOrder, $hasOpenPosition]
+            );
+            $this->em->getConnection()->commit();
+            $this->logger->info('sp_post_callback_fix applied', [
+                'symbol' => $symbol, 'tf' => $timeframe,
+                'has_open_order' => $hasOpenOrder, 'has_open_position' => $hasOpenPosition,
+                'meta' => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
+            ]);
+        } catch (\Throwable $e) {
+            $this->em->getConnection()->rollBack();
+            $this->logger->error('sp_post_callback_fix failed', [
+                'symbol' => $symbol, 'tf' => $timeframe, 'error' => $e->getMessage(),
+                'meta' => ['batch_id' => $metaBatchId, 'request_id' => $metaRequestId],
             ]);
         }
 
@@ -519,6 +349,13 @@ pipeline_lock:
             'window'    => ['limit' => $limit],
             'signals'   => $signalsPayload,
             'decision'  => $signalsPayload['final'] ?? null,
+            'meta'      => [
+                'batch_id' => $metaBatchId,
+                'request_id' => $metaRequestId,
+                'root_tf' => $metaRootTf,
+                'parent_tf' => $metaParentTf,
+                'source' => $metaSource,
+            ],
         ]);
     }
 
@@ -534,6 +371,296 @@ pipeline_lock:
             || str_contains($message, 'balance not enough')
             || str_contains($message, 'insufficient margin')
             || str_contains($message, 'margin not enough');
+    }
+
+    private function buildKnownSignals(array $snapshot): array
+    {
+        $known = [];
+        foreach ($snapshot as $tf => $row) {
+            $known[$tf] = ['signal' => strtoupper((string)($row['signal'] ?? 'NONE'))];
+        }
+        return $known;
+    }
+
+    private function buildDecisionSignals(array $snapshot): array
+    {
+        $decision = [];
+        foreach ($snapshot as $tf => $row) {
+            $decision[$tf] = ['signal' => strtoupper((string)($row['signal'] ?? 'NONE'))];
+        }
+        return $decision;
+    }
+
+    private function buildContextSignals(array $snapshot, array $signalsPayload): array
+    {
+        $context = [];
+        foreach ($snapshot as $tf => $row) {
+            $metaSignals = $row['meta']['signals_payload'][$tf] ?? null;
+            if (is_array($metaSignals)) {
+                $context[$tf] = $metaSignals;
+            } else {
+                $context[$tf] = ['signal' => strtoupper((string)($row['signal'] ?? 'NONE'))];
+            }
+            if (!isset($context[$tf]['signal'])) {
+                $context[$tf]['signal'] = strtoupper((string)($row['signal'] ?? 'NONE'));
+            }
+        }
+        foreach ($signalsPayload as $key => $data) {
+            if (!is_array($data) || !isset($data['signal'])) {
+                continue;
+            }
+            $context[$key] = $data;
+        }
+        return $context;
+    }
+
+    private function buildFactsFromSignals(array $signalsPayload, string $timeframe, array $knownSignals, array $extraMeta = []): array
+    {
+        $side   = strtoupper($signalsPayload[$timeframe]['signal'] ?? 'NONE');
+        $status = strtoupper($signalsPayload['status'] ?? 'FAILED');
+        $passed = $status !== 'FAILED';
+        $score  = $signalsPayload[$timeframe]['score'] ?? null;
+
+        return [
+            'passed' => $passed,
+            'side'   => $side,
+            'score'  => is_numeric($score) ? (float)$score : null,
+            'meta'   => array_merge([
+                'signals_payload' => $signalsPayload,
+                'known_signals'   => $knownSignals,
+            ], $extraMeta),
+        ];
+    }
+
+    private function isExecutionLocked(array $eligibility, array $tfs): bool
+    {
+        foreach ($tfs as $tf) {
+            $status = strtoupper((string)($eligibility[$tf]['status'] ?? ''));
+            if (in_array($status, ['LOCKED_POSITION','LOCKED_ORDER'], true)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function buildEventId(string $type, string $symbol, string $tf, string $side): string
+    {
+        return sprintf('%s|%s|%s|%s|%d', $type, strtoupper($symbol), $tf, $side, microtime(true) * 1000);
+    }
+
+    private function handleExecutionWindow(
+        string $symbol,
+        string $timeframe,
+        string $finalSide,
+        array $signalsPayload,
+        array $contextSignals,
+        array $meta,
+        array $eligibility,
+        array &$contextTrail
+    ): void {
+        $ctx = $contextSignals;
+        $executionTfs = $this->executionTimeframes($timeframe);
+        $shouldLock = false;
+
+        try {
+            $built = $this->hcMetricsBuilder->buildForSymbol(
+                symbol: $symbol,
+                signals: $ctx,
+                sideUpper: $finalSide,
+                entry: null,
+                riskMaxPct: 0.07,
+                rMultiple: 2.0
+            );
+            $metrics = $built['metrics'];
+        } catch (\Throwable $e) {
+            $this->validationLogger->warning('HC metrics builder failed, skipping order', [
+                'symbol' => $symbol,
+                'timeframe' => $timeframe,
+                'error' => $e->getMessage(),
+                'trail' => $contextTrail,
+            ]);
+            $metrics = null;
+        }
+
+        $hcResult = ['ok' => false, 'flags' => []];
+        if ($metrics !== null) {
+            $hcResult = $this->highConviction->validate($ctx, $metrics);
+        }
+        $isHigh = (bool)($hcResult['ok'] ?? false);
+        $levCap = (int)($hcResult['flags']['leverage_cap'] ?? 0);
+        $contextTrail[] = ['step' => 'hc_result', 'is_high' => $isHigh, 'leverage_cap' => $levCap];
+
+        $this->hcTraceWriter->record([
+            'symbol'       => $symbol,
+            'timeframe'    => $timeframe,
+            'evaluated_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format(DATE_ATOM),
+            'signals'      => $ctx,
+            'metrics'      => $metrics,
+            'validation'   => $hcResult,
+            'trail'        => $contextTrail,
+        ]);
+
+        $isHigh = false; // HC désactivé présentement
+        if ($isHigh && $levCap > 0 && $metrics !== null) {
+            $config = $this->userConfigRepository->getOrCreateDefault();
+            $availableUsdt = $this->bitmartAccount->getAvailableUSDT();
+            $marginBudget  = max(0.0, $availableUsdt * $config->getHcMarginPct());
+            $contextTrail[] = [
+                'step' => 'budget_high_conviction',
+                'available_usdt' => $availableUsdt,
+                'margin_usdt' => $marginBudget,
+                'margin_pct' => $config->getHcMarginPct(),
+            ];
+
+            if ($marginBudget <= 0.0) {
+                $contextTrail[] = ['step' => 'budget_insufficient'];
+                $this->validationLogger->warning('Skipping HC opening: available balance is zero', [
+                    'symbol' => $symbol,
+                    'available_usdt' => $availableUsdt,
+                    'trail' => $contextTrail,
+                ]);
+            } else {
+                $contextTrail[] = ['step' => 'opening_high_conviction'];
+                try {
+                    $this->positionOpener->openLimitHighConvWithSr(
+                        symbol:         $symbol,
+                        finalSideUpper: $finalSide,
+                        leverageCap:    $levCap,
+                        marginUsdt:     $marginBudget,
+                        riskMaxPct:     $config->getHcRiskMaxPct(),
+                        rMultiple:      $config->getHcRMultiple(),
+                        meta:           ['ctx' => 'HC'],
+                        expireAfterSec: $config->getHcExpireAfterSec()
+                    );
+                    $contextTrail[] = ['step' => 'order_submitted', 'type' => 'high_conviction'];
+                    $shouldLock = true;
+                } catch (\Throwable $e) {
+                    $insufficient = $this->isInsufficientBalanceError($e);
+                    $contextTrail[] = [
+                        'step' => 'order_failed',
+                        'type' => 'high_conviction',
+                        'error' => $e->getMessage(),
+                        'insufficient_balance' => $insufficient,
+                        'available_usdt' => $availableUsdt,
+                        'margin_usdt' => $marginBudget,
+                    ];
+                    $loggerContext = [
+                        'symbol' => $symbol,
+                        'error' => $e->getMessage(),
+                        'available_usdt' => $availableUsdt,
+                        'margin_usdt' => $marginBudget,
+                        'trail' => $contextTrail,
+                    ];
+                    if ($insufficient) {
+                        $this->validationLogger->warning('Insufficient balance, skipping order [HIGH_CONVICTION]', $loggerContext);
+                    } else {
+                        $this->validationLogger->error('Order submission failed [HIGH_CONVICTION]', $loggerContext);
+                    }
+                }
+            }
+        } else {
+            $config = $this->userConfigRepository->getOrCreateDefault();
+            $contextTrail[] = ['step' => 'opening_scalping'];
+            $this->validationLogger->info('Opening position [SCALPING]', [
+                'symbol' => $symbol,
+                'final_side' => $finalSide,
+                'signal' => $contextSignals[$timeframe]['signal'] ?? 'NONE',
+                'config' => [
+                    'margin_usdt' => $config->getScalpMarginUsdt(),
+                    'risk_max_pct' => $config->getScalpRiskMaxPct(),
+                    'r_multiple' => $config->getScalpRMultiple(),
+                ],
+                'trail' => $contextTrail,
+            ]);
+
+            $scalpTrigger = $this->scalpModeTrigger->evaluate(
+                $symbol,
+                $timeframe,
+                $signalsPayload,
+                [
+                    'timeframe' => $timeframe,
+                    'final_side' => $finalSide,
+                    'meta_payload' => $meta,
+                    'margin_usdt' => 10.0,
+                ]
+            );
+
+            try {
+                if ($scalpTrigger !== null) {
+                    $contextTrail[] = [
+                        'step' => 'scalp_trigger_active',
+                        'conditions' => array_map(
+                            static fn(array $row) => $row['condition'] ?? 'unknown',
+                            $scalpTrigger['conditions'] ?? []
+                        ),
+                    ];
+                    $this->validationLogger->info('Scalp trigger satisfied, applying overrides', [
+                        'symbol' => $symbol,
+                        'timeframe' => $timeframe,
+                        'overrides' => $scalpTrigger['overrides'] ?? [],
+                        'trail' => $contextTrail,
+                    ]);
+                    $this->positionOpener->openScalpTriggerOrder(
+                        symbol: $symbol,
+                        finalSideUpper: $finalSide,
+                        triggerContext: $scalpTrigger
+                    );
+                } else {
+                    $contextTrail[] = ['step' => 'scalp_trigger_skipped'];
+                    $this->validationLogger->info('Scalp trigger not satisfied, opening standard scalping order', [
+                        'symbol' => $symbol,
+                        'timeframe' => $timeframe,
+                        'trail' => $contextTrail,
+                    ]);
+                    $this->positionOpener->openLimitAutoLevWithSr(
+                        symbol:         $symbol,
+                        finalSideUpper: $finalSide,
+                        marginUsdt:     $config->getScalpMarginUsdt(),
+                        riskMaxPct:     $config->getScalpRiskMaxPct(),
+                        rMultiple:      $config->getScalpRMultiple()
+                    );
+                }
+                $contextTrail[] = ['step' => 'order_submitted', 'type' => 'scalping'];
+                $shouldLock = true;
+            } catch (LeverageLowException $exception) {
+                $this->validationLogger->error('Leverage balance [SCALPING]', [
+                    'symbol' => $symbol,
+                    'error' => $exception->getMessage(),
+                    'trail' => $contextTrail,
+                ]);
+            } catch (\Throwable $e) {
+                $contextTrail[] = ['step' => 'order_failed', 'type' => 'scalping', 'error' => $e->getMessage()];
+                $this->validationLogger->error('Order submission failed [SCALPING]', [
+                    'symbol' => $symbol,
+                    'error' => $e->getMessage(),
+                    'trail' => $contextTrail,
+                ]);
+            }
+        }
+
+        if ($shouldLock) {
+            $eventId = $this->buildEventId('order', $symbol, $timeframe, $finalSide);
+            $this->mtfStateService->applyOrderPlaced($eventId, $symbol, $executionTfs ?? $this->executionTimeframes($timeframe));
+        }
+    }
+
+    private function executionTimeframes(string $timeframe, bool $includeParent = false): array
+    {
+        $mapping = [
+            '1m' => ['1m'],
+            '5m' => ['5m'],
+            '15m' => ['15m'],
+            '1h' => ['1h'],
+            '4h' => ['4h'],
+        ];
+        $tfs = $mapping[$timeframe] ?? [$timeframe];
+        if ($includeParent) {
+            $parent = $this->slotService->parentOf($timeframe);
+            if ($parent) {
+                $tfs[] = $parent;
+            }
+        }
+        return $tfs;
     }
 
     private function jsonError(string $message, int $status): JsonResponse

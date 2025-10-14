@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Entity\ContractPipeline;
-use App\Repository\ContractPipelineRepository;
+use App\Service\Pipeline\MtfPipelineViewService;
+use DateTimeImmutable;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -14,163 +14,139 @@ use Symfony\Component\Routing\Annotation\Route;
 final class ContractPipelineController extends AbstractController
 {
     private const STAGE_FLOW = [
-        ['tf' => ContractPipeline::TF_4H,  'label' => 'Analyse 4H'],
-        ['tf' => ContractPipeline::TF_1H,  'label' => 'Analyse 1H'],
-        ['tf' => ContractPipeline::TF_15M, 'label' => 'Analyse 15M'],
-        ['tf' => ContractPipeline::TF_5M,  'label' => 'Analyse 5M'],
-        ['tf' => ContractPipeline::TF_1M,  'label' => 'Analyse 1M'],
+        ['tf' => '4h',  'label' => 'Analyse 4H'],
+        ['tf' => '1h',  'label' => 'Analyse 1H'],
+        ['tf' => '15m', 'label' => 'Analyse 15M'],
+        ['tf' => '5m',  'label' => 'Analyse 5M'],
+        ['tf' => '1m',  'label' => 'Analyse 1M'],
     ];
 
-    public function __construct(private readonly ContractPipelineRepository $pipelines)
+    public function __construct(private readonly MtfPipelineViewService $pipelines)
     {
     }
 
     #[Route('/api/contract-pipeline', name: 'api_contract_pipeline', methods: ['GET'])]
     public function __invoke(Request $request): JsonResponse
     {
-        $statusFilter = strtolower((string) $request->query->get('status', 'all'));
-
-        $qb = $this->pipelines->createQueryBuilder('p')
-            ->innerJoin('p.contract', 'c')->addSelect('c')
-            ->leftJoin('p.fromKline', 'kf')->addSelect('kf')
-            ->leftJoin('p.toKline', 'kt')->addSelect('kt')
-            ->orderBy('p.updatedAt', 'DESC');
-
-        $statuses = $this->mapStatusFilter($statusFilter);
-        if ($statuses !== []) {
-            $qb->andWhere('p.status IN (:statuses)')
-                ->setParameter('statuses', $statuses);
-        }
-
-        /** @var ContractPipeline[] $pipelines */
-        $pipelines = $qb->getQuery()->getResult();
-
-        $payload = array_map(fn (ContractPipeline $pipeline) => $this->serializePipeline($pipeline), $pipelines);
-
+        $statusFilter = strtolower((string)$request->query->get('status', 'all'));
+        $items = $this->pipelines->list($statusFilter === 'all' ? null : $statusFilter);
+        $payload = array_map(fn(array $pipeline) => $this->serializePipeline($pipeline), $items);
         return new JsonResponse($payload);
     }
 
-    private function mapStatusFilter(string $filter): array
+    private function serializePipeline(array $pipeline): array
     {
-        return match ($filter) {
-            'completed' => [
-                ContractPipeline::STATUS_VALIDATED,
-                ContractPipeline::STATUS_OPENED_LOCKED,
-                ContractPipeline::STATUS_ORDER_OPENED,
-            ],
-            'failed' => [ContractPipeline::STATUS_FAILED],
-            'in-progress' => [
-                ContractPipeline::STATUS_PENDING,
-                ContractPipeline::STATUS_BACK,
-            ],
-            default => [],
-        };
-    }
-
-    private function serializePipeline(ContractPipeline $pipeline): array
-    {
-        $contract = $pipeline->getContract();
-        $cardStatus = $this->mapCardStatus($pipeline->getStatus());
-
-        $startAt = $pipeline->getFromKline()?->getTimestamp()
-            ?? $pipeline->getLastAttemptAt()
-            ?? $pipeline->getUpdatedAt();
-
-        $endAt = $pipeline->getToKline()?->getTimestamp();
-        if ($endAt === null && in_array($pipeline->getStatus(), [ContractPipeline::STATUS_VALIDATED, ContractPipeline::STATUS_FAILED], true)) {
-            $endAt = $pipeline->getUpdatedAt();
-        }
-
-        $stages = $this->buildStageTimeline($pipeline, $cardStatus);
+        $contract = $pipeline['contract'];
+        $startAt = $this->findEarliestSlot($pipeline['signals'] ?? []);
+        $endAt = $this->findLatestSlot($pipeline['signals'] ?? []);
+        $stages = $this->buildStageTimeline($pipeline);
 
         return [
-            'id' => $pipeline->getId(),
-            'contract' => [
-                'symbol' => $contract->getSymbol(),
-                'exchange' => $contract->getExchange()->getName(),
-            ],
-            'status_raw' => $pipeline->getStatus(),
-            'status' => $cardStatus,
-            'current_timeframe' => $pipeline->getCurrentTimeframe(),
-            'retries' => $pipeline->getRetries(),
-            'max_retries' => $pipeline->getMaxRetries(),
-            'order_id' => $pipeline->getOrderId(),
-            'start_time' => $this->formatDate($startAt),
-            'end_time' => $this->formatDate($endAt),
-            'duration' => $this->formatDuration($startAt, $endAt),
+            'symbol' => $contract['symbol'],
+            'contract' => $contract,
+            'status_raw' => $pipeline['card_status'],
+            'status' => $pipeline['card_status'],
+            'current_timeframe' => $pipeline['current_timeframe'],
+            'retries' => $pipeline['retries_current'] ?? 0,
+            'max_retries' => $pipeline['max_retries'] ?? 0,
+            'order_id' => $pipeline['order_id'],
+            'start_time' => $startAt,
+            'end_time' => $endAt,
+            'duration' => $this->computeDuration($startAt, $endAt),
             'stages' => $stages,
-            'signals' => $pipeline->getSignals(),
-            'updated_at' => $this->formatDate($pipeline->getUpdatedAt()),
-            'last_attempt_at' => $this->formatDate($pipeline->getLastAttemptAt()),
+            'signals' => $pipeline['signals'],
+            'eligibility' => $pipeline['eligibility'],
+            'retries_per_tf' => $pipeline['retries'],
+            'pending_children' => $pipeline['pending_children'],
+            'updated_at' => $pipeline['updated_at'],
+            'last_attempt_at' => $pipeline['last_attempt_at'],
         ];
     }
 
-    private function buildStageTimeline(ContractPipeline $pipeline, string $cardStatus): array
+    private function buildStageTimeline(array $pipeline): array
     {
-        $currentTf = $pipeline->getCurrentTimeframe();
-        $currentIndex = array_search($currentTf, array_column(self::STAGE_FLOW, 'tf'), true);
-        if ($currentIndex === false) {
-            $currentIndex = 0;
-        }
-
+        $currentTf = $pipeline['current_timeframe'];
+        $cardStatus = $pipeline['card_status'];
         $timeline = [];
-        foreach (self::STAGE_FLOW as $index => $stage) {
+        foreach (self::STAGE_FLOW as $stage) {
             $timeline[] = [
                 'timeframe' => $stage['tf'],
                 'name' => $stage['label'],
-                'status' => $this->determineStageStatus($pipeline, $cardStatus, $index, $currentIndex, $stage['tf']),
+                'status' => $this->determineStageStatus($pipeline, $stage['tf'], $currentTf, $cardStatus),
             ];
         }
-
         return $timeline;
     }
 
-    private function determineStageStatus(ContractPipeline $pipeline, string $cardStatus, int $index, int $currentIndex, string $stageTf): string
+    private function determineStageStatus(array $pipeline, string $stageTf, string $currentTf, string $cardStatus): string
     {
+        $order = array_map(static fn($row) => $row['tf'], self::STAGE_FLOW);
+        $indexCurrent = array_search($currentTf, $order, true);
+        $indexStage = array_search($stageTf, $order, true);
+        if ($indexCurrent === false) {
+            $indexCurrent = 0;
+        }
+        if ($indexStage === false) {
+            $indexStage = 0;
+        }
         if ($cardStatus === 'completed') {
             return 'completed';
         }
-
-        if ($cardStatus === 'failed' && $stageTf === $pipeline->getCurrentTimeframe()) {
-            return 'failed';
+        if ($indexStage < $indexCurrent) {
+            $signal = strtoupper($pipeline['signals'][$stageTf]['signal'] ?? 'NONE');
+            return $signal !== 'NONE' ? 'completed' : 'pending';
         }
-
-        if ($index < $currentIndex) {
-            return 'completed';
-        }
-
-        if ($index === $currentIndex) {
+        if ($indexStage === $indexCurrent) {
             return $cardStatus === 'failed' ? 'failed' : 'in-progress';
         }
-
         return 'pending';
     }
 
-    private function mapCardStatus(string $status): string
+    private function findEarliestSlot(array $signals): ?string
     {
-        return match ($status) {
-            ContractPipeline::STATUS_FAILED => 'failed',
-            ContractPipeline::STATUS_VALIDATED,
-            ContractPipeline::STATUS_OPENED_LOCKED,
-            ContractPipeline::STATUS_ORDER_OPENED => 'completed',
-            default => 'in-progress',
-        };
+        $earliest = null;
+        foreach ($signals as $payload) {
+            if (empty($payload['slot_start'])) {
+                continue;
+            }
+            $slot = $payload['slot_start'];
+            if (!$slot instanceof DateTimeImmutable) {
+                continue;
+            }
+            if ($earliest === null || $slot < $earliest) {
+                $earliest = $slot;
+            }
+        }
+        return $earliest?->format(DateTimeImmutable::ATOM);
     }
 
-    private function formatDate(?\DateTimeInterface $date): ?string
+    private function findLatestSlot(array $signals): ?string
     {
-        return $date?->format(DATE_ATOM);
+        $latest = null;
+        foreach ($signals as $payload) {
+            if (empty($payload['slot_start'])) {
+                continue;
+            }
+            $slot = $payload['slot_start'];
+            if (!$slot instanceof DateTimeImmutable) {
+                continue;
+            }
+            if ($latest === null || $slot > $latest) {
+                $latest = $slot;
+            }
+        }
+        return $latest?->format(DateTimeImmutable::ATOM);
     }
 
-    private function formatDuration(?\DateTimeInterface $start, ?\DateTimeInterface $end): ?string
+    private function computeDuration(?string $start, ?string $end): ?string
     {
-        if (!$start || !$end) {
+        if ($start === null || $end === null) {
             return null;
         }
-
-        $interval = $start->diff($end);
+        $startDt = new DateTimeImmutable($start);
+        $endDt = new DateTimeImmutable($end);
+        $interval = $startDt->diff($endDt);
         $parts = [];
-
         if ($interval->d > 0) {
             $parts[] = sprintf('%dj', $interval->d);
         }
@@ -180,10 +156,9 @@ final class ContractPipelineController extends AbstractController
         if ($interval->i > 0) {
             $parts[] = sprintf('%dm', $interval->i);
         }
-        if ($interval->s > 0 && $parts === []) {
+        if ($parts === []) {
             $parts[] = sprintf('%ds', $interval->s);
         }
-
-        return $parts === [] ? '0s' : implode(' ', $parts);
+        return implode(' ', $parts);
     }
 }

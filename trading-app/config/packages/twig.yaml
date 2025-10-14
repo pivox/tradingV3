@@ -1,0 +1,13 @@
+twig:
+    default_path: '%kernel.project_dir%/templates'
+    form_themes: ['bootstrap_5_layout.html.twig']
+    globals:
+        app_name: 'Trading App'
+        app_version: '1.0.0'
+    date:
+        format: 'd/m/Y H:i:s'
+        interval_format: '%%d jours %%h heures %%i minutes'
+    number_format:
+        decimals: 2
+        decimal_point: ','
+        thousands_separator: ' '

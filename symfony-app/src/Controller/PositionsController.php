@@ -4,13 +4,12 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Entity\ContractPipeline;
 use App\Entity\Position;
-use App\Repository\ContractPipelineRepository;
 use App\Repository\PositionRepository;
 use App\Service\Trading\OpenedLockedSyncService;
 use App\Service\Trading\PositionEvaluator;
 use App\Service\Trading\PositionFetcher;
+use App\Service\Pipeline\MtfPipelineViewService;
 use DateTimeImmutable;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -23,15 +22,12 @@ use Symfony\Component\Routing\Annotation\Route;
  */
 final class PositionsController extends AbstractController
 {
-    private const LIVE_PIPELINE_STATUSES = [
-        ContractPipeline::STATUS_OPENED_LOCKED,
-        ContractPipeline::STATUS_ORDER_OPENED,
-    ];
+    private const EXECUTION_LOCK_STATUSES = ['LOCKED_POSITION','LOCKED_ORDER'];
 
     public function __construct(
         private readonly PositionRepository $positions,
         private readonly PositionEvaluator $evaluator,
-        private readonly ContractPipelineRepository $pipelineRepo,
+        private readonly MtfPipelineViewService $pipelineView,
         private readonly PositionFetcher $positionFetcher,
         private readonly OpenedLockedSyncService $openedLockedSync,
     ) {
@@ -58,19 +54,13 @@ final class PositionsController extends AbstractController
 
         // 2) Evaluation en direct (même logique que app:evaluate:positions)
         $this->openedLockedSync->sync();
-        $livePipelines = $this->pipelineRepo->createQueryBuilder('p')
-            ->innerJoin('p.contract', 'c')->addSelect('c')
-            ->andWhere('p.status IN (:statuses)')
-            ->setParameter('statuses', self::LIVE_PIPELINE_STATUSES)
-            ->getQuery()
-            ->getResult();
+        $livePipelines = array_filter(
+            $this->pipelineView->list(null),
+            fn(array $row) => $this->isLivePipeline($row)
+        );
 
         foreach ($livePipelines as $pipeline) {
-            if (!$pipeline instanceof ContractPipeline) {
-                continue;
-            }
-
-            $symbol = $pipeline->getContract()->getSymbol();
+            $symbol = $pipeline['symbol'];
 
             if ($filters['contract'] && $filters['contract'] !== $symbol) {
                 continue;
@@ -96,6 +86,16 @@ final class PositionsController extends AbstractController
         }
 
         return new JsonResponse($results);
+    }
+
+    private function isLivePipeline(array $pipeline): bool
+    {
+        foreach ($pipeline['eligibility'] ?? [] as $tf => $row) {
+            if (in_array($row['status'] ?? '', self::EXECUTION_LOCK_STATUSES, true)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -198,52 +198,42 @@ final class PositionsController extends AbstractController
         ];
     }
 
-    private function serializeLivePosition(ContractPipeline $pipeline, object $position): array
+    private function serializeLivePosition(array $pipeline, object $position): array
     {
-        $contract = $pipeline->getContract();
-        $contractSize = (float) ($contract->getContractSize() ?? 1.0);
-        if ($contractSize <= 0.0) {
-            $contractSize = 1.0;
-        }
-
+        $contract = $pipeline['contract'];
+        $symbol = $contract['symbol'];
         $quantityContracts = (float) ($position->contractsQty ?? $position->quantity ?? 0.0);
-        $baseQuantity = $quantityContracts * $contractSize;
-
         $entryPrice = $this->toFloat($position->entryPrice ?? null);
         $markPrice = $this->toFloat($position->markPrice ?? null);
         $stopLoss = $this->toFloat($position->stopLoss ?? null);
         $takeProfit = $this->toFloat($position->takeProfit ?? null);
         $leverage = $this->toFloat($position->leverage ?? null);
         $margin = $this->toFloat($position->margin ?? null);
-
         if (($margin === null || $margin == 0.0) && $entryPrice && $leverage) {
-            $notional = $baseQuantity * $entryPrice;
+            $notional = $quantityContracts * $entryPrice;
             if ($notional > 0 && $leverage > 0) {
                 $margin = $notional / $leverage;
             }
         }
-
         $evaluationInput = (object) [
             'side'          => $position->side ?? null,
             'quantity'      => $quantityContracts,
             'entryPrice'    => $entryPrice,
             'markPrice'     => $markPrice,
             'leverage'      => $leverage,
-            'contractSize'  => $contractSize,
+            'contractSize'  => 1.0,
             'stopLoss'      => $stopLoss,
             'takeProfit'    => $takeProfit,
             'liqPrice'      => $this->toFloat($position->liqPrice ?? null),
             'openTime'      => $position->openTime ?? null,
         ];
-
         $evaluation = $this->evaluator->evaluate($evaluationInput);
-
         return [
-            'id' => $pipeline->getId(),
+            'id' => null,
             'source' => 'exchange',
             'contract' => [
-                'symbol' => $contract->getSymbol(),
-                'exchange' => $contract->getExchange()->getName(),
+                'symbol' => $symbol,
+                'exchange' => $contract['exchange'],
             ],
             'type' => strtolower((string) ($position->side ?? 'unknown')),
             'status' => 'open',
@@ -251,7 +241,7 @@ final class PositionsController extends AbstractController
             'entry_price' => $entryPrice,
             'exit_price' => $takeProfit,
             'qty_contract' => $quantityContracts,
-            'qty_base' => $baseQuantity,
+            'qty_base' => $quantityContracts,
             'leverage' => $leverage,
             'mark_price' => $markPrice,
             'open_date' => $this->formatUnixTimestamp($position->openTime ?? null),
@@ -269,11 +259,11 @@ final class PositionsController extends AbstractController
             'dist_to_tp_pct' => $evaluation['dist_to_tp_pct'],
             'liq_risk_pct' => $evaluation['liq_risk_pct'],
             'time_in_position_s' => $evaluation['time_in_position_s'],
-            'time_in_force' => $pipeline->getCurrentTimeframe(),
+            'time_in_force' => $pipeline['current_timeframe'],
             'expires_at' => null,
-            'external_order_id' => $pipeline->getOrderId(),
-            'external_status' => strtolower($pipeline->getStatus()),
-            'last_sync_at' => $this->formatDate($pipeline->getUpdatedAt()),
+            'external_order_id' => $pipeline['order_id'],
+            'external_status' => $pipeline['card_status'],
+            'last_sync_at' => $pipeline['updated_at'],
             'meta' => [
                 'raw_position' => $position,
             ],
@@ -282,20 +272,17 @@ final class PositionsController extends AbstractController
         ];
     }
 
-    private function summarizePipeline(ContractPipeline $pipeline): array
+    private function summarizePipeline(array $pipeline): array
     {
         return [
-            'id' => $pipeline->getId(),
-            'status' => $pipeline->getStatus(),
-            'current_timeframe' => $pipeline->getCurrentTimeframe(),
-            'retries' => $pipeline->getRetries(),
-            'max_retries' => $pipeline->getMaxRetries(),
-            'order_id' => $pipeline->getOrderId(),
-            'updated_at' => $this->formatDate($pipeline->getUpdatedAt()),
-            'last_attempt_at' => $this->formatDate($pipeline->getLastAttemptAt()),
+            'status' => $pipeline['card_status'],
+            'current_timeframe' => $pipeline['current_timeframe'],
+            'retries' => $pipeline['retries_current'],
+            'max_retries' => $pipeline['max_retries'],
+            'signals' => $pipeline['signals'],
+            'eligibility' => $pipeline['eligibility'],
         ];
     }
-
     private function passesFilter(array $row, array $filters): bool
     {
         if ($filters['type'] !== '' && $filters['type'] !== 'all' && ($row['type'] ?? null) !== $filters['type']) {

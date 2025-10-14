@@ -1,0 +1,9 @@
+# routes
+
+controllers:
+  resource: '../src/Controller/'
+  type: attribute
+
+# Import MTF routes
+mtf_api:
+    resource: routes_mtf.yaml

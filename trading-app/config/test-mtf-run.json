@@ -1,0 +1,111 @@
+{
+  "test_cases": [
+    {
+      "name": "Test basique",
+      "description": "Test avec les paramètres par défaut",
+      "request": {
+        "symbols": [],
+        "dry_run": true,
+        "force_run": false
+      },
+      "expected_status": 200,
+      "expected_symbols": 5
+    },
+    {
+      "name": "Test avec symboles spécifiques",
+      "description": "Test avec BTCUSDT et ETHUSDT",
+      "request": {
+        "symbols": ["BTCUSDT", "ETHUSDT"],
+        "dry_run": true,
+        "force_run": false
+      },
+      "expected_status": 200,
+      "expected_symbols": 2
+    },
+    {
+      "name": "Test avec un seul symbole",
+      "description": "Test avec BTCUSDT seulement",
+      "request": {
+        "symbols": ["BTCUSDT"],
+        "dry_run": true,
+        "force_run": false
+      },
+      "expected_status": 200,
+      "expected_symbols": 1
+    },
+    {
+      "name": "Test en mode production",
+      "description": "Test avec création d'order plans",
+      "request": {
+        "symbols": ["BTCUSDT"],
+        "dry_run": false,
+        "force_run": false
+      },
+      "expected_status": 200,
+      "expected_symbols": 1,
+      "expected_order_plans": true
+    },
+    {
+      "name": "Test avec force run",
+      "description": "Test en ignorant les kill switches",
+      "request": {
+        "symbols": ["BTCUSDT"],
+        "dry_run": true,
+        "force_run": true
+      },
+      "expected_status": 200,
+      "expected_symbols": 1
+    },
+    {
+      "name": "Test avec symboles invalides",
+      "description": "Test avec des symboles qui n'existent pas",
+      "request": {
+        "symbols": ["INVALID_SYMBOL"],
+        "dry_run": true,
+        "force_run": false
+      },
+      "expected_status": 200,
+      "expected_symbols": 1,
+      "expected_failures": true
+    }
+  ],
+  "environment": {
+    "base_url": "http://localhost:8082",
+    "timeout": 60,
+    "retries": 3
+  },
+  "validation": {
+    "required_fields": [
+      "status",
+      "message",
+      "data.summary",
+      "data.results"
+    ],
+    "summary_fields": [
+      "run_id",
+      "execution_time_seconds",
+      "symbols_requested",
+      "symbols_processed",
+      "symbols_successful",
+      "symbols_failed",
+      "symbols_skipped",
+      "success_rate",
+      "dry_run",
+      "force_run",
+      "timestamp"
+    ],
+    "result_fields": [
+      "status",
+      "timestamp"
+    ]
+  },
+  "performance": {
+    "max_execution_time": 30,
+    "max_memory_usage": "512M",
+    "expected_success_rate": 80
+  }
+}
+
+
+
+

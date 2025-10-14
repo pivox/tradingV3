@@ -5,9 +5,9 @@ namespace App\Service\Config;
 class BitmartConfig
 {
     public function __construct(
-        private readonly string $apiKey,
-        private readonly string $secretKey,
-        private readonly string $apiMemo
+        protected readonly string $apiKey,
+        protected readonly string $secretKey,
+        protected readonly string $apiMemo
     ) {}
 
     public function getApiKey(): string

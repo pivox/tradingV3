@@ -1,0 +1,117 @@
+services:
+  # Services MTF
+  App\Domain\Mtf\Service\MtfTimeService:
+    arguments:
+      $logger: '@logger'
+
+  App\Domain\Mtf\Service\MtfBackfillService:
+    arguments:
+      $bitmartClient: '@App\Infrastructure\Http\BitmartClient'
+      $klineRepository: '@App\Repository\KlineRepository'
+      $rateLimiter: '@App\Infrastructure\RateLimiter\TokenBucketRateLimiter'
+      $timeService: '@App\Domain\Mtf\Service\MtfTimeService'
+      $logger: '@logger'
+
+  App\Domain\Mtf\Service\MtfService:
+    arguments:
+      $timeService: '@App\Domain\Mtf\Service\MtfTimeService'
+      $klineRepository: '@App\Repository\KlineRepository'
+      $mtfStateRepository: '@App\Repository\MtfStateRepository'
+      $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
+      $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
+      $signalValidationService: '@App\Signal\SignalValidationService'
+      $logger: '@logger'
+      $mtfConfig: '@App\Config\MtfConfigProviderInterface'
+
+  # Rate Limiter
+  App\Infrastructure\RateLimiter\TokenBucketRateLimiter:
+    arguments:
+      $capacity: 6
+      $refillRate: 6
+      $refillInterval: 1000
+      $logger: '@logger'
+
+  # HTTP Client
+  App\Infrastructure\Http\BitmartClient:
+    arguments:
+      $httpClient: '@http_client'
+      $logger: '@logger'
+
+  # Temporal Services
+  App\Application\Activity\MtfActivity:
+    arguments:
+      $mtfService: '@App\Domain\Mtf\Service\MtfService'
+      $backfillService: '@App\Domain\Mtf\Service\MtfBackfillService'
+      $timeService: '@App\Domain\Mtf\Service\MtfTimeService'
+      $klineRepository: '@App\Repository\KlineRepository'
+      $mtfStateRepository: '@App\Repository\MtfStateRepository'
+      $logger: '@logger'
+
+  App\Application\Worker\MtfWorker:
+    arguments:
+      $workerFactory: '@temporal.worker_factory'
+      $mtfActivity: '@App\Application\Activity\MtfActivity'
+      $logger: '@logger'
+
+  App\Application\Service\MtfWorkflowService:
+    arguments:
+      $workflowClient: '@temporal.workflow_client'
+      $logger: '@logger'
+
+  # Controllers
+  App\Controller\MtfController:
+    arguments:
+      $mtfService: '@App\Domain\Mtf\Service\MtfService'
+      $klineRepository: '@App\Repository\KlineRepository'
+      $mtfStateRepository: '@App\Repository\MtfStateRepository'
+      $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
+      $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
+      $mtfLockRepository: '@App\Repository\MtfLockRepository'
+      $orderPlanRepository: '@App\Repository\OrderPlanRepository'
+      $logger: '@logger'
+      $mtfRunService: '@App\Domain\Mtf\Service\MtfRunService'
+    tags: ['controller.service_arguments']
+
+  # Commands
+  App\Command\MtfWorkerCommand:
+    arguments:
+      $mtfWorker: '@App\Application\Worker\MtfWorker'
+      $logger: '@logger'
+    tags: ['console.command']
+
+  App\Command\MtfWorkflowCommand:
+    arguments:
+      $workflowService: '@App\Application\Service\MtfWorkflowService'
+      $logger: '@logger'
+    tags: ['console.command']
+
+  # HTTP Client Configuration
+  http_client:
+    class: Symfony\Component\HttpClient\CurlHttpClient
+    arguments:
+      $defaultOptions:
+        timeout: 30
+        max_redirects: 3
+        headers:
+          User-Agent: 'MTF-Trading-System/1.0'
+
+  # Temporal Configuration
+  temporal.workflow_client:
+    class: Temporal\Client\WorkflowClient
+    arguments:
+      $serviceClient: '@temporal.service_client'
+
+  temporal.service_client:
+    class: Temporal\Client\GRPC\ServiceClient
+    arguments:
+      $hostPort: '%env(TEMPORAL_ADDRESS)%'
+      $options: []
+
+  temporal.worker_factory:
+    class: Temporal\Worker\WorkerFactory
+    arguments:
+      $serviceClient: '@temporal.service_client'
+
+
+
+

@@ -1,0 +1,7 @@
+Élément	Signature / But
+evaluate()	Point d’entrée principal → retourne signal structuré
+supportsTimeframe()	(Optionnel) savoir quel TF gérer
+evaluateLong() / evaluateShort()	(Optionnel) pour découper la logique
+getName()	(Optionnel) identifiant service
+ConditionRegistry	Injection centrale pour charger les conditions dynamiquement
+EvaluationContext	Fournit les indicateurs et le contexte au moment de l’évaluation

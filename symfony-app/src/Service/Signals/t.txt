@@ -159,7 +159,7 @@ final class Signal15mService
 <?php
 declare(strict_types=1);
 
-namespace App\Service\Signals\Timeframe;
+namespace App\Signals\Timeframe;
 
 use App\Entity\Kline;
 use App\Service\Config\TradingParameters;
@@ -238,7 +238,7 @@ final class Signal5mService
 <?php
 declare(strict_types=1);
 
-namespace App\Service\Signals\Timeframe;
+namespace App\Signals\Timeframe;
 
 use App\Entity\Kline;
 use App\Service\Config\TradingParameters;

@@ -2,6 +2,7 @@
 
 namespace App\Controller\Bitmart;
 
+use App\Entity\Kline;
 use App\Repository\KlineRepository;
 use App\Service\Exchange\Bitmart\BitmartFetcher;
 use App\Service\Persister\KlinePersister;
@@ -128,7 +129,7 @@ class KlinesByTimeframeGetController extends AbstractController
                             ->getResult();
                     }
 
-                    $rows = array_map(static fn(App\Entity\Kline $e) => [
+                    $rows = array_map(static fn(Kline $e) => [
                         'timestamp' => $e->getTimestamp()
                             ->setTimezone(new \DateTimeZone('UTC'))
                             ->format(\DateTimeInterface::ATOM),
