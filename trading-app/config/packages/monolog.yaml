@@ -1,9 +1,18 @@
 monolog:
-  channels: ['validation', 'signals', 'positions', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
+  channels: ['mtf', 'validation', 'signals', 'positions', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
   handlers:
     # =====================
     # --- Canaux Métier ---
     # =====================
+    
+    # Canal MTF - Système Multi-Timeframe
+    mtf_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/mtf.log'
+      max_files: 14
+      level: '%env(MTF_LOG_LEVEL)%'
+      channels: ['mtf']
+      formatter: App\Logging\CustomLineFormatter
     
     # Canal Validation - Règles MTF et conditions YAML
     validation_rotating:

@@ -1,0 +1,633 @@
+GET http://localhost:8080/pipelines/with-klines
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-29T123701.200.json
+
+###
+
+PUT https://api.trello.com/1/labels/68d92a163fbc866e50fecdcc%20%20%20%20%20%20%20#%20red?name=🔴 Urgent&key=&token=
+Accept: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Cookie: dsc=15046ba1dabae6aba5a54f96cb1b2d081837bd74e8484a2a99be8a16358c78bb
+content-length: 0
+
+<> 2025-09-28T143420.400.txt
+
+###
+
+PUT https://api.trello.com/1/labels/68d92a163fbc866e50fecdca%20%20%20%20#%20yellow?name=🟡 Bloqué&key=&token=
+Accept: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Cookie: dsc=15046ba1dabae6aba5a54f96cb1b2d081837bd74e8484a2a99be8a16358c78bb
+content-length: 0
+
+<> 2025-09-28T143419-4.400.txt
+
+###
+
+PUT https://api.trello.com/1/labels/68d92a163fbc866e50fecdc9%20%20%20%20%20#%20green?name=🟢 En cours&key=&token=
+Accept: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Cookie: dsc=15046ba1dabae6aba5a54f96cb1b2d081837bd74e8484a2a99be8a16358c78bb
+content-length: 0
+
+<> 2025-09-28T143419-3.400.txt
+
+###
+
+PUT https://api.trello.com/1/labels/68d92a163fbc866e50fecdcb%20%20%20%20#%20orange?name=BitMart Costs&key=&token=
+Accept: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Cookie: dsc=15046ba1dabae6aba5a54f96cb1b2d081837bd74e8484a2a99be8a16358c78bb
+content-length: 0
+
+<> 2025-09-28T143419-2.400.txt
+
+###
+
+PUT https://api.trello.com/1/labels/68d92a163fbc866e50fecdcd%20%20%20%20#%20purple?name=Symfony / Temporal&key=&token=
+Accept: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Cookie: dsc=15046ba1dabae6aba5a54f96cb1b2d081837bd74e8484a2a99be8a16358c78bb
+content-length: 0
+
+<> 2025-09-28T143419-1.400.txt
+
+###
+
+PUT https://api.trello.com/1/labels/68d92a163fbc866e50fecdce%20%20%20%20%20%20#%20blue?name=Flows MTF&key=&token=
+Accept: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Cookie: dsc=15046ba1dabae6aba5a54f96cb1b2d081837bd74e8484a2a99be8a16358c78bb
+content-length: 0
+
+<> 2025-09-28T143419.400.txt
+
+###
+
+GET https://api.trello.com/1/members/me/boards?fields=name,url&key=25f9ff3689caa6c2a15e20a99d48bd1b&token=ef5ee0870fb60d01244c1cdfa34dee34d9fcc3cffd1c42167d70e89585079438
+Accept: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Cookie: dsc=15046ba1dabae6aba5a54f96cb1b2d081837bd74e8484a2a99be8a16358c78bb
+
+<> 2025-09-28T142933.401.txt
+
+###
+
+GET https://api.trello.com/1/members/me/boards?fields=name,url&key=25f9ff3689caa6c2a15e20a99d48bd1b&token=ef5ee0870fb60d01244c1cdfa34dee34d9fcc3cffd1c42167d70e89585079438
+Accept: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Cookie: dsc=15046ba1dabae6aba5a54f96cb1b2d081837bd74e8484a2a99be8a16358c78bb
+
+<> 2025-09-28T142917.401.txt
+
+###
+
+GET https://api.trello.com/1/members/me/boards?fields=name,url&key=25f9ff3689caa6c2a15e20a99d48bd1b&token=ef5ee0870fb60d01244c1cdfa34dee34d9fcc3cffd1c42167d70e89585079438
+Accept: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Cookie: dsc=15046ba1dabae6aba5a54f96cb1b2d081837bd74e8484a2a99be8a16358c78bb
+
+<> 2025-09-28T142805.401.txt
+
+###
+
+GET https://api.trello.com/1/members/me/boards?fields=name,url&key=25f9ff3689caa6c2a15e20a99d48bd1b&token=ef5ee0870fb60d01244c1cdfa34dee34d9fcc3cffd1c42167d70e89585079438
+Accept: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+
+<> 2025-09-28T142644.401.txt
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=ZORAUSDT&intervals=4h,1h,15m,5m,1m&persist=false&from_bitmart=1
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-28T025212.200.json
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=ZORAUSDT&intervals=4h,1h,15m,5m,1m&persist=false&from_bitmart=1
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-28T023913.200.json
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=HIFIUSDT&intervals=4h,1h,15m,5m,1m&persist=false&from_bitmart=1
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-28T022658.200.json
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/fetch-all-contracts
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+content-length: 0
+
+<> 2025-09-28T001901.404.html
+
+###
+
+GET http://localhost:8080/api/validate-15m
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-26T185309.404.html
+
+###
+
+GET http://localhost:8080/api/cron/bitmart/validate-15m
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-26T185300.404.html
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=PLUMEUSDT&intervals=4h,1h,15m,5m,1m&persist=false&from_bitmart=1
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-25T133358.200.json
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=PLUMEUSDT&intervals=4h,1h,15m,5m,1m&persist=false&from_bitmart=1
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-25T123459.200.json
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=PLUMEUSDT&intervals=4h,1h,15m,5m,1m
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-25T123311.500.json
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=PLUMEUSDT&intervals=4h,1h,15m,5m,1m
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-25T123218.500.json
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=PLUMEUSDT&intervals=4h,1h,15m,5m,1m
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-25T123148.500.html
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=VELVETUSDT&intervals=4h,1h,15m,5m,1m
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+Cookie: XDEBUG_SESSION=16882
+
+<> 2025-09-25T122022.200.json
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=VELVETUSDT&intervals=4h,1h,15m,5m,1m
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-25T121951.200.json
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=VELVETUSDT
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-25T120039.200.json
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=AAVEUSDT
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-25T020147.200.json
+
+###
+
+POST http://localhost:8080/api/cron/bitmart/refresh-5m
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+content-length: 0
+
+<> 2025-09-24T155320.200.json
+
+###
+
+GET http://localhost:8080/api/bitmart/balance/futures
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-24T154054.200.json
+
+###
+
+POST http://localhost:8080/api/cron/bitmart/refresh-1m
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+content-length: 0
+
+<> 2025-09-24T155358.200.json
+
+###
+
+POST http://localhost:8080/api/cron/bitmart/refresh-15m
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+content-length: 0
+
+<> 2025-09-24T155111.200.json
+
+###
+
+POST http://localhost:8080/api/cron/bitmart/refresh-1h
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+content-length: 0
+
+<> 2025-09-24T154333.200.json
+
+###
+
+POST http://localhost:8080/api/cron/bitmart/refresh-1h
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+content-length: 0
+
+<> 2025-09-24T154240.200.json
+
+###
+
+GET http://localhost:8080/api/bitmart/balance/futures
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-24T154213.200.json
+
+###
+
+GET http://localhost:8080/api/bitmart/balances
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-24T153751.404.html
+
+###
+
+GET http://localhost:8080/api/cron/bitmart/refresh-4h
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-24T153041.405.html
+
+###
+
+GET http://localhost:8080/api/cron/bitmart/refresh-4h
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-24T153008.405.html
+
+###
+
+GET http://localhost:8080/api/cron/bitmart/refresh-4h
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-24T152539.405.html
+
+###
+
+GET http://localhost:8080/api/refresh-1h
+Content-Type: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+<> 2025-09-24T152524.404.html
+
+###
+
+GET http://localhost:8080/api/bitmart/klines/by-timeframe?symbol=BTCUSDT
+Accept: application/json
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+
+<> 2025-09-24T122739.200.json
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/get-kline
+Content-Length: 304
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+  "base_url": "http://nginx",
+  "payload": {
+    "contract": "1INCHUSDT",
+    "limit": 200,
+    "since_ts": null,
+    "source": "bitmart",
+    "timeframe": "15m"
+  },
+  "request_id": "0425b56b-0800-4063-91bf-29560c61984c",
+  "url_callback": "api/callback/bitmart/get-kline",
+  "url_type": "get kline"
+}
+
+<> 2025-09-04T181515.500.html
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/get-kline
+Content-Length: 304
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+  "base_url": "http://nginx",
+  "payload": {
+    "contract": "1INCHUSDT",
+    "limit": 200,
+    "since_ts": null,
+    "source": "bitmart",
+    "timeframe": "15m"
+  },
+  "request_id": "0425b56b-0800-4063-91bf-29560c61984c",
+  "url_callback": "api/callback/bitmart/get-kline",
+  "url_type": "get kline"
+}
+
+<> 2025-09-04T181434.200.html
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/get-kline
+Content-Length: 304
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+  "base_url": "http://nginx",
+  "payload": {
+    "contract": "1INCHUSDT",
+    "limit": 200,
+    "since_ts": null,
+    "source": "bitmart",
+    "timeframe": "15m"
+  },
+  "request_id": "0425b56b-0800-4063-91bf-29560c61984c",
+  "url_callback": "api/callback/bitmart/get-kline",
+  "url_type": "get kline"
+}
+
+<> 2025-09-04T150552.500.html
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/get-kline
+Content-Length: 304
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+  "base_url": "http://nginx",
+  "payload": {
+    "contract": "1INCHUSDT",
+    "limit": 200,
+    "since_ts": null,
+    "source": "bitmart",
+    "timeframe": "15m"
+  },
+  "request_id": "0425b56b-0800-4063-91bf-29560c61984c",
+  "url_callback": "api/callback/bitmart/get-kline",
+  "url_type": "get kline"
+}
+
+<> 2025-09-04T150359.500.html
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/get-kline
+Content-Length: 304
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+  "base_url": "http://nginx",
+  "payload": {
+    "contract": "1INCHUSDT",
+    "limit": 200,
+    "since_ts": null,
+    "source": "bitmart",
+    "timeframe": "15m"
+  },
+  "request_id": "0425b56b-0800-4063-91bf-29560c61984c",
+  "url_callback": "api/callback/bitmart/get-kline",
+  "url_type": "get kline"
+}
+
+<> 2025-09-04T150308.500.html
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/get-kline
+Content-Length: 301
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+  "base_url": "http://nginx",
+  "payload": {
+    "contract": "BTCUSDT",
+    "limit": 100,
+    "since_ts": null,
+    "source": "bitmart",
+    "timeframe": "4h"
+  },
+  "request_id": "48c9bfe1-95d3-4afe-b28a-f793e1e4248f",
+  "url_callback": "api/callback/bitmart/get-kline",
+  "url_type": "get kline"
+}
+
+<> 2025-08-27T154555.200.json
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/get-kline
+Content-Length: 301
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+  "base_url": "http://nginx",
+  "payload": {
+    "contract": "BTCUSDT",
+    "limit": 100,
+    "since_ts": null,
+    "source": "bitmart",
+    "timeframe": "4h"
+  },
+  "request_id": "48c9bfe1-95d3-4afe-b28a-f793e1e4248f",
+  "url_callback": "api/callback/bitmart/get-kline",
+  "url_type": "get kline"
+}
+
+<> 2025-08-27T145956.200.json
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/get-kline
+Content-Length: 187
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+    "payload" : {
+        "contract": "SOLUSDT",
+        "interval": "1m",
+        "start": "2024-06-01 00:00:00",
+        "end": "2024-06-01 01:00:00",
+        "persist": false
+    }
+}
+
+<> 2025-08-27T142200.200.json
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/get-kline
+Content-Length: 187
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+    "payload" : {
+        "contract": "SOLUSDT",
+        "interval": "1m",
+        "start": "2024-06-01 00:00:00",
+        "end": "2024-06-01 01:00:00",
+        "persist": false
+    }
+}
+
+<> 2025-08-27T141941.200.json
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/get-kline
+Content-Length: 187
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+    "payload" : {
+        "contract": "SOLUSDT",
+        "interval": "1m",
+        "start": "2024-06-01 00:00:00",
+        "end": "2024-06-01 01:00:00",
+        "persist": false
+    }
+}
+
+<> 2025-08-27T141920.200.json
+
+###
+
+POST http://localhost:8080/api/callback/bitmart/get-kline
+Content-Length: 187
+User-Agent: IntelliJ HTTP Client/PhpStorm 2025.1.0.1
+Accept-Encoding: br, deflate, gzip, x-gzip
+Accept: */*
+
+{
+    "payload" : {
+        "contract": "SOLUSDT",
+        "interval": "1m",
+        "start": "2024-06-01 00:00:00",
+        "end": "2024-06-01 01:00:00",
+        "persist": false
+    }
+}
+
+<> 2025-08-27T141832.200.json
+
+###
+

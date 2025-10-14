@@ -1,0 +1,1167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="73604acf-3471-46f2-a1fd-fdf73ef42078" name="Changes" comment="OpenedLockedSyncService conf" />
+    <list id="0ec51621-5bf1-43ac-acaa-64de0476dee0" name="todo" comment="" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ChangesViewManager" show_ignored="true">
+    <option name="groupingKeys">
+      <option value="directory" />
+      <option value="repository" />
+    </option>
+  </component>
+  <component name="ComposerSettings" synchronizationState="SYNCHRONIZE">
+    <pharConfigPath>$PROJECT_DIR$/symfony-app/composer.json</pharConfigPath>
+    <execution>
+      <executable path="composer" />
+    </execution>
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="HTTP Request" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="main" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="RESET_MODE" value="HARD" />
+  </component>
+  <component name="GitRewordedCommitMessages">
+    <option name="commitMessagesMapping">
+      <RewordedCommitMessageMapping>
+        <option name="originalMessage" value="filtrer les contrats: ajouter blacklist symbol" />
+        <option name="rewordedMessage" value="Filtrer les contrats: ajouter blacklist symbol" />
+      </RewordedCommitMessageMapping>
+    </option>
+    <option name="currentCommit" value="1" />
+    <option name="onto" value="8ddc337693003ebac9ead3a4d4084cf29ee598f2" />
+  </component>
+  <component name="HttpClientSelectedEnvironments">
+    <file url="jar://$APPLICATION_HOME_DIR$/plugins/restClient/lib/restClient.jar!/com/intellij/ws/rest/client/requests/collection/post-requests.http" environment="test" />
+    <file url="file:///private/var/folders/zm/xxmsn8rj14vb619z02pz6y6h0000gq/T/whats-new-dir/whats-new.http" environment="test" />
+  </component>
+  <component name="PhpServers">
+    <servers>
+      <server host="localhost" id="1bbb65da-f106-4331-a224-c8ca6c490892" name="trading-app-php" use_path_mappings="true">
+        <path_mappings>
+          <mapping local-root="$PROJECT_DIR$/trading-app" remote-root="/var/www/html " />
+        </path_mappings>
+      </server>
+    </servers>
+  </component>
+  <component name="PhpWorkspaceProjectConfiguration" interpreter_name="trading-app-php">
+    <include_path>
+      <path value="$PROJECT_DIR$/symfony-app/vendor/composer" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/psr/cache" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/psr/container" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/psr/event-dispatcher" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/psr/log" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/framework-bundle" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/dotenv" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/cache" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/config" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/event-dispatcher" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/var-dumper" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/runtime" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/filesystem" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/polyfill-intl-normalizer" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/finder" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/polyfill-php83" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/http-kernel" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/string" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/yaml" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/routing" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/http-foundation" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/flex" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/var-exporter" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/dependency-injection" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/error-handler" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/console" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/polyfill-intl-grapheme" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/polyfill-mbstring" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phpdocumentor/reflection-common" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phpdocumentor/reflection-docblock" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phpdocumentor/type-resolver" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/migrations" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/doctrine-migrations-bundle" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/lexer" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/cache" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/inflector" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/dbal" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/persistence" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/orm" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/instantiator" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/nikic/php-parser" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/collections" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/event-manager" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/deprecations" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/sql-formatter" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/doctrine-bundle" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phpstan/phpdoc-parser" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/security-bundle" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/webmozart/assert" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/serializer" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/twig/twig" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/validator" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/polyfill-php84" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/type-info" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/property-info" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/property-access" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/doctrine-bridge" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/nelmio/cors-bundle" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/process" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/password-hasher" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/twig-bundle" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/security-csrf" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/clock" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/expression-language" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/twig-bridge" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/maker-bundle" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/security-http" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/security-core" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/asset" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/psr/clock" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/stopwatch" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/http-client" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/contracts" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/metadata" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/doctrine-orm" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/state" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/doctrine-common" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/doctrine/common" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/openapi" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/validator" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/documentation" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/jsonld" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/psr/link" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/serializer" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/hydra" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/symfony" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/http-cache" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/api-platform/json-schema" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/polyfill-uuid" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/uid" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/web-link" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/willdurand/negotiation" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/monolog-bridge" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/monolog-bundle" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/monolog/monolog" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/options-resolver" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/nelmio/api-doc-bundle" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/zircote/swagger-php" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/ramsey/collection" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/brick/math" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/nesbot/carbon" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/react/promise" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/spiral/roadrunner-kv" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/spiral/logger" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/spiral/core" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/spiral/interceptors" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/roadrunner-php/version-checker" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/roadrunner-php/roadrunner-api-dto" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/temporal/sdk" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/ramsey/uuid" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/google/common-protos" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/spiral/goridge" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/spiral/hmvc" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/spiral/roadrunner-worker" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/spiral/attributes" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/spiral/roadrunner-cli" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/spiral/tokenizer" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/spiral/security" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/psr/simple-cache" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/translation" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/carbonphp/carbon-doctrine-types" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/grpc/grpc" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/google/protobuf" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/evenement/evenement" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/react/event-loop" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/react/socket" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/react/cache" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/react/dns" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/react/stream" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/ratchet/pawl" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/ratchet/rfc6455" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/bitmartexchange/bitmart-php-sdk-api" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/ralouphie/getallheaders" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/psr/http-client" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/psr/http-factory" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/psr/http-message" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/guzzlehttp/guzzle" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/guzzlehttp/psr7" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/guzzlehttp/promises" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/lock" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/comparator" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/global-state" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/object-enumerator" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/object-reflector" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/complexity" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/diff" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/recursion-context" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/lines-of-code" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/type" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phar-io/manifest" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phar-io/version" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/version" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/cli-parser" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/environment" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/sebastian/exporter" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/theseer/tokenizer" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phpunit/php-timer" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phpunit/phpunit" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phpunit/php-text-template" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phpunit/php-code-coverage" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phpunit/php-invoker" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/phpunit/php-file-iterator" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/staabm/side-effects-detector" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/myclabs/deep-copy" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/masterminds/html5" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/browser-kit" />
+      <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/dom-crawler" />
+    </include_path>
+  </component>
+  <component name="PhpXdebugProxy" ide_key="PHPSTORM" host="client_host=host.docker.internal" port="9003" />
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="CurrentFile" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 4
+}</component>
+  <component name="ProjectId" id="2z8PjFcYrkgoUA0LkJEYoNhyu5O" />
+  <component name="ProjectLevelVcsManager">
+    <ConfirmationsSetting value="1" id="Add" />
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Docker.docker-compose.yml.bitmart-positions-forwarder: Compose Deployment.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.All in rest-api.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.All in rest-api_1.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.All in rest-api_2.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.All in rest-api_3.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.bitmart | #2.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.bitmart | GET balance.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.eval | GET request to example server.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.kline | #2.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.refresh | #2.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.refresh | #3.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.refresh | #4.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.refresh | #5.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.refresh | #6.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api | #2.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api | #3.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api | #4.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api | #5.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api | #6.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api | Test lecture directe depuis BitMart sans persistence.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api | ✅ Exemple : Récupérer 100 dernières minutes de SOLUSDT sans persister.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api_1 | #1.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api_1 | Conversion d'une date en timestamp via une API.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api_3 | #1.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api_3 | #2.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api_5 | #1.executor&quot;: &quot;Run&quot;,
+    &quot;HTTP Request.rest-api_5 | #3.executor&quot;: &quot;Run&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;PHP Script.xdebug trading.executor&quot;: &quot;Debug&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;SHELLCHECK.PATH&quot;: &quot;/Users/haythem.mabrouk/Library/Application Support/JetBrains/PhpStorm2025.1/plugins/Shell Script/shellcheck&quot;,
+    &quot;Shell Script.RESOLVUSDT sync.executor&quot;: &quot;Run&quot;,
+    &quot;Shell Script.SOLUSDT sync.executor&quot;: &quot;Run&quot;,
+    &quot;Shell Script.mtf:run .executor&quot;: &quot;Debug&quot;,
+    &quot;Shell Script.worker.executor&quot;: &quot;Run&quot;,
+    &quot;com.jetbrains.php.lang.actions.generation.PhpGenerateFieldAccessorHandlerBase$MyMemberChooser.fluent.setters.last.selected&quot;: &quot;true&quot;,
+    &quot;credentialsType com.jetbrains.php.remote.interpreter.ui.PhpCreateRemoteSdkForm&quot;: &quot;Docker Compose&quot;,
+    &quot;credentialsType com.jetbrains.php.remote.interpreter.ui.PhpInplaceEditRemoteSdkForm&quot;: &quot;Docker Compose&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;develop&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/haythem.mabrouk/workspace/perso/tradingV3&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;php.override.implement.member.chooser.php.doc&quot;: &quot;NONE&quot;,
+    &quot;run.code.analysis.last.selected.profile&quot;: &quot;pProject Default&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;reference.webide.settings.project.settings.php&quot;,
+    &quot;ts.external.directory.path&quot;: &quot;/Applications/PhpStorm.app/Contents/plugins/javascript-plugin/jsLanguageServicesImpl/external&quot;,
+    &quot;two.files.diff.last.used.folder&quot;: &quot;/Users/haythem.mabrouk/workspace/perso/tradingDev/api_rate_limiter/workflows&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  },
+  &quot;keyToStringList&quot;: {
+    &quot;DatabaseDriversLRU&quot;: [
+      &quot;postgresql&quot;,
+      &quot;mysql&quot;
+    ]
+  }
+}</component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/trading-app" />
+      <recent name="$PROJECT_DIR$/trading-app/src" />
+      <recent name="$PROJECT_DIR$/trading-app/config" />
+      <recent name="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new" />
+      <recent name="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/old" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/trading-app/migrations/sql" />
+      <recent name="$PROJECT_DIR$/symfony-app/src/Service/Trading/Idempotency" />
+      <recent name="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new" />
+      <recent name="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/old" />
+      <recent name="$PROJECT_DIR$/cron_symfony_fetch_klines/tools" />
+    </key>
+  </component>
+  <component name="RunManager" selected="Docker.docker-compose.yml.bitmart-positions-forwarder: Compose Deployment">
+    <configuration name="All in rest-api_1" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" path="$APPLICATION_CONFIG_DIR$/scratches/rest-api_1.http">
+      <method v="2" />
+    </configuration>
+    <configuration name="All in rest-api_1" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" path="$APPLICATION_CONFIG_DIR$/scratches/rest-api_1.http">
+      <method v="2" />
+    </configuration>
+    <configuration name="bitmart | #2" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/bitmart.http" executionIdentifier="#2" index="2" runType="Run single request">
+      <method v="2" />
+    </configuration>
+    <configuration name="bitmart | #2" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/bitmart.http" executionIdentifier="#2" index="2" runType="Run single request">
+      <method v="2" />
+    </configuration>
+    <configuration name="eval | GET request to example server" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/eval.http" executionIdentifier="GET request to example server" runType="Run single request">
+      <method v="2" />
+    </configuration>
+    <configuration name="eval | GET request to example server" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/eval.http" executionIdentifier="GET request to example server" runType="Run single request">
+      <method v="2" />
+    </configuration>
+    <configuration name="kline | #2" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/kline.http" executionIdentifier="#2" index="2" runType="Run single request">
+      <method v="2" />
+    </configuration>
+    <configuration name="kline | #2" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/kline.http" executionIdentifier="#2" index="2" runType="Run single request">
+      <method v="2" />
+    </configuration>
+    <configuration name="refresh | #6" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/refresh.http" executionIdentifier="#6" index="6" runType="Run single request">
+      <method v="2" />
+    </configuration>
+    <configuration name="xdebug trading" type="PhpLocalRunConfigurationType" factoryName="PHP Console" path="bin/console" scriptParameters="mtf:run --symbols=BTCUSDT">
+      <CommandLine>
+        <PhpTestInterpreterSettings>
+          <option name="interpreterName" value="trading-app-php" />
+        </PhpTestInterpreterSettings>
+      </CommandLine>
+      <method v="2" />
+    </configuration>
+    <configuration name="RESOLVUSDT sync" type="ShConfigurationType">
+      <option name="SCRIPT_TEXT" value="docker compose exec php php bin/console bitmart:kline:sync-all --symbol=RESOLVUSDT " />
+      <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+      <option name="SCRIPT_PATH" value="" />
+      <option name="SCRIPT_OPTIONS" value="docker compose exec php php bin/console bitmart:kline:sync-all --symbol=RESOLVUSDT" />
+      <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+      <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="INDEPENDENT_INTERPRETER_PATH" value="true" />
+      <option name="INTERPRETER_PATH" value="/bin/zsh" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="EXECUTE_IN_TERMINAL" value="true" />
+      <option name="EXECUTE_SCRIPT_FILE" value="false" />
+      <envs />
+      <method v="2" />
+    </configuration>
+    <configuration name="RESOLVUSDT sync" type="ShConfigurationType">
+      <option name="SCRIPT_TEXT" value="docker compose exec php php bin/console bitmart:kline:sync-all --symbol=RESOLVUSDT " />
+      <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+      <option name="SCRIPT_PATH" value="" />
+      <option name="SCRIPT_OPTIONS" value="docker compose exec php php bin/console bitmart:kline:sync-all --symbol=RESOLVUSDT" />
+      <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+      <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="INDEPENDENT_INTERPRETER_PATH" value="true" />
+      <option name="INTERPRETER_PATH" value="/bin/zsh" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="EXECUTE_IN_TERMINAL" value="true" />
+      <option name="EXECUTE_SCRIPT_FILE" value="false" />
+      <envs />
+      <method v="2" />
+    </configuration>
+    <configuration name="SOLUSDT sync" type="ShConfigurationType">
+      <option name="SCRIPT_TEXT" value="docker compose exec php php bin/console bitmart:kline:sync-all --symbol=RESOLVUSDT " />
+      <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+      <option name="SCRIPT_PATH" value="" />
+      <option name="SCRIPT_OPTIONS" value="" />
+      <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+      <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="INDEPENDENT_INTERPRETER_PATH" value="true" />
+      <option name="INTERPRETER_PATH" value="/bin/zsh" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="EXECUTE_IN_TERMINAL" value="true" />
+      <option name="EXECUTE_SCRIPT_FILE" value="false" />
+      <envs />
+      <method v="2" />
+    </configuration>
+    <configuration name="SOLUSDT sync" type="ShConfigurationType">
+      <option name="SCRIPT_TEXT" value="docker compose exec php php bin/console bitmart:kline:sync-all --symbol=RESOLVUSDT " />
+      <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+      <option name="SCRIPT_PATH" value="" />
+      <option name="SCRIPT_OPTIONS" value="" />
+      <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+      <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="INDEPENDENT_INTERPRETER_PATH" value="true" />
+      <option name="INTERPRETER_PATH" value="/bin/zsh" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="EXECUTE_IN_TERMINAL" value="true" />
+      <option name="EXECUTE_SCRIPT_FILE" value="false" />
+      <envs />
+      <method v="2" />
+    </configuration>
+    <configuration name="worker" type="ShConfigurationType">
+      <option name="SCRIPT_TEXT" value="docker compose exec python python temporal/workers/task_processor/worker.py" />
+      <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+      <option name="SCRIPT_PATH" value="" />
+      <option name="SCRIPT_OPTIONS" value="" />
+      <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+      <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="INDEPENDENT_INTERPRETER_PATH" value="true" />
+      <option name="INTERPRETER_PATH" value="/bin/zsh" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="EXECUTE_IN_TERMINAL" value="true" />
+      <option name="EXECUTE_SCRIPT_FILE" value="false" />
+      <envs />
+      <method v="2" />
+    </configuration>
+    <configuration name="worker" type="ShConfigurationType">
+      <option name="SCRIPT_TEXT" value="docker compose exec python python temporal/workers/task_processor/worker.py" />
+      <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+      <option name="SCRIPT_PATH" value="" />
+      <option name="SCRIPT_OPTIONS" value="" />
+      <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+      <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="INDEPENDENT_INTERPRETER_PATH" value="true" />
+      <option name="INTERPRETER_PATH" value="/bin/zsh" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="EXECUTE_IN_TERMINAL" value="true" />
+      <option name="EXECUTE_SCRIPT_FILE" value="false" />
+      <envs />
+      <method v="2" />
+    </configuration>
+    <configuration default="true" type="docker-deploy" factoryName="docker-compose.yml" temporary="true">
+      <deployment type="docker-compose.yml">
+        <settings />
+      </deployment>
+      <method v="2" />
+    </configuration>
+    <configuration name="docker-compose.yml.bitmart-positions-forwarder: Compose Deployment" type="docker-deploy" factoryName="docker-compose.yml" temporary="true" server-name="Docker">
+      <deployment type="docker-compose.yml">
+        <settings>
+          <option name="services">
+            <list>
+              <option value="bitmart-positions-forwarder" />
+            </list>
+          </option>
+          <option name="sourceFilePath" value="docker-compose.yml" />
+        </settings>
+      </deployment>
+      <method v="2" />
+    </configuration>
+    <configuration name="docker" type="docker-deploy" factoryName="docker-compose.yml" server-name="Docker">
+      <deployment type="docker-compose.yml">
+        <settings>
+          <option name="envFilePath" value="" />
+          <option name="sourceFilePath" value="docker-compose.yml" />
+        </settings>
+      </deployment>
+      <method v="2" />
+    </configuration>
+    <configuration name="docker" type="docker-deploy" factoryName="docker-compose.yml" server-name="Docker">
+      <deployment type="docker-compose.yml">
+        <settings>
+          <option name="envFilePath" value="" />
+          <option name="sourceFilePath" value="docker-compose.yml" />
+        </settings>
+      </deployment>
+      <method v="2" />
+    </configuration>
+    <list>
+      <item itemvalue="Docker.docker" />
+      <item itemvalue="Docker.docker-compose.yml.bitmart-positions-forwarder: Compose Deployment" />
+      <item itemvalue="HTTP Request.All in rest-api_1" />
+      <item itemvalue="HTTP Request.bitmart | #2" />
+      <item itemvalue="HTTP Request.eval | GET request to example server" />
+      <item itemvalue="HTTP Request.kline | #2" />
+      <item itemvalue="HTTP Request.refresh | #6" />
+      <item itemvalue="PHP Script.xdebug trading" />
+      <item itemvalue="Shell Script.RESOLVUSDT sync" />
+      <item itemvalue="Shell Script.SOLUSDT sync" />
+      <item itemvalue="Shell Script.worker" />
+    </list>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Docker.docker-compose.yml.bitmart-positions-forwarder: Compose Deployment" />
+        <item itemvalue="HTTP Request.eval | GET request to example server" />
+        <item itemvalue="HTTP Request.All in rest-api_1" />
+        <item itemvalue="HTTP Request.kline | #2" />
+        <item itemvalue="HTTP Request.bitmart | #2" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-f27c65a3e318-JavaScript-PS-251.23774.466" />
+        <option value="bundled-php-predefined-a98d8de5180a-aaeaa8632555-com.jetbrains.php.sharedIndexes-PS-251.23774.466" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="ShelveChangesManager">
+    <option name="groupingKeys">
+      <option value="directory" />
+    </option>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="73604acf-3471-46f2-a1fd-fdf73ef42078" name="Changes" comment="" />
+      <changelist id="0ec51621-5bf1-43ac-acaa-64de0476dee0" name="todo" comment="" />
+      <created>1751109859615</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1751109859615</updated>
+      <workItem from="1751109860644" duration="2313000" />
+      <workItem from="1751112906025" duration="17110000" />
+      <workItem from="1751277373393" duration="14480000" />
+      <workItem from="1751352452292" duration="3612000" />
+      <workItem from="1751437943854" duration="1839000" />
+      <workItem from="1751486676352" duration="2753000" />
+      <workItem from="1751490476768" duration="10453000" />
+      <workItem from="1751545983484" duration="599000" />
+      <workItem from="1751554099000" duration="7054000" />
+      <workItem from="1751658476182" duration="4324000" />
+      <workItem from="1751721877496" duration="19991000" />
+      <workItem from="1751960339094" duration="1210000" />
+      <workItem from="1752014064642" duration="4511000" />
+      <workItem from="1752052413913" duration="11000" />
+      <workItem from="1752053233618" duration="6000" />
+      <workItem from="1752094908902" duration="5215000" />
+      <workItem from="1752146292585" duration="3969000" />
+      <workItem from="1752166349952" duration="13891000" />
+      <workItem from="1752217884303" duration="1140000" />
+      <workItem from="1753044042048" duration="134000" />
+      <workItem from="1753044280683" duration="1914000" />
+      <workItem from="1753088474887" duration="504000" />
+      <workItem from="1753097681822" duration="1986000" />
+      <workItem from="1753120360677" duration="3205000" />
+      <workItem from="1753169487819" duration="1359000" />
+      <workItem from="1753172160646" duration="373000" />
+      <workItem from="1753175258013" duration="728000" />
+      <workItem from="1753180612604" duration="228000" />
+      <workItem from="1753254583244" duration="449000" />
+      <workItem from="1753255240686" duration="446000" />
+      <workItem from="1753268418279" duration="1571000" />
+      <workItem from="1753790804190" duration="610000" />
+      <workItem from="1755157591366" duration="43617000" />
+      <workItem from="1756333875237" duration="2939000" />
+      <workItem from="1756462442709" duration="21744000" />
+      <workItem from="1756554063053" duration="18273000" />
+      <workItem from="1756740964981" duration="8026000" />
+      <workItem from="1756901342287" duration="15728000" />
+      <workItem from="1757061281265" duration="569000" />
+      <workItem from="1757071322466" duration="4666000" />
+      <workItem from="1757148418158" duration="32929000" />
+      <workItem from="1757320210869" duration="1082000" />
+      <workItem from="1757322740102" duration="500000" />
+      <workItem from="1757531902382" duration="1860000" />
+      <workItem from="1757535755889" duration="580000" />
+      <workItem from="1758375140886" duration="25392000" />
+      <workItem from="1758530925583" duration="15505000" />
+      <workItem from="1758564090030" duration="3914000" />
+      <workItem from="1758616488716" duration="6537000" />
+      <workItem from="1758628748795" duration="11363000" />
+      <workItem from="1758651360248" duration="26861000" />
+      <workItem from="1758725437380" duration="2327000" />
+      <workItem from="1758733823508" duration="1810000" />
+      <workItem from="1758738519667" duration="13460000" />
+      <workItem from="1758784709405" duration="689000" />
+      <workItem from="1758785445599" duration="8000" />
+      <workItem from="1758787180807" duration="22000" />
+      <workItem from="1758787794766" duration="1214000" />
+      <workItem from="1758790494393" duration="123000" />
+      <workItem from="1758793673509" duration="893000" />
+      <workItem from="1758794966129" duration="5674000" />
+      <workItem from="1758806368183" duration="1668000" />
+      <workItem from="1758808070309" duration="93000" />
+      <workItem from="1758808520406" duration="393000" />
+      <workItem from="1758809406287" duration="662000" />
+      <workItem from="1758814095231" duration="916000" />
+      <workItem from="1758832094442" duration="31850000" />
+      <workItem from="1758898721953" duration="14842000" />
+      <workItem from="1758954410153" duration="3765000" />
+      <workItem from="1758998169512" duration="340000" />
+      <workItem from="1759010389025" duration="36644000" />
+      <workItem from="1759135120889" duration="243000" />
+      <workItem from="1759137942741" duration="3867000" />
+      <workItem from="1759148307139" duration="99000" />
+      <workItem from="1759151141558" duration="901000" />
+      <workItem from="1759152626736" duration="86000" />
+      <workItem from="1759156837608" duration="15798000" />
+      <workItem from="1759214289808" duration="18000" />
+      <workItem from="1759214831256" duration="786000" />
+      <workItem from="1759216445266" duration="115000" />
+      <workItem from="1759216572219" duration="118000" />
+      <workItem from="1759216918433" duration="272000" />
+      <workItem from="1759217209534" duration="18000" />
+      <workItem from="1759222800443" duration="20000" />
+      <workItem from="1759223649896" duration="32000" />
+      <workItem from="1759224530901" duration="48000" />
+      <workItem from="1759227881580" duration="4545000" />
+      <workItem from="1759236662009" duration="316000" />
+      <workItem from="1759237103980" duration="593000" />
+      <workItem from="1759255019765" duration="24631000" />
+      <workItem from="1759315604786" duration="22000" />
+      <workItem from="1759319207983" duration="19000" />
+      <workItem from="1759321357119" duration="30172000" />
+      <workItem from="1759387487469" duration="3456000" />
+      <workItem from="1759399014863" duration="3898000" />
+      <workItem from="1759405263269" duration="22777000" />
+      <workItem from="1759478704286" duration="148000" />
+      <workItem from="1759479272263" duration="5270000" />
+      <workItem from="1759491820924" duration="702000" />
+      <workItem from="1759493210727" duration="38000" />
+      <workItem from="1759497655304" duration="15000" />
+      <workItem from="1759499861805" duration="27000" />
+      <workItem from="1759504723244" duration="4000" />
+      <workItem from="1759526070498" duration="11855000" />
+      <workItem from="1759569453842" duration="19119000" />
+      <workItem from="1759596833295" duration="4000" />
+      <workItem from="1759596849254" duration="27940000" />
+      <workItem from="1759686580391" duration="12628000" />
+      <workItem from="1759734866238" duration="22000" />
+      <workItem from="1759734962791" duration="217000" />
+      <workItem from="1759740792400" duration="119000" />
+      <workItem from="1759746466787" duration="3408000" />
+      <workItem from="1759781203682" duration="13117000" />
+      <workItem from="1759820191836" duration="23000" />
+      <workItem from="1759821136249" duration="327000" />
+      <workItem from="1759821862390" duration="144000" />
+      <workItem from="1759822096727" duration="100000" />
+      <workItem from="1759822988748" duration="23000" />
+      <workItem from="1759823073880" duration="741000" />
+      <workItem from="1759823950858" duration="7000" />
+      <workItem from="1759826553437" duration="2000" />
+      <workItem from="1759834389805" duration="26414000" />
+      <workItem from="1759907580089" duration="6000" />
+      <workItem from="1759917060729" duration="21821000" />
+      <workItem from="1759954123954" duration="7000" />
+      <workItem from="1759954431376" duration="18000" />
+      <workItem from="1759956102265" duration="1430000" />
+      <workItem from="1759993850161" duration="95000" />
+      <workItem from="1760004836386" duration="132000" />
+      <workItem from="1760007433628" duration="7049000" />
+      <workItem from="1760021329168" duration="2799000" />
+      <workItem from="1760029520699" duration="11946000" />
+      <workItem from="1760047210220" duration="2822000" />
+      <workItem from="1760079925300" duration="594000" />
+      <workItem from="1760087645137" duration="755000" />
+      <workItem from="1760100015303" duration="3977000" />
+      <workItem from="1760110504769" duration="1405000" />
+      <workItem from="1760127191795" duration="334000" />
+      <workItem from="1760127805859" duration="10649000" />
+      <workItem from="1760139343872" duration="27000" />
+      <workItem from="1760139387105" duration="2136000" />
+      <workItem from="1760142905411" duration="28000" />
+      <workItem from="1760143451834" duration="92000" />
+      <workItem from="1760166023597" duration="4894000" />
+      <workItem from="1760180454684" duration="11992000" />
+      <workItem from="1760208833462" duration="5483000" />
+      <workItem from="1760216019038" duration="21835000" />
+      <workItem from="1760259326407" duration="8301000" />
+      <workItem from="1760285133172" duration="405000" />
+      <workItem from="1760296313839" duration="29190000" />
+      <workItem from="1760351834914" duration="2438000" />
+      <workItem from="1760380856740" duration="117000" />
+      <workItem from="1760381705378" duration="246000" />
+      <workItem from="1760428930709" duration="67000" />
+      <workItem from="1760430018552" duration="71000" />
+      <workItem from="1760441101669" duration="1635000" />
+    </task>
+    <task id="LOCAL-00050" summary="positions dans bitmart =&gt; nettyage">
+      <option name="closed" value="true" />
+      <created>1759135318025</created>
+      <option name="number" value="00050" />
+      <option name="presentableId" value="LOCAL-00050" />
+      <option name="project" value="LOCAL" />
+      <updated>1759135318025</updated>
+    </task>
+    <task id="LOCAL-00051" summary="RefreshOpenedLockedController.php">
+      <option name="closed" value="true" />
+      <created>1759152008587</created>
+      <option name="number" value="00051" />
+      <option name="presentableId" value="LOCAL-00051" />
+      <option name="project" value="LOCAL" />
+      <updated>1759152008588</updated>
+    </task>
+    <task id="LOCAL-00052" summary="KlinesCallbackController.php">
+      <option name="closed" value="true" />
+      <created>1759152043606</created>
+      <option name="number" value="00052" />
+      <option name="presentableId" value="LOCAL-00052" />
+      <option name="project" value="LOCAL" />
+      <updated>1759152043607</updated>
+    </task>
+    <task id="LOCAL-00053" summary="MonitorContractPipelineCommand.php">
+      <option name="closed" value="true" />
+      <created>1759263234482</created>
+      <option name="number" value="00053" />
+      <option name="presentableId" value="LOCAL-00053" />
+      <option name="project" value="LOCAL" />
+      <updated>1759263234482</updated>
+    </task>
+    <task id="LOCAL-00054" summary="ouvrir des positions après avoir fait MTF">
+      <option name="closed" value="true" />
+      <created>1759263300575</created>
+      <option name="number" value="00054" />
+      <option name="presentableId" value="LOCAL-00054" />
+      <option name="project" value="LOCAL" />
+      <updated>1759263300575</updated>
+    </task>
+    <task id="LOCAL-00055" summary="ouvrir des positions après avoir fait MTF">
+      <option name="closed" value="true" />
+      <created>1759263327970</created>
+      <option name="number" value="00055" />
+      <option name="presentableId" value="LOCAL-00055" />
+      <option name="project" value="LOCAL" />
+      <updated>1759263327970</updated>
+    </task>
+    <task id="LOCAL-00056" summary="test open position">
+      <option name="closed" value="true" />
+      <created>1759263345002</created>
+      <option name="number" value="00056" />
+      <option name="presentableId" value="LOCAL-00056" />
+      <option name="project" value="LOCAL" />
+      <updated>1759263345002</updated>
+    </task>
+    <task id="LOCAL-00057" summary=" KlinesByTimeframeGetController.php">
+      <option name="closed" value="true" />
+      <created>1759263365506</created>
+      <option name="number" value="00057" />
+      <option name="presentableId" value="LOCAL-00057" />
+      <option name="project" value="LOCAL" />
+      <updated>1759263365506</updated>
+    </task>
+    <task id="LOCAL-00058" summary="Regrouper bitmart Public method dans un seul endroit">
+      <option name="closed" value="true" />
+      <created>1759269532485</created>
+      <option name="number" value="00058" />
+      <option name="presentableId" value="LOCAL-00058" />
+      <option name="project" value="LOCAL" />
+      <updated>1759269532485</updated>
+    </task>
+    <task id="LOCAL-00059" summary="frontend v0">
+      <option name="closed" value="true" />
+      <created>1759399245557</created>
+      <option name="number" value="00059" />
+      <option name="presentableId" value="LOCAL-00059" />
+      <option name="project" value="LOCAL" />
+      <updated>1759399245558</updated>
+    </task>
+    <task id="LOCAL-00060" summary="ajout global-serverity log file pour regrouper les erreurs">
+      <option name="closed" value="true" />
+      <created>1759399295689</created>
+      <option name="number" value="00060" />
+      <option name="presentableId" value="LOCAL-00060" />
+      <option name="project" value="LOCAL" />
+      <updated>1759399295689</updated>
+    </task>
+    <task id="LOCAL-00061" summary="Refactoriser les appels bitmart, utliser 5m klines pour les atr au lieu de 15m, &#10;ajouter des commandes de tests">
+      <option name="closed" value="true" />
+      <created>1759399434682</created>
+      <option name="number" value="00061" />
+      <option name="presentableId" value="LOCAL-00061" />
+      <option name="project" value="LOCAL" />
+      <updated>1759399434682</updated>
+    </task>
+    <task id="LOCAL-00062" summary="Trading configuration + position in the front">
+      <option name="closed" value="true" />
+      <created>1759437683189</created>
+      <option name="number" value="00062" />
+      <option name="presentableId" value="LOCAL-00062" />
+      <option name="project" value="LOCAL" />
+      <updated>1759437683189</updated>
+    </task>
+    <task id="LOCAL-00063" summary="python container pour les websockets">
+      <option name="closed" value="true" />
+      <created>1759437702356</created>
+      <option name="number" value="00063" />
+      <option name="presentableId" value="LOCAL-00063" />
+      <option name="project" value="LOCAL" />
+      <updated>1759437702356</updated>
+    </task>
+    <task id="LOCAL-00064" summary="hightconviction macro">
+      <option name="closed" value="true" />
+      <created>1759437721321</created>
+      <option name="number" value="00064" />
+      <option name="presentableId" value="LOCAL-00064" />
+      <option name="project" value="LOCAL" />
+      <updated>1759437721321</updated>
+    </task>
+    <task id="LOCAL-00065" summary="migrations">
+      <option name="closed" value="true" />
+      <created>1759437738725</created>
+      <option name="number" value="00065" />
+      <option name="presentableId" value="LOCAL-00065" />
+      <option name="project" value="LOCAL" />
+      <updated>1759437738725</updated>
+    </task>
+    <task id="LOCAL-00066" summary="en vrac">
+      <option name="closed" value="true" />
+      <created>1759437765603</created>
+      <option name="number" value="00066" />
+      <option name="presentableId" value="LOCAL-00066" />
+      <option name="project" value="LOCAL" />
+      <updated>1759437765603</updated>
+    </task>
+    <task id="LOCAL-00067" summary="fix bug _em">
+      <option name="closed" value="true" />
+      <created>1759439523009</created>
+      <option name="number" value="00067" />
+      <option name="presentableId" value="LOCAL-00067" />
+      <option name="project" value="LOCAL" />
+      <updated>1759439523009</updated>
+    </task>
+    <task id="LOCAL-00068" summary="Ajouter des logs et ne pas afficher les closed">
+      <option name="closed" value="true" />
+      <created>1759439544156</created>
+      <option name="number" value="00068" />
+      <option name="presentableId" value="LOCAL-00068" />
+      <option name="project" value="LOCAL" />
+      <updated>1759439544156</updated>
+    </task>
+    <task id="LOCAL-00069" summary="reset contractPipeline a 15m (voir après comment récuérer les klines et affecter le dernier)">
+      <option name="closed" value="true" />
+      <created>1759479342995</created>
+      <option name="number" value="00069" />
+      <option name="presentableId" value="LOCAL-00069" />
+      <option name="project" value="LOCAL" />
+      <updated>1759479342995</updated>
+    </task>
+    <task id="LOCAL-00070" summary="is leverage &lt; 20% maximum alors j'ignore pas la peine de placer un ordre">
+      <option name="closed" value="true" />
+      <created>1759526570191</created>
+      <option name="number" value="00070" />
+      <option name="presentableId" value="LOCAL-00070" />
+      <option name="project" value="LOCAL" />
+      <updated>1759526570191</updated>
+    </task>
+    <task id="LOCAL-00071" summary="filtrer les contrats de plus en plus">
+      <option name="closed" value="true" />
+      <created>1759594442771</created>
+      <option name="number" value="00071" />
+      <option name="presentableId" value="LOCAL-00071" />
+      <option name="project" value="LOCAL" />
+      <updated>1759594442771</updated>
+    </task>
+    <task id="LOCAL-00072" summary="filtrer les contrats: ajouter blacklist symbol">
+      <option name="closed" value="true" />
+      <created>1759614004639</created>
+      <option name="number" value="00072" />
+      <option name="presentableId" value="LOCAL-00072" />
+      <option name="project" value="LOCAL" />
+      <updated>1759614004639</updated>
+    </task>
+    <task id="LOCAL-00073" summary="filtrer les contrats: ajouter blacklist symbol">
+      <option name="closed" value="true" />
+      <created>1759614096253</created>
+      <option name="number" value="00073" />
+      <option name="presentableId" value="LOCAL-00073" />
+      <option name="project" value="LOCAL" />
+      <updated>1759614096253</updated>
+    </task>
+    <task id="LOCAL-00074" summary="filtrer les contrats: ajouter blacklist symbol">
+      <option name="closed" value="true" />
+      <created>1759614099422</created>
+      <option name="number" value="00074" />
+      <option name="presentableId" value="LOCAL-00074" />
+      <option name="project" value="LOCAL" />
+      <updated>1759614099422</updated>
+    </task>
+    <task id="LOCAL-00075" summary="BachRun first try">
+      <option name="closed" value="true" />
+      <created>1759617271866</created>
+      <option name="number" value="00075" />
+      <option name="presentableId" value="LOCAL-00075" />
+      <option name="project" value="LOCAL" />
+      <updated>1759617271866</updated>
+    </task>
+    <task id="LOCAL-00076" summary="BlacklistService.php">
+      <option name="closed" value="true" />
+      <created>1759617328087</created>
+      <option name="number" value="00076" />
+      <option name="presentableId" value="LOCAL-00076" />
+      <option name="project" value="LOCAL" />
+      <updated>1759617328087</updated>
+    </task>
+    <task id="LOCAL-00077" summary="suite bachrun">
+      <option name="closed" value="true" />
+      <created>1759617353875</created>
+      <option name="number" value="00077" />
+      <option name="presentableId" value="LOCAL-00077" />
+      <option name="project" value="LOCAL" />
+      <updated>1759617353875</updated>
+    </task>
+    <task id="LOCAL-00078" summary="migrations: c'est compliqué ça contient blacklist, bachrun et orders">
+      <option name="closed" value="true" />
+      <created>1759617556011</created>
+      <option name="number" value="00078" />
+      <option name="presentableId" value="LOCAL-00078" />
+      <option name="project" value="LOCAL" />
+      <updated>1759617556011</updated>
+    </task>
+    <task id="LOCAL-00079" summary="bachrun context">
+      <option name="closed" value="true" />
+      <created>1759617578524</created>
+      <option name="number" value="00079" />
+      <option name="presentableId" value="LOCAL-00079" />
+      <option name="project" value="LOCAL" />
+      <updated>1759617578524</updated>
+    </task>
+    <task id="LOCAL-00080" summary="changer la limite de volume24h">
+      <option name="closed" value="true" />
+      <created>1759619432779</created>
+      <option name="number" value="00080" />
+      <option name="presentableId" value="LOCAL-00080" />
+      <option name="project" value="LOCAL" />
+      <updated>1759619432779</updated>
+    </task>
+    <task id="LOCAL-00081" summary="Adapter encore la récuépration des contrats">
+      <option name="closed" value="true" />
+      <created>1759653445420</created>
+      <option name="number" value="00081" />
+      <option name="presentableId" value="LOCAL-00081" />
+      <option name="project" value="LOCAL" />
+      <updated>1759653445421</updated>
+    </task>
+    <task id="LOCAL-00082" summary="UserConfig">
+      <option name="closed" value="true" />
+      <created>1759656774677</created>
+      <option name="number" value="00082" />
+      <option name="presentableId" value="LOCAL-00082" />
+      <option name="project" value="LOCAL" />
+      <updated>1759656774677</updated>
+    </task>
+    <task id="LOCAL-00083" summary="HIGH CONVICTION fix">
+      <option name="closed" value="true" />
+      <created>1759656808003</created>
+      <option name="number" value="00083" />
+      <option name="presentableId" value="LOCAL-00083" />
+      <option name="project" value="LOCAL" />
+      <updated>1759656808003</updated>
+    </task>
+    <task id="LOCAL-00084" summary="lock">
+      <option name="closed" value="true" />
+      <created>1759656830077</created>
+      <option name="number" value="00084" />
+      <option name="presentableId" value="LOCAL-00084" />
+      <option name="project" value="LOCAL" />
+      <updated>1759656830077</updated>
+    </task>
+    <task id="LOCAL-00085" summary="4h cron get all even those in contrat_pipeline">
+      <option name="closed" value="true" />
+      <created>1759686775700</created>
+      <option name="number" value="00085" />
+      <option name="presentableId" value="LOCAL-00085" />
+      <option name="project" value="LOCAL" />
+      <updated>1759686775700</updated>
+    </task>
+    <task id="LOCAL-00086" summary="pour le cron, on regarde les tf parents s'ils sont ancien ou pas, &#10;pour le trade si 15m, 5m ou 1m est valide et current tf est 1m alors on ouvre position">
+      <option name="closed" value="true" />
+      <created>1759783443774</created>
+      <option name="number" value="00086" />
+      <option name="presentableId" value="LOCAL-00086" />
+      <option name="project" value="LOCAL" />
+      <updated>1759783443774</updated>
+    </task>
+    <task id="LOCAL-00087" summary="corriger docker compose temporal container">
+      <option name="closed" value="true" />
+      <created>1759928726232</created>
+      <option name="number" value="00087" />
+      <option name="presentableId" value="LOCAL-00087" />
+      <option name="project" value="LOCAL" />
+      <updated>1759928726232</updated>
+    </task>
+    <task id="LOCAL-00088" summary="command get assets">
+      <option name="closed" value="true" />
+      <created>1759928771995</created>
+      <option name="number" value="00088" />
+      <option name="presentableId" value="LOCAL-00088" />
+      <option name="project" value="LOCAL" />
+      <updated>1759928771995</updated>
+    </task>
+    <task id="LOCAL-00089" summary="envoie des refresh en cascade">
+      <option name="closed" value="true" />
+      <created>1759928854028</created>
+      <option name="number" value="00089" />
+      <option name="presentableId" value="LOCAL-00089" />
+      <option name="project" value="LOCAL" />
+      <updated>1759928854028</updated>
+    </task>
+    <task id="LOCAL-00090" summary="Ajout des conditions de validation">
+      <option name="closed" value="true" />
+      <created>1759928906712</created>
+      <option name="number" value="00090" />
+      <option name="presentableId" value="LOCAL-00090" />
+      <option name="project" value="LOCAL" />
+      <updated>1759928906712</updated>
+    </task>
+    <task id="LOCAL-00091" summary="assets">
+      <option name="closed" value="true" />
+      <created>1759928914235</created>
+      <option name="number" value="00091" />
+      <option name="presentableId" value="LOCAL-00091" />
+      <option name="project" value="LOCAL" />
+      <updated>1759928914235</updated>
+    </task>
+    <task id="LOCAL-00092" summary="envoie des refresh">
+      <option name="closed" value="true" />
+      <created>1759928931902</created>
+      <option name="number" value="00092" />
+      <option name="presentableId" value="LOCAL-00092" />
+      <option name="project" value="LOCAL" />
+      <updated>1759928931903</updated>
+    </task>
+    <task id="LOCAL-00093" summary="trading">
+      <option name="closed" value="true" />
+      <created>1759928939108</created>
+      <option name="number" value="00093" />
+      <option name="presentableId" value="LOCAL-00093" />
+      <option name="project" value="LOCAL" />
+      <updated>1759928939108</updated>
+    </task>
+    <task id="LOCAL-00094" summary="migrations pour pipeline">
+      <option name="closed" value="true" />
+      <created>1759931854848</created>
+      <option name="number" value="00094" />
+      <option name="presentableId" value="LOCAL-00094" />
+      <option name="project" value="LOCAL" />
+      <updated>1759931854848</updated>
+    </task>
+    <task id="LOCAL-00095" summary="remove bachrun">
+      <option name="closed" value="true" />
+      <created>1759931950711</created>
+      <option name="number" value="00095" />
+      <option name="presentableId" value="LOCAL-00095" />
+      <option name="project" value="LOCAL" />
+      <updated>1759931950711</updated>
+    </task>
+    <task id="LOCAL-00096" summary="remove bachrun">
+      <option name="closed" value="true" />
+      <created>1759931975017</created>
+      <option name="number" value="00096" />
+      <option name="presentableId" value="LOCAL-00096" />
+      <option name="project" value="LOCAL" />
+      <updated>1759931975017</updated>
+    </task>
+    <task id="LOCAL-00097" summary="trading logic">
+      <option name="closed" value="true" />
+      <created>1759931985846</created>
+      <option name="number" value="00097" />
+      <option name="presentableId" value="LOCAL-00097" />
+      <option name="project" value="LOCAL" />
+      <updated>1759931985846</updated>
+    </task>
+    <task id="LOCAL-00098" summary="OpenedLockedSyncService conf">
+      <option name="closed" value="true" />
+      <created>1759932292760</created>
+      <option name="number" value="00098" />
+      <option name="presentableId" value="LOCAL-00098" />
+      <option name="project" value="LOCAL" />
+      <updated>1759932292760</updated>
+    </task>
+    <option name="localTasksCounter" value="99" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="OPEN_GENERIC_TABS">
+      <map>
+        <entry key="348ade0f-81c4-4d8a-bdfe-70dd7d2e2580" value="TOOL_WINDOW" />
+      </map>
+    </option>
+    <option name="TAB_STATES">
+      <map>
+        <entry key="348ade0f-81c4-4d8a-bdfe-70dd7d2e2580">
+          <value>
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="HEAD" />
+                      </list>
+                    </value>
+                  </entry>
+                  <entry key="structure">
+                    <value>
+                      <list>
+                        <option value="dir:/Users/haythem.mabrouk/workspace/perso/tradingV3/api_rate_limiter" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+              <option name="SHOW_ONLY_AFFECTED_CHANGES" value="true" />
+            </State>
+          </value>
+        </entry>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <option name="CHECK_CODE_SMELLS_BEFORE_PROJECT_COMMIT" value="false" />
+    <option name="CHECK_NEW_TODO" value="false" />
+    <MESSAGE value="filtrer les contrats: ajouter blacklist symbol" />
+    <MESSAGE value="BlacklistService.php" />
+    <MESSAGE value="suite bachrun" />
+    <MESSAGE value="BachRun first try" />
+    <MESSAGE value="migrations: c'est compliqué ça contient blacklist, bachrun et orders" />
+    <MESSAGE value="bachrun context" />
+    <MESSAGE value="Filtrer les contrats: ajouter blacklist symbol" />
+    <MESSAGE value="changer la limite de volume24h" />
+    <MESSAGE value="Adapter encore la récuépration des contrats" />
+    <MESSAGE value="UserConfig" />
+    <MESSAGE value="HIGH CONVICTION fix" />
+    <MESSAGE value="lock" />
+    <MESSAGE value="4h cron get all even those in contrat_pipeline" />
+    <MESSAGE value="pour le cron, on regarde les tf parents s'ils sont ancien ou pas, &#10;pour le trade si 15m, 5m ou 1m est valide et current tf est 1m alors on ouvre position" />
+    <MESSAGE value="corriger docker compose temporal container" />
+    <MESSAGE value="command get assets" />
+    <MESSAGE value="envoie des refresh en cascade" />
+    <MESSAGE value="Ajout des conditions de validation" />
+    <MESSAGE value="assets" />
+    <MESSAGE value="envoie des refresh" />
+    <MESSAGE value="trading" />
+    <MESSAGE value="migrations pour pipeline" />
+    <MESSAGE value="remove bachrun" />
+    <MESSAGE value="trading logic" />
+    <MESSAGE value="OpenedLockedSyncService conf" />
+    <option name="LAST_COMMIT_MESSAGE" value="OpenedLockedSyncService conf" />
+    <option name="NON_MODAL_COMMIT_POSTPONE_SLOW_CHECKS" value="false" />
+  </component>
+  <component name="XSLT-Support.FileAssociations.UIState">
+    <expand />
+    <select />
+  </component>
+</project>

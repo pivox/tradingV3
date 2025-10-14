@@ -46,10 +46,10 @@ limits_config:
   max_streams_per_user: 0
   # Rétention des logs (30 jours)
   retention_period: 720h
-  # Taille maximale des chunks (5 MB)
-  max_chunk_size: 5242880
   # Taille maximale des entrées par chunk (250000)
   max_entries_limit_per_query: 250000
+  # Désactiver les métadonnées structurées pour éviter les erreurs
+  allow_structured_metadata: false
 
 # Configuration pour les performances
 ingester:
@@ -61,21 +61,14 @@ ingester:
   chunk_idle_period: 3m
   # Période de rétention des chunks (1 minute)
   chunk_retain_period: 1m
-  # Nombre maximum de tentatives de transfert
-  max_transfer_retries: 0
-  # Taille maximale des chunks (5 MB)
-  max_chunk_size: 5242880
   # Période de flush (1 heure)
   chunk_target_size: 1048576
-  # Nombre maximum de chunks en attente
-  max_chunks_per_query: 2000000
 
 # Configuration du stockage
 storage_config:
   boltdb_shipper:
     active_index_directory: /tmp/loki/index
     cache_location: /tmp/loki/cache
-    shared_store: filesystem
   filesystem:
     directory: /tmp/loki/chunks
 
@@ -89,8 +82,8 @@ frontend:
 # Configuration des compressions
 compactor:
   working_directory: /tmp/loki/compactor
-  shared_store: filesystem
   compaction_interval: 10m
   retention_enabled: true
   retention_delete_delay: 2h
   retention_delete_worker_count: 150
+  delete_request_store: filesystem

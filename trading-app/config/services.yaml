@@ -40,7 +40,7 @@ services:
             $klineRepository: '@App\Repository\KlineRepository'
             $rateLimiter: '@App\Infrastructure\RateLimiter\TokenBucketRateLimiter'
             $timeService: '@App\Domain\Mtf\Service\MtfTimeService'
-            $logger: '@monolog.logger.mtf'
+            $logger: '@logger'
             $clock: '@Psr\Clock\ClockInterface'
         public: true
 
@@ -51,8 +51,9 @@ services:
             $mtfStateRepository: '@App\Repository\MtfStateRepository'
             $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
             $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
+            $contractRepository: '@App\Repository\ContractRepository'
             $signalValidationService: '@App\Signal\SignalValidationService'
-            $logger: '@monolog.logger.mtf'
+            $logger: '@logger'
             $mtfConfig: '@App\Config\MtfConfigProviderInterface'
             $klineProvider: '@App\Infrastructure\Http\BitmartRestClient'
             $entityManager: '@doctrine.orm.entity_manager'
@@ -67,7 +68,7 @@ services:
             $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
             $mtfLockRepository: '@App\Repository\MtfLockRepository'
             $contractRepository: '@App\Repository\ContractRepository'
-            $logger: '@monolog.logger.mtf'
+            $logger: '@logger'
             $clock: '@Psr\Clock\ClockInterface'
             $tradingDecisionService: '@App\Domain\Trading\Service\TradingDecisionService'
             $tradeContext: '@App\Domain\Trading\Service\TradeContextService'
@@ -109,7 +110,7 @@ services:
             $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
             $mtfLockRepository: '@App\Repository\MtfLockRepository'
             $orderPlanRepository: '@App\Repository\OrderPlanRepository'
-            $logger: '@monolog.logger.mtf'
+            $logger: '@logger'
             $mtfRunService: '@App\Domain\Mtf\Service\MtfRunService'
             $clock: '@Psr\Clock\ClockInterface'
         public: true

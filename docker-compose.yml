@@ -332,7 +332,7 @@ services:
     image: grafana/grafana:10.4.0
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -370,6 +370,38 @@ services:
       <<: *global-env
       DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
       DEFAULT_URI: ${DEFAULT_URI:-http://localhost:8082}
+      # MTF Configuration
+      MTF_LOG_LEVEL: info
+      MTF_LOG_CHANNEL: mtf
+      MTF_RATE_LIMIT_CAPACITY: 6
+      MTF_RATE_LIMIT_REFILL_RATE: 6
+      MTF_RATE_LIMIT_REFILL_INTERVAL: 1000
+      MTF_GRACE_WINDOW_MINUTES: 4
+      MTF_MAX_CANDLES_PER_REQUEST: 500
+      MTF_MAX_RETRIES: 3
+      # Database Configuration
+      MTF_DB_HOST: trading-app-db
+      MTF_DB_PORT: 5432
+      MTF_DB_NAME: trading_app
+      MTF_DB_USER: postgres
+      MTF_DB_PASSWORD: password
+      # Cache Configuration
+      MTF_CACHE_TTL_DEFAULT: 3600
+      MTF_CACHE_TTL_VALIDATION: 1800
+      # Security Configuration
+      MTF_MAX_CLOCK_DRIFT_SECONDS: 3
+      MTF_SIGNATURE_TIMEOUT_SECONDS: 30
+      # Monitoring Configuration
+      MTF_METRICS_ENABLED: true
+      MTF_HEALTH_CHECK_INTERVAL: 60
+      # Multi-Channel Logging Configuration
+      LOG_LEVEL_VALIDATION: info
+      LOG_LEVEL_SIGNALS: info
+      LOG_LEVEL_POSITIONS: info
+      LOG_LEVEL_INDICATORS: info
+      LOG_LEVEL_HIGHCONVICTION: info
+      LOG_LEVEL_PIPELINE_EXEC: info
+      LOG_LEVEL_MAIN: info
     depends_on:
       trading-app-db:
         condition: service_healthy
@@ -437,7 +469,6 @@ services:
       MTF_RATE_LIMIT_CAPACITY: 6
       MTF_RATE_LIMIT_REFILL_RATE: 6
       MTF_RATE_LIMIT_REFILL_INTERVAL: 1000
-      MTF_SYMBOLS_TO_WATCH: BTCUSDT,ETHUSDT,ADAUSDT,SOLUSDT,DOTUSDT
       MTF_GRACE_WINDOW_MINUTES: 4
       MTF_MAX_CANDLES_PER_REQUEST: 500
       MTF_MAX_RETRIES: 3
