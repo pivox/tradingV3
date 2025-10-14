@@ -1,0 +1,78 @@
+# Configuration des services pour le système de switch PHP/SQL des indicateurs
+
+services:
+    # Service de gestion du mode de calcul
+    App\Service\Indicator\IndicatorCalculationModeService:
+        arguments:
+            $configService: '@App\Service\TradingConfigService'
+            $logger: '@logger'
+
+    # Service SQL pour les indicateurs
+    App\Service\Indicator\SqlIndicatorService:
+        arguments:
+            $entityManager: '@doctrine.orm.entity_manager'
+            $logger: '@logger'
+
+    # Service PHP pour les indicateurs
+    App\Service\Indicator\PhpIndicatorService:
+        arguments:
+            $emaService: '@App\Indicator\Trend\Ema'
+            $macdService: '@App\Indicator\Momentum\Macd'
+            $rsiService: '@App\Indicator\Momentum\Rsi'
+            $vwapService: '@App\Indicator\Volume\Vwap'
+            $logger: '@logger'
+
+    # Service hybride qui combine PHP et SQL
+    App\Service\Indicator\HybridIndicatorService:
+        arguments:
+            $modeService: '@App\Service\Indicator\IndicatorCalculationModeService'
+            $sqlService: '@App\Service\Indicator\SqlIndicatorService'
+            $phpService: '@App\Service\Indicator\PhpIndicatorService'
+            $logger: '@logger'
+
+    # Alias pour faciliter l'injection
+    indicator_calculation_mode_service: '@App\Service\Indicator\IndicatorCalculationModeService'
+    sql_indicator_service: '@App\Service\Indicator\SqlIndicatorService'
+    php_indicator_service: '@App\Service\Indicator\PhpIndicatorService'
+    hybrid_indicator_service: '@App\Service\Indicator\HybridIndicatorService'
+
+    # Alias principal pour l'interface IndicatorProviderPort
+    App\Domain\Ports\Out\IndicatorProviderPort: '@App\Service\Indicator\HybridIndicatorService'
+
+    # Configuration des contrôleurs d'administration
+    App\Controller\Admin\IndicatorCalculationController:
+        arguments:
+            $modeService: '@App\Service\Indicator\IndicatorCalculationModeService'
+            $sqlService: '@App\Service\Indicator\SqlIndicatorService'
+        tags: ['controller.service_arguments']
+
+    # Configuration des services d'indicateurs existants
+    App\Indicator\Trend\Ema:
+        tags: ['indicator.calculator']
+
+    App\Indicator\Momentum\Rsi:
+        tags: ['indicator.calculator']
+
+    App\Indicator\Momentum\Macd:
+        tags: ['indicator.calculator']
+
+    App\Indicator\Volume\Vwap:
+        tags: ['indicator.calculator']
+
+    App\Indicator\Volatility\BollingerBands:
+        tags: ['indicator.calculator']
+
+    App\Indicator\Momentum\StochRsi:
+        tags: ['indicator.calculator']
+
+    App\Indicator\Trend\Adx:
+        tags: ['indicator.calculator']
+
+    App\Indicator\Trend\Ichimoku:
+        tags: ['indicator.calculator']
+
+    App\Indicator\Volume\Obv:
+        tags: ['indicator.calculator']
+
+    App\Indicator\Volatility\DonchianChannels:
+        tags: ['indicator.calculator']
