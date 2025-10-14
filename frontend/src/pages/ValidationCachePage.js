@@ -7,9 +7,9 @@ const ValidationCachePage = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [filters, setFilters] = useState({
+        key: '',
         symbol: '',
         timeframe: '',
-        cacheKey: '',
         dateFrom: '',
         dateTo: ''
     });
@@ -85,9 +85,9 @@ const ValidationCachePage = () => {
 
     const clearFilters = () => {
         setFilters({
+            key: '',
             symbol: '',
             timeframe: '',
-            cacheKey: '',
             dateFrom: '',
             dateTo: ''
         });
@@ -137,7 +137,8 @@ const ValidationCachePage = () => {
     return (
         <div className="validation-cache-page">
             <div className="page-header">
-                <h1>Cache de Validation</h1>
+                <h1>Validation Cache (Diagnostic)</h1>
+                <p className="page-subtitle">Inspecter la validation_cache pour comprendre les décisions mises en cache</p>
                 <div className="page-actions">
                     <button 
                         className="btn btn-secondary"
@@ -190,8 +191,8 @@ const ValidationCachePage = () => {
                         <input
                             type="text"
                             placeholder="Ex: validation_key"
-                            value={filters.cacheKey}
-                            onChange={(e) => handleFilterChange('cacheKey', e.target.value)}
+                            value={filters.key}
+                            onChange={(e) => handleFilterChange('key', e.target.value)}
                             className="form-control"
                         />
                     </div>
@@ -250,9 +251,9 @@ const ValidationCachePage = () => {
                             </th>
                             <th 
                                 className="sortable"
-                                onClick={() => handleSort('cacheKey')}
+                                onClick={() => handleSort('key')}
                             >
-                                Clé de cache {sortConfig.key === 'cacheKey' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                                Clé de cache {sortConfig.key === 'key' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                             </th>
                             <th>Valeur</th>
                             <th>Âge</th>
@@ -299,9 +300,9 @@ const ValidationCachePage = () => {
                                                 {entry.timeframe}
                                             </span>
                                         </td>
-                                        <td>
-                                            <span className="cache-key">{entry.cacheKey}</span>
-                                        </td>
+                                    <td>
+                                        <span className="cache-key">{entry.key}</span>
+                                    </td>
                                         <td>
                                             {formatJsonData(entry.value) ? (
                                                 <details className="json-details">

@@ -7,8 +7,10 @@ const MtfAuditPage = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [filters, setFilters] = useState({
+        runId: '',
         symbol: '',
-        action: '',
+        step: '',
+        verdict: '',
         dateFrom: '',
         dateTo: ''
     });
@@ -84,8 +86,10 @@ const MtfAuditPage = () => {
 
     const clearFilters = () => {
         setFilters({
+            runId: '',
             symbol: '',
-            action: '',
+            step: '',
+            verdict: '',
             dateFrom: '',
             dateTo: ''
         });
@@ -97,20 +101,44 @@ const MtfAuditPage = () => {
         return new Date(dateString).toLocaleString('fr-FR');
     };
 
-    const getActionBadgeClass = (action) => {
-        switch (action?.toLowerCase()) {
-            case 'create':
-            case 'created':
+    const getVerdictBadgeClass = (verdict) => {
+        switch (verdict?.toLowerCase()) {
+            case 'passed':
+            case 'success':
+            case 'valid':
                 return 'badge-success';
-            case 'update':
-            case 'updated':
-                return 'badge-info';
-            case 'delete':
-            case 'deleted':
-                return 'badge-danger';
-            case 'switch':
-            case 'switched':
+            case 'warning':
+            case 'partial':
                 return 'badge-warning';
+            case 'failed':
+            case 'error':
+            case 'invalid':
+                return 'badge-danger';
+            case 'skipped':
+            case 'pending':
+                return 'badge-info';
+            default:
+                return 'badge-secondary';
+        }
+    };
+
+    const getStepBadgeClass = (step) => {
+        switch (step?.toLowerCase()) {
+            case 'validation':
+            case 'validate':
+                return 'badge-primary';
+            case 'signal':
+            case 'signals':
+                return 'badge-info';
+            case 'indicator':
+            case 'indicators':
+                return 'badge-warning';
+            case 'decision':
+            case 'decision-making':
+                return 'badge-success';
+            case 'execution':
+            case 'execute':
+                return 'badge-danger';
             default:
                 return 'badge-secondary';
         }
@@ -124,7 +152,8 @@ const MtfAuditPage = () => {
     return (
         <div className="mtf-audit-page">
             <div className="page-header">
-                <h1>Audits MTF</h1>
+                <h1>Journal MTF (Audit)</h1>
+                <p className="page-subtitle">Visualiser un journal des étapes MTF (validation séquentielle, causes d'échec)</p>
                 <div className="page-actions">
                     <button 
                         className="btn btn-secondary"
@@ -146,6 +175,17 @@ const MtfAuditPage = () => {
             <div className="filters-section">
                 <div className="filters-grid">
                     <div className="filter-group">
+                        <label>Run ID</label>
+                        <input
+                            type="text"
+                            placeholder="Ex: run_123456"
+                            value={filters.runId}
+                            onChange={(e) => handleFilterChange('runId', e.target.value)}
+                            className="form-control"
+                        />
+                    </div>
+
+                    <div className="filter-group">
                         <label>Symbole</label>
                         <input
                             type="text"
@@ -157,17 +197,33 @@ const MtfAuditPage = () => {
                     </div>
 
                     <div className="filter-group">
-                        <label>Action</label>
+                        <label>Étape</label>
                         <select
-                            value={filters.action}
-                            onChange={(e) => handleFilterChange('action', e.target.value)}
+                            value={filters.step}
+                            onChange={(e) => handleFilterChange('step', e.target.value)}
                             className="form-control"
                         >
                             <option value="">Toutes</option>
-                            <option value="create">Création</option>
-                            <option value="update">Mise à jour</option>
-                            <option value="delete">Suppression</option>
-                            <option value="switch">Switch</option>
+                            <option value="validation">Validation</option>
+                            <option value="signal">Signal</option>
+                            <option value="indicator">Indicateur</option>
+                            <option value="decision">Décision</option>
+                            <option value="execution">Exécution</option>
+                        </select>
+                    </div>
+
+                    <div className="filter-group">
+                        <label>Verdict</label>
+                        <select
+                            value={filters.verdict}
+                            onChange={(e) => handleFilterChange('verdict', e.target.value)}
+                            className="form-control"
+                        >
+                            <option value="">Tous</option>
+                            <option value="passed">Réussi</option>
+                            <option value="failed">Échoué</option>
+                            <option value="warning">Avertissement</option>
+                            <option value="skipped">Ignoré</option>
                         </select>
                     </div>
 
@@ -213,35 +269,47 @@ const MtfAuditPage = () => {
                             </th>
                             <th 
                                 className="sortable"
+                                onClick={() => handleSort('runId')}
+                            >
+                                Run ID {sortConfig.key === 'runId' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                            </th>
+                            <th 
+                                className="sortable"
                                 onClick={() => handleSort('symbol')}
                             >
                                 Symbole {sortConfig.key === 'symbol' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                             </th>
                             <th 
                                 className="sortable"
-                                onClick={() => handleSort('action')}
+                                onClick={() => handleSort('step')}
                             >
-                                Action {sortConfig.key === 'action' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                                Étape {sortConfig.key === 'step' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                             </th>
-                            <th>Détails</th>
                             <th 
                                 className="sortable"
-                                onClick={() => handleSort('createdAt')}
+                                onClick={() => handleSort('verdict')}
                             >
-                                Créé le {sortConfig.key === 'createdAt' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                                Verdict/Cause {sortConfig.key === 'verdict' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                            </th>
+                            <th>Payload JSON</th>
+                            <th 
+                                className="sortable"
+                                onClick={() => handleSort('timestamp')}
+                            >
+                                Horodatage {sortConfig.key === 'timestamp' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                             </th>
                         </tr>
                     </thead>
                     <tbody>
                         {loading ? (
                             <tr>
-                                <td colSpan="5" className="text-center">
+                                <td colSpan="7" className="text-center">
                                     <div className="loading">Chargement des audits...</div>
                                 </td>
                             </tr>
                         ) : audits.length === 0 ? (
                             <tr>
-                                <td colSpan="5" className="text-center">
+                                <td colSpan="7" className="text-center">
                                     <div className="no-data">Aucun audit trouvé</div>
                                 </td>
                             </tr>
@@ -250,26 +318,39 @@ const MtfAuditPage = () => {
                                 <tr key={audit.id}>
                                     <td>{audit.id}</td>
                                     <td>
+                                        <span className="run-id-badge">{audit.runId || '-'}</span>
+                                    </td>
+                                    <td>
                                         <span className="symbol-badge">{audit.symbol}</span>
                                     </td>
                                     <td>
-                                        <span className={`badge ${getActionBadgeClass(audit.action)}`}>
-                                            {audit.action}
+                                        <span className={`badge ${getStepBadgeClass(audit.step)}`}>
+                                            {audit.step}
                                         </span>
                                     </td>
                                     <td>
-                                        {formatJsonData(audit.details) ? (
+                                        <span className={`badge ${getVerdictBadgeClass(audit.verdict)}`}>
+                                            {audit.verdict}
+                                        </span>
+                                        {audit.cause && (
+                                            <div className="cause-text">
+                                                <small>{audit.cause}</small>
+                                            </div>
+                                        )}
+                                    </td>
+                                    <td>
+                                        {formatJsonData(audit.payload) ? (
                                             <details className="json-details">
                                                 <summary>Voir</summary>
                                                 <pre className="json-content">
-                                                    {formatJsonData(audit.details)}
+                                                    {formatJsonData(audit.payload)}
                                                 </pre>
                                             </details>
                                         ) : (
                                             <span className="text-muted">-</span>
                                         )}
                                     </td>
-                                    <td>{formatDate(audit.createdAt)}</td>
+                                    <td>{formatDate(audit.timestamp)}</td>
                                 </tr>
                             ))
                         )}
@@ -309,3 +390,4 @@ const MtfAuditPage = () => {
 };
 
 export default MtfAuditPage;
+

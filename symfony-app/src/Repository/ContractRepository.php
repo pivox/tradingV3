@@ -7,7 +7,7 @@ use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
- * @extends ServiceEntityRepository<Kline>
+ * @extends ServiceEntityRepository<Contract>
  */
 class ContractRepository extends ServiceEntityRepository
 {
@@ -19,7 +19,7 @@ class ContractRepository extends ServiceEntityRepository
     public function allActiveSymbols(): array
     {
         $date = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-            ->modify('-1080 hours')
+            ->modify('-880 hours')
             ->getTimestamp();
 
         $qb = $this->createQueryBuilder('contract');
@@ -47,7 +47,7 @@ class ContractRepository extends ServiceEntityRepository
     {
 
         $date = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-            ->modify('-1080 hours')
+            ->modify('-880 hours')
             ->getTimestamp();
 
         $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));

@@ -6,10 +6,16 @@ const MtfSwitchPage = () => {
     const [switches, setSwitches] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [toggleLoading, setToggleLoading] = useState(false);
+    const [newSwitch, setNewSwitch] = useState({
+        key: '',
+        value: false,
+        expiresAt: ''
+    });
+    const [showAddForm, setShowAddForm] = useState(false);
     const [filters, setFilters] = useState({
-        symbol: '',
-        fromTimeframe: '',
-        toTimeframe: '',
+        key: '',
+        status: '',
         dateFrom: '',
         dateTo: ''
     });
@@ -19,7 +25,7 @@ const MtfSwitchPage = () => {
         total: 0
     });
     const [sortConfig, setSortConfig] = useState({
-        key: 'createdAt',
+        key: 'updatedAt',
         direction: 'desc'
     });
 
@@ -85,13 +91,47 @@ const MtfSwitchPage = () => {
 
     const clearFilters = () => {
         setFilters({
-            symbol: '',
-            fromTimeframe: '',
-            toTimeframe: '',
+            key: '',
+            status: '',
             dateFrom: '',
             dateTo: ''
         });
         setPagination(prev => ({ ...prev, page: 1 }));
+    };
+
+    const toggleSwitch = async (switchId) => {
+        setToggleLoading(true);
+        try {
+            await api.toggleMtfSwitch(switchId);
+            await fetchSwitches(); // Recharger la liste
+        } catch (err) {
+            console.error('Erreur lors du toggle du switch:', err);
+            setError(`Erreur lors du toggle: ${err.message}`);
+        } finally {
+            setToggleLoading(false);
+        }
+    };
+
+    const addNewSwitch = async () => {
+        if (!newSwitch.key.trim()) {
+            setError('La clé du switch est requise');
+            return;
+        }
+
+        try {
+            await api.addMtfSwitch({
+                key: newSwitch.key,
+                value: newSwitch.value,
+                expiresAt: newSwitch.expiresAt || null
+            });
+            
+            setNewSwitch({ key: '', value: false, expiresAt: '' });
+            setShowAddForm(false);
+            await fetchSwitches(); // Recharger la liste
+        } catch (err) {
+            console.error('Erreur lors de l\'ajout du switch:', err);
+            setError(`Erreur lors de l'ajout: ${err.message}`);
+        }
     };
 
     const formatDate = (dateString) => {
@@ -99,15 +139,26 @@ const MtfSwitchPage = () => {
         return new Date(dateString).toLocaleString('fr-FR');
     };
 
-    const getTimeframeBadgeClass = (timeframe) => {
-        switch (timeframe) {
-            case '1m': return 'badge-primary';
-            case '5m': return 'badge-info';
-            case '15m': return 'badge-warning';
-            case '1h': return 'badge-success';
-            case '4h': return 'badge-danger';
-            default: return 'badge-secondary';
+    const getStatusBadgeClass = (status) => {
+        switch (status?.toLowerCase()) {
+            case 'active':
+            case 'on':
+            case 'enabled':
+                return 'badge-success';
+            case 'inactive':
+            case 'off':
+            case 'disabled':
+                return 'badge-danger';
+            case 'expired':
+                return 'badge-warning';
+            default:
+                return 'badge-secondary';
         }
+    };
+
+    const isExpired = (expiresAt) => {
+        if (!expiresAt) return false;
+        return new Date(expiresAt) < new Date();
     };
 
     const formatJsonData = (jsonData) => {
@@ -118,8 +169,15 @@ const MtfSwitchPage = () => {
     return (
         <div className="mtf-switch-page">
             <div className="page-header">
-                <h1>Switches MTF</h1>
+                <h1>Switchs d'Exécution (Flags)</h1>
+                <p className="page-subtitle">Activer/Désactiver des switchs (avec expiration) pour piloter le runtime</p>
                 <div className="page-actions">
+                    <button 
+                        className="btn btn-success"
+                        onClick={() => setShowAddForm(!showAddForm)}
+                    >
+                        {showAddForm ? 'Annuler' : 'Ajouter un Switch'}
+                    </button>
                     <button 
                         className="btn btn-secondary"
                         onClick={clearFilters}
@@ -136,49 +194,78 @@ const MtfSwitchPage = () => {
                 </div>
             </div>
 
+            {/* Formulaire d'ajout */}
+            {showAddForm && (
+                <div className="add-switch-form">
+                    <h3>Ajouter un nouveau switch</h3>
+                    <div className="form-grid">
+                        <div className="form-group">
+                            <label>Clé du switch *</label>
+                            <input
+                                type="text"
+                                placeholder="Ex: mtf_enabled, signal_processing"
+                                value={newSwitch.key}
+                                onChange={(e) => setNewSwitch(prev => ({ ...prev, key: e.target.value }))}
+                                className="form-control"
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label>Valeur initiale</label>
+                            <select
+                                value={newSwitch.value}
+                                onChange={(e) => setNewSwitch(prev => ({ ...prev, value: e.target.value === 'true' }))}
+                                className="form-control"
+                            >
+                                <option value={false}>OFF (Désactivé)</option>
+                                <option value={true}>ON (Activé)</option>
+                            </select>
+                        </div>
+                        <div className="form-group">
+                            <label>Expiration (optionnel)</label>
+                            <input
+                                type="datetime-local"
+                                value={newSwitch.expiresAt}
+                                onChange={(e) => setNewSwitch(prev => ({ ...prev, expiresAt: e.target.value }))}
+                                className="form-control"
+                            />
+                        </div>
+                        <div className="form-group">
+                            <button 
+                                className="btn btn-primary"
+                                onClick={addNewSwitch}
+                            >
+                                Ajouter
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Filtres */}
             <div className="filters-section">
                 <div className="filters-grid">
                     <div className="filter-group">
-                        <label>Symbole</label>
+                        <label>Clé du switch</label>
                         <input
                             type="text"
-                            placeholder="Ex: BTCUSDT"
-                            value={filters.symbol}
-                            onChange={(e) => handleFilterChange('symbol', e.target.value)}
+                            placeholder="Ex: mtf_enabled"
+                            value={filters.key}
+                            onChange={(e) => handleFilterChange('key', e.target.value)}
                             className="form-control"
                         />
                     </div>
 
                     <div className="filter-group">
-                        <label>Timeframe Source</label>
+                        <label>Statut</label>
                         <select
-                            value={filters.fromTimeframe}
-                            onChange={(e) => handleFilterChange('fromTimeframe', e.target.value)}
+                            value={filters.status}
+                            onChange={(e) => handleFilterChange('status', e.target.value)}
                             className="form-control"
                         >
                             <option value="">Tous</option>
-                            <option value="1m">1 minute</option>
-                            <option value="5m">5 minutes</option>
-                            <option value="15m">15 minutes</option>
-                            <option value="1h">1 heure</option>
-                            <option value="4h">4 heures</option>
-                        </select>
-                    </div>
-
-                    <div className="filter-group">
-                        <label>Timeframe Cible</label>
-                        <select
-                            value={filters.toTimeframe}
-                            onChange={(e) => handleFilterChange('toTimeframe', e.target.value)}
-                            className="form-control"
-                        >
-                            <option value="">Tous</option>
-                            <option value="1m">1 minute</option>
-                            <option value="5m">5 minutes</option>
-                            <option value="15m">15 minutes</option>
-                            <option value="1h">1 heure</option>
-                            <option value="4h">4 heures</option>
+                            <option value="active">Actif</option>
+                            <option value="inactive">Inactif</option>
+                            <option value="expired">Expiré</option>
                         </select>
                     </div>
 
@@ -224,19 +311,24 @@ const MtfSwitchPage = () => {
                             </th>
                             <th 
                                 className="sortable"
-                                onClick={() => handleSort('symbol')}
+                                onClick={() => handleSort('key')}
                             >
-                                Symbole {sortConfig.key === 'symbol' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                                Clé {sortConfig.key === 'key' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                             </th>
-                            <th>Timeframe Source</th>
-                            <th>Timeframe Cible</th>
-                            <th>Données</th>
                             <th 
                                 className="sortable"
-                                onClick={() => handleSort('createdAt')}
+                                onClick={() => handleSort('value')}
                             >
-                                Créé le {sortConfig.key === 'createdAt' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                                État {sortConfig.key === 'value' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                             </th>
+                            <th>Expiration</th>
+                            <th 
+                                className="sortable"
+                                onClick={() => handleSort('updatedAt')}
+                            >
+                                Dernière MAJ {sortConfig.key === 'updatedAt' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                            </th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -253,37 +345,51 @@ const MtfSwitchPage = () => {
                                 </td>
                             </tr>
                         ) : (
-                            switches.map((switchItem) => (
-                                <tr key={switchItem.id}>
-                                    <td>{switchItem.id}</td>
-                                    <td>
-                                        <span className="symbol-badge">{switchItem.symbol}</span>
-                                    </td>
-                                    <td>
-                                        <span className={`badge ${getTimeframeBadgeClass(switchItem.fromTimeframe)}`}>
-                                            {switchItem.fromTimeframe}
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span className={`badge ${getTimeframeBadgeClass(switchItem.toTimeframe)}`}>
-                                            {switchItem.toTimeframe}
-                                        </span>
-                                    </td>
-                                    <td>
-                                        {formatJsonData(switchItem.data) ? (
-                                            <details className="json-details">
-                                                <summary>Voir</summary>
-                                                <pre className="json-content">
-                                                    {formatJsonData(switchItem.data)}
-                                                </pre>
-                                            </details>
-                                        ) : (
-                                            <span className="text-muted">-</span>
-                                        )}
-                                    </td>
-                                    <td>{formatDate(switchItem.createdAt)}</td>
-                                </tr>
-                            ))
+                            switches.map((switchItem) => {
+                                const expired = isExpired(switchItem.expiresAt);
+                                const currentStatus = expired ? 'expired' : (switchItem.value ? 'active' : 'inactive');
+                                
+                                return (
+                                    <tr key={switchItem.id} className={expired ? 'expired-row' : ''}>
+                                        <td>{switchItem.id}</td>
+                                        <td>
+                                            <span className="switch-key">{switchItem.key}</span>
+                                        </td>
+                                        <td>
+                                            <span className={`badge ${getStatusBadgeClass(currentStatus)}`}>
+                                                {switchItem.value ? 'ON' : 'OFF'}
+                                            </span>
+                                            {expired && (
+                                                <span className="badge badge-warning ml-1">EXPIRÉ</span>
+                                            )}
+                                        </td>
+                                        <td>
+                                            {switchItem.expiresAt ? (
+                                                <div className="expiration-info">
+                                                    <div>{formatDate(switchItem.expiresAt)}</div>
+                                                    {expired && (
+                                                        <small className="text-warning">Expiré</small>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <span className="text-muted">Permanent</span>
+                                            )}
+                                        </td>
+                                        <td>{formatDate(switchItem.updatedAt)}</td>
+                                        <td>
+                                            <div className="action-buttons">
+                                                <button 
+                                                    className={`btn btn-sm ${switchItem.value ? 'btn-outline-danger' : 'btn-outline-success'}`}
+                                                    onClick={() => toggleSwitch(switchItem.id)}
+                                                    disabled={toggleLoading || expired}
+                                                >
+                                                    {switchItem.value ? 'Désactiver' : 'Activer'}
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })
                         )}
                     </tbody>
                 </table>

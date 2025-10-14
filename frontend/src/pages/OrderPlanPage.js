@@ -135,7 +135,8 @@ const OrderPlanPage = () => {
     return (
         <div className="order-plan-page">
             <div className="page-header">
-                <h1>Plans de Commandes</h1>
+                <h1>Plans d'Ordres (Order Plans)</h1>
+                <p className="page-subtitle">Consulter les plans d'ordres générés (risque, contexte, exécution) avant envoi</p>
                 <div className="page-actions">
                     <button 
                         className="btn btn-secondary"
@@ -259,21 +260,22 @@ const OrderPlanPage = () => {
                             >
                                 Statut {sortConfig.key === 'status' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                             </th>
-                            <th>Risk JSON</th>
-                            <th>Context JSON</th>
-                            <th>Exec JSON</th>
+                            <th>Risk</th>
+                            <th>Context</th>
+                            <th>Exec</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         {loading ? (
                             <tr>
-                                <td colSpan="8" className="text-center">
+                                <td colSpan="9" className="text-center">
                                     <div className="loading">Chargement des plans de commandes...</div>
                                 </td>
                             </tr>
                         ) : orderPlans.length === 0 ? (
                             <tr>
-                                <td colSpan="8" className="text-center">
+                                <td colSpan="9" className="text-center">
                                     <div className="no-data">Aucun plan de commande trouvé</div>
                                 </td>
                             </tr>
@@ -298,7 +300,7 @@ const OrderPlanPage = () => {
                                     <td>
                                         {formatJsonData(plan.riskJson) ? (
                                             <details className="json-details">
-                                                <summary>Voir</summary>
+                                                <summary>Risk</summary>
                                                 <pre className="json-content">
                                                     {formatJsonData(plan.riskJson)}
                                                 </pre>
@@ -310,7 +312,7 @@ const OrderPlanPage = () => {
                                     <td>
                                         {formatJsonData(plan.contextJson) ? (
                                             <details className="json-details">
-                                                <summary>Voir</summary>
+                                                <summary>Context</summary>
                                                 <pre className="json-content">
                                                     {formatJsonData(plan.contextJson)}
                                                 </pre>
@@ -322,7 +324,7 @@ const OrderPlanPage = () => {
                                     <td>
                                         {formatJsonData(plan.execJson) ? (
                                             <details className="json-details">
-                                                <summary>Voir</summary>
+                                                <summary>Exec</summary>
                                                 <pre className="json-content">
                                                     {formatJsonData(plan.execJson)}
                                                 </pre>
@@ -330,6 +332,30 @@ const OrderPlanPage = () => {
                                         ) : (
                                             <span className="text-muted">-</span>
                                         )}
+                                    </td>
+                                    <td>
+                                        <div className="action-buttons">
+                                            <button 
+                                                className="btn btn-sm btn-outline-primary"
+                                                onClick={() => {
+                                                    // Action pour voir le détail complet
+                                                    console.log('Voir détail plan:', plan);
+                                                }}
+                                            >
+                                                Détail
+                                            </button>
+                                            {plan.status === 'PLANNED' && (
+                                                <button 
+                                                    className="btn btn-sm btn-outline-success"
+                                                    onClick={() => {
+                                                        // Action pour exécuter le plan
+                                                        console.log('Exécuter plan:', plan);
+                                                    }}
+                                                >
+                                                    Exécuter
+                                                </button>
+                                            )}
+                                        </div>
                                     </td>
                                 </tr>
                             ))

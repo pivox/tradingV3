@@ -182,7 +182,7 @@ class ContractRepository extends ServiceEntityRepository
         $nowMs = (int) round(microtime(true) * 1000);
         $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
 
-        $openTimestamp = $now->sub(new \DateInterval('PT1040H'))->getTimestamp();
+        $openTimestamp = $now->sub(new \DateInterval('PT880H'))->getTimestamp();
 
 
         $qb = $this->createQueryBuilder('contract')

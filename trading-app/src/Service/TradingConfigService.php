@@ -75,6 +75,29 @@ class TradingConfigService
         return in_array($timeframe, $this->getTimeframes());
     }
 
+    public function getIndicatorCalculationConfig(): array
+    {
+        return $this->config['indicator_calculation'] ?? [];
+    }
+
+    public function getIndicatorCalculationMode(): string
+    {
+        $config = $this->getIndicatorCalculationConfig();
+        return $config['mode'] ?? 'sql';
+    }
+
+    public function isIndicatorCalculationFallbackEnabled(): bool
+    {
+        $config = $this->getIndicatorCalculationConfig();
+        return $config['fallback_to_php'] ?? true;
+    }
+
+    public function getIndicatorCalculationPerformanceThreshold(): int
+    {
+        $config = $this->getIndicatorCalculationConfig();
+        return $config['performance_threshold_ms'] ?? 100;
+    }
+
     public function getTimeframeValidationRules(string $timeframe): array
     {
         if (!$this->isTimeframeValid($timeframe)) {

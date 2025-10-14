@@ -297,18 +297,29 @@ services:
       context: ./trading-app
       dockerfile: Dockerfile.mtf
     container_name: trading_app_php
+    working_dir: /var/www/html
     volumes:
       - ./trading-app:/var/www/html
       - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
     environment:
       <<: *global-env
       DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
+      DEFAULT_URI: ${DEFAULT_URI:-http://localhost:8082}
     depends_on:
       trading-app-db:
         condition: service_healthy
     networks:
       - trading-app-net
       - shared-net
+    # Réinstalle si vendor absent OU si composer.json plus récent que vendor/autoload.php
+    command: >-
+      sh -c "if [ ! -f vendor/autoload.php ] || [ composer.json -nt vendor/autoload.php ]; then \
+        echo '[trading-app-php] (re)installing composer deps (with scripts)'; \
+        rm -rf vendor; \
+        composer install --no-dev --optimize-autoloader --no-interaction; \
+      else \
+        echo '[trading-app-php] vendor up-to-date'; \
+      fi && php-fpm"
 
   trading-app-nginx:
     image: nginx:latest
@@ -375,6 +386,16 @@ services:
       - temporal-net
       - shared-net
     restart: always
+    # Réinstalle si vendor absent OU composer.json plus récent
+    command: >-
+      sh -c "if [ ! -f vendor/autoload.php ] || [ composer.json -nt vendor/autoload.php ]; then \
+        echo '[mtf-worker] (re)installing composer deps (with scripts)'; \
+        rm -rf vendor; \
+        composer install --no-dev --optimize-autoloader --no-interaction; \
+        chown -R www-data:www-data vendor; \
+      else \
+        echo '[mtf-worker] vendor up-to-date'; \
+      fi; exec /usr/local/bin/start-mtf-worker.sh"
     healthcheck:
       test: ["CMD-SHELL", "php bin/console mtf:workflow status > /dev/null 2>&1 || exit 1"]
       interval: 30s

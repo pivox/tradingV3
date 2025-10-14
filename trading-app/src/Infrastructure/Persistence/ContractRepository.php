@@ -121,12 +121,12 @@ final class ContractRepository
             return false;
         }
 
-        // 4. Vérifier que le contrat n'est pas trop récent (moins de 45 jours)
+        // 4. Vérifier que le contrat n'est pas trop récent (moins de 880 heures = 36.67 jours)
         $openTimestamp = intval($contract['open_timestamp'] ?? 0);
         if ($openTimestamp > 0) {
             $openDate = new \DateTimeImmutable('@' . ($openTimestamp / 1000));
             $minDate = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-                ->modify('-45 days');
+                ->modify('-880 hours');
             
             if ($openDate > $minDate) {
                 return false;

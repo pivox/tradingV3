@@ -500,22 +500,6 @@ final class PositionOpener
         } finally {
             $this->persistOrderId($symbol, $orderId, '[LimitPct]');
         }
-
-        try {
-            $this->positionsLogger->info('[SR] Enforcement TP/SL après ouverture', ['symbol' => $symbol]);
-            $openPositions = $this->bitmartPositions->list(['symbol' => $symbol]);
-            $positionRow = $openPositions['data'][0] ?? null;
-            if (is_array($positionRow)) {
-                $this->enforcePositionTpSl($positionRow);
-            } else {
-                $this->positionsLogger->warning('[SR] Aucune position trouvée pour enforce TP/SL', ['symbol' => $symbol]);
-            }
-        } catch (\Throwable $e) {
-            $this->positionsLogger->error('[SR] enforcePositionTpSl() failed', [
-                'symbol' => $symbol,
-                'error' => $e->getMessage()
-            ]);
-        }
     }
 
     public function openLimitAutoLevWithTpSlPct(
@@ -532,6 +516,34 @@ final class PositionOpener
 
         try {
             $side = strtolower($finalSideUpper);
+
+            // Vérification des positions existantes pour ce contrat
+            $this->positionsLogger->info('[AutoLev] Vérification des positions existantes', ['symbol' => $symbol]);
+            $existingPositions = $this->bitmartPositions->list(['symbol' => $symbol]);
+            $positionsData = $existingPositions['data'] ?? [];
+            
+            // Vérifier s'il y a une position ouverte (size > 0)
+            $hasOpenPosition = false;
+            if (is_array($positionsData)) {
+                foreach ($positionsData as $position) {
+                    if (is_array($position)) {
+                        $positionSize = (float)($position['size'] ?? 0);
+                        if ($positionSize > 0) {
+                            $hasOpenPosition = true;
+                            $this->positionsLogger->warning('[AutoLev] Position existante détectée, abandon de l\'ouverture', [
+                                'symbol' => $symbol,
+                                'existing_size' => $positionSize,
+                                'position_data' => $position
+                            ]);
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if ($hasOpenPosition) {
+                throw new RuntimeException("Une position est déjà ouverte pour le contrat $symbol. Impossible d'ouvrir un nouvel ordre.");
+            }
 
             // 1) Détails contrat
             $details = $this->getContractDetails($symbol);

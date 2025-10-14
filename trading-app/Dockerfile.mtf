@@ -1,5 +1,10 @@
 FROM php:8.2-fpm
 
+# ARG pour l'environnement (prod par défaut)
+ARG APP_ENV=prod
+ENV APP_ENV=${APP_ENV} \
+    APP_DEBUG=0
+
 # Installer les dépendances système
 RUN apt-get update && apt-get install -y \
     git \
@@ -24,8 +29,9 @@ WORKDIR /var/www/html
 # Copier les fichiers de configuration
 COPY composer.json composer.lock ./
 
-# Installer les dépendances PHP (sans exécuter les scripts)
-RUN composer install --no-dev --no-scripts --optimize-autoloader --no-interaction
+# Installer les dépendances PHP (sans scripts, le code applicatif n'est pas encore présent)
+RUN composer install --no-dev --no-scripts --optimize-autoloader --no-interaction \
+    && composer clear-cache
 
 # Copier le code source
 COPY . .
@@ -49,7 +55,3 @@ EXPOSE 8082
 
 # Commande par défaut (FPM)
 CMD ["php-fpm"]
-
-
-
-

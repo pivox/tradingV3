@@ -6,6 +6,9 @@ const SignalsPage = () => {
     const [signals, setSignals] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [selectedSignal, setSelectedSignal] = useState(null);
+    const [signalDetail, setSignalDetail] = useState(null);
+    const [detailLoading, setDetailLoading] = useState(false);
     const [filters, setFilters] = useState({
         symbol: '',
         timeframe: '',
@@ -92,6 +95,32 @@ const SignalsPage = () => {
             dateTo: ''
         });
         setPagination(prev => ({ ...prev, page: 1 }));
+    };
+
+    const fetchSignalDetail = async (signal) => {
+        setDetailLoading(true);
+        setSelectedSignal(signal);
+        setSignalDetail(null);
+
+        try {
+            // Construire l'URL selon l'US-002: GET /signals/{symbol}/{tf}/{klineTime}
+            const klineTime = new Date(signal.klineTime).toISOString();
+            const detailUrl = `/api/signals/${signal.symbol}/${signal.timeframe}/${klineTime}`;
+            
+            // Pour l'instant, utiliser l'API existante avec l'ID
+            const response = await api.getSignalDetail(signal.id);
+            setSignalDetail(response);
+        } catch (err) {
+            console.error('Erreur lors du chargement du détail du signal:', err);
+            setError(`Erreur de chargement du détail: ${err.message}`);
+        } finally {
+            setDetailLoading(false);
+        }
+    };
+
+    const closeSignalDetail = () => {
+        setSelectedSignal(null);
+        setSignalDetail(null);
     };
 
     const formatDate = (dateString) => {
@@ -264,18 +293,19 @@ const SignalsPage = () => {
                             >
                                 Créé le {sortConfig.key === 'insertedAt' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                             </th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         {loading ? (
                             <tr>
-                                <td colSpan="8" className="text-center">
+                                <td colSpan="9" className="text-center">
                                     <div className="loading">Chargement des signaux...</div>
                                 </td>
                             </tr>
                         ) : signals.length === 0 ? (
                             <tr>
-                                <td colSpan="8" className="text-center">
+                                <td colSpan="9" className="text-center">
                                     <div className="no-data">Aucun signal trouvé</div>
                                 </td>
                             </tr>
@@ -322,6 +352,14 @@ const SignalsPage = () => {
                                         )}
                                     </td>
                                     <td>{formatDate(signal.insertedAt)}</td>
+                                    <td>
+                                        <button 
+                                            className="btn btn-sm btn-outline-primary"
+                                            onClick={() => fetchSignalDetail(signal)}
+                                        >
+                                            Détail
+                                        </button>
+                                    </td>
                                 </tr>
                             ))
                         )}
@@ -353,6 +391,104 @@ const SignalsPage = () => {
                         >
                             Suivant
                         </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal de détail du signal */}
+            {selectedSignal && (
+                <div className="modal-overlay" onClick={closeSignalDetail}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>Détail du Signal</h3>
+                            <button className="modal-close" onClick={closeSignalDetail}>×</button>
+                        </div>
+                        <div className="modal-body">
+                            {detailLoading ? (
+                                <div className="loading">Chargement du détail...</div>
+                            ) : signalDetail ? (
+                                <div className="signal-detail">
+                                    <div className="detail-section">
+                                        <h4>Informations de base</h4>
+                                        <div className="detail-grid">
+                                            <div className="detail-item">
+                                                <label>ID:</label>
+                                                <span>{signalDetail.id}</span>
+                                            </div>
+                                            <div className="detail-item">
+                                                <label>Symbole:</label>
+                                                <span className="symbol-badge">{signalDetail.symbol}</span>
+                                            </div>
+                                            <div className="detail-item">
+                                                <label>Timeframe:</label>
+                                                <span className={`badge ${getTimeframeBadgeClass(signalDetail.timeframe)}`}>
+                                                    {signalDetail.timeframe}
+                                                </span>
+                                            </div>
+                                            <div className="detail-item">
+                                                <label>Côté:</label>
+                                                <span className={`badge ${getSideBadgeClass(signalDetail.side)}`}>
+                                                    {signalDetail.side}
+                                                </span>
+                                            </div>
+                                            <div className="detail-item">
+                                                <label>Score:</label>
+                                                <span className="score-value">
+                                                    {signalDetail.score !== null ? 
+                                                        (typeof signalDetail.score === 'number' 
+                                                            ? signalDetail.score.toFixed(2) 
+                                                            : signalDetail.score
+                                                        ) : '-'
+                                                    }
+                                                </span>
+                                            </div>
+                                            <div className="detail-item">
+                                                <label>Date Kline:</label>
+                                                <span>{formatDate(signalDetail.klineTime)}</span>
+                                            </div>
+                                            <div className="detail-item">
+                                                <label>Créé le:</label>
+                                                <span>{formatDate(signalDetail.insertedAt)}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {signalDetail.meta && Object.keys(signalDetail.meta).length > 0 && (
+                                        <div className="detail-section">
+                                            <h4>Métadonnées</h4>
+                                            <pre className="meta-content">
+                                                {JSON.stringify(signalDetail.meta, null, 2)}
+                                            </pre>
+                                        </div>
+                                    )}
+
+                                    {signalDetail.context && (
+                                        <div className="detail-section">
+                                            <h4>Contexte MTF</h4>
+                                            <pre className="context-content">
+                                                {JSON.stringify(signalDetail.context, null, 2)}
+                                            </pre>
+                                        </div>
+                                    )}
+
+                                    {signalDetail.indicators && (
+                                        <div className="detail-section">
+                                            <h4>Indicateurs</h4>
+                                            <pre className="indicators-content">
+                                                {JSON.stringify(signalDetail.indicators, null, 2)}
+                                            </pre>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="error">Erreur lors du chargement du détail</div>
+                            )}
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn btn-secondary" onClick={closeSignalDetail}>
+                                Fermer
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
