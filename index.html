@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradingV3 - Dashboard des Services</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .services-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .service-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .service-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+        }
+
+        .service-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+        }
+
+        .service-icon {
+            font-size: 2.5rem;
+            margin-bottom: 15px;
+            display: block;
+        }
+
+        .service-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .service-description {
+            color: #666;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+
+        .service-url {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .service-url::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s;
+        }
+
+        .service-url:hover::before {
+            left: 100%;
+        }
+
+        .service-url:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        .status-online {
+            background-color: #4CAF50;
+        }
+
+        .status-offline {
+            background-color: #f44336;
+        }
+
+        .status-unknown {
+            background-color: #ff9800;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .category {
+            margin-bottom: 30px;
+        }
+
+        .category-title {
+            color: white;
+            font-size: 1.8rem;
+            margin-bottom: 20px;
+            text-align: center;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+        }
+
+        .footer {
+            text-align: center;
+            color: white;
+            margin-top: 40px;
+            opacity: 0.8;
+        }
+
+        .quick-actions {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+            backdrop-filter: blur(10px);
+        }
+
+        .quick-actions h3 {
+            color: white;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        .action-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .action-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: bold;
+        }
+
+        .action-btn:hover {
+            background: rgba(255,255,255,0.3);
+            transform: scale(1.05);
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .services-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 TradingV3</h1>
+            <p>Dashboard des Services - Système de Trading Multi-Timeframe</p>
+        </div>
+
+        <div class="quick-actions">
+            <h3>Actions Rapides</h3>
+            <div class="action-buttons">
+                <button class="action-btn" onclick="checkAllServices()">🔍 Vérifier Tous les Services</button>
+                <button class="action-btn" onclick="openAllServices()">🌐 Ouvrir Tous les Services</button>
+                <button class="action-btn" onclick="showSystemInfo()">ℹ️ Informations Système</button>
+            </div>
+        </div>
+
+        <div class="category">
+            <h2 class="category-title">🎯 Applications Principales</h2>
+            <div class="services-grid">
+                <div class="service-card">
+                    <span class="service-icon">📊</span>
+                    <h3 class="service-title">Trading App</h3>
+                    <p class="service-description">Application principale de trading avec interface MTF et gestion des positions</p>
+                    <a href="http://localhost:8082" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-trading-app"></span>
+                        Accéder à Trading App
+                    </a>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">⚡</span>
+                    <h3 class="service-title">Symfony App</h3>
+                    <p class="service-description">Application Symfony pour la gestion des données et API</p>
+                    <a href="http://localhost:8080" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-symfony-app"></span>
+                        Accéder à Symfony App
+                    </a>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">🎨</span>
+                    <h3 class="service-title">Frontend React</h3>
+                    <p class="service-description">Interface utilisateur React pour la visualisation des données</p>
+                    <a href="http://localhost:3000" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-frontend"></span>
+                        Accéder au Frontend
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="category">
+            <h2 class="category-title">📈 Monitoring & Logs</h2>
+            <div class="services-grid">
+                <div class="service-card">
+                    <span class="service-icon">📊</span>
+                    <h3 class="service-title">Grafana Dashboard</h3>
+                    <p class="service-description">Visualisation des logs et métriques du système de trading</p>
+                    <a href="http://localhost:3000" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-grafana"></span>
+                        Accéder à Grafana (admin/admin)
+                    </a>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">🔍</span>
+                    <h3 class="service-title">Loki API</h3>
+                    <p class="service-description">API de logs centralisés pour l'agrégation des données</p>
+                    <a href="http://localhost:3100" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-loki"></span>
+                        Accéder à Loki API
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="category">
+            <h2 class="category-title">⚙️ Outils de Développement</h2>
+            <div class="services-grid">
+                <div class="service-card">
+                    <span class="service-icon">🗄️</span>
+                    <h3 class="service-title">phpMyAdmin</h3>
+                    <p class="service-description">Interface d'administration pour la base de données MySQL</p>
+                    <a href="http://localhost:8081" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-phpmyadmin"></span>
+                        Accéder à phpMyAdmin
+                    </a>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">⏰</span>
+                    <h3 class="service-title">Temporal UI</h3>
+                    <p class="service-description">Interface de gestion des workflows et activités Temporal</p>
+                    <a href="http://localhost:8233" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-temporal"></span>
+                        Accéder à Temporal UI
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="category">
+            <h2 class="category-title">🔧 Services Backend</h2>
+            <div class="services-grid">
+                <div class="service-card">
+                    <span class="service-icon">🐘</span>
+                    <h3 class="service-title">PostgreSQL Trading</h3>
+                    <p class="service-description">Base de données PostgreSQL pour l'application trading</p>
+                    <div class="service-description">
+                        <strong>Port:</strong> 5433<br>
+                        <strong>Host:</strong> localhost<br>
+                        <strong>Database:</strong> trading_app
+                    </div>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">🐬</span>
+                    <h3 class="service-title">MySQL Symfony</h3>
+                    <p class="service-description">Base de données MySQL pour l'application Symfony</p>
+                    <div class="service-description">
+                        <strong>Port:</strong> 3306<br>
+                        <strong>Host:</strong> localhost<br>
+                        <strong>Database:</strong> symfony_db
+                    </div>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">⚡</span>
+                    <h3 class="service-title">Temporal Server</h3>
+                    <p class="service-description">Serveur Temporal pour l'orchestration des workflows</p>
+                    <div class="service-description">
+                        <strong>Port:</strong> 7233<br>
+                        <strong>gRPC:</strong> localhost:7233<br>
+                        <strong>HTTP:</strong> localhost:8080
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>🚀 TradingV3 - Système de Trading Multi-Timeframe avec Logging Centralisé</p>
+            <p>Dernière mise à jour: <span id="last-update"></span></p>
+        </div>
+    </div>
+
+    <script>
+        // Mise à jour de l'heure
+        document.getElementById('last-update').textContent = new Date().toLocaleString('fr-FR');
+
+        // Vérification du statut des services
+        async function checkServiceStatus(url, statusId) {
+            try {
+                const response = await fetch(url, { 
+                    method: 'HEAD', 
+                    mode: 'no-cors',
+                    timeout: 5000 
+                });
+                document.getElementById(statusId).className = 'status-indicator status-online';
+                return true;
+            } catch (error) {
+                document.getElementById(statusId).className = 'status-indicator status-offline';
+                return false;
+            }
+        }
+
+        // Vérifier tous les services
+        async function checkAllServices() {
+            const services = [
+                { url: 'http://localhost:8082', id: 'status-trading-app' },
+                { url: 'http://localhost:8080', id: 'status-symfony-app' },
+                { url: 'http://localhost:3000', id: 'status-frontend' },
+                { url: 'http://localhost:3000', id: 'status-grafana' },
+                { url: 'http://localhost:3100', id: 'status-loki' },
+                { url: 'http://localhost:8081', id: 'status-phpmyadmin' },
+                { url: 'http://localhost:8233', id: 'status-temporal' }
+            ];
+
+            for (const service of services) {
+                await checkServiceStatus(service.url, service.id);
+                await new Promise(resolve => setTimeout(resolve, 500)); // Délai entre les vérifications
+            }
+        }
+
+        // Ouvrir tous les services
+        function openAllServices() {
+            const urls = [
+                'http://localhost:8082',  // Trading App
+                'http://localhost:8080',  // Symfony App
+                'http://localhost:3000',  // Frontend
+                'http://localhost:3000',  // Grafana
+                'http://localhost:3100',  // Loki
+                'http://localhost:8081',  // phpMyAdmin
+                'http://localhost:8233'   // Temporal UI
+            ];
+
+            urls.forEach(url => {
+                window.open(url, '_blank');
+            });
+        }
+
+        // Afficher les informations système
+        function showSystemInfo() {
+            const info = `
+🚀 TradingV3 - Informations Système
+
+📊 Services Disponibles:
+• Trading App: http://localhost:8082
+• Symfony App: http://localhost:8080  
+• Frontend React: http://localhost:3000
+• Grafana: http://localhost:3000 (admin/admin)
+• Loki API: http://localhost:3100
+• phpMyAdmin: http://localhost:8081
+• Temporal UI: http://localhost:8233
+
+🗄️ Bases de Données:
+• PostgreSQL (Trading): localhost:5433
+• MySQL (Symfony): localhost:3306
+
+⚡ Temporal:
+• gRPC: localhost:7233
+• HTTP: localhost:8080
+
+🔧 Commandes Utiles:
+• docker-compose ps - Voir l'état des services
+• docker-compose logs -f [service] - Voir les logs
+• ./scripts/start-logging-stack.sh - Démarrer la stack de logging
+            `;
+            
+            alert(info);
+        }
+
+        // Vérification automatique au chargement
+        window.addEventListener('load', () => {
+            setTimeout(checkAllServices, 1000);
+        });
+
+        // Actualisation automatique toutes les 30 secondes
+        setInterval(checkAllServices, 30000);
+    </script>
+</body>
+</html>
