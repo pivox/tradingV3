@@ -614,8 +614,23 @@ final class MtfService
         $known = [];
         foreach ($collector as $c) { $known[$c['tf']] = ['signal' => strtoupper((string)($c['signal_side'] ?? 'NONE'))]; }
 
+        // S'assurer que $klines contient des entités Kline et non des KlineDto
+        $klineEntities = [];
+        foreach ($klines as $kline) {
+            if ($kline instanceof \App\Domain\Common\Dto\KlineDto) {
+                // Convertir KlineDto en entité Kline si nécessaire
+                $this->logger->warning('[MTF] Found KlineDto in klines array, this should not happen', [
+                    'symbol' => $symbol,
+                    'timeframe' => $timeframe->value
+                ]);
+                continue; // Skip les KlineDto
+            } elseif ($kline instanceof \App\Entity\Kline) {
+                $klineEntities[] = $kline;
+            }
+        }
+
         // Valider via SignalValidationService
-        $res = $this->signalValidationService->validate(strtolower($timeframe->value), $klines, $known, $contract);
+        $res = $this->signalValidationService->validate(strtolower($timeframe->value), $klineEntities, $known, $contract);
         $tfKey = strtolower($timeframe->value);
         $eval = $res['signals'][$tfKey] ?? [];
         $sig = strtoupper((string)($eval['signal'] ?? 'NONE'));
