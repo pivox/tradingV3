@@ -31,9 +31,9 @@ class MtfRunService
     /**
      * Lance un cycle MTF en déléguant le traitement de chaque symbole à MtfService.
      * @param string[] $symbols
-     * @return array{summary: array, results: array}
+     * @return \Generator<int, array{symbol: string, result: array, progress: array}, array{summary: array, results: array}>
      */
-    public function run(array $symbols = [], bool $dryRun = true, bool $forceRun = false, ?string $currentTf = null, bool $forceTimeframeCheck = false): array
+    public function run(array $symbols = [], bool $dryRun = true, bool $forceRun = false, ?string $currentTf = null, bool $forceTimeframeCheck = false): \Generator
     {
         $startTime = microtime(true);
         $runId = Uuid::uuid4();
@@ -74,19 +74,17 @@ class MtfRunService
                 'started_at' => $this->clock->now()->format('Y-m-d H:i:s'),
             ]);
 
-            // Activer le verrou si nécessaire
-            if (false && !$this->mtfLockRepository->acquireLock($lockKey, $processId, $lockTimeout, $lockMetadata)) {
-                $existingLockInfo = $this->mtfLockRepository->getLockInfo($lockKey);
-                return [
-                    'summary' => [
-                        'run_id' => $runId->toString(),
-                        'status' => 'already_in_progress',
-                        'existing_lock' => $existingLockInfo,
-                        'current_tf' => $currentTf,
-                    ],
-                    'results' => [],
-                ];
-            }
+            // Activer le verrou si nécessaire (désactivé pour le moment)
+            // if (false && !$this->mtfLockRepository->acquireLock($lockKey, $processId, $lockTimeout, $lockMetadata)) {
+            //     $existingLockInfo = $this->mtfLockRepository->getLockInfo($lockKey);
+            //     $summary = [
+            //         'run_id' => $runId->toString(),
+            //         'status' => 'already_in_progress',
+            //         'existing_lock' => $existingLockInfo,
+            //         'current_tf' => $currentTf,
+            //     ];
+            //     return yield from $this->yieldFinalResult($summary, [], $startTime, $runId);
+            // }
             $lockAcquired = true;
             $this->logger->info('[MTF Run] Lock acquired', [
                 'run_id' => $runId->toString(),
@@ -128,21 +126,50 @@ class MtfRunService
                     'status' => 'no_active_symbols',
                 ];
                 $this->logger->info('[MTF Run] Completed - no active symbols');
-                return [ 'summary' => $summary, 'results' => [] ];
+                return yield from $this->yieldFinalResult($summary, [], $startTime, $runId);
             }
 
             $results = [];
             $now = $this->clock->now();
+            $totalSymbols = count($symbols);
 
-            foreach ($symbols as $symbol) {
-                $results[$symbol] = $this->mtfService->runForSymbol($runId, $symbol, $now, $currentTf, $forceTimeframeCheck, $forceRun);
+            foreach ($symbols as $index => $symbol) {
+                $mtfGenerator = $this->mtfService->runForSymbol($runId, $symbol, $now, $currentTf, $forceTimeframeCheck, $forceRun);
+                
+                // Consommer le generator de MtfService et récupérer le résultat
+                $result = null;
+                foreach ($mtfGenerator as $mtfYieldedData) {
+                    $result = $mtfYieldedData['result'];
+                    
+                    // Yield progress information avec les données de MtfService
+                    $progress = [
+                        'current' => $index + 1,
+                        'total' => $totalSymbols,
+                        'percentage' => round((($index + 1) / $totalSymbols) * 100, 2),
+                        'symbol' => $symbol,
+                        'status' => $result['status'] ?? 'unknown',
+                        'mtf_progress' => $mtfYieldedData['progress'] ?? null,
+                    ];
+                    
+                    yield [
+                        'symbol' => $symbol,
+                        'result' => $result,
+                        'progress' => $progress,
+                    ];
+                }
+                
+                // Récupérer le résultat final du generator
+                $finalResult = $mtfGenerator->getReturn();
+                if ($finalResult !== null) {
+                    $results[$symbol] = $finalResult;
+                } elseif ($result !== null) {
+                    $results[$symbol] = $result;
+                }
             }
 
-            $endTime = microtime(true);
-            $executionTime = $endTime - $startTime;
             $summary = [
                 'run_id' => $runId->toString(),
-                'execution_time_seconds' => round($executionTime, 3),
+                'execution_time_seconds' => round(microtime(true) - $startTime, 3),
                 'symbols_requested' => count($symbols),
                 'symbols_processed' => count($results),
                 'symbols_successful' => count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'SUCCESS')),
@@ -157,7 +184,7 @@ class MtfRunService
             ];
 
             $this->logger->info('[MTF Run] Completed', $summary);
-            return [ 'summary' => $summary, 'results' => $results ];
+            return yield from $this->yieldFinalResult($summary, $results, $startTime, $runId);
         } finally {
             if ($lockAcquired) {
                 $released = $this->mtfLockRepository->releaseLock($lockKey, $processId);
@@ -256,5 +283,33 @@ class MtfRunService
         $signalSide = strtoupper((string)($result['signal_side'] ?? 'NONE'));
 
         return $aligned && $contextDir !== 'NONE' && $contextDir === $signalSide;
+    }
+
+    /**
+     * Helper method to yield final result
+     * @param array $summary
+     * @param array $results
+     * @param float $startTime
+     * @param \Ramsey\Uuid\UuidInterface $runId
+     * @return \Generator<int, array{symbol: string, result: array, progress: array}, array{summary: array, results: array}>
+     */
+    private function yieldFinalResult(array $summary, array $results, float $startTime, \Ramsey\Uuid\UuidInterface $runId): \Generator
+    {
+        // Yield final summary as progress
+        yield [
+            'symbol' => 'FINAL',
+            'result' => $summary,
+            'progress' => [
+                'current' => count($results),
+                'total' => count($results),
+                'percentage' => 100.0,
+                'symbol' => 'FINAL',
+                'status' => 'completed',
+                'execution_time' => round(microtime(true) - $startTime, 3),
+            ],
+        ];
+        
+        // Return final result
+        return ['summary' => $summary, 'results' => $results];
     }
 }

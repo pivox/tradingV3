@@ -14,6 +14,7 @@ use App\Repository\KlineRepository;
 use App\Repository\MtfAuditRepository;
 use App\Repository\MtfStateRepository;
 use App\Repository\MtfSwitchRepository;
+use App\Repository\ContractRepository;
 use Brick\Math\BigDecimal;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;
@@ -28,14 +29,13 @@ use App\Infrastructure\Cache\DbValidationCache;
 
 final class MtfService
 {
-    private const SYMBOLS_TO_WATCH = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT', 'DOTUSDT'];
-
     public function __construct(
         private readonly MtfTimeService $timeService,
         private readonly KlineRepository $klineRepository,
         private readonly MtfStateRepository $mtfStateRepository,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly MtfAuditRepository $mtfAuditRepository,
+        private readonly ContractRepository $contractRepository,
         private readonly SignalValidationService $signalValidationService,
         private readonly LoggerInterface $logger,
         private readonly MtfConfigProviderInterface $mtfConfig,
@@ -55,8 +55,9 @@ final class MtfService
 
     /**
      * Exécute le cycle MTF complet pour tous les symboles
+     * @return \Generator<int, array{symbol: string, result: array, progress: array}, array>
      */
-    public function executeMtfCycle(UuidInterface $runId): array
+    public function executeMtfCycle(UuidInterface $runId): \Generator
     {
         $this->logger->info('[MTF] Starting MTF cycle', ['run_id' => $runId->toString()]);
         
@@ -67,13 +68,53 @@ final class MtfService
         if (!$this->mtfSwitchRepository->isGlobalSwitchOn()) {
             $this->logger->warning('[MTF] Global kill switch is OFF, skipping cycle');
             $this->auditStep($runId, 'GLOBAL', 'KILL_SWITCH_OFF', 'Global kill switch is OFF');
+            yield [
+                'symbol' => 'GLOBAL',
+                'result' => ['status' => 'SKIPPED', 'reason' => 'Global kill switch OFF'],
+                'progress' => ['current' => 0, 'total' => 0, 'percentage' => 0, 'symbol' => 'GLOBAL', 'status' => 'SKIPPED']
+            ];
             return ['status' => 'SKIPPED', 'reason' => 'Global kill switch OFF'];
         }
 
-        foreach (self::SYMBOLS_TO_WATCH as $symbol) {
+        // Récupérer tous les symboles actifs depuis la base de données
+        $activeSymbols = $this->contractRepository->allActiveSymbolNames();
+        
+        if (empty($activeSymbols)) {
+            $this->logger->warning('[MTF] No active symbols found');
+            $this->auditStep($runId, 'GLOBAL', 'NO_ACTIVE_SYMBOLS', 'No active symbols found');
+            yield [
+                'symbol' => 'GLOBAL',
+                'result' => ['status' => 'SKIPPED', 'reason' => 'No active symbols found'],
+                'progress' => ['current' => 0, 'total' => 0, 'percentage' => 0, 'symbol' => 'GLOBAL', 'status' => 'SKIPPED']
+            ];
+            return ['status' => 'SKIPPED', 'reason' => 'No active symbols found'];
+        }
+
+        $this->logger->info('[MTF] Processing symbols', [
+            'count' => count($activeSymbols),
+            'symbols' => array_slice($activeSymbols, 0, 10) // Log only first 10 for brevity
+        ]);
+
+        $totalSymbols = count($activeSymbols);
+        foreach ($activeSymbols as $index => $symbol) {
             try {
                 $result = $this->processSymbol($symbol, $runId, $now, '4h');
                 $results[$symbol] = $result;
+                
+                // Yield progress information
+                $progress = [
+                    'current' => $index + 1,
+                    'total' => $totalSymbols,
+                    'percentage' => round((($index + 1) / $totalSymbols) * 100, 2),
+                    'symbol' => $symbol,
+                    'status' => $result['status'] ?? 'unknown',
+                ];
+                
+                yield [
+                    'symbol' => $symbol,
+                    'result' => $result,
+                    'progress' => $progress,
+                ];
             } catch (\Exception $e) {
                 $this->logger->error('[MTF] Error processing symbol', [
                     'symbol' => $symbol,
@@ -81,7 +122,23 @@ final class MtfService
                     'trace' => $e->getTraceAsString()
                 ]);
                 $this->auditStep($runId, $symbol, 'ERROR', $e->getMessage());
-                $results[$symbol] = ['status' => 'ERROR', 'error' => $e->getMessage()];
+                $errorResult = ['status' => 'ERROR', 'error' => $e->getMessage()];
+                $results[$symbol] = $errorResult;
+                
+                // Yield error information
+                $progress = [
+                    'current' => $index + 1,
+                    'total' => $totalSymbols,
+                    'percentage' => round((($index + 1) / $totalSymbols) * 100, 2),
+                    'symbol' => $symbol,
+                    'status' => 'ERROR',
+                ];
+                
+                yield [
+                    'symbol' => $symbol,
+                    'result' => $errorResult,
+                    'progress' => $progress,
+                ];
             }
         }
 
@@ -89,6 +146,26 @@ final class MtfService
             'run_id' => $runId->toString(),
             'results' => $results
         ]);
+
+        // Yield final summary
+        yield [
+            'symbol' => 'FINAL',
+            'result' => [
+                'status' => 'COMPLETED',
+                'total_symbols' => $totalSymbols,
+                'processed_symbols' => count($results),
+                'successful_symbols' => count(array_filter($results, fn($r) => ($r['status'] ?? '') === 'READY')),
+                'error_symbols' => count(array_filter($results, fn($r) => ($r['status'] ?? '') === 'ERROR')),
+                'skipped_symbols' => count(array_filter($results, fn($r) => ($r['status'] ?? '') === 'SKIPPED')),
+            ],
+            'progress' => [
+                'current' => $totalSymbols,
+                'total' => $totalSymbols,
+                'percentage' => 100.0,
+                'symbol' => 'FINAL',
+                'status' => 'COMPLETED',
+            ],
+        ];
 
         return $results;
     }
@@ -715,9 +792,27 @@ final class MtfService
 
     /**
      * Expose le traitement d'un symbole pour délégation externe.
+     * @return \Generator<int, array{symbol: string, result: array, progress: array}, array>
      */
-    public function runForSymbol(\Ramsey\Uuid\UuidInterface $runId, string $symbol, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false): array
+    public function runForSymbol(\Ramsey\Uuid\UuidInterface $runId, string $symbol, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false): \Generator
     {
-        return $this->processSymbol($symbol, $runId, $now, $currentTf, $forceTimeframeCheck, $forceRun);
+        $result = $this->processSymbol($symbol, $runId, $now, $currentTf, $forceTimeframeCheck, $forceRun);
+        
+        // Yield progress information for single symbol
+        $progress = [
+            'current' => 1,
+            'total' => 1,
+            'percentage' => 100.0,
+            'symbol' => $symbol,
+            'status' => $result['status'] ?? 'unknown',
+        ];
+        
+        yield [
+            'symbol' => $symbol,
+            'result' => $result,
+            'progress' => $progress,
+        ];
+        
+        return $result;
     }
 }
