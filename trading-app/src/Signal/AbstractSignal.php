@@ -30,7 +30,14 @@ abstract class AbstractSignal implements SignalServiceInterface
         // Extraire OHLCV depuis les entités Kline
         $closes = [];$highs=[];$lows=[];$volumes=[];
         foreach ($klines as $k) {
-            if (!$k instanceof Kline) { continue; }
+            if (!$k instanceof Kline) { 
+                $this->validationLogger->error('[AbstractSignal] Non-Kline object found in klines array', [
+                    'object_type' => get_class($k),
+                    'timeframe' => $tf,
+                    'symbol' => $contract->getSymbol()
+                ]);
+                continue; 
+            }
             $closes[] = (float) $k->getClosePrice()->toScale(12)->__toString();
             $highs[]  = (float) $k->getHighPrice()->toScale(12)->__toString();
             $lows[]   = (float) $k->getLowPrice()->toScale(12)->__toString();
