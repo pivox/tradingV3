@@ -23,8 +23,8 @@ class StrategyBacktester
      * @param StrategyInterface[] $strategies
      */
     public function __construct(
-        private array $strategies = [],
-        private readonly ClockInterface $clock
+        private readonly ClockInterface $clock,
+        private array $strategies = []
     ) {
     }
 

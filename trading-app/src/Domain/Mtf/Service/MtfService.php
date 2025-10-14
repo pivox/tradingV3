@@ -23,6 +23,7 @@ use App\Domain\Ports\Out\KlineProviderPort;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use App\Infrastructure\Persistence\SignalPersistenceService;
+use App\Infrastructure\Persistence\KlineJsonIngestionService;
 use App\Infrastructure\Cache\DbValidationCache;
 
 final class MtfService
@@ -43,6 +44,7 @@ final class MtfService
         private readonly ClockInterface $clock,
         private readonly ?SignalPersistenceService $signalPersistenceService = null,
         private readonly ?DbValidationCache $validationCache = null,
+        private readonly ?KlineJsonIngestionService $klineJsonIngestion = null,
     ) {
     }
 
@@ -302,8 +304,64 @@ final class MtfService
     }
 
     /**
+     * NOUVELLE MÉTHODE : Remplit les klines manquantes en masse
+     */
+    private function fillMissingKlinesInBulk(
+        string $symbol, 
+        Timeframe $timeframe, 
+        int $requiredLimit, 
+        \DateTimeImmutable $now,
+        UuidInterface $runId
+    ): void {
+        if (!$this->klineJsonIngestion) {
+            $this->logger->warning('[MTF] KlineJsonIngestionService not available, skipping bulk fill');
+            return;
+        }
+
+        $this->logger->info('[MTF] Filling missing klines in bulk', [
+            'symbol' => $symbol,
+            'timeframe' => $timeframe->value,
+            'required_limit' => $requiredLimit
+        ]);
+
+        // Calculer la période à récupérer
+        $intervalMinutes = $timeframe->getStepInMinutes();
+        $startDate = (clone $now)->sub(new \DateInterval('PT' . ($requiredLimit * $intervalMinutes) . 'M'));
+        
+        // Fetch toutes les klines manquantes d'un coup
+        $fetchedKlines = $this->klineProvider->fetchKlinesInWindow(
+            $symbol,
+            $timeframe,
+            $startDate,
+            $now,
+            $requiredLimit * 2 // Récupérer un peu plus pour être sûr
+        );
+
+        if (empty($fetchedKlines)) {
+            $this->logger->warning('[MTF] No klines fetched from BitMart', [
+                'symbol' => $symbol,
+                'timeframe' => $timeframe->value
+            ]);
+            return;
+        }
+
+        // Insertion en masse via la fonction SQL JSON
+        $result = $this->klineJsonIngestion->ingestKlinesBatch($fetchedKlines);
+        
+        $this->logger->info('[MTF] Bulk klines insertion completed', [
+            'symbol' => $symbol,
+            'timeframe' => $timeframe->value,
+            'fetched_count' => count($fetchedKlines),
+            'inserted_count' => $result->count,
+            'duration_ms' => $result->durationMs
+        ]);
+    }
+
+    /**
      * Valide un timeframe via SignalValidationService. Retourne INVALID si signal = NONE.
-     * Ajoute l’état minimal dans $collector pour construire le contexte MTF.
+     * Ajoute l'état minimal dans $collector pour construire le contexte MTF.
+     * 
+     * NOUVELLE LOGIQUE : Insertion en masse au lieu de backfill complexe
      */
     private function processTimeframe(string $symbol, Timeframe $timeframe, UuidInterface $runId, \DateTimeImmutable $now, array &$collector, bool $forceTimeframeCheck = false, bool $forceRun = false): array
     {
@@ -317,20 +375,37 @@ final class MtfService
         }
         
         $klines = $this->klineRepository->findBySymbolAndTimeframe($symbol, $timeframe, $limit);
+        
+        // 🔥 NOUVELLE LOGIQUE : Si pas assez de klines → INSÉRER EN MASSE
         if (count($klines) < $limit) {
-            // Désactiver le symbole pour une durée basée sur le nombre de barres manquantes
-            $missingBars = $limit - count($klines);
-            $duration = ($missingBars * $timeframe->getStepInMinutes() + $timeframe->getStepInMinutes()) . ' minutes';
-            $this->mtfSwitchRepository->turnOffSymbolForDuration($symbol, $duration);
-            
-            $this->auditStep($runId, $symbol, "{$timeframe->value}_INSUFFICIENT_DATA", "Insufficient bars for {$timeframe->value}", [
+            $this->logger->info('[MTF] Insufficient klines, filling in bulk', [
+                'symbol' => $symbol,
                 'timeframe' => $timeframe->value,
-                'bars_count' => count($klines),
-                'min_bars' => $limit,
-                'missing_bars' => $missingBars,
-                'duration_disabled' => $duration
+                'current_count' => count($klines),
+                'required_count' => $limit
             ]);
-            return ['status' => 'SKIPPED', 'reason' => 'INSUFFICIENT_DATA', 'failed_timeframe' => $timeframe->value];
+            
+            // Remplir les klines manquantes en masse
+            $this->fillMissingKlinesInBulk($symbol, $timeframe, $limit, $now, $runId);
+            
+            // Recharger les klines après insertion
+            $klines = $this->klineRepository->findBySymbolAndTimeframe($symbol, $timeframe, $limit);
+            
+            // Si toujours pas assez après insertion → désactiver temporairement
+            if (count($klines) < $limit) {
+                $missingBars = $limit - count($klines);
+                $duration = ($missingBars * $timeframe->getStepInMinutes() + $timeframe->getStepInMinutes()) . ' minutes';
+                $this->mtfSwitchRepository->turnOffSymbolForDuration($symbol, $duration);
+                
+                $this->auditStep($runId, $symbol, "{$timeframe->value}_INSUFFICIENT_DATA_AFTER_FILL", "Still insufficient bars after bulk fill", [
+                    'timeframe' => $timeframe->value,
+                    'bars_count' => count($klines),
+                    'min_bars' => $limit,
+                    'missing_bars' => $missingBars,
+                    'duration_disabled' => $duration
+                ]);
+                return ['status' => 'SKIPPED', 'reason' => 'INSUFFICIENT_DATA_AFTER_FILL', 'failed_timeframe' => $timeframe->value];
+            }
         }
 
         // Ajout de la vérification de la fraîcheur de la dernière kline (sauf si force-run ou force-timeframe-check)
@@ -362,14 +437,12 @@ final class MtfService
             return ['status' => 'GRACE_WINDOW', 'reason' => "In grace window for {$timeframe->value}"];
         }
 
-        // Vérifier s'il y a des klines (déjà chargées plus haut)
-        if ($klines === []) {
-            $this->auditStep($runId, $symbol, "{$timeframe->value}_BACKFILL_NEEDED", "No klines for {$timeframe->value}", ['timeframe' => $timeframe->value]);
-            return ['status' => 'BACKFILL_NEEDED', 'reason' => "Kline missing for {$timeframe->value}", 'timeframe' => $timeframe->value];
-        }
+        // ✅ SUITE NORMALE : Vérifications de fraîcheur, kill switches, etc.
         // Reverser en ordre chronologique ascendant
         usort($klines, fn($a, $b) => $a->getOpenTime() <=> $b->getOpenTime());
 
+        // 🔄 ANCIENNE LOGIQUE COMMENTÉE POUR ROLLBACK POSSIBLE
+        /*
         // --- Détection et comblement des trous via getMissingKlineChunks ---
 
         // Calculer la plage temporelle à analyser
@@ -453,8 +526,9 @@ final class MtfService
                 }
             }
         }
+        */
 
-        // --- Fin de la logique de comblement ---
+        // --- Fin de la logique de comblement (ANCIENNE LOGIQUE COMMENTÉE) ---
 
         // Construire Contract avec symbole (requis par AbstractSignal->buildIndicatorContext)
         $contract = (new Contract())->setSymbol($symbol);

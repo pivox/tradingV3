@@ -122,7 +122,8 @@ const BlacklistedContractPage = () => {
     return (
         <div className="blacklisted-contract-page">
             <div className="page-header">
-                <h1>Contrats Blacklistés</h1>
+                <h1>Gestion de la Blacklist</h1>
+                <p className="page-subtitle">Gérer une blacklist de symboles avec raison et expiration</p>
                 <div className="page-actions">
                     <button 
                         className="btn btn-secondary"

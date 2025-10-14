@@ -64,6 +64,15 @@ atr:
     meta: >
         ATR(5m) pour le stop et le R-multiple. SL initial = 1.5x ATR, TP = 2R.
 
+# ======== INDICATOR CALCULATION MODE ========
+indicator_calculation:
+    mode: sql                            # 'php' ou 'sql'
+    fallback_to_php: false                # fallback vers PHP si SQL échoue
+    performance_threshold_ms: 10        # seuil de performance pour switch automatique
+    meta: >
+        Mode de calcul des indicateurs: 'sql' utilise les vues matérialisées PostgreSQL,
+        'php' utilise les calculs en mémoire. Fallback automatique si SQL échoue.
+
 indicators:
     ema:
         fast: 20

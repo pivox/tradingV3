@@ -10,6 +10,7 @@ const IndicatorSnapshotPage = () => {
         symbol: '',
         timeframe: '',
         indicatorName: '',
+        at: '', // Timestamp spécifique pour l'US-003
         dateFrom: '',
         dateTo: ''
     });
@@ -88,6 +89,7 @@ const IndicatorSnapshotPage = () => {
             symbol: '',
             timeframe: '',
             indicatorName: '',
+            at: '',
             dateFrom: '',
             dateTo: ''
         });
@@ -113,6 +115,24 @@ const IndicatorSnapshotPage = () => {
     const formatJsonData = (jsonData) => {
         if (!jsonData || Object.keys(jsonData).length === 0) return null;
         return JSON.stringify(jsonData, null, 2);
+    };
+
+    const getFreshnessStatus = (createdAt) => {
+        if (!createdAt) return { status: 'unknown', text: 'Inconnu', class: 'badge-secondary' };
+        
+        const now = new Date();
+        const created = new Date(createdAt);
+        const diffMinutes = (now - created) / (1000 * 60);
+        
+        if (diffMinutes < 5) {
+            return { status: 'fresh', text: 'Très frais', class: 'badge-success' };
+        } else if (diffMinutes < 30) {
+            return { status: 'recent', text: 'Récent', class: 'badge-info' };
+        } else if (diffMinutes < 60) {
+            return { status: 'moderate', text: 'Modéré', class: 'badge-warning' };
+        } else {
+            return { status: 'stale', text: 'Ancien', class: 'badge-danger' };
+        }
     };
 
     return (
@@ -178,6 +198,17 @@ const IndicatorSnapshotPage = () => {
                     </div>
 
                     <div className="filter-group">
+                        <label>Timestamp spécifique (at)</label>
+                        <input
+                            type="datetime-local"
+                            placeholder="Ex: 2024-01-15T10:30:00"
+                            value={filters.at}
+                            onChange={(e) => handleFilterChange('at', e.target.value)}
+                            className="form-control"
+                        />
+                    </div>
+
+                    <div className="filter-group">
                         <label>Date de début</label>
                         <input
                             type="datetime-local"
@@ -236,6 +267,7 @@ const IndicatorSnapshotPage = () => {
                                 Indicateur {sortConfig.key === 'indicatorName' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                             </th>
                             <th>Valeurs</th>
+                            <th>Fraîcheur</th>
                             <th 
                                 className="sortable"
                                 onClick={() => handleSort('createdAt')}
@@ -247,13 +279,13 @@ const IndicatorSnapshotPage = () => {
                     <tbody>
                         {loading ? (
                             <tr>
-                                <td colSpan="6" className="text-center">
+                                <td colSpan="7" className="text-center">
                                     <div className="loading">Chargement des snapshots...</div>
                                 </td>
                             </tr>
                         ) : snapshots.length === 0 ? (
                             <tr>
-                                <td colSpan="6" className="text-center">
+                                <td colSpan="7" className="text-center">
                                     <div className="no-data">Aucun snapshot trouvé</div>
                                 </td>
                             </tr>
@@ -283,6 +315,16 @@ const IndicatorSnapshotPage = () => {
                                         ) : (
                                             <span className="text-muted">-</span>
                                         )}
+                                    </td>
+                                    <td>
+                                        {(() => {
+                                            const freshness = getFreshnessStatus(snapshot.createdAt);
+                                            return (
+                                                <span className={`badge ${freshness.class}`}>
+                                                    {freshness.text}
+                                                </span>
+                                            );
+                                        })()}
                                     </td>
                                     <td>{formatDate(snapshot.createdAt)}</td>
                                 </tr>
