@@ -2,16 +2,16 @@
 
 namespace App\Logging;
 
-use Monolog\Logger;
+use Psr\Log\LoggerInterface;
 
 /**
  * Helper pour faciliter l'utilisation des canaux de logging métier
  */
 class LoggerHelper
 {
-    private Logger $logger;
+    private LoggerInterface $logger;
 
-    public function __construct(Logger $logger)
+    public function __construct(LoggerInterface $logger)
     {
         $this->logger = $logger;
     }

@@ -11,14 +11,14 @@ datasources:
       maxLines: 1000
       derivedFields:
         - datasourceUid: loki
-          matcherRegex: "symbol=(\\w+)"
+          matcherRegex: "\\[(\\w+USDT)\\]"
           name: Symbol
-          url: "/explore?orgId=1&left={\"datasource\":\"Loki\",\"queries\":[{\"expr\":\"{job=\\\"symfony\\\", symbol=\\\"$1\\\"}\",\"refId\":\"A\"}],\"range\":{\"from\":\"now-1h\",\"to\":\"now\"}}"
+          url: "/explore?orgId=1&left={\"datasource\":\"Loki\",\"queries\":[{\"expr\":\"{job=\\\"symfony\\\"} |= \\\"$1\\\"\",\"refId\":\"A\"}],\"range\":{\"from\":\"now-1h\",\"to\":\"now\"}}"
         - datasourceUid: loki
-          matcherRegex: "timeframe=(\\w+)"
+          matcherRegex: "\\[(\\d+[hm])\\]"
           name: Timeframe
-          url: "/explore?orgId=1&left={\"datasource\":\"Loki\",\"queries\":[{\"expr\":\"{job=\\\"symfony\\\", timeframe=\\\"$1\\\"}\",\"refId\":\"A\"}],\"range\":{\"from\":\"now-1h\",\"to\":\"now\"}}"
+          url: "/explore?orgId=1&left={\"datasource\":\"Loki\",\"queries\":[{\"expr\":\"{job=\\\"symfony\\\"} |= \\\"$1\\\"\",\"refId\":\"A\"}],\"range\":{\"from\":\"now-1h\",\"to\":\"now\"}}"
         - datasourceUid: loki
-          matcherRegex: "side=(\\w+)"
+          matcherRegex: "\\[(BUY|SELL|NONE)\\]"
           name: Side
-          url: "/explore?orgId=1&left={\"datasource\":\"Loki\",\"queries\":[{\"expr\":\"{job=\\\"symfony\\\", side=\\\"$1\\\"}\",\"refId\":\"A\"}],\"range\":{\"from\":\"now-1h\",\"to\":\"now\"}}"
+          url: "/explore?orgId=1&left={\"datasource\":\"Loki\",\"queries\":[{\"expr\":\"{job=\\\"symfony\\\"} |= \\\"$1\\\"\",\"refId\":\"A\"}],\"range\":{\"from\":\"now-1h\",\"to\":\"now\"}}"

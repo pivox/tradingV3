@@ -22,7 +22,6 @@ mtf:
     refill_interval: '%env(int:MTF_RATE_LIMIT_REFILL_INTERVAL)%'
   
   # Configuration MTF
-  symbols_to_watch: '%env(csv:MTF_SYMBOLS_TO_WATCH)%'
   grace_window_minutes: '%env(int:MTF_GRACE_WINDOW_MINUTES)%'
   max_candles_per_request: '%env(int:MTF_MAX_CANDLES_PER_REQUEST)%'
   max_retries: '%env(int:MTF_MAX_RETRIES)%'
