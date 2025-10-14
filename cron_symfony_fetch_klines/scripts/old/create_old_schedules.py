@@ -1,4 +1,4 @@
-# scripts/create_all_schedules.py
+# scripts/create_old_schedules.py
 import os, sys, argparse, asyncio
 from typing import Dict, Any, List
 

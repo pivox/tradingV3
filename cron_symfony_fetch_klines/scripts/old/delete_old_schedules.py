@@ -1,5 +1,5 @@
 
-# scripts/delete_all_schedules.py
+# scripts/create_old_schedules.py
 import os, sys, argparse, asyncio
 from typing import List, Optional
 
@@ -12,9 +12,9 @@ KNOWN_SCHEDULE_IDS = []
 try:
     import importlib.util, pathlib
     current_dir = pathlib.Path(__file__).resolve().parent
-    candidate = current_dir / "create_all_schedules.py"
+    candidate = current_dir / "create_old_schedules.py"
     if candidate.exists():
-        spec = importlib.util.spec_from_file_location("create_all_schedules", candidate)
+        spec = importlib.util.spec_from_file_location("create_old_schedules", candidate)
         mod = importlib.util.module_from_spec(spec)  # type: ignore
         assert spec and spec.loader
         spec.loader.exec_module(mod)  # type: ignore
@@ -28,7 +28,7 @@ except Exception:
 
 async def delete_known(client: Client, *, filter_prefix: Optional[str], dry_run: bool) -> None:
     if not KNOWN_SCHEDULE_IDS:
-        print("[info] Aucun schedule connu via create_all_schedules.py, on bascule en mode list...")
+        print("[info] Aucun schedule connu via create_old_schedules.py, on bascule en mode list...")
         await delete_by_listing(client, filter_prefix=filter_prefix, dry_run=dry_run)
         return
 
@@ -71,7 +71,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Supprimer des Schedules Temporal (delete).")
     p.add_argument("--filter", type=str, default=None, help="Filtrer par préfixe d'ID (ex: 'cron-symfony-').")
     p.add_argument("--dry-run", action="store_true", help="Afficher ce qui serait fait sans exécuter.")
-    p.add_argument("--list", action="store_true", help="Lister côté serveur et agir sur tous les schedules (au lieu d'utiliser la liste connue du fichier create_all_schedules.py).")
+    p.add_argument("--list", action="store_true", help="Lister côté serveur et agir sur tous les schedules (au lieu d'utiliser la liste connue du fichier create_old_schedules.py).")
     return p.parse_args(argv)
 
 if __name__ == "__main__":
