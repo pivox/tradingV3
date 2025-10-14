@@ -50,8 +50,8 @@ final class KlineJsonIngestionService
             $this->logger->info('[KlineJsonIngestion] Batch ingested successfully', [
                 'count' => count($klines),
                 'duration_ms' => round($duration, 2),
-                'symbol' => $klines[0]['symbol'] ?? $klines[0]->symbol ?? 'unknown',
-                'timeframe' => $klines[0]['timeframe'] ?? $klines[0]->timeframe->value ?? 'unknown'
+                'symbol' => is_object($klines[0]) ? $klines[0]->symbol : ($klines[0]['symbol'] ?? 'unknown'),
+                'timeframe' => is_object($klines[0]) ? $klines[0]->timeframe->value : ($klines[0]['timeframe'] ?? 'unknown')
             ]);
             
             return new IngestionResult(
@@ -66,7 +66,7 @@ final class KlineJsonIngestionService
             $this->logger->error('[KlineJsonIngestion] Batch failed', [
                 'count' => count($klines),
                 'error' => $e->getMessage(),
-                'symbol' => $klines[0]['symbol'] ?? $klines[0]->symbol ?? 'unknown'
+                'symbol' => is_object($klines[0]) ? $klines[0]->symbol : ($klines[0]['symbol'] ?? 'unknown')
             ]);
             
             throw $e;

@@ -442,6 +442,7 @@ final class MtfService
      */
     private function processTimeframe(string $symbol, Timeframe $timeframe, UuidInterface $runId, \DateTimeImmutable $now, array &$collector, bool $forceTimeframeCheck = false, bool $forceRun = false): array
     {
+        try {
         // Vérification des min_bars AVANT la vérification TOO_RECENT pour désactiver les symboles si nécessaire
         $limit = 270; // fallback
         try {
@@ -616,21 +617,63 @@ final class MtfService
 
         // S'assurer que $klines contient des entités Kline et non des KlineDto
         $klineEntities = [];
+        $klineDtoCount = 0;
+        $klineEntityCount = 0;
+        $unknownCount = 0;
+        
         foreach ($klines as $kline) {
             if ($kline instanceof \App\Domain\Common\Dto\KlineDto) {
-                // Convertir KlineDto en entité Kline si nécessaire
+                $klineDtoCount++;
                 $this->logger->warning('[MTF] Found KlineDto in klines array, this should not happen', [
                     'symbol' => $symbol,
-                    'timeframe' => $timeframe->value
+                    'timeframe' => $timeframe->value,
+                    'kline_dto_count' => $klineDtoCount
                 ]);
                 continue; // Skip les KlineDto
             } elseif ($kline instanceof \App\Entity\Kline) {
+                $klineEntityCount++;
                 $klineEntities[] = $kline;
+            } else {
+                $unknownCount++;
+                $this->logger->error('[MTF] Found unknown object type in klines array', [
+                    'symbol' => $symbol,
+                    'timeframe' => $timeframe->value,
+                    'object_type' => get_class($kline),
+                    'unknown_count' => $unknownCount
+                ]);
             }
         }
+        
+        $this->logger->info('[MTF] Klines filtering results', [
+            'symbol' => $symbol,
+            'timeframe' => $timeframe->value,
+            'total_klines' => count($klines),
+            'kline_entities' => $klineEntityCount,
+            'kline_dtos' => $klineDtoCount,
+            'unknown_objects' => $unknownCount
+        ]);
 
         // Valider via SignalValidationService
-        $res = $this->signalValidationService->validate(strtolower($timeframe->value), $klineEntities, $known, $contract);
+        try {
+            $res = $this->signalValidationService->validate(strtolower($timeframe->value), $klineEntities, $known, $contract);
+        } catch (\Throwable $e) {
+            $this->logger->error('[MTF] Error in SignalValidationService::validate', [
+                'symbol' => $symbol,
+                'timeframe' => $timeframe->value,
+                'error' => $e->getMessage(),
+                'kline_entities_count' => count($klineEntities),
+                'kline_dto_count' => $klineDtoCount,
+                'unknown_count' => $unknownCount
+            ]);
+            
+            // Retourner un résultat d'erreur au lieu de faire planter
+            return [
+                'status' => 'ERROR',
+                'reason' => 'VALIDATION_ERROR',
+                'error' => $e->getMessage(),
+                'failed_timeframe' => $timeframe->value
+            ];
+        }
         $tfKey = strtolower($timeframe->value);
         $eval = $res['signals'][$tfKey] ?? [];
         $sig = strtoupper((string)($eval['signal'] ?? 'NONE'));
@@ -693,6 +736,22 @@ final class MtfService
             'atr' => $atrValue,
             'indicator_context' => $indicatorContext,
         ];
+        
+        } catch (\Throwable $e) {
+            $this->logger->error('[MTF] Error in processTimeframe', [
+                'symbol' => $symbol,
+                'timeframe' => $timeframe->value,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return [
+                'status' => 'ERROR',
+                'reason' => 'PROCESS_TIMEFRAME_ERROR',
+                'error' => $e->getMessage(),
+                'failed_timeframe' => $timeframe->value
+            ];
+        }
     }
 
     private function getConsistentSideSimple(array $states): string
