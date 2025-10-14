@@ -192,4 +192,44 @@ class KlineRepository extends ServiceEntityRepository
 
         return $klines;
     }
+
+    public function findWithFilters(?string $contract = null, ?int $step = null, ?string $exchange = null, ?string $dateFrom = null, ?string $dateTo = null): array
+    {
+        $qb = $this->createQueryBuilder('k')
+            ->leftJoin('k.contract', 'c')
+            ->addSelect('c')
+            ->leftJoin('c.exchange', 'e')
+            ->addSelect('e')
+            ->orderBy('k.timestamp', 'DESC')
+            ->setMaxResults(1000); // Limiter pour les performances
+
+        if ($contract) {
+            $qb->andWhere('c.symbol LIKE :contract')
+                ->setParameter('contract', '%' . $contract . '%');
+        }
+
+        if ($step) {
+            $qb->andWhere('k.step = :step')
+                ->setParameter('step', $step);
+        }
+
+        if ($exchange) {
+            $qb->andWhere('e.name = :exchange')
+                ->setParameter('exchange', $exchange);
+        }
+
+        if ($dateFrom) {
+            $date = new \DateTime($dateFrom);
+            $qb->andWhere('k.timestamp >= :dateFrom')
+                ->setParameter('dateFrom', $date);
+        }
+
+        if ($dateTo) {
+            $date = new \DateTime($dateTo);
+            $qb->andWhere('k.timestamp <= :dateTo')
+                ->setParameter('dateTo', $date);
+        }
+
+        return $qb->getQuery()->getResult();
+    }
 }

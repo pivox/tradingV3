@@ -3,12 +3,11 @@
 namespace App\Controller\Bitmart;
 
 use App\Entity\Contract;
-use App\Repository\ContractPipelineRepository;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Service\Exchange\Bitmart\BitmartFetcher;
 use App\Service\Persister\ContractPersister;
-use App\Service\Pipeline\ContractPipelineService;
+use App\Service\Pipeline\MtfStateService;
 use App\Service\Temporal\Dto\WorkflowRef;
 use App\Service\Temporal\Orchestrators\BitmartOrchestrator;
 use Doctrine\ORM\EntityManagerInterface;
@@ -37,7 +36,7 @@ class ContractCallbackController extends AbstractController
         EntityManagerInterface $em,
         ContractPersister $persister,
         BitmartFetcher $bitmartFetcher,
-        ContractPipelineService $pipelineService,
+        MtfStateService $mtfStateService,
         LoggerInterface $logger,
     ): JsonResponse {
         $startedAt = microtime(true);
@@ -126,7 +125,7 @@ class ContractCallbackController extends AbstractController
                     continue;
                 }
 
-                $pipelineService->ensureSeeded4h($contract);
+                $mtfStateService->ensureSeeded($symbol);
                 $seeded++;
             } catch (\Throwable $e) {
                 $errors[] = ['symbol' => $symbol, 'stage' => 'seed', 'error' => $e->getMessage()];

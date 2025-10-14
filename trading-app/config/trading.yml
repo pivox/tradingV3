@@ -1,0 +1,372 @@
+version: '2.0'
+
+meta:
+    name: SCALPING v2.0 - MTF + Pipeline + Leverage
+    description: >
+        Configuration complète avec persistance par timeframe, orchestration any_of ou séquentielle,
+        et levier dérivé du % risque avec multiplicateur par TF (clamp sur caps).
+        Indicateurs utilisés: EMA, MACD, VWAP, ATR (+ RSI pour le timing d'exécution).
+    created_at: '2025-10-05'
+
+# ======== UNIVERSE ========
+symbols:
+    allowed_quotes: [USDT]
+    blacklist: []
+    meta: >
+        Restreindre l’univers aux contrats USDT perpétuels. Une blacklist permet d’exclure
+        des symboles instables ou en maintenance.
+
+# ======== RISK & LEVERAGE ========
+risk:
+    fixed_risk_pct: 5.0                  # % du capital risqué par trade (base)
+    daily_max_loss_pct: 6.0
+ #   max_concurrent_positions: 4
+    meta: >
+        Risque fixe par trade, coupe-circuit journalier et limite de positions simultanées.
+
+leverage:
+    mode: dynamic_from_risk              # base = risk_pct / stop_pct (puis clamps)
+    floor: 1.0
+    exchange_cap: 20.0
+    per_symbol_caps:
+        - { symbol_regex: "^(BTC|ETH).*", cap: 10.0 }
+    timeframe_multipliers:
+        '4h': 1.0
+        '1h': 1.0
+        '15m': 1.0
+        '5m': 0.75
+        '1m': 0.5
+    confidence_multiplier:
+        enabled: true
+        default: 1.0
+        when_upstream_stale: 0.8           # ex: 15m expiré mais 5m valide
+        when_tie_breaker_used: 0.8
+    conviction:
+        enabled: true
+        cap_pct_of_exchange: 0.60          # 60% du levier max exchange si conviction_high
+        meta: >
+            Quand un setup high-conviction est détecté, le levier final = min(levier_dynamique, 0.60 * exchange_cap),
+            puis clamps par per_symbol_caps et tf_multiplier.
+    rounding:
+        precision: 2                       # arrondi du levier final (ex. 12.34)
+        mode: floor
+    meta: >
+        Levier dérivé du risque et de la distance de stop (ATR), borné par des caps globaux/symbole/TF.
+        Un boost mesuré est possible via conviction_high.
+
+# ======== INDICATORS ========
+atr:
+    period: 14
+    method: wilder
+    timeframe: '5m'
+    sl_multiplier: 1.5                   # SL = k * ATR
+    r_multiple: 2.0
+    meta: >
+        ATR(5m) pour le stop et le R-multiple. SL initial = 1.5x ATR, TP = 2R.
+
+indicators:
+    ema:
+        fast: 20
+        mid: 50
+        trend: 200
+        pullback_fast: 9                   # pour détection pullback
+        pullback_mid: 21                   # "MA21" implémentée en EMA(21)
+    macd:
+        fast: 12
+        slow: 26
+        signal: 9
+    vwap:
+        daily: true
+        timezone: 'UTC'
+    rsi:
+        period: 14
+        source: close
+    meta: >
+        EMA(20/50/200) pour structure, EMA(9/21) pour pullback, MACD (12,26,9) pour momentum,
+        VWAP daily pour repère intraday, RSI(14) pour filtrage de timing.
+
+# ======== MTF FRAMESET ========
+mtf:
+    context: [4h, 1h]
+    execution: [15m, 5m, 1m]
+    meta: >
+        Contexte: 4h & 1h (tendance/validation). Exécution: 15m/5m/1m (timing).
+
+runtime:
+    eps: 1.0e-6
+    use_last_closed: true
+    meta: >
+        Évaluation sur bougies clôturées uniquement, tolérance numérique eps.
+
+timeframes:
+    '4h':  { guards: { min_bars: 200 } }
+    '1h':  { guards: { min_bars: 200 } }
+    '15m': { guards: { min_bars: 50 } }
+    '5m':  { guards: { min_bars: 50 } }
+    '1m':  { guards: { min_bars: 50 } }
+    meta: >
+        min_bars = max des exigences par indicateur utilisé sur le TF.
+        VWAP est intraday (reset quotidien), pas de plancher fixe au-delà du TF lui-même.
+
+
+# ======== LOGIC RULES ========
+validation:
+    timeframe:
+        '4h':
+            long:
+                - ema_50_gt_200
+                - macd_hist_gt_0
+                - close_above_ema_200
+            short:
+                - ema_50_lt_200
+                - macd_hist_lt_0
+                - close_below_ema_200
+        '1h':
+            long:
+                - close_above_ema_200
+                - macd_hist_gt_0
+                - price_regime_ok
+            short:
+                - ema_20_lt_50
+                - macd_hist_lt_0
+                - price_regime_ok
+        '15m':
+            long:
+                - ema_20_gt_50
+                - macd_hist_gt_0
+                - close_above_vwap
+                - rsi_lt_70                 # timing: éviter d’entrer en surachat
+            short:
+                - ema_20_lt_50
+                - macd_hist_lt_0
+                - close_below_vwap
+                - rsi_gt_30                 # timing: éviter d’entrer en survente
+        '5m':
+            long:
+                - ema_20_gt_50
+                - macd_hist_gt_0
+                - close_above_vwap
+                - rsi_lt_70
+            short:
+                - ema_20_lt_50
+                - macd_hist_lt_0
+                - close_below_vwap
+                - rsi_gt_30
+        '1m':
+            long:
+                - ema_20_gt_50
+                - close_above_vwap
+                - rsi_lt_70
+            short:
+                - ema_20_lt_50
+                - close_below_vwap
+                - rsi_gt_30
+    meta: >
+        Contexte strict (4h/1h) sur EMA/MACD/EMA200. Exécution (15m/5m/1m) ajoute VWAP
+        et RSI comme filtre de timing pour éviter entrées "au sommet/au fond".
+
+# ======== HIGH-CONVICTION DETECTION ========
+conviction_high:
+    all:
+        - mtf_confluence_ok          # 4h/1h/15m alignés même sens
+        - rsi_4h_gt_50               # momentum de fond sain
+        - rsi_4h_lt_70               # éviter surachat 4h
+        - rsi_1h_gt_50               # dynamique intermédiaire OK
+        - adx_gt_25                  # tendance suffisamment forte
+        - macd_hist_2x_mean          # accélération significative
+        - pullback_confirmed_ma21_vwap
+    meta: >
+        Marque les setups à forte probabilité: confluence MTF + momentum fort mais non sur-étiré.
+        Utilisé par leverage.conviction pour limiter/booster le levier de manière contrôlée.
+
+# ======== REVERSAL PROTECTION (ANTI-RETOURNEMENT) ========
+reversal_protection:
+    none_of:
+        - extended_above_ma21_2atr: true   # long: extension excessive
+        - extended_below_ma21_2atr: true   # short: extension excessive
+        - rsi_gt_70: true                  # éviter longs en surachat
+        - rsi_lt_30: true                  # éviter shorts en survente
+        - bearish_divergence_rsi_macd: true
+        - bullish_divergence_rsi_macd: true
+        - exhaustion_candle: true          # mèches d’essoufflement (shooting star/hammer contraires)
+    meta: >
+        Garde-fous pour bloquer les entrées en zone d’épuisement ou divergence. Basé sur ATR/EMA21,
+        RSI, MACD et patterns de chandeliers.
+
+# ======== SCALP MODE TRIGGER (1–5 minutes) ========
+scalp_mode_trigger:
+    all:
+        - mtf_confirmed: true              # 15m & 5m alignés avec 1m (ema_20/50 + macd_hist)
+        - timeframe: '1m'                  # exécution micro
+        - atr_rel_in_range: [0.001, 0.004] # 0.1–0.4 % du prix
+        - volume_rel_gt_1_5x: true         # participation confirmée
+        - ema_20_gt_50_or_lt_50: true      # autorise long OU short selon sens
+        - macd_hist_sign_aligned: true     # signe MACD aligné avec le sens
+        - vwap_slope_stable: true
+    overrides:
+        time_stop: '5m'                    # sortie forcée max
+        sl_atr_mult: 0.75                  # SL initial = 0.75x ATR(1m)
+        tp_r_multiple: 2.0                 # TP = 2R
+        leverage_multiplier: 0.5           # prudence en micro (déjà dans tf_multiplier=0.5)
+    meta: >
+        N’active le scalping 1m que si 15m et 5m confirment la direction. Exige ATR/volume suffisants,
+        VWAP stable et momentum cohérent. Applique un time-stop court et un SL/TP rapides.
+
+# ======== CONTRACT PIPELINE (PERSISTENCE PAR TF) ========
+contract_pipeline:
+    persist_last_result: true
+    fields_per_tf:
+        - last_status        # VALID_LONG | VALID_SHORT | NEUTRAL | FAILED
+        - last_side          # LONG | SHORT | null
+        - last_eval_ts       # timestamp de la dernière bougie close évaluée
+        - last_reason        # JSON court (conditions passées/ratées, metrics)
+        - retries            # compteur d'essais
+        - stale              # bool, selon TTL d'orchestration
+    idempotency:
+        decision_key: '{symbol}:{timeframe}:{candle_close_ts}'  # empêche double action sur même bougie
+    meta: >
+        Traçabilité et idempotence par TF. Permet audits, reprises propres et anti multi-soumissions.
+
+# ======== ENTRY BUDGET & QUANTIZATION ========
+entry:
+    prefer_maker: true
+    fallback_taker: true
+    budget:
+        mode: fixed_or_available
+        fixed_usdt_if_available: 100       # utilise 100 USDT si dispo, sinon solde dispo
+    quantization:
+        price_tick: from_exchange
+        qty_step: from_exchange
+    slippage_guard_bps: 8                # 0.08% max dérive
+    spread_guard_bps: 6                  # 0.06% max spread
+    meta: >
+        Préférence maker mais fallback taker si nécessaire. Budget d’ouverture fixe/solde dispo.
+        Quantification aux règles exchange et garde-fous de spread/slippage.
+
+# ======== INTEGRATION (SERVICES) ========
+integration:
+    services:
+        kline_provider:   'App\\Service\\Market\\KlineDataProvider'
+        indicators:
+            ema:            'App\\Service\\Indicators\\EmaService'
+            macd:           'App\\Service\\Indicators\\MacdService'
+            vwap:           'App\\Service\\Indicators\\VwapService'
+            atr:            'App\\Service\\Indicators\\AtrCalculator'
+            rsi:            'App\\Service\\Indicators\\RsiService'
+        signal:
+            h4:             'App\\Service\\Signal\\Signal4hService'
+            h1:             'App\\Service\\Signal\\Signal1hService'
+            m15:            'App\\Service\\Signal\\Signal15mService'
+            m5:             'App\\Service\\Signal\\Signal5mService'
+            m1:             'App\\Service\\Signal\\Signal1mService'
+            mtf_coord:      'App\\Service\\Signal\\MtfCoordinator'
+            tie_breaker:    'App\\Service\\Signal\\TieBreaker'
+            cross_tf_tb:    'App\\Service\\Signal\\CrossTimeframeTieBreaker'
+        risk:
+            position_sizer: 'App\\Service\\Risk\\PositionSizer'
+        logging:
+            signal_logger:  'App\\Service\\Logging\\SignalLogger'
+    meta: >
+        Services Symfony séparés (calcul indicateurs, signaux par TF, coordination MTF, risk sizing et logs).
+
+# ======== LOGGING & METRICS ========
+logging:
+    audit_table: true
+    metrics:
+        pnl: true
+        expectancy: true
+        profit_factor: true
+        max_drawdown: true
+    evidence:
+        store_condition_evidence: true
+    streams:
+        ws_private_positions: true
+        ws_private_orders: true
+    meta: >
+        Journalisation étendue (PnL, expectancy, PF, MDD) + conservation des preuves conditionnelles.
+        Flux temps réel via WebSocket privé (positions, ordres).
+
+# ======== POST-VALIDATION (ENTRY ZONE + POSITION OPENER) ========
+post_validation:
+    entry_zone:
+        vwap_anchor: true
+        k_atr: 0.35                    # largeur relative à ATR
+        w_min: 0.0005                  # largeur minimale (0.05%)
+        w_max: 0.0100                  # largeur maximale (1.00%)
+        spread_bps_max: 2.0            # spread max en bps
+        depth_min_usd: 20000           # profondeur minimale en USD
+        mark_index_gap_bps_max: 15.0   # écart Mark/Index max en bps
+        quantize_to_exchange_step: true # quantification aux pas exchange
+    
+    execution_timeframe:
+        default: "5m"                  # timeframe par défaut
+        upshift_to_1m:
+            atr_pct_hi: 0.12           # ATR >= 0.12% pour upshift
+            spread_bps_max: 2.0        # spread max pour upshift
+            depth_min_usd: 30000       # profondeur min pour upshift
+            require_mtf_alignment: true # alignement 5m/15m requis
+        downshift_to_5m:
+            atr_pct_lo: 0.07           # ATR < 0.07% pour downshift
+            spread_bps_max: 4.0        # spread max pour downshift
+    
+    sizing:
+        risk_pct: 0.005                # 0.5% du capital risqué
+        sl_mult_atr: 1.5               # SL = 1.5x ATR
+        tp_r_multiple: 2.0             # TP = 2R
+        budget_mode: fixed_or_available # budget fixe ou disponible
+        budget_usdt: 100               # budget fixe en USDT
+    
+    leverage:
+        use_submit_leverage: true      # utiliser submit-leverage
+        respect_bracket: true          # respecter les brackets exchange
+        cap_pct_of_exchange: 0.60      # 60% du levier max exchange
+        timeframe_multipliers:
+            '1m': 0.5                  # réduction pour 1m
+            '5m': 0.75                 # réduction pour 5m
+            '15m': 1.0                 # normal pour 15m
+            '1h': 1.0                  # normal pour 1h
+            '4h': 1.0                  # normal pour 4h
+        conviction:
+            enabled: true
+            cap_pct_of_exchange: 0.60  # boost conviction limité à 60%
+    
+    order_plan:
+        prefer_maker: true             # préférer les ordres maker
+        maker:
+            mode: "GTC"                # Good Till Cancelled
+            maker_only: true           # ordres maker uniquement
+            timeout_sec: 5             # timeout en secondes
+        fallback_taker:
+            enable: true               # activer le fallback taker
+            type: "IOC"                # Immediate Or Cancel
+            max_slip_bps: 5            # slippage max en bps
+        tp_sl:
+            use_position_tp_sl: true   # utiliser submit-tp-sl-order
+            price_type: last_price     # type de prix pour TP/SL
+            plan_category: 2           # Position TP/SL
+    
+    guards:
+        stale_ticker_sec: 2            # données obsolètes après 2s
+        max_slip_bps: 5                # slippage max en bps
+        min_liquidity_usd: 10000       # liquidité minimale en USD
+        funding_cutoff_min: 5          # cutoff funding 5min avant
+        max_funding_rate: 0.01         # funding rate max (1%)
+        mark_index_gap_bps_max: 15.0   # écart Mark/Index max
+    
+    idempotency:
+        decision_key_tpl: "{symbol}:{timeframe}:{candle_close_ts}"
+        max_attempts: 3                # max tentatives par décision
+    
+    telemetry:
+        audit_table: true              # table d'audit
+        evidence: true                 # conservation des preuves
+        metrics:
+            execution_time: true       # temps d'exécution
+            success_rate: true         # taux de succès
+            slippage_stats: true       # statistiques de slippage
+            liquidity_stats: true      # statistiques de liquidité
+    meta: >
+        Configuration Post-Validation pour EntryZone + PositionOpener.
+        Transforme un signal validé (MTF) en plans d'exécution sûrs, traçables et idempotents.
+        Sélection dynamique 1m vs 5m, calcul du dernier prix (WS->REST->K-line),
+        sizing, levier, orchestration, état, tests, observabilité.

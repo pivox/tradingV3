@@ -1,0 +1,55 @@
+mtf:
+  # Configuration du système MTF
+  temporal:
+    address: '%env(TEMPORAL_ADDRESS)%'
+    namespace: '%env(TEMPORAL_NAMESPACE)%'
+    task_queue: 'mtf_minute_queue'
+    workflow_id: 'mtf-minute-workflow'
+  
+  # Configuration BitMart
+  bitmart:
+    api_key: '%env(BITMART_API_KEY)%'
+    secret_key: '%env(BITMART_SECRET_KEY)%'
+    base_url: '%env(BITMART_BASE_URL)%'
+    ws_url: '%env(BITMART_WS_PRIVATE_URL)%'
+    timeout: 30
+    max_retries: 3
+  
+  # Configuration du rate limiting
+  rate_limiter:
+    capacity: '%env(int:MTF_RATE_LIMIT_CAPACITY)%'
+    refill_rate: '%env(int:MTF_RATE_LIMIT_REFILL_RATE)%'
+    refill_interval: '%env(int:MTF_RATE_LIMIT_REFILL_INTERVAL)%'
+  
+  # Configuration MTF
+  symbols_to_watch: '%env(csv:MTF_SYMBOLS_TO_WATCH)%'
+  grace_window_minutes: '%env(int:MTF_GRACE_WINDOW_MINUTES)%'
+  max_candles_per_request: '%env(int:MTF_MAX_CANDLES_PER_REQUEST)%'
+  max_retries: '%env(int:MTF_MAX_RETRIES)%'
+  
+  # Configuration de la base de données
+  database:
+    host: '%env(MTF_DB_HOST)%'
+    port: '%env(int:MTF_DB_PORT)%'
+    name: '%env(MTF_DB_NAME)%'
+    user: '%env(MTF_DB_USER)%'
+    password: '%env(MTF_DB_PASSWORD)%'
+  
+  # Configuration du cache
+  cache:
+    ttl_default: '%env(int:MTF_CACHE_TTL_DEFAULT)%'
+    ttl_validation: '%env(int:MTF_CACHE_TTL_VALIDATION)%'
+  
+  # Configuration de sécurité
+  security:
+    max_clock_drift_seconds: '%env(int:MTF_MAX_CLOCK_DRIFT_SECONDS)%'
+    signature_timeout_seconds: '%env(int:MTF_SIGNATURE_TIMEOUT_SECONDS)%'
+  
+  # Configuration du monitoring
+  monitoring:
+    metrics_enabled: '%env(bool:MTF_METRICS_ENABLED)%'
+    health_check_interval: '%env(int:MTF_HEALTH_CHECK_INTERVAL)%'
+
+
+
+

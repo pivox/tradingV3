@@ -2,18 +2,19 @@
 
 namespace App\Controller;
 
-use App\Service\Exchange\Bitmart\Dto\KlineDto;
-use App\Service\Exchange\Bitmart\BitmartFetcher;
+use App\Repository\KlineRepository;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Annotation\Route;
+use Symfony\Contracts\HttpClient\Exception\ExceptionInterface;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 class KlinesController
 {
-    public function __construct(private BitmartFetcher $fetcher) {}
+    public function __construct(private HttpClientInterface $httpClient) {}
 
     #[Route('/api/klines', name: 'api_klines', methods: ['GET'])]
-    public function __invoke(Request $request): JsonResponse
+    public function __invoke(Request $request, KlineRepository $klineRepository): JsonResponse
     {
         $symbol = $request->query->get('symbol');
         $start = $request->query->get('start');
@@ -29,21 +30,30 @@ class KlinesController
         }
 
         try {
-            $startTime = new \DateTimeImmutable($start);
-            $endTime = new \DateTimeImmutable($end);
+            $startTime = new \DateTimeImmutable($start, new \DateTimeImmutable('UTC'));
+            $endTime = new \DateTimeImmutable($end, new \DateTimeImmutable('UTC'));
         } catch (\Exception $e) {
             return new JsonResponse(['error' => 'Invalid date format'], 400);
         }
 
-        $klines = $this->fetcher->fetchKlines($symbol, $startTime, $endTime, $step);
+        try {
+            $response = $this->httpClient->request('GET', 'http://localhost:8080/api/klines', [
+                'query' => [
+                    'symbol' => $symbol,
+                    'start'  => $start,
+                    'end'    => $end,
+                    'step'   => $step,
+                ],
+            ]);
 
-        return new JsonResponse(array_map(fn($k) => [
-            'timestamp' => $k->timestamp->format('Y-m-d H:i:s'),
-            'open' => $k->open,
-            'high' => $k->high,
-            'low' => $k->low,
-            'close' => $k->close,
-            'volume' => $k->volume,
-        ], $klines));
+            $klines = $response->toArray();
+        } catch (ExceptionInterface $exception) {
+            return new JsonResponse([
+                'error' => 'Unable to fetch klines from upstream service',
+                'message' => $exception->getMessage(),
+            ], 502);
+        }
+
+        return new JsonResponse($klines);
     }
 }

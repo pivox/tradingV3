@@ -1,0 +1,19 @@
+# Configuration pour le backtesting avec heure fixe
+# Ce fichier peut être utilisé pour remplacer la configuration normale
+# lors du backtesting
+
+services:
+    # Clock Service pour le backtesting avec MockClock
+    Psr\Clock\ClockInterface:
+        class: Symfony\Component\Clock\MockClock
+        arguments:
+            - now: '%app.clock.fixed_time%'
+            - timezone: 'UTC'
+
+    # Service utilitaire pour le backtesting avec heure fixe
+    App\Service\BacktestClockService:
+        arguments:
+            $clock: '@Psr\Clock\ClockInterface'
+        public: true
+
+

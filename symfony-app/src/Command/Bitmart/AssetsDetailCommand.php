@@ -52,3 +52,8 @@ final class AssetsDetailCommand extends Command
 }
 
 
+
+
+
+
+

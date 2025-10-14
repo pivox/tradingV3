@@ -3,13 +3,13 @@ declare(strict_types=1);
 
 namespace App\Service\Trading;
 
-use App\Entity\ContractPipeline;
-use App\Repository\ContractPipelineRepository;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Service\Config\TradingParameters;
 use App\Service\Exception\Trade\Position\LeverageLowException;
 use App\Service\Indicator\AtrCalculator;
+use App\Service\Pipeline\MtfStateService;
+use App\Service\Trading\Idempotency\ClientOrderIdFactory;
 use App\Util\SrRiskHelper;
 use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
@@ -26,6 +26,9 @@ final class PositionOpener
     private const MIN_LEVERAGE_THRESHOLD          = 3.0;
     private const LARGE_CAP_MIN_LEVERAGE_RATIO    = 0.10; // 10% du levier max contrat
 
+    private const SCALP_BASE_RISK_MAX_PCT         = 0.07; // 7% sur la marge engagée
+    private const SCALP_DEFAULT_MARGIN            = 50.0; // budget usdt par défaut pour le mode scalp
+
     // --- Constantes spécifiques High Conviction ---
     private const HC_DEFAULT_LEV_CAP     = 50;   // levier max autorisé par la stratégie HC
     private const HC_MIN_LIQ_RATIO       = 3.0;  // liquidation ≥ 3x distance SL (si tu veux contrôler ici)
@@ -37,13 +40,15 @@ final class PositionOpener
         private readonly TradingParameters $tradingParameters,
         private readonly LoggerInterface $positionsLogger, // channel "positions"
         private readonly LoggerInterface $validationLogger, // channel "positions"
-        private readonly ContractPipelineRepository $pipelineRepository,
+        private readonly MtfStateService $mtfState,
         private readonly ContractRepository $contractRepository,
         private readonly KlineRepository $klineRepository,
         private readonly OrdersService $ordersService,
         private readonly BitmartPositionsService $bitmartPositions,
         private readonly TrailOrdersService $trailOrders,
         private readonly BitmartHttpClientPublic $bitmartPublic,
+        private readonly ClientOrderIdFactory $idempotency,
+        private readonly SimpleQuantizer $quantizer,
     ) {}
 
     /**
@@ -460,6 +465,7 @@ final class PositionOpener
             }
             $orderId = $res['data']['order_id'] ?? null;
 
+
             /* 7) (Optionnel) Position TP/SL “plan_category=2” */
             // Si tu veux la couche position en plus des presets:
             try {
@@ -493,6 +499,22 @@ final class PositionOpener
             return $out;
         } finally {
             $this->persistOrderId($symbol, $orderId, '[LimitPct]');
+        }
+
+        try {
+            $this->positionsLogger->info('[SR] Enforcement TP/SL après ouverture', ['symbol' => $symbol]);
+            $openPositions = $this->bitmartPositions->list(['symbol' => $symbol]);
+            $positionRow = $openPositions['data'][0] ?? null;
+            if (is_array($positionRow)) {
+                $this->enforcePositionTpSl($positionRow);
+            } else {
+                $this->positionsLogger->warning('[SR] Aucune position trouvée pour enforce TP/SL', ['symbol' => $symbol]);
+            }
+        } catch (\Throwable $e) {
+            $this->positionsLogger->error('[SR] enforcePositionTpSl() failed', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage()
+            ]);
         }
     }
 
@@ -1110,6 +1132,61 @@ final class PositionOpener
             'side'    => strtoupper($sideUpper),
         ];
     }
+
+    public function openScalpTriggerOrder(
+        string $symbol,
+        string $finalSideUpper,
+        array $triggerContext = []
+    ): array {
+        $overrides = $triggerContext['overrides'] ?? [];
+        $conditions = $triggerContext['conditions'] ?? [];
+
+        $margin = self::SCALP_DEFAULT_MARGIN;
+        if (isset($overrides['margin_usdt']) && is_numeric($overrides['margin_usdt'])) {
+            $margin = (float)$overrides['margin_usdt'];
+        } elseif (isset($triggerContext['budget']) && is_numeric($triggerContext['budget'])) {
+            $margin = (float)$triggerContext['budget'];
+        }
+
+        $leverageMultiplier = isset($overrides['leverage_multiplier']) ? (float)$overrides['leverage_multiplier'] : 1.0;
+        if ($leverageMultiplier <= 0.0) {
+            $leverageMultiplier = 1.0;
+        }
+        $riskMaxPct = max(0.01, self::SCALP_BASE_RISK_MAX_PCT * $leverageMultiplier);
+        $rMultiple  = isset($overrides['tp_r_multiple']) ? (float)$overrides['tp_r_multiple'] : 2.0;
+        $expireAfterSec = $this->convertDurationToSeconds($overrides['time_stop'] ?? null) ?? 120;
+
+        $meta = [
+            'mode' => 'scalp_trigger',
+            'conditions' => $conditions,
+        ];
+        if (($triggerContext['meta'] ?? null) !== null) {
+            $meta['meta'] = $triggerContext['meta'];
+        }
+        if ($overrides !== []) {
+            $meta['overrides'] = $overrides;
+        }
+
+        $this->positionsLogger->info('Scalp trigger opening order', [
+            'symbol' => $symbol,
+            'side' => strtoupper($finalSideUpper),
+            'margin_usdt' => $margin,
+            'risk_max_pct' => $riskMaxPct,
+            'r_multiple' => $rMultiple,
+            'expire_after_sec' => $expireAfterSec,
+        ]);
+
+        return $this->openLimitAutoLevWithSr(
+            symbol: $symbol,
+            finalSideUpper: $finalSideUpper,
+            marginUsdt: $margin,
+            riskMaxPct: $riskMaxPct,
+            rMultiple: $rMultiple,
+            meta: $meta,
+            expireAfterSec: $expireAfterSec,
+        );
+    }
+
     public function openLimitAutoLevWithSr(
         string $symbol,
         string $finalSideUpper,        // 'LONG' | 'SHORT'
@@ -1374,19 +1451,20 @@ final class PositionOpener
                 $res = $this->ordersService->create($payload);
             }
         }
-        // Mise à jour du pipeline
+        // Mise à jour de l'état MTF
         try {
-            $this->pipelineRepository->updateStatusBySymbol(
-                symbol: $symbol,
-                status: ContractPipeline::STATUS_ORDER_OPENED
-            );
-            $this->positionsLogger->info('[SR] Pipeline mis à jour -> STATUS_ORDER_OPENED', [
+            $eventId = $this->buildEventId('ORDER_PLACED', $symbol);
+            $this->mtfState->applyOrderPlaced($eventId, $symbol, [$timeframe ?? '5m']);
+            if (!empty($res['data']['order_id'])) {
+                $intent = $side === 'LONG' ? 'OPEN_LONG' : 'OPEN_SHORT';
+                $this->mtfState->recordOrder((string)$res['data']['order_id'], $symbol, $intent);
+            }
+            $this->positionsLogger->info('[SR] État MTF mis à jour -> ORDER_PLACED', [
                 'symbol' => $symbol,
                 'order_id' => $res['data']['order_id'] ?? null,
-                'status' => ContractPipeline::STATUS_ORDER_OPENED
             ]);
         } catch (\Throwable $e) {
-            $this->positionsLogger->error('[SR] Erreur lors de la mise à jour du pipeline', [
+            $this->positionsLogger->error('[SR] Erreur lors de la mise à jour MTF', [
                 'symbol' => $symbol,
                 'error' => $e->getMessage()
             ]);
@@ -1470,6 +1548,7 @@ final class PositionOpener
         $contextTrail  = [];
         $sideUpper     = strtoupper($finalSideUpper);
         $sideLower     = strtolower($finalSideUpper); // 'long'|'short'
+        $executionTf   = strtolower((string)($meta['timeframe'] ?? '5m'));
 
         // ==== Charger toute la config (YAML + overrides DB) ====
         $params = $this->tradingParameters->all();
@@ -1651,7 +1730,7 @@ final class PositionOpener
                     ]);
                     $this->bitmartPositions->setLeverage($symbol, $levOpt, $openType);
                     $this->waitLeverageSynchronized($symbol, $levOpt, $openType, tries: 3, sleepMs: 300);
-                    usleep(300_000);
+                    usleep(200_000);
 
                     $res = $submitOnce($payload);
                     if ((int)($res['code'] ?? 0) !== 1000) {
@@ -1718,19 +1797,20 @@ final class PositionOpener
             return;
         }
 
-        $orderIdAsString = trim((string) $orderId);
+        $orderIdAsString = trim((string)$orderId);
         if ($orderIdAsString === '') {
             return;
         }
 
+        $intent = str_contains(strtolower($context), 'short') ? 'OPEN_SHORT' : 'OPEN_LONG';
         try {
-            $this->pipelineRepository->updateOrderIdBySymbol($symbol, $orderIdAsString);
-            $this->positionsLogger->info("$context OrderId persisted in ContractPipeline", [
+            $this->mtfState->recordOrder($orderIdAsString, $symbol, $intent);
+            $this->positionsLogger->info("$context OrderId persisted in mtf", [
                 'symbol' => $symbol,
                 'order_id' => $orderIdAsString,
             ]);
         } catch (Throwable $error) {
-            $this->positionsLogger->warning("$context Failed to persist orderId in ContractPipeline", [
+            $this->positionsLogger->warning("$context Failed to persist orderId", [
                 'symbol' => $symbol,
                 'order_id' => $orderIdAsString,
                 'error' => $error->getMessage(),
@@ -1830,6 +1910,49 @@ final class PositionOpener
         }
     }
 
+    private function buildEventId(string $type, string $symbol): string
+    {
+        return sprintf('%s|%s|%d', $type, strtoupper($symbol), (int)(microtime(true) * 1000));
+    }
+
+    private function convertDurationToSeconds(?string $value): ?int
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $normalized = strtolower(trim($value));
+        if ($normalized === '') {
+            return null;
+        }
+
+        if (is_numeric($normalized)) {
+            $seconds = (int)round((float)$normalized);
+            return $seconds > 0 ? $seconds : null;
+        }
+
+        if (!preg_match('/^(\d+(?:\.\d+)?)([smhd])$/', $normalized, $matches)) {
+            return null;
+        }
+
+        $amount = (float)$matches[1];
+        $unit = $matches[2];
+
+        $seconds = match ($unit) {
+            's' => $amount,
+            'm' => $amount * 60,
+            'h' => $amount * 3600,
+            'd' => $amount * 86400,
+            default => null,
+        };
+
+        if ($seconds === null) {
+            return null;
+        }
+
+        return (int)max(1, round($seconds));
+    }
+
     /** BC alias: certains appels utilisent encore getMarkPrice() */
     private function getMarkPrice(string $symbol): float
     {
@@ -1880,6 +2003,137 @@ final class PositionOpener
 
         // Envoi avec fallback intégré (market→limit→price_type→sans plan_category)
         return $this->submitPlanOrderWithFallback($payload);
+    }
+// PSEUDO-CODE (Symfony service)
+// Remplace intégralement ta méthode existante par celle-ci
+
+    public function enforcePositionTpSl(array $position): void
+    {
+        $symbol = (string)($position['symbol'] ?? '');
+        $entry  = (float)($position['entry_price'] ?? 0.0);
+        $side   = strtolower((string)($position['side'] ?? 'long'));   // 'long'|'short'
+        $size   = (int)($position['size'] ?? 0);                       // nb de contrats
+
+        if ($symbol === '' || $entry <= 0.0 || !\in_array($side, ['long','short'], true)) {
+            $this->positionsLogger->warning('[TP/SL] Position invalide', compact('symbol','entry','side','size'));
+            return;
+        }
+
+        // 1) Détails contrat (pas & tailles)
+        $details = $this->getContractDetails($symbol);
+        $tick    = (float)($details['price_precision'] ?? 0.0);
+        $ctSize  = (float)($details['contract_size']   ?? 0.0);
+        $qtyStep = (float)($details['vol_precision']   ?? 0.0);
+
+        if ($tick <= 0.0 || $ctSize <= 0.0) {
+            $this->positionsLogger->error('[TP/SL] Détails contrat invalides', compact('tick','ctSize','qtyStep'));
+            return;
+        }
+        if ($size <= 0) {
+            // On tente une taille minimale si absente (garantit un size > 0 pour plan_category=2 si requis)
+            $size = (int)max(1, $qtyStep > 0.0 ? $qtyStep : 1);
+        }
+
+        // 2) Source de TP/SL : d'abord la position (si déjà calculés), sinon fallback config (abs USDT)
+        $tpFromPos = isset($position['tp_price']) ? (float)$position['tp_price'] : null;
+        $slFromPos = isset($position['sl_price']) ? (float)$position['sl_price'] : null;
+
+        $tpQ = null; $slQ = null;
+        if (is_finite((float)$tpFromPos) && (float)$tpFromPos > 0.0 &&
+            is_finite((float)$slFromPos) && (float)$slFromPos > 0.0) {
+            // Utilise les prix fournis par la position
+            $tpQ = $this->quantizeToStep((float)$tpFromPos, $tick);
+            $slQ = $this->quantizeToStep((float)$slFromPos, $tick);
+        } else {
+            // Fallback : calcule TP/SL à partir de la conf (tp.abs_usdt, risk.abs_usdt) et de la taille
+            $cfg        = $this->tradingParameters->all();
+            $tpAbsUsdt  = (float)($cfg['tp']['abs_usdt']   ?? 5.0);
+            $slAbsUsdt  = (float)($cfg['risk']['abs_usdt'] ?? 3.0);
+
+            if ($tpAbsUsdt <= 0.0 || $slAbsUsdt <= 0.0) {
+                $this->positionsLogger->warning('[TP/SL] Config abs_usdt invalide', compact('tpAbsUsdt','slAbsUsdt'));
+                return;
+            }
+
+            $qtyNotional = max(1e-9, $size * $ctSize);
+
+            if ($side === 'long') {
+                $slRaw = $entry - ($slAbsUsdt / $qtyNotional);
+                $tpRaw = $entry + ($tpAbsUsdt / $qtyNotional);
+            } else {
+                $slRaw = $entry + ($slAbsUsdt / $qtyNotional);
+                $tpRaw = $entry - ($tpAbsUsdt / $qtyNotional);
+            }
+
+            $tpQ = $this->quantizeToStep($tpRaw, $tick);
+            $slQ = $this->quantizeToStep($slRaw, $tick);
+
+            $this->positionsLogger->info('[TP/SL] Fallback abs_usdt appliqué', [
+                'tp_abs_usdt' => $tpAbsUsdt,
+                'sl_abs_usdt' => $slAbsUsdt,
+                'qty_notional'=> $qtyNotional,
+                'tp_q' => $tpQ, 'sl_q' => $slQ
+            ]);
+        }
+
+        // 3) Garde-fous directionnels
+        if ($side === 'long' && !($slQ < $entry && $tpQ > $entry)) {
+            $this->positionsLogger->warning('[TP/SL] Sens invalide LONG', ['entry'=>$entry,'tp'=>$tpQ,'sl'=>$slQ]);
+            return;
+        }
+        if ($side === 'short' && !($slQ > $entry && $tpQ < $entry)) {
+            $this->positionsLogger->warning('[TP/SL] Sens invalide SHORT', ['entry'=>$entry,'tp'=>$tpQ,'sl'=>$slQ]);
+            return;
+        }
+
+        // 4) Soumission en "Position TP/SL" (plan_category=2), price_type=2 (mark), catégorie 'market'
+        $reduceSide = $this->mapSideReduce($side); // 3: close long | 2: close short
+
+        try {
+            $this->positionsLogger->info('[TP/SL] Submit TAKE_PROFIT (plan_category=2)', [
+                'symbol'=>$symbol,'side'=>$side,'trigger'=>$tpQ
+            ]);
+            $tpRes = $this->submitPositionTpSl(
+                symbol: $symbol,
+                orderType: 'take_profit',
+                sideReduce: $reduceSide,
+                triggerPrice: (string)$tpQ,
+                priceType: 2,               // 2 = fair/mark
+                executivePrice: '0',        // inutile pour 'market'
+                category: 'market',
+                size: $size,
+                planCategory: 2
+            );
+
+            $this->positionsLogger->info('[TP/SL] Submit STOP_LOSS (plan_category=2)', [
+                'symbol'=>$symbol,'side'=>$side,'trigger'=>$slQ
+            ]);
+            $slRes = $this->submitPositionTpSl(
+                symbol: $symbol,
+                orderType: 'stop_loss',
+                sideReduce: $reduceSide,
+                triggerPrice: (string)$slQ,
+                priceType: 2,
+                executivePrice: '0',
+                category: 'market',
+                size: $size,
+                planCategory: 2
+            );
+
+            $this->positionsLogger->info('[TP/SL] Enforcement done', [
+                'symbol' => $symbol,
+                'entry'  => $entry,
+                'tp_q'   => $tpQ,
+                'sl_q'   => $slQ,
+                'tp_res' => $tpRes,
+                'sl_res' => $slRes,
+            ]);
+        } catch (\Throwable $e) {
+            $this->positionsLogger->error('[TP/SL] Submission failed', [
+                'symbol' => $symbol,
+                'error'  => $e->getMessage(),
+            ]);
+        }
     }
 
 

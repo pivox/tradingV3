@@ -1,0 +1,400 @@
+cette application va a terme remplacer symfony-app,
+on prépare tout puis on bascule
+la bdd sera postgresql
+DOCUMENTATION COMPLÈTE DU SYSTÈME MTF BITMART
+1. Objectif général
+
+Le système a pour but de surveiller les marchés à terme (Futures) de BitMart via une analyse multi-timeframe (MTF) automatisée, afin de valider des setups et déclencher des ordres de trading selon une logique séquentielle :
+4h → 1h → 15m → 5m → 1m.
+
+Il doit :
+
+Charger les données historiques (REST API) ;
+
+Écouter les flux en temps réel (WebSocket) ;
+
+Calculer les indicateurs ;
+
+Gérer le cache de validation ;
+
+Orchestrer le tout via Temporal ;
+
+Exécuter les ordres sur l’API privée ;
+
+Respecter les quotas API et assurer la reprise après panne.
+
+2. Architecture générale
+2.1 Schéma logique
+Temporal (Schedule minute)
+       │
+       ▼
+   MtfMinuteWorkflow
+       │
+       ├─ Vérif 4h (REST)
+       ├─ Vérif 1h (REST)
+       ├─ Vérif 15m (REST)
+       ├─ Si validé → attente WS
+       └─ Sur 1m/5m (WS) → décision → ordre (REST privé)
+
+2.2 Domaines principaux
+
+Domain : logique métier pure (validation, signaux, indicateurs, règles MTF)
+
+Application : workflows, handlers, orchestrations
+
+Infrastructure : adaptateurs BitMart REST/WS, persistence, cache, logs
+
+Presentation : CLI et contrôleurs de supervision
+
+3. Flux fonctionnels
+3.1 Initialisation
+
+Récupération de tous les klines 4h et 1h via :
+
+GET https://api-cloud-v2.bitmart.com/contract/public/kline?symbol=BTCUSDT&step=240
+GET https://api-cloud-v2.bitmart.com/contract/public/kline?symbol=BTCUSDT&step=60
+
+
+Les bougies sont stockées dans klines.
+
+Calcul des indicateurs → stockage dans indicator_snapshots.
+
+Génération de signaux (signals).
+
+Cache de validation mis à jour (validation_cache).
+
+3.2 Cycle périodique (chaque minute)
+
+Vérifier 4h : si cache expiré → fetch REST → combler les trous → recalculer → valider.
+
+Vérifier 1h : même logique.
+
+Vérifier 15m : fetch + calcul + validation.
+
+Si 4h, 1h, 15m = validés → état “exécution”.
+
+Abonnement WS (1m / 5m) → écoute continue.
+
+Sur clôture : recalcul indicateurs ; si conditions OK → envoi d’ordre.
+
+3.3 Exécution (1m / 5m)
+
+Flux :
+
+{"action":"subscribe","args":["futures/klineBin1m:BTCUSDT"]}
+{"action":"subscribe","args":["futures/klineBin5m:BTCUSDT"]}
+
+
+Calcul micro-signaux.
+
+Si alignement MTF et filtres respectés :
+
+POST https://api-cloud-v2.bitmart.com/contract/private/submit-order
+
+
+(params : symbol, side, type, leverage, open_type, size, etc.)
+
+4. Authentification et signatures
+4.1 REST (privé)
+
+En-têtes requis :
+
+X-BM-KEY: <api_key>
+X-BM-TIMESTAMP: <milliseconds>
+X-BM-SIGN: <signature>
+
+
+Signature HMAC-SHA256 sur la concaténation :
+timestamp + endpoint + body
+avec la clé secrète.
+
+4.2 WebSocket (privé)
+
+Authentification :
+
+{"op":"login","args":["<api_key>", "<timestamp>", "<signature>"]}
+
+
+Après succès :
+
+{"action":"subscribe","args":["futures/order"]}
+{"action":"subscribe","args":["futures/position"]}
+{"action":"subscribe","args":["futures/asset:USDT"]}
+
+5. URLs BitMart officielles (Futures V2)
+Fonction	Méthode	URL
+Klines publics	GET	https://api-cloud-v2.bitmart.com/contract/public/kline
+Passer ordre	POST	https://api-cloud-v2.bitmart.com/contract/private/submit-order
+Annuler ordre	POST	/contract/private/cancel-order
+Batch annulation	POST	/contract/private/cancel-orders
+Positions	GET	/contract/private/position
+Détails assets	GET	/contract/private/assets-detail
+Levier	POST	/contract/private/submit-leverage
+TP/SL	POST	/contract/private/submit-tp-sl-order
+WS public	wss://ws-manager-compress.bitmart.com/api?protocol=1.1
+WS privé	wss://ws-manager-compress.bitmart.com/api?protocol=1.1
+
+Référence complète : https://developer-pro.bitmart.com/en/futuresv2/
+
+6. Rate limit et throttling
+
+5 req/s par IP (REST).
+
+Politique locale : token bucket partagé :
+
+capacité = 5 tokens ;
+
+refill = 1 token chaque 200 ms ;
+
+1 token = 1 requête.
+
+Workers parallélisent les tâches CPU mais utilisent un même bucket centralisé (via Redis ou process singleton).
+
+7. Orchestration (Temporal)
+
+Workflow : MtfMinuteWorkflow
+
+Cadence : toutes les minutes.
+
+OverlapPolicy : SKIP ; si un run N est en retard, le N+1 ne démarre pas.
+
+Activities :
+
+FillGapsActivity → 4h/1h/15m.
+
+BuildSignalsActivity → indicateurs + signaux.
+
+ValidateMtfActivity → règles/filtres.
+
+8. WebSocket – gestion des connexions
+
+Connexions publiques : une par ~50 symboles.
+
+PING toutes les 25 s ; reconnexion après 3 timeouts.
+
+Message :
+
+{"action":"subscribe","args":["futures/klineBin1m:BTCUSDT"]}
+
+
+Messages reçus :
+
+{
+  "table": "futures/klineBin1m",
+  "data": [
+    {
+      "symbol": "BTCUSDT",
+      "open_time": 1730002200000,
+      "open": "65950.2",
+      "close": "65970.4",
+      "high": "65980.0",
+      "low": "65940.1",
+      "volume": "10.5"
+    }
+  ]
+}
+
+9. Alignement et idempotence
+
+Timestamps normalisés UTC.
+
+Alignement bougies sur multiples de TF (00:00, 01:00, 01:15…).
+
+UPSERT SQL :
+
+INSERT INTO klines (...) VALUES (...)
+ON CONFLICT (symbol, timeframe, open_time)
+DO UPDATE SET close_price=EXCLUDED.close_price, volume=EXCLUDED.volume;
+
+10. DTO et structure de données
+DTO	Champs principaux
+KlineDto	symbol, timeframe, open_time, open, high, low, close, volume
+IndicatorSnapshotDto	ema20, ema50, macd, atr, rsi, vwap
+SignalDto	side, score, trigger, meta
+ValidationStateDto	status, klineTime, expires_at
+OrderPlanDto	side, leverage, sl, tp, context
+
+Tous les DTO sont sérialisables JSON.
+
+11. Validation MTF & filtres
+
+Filtres appliqués avant ouverture position :
+
+RSI < 70 ;
+
+Distance prix–MA21 ≤ 2 × ATR ;
+
+Pullback confirmé (MA9/21 ou VWAP) ;
+
+Scaling progressif (pas entrée pleine taille) ;
+
+MACD / RSI divergences invalidantes.
+
+12. Erreurs & retries
+Type	Comportement
+HTTP 429	backoff exponentiel 2s–32s
+Timeout	3 retries max ; journalisé
+Auth fail	reset clé + alerte
+WebSocket drop	reconnexion + rattrapage REST
+13. Observabilité et audit
+
+Tables :
+
+mtf_audit → trace chaque étape et décision.
+
+order_plan → traces d’ordres planifiés/exécutés.
+Logs enrichis (run_id, tf, symbol, durée, score).
+
+Requêtes utiles :
+
+SELECT * FROM mtf_audit WHERE symbol='BTCUSDT' ORDER BY created_at DESC LIMIT 20;
+SELECT COUNT(*) FROM validation_cache WHERE expires_at<NOW();
+
+14. Sécurité & gestion des secrets
+
+Clés API stockées via vault/.env.local non versionné.
+
+Rotation manuelle tous les 90 jours.
+
+Isolation : une clé par environnement (dev/staging/prod).
+
+Mode hedge/one-way configurable :
+
+POST /contract/private/set-position-mode
+
+15. Déploiement et CI/CD
+
+Stack Docker Compose :
+
+Symfony + Temporal Worker + PostgreSQL + frontend React.
+
+Migrations Doctrine pour schéma DB.
+
+Tests intégration : simulateur WS (mock JSON) + API sandbox BitMart.
+
+CI : phpunit, psalm, phpstan, eslint, jest.
+
+16. Exploitation / Runbooks
+Action	Commande / Endpoint
+Purger cache	bin/console app:purge:validation-cache
+Backfill données	bin/console app:backfill:klines BTCUSDT --tf=15m
+Redémarrer WS	docker restart ws-worker
+Forcer revalidation	API : /api/cron/bitmart/refresh-{tf}
+Monitoring	/api/debug/mtf/state/{symbol}
+Audit recent	/api/debug/mtf/audit/{symbol}
+17. Arborescence des fichiers
+src/
+├ Domain/
+│  ├ Common/Dto/[…]
+│  ├ Common/Enum/[…]
+│  ├ Common/Service/[…]
+│  ├ Kline/Service/KlineFetcher.php
+│  ├ Indicator/Service/IndicatorEngine.php
+│  ├ Mtf/Service/MtfValidator.php
+│  ├ Ports/In/MtfWorkflowPort.php
+│  ├ Ports/Out/KlineProviderPort.php
+│  └ Trade/Service/OrderPlanner.php
+├ Application/
+│  ├ Workflow/MtfMinuteWorkflow.php
+│  ├ Activities/[…]
+│  ├ Handler/[…]
+│  └ Message/[…]
+├ Infrastructure/
+│  ├ Http/BitmartRestClient.php
+│  ├ WebSocket/BitmartWsClient.php
+│  ├ Cache/DbValidationCache.php
+│  ├ Persistence/Repository/[…]
+│  └ Config/BitmartConfig.php
+└ Presentation/
+   ├ Controller/[…]
+   └ Cli/[…]
+
+18. Schéma PostgreSQL (rappel complet)
+
+(identique à la version validée)
+
+CREATE TYPE timeframe AS ENUM ('4h','1h','15m','5m','1m');
+CREATE TYPE signal_side AS ENUM ('LONG','SHORT','NONE');
+
+CREATE TABLE klines (
+  id BIGSERIAL PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  timeframe timeframe NOT NULL,
+  open_time TIMESTAMPTZ NOT NULL,
+  open_price NUMERIC(24,12) NOT NULL,
+  high_price NUMERIC(24,12) NOT NULL,
+  low_price NUMERIC(24,12) NOT NULL,
+  close_price NUMERIC(24,12) NOT NULL,
+  volume NUMERIC(28,12),
+  source TEXT NOT NULL DEFAULT 'REST',
+  inserted_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE UNIQUE INDEX ux_klines_symbol_tf_open ON klines(symbol,timeframe,open_time);
+
+CREATE TABLE indicator_snapshots (
+  id BIGSERIAL PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  timeframe timeframe NOT NULL,
+  kline_time TIMESTAMPTZ NOT NULL,
+  values JSONB NOT NULL,
+  inserted_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE UNIQUE INDEX ux_ind_snap_symbol_tf_time ON indicator_snapshots(symbol,timeframe,kline_time);
+
+CREATE TABLE signals (
+  id BIGSERIAL PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  timeframe timeframe NOT NULL,
+  kline_time TIMESTAMPTZ NOT NULL,
+  side signal_side NOT NULL,
+  score DOUBLE PRECISION,
+  meta JSONB DEFAULT '{}'::jsonb,
+  inserted_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE UNIQUE INDEX ux_signals_symbol_tf_time ON signals(symbol,timeframe,kline_time);
+
+CREATE TABLE validation_cache (
+  cache_key TEXT PRIMARY KEY,
+  payload JSONB NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE mtf_audit (
+  id BIGSERIAL PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  run_id UUID NOT NULL,
+  step TEXT NOT NULL,
+  timeframe timeframe,
+  cause TEXT,
+  details JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE order_plan (
+  id BIGSERIAL PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  plan_time TIMESTAMPTZ DEFAULT now(),
+  side signal_side NOT NULL,
+  risk_json JSONB NOT NULL,
+  context_json JSONB NOT NULL,
+  exec_json JSONB NOT NULL,
+  status TEXT DEFAULT 'PLANNED'
+);
+
+19. Annexes & références
+
+🔗 BitMart Futures V2 REST/WS Docs :
+https://developer-pro.bitmart.com/en/futuresv2/
+
+🔗 Temporal Schedules :
+https://docs.temporal.io/workflows#schedules
+
+🔗 PostgreSQL UPSERT :
+https://www.postgresql.org/docs/current/sql-insert.html
+
+🔗 Symfony Hexagonal Architecture Guide :
+https://symfony.com/doc/current/best_practices/hexagonal_architecture.html

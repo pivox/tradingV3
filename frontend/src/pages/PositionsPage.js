@@ -1,36 +1,8 @@
 // src/pages/PositionsPage.js
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import api from '../services/api';
-import config from '../config';
 
-const INITIAL_DELAY = 2000;
-const MAX_DELAY = 30000;
-const CONNECTION_LABELS = {
-    inactive: 'inactif',
-    connecting: 'connexion en cours',
-    connected: 'connecté',
-    disconnected: 'déconnecté',
-};
-
-const buildWsUrl = (filters) => {
-    const base = config.positionsRealtimeBaseUrl || config.pythonApiUrl || window.location.origin;
-    const url = new URL('/ws/positions', base);
-    url.protocol = url.protocol.replace('http', 'ws');
-
-    if (filters.contract) {
-        url.searchParams.set('symbol', filters.contract.trim().toUpperCase());
-    }
-    if (filters.type && filters.type !== 'all') {
-        const side = filters.type === 'long' ? 'LONG' : 'SHORT';
-        url.searchParams.set('side', side);
-    }
-    if (filters.status && filters.status !== 'all') {
-        const status = filters.status === 'open' ? 'OPEN' : 'CLOSED';
-        url.searchParams.set('status', status);
-    }
-
-    return url.toString();
-};
+const POLL_INTERVAL_MS = 5000;
 
 const formatNumber = (value, options = {}) => {
     if (value === null || value === undefined || Number.isNaN(Number(value))) {
@@ -46,17 +18,73 @@ const formatNumber = (value, options = {}) => {
     }).format(Number(value));
 };
 
+const normalizePosition = (raw) => {
+    if (!raw) return null;
+
+    const contractSymbol = raw.contractSymbol || raw.contract_symbol || raw.symbol || raw.contract?.symbol || null;
+    const qtyContract = raw.qtyContract ?? raw.qty_contract ?? raw.size ?? raw.position_volume ?? raw.position_amount ?? null;
+    const entryPrice = raw.entryPrice ?? raw.entry_price ?? raw.avg_entry_price ?? raw.average_price ?? null;
+    const leverage = raw.leverage ?? raw.position_leverage ?? null;
+    const statusRaw = raw.status ?? raw.position_status ?? null;
+    const status = typeof statusRaw === 'string' ? statusRaw.toUpperCase() : statusRaw;
+    const pnlUsdt = raw.pnlUsdt ?? raw.pnl_usdt ?? raw.realized_pnl ?? raw.realised_pnl ?? null;
+    const amountUsdt = raw.amountUsdt ?? raw.amount_usdt ?? raw.position_value ?? raw.mark_value ?? null;
+    const lastSyncAt = raw.lastSyncAt ?? raw.last_sync_at ?? raw.updatedAt ?? raw.updated_at ?? raw.closedAt ?? raw.closed_at ?? null;
+    const sideRaw = raw.side ?? raw.position_side ?? raw.hold_side ?? raw.holdSide ?? (raw.type ? String(raw.type).toUpperCase() : null);
+    const side = typeof sideRaw === 'string' ? sideRaw.toUpperCase() : sideRaw;
+    const openedAt = raw.openedAt ?? raw.open_date ?? raw.createdAt ?? raw.created_at ?? null;
+    const createdAt = raw.createdAt ?? raw.created_at ?? raw.open_date ?? null;
+
+    let isClosed = raw.isClosed;
+    if (typeof isClosed !== 'boolean') {
+        if (status === 'CLOSED') {
+            isClosed = true;
+        } else if (qtyContract !== null && qtyContract !== undefined) {
+            const n = Number(qtyContract);
+            isClosed = Number.isFinite(n) ? Math.abs(n) < 1e-12 : false;
+        } else {
+            isClosed = false;
+        }
+    }
+
+    return {
+        ...raw,
+        contractSymbol,
+        qtyContract,
+        entryPrice,
+        leverage,
+        status,
+        pnlUsdt,
+        amountUsdt,
+        lastSyncAt,
+        side,
+        isClosed,
+        openedAt,
+        createdAt,
+    };
+};
+
 const enrichPosition = (position) => {
     if (!position) {
         return null;
     }
-    const amount = position.amountUsdt ?? 0;
-    const pnl = position.pnlUsdt ?? null;
+    const norm = normalizePosition(position);
+    if (!norm) return null;
+    const amount = norm.amountUsdt ?? 0;
+    const pnl = norm.pnlUsdt ?? null;
     const roiPct = amount && pnl !== null ? (pnl / amount) * 100 : null;
     return {
-        ...position,
+        ...norm,
         roiPct,
     };
+};
+
+const getPositionKey = (p) => {
+    return (
+        p.key ||
+        p.id ||
+        `${p.contractSymbol || p.symbol || 'UNKNOWN'}-${p.side || 'NA'}-${p.openedAt || p.createdAt || ''}`
+    );
 };
 
 const PositionsPage = () => {
@@ -69,15 +97,9 @@ const PositionsPage = () => {
     const [positions, setPositions] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
-    const [connectionState, setConnectionState] = useState('inactive');
-    const [isRealtimeEnabled, setRealtimeEnabled] = useState(false);
+    const [autoRefresh, setAutoRefresh] = useState(true);
 
-    const websocketRef = useRef(null);
-    const reconnectTimeoutRef = useRef(null);
-    const backoffRef = useRef(INITIAL_DELAY);
-    const shouldReconnectRef = useRef(false);
-    const positionsRef = useRef(new Map());
-    const sequenceRef = useRef(0);
+    const pollTimerRef = useRef(null);
 
     useEffect(() => {
         api.getContracts()
@@ -85,170 +107,67 @@ const PositionsPage = () => {
             .catch((err) => console.error('Erreur lors du chargement des contrats:', err));
     }, []);
 
-    const stopRealtime = (resetStatus = false) => {
-        shouldReconnectRef.current = false;
-        if (reconnectTimeoutRef.current) {
-            clearTimeout(reconnectTimeoutRef.current);
-            reconnectTimeoutRef.current = null;
-        }
-        if (websocketRef.current && websocketRef.current.readyState <= 1) {
-            websocketRef.current.close();
-        }
-        if (resetStatus) {
-            setConnectionState('inactive');
+    const fetchPositions = async () => {
+        setError(null);
+        try {
+            const params = {};
+            if (filters.contract) {
+                params.contract = filters.contract.trim().toUpperCase();
+            }
+            if (filters.type && filters.type !== 'all') {
+                params.type = filters.type; // 'long' | 'short'
+            }
+            if (filters.status && filters.status !== 'all') {
+                params.status = filters.status; // 'open' | 'closed'
+            }
+            const res = await api.getPositions(params);
+            const list = Array.isArray(res)
+                ? res
+                : (res?.positions || res?.items || res?.data || []);
+
+            const mapped = list
+                .map((item) => {
+                    const enriched = enrichPosition(item);
+                    if (!enriched) return null;
+                    return { key: getPositionKey(enriched), ...enriched };
+                })
+                .filter(Boolean);
+
+            setPositions(mapped);
+        } catch (e) {
+            console.error('Erreur de récupération des positions', e);
+            setError("Impossible de récupérer les positions");
+        } finally {
             setLoading(false);
         }
     };
 
     useEffect(() => {
-        if (!isRealtimeEnabled) {
-            stopRealtime(true);
-            return undefined;
+        setLoading(true);
+        fetchPositions();
+        if (pollTimerRef.current) {
+            clearInterval(pollTimerRef.current);
+            pollTimerRef.current = null;
         }
-
-        shouldReconnectRef.current = true;
-        connectWebsocket();
-
+        if (autoRefresh) {
+            pollTimerRef.current = setInterval(fetchPositions, POLL_INTERVAL_MS);
+        }
         return () => {
-            stopRealtime(false);
+            if (pollTimerRef.current) {
+                clearInterval(pollTimerRef.current);
+                pollTimerRef.current = null;
+            }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isRealtimeEnabled, filters.contract, filters.type, filters.status]);
-
-    const connectWebsocket = () => {
-        const wsUrl = buildWsUrl(filters);
-        if (positionsRef.current.size === 0) {
-            setLoading(true);
-        }
-        setConnectionState('connecting');
-        setError(null);
-        sequenceRef.current = 0;
-
-        try {
-            if (websocketRef.current && websocketRef.current.readyState <= 1) {
-                websocketRef.current.close();
-            }
-            const socket = new WebSocket(wsUrl);
-            websocketRef.current = socket;
-
-            socket.onopen = () => {
-                setConnectionState('connected');
-                backoffRef.current = INITIAL_DELAY;
-            };
-
-            socket.onmessage = (event) => {
-            console.log('[WS] Message brut reçu:', event.data);
-                try {
-                    const payload = JSON.parse(event.data);
-                    handleRealtimePayload(payload);
-                } catch (err) {
-                    console.error('Message temps réel invalide', err);
-                }
-            };
-
-            socket.onerror = (event) => {
-            console.error('[WS] Erreur WebSocket', event);
-                setError('Erreur de communication temps réel');
-            };
-
-            socket.onclose = () => {
-            console.log('[WS] Connexion fermée');
-                const nextState = shouldReconnectRef.current ? 'disconnected' : 'inactive';
-                setConnectionState(nextState);
-                if (shouldReconnectRef.current) {
-                    scheduleReconnect();
-                }
-            };
-        } catch (err) {
-        console.error('[WS] Impossible de créer la connexion WebSocket', err);
-            setError("Impossible d'ouvrir la connexion temps réel");
-            scheduleReconnect();
-        }
-    };
-
-    const scheduleReconnect = () => {
-        if (!shouldReconnectRef.current) {
-            return;
-        }
-        const delay = backoffRef.current;
-        if (reconnectTimeoutRef.current) {
-            clearTimeout(reconnectTimeoutRef.current);
-        }
-        reconnectTimeoutRef.current = setTimeout(() => {
-            connectWebsocket();
-        }, delay);
-        backoffRef.current = Math.min(backoffRef.current * 2, MAX_DELAY);
-    };
-
-    const handleRealtimePayload = (payload) => {
-        if (!payload) {
-                    console.log('[WS] Payload vide ignoré');
-
-            return;
-        }
-        if (payload.type === 'snapshot') {
-        console.log('[WS] Snapshot reçu avec', (payload.positions || []).length, 'positions');
-            const map = new Map();
-            (payload.positions || []).forEach((item) => {
-                const enriched = enrichPosition(item);
-                if (enriched) {
-                    map.set(enriched.key, enriched);
-                }
-            });
-            positionsRef.current = map;
-            sequenceRef.current = payload.seq || 0;
-            setPositions(Array.from(map.values()));
-            setLoading(false);
-            setError(null);
-            return;
-        }
-
-        if (!payload.position) {
-            return;
-        }
-        if (payload.seq && payload.seq <= sequenceRef.current) {
-            return;
-        }
-        if (payload.seq) {
-            sequenceRef.current = payload.seq;
-        }
-
-        const enriched = enrichPosition(payload.position);
-        if (!enriched) {
-            return;
-        }
-
-        const map = new Map(positionsRef.current);
-        map.set(enriched.key, enriched);
-        positionsRef.current = map;
-        setPositions(Array.from(map.values()));
-        setLoading(false);
-    };
+    }, [filters.contract, filters.type, filters.status, autoRefresh]);
 
     const handleFilterChange = (name, value) => {
         setFilters((prev) => ({ ...prev, [name]: value }));
     };
 
-    const handleToggleRealtime = () => {
-        setRealtimeEnabled((prev) => {
-            const next = !prev;
-            if (next && positionsRef.current.size === 0) {
-                setLoading(true);
-            }
-            if (!next) {
-                stopRealtime(true);
-                setError(null);
-            }
-            return next;
-        });
-    };
-
     const filteredPositions = useMemo(() => {
         return positions
             .filter((position) => {
-                if (position.status == 'CLOSED') {
-                    return false;
-                }
                 if (filters.contract && position.contractSymbol !== filters.contract.trim().toUpperCase()) {
                     return false;
                 }
@@ -258,24 +177,26 @@ const PositionsPage = () => {
                         return false;
                     }
                 }
-                if (filters.status === 'open' && position.isClosed) {
-                    return false;
+                if (filters.status === 'open') {
+                    const isClosed = position.isClosed !== undefined ? position.isClosed : (position.status === 'CLOSED');
+                    if (isClosed) return false;
                 }
-                if (filters.status === 'closed' && !position.isClosed) {
-                    return false;
+                if (filters.status === 'closed') {
+                    const isClosed = position.isClosed !== undefined ? position.isClosed : (position.status === 'CLOSED');
+                    if (!isClosed) return false;
                 }
                 return true;
             })
-            .sort((a, b) => a.contractSymbol.localeCompare(b.contractSymbol));
+            .sort((a, b) => (a.contractSymbol || '').localeCompare(b.contractSymbol || ''));
     }, [positions, filters]);
 
     const availableContracts = useMemo(() => {
-        const fromRealtime = Array.from(
+        const fromPositions = Array.from(
             new Set(positions.map((position) => position.contractSymbol))
         ).map((symbol) => ({ symbol, id: symbol }));
 
         const combined = [...contracts];
-        fromRealtime.forEach((item) => {
+        fromPositions.forEach((item) => {
             if (!combined.some((contract) => (contract.symbol || contract.id) === item.symbol)) {
                 combined.push(item);
             }
@@ -286,13 +207,19 @@ const PositionsPage = () => {
     return (
         <div className="positions-page">
             <h1>Positions</h1>
-            <div className="realtime-controls">
-                <button type="button" onClick={handleToggleRealtime}>
-                    {isRealtimeEnabled ? 'Couper le flux temps réel' : 'Activer le flux temps réel'}
+
+            <div className="refresh-controls">
+                <button type="button" onClick={() => { setLoading(true); fetchPositions(); }}>
+                    Rafraîchir
                 </button>
-                <div className={`connection-state state-${connectionState}`}>
-                    Flux temps réel : {CONNECTION_LABELS[connectionState] ?? connectionState}
-                </div>
+                <label style={{ marginLeft: 12 }}>
+                    <input
+                        type="checkbox"
+                        checked={autoRefresh}
+                        onChange={(e) => setAutoRefresh(e.target.checked)}
+                    />
+                    Actualisation automatique (toutes les {Math.round(POLL_INTERVAL_MS / 1000)}s)
+                </label>
             </div>
 
             <div className="filters">
@@ -393,12 +320,10 @@ const PositionsPage = () => {
                     </tbody>
                 </table>
             ) : (
-                <div className="no-data">
-                    {isRealtimeEnabled ? 'Aucune position trouvée' : 'Activez le flux temps réel pour afficher les positions'}
-                </div>
+                <div className="no-data">Aucune position trouvée</div>
             )}
         </div>
     );
-};
+}
 
 export default PositionsPage;

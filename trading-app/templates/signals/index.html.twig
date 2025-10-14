@@ -1,0 +1,76 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Signaux - Trading{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="bi bi-signal"></i> Signaux de Trading
+            </h1>
+            <div>
+                <button class="btn btn-primary" onclick="refreshTable()">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Onglets -->
+<div class="row mb-4">
+    <div class="col-12">
+        <ul class="nav nav-tabs" id="signalsTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview" type="button" role="tab" aria-controls="overview" aria-selected="true">
+                    <i class="bi bi-grid-3x3-gap"></i> Vue d'ensemble
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="details-tab" data-bs-toggle="tab" data-bs-target="#details" type="button" role="tab" aria-controls="details" aria-selected="false">
+                    <i class="bi bi-list-ul"></i> Détails des signaux
+                </button>
+            </li>
+        </ul>
+    </div>
+</div>
+
+<!-- Contenu des onglets -->
+<div class="tab-content" id="signalsTabsContent">
+    <!-- Onglet Vue d'ensemble -->
+    <div class="tab-pane fade show active" id="overview" role="tabpanel" aria-labelledby="overview-tab">
+        {% include 'signals/_overview_tab.html.twig' %}
+    </div>
+    
+    <!-- Onglet Détails -->
+    <div class="tab-pane fade" id="details" role="tabpanel" aria-labelledby="details-tab">
+        {% include 'signals/_details_tab.html.twig' %}
+    </div>
+</div>
+
+<!-- Modal pour les métadonnées -->
+<div class="modal fade" id="metaModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Métadonnées du Signal</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <pre id="metaContent" class="bg-light p-3"></pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+// Le JavaScript pour les DataTables est maintenant géré dans les templates d'onglets
+
+function refreshTable() {
+    location.reload();
+}
+</script>
+{% endblock %}

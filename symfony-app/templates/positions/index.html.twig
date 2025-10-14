@@ -1,0 +1,318 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Positions - Trading{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="bi bi-bullseye"></i> Positions
+            </h1>
+            <div>
+                <button class="btn btn-primary" onclick="refreshTable()">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filtres -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-funnel"></i> Filtres
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-2">
+                        <label for="filterStatus" class="form-label">Statut</label>
+                        <select class="form-select" id="filterStatus">
+                            <option value="">Tous</option>
+                            <option value="OPEN">Ouvertes</option>
+                            <option value="CLOSED">Fermées</option>
+                            <option value="PENDING">En attente</option>
+                            <option value="CANCELLED">Annulées</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterSide" class="form-label">Type</label>
+                        <select class="form-select" id="filterSide">
+                            <option value="">Tous</option>
+                            <option value="LONG">Long</option>
+                            <option value="SHORT">Short</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterContract" class="form-label">Contrat</label>
+                        <input type="text" class="form-control" id="filterContract" placeholder="Ex: BTCUSDT">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterExchange" class="form-label">Exchange</label>
+                        <select class="form-select" id="filterExchange">
+                            <option value="">Tous</option>
+                            <option value="bitmart">BitMart</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterPnL" class="form-label">PnL</label>
+                        <select class="form-select" id="filterPnL">
+                            <option value="">Tous</option>
+                            <option value="positive">Positif</option>
+                            <option value="negative">Négatif</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button class="btn btn-outline-secondary" onclick="clearFilters()">
+                            <i class="bi bi-x-circle"></i> Effacer
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Statistiques rapides -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card bg-success text-white">
+            <div class="card-body text-center">
+                <h5>{{ stats.open_positions ?? 0 }}</h5>
+                <small>Positions Ouvertes</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-info text-white">
+            <div class="card-body text-center">
+                <h5>{{ stats.total_pnl ?? 0 }}</h5>
+                <small>PnL Total (USDT)</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-white">
+            <div class="card-body text-center">
+                <h5>{{ stats.pending_positions ?? 0 }}</h5>
+                <small>En Attente</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-secondary text-white">
+            <div class="card-body text-center">
+                <h5>{{ stats.closed_positions ?? 0 }}</h5>
+                <small>Fermées</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Table des positions -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-table"></i> Liste des Positions ({{ positions|length }})
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table id="positionsTable" class="table table-striped table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>ID</th>
+                                <th>Contrat</th>
+                                <th>Type</th>
+                                <th>Statut</th>
+                                <th>Montant (USDT)</th>
+                                <th>Prix Entrée</th>
+                                <th>Prix Actuel</th>
+                                <th>Quantité</th>
+                                <th>Leverage</th>
+                                <th>PnL</th>
+                                <th>Ouvert le</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for position in positions %}
+                            <tr>
+                                <td>
+                                    <code>{{ position.id }}</code>
+                                </td>
+                                <td>
+                                    <strong>{{ position.contract.symbol }}</strong>
+                                    <br><small class="text-muted">{{ position.exchange }}</small>
+                                </td>
+                                <td>
+                                    {% if position.side == 'LONG' %}
+                                        <span class="badge bg-success">LONG</span>
+                                    {% else %}
+                                        <span class="badge bg-danger">SHORT</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if position.status == 'OPEN' %}
+                                        <span class="badge bg-success">{{ position.status }}</span>
+                                    {% elseif position.status == 'CLOSED' %}
+                                        <span class="badge bg-secondary">{{ position.status }}</span>
+                                    {% elseif position.status == 'PENDING' %}
+                                        <span class="badge bg-warning">{{ position.status }}</span>
+                                    {% elseif position.status == 'CANCELLED' %}
+                                        <span class="badge bg-danger">{{ position.status }}</span>
+                                    {% else %}
+                                        <span class="badge bg-info">{{ position.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <strong>${{ position.amountUsdt|number_format(2) }}</strong>
+                                </td>
+                                <td>
+                                    {% if position.entryPrice %}
+                                        <strong>${{ position.entryPrice|number_format(4) }}</strong>
+                                    {% else %}
+                                        <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if position.contract.lastPrice %}
+                                        <strong>${{ position.contract.lastPrice|number_format(4) }}</strong>
+                                    {% else %}
+                                        <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if position.qtyContract %}
+                                        {{ position.qtyContract|number_format(4) }}
+                                    {% else %}
+                                        <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if position.leverage %}
+                                        <span class="badge bg-info">{{ position.leverage }}x</span>
+                                    {% else %}
+                                        <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if position.pnlUsdt %}
+                                        {% if position.pnlUsdt > 0 %}
+                                            <span class="text-success">+${{ position.pnlUsdt|number_format(2) }}</span>
+                                        {% else %}
+                                            <span class="text-danger">${{ position.pnlUsdt|number_format(2) }}</span>
+                                        {% endif %}
+                                    {% else %}
+                                        <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if position.openedAt %}
+                                        {{ position.openedAt|date('d/m/Y H:i') }}
+                                    {% elseif position.createdAt %}
+                                        {{ position.createdAt|date('d/m/Y H:i') }}
+                                    {% else %}
+                                        <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-primary" onclick="viewPosition({{ position.id }})" title="Voir détails">
+                                            <i class="bi bi-eye"></i>
+                                        </button>
+                                        {% if position.status == 'OPEN' %}
+                                            <button class="btn btn-outline-warning" onclick="closePosition({{ position.id }})" title="Fermer position">
+                                                <i class="bi bi-x-circle"></i>
+                                            </button>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+$(document).ready(function() {
+    // Initialisation de DataTables
+    $('#positionsTable').DataTable({
+        language: {
+            url: '//cdn.datatables.net/plug-ins/1.13.6/i18n/fr-FR.json'
+        },
+        pageLength: 25,
+        order: [[10, 'desc']], // Trier par date d'ouverture
+        columnDefs: [
+            { orderable: false, targets: [11] } // Actions column
+        ]
+    });
+
+    // Filtres
+    $('#filterStatus, #filterSide, #filterContract, #filterExchange, #filterPnL').on('change keyup', function() {
+        applyFilters();
+    });
+});
+
+function applyFilters() {
+    const table = $('#positionsTable').DataTable();
+    const status = $('#filterStatus').val();
+    const side = $('#filterSide').val();
+    const contract = $('#filterContract').val();
+    const exchange = $('#filterExchange').val();
+    const pnl = $('#filterPnL').val();
+
+    // Réinitialiser les filtres
+    table.search('').columns().search('').draw();
+
+    // Appliquer les filtres
+    if (status) {
+        table.column(3).search(status, false, false);
+    }
+    if (side) {
+        table.column(2).search(side, false, false);
+    }
+    if (contract) {
+        table.column(1).search(contract, false, false);
+    }
+    if (exchange) {
+        table.column(1).search(exchange, false, false);
+    }
+
+    table.draw();
+}
+
+function clearFilters() {
+    $('#filterStatus, #filterSide, #filterContract, #filterExchange, #filterPnL').val('');
+    $('#positionsTable').DataTable().search('').columns().search('').draw();
+}
+
+function refreshTable() {
+    location.reload();
+}
+
+function viewPosition(id) {
+    // TODO: Implémenter la vue détaillée de la position
+    alert('Vue détaillée pour la position ' + id);
+}
+
+function closePosition(id) {
+    if (confirm('Êtes-vous sûr de vouloir fermer cette position ?')) {
+        // TODO: Implémenter la fermeture de position
+        alert('Fermeture de la position ' + id);
+    }
+}
+</script>
+{% endblock %}

@@ -1,37 +1,70 @@
 // src/components/ContractList.js
 import React, { useState, useEffect } from 'react';
 
+const safeValue = (v, def = '') => (v === null || v === undefined ? def : v);
+const compareValues = (a, b, key, direction) => {
+    const va = safeValue(a[key]);
+    const vb = safeValue(b[key]);
+    let cmp;
+    if (typeof va === 'string' || typeof vb === 'string') {
+        cmp = String(va).localeCompare(String(vb));
+    } else {
+        const na = Number(va);
+        const nb = Number(vb);
+        if (Number.isFinite(na) && Number.isFinite(nb)) {
+            cmp = na === nb ? 0 : (na < nb ? -1 : 1);
+        } else {
+            cmp = String(va).localeCompare(String(vb));
+        }
+    }
+    return direction === 'ascending' ? cmp : -cmp;
+};
+
+const formatCompact = (n) => {
+    if (!Number.isFinite(Number(n))) return '-';
+    try {
+        return new Intl.NumberFormat('fr-FR', { notation: 'compact', maximumFractionDigits: 2 }).format(Number(n));
+    } catch (_) {
+        return String(n);
+    }
+};
+
+const formatNumber = (n, max = 6) => {
+    if (!Number.isFinite(Number(n))) return '-';
+    return new Intl.NumberFormat('fr-FR', { maximumFractionDigits: max }).format(Number(n));
+};
+
+const formatChangePct = (v) => {
+    if (!Number.isFinite(Number(v))) return '-';
+    const num = Number(v);
+    const sign = num > 0 ? '+' : '';
+    return `${sign}${num.toFixed(2)}%`;
+};
+
 const ContractList = ({ contracts, onSelect, selectedContract }) => {
     const [sortedContracts, setSortedContracts] = useState([]);
     const [sortConfig, setSortConfig] = useState({
-        key: 'name',
+        key: 'symbol',
         direction: 'ascending'
     });
 
     useEffect(() => {
         let contractsCopy = [...contracts];
+        const key = sortConfig.key;
+        const direction = sortConfig.direction;
 
-        if (sortConfig.key) {
-            contractsCopy.sort((a, b) => {
-                if (a[sortConfig.key] < b[sortConfig.key]) {
-                    return sortConfig.direction === 'ascending' ? -1 : 1;
-                }
-                if (a[sortConfig.key] > b[sortConfig.key]) {
-                    return sortConfig.direction === 'ascending' ? 1 : -1;
-                }
-                return 0;
-            });
+        if (key) {
+            contractsCopy.sort((a, b) => compareValues(a, b, key, direction));
         }
 
         setSortedContracts(contractsCopy);
     }, [contracts, sortConfig]);
 
     const requestSort = key => {
-        let direction = 'ascending';
-        if (sortConfig.key === key && sortConfig.direction === 'ascending') {
-            direction = 'descending';
-        }
-        setSortConfig({ key, direction });
+        const nextDirection = (sortConfig.key === key && sortConfig.direction === 'ascending')
+            ? 'descending'
+            : 'ascending';
+        setSortConfig({ key, direction: nextDirection });
     };
 
     return (
@@ -41,27 +74,40 @@ const ContractList = ({ contracts, onSelect, selectedContract }) => {
                     onClick={() => requestSort('symbol')}
                     className={sortConfig.key === 'symbol' ? `sorted-${sortConfig.direction}` : ''}
                 >
-                    Nom {sortConfig.key === 'symbol' ? (sortConfig.direction === 'ascending' ? '↑' : '↓') : ''}
+                    Symbole {sortConfig.key === 'symbol' ? (sortConfig.direction === 'ascending' ? '↑' : '↓') : ''}
                 </button>
                 <button
-                    onClick={() => requestSort('volume')}
-                    className={sortConfig.key === 'volume' ? `sorted-${sortConfig.direction}` : ''}
+                    onClick={() => requestSort('lastPrice')}
+                    className={sortConfig.key === 'lastPrice' ? `sorted-${sortConfig.direction}` : ''}
                 >
-                    Volume {sortConfig.key === 'volume' ? (sortConfig.direction === 'ascending' ? '↑' : '↓') : ''}
+                    Prix {sortConfig.key === 'lastPrice' ? (sortConfig.direction === 'ascending' ? '↑' : '↓') : ''}
                 </button>
                 <button
-                    onClick={() => requestSort('score')}
-                    className={sortConfig.key === 'score' ? `sorted-${sortConfig.direction}` : ''}
+                    onClick={() => requestSort('volume24h')}
+                    className={sortConfig.key === 'volume24h' ? `sorted-${sortConfig.direction}` : ''}
                 >
-                    Score {sortConfig.key === 'score' ? (sortConfig.direction === 'ascending' ? '↑' : '↓') : ''}
+                    Vol 24h {sortConfig.key === 'volume24h' ? (sortConfig.direction === 'ascending' ? '↑' : '↓') : ''}
+                </button>
+                <button
+                    onClick={() => requestSort('change24h')}
+                    className={sortConfig.key === 'change24h' ? `sorted-${sortConfig.direction}` : ''}
+                >
+                    Var 24h {sortConfig.key === 'change24h' ? (sortConfig.direction === 'ascending' ? '↑' : '↓') : ''}
                 </button>
             </div>
             <ul className="contract-list">
                 {sortedContracts.map(contract => {
-                    const contractKey = contract.id ?? contract.symbol;
+                    const contractKey = contract.symbol; // identifiant côté API Platform
                     const isSelected = selectedContract
-                        ? (selectedContract.id ?? selectedContract.symbol) === contractKey
+                        ? (selectedContract.symbol ?? selectedContract.id) === contractKey
                         : false;
+
+                    const symbol = safeValue(contract.symbol, contract.id);
+                    const lastPrice = safeValue(contract.lastPrice, contract.indexPrice);
+                    const volume24h = safeValue(contract.volume24h, contract.volume);
+                    const change24h = safeValue(contract.change24h, null);
+
+                    const changeClass = Number(change24h) > 0 ? 'pos' : Number(change24h) < 0 ? 'neg' : '';
 
                     return (
                         <li
@@ -69,13 +115,14 @@ const ContractList = ({ contracts, onSelect, selectedContract }) => {
                             onClick={() => onSelect(contract)}
                             className={isSelected ? 'selected' : ''}
                         >
-                        <div className="contract-item">
-                            <span className="contract-symbol">{contract.symbol}</span>
-                            <span className="contract-details">
-                <span className="contract-volume">Vol: {contract.volume}</span>
-                <span className="contract-score">Score: {contract.score}</span>
-              </span>
-                        </div>
+                            <div className="contract-item">
+                                <span className="contract-symbol">{symbol}</span>
+                                <span className="contract-details">
+                                    <span className="contract-price">{formatNumber(lastPrice, 6)}</span>
+                                    <span className="contract-volume">Vol: {formatCompact(volume24h)}</span>
+                                    <span className={`contract-change ${changeClass}`}>{formatChangePct(change24h)}</span>
+                                </span>
+                            </div>
                         </li>
                     );
                 })}

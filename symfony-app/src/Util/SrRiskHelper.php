@@ -5,6 +5,10 @@ namespace App\Util;
 
 final class SrRiskHelper
 {
+    private const MIN_BUFFER_PCT = 0.0005;          // 0.05%
+    private const BUFFER_RATIO   = 0.5;             // utilise au plus 50% de l'écart support/entrée
+    private const MAX_ATR_DISTANCE_MULT = 1.2;      // ne pas élargir le stop à >120% de l'ATR prévu
+
     /**
      * @param array<int, array{open:float, high:float, low:float, close:float}> $klines  bougies triées ASC par temps
      * @param int   $fractalLR  nb de bougies à gauche/droite pour détecter les pivots (ex: 2 à 4)
@@ -131,18 +135,64 @@ final class SrRiskHelper
         float $atr,
         float $atrK = 1.5
     ): float {
-        $side = strtolower($side);
+        $side        = strtolower($side);
+        $atrDistance = max($atrK * $atr, 1e-12);
+        $minBuffer   = max(self::MIN_BUFFER_PCT * $entry, 1e-12);
+
         if ($side === 'long') {
-            // SL sous le support le plus proche < entry, avec buffer ATR
+            $fallback = max(1e-12, $entry - $atrDistance);
             $cands = array_values(array_filter($supports, fn($s) => $s < $entry));
-            $level = !empty($cands) ? max($cands) : ($entry - 2*$atr);
-            return max(1e-12, $level - $atrK * $atr);
-        } else {
-            // SHORT : SL au-dessus de la résistance la plus proche > entry
-            $cands = array_values(array_filter($resistances, fn($r) => $r > $entry));
-            $level = !empty($cands) ? min($cands) : ($entry + 2*$atr);
-            return $level + $atrK * $atr;
+            if (empty($cands)) {
+                return $fallback;
+            }
+            $level = max($cands);
+            $distanceToLevel = $entry - $level;
+            if ($distanceToLevel <= 0.0) {
+                return $fallback;
+            }
+            if ($distanceToLevel > $atrDistance * self::MAX_ATR_DISTANCE_MULT) {
+                return $fallback;
+            }
+            if ($fallback >= $level) {
+                return max(1e-12, $level - $minBuffer);
+            }
+
+            $buffer = min(
+                $atrDistance,
+                max($minBuffer, $distanceToLevel * self::BUFFER_RATIO)
+            );
+            $stop = $level - $buffer;
+            $stop = max($stop, $fallback);
+
+            return max(1e-12, $stop);
         }
+
+        // SHORT : SL au-dessus de la résistance la plus proche > entry
+        $fallback = $entry + $atrDistance;
+        $cands = array_values(array_filter($resistances, fn($r) => $r > $entry));
+        if (empty($cands)) {
+            return $fallback;
+        }
+        $level = min($cands);
+        $distanceToLevel = $level - $entry;
+        if ($distanceToLevel <= 0.0) {
+            return $fallback;
+        }
+        if ($distanceToLevel > $atrDistance * self::MAX_ATR_DISTANCE_MULT) {
+            return $fallback;
+        }
+        if ($fallback <= $level) {
+            return $level + $minBuffer;
+        }
+
+        $buffer = min(
+            $atrDistance,
+            max($minBuffer, $distanceToLevel * self::BUFFER_RATIO)
+        );
+        $stop = $level + $buffer;
+        $stop = min($stop, $fallback);
+
+        return max(1e-12, $stop);
     }
 
     /**

@@ -7,6 +7,7 @@ from workflows.cron_symfony_1h import CronSymfony1hWorkflow
 from workflows.cron_symfony_15m import CronSymfony15mWorkflow
 from workflows.cron_symfony_5m import CronSymfony5mWorkflow
 from workflows.cron_symfony_1m import CronSymfony1mWorkflow
+from workflows.cron_symfony_mtf import CronSymfonyMtfWorkflow
 from activities.symfony_http import call_symfony_endpoint  # ici c'est OK (hors sandbox)
 
 TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
@@ -22,7 +23,8 @@ async def main():
         CronSymfony1hWorkflow,
         CronSymfony15mWorkflow,
         CronSymfony5mWorkflow,
-        CronSymfony1mWorkflow
+        CronSymfony1mWorkflow,
+        CronSymfonyMtfWorkflow
         ],
         activities=[call_symfony_endpoint],     # registre l’activité
     )

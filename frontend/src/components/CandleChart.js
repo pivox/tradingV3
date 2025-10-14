@@ -12,7 +12,8 @@ const CandleChart = ({
     loading: externalLoading = false,
     timeframes = DEFAULT_TIMEFRAMES,
     height = 400,
-    emptyMessage = 'Aucune donnée disponible'
+    emptyMessage = 'Aucune donnée disponible',
+    utcOffsetMinutes = 0,
 }) => {
     const [internalTimeframe, setInternalTimeframe] = useState(controlledTimeframe || '1h');
     const [internalData, setInternalData] = useState([]);
@@ -83,19 +84,21 @@ const CandleChart = ({
         }
     };
 
+    const offsetMs = (Number(utcOffsetMinutes) || 0) * 60 * 1000;
+
     const series = useMemo(() => [{
         data: (effectiveData ?? []).map(point => {
             const timestamp = point.timestamp;
-            const x = typeof timestamp === 'number'
+            const base = typeof timestamp === 'number'
                 ? timestamp
                 : new Date(timestamp).getTime();
-
+            const x = base + offsetMs; // Affichage: UTC + offset
             return {
                 x,
                 y: [Number(point.open), Number(point.high), Number(point.low), Number(point.close)]
             };
         })
-    }], [effectiveData]);
+    }], [effectiveData, offsetMs]);
 
     const options = useMemo(() => ({
         chart: {
@@ -112,7 +115,7 @@ const CandleChart = ({
         },
         xaxis: {
             type: 'datetime',
-            labels: { datetimeUTC: false }
+            labels: { datetimeUTC: true } // force l’affichage en UTC; on décale déjà les timestamps
         },
         yaxis: {
             tooltip: { enabled: true }

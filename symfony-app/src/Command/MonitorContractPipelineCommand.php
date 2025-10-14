@@ -2,7 +2,8 @@
 
 namespace App\Command;
 
-use Doctrine\DBAL\Connection;
+use App\Service\Pipeline\MtfPipelineViewService;
+use DateTimeImmutable;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Helper\Table;
@@ -10,15 +11,14 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\BufferedOutput;
 use Symfony\Component\Console\Output\OutputInterface;
-use Symfony\Component\Console\Cursor;
 
 #[AsCommand(
     name: 'app:monitor:contract-pipeline',
-    description: 'Affiche en continu contract_pipeline et remonte les lignes modifiées'
+    description: 'Affiche les pipelines MTF (tf_eligibility/latest_signal) et détecte les changements'
 )]
 class MonitorContractPipelineCommand extends Command
 {
-    public function __construct(private readonly Connection $db)
+    public function __construct(private readonly MtfPipelineViewService $pipelines)
     {
         parent::__construct();
     }
@@ -27,151 +27,130 @@ class MonitorContractPipelineCommand extends Command
     {
         $this
             ->addOption('interval', 'i', InputOption::VALUE_OPTIONAL, 'Intervalle de refresh (secondes)', '2')
-            ->addOption('limit', 'l', InputOption::VALUE_OPTIONAL, 'Nombre max de lignes affichées (0 = toutes)', '0')
-            ->addOption('order-by', null, InputOption::VALUE_OPTIONAL, 'Ordre de base quand aucune ligne ne change', 'contract_symbol ASC, current_timeframe ASC');
+            ->addOption('limit', 'l', InputOption::VALUE_OPTIONAL, 'Nombre max de lignes affichées (0 = toutes)', '0');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $interval = max(1, (int)$input->getOption('interval')); // ex: --interval=2
-        $limit    = max(0, (int)$input->getOption('limit'));     // ex: --limit=50, 0=toutes
-        $orderBy  = (string)$input->getOption('order-by');       // ex: --order-by="contract_symbol ASC"
+        $interval = max(1, (int)$input->getOption('interval'));
+        $limit    = max(0, (int)$input->getOption('limit'));
 
-        // Snapshots pour détecter les changements
-        $prevSnapshot = [];   // key => hash des valeurs surveillées
-        $prevValues   = [];   // key => valeurs brutes (ex: retries) pour calculer delta ▲▼
-
-        // Section réinscrite à chaque tick (pas de scroll)
+        $prevSnapshot = [];
+        $prevValues   = [];
         $section = $output->section();
 
         while (true) {
-            // 1) Lecture DB
-            $rows = $this->fetchRows($orderBy, $limit);
-
-            // 2) Détection des changements
-            $changed = [];   // key => true si la ligne a changé depuis le tick précédent
+            $rows = $this->fetchRows($limit);
+            $changed = [];
             $nowSnapshot = [];
-
-            foreach ($rows as $r) {
-                $key  = $this->rowKey($r);     // ex: symbol|timeframe
-                $hash = $this->rowHash($r);    // ex: sha1([retries, max_retries, status])
+            foreach ($rows as $row) {
+                $key = $this->rowKey($row);
+                $hash = $this->rowHash($row);
                 $nowSnapshot[$key] = $hash;
                 if (!isset($prevSnapshot[$key]) || $prevSnapshot[$key] !== $hash) {
                     $changed[$key] = true;
                 }
             }
 
-            // 3) Tri : lignes modifiées en tête, puis ordre secondaire stable
-            usort($rows, function (array $a, array $b) use ($changed) {
-                $ka = $this->rowKey($a);
-                $kb = $this->rowKey($b);
-                $ca = isset($changed[$ka]);
-                $cb = isset($changed[$kb]);
-                if ($ca !== $cb) {
-                    return $ca ? -1 : 1; // changées d'abord
-                }
-                // tri secondaire stable
-                return strcmp($a['contract_symbol'], $b['contract_symbol'])
-                    ?: strcmp($a['current_timeframe'], $b['current_timeframe']);
-            });
-
-            // 4) Rendu dans un buffer, puis overwrite de la section
             $buf = new BufferedOutput();
             $buf->writeln(sprintf(
-                "<info>contract_pipeline</info> | %d lignes | %d modifiée(s) | refresh %ds | %s",
-                count($rows), count($changed), $interval, (new \DateTimeImmutable())->format('H:i:s')
+                "<info>mtf_pipelines</info> | %d lignes | %d modifiée(s) | refresh %ds | %s",
+                count($rows), count($changed), $interval, (new DateTimeImmutable())->format('H:i:s')
             ));
 
             $table = new Table($buf);
-            $table->setHeaders(['contract_symbol', 'current_timeframe', 'retries', 'max_retries', 'status']);
-            $table->setStyle('box'); // compact | box | box-double | borderless
+            $table->setHeaders(['symbol', 'tf', 'card', 'retries', 'lock', 'updated']);
+            $table->setStyle('box');
 
-            $nextPrev = []; // valeurs brutes pour le prochain tick (delta)
-
-            foreach ($rows as $r) {
-                $key       = $this->rowKey($r);
-                $isChanged = isset($changed[$key]);
-
-                // Alignement chiffres + delta ▲▼
+            $nextPrev = [];
+            foreach ($rows as $row) {
+                $key = $this->rowKey($row);
                 $prevRetries = $prevValues[$key]['retries'] ?? null;
                 $delta = $prevRetries === null ? ''
-                    : ((int)$r['retries'] > (int)$prevRetries ? ' ▲'
-                        : ((int)$r['retries'] < (int)$prevRetries ? ' ▼' : ''));
+                    : ((int)$row['retries'] > (int)$prevRetries ? ' ▲'
+                        : ((int)$row['retries'] < (int)$prevRetries ? ' ▼' : ''));
 
-                $colRetries    = sprintf('%3d', (int)$r['retries']) . $delta;
-                $colMaxRetries = sprintf('%3d', (int)$r['max_retries']);
-
-                // Couleur du status
-                $statusLabel = strtolower((string)$r['status']);
-                $statusColored = match ($statusLabel) {
-                    'done', 'ok', 'success'   => '<fg=green>done</>',
-                    'running','processing'    => '<fg=blue>running</>',
-                    'error','failed'          => '<fg=red>error</>',
-                    default                   => '<fg=yellow>pending</>',
+                $card = match ($row['card_status']) {
+                    'completed' => '<fg=green>completed</>',
+                    'failed'    => '<fg=red>failed</>',
+                    default     => '<fg=yellow>progress</>',
                 };
-
-                // Ligne prête
-                $row = [
-                    (string)$r['contract_symbol'],
-                    (string)$r['current_timeframe'],
-                    $colRetries,
-                    $colMaxRetries,
-                    $statusColored,
+                $lock = $row['locked'] ? '<fg=red>locked</>' : '<fg=green>open</>';
+                $tableRow = [
+                    $row['symbol'],
+                    $row['current_timeframe'],
+                    $card,
+                    sprintf('%d/%d%s', $row['retries'], $row['max_retries'], $delta),
+                    $lock,
+                    $row['updated_at'] ?? '-',
                 ];
-
-                // Surligner toute la ligne UNE FOIS quand un changement est détecté
-                if ($isChanged) {
-                    $row = array_map(
-                        static fn($v) => "<bg=yellow;fg=black;options=bold> $v </>",
-                        $row
-                    );
+                if (isset($changed[$key])) {
+                    $tableRow = array_map(static fn($v) => "<bg=yellow;fg=black;options=bold> $v </>", $tableRow);
                 }
-
-                $table->addRow($row);
-
-                // Mémoriser valeurs brutes pour le prochain tick (calcul delta)
-                $nextPrev[$key]['retries']     = (int)$r['retries'];
-                $nextPrev[$key]['max_retries'] = (int)$r['max_retries'];
-                $nextPrev[$key]['status']      = (string)$r['status'];
+                $table->addRow($tableRow);
+                $nextPrev[$key] = [
+                    'retries' => $row['retries'],
+                    'max_retries' => $row['max_retries'],
+                    'card_status' => $row['card_status'],
+                ];
             }
 
             $table->render();
             $section->overwrite($buf->fetch());
 
-            // 5) Mettre à jour les snapshots pour la prochaine itération
             $prevSnapshot = $nowSnapshot;
-            $prevValues   = $nextPrev;
+            $prevValues = $nextPrev;
 
-            // 6) Pause
             sleep($interval);
         }
 
-        // (on ne sort normalement jamais ; si besoin, captez SIGINT pour un retour propre)
-        // return Command::SUCCESS;
+        // unreachable
     }
 
-    private function fetchRows(string $orderBy, int $limit): array
+    /** @return array<int,array<string,mixed>> */
+    private function fetchRows(int $limit): array
     {
-        $sql = "SELECT contract_symbol, current_timeframe, retries, max_retries, status
-                FROM contract_pipeline
-                WHERE current_timeframe in ('1m', '5m', '15m')
-                ORDER BY $orderBy";
+        $rows = $this->pipelines->list();
+        usort($rows, static function (array $a, array $b) {
+            return strcmp($b['updated_at'] ?? '', $a['updated_at'] ?? '');
+        });
         if ($limit > 0) {
-            $sql .= " LIMIT " . (int)$limit;
+            $rows = array_slice($rows, 0, $limit);
         }
-        return $this->db->fetchAllAssociative($sql);
+        return array_map(fn(array $row) => [
+            'symbol' => $row['symbol'],
+            'current_timeframe' => $row['current_timeframe'],
+            'retries' => (int)($row['retries_current'] ?? 0),
+            'max_retries' => (int)($row['max_retries'] ?? 0),
+            'card_status' => $row['card_status'],
+            'locked' => $this->isLocked($row),
+            'updated_at' => $row['updated_at'],
+        ], $rows);
     }
 
-    private function rowKey(array $r): string
+    private function rowKey(array $row): string
     {
-        return $r['contract_symbol'].'|'.$r['current_timeframe'];
+        return $row['symbol'].'|'.$row['current_timeframe'];
     }
 
-    private function rowHash(array $r): string
+    private function rowHash(array $row): string
     {
-        // hache uniquement les champs qui nous intéressent
         return sha1(json_encode([
-            $r['retries'], $r['max_retries'], $r['status']
+            $row['retries'],
+            $row['max_retries'],
+            $row['card_status'],
+            $row['locked'],
         ], JSON_UNESCAPED_UNICODE));
+    }
+
+    private function isLocked(array $pipeline): bool
+    {
+        foreach ($pipeline['eligibility'] ?? [] as $row) {
+            $status = strtoupper((string)($row['status'] ?? ''));
+            if (in_array($status, ['LOCKED_POSITION','LOCKED_ORDER'], true)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

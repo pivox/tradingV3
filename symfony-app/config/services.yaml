@@ -15,6 +15,9 @@ parameters:
     trading.account.default_user: 'system'
     trading.account.exchange: 'bitmart'
     high_conviction.trace_path: '%kernel.project_dir%/var/log/high_conviction_traces.jsonl'
+    app.bitmart_callback_base_url: 'http://nginx'
+    app.bitmart_callback_path: 'api/callback/bitmart/get-kline'
+    app.pipeline_default_limit: 260
 
 
     # Path to strategy YAML (also set in packages/scalping.yaml)
@@ -35,7 +38,9 @@ services:
             - '../src/Entity/'
             - '../src/Kernel.php'
 
-
+    React\EventLoop\LoopInterface:
+        class: React\EventLoop\Loop
+        factory: ['React\EventLoop\Loop', 'get']
 
     App\Service\Exchange\Bitmart\BitmartFetcher:
         tags: [ 'mon.exchange.fetcher' ]
@@ -72,6 +77,13 @@ services:
             $temporalHttpBase: 'http://temporal:8080'
             $namespace: 'default'
             $signalName: 'submit'
+    App\Repository\:
+        resource: '../src/Repository/'
+        autowire: true
+        autoconfigure: true
+        lazy: true
+    App\Repository\RuntimeGuardRepository:
+        lazy: false
     App\Service\Trading\InMemoryExchangeClient:
         autowire: true
         autoconfigure: true
@@ -96,6 +108,8 @@ services:
         factory: ['@monolog.logger.signals', 'get']
     Psr\Log\LoggerInterface $indicatorsLogger:
         factory: ['@monolog.logger.indicators', 'get']
+    Psr\Log\LoggerInterface $pipelineExecLogger:
+        factory: ['@monolog.logger.pipeline_exec', 'get']
 
     App\Service\Signals\Timeframe\Signal1hService:
         arguments:
@@ -126,6 +140,11 @@ services:
             $apiKey: '%env(BITMART_API_KEY)%'
             $secretKey: '%env(BITMART_SECRET_KEY)%'
             $apiMemo: '%env(BITMART_API_MEMO)%'
+    App\Service\Config\BitmartWsConfig:
+        parent: App\Service\Config\BitmartConfig
+        arguments:
+            $wsBaseUrl: '%env(BITMART_WS_PRIVATE_URL)%'
+            $device: '%env(BITMART_WS_DEVICE)%'
 
     App\Logging\CustomLineFormatter:
         class: App\Logging\CustomLineFormatter
@@ -150,3 +169,49 @@ services:
         public: false
         autowire: true
         autoconfigure: true
+
+    App\Service\Pipeline\SlotService: ~
+
+    App\Service\Pipeline\RefreshTfService:
+        arguments:
+            $db: '@doctrine.dbal.default_connection'
+            $slot: '@App\Service\Pipeline\SlotService'
+            $logger: '@monolog.logger.pipeline_exec'
+            $dispatcher: '@App\Service\Temporal\TemporalDispatcher' # ton implémentation
+
+    App\Service\Pipeline\IndicatorSignalAdapter:
+        arguments:
+            $logger: '@logger'
+
+    App\Service\Pipeline\CallbackEvalService:
+        arguments:
+            $db: '@doctrine.dbal.default_connection'
+            $slot: '@App\Service\Pipeline\SlotService'
+            $logger: '@monolog.logger.pipeline_exec'
+            $indicators: '@App\Service\Pipeline\IndicatorSignalAdapter'
+            $tradingParameters: '@App\Service\Config\TradingParameters'
+
+    App\Service\Pipeline\IndicatorServiceInterface: '@App\Service\Pipeline\IndicatorSignalAdapter'
+    App\Service\Temporal\Dto\WorkflowRef:
+        arguments:
+            $id: 'api-rate-limiter-workflow'
+            $type: 'ApiRateLimiterClient'
+            $taskQueue: 'api_rate_limiter_queue'
+
+    App\Service\Temporal\TemporalDispatcher:
+        arguments:
+            $workflowRef: '@App\Service\Temporal\Dto\WorkflowRef'
+            $baseUrl: '%app.bitmart_callback_base_url%'
+            $callbackPath: '%app.bitmart_callback_path%'
+            $defaultLimit: '%app.pipeline_default_limit%'
+            $logger: '@monolog.logger.pipeline_exec'
+
+    App\Service\Pipeline\MtfStateService:
+        arguments:
+            $logger: '@monolog.logger.pipeline_exec'
+
+    App\Service\Pipeline\MtfEligibilityFinder:
+        arguments:
+            $logger: '@monolog.logger.pipeline_exec'
+
+    App\Service\Pipeline\TemporalDispatcherInterface: '@App\Service\Temporal\TemporalDispatcher'

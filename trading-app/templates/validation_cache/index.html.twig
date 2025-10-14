@@ -1,0 +1,305 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Cache de Validation - Trading{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="bi bi-database-check"></i> Cache de Validation
+            </h1>
+            <div>
+                <button class="btn btn-primary" onclick="refreshTable()">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filtres -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-funnel"></i> Filtres
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-2">
+                        <label for="filterSymbol" class="form-label">Symbole</label>
+                        <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterTimeframe" class="form-label">Timeframe</label>
+                        <select class="form-select" id="filterTimeframe">
+                            <option value="">Tous</option>
+                            <option value="1m">1 minute</option>
+                            <option value="5m">5 minutes</option>
+                            <option value="15m">15 minutes</option>
+                            <option value="1h">1 heure</option>
+                            <option value="4h">4 heures</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterCacheKey" class="form-label">Clé de cache</label>
+                        <input type="text" class="form-control" id="filterCacheKey" placeholder="Ex: validation_key">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterDateFrom" class="form-label">Date Début</label>
+                        <input type="date" class="form-control" id="filterDateFrom">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterDateTo" class="form-label">Date Fin</label>
+                        <input type="date" class="form-control" id="filterDateTo">
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button class="btn btn-outline-secondary" onclick="clearFilters()">
+                            <i class="bi bi-x-circle"></i> Effacer
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Statistiques -->
+<div class="row mb-4">
+    <div class="col-md-2">
+        <div class="card bg-primary text-white">
+            <div class="card-body text-center">
+                <h5>{{ cacheEntries|length }}</h5>
+                <small>Total Entrées</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-success text-white">
+            <div class="card-body text-center">
+                <h5 id="validCount">{{ cacheEntries|filter(e => e.expiresAt and e.expiresAt|date('U') > date()|date('U'))|length }}</h5>
+                <small>Valides</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-danger text-white">
+            <div class="card-body text-center">
+                <h5 id="expiredCount">{{ cacheEntries|filter(e => e.expiresAt and e.expiresAt|date('U') < date()|date('U'))|length }}</h5>
+                <small>Expirées</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-info text-white">
+            <div class="card-body text-center">
+                <h5>{{ cacheEntries|map(e => e.symbol)|unique|length }}</h5>
+                <small>Symboles Uniques</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-warning text-white">
+            <div class="card-body text-center">
+                <h5>{{ cacheEntries|map(e => e.cacheKey)|unique|length }}</h5>
+                <small>Clés Uniques</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Table du cache -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-table"></i> Liste du Cache de Validation ({{ cacheEntries|length }})
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table id="cacheTable" class="table table-striped table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>ID</th>
+                                <th>Symbole</th>
+                                <th>Timeframe</th>
+                                <th>Clé de cache</th>
+                                <th>Valeur</th>
+                                <th>Âge</th>
+                                <th>Expire le</th>
+                                <th>Créé le</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for entry in cacheEntries %}
+                            {% set expired = entry.expiresAt and entry.expiresAt|date('U') < date()|date('U') %}
+                            {% set age = entry.createdAt ? (date()|date('U') - entry.createdAt|date('U')) / 60 : 0 %}
+                            <tr class="{{ expired ? 'table-danger' : '' }}">
+                                <td>
+                                    <code>{{ entry.id }}</code>
+                                </td>
+                                <td>
+                                    <strong>{{ entry.symbol }}</strong>
+                                </td>
+                                <td>
+                                    {% if entry.timeframe == '1m' %}
+                                        <span class="badge bg-primary">1m</span>
+                                    {% elseif entry.timeframe == '5m' %}
+                                        <span class="badge bg-info">5m</span>
+                                    {% elseif entry.timeframe == '15m' %}
+                                        <span class="badge bg-warning">15m</span>
+                                    {% elseif entry.timeframe == '1h' %}
+                                        <span class="badge bg-success">1h</span>
+                                    {% elseif entry.timeframe == '4h' %}
+                                        <span class="badge bg-danger">4h</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ entry.timeframe }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="cache-key">{{ entry.cacheKey }}</span>
+                                </td>
+                                <td>
+                                    {% if entry.value and entry.value|length > 0 %}
+                                        <button class="btn btn-sm btn-outline-info" onclick="viewValue({{ entry.id }})">
+                                            <i class="bi bi-eye"></i> Voir
+                                        </button>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if age > 0 %}
+                                        <span class="{{ expired ? 'text-danger' : '' }}">
+                                            {% if age < 60 %}
+                                                {{ age|round }}m
+                                            {% elseif age < 1440 %}
+                                                {{ (age / 60)|round }}h
+                                            {% else %}
+                                                {{ (age / 1440)|round }}j
+                                            {% endif %}
+                                        </span>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if entry.expiresAt %}
+                                        <span class="{{ expired ? 'text-danger' : '' }}">
+                                            {{ entry.expiresAt|date('d/m/Y H:i:s') }}
+                                        </span>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {{ entry.createdAt|date('d/m/Y H:i:s') }}
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-primary" onclick="viewChart('{{ entry.symbol }}', '{{ entry.timeframe }}')" title="Voir graphique">
+                                            <i class="bi bi-graph-up"></i>
+                                        </button>
+                                        <button class="btn btn-outline-info" onclick="viewValue({{ entry.id }})" title="Voir valeur">
+                                            <i class="bi bi-eye"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal pour les valeurs -->
+<div class="modal fade" id="valueModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Valeur du Cache</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <pre id="valueContent" class="bg-light p-3"></pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+$(document).ready(function() {
+    // Initialisation de DataTables
+    $('#cacheTable').DataTable({
+        pageLength: 25,
+        order: [[7, 'desc']], // Trier par date de création
+        columnDefs: [
+            { orderable: false, targets: [4, 8] } // Valeur et Actions columns
+        ]
+    });
+
+    // Filtres
+    $('#filterSymbol, #filterTimeframe, #filterCacheKey, #filterDateFrom, #filterDateTo').on('change keyup', function() {
+        applyFilters();
+    });
+});
+
+function applyFilters() {
+    const table = $('#cacheTable').DataTable();
+    const symbol = $('#filterSymbol').val();
+    const timeframe = $('#filterTimeframe').val();
+    const cacheKey = $('#filterCacheKey').val();
+
+    // Réinitialiser les filtres
+    table.search('').columns().search('').draw();
+
+    // Appliquer les filtres
+    if (symbol) {
+        table.column(1).search(symbol, false, false);
+    }
+    if (timeframe) {
+        table.column(2).search(timeframe, false, false);
+    }
+    if (cacheKey) {
+        table.column(3).search(cacheKey, false, false);
+    }
+
+    table.draw();
+}
+
+function clearFilters() {
+    $('#filterSymbol, #filterTimeframe, #filterCacheKey, #filterDateFrom, #filterDateTo').val('');
+    $('#cacheTable').DataTable().search('').columns().search('').draw();
+}
+
+function refreshTable() {
+    location.reload();
+}
+
+function viewChart(symbol, timeframe) {
+    // Rediriger vers les graphiques avec le symbole et timeframe
+    window.location.href = '{{ path('graph_index') }}?symbol=' + symbol + '&interval=' + timeframe;
+}
+
+function viewValue(id) {
+    // Récupérer la valeur du cache (à implémenter côté serveur)
+    const valueContent = document.getElementById('valueContent');
+    valueContent.textContent = 'Valeur du cache ' + id + '\n\n' + 
+        'Cette fonctionnalité sera implémentée pour afficher la valeur du cache.';
+    
+    const modal = new bootstrap.Modal(document.getElementById('valueModal'));
+    modal.show();
+}
+</script>
+{% endblock %}
