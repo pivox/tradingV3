@@ -1,0 +1,266 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # =====================
+  # --- Symfony Logs ---
+  # =====================
+  - job_name: symfony_trading_app
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: symfony
+          app: trading-app
+          env: ${APP_ENV:-dev}
+          __path__: /var/log/symfony/*.log
+    
+    # Pipeline de transformation pour parser les logs structurés
+    pipeline_stages:
+      # Parse le format de log personnalisé
+      - regex:
+          expression: '^\[(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\[(?P<channel>\w+)\.(?P<level>\w+)\]: (?P<message>.*)$'
+      
+      # Parse les métadonnées de trading
+      - regex:
+          expression: '^\[(?P<symbol>\w+)\]\[(?P<timeframe>\w+)\]\[(?P<side>\w+)\] (?P<content>.*)$'
+          source: message
+      
+      # Parse le contexte JSON
+      - json:
+          expressions:
+            context: context
+          source: content
+      
+      # Ajouter des labels pour le filtrage
+      - labels:
+          channel:
+          level:
+          symbol:
+          timeframe:
+          side:
+      
+      # Timestamp parsing
+      - timestamp:
+          source: timestamp
+          format: '2006-01-02 15:04:05.000'
+          action_on_failure: fudge
+          fudge: 1s
+      
+      # Output final
+      - output:
+          source: content
+
+  # =====================
+  # --- Logs de Validation ---
+  # =====================
+  - job_name: symfony_validation
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: symfony
+          app: trading-app
+          channel: validation
+          env: ${APP_ENV:-dev}
+          __path__: /var/log/symfony/validation.log
+    
+    pipeline_stages:
+      - regex:
+          expression: '^\[(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\[validation\.(?P<level>\w+)\]: (?P<message>.*)$'
+      - labels:
+          level:
+      - timestamp:
+          source: timestamp
+          format: '2006-01-02 15:04:05.000'
+          action_on_failure: fudge
+          fudge: 1s
+      - output:
+          source: message
+
+  # =====================
+  # --- Logs de Signals ---
+  # =====================
+  - job_name: symfony_signals
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: symfony
+          app: trading-app
+          channel: signals
+          env: ${APP_ENV:-dev}
+          __path__: /var/log/symfony/signals.log
+    
+    pipeline_stages:
+      - regex:
+          expression: '^\[(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\[signals\.(?P<level>\w+)\]: (?P<message>.*)$'
+      - regex:
+          expression: '^\[(?P<symbol>\w+)\]\[(?P<timeframe>\w+)\]\[(?P<side>\w+)\] (?P<content>.*)$'
+          source: message
+      - labels:
+          level:
+          symbol:
+          timeframe:
+          side:
+      - timestamp:
+          source: timestamp
+          format: '2006-01-02 15:04:05.000'
+          action_on_failure: fudge
+          fudge: 1s
+      - output:
+          source: content
+
+  # =====================
+  # --- Logs de Positions ---
+  # =====================
+  - job_name: symfony_positions
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: symfony
+          app: trading-app
+          channel: positions
+          env: ${APP_ENV:-dev}
+          __path__: /var/log/symfony/positions.log
+    
+    pipeline_stages:
+      - regex:
+          expression: '^\[(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\[positions\.(?P<level>\w+)\]: (?P<message>.*)$'
+      - regex:
+          expression: '^\[(?P<symbol>\w+)\]\[(?P<timeframe>\w+)\]\[(?P<side>\w+)\] (?P<content>.*)$'
+          source: message
+      - labels:
+          level:
+          symbol:
+          timeframe:
+          side:
+      - timestamp:
+          source: timestamp
+          format: '2006-01-02 15:04:05.000'
+          action_on_failure: fudge
+          fudge: 1s
+      - output:
+          source: content
+
+  # =====================
+  # --- Logs d'Indicateurs ---
+  # =====================
+  - job_name: symfony_indicators
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: symfony
+          app: trading-app
+          channel: indicators
+          env: ${APP_ENV:-dev}
+          __path__: /var/log/symfony/indicators.log
+    
+    pipeline_stages:
+      - regex:
+          expression: '^\[(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\[indicators\.(?P<level>\w+)\]: (?P<message>.*)$'
+      - regex:
+          expression: '^\[(?P<symbol>\w+)\]\[(?P<timeframe>\w+)\]\[(?P<side>\w+)\] (?P<content>.*)$'
+          source: message
+      - labels:
+          level:
+          symbol:
+          timeframe:
+          side:
+      - timestamp:
+          source: timestamp
+          format: '2006-01-02 15:04:05.000'
+          action_on_failure: fudge
+          fudge: 1s
+      - output:
+          source: content
+
+  # =====================
+  # --- Logs High Conviction ---
+  # =====================
+  - job_name: symfony_highconviction
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: symfony
+          app: trading-app
+          channel: highconviction
+          env: ${APP_ENV:-dev}
+          __path__: /var/log/symfony/highconviction.log
+    
+    pipeline_stages:
+      - regex:
+          expression: '^\[(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\[highconviction\.(?P<level>\w+)\]: (?P<message>.*)$'
+      - labels:
+          level:
+      - timestamp:
+          source: timestamp
+          format: '2006-01-02 15:04:05.000'
+          action_on_failure: fudge
+          fudge: 1s
+      - output:
+          source: message
+
+  # =====================
+  # --- Logs Pipeline Exec ---
+  # =====================
+  - job_name: symfony_pipeline_exec
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: symfony
+          app: trading-app
+          channel: pipeline_exec
+          env: ${APP_ENV:-dev}
+          __path__: /var/log/symfony/pipeline-exec.log
+    
+    pipeline_stages:
+      - regex:
+          expression: '^\[(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\[pipeline_exec\.(?P<level>\w+)\]: (?P<message>.*)$'
+      - labels:
+          level:
+      - timestamp:
+          source: timestamp
+          format: '2006-01-02 15:04:05.000'
+          action_on_failure: fudge
+          fudge: 1s
+      - output:
+          source: message
+
+  # =====================
+  # --- Logs Global Severity ---
+  # =====================
+  - job_name: symfony_global_severity
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: symfony
+          app: trading-app
+          channel: global_severity
+          env: ${APP_ENV:-dev}
+          __path__: /var/log/symfony/global-severity.log
+    
+    pipeline_stages:
+      - regex:
+          expression: '^\[(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]\[global-severity\.(?P<level>\w+)\]: (?P<message>.*)$'
+      - labels:
+          level:
+      - timestamp:
+          source: timestamp
+          format: '2006-01-02 15:04:05.000'
+          action_on_failure: fudge
+          fudge: 1s
+      - output:
+          source: message
