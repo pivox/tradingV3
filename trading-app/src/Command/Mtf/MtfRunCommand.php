@@ -89,9 +89,46 @@ class MtfRunCommand extends Command
                 $io->warning('Synchronisation des contrats échouée: ' . $e->getMessage());
             }
 
-            $result = $this->mtfRunService->run($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck);
-            $summary = $result['summary'] ?? [];
-            $details = $result['results'] ?? [];
+            $io->section('Exécution MTF en cours...');
+            
+            $generator = $this->mtfRunService->run($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck);
+            $summary = [];
+            $details = [];
+            
+            // Consommer le generator et afficher le progrès en temps réel
+            foreach ($generator as $yieldedData) {
+                $symbol = $yieldedData['symbol'];
+                $result = $yieldedData['result'];
+                $progress = $yieldedData['progress'];
+                
+                if ($symbol === 'FINAL') {
+                    // C'est le résultat final
+                    $summary = $result;
+                    break;
+                }
+                
+                // Afficher le progrès pour chaque symbole
+                $io->writeln(sprintf(
+                    '[%s%%] %s - %s',
+                    $progress['percentage'],
+                    $symbol,
+                    $progress['status']
+                ));
+                
+                // Stocker le résultat pour l'affichage final
+                $details[$symbol] = $result;
+            }
+            
+            // Récupérer le résultat final du generator après avoir consommé tous les éléments
+            try {
+                $finalResult = $generator->getReturn();
+                if ($finalResult && isset($finalResult['results'])) {
+                    $details = $finalResult['results'];
+                }
+            } catch (\Exception $e) {
+                // Si getReturn() échoue, on utilise les détails déjà collectés
+                $io->writeln('Note: Impossible de récupérer le résultat final du generator');
+            }
 
             $io->section('Résumé');
             $io->definitionList(
