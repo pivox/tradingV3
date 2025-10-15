@@ -239,6 +239,15 @@
             </div>
         </div>
 
+        <div class="quick-actions">
+            <h3>📊 Actions Dashboards Grafana</h3>
+            <div class="action-buttons">
+                <button class="action-btn" onclick="openGrafanaDashboards()">📈 Ouvrir Tous les Dashboards</button>
+                <button class="action-btn" onclick="generateTestLogs()">🧪 Générer Logs de Test</button>
+                <button class="action-btn" onclick="showGrafanaInfo()">ℹ️ Info Grafana</button>
+            </div>
+        </div>
+
         <div class="category">
             <h2 class="category-title">🎯 Applications Principales</h2>
             <div class="services-grid">
@@ -280,8 +289,8 @@
                 <div class="service-card">
                     <span class="service-icon">📊</span>
                     <h3 class="service-title">Grafana Dashboard</h3>
-                    <p class="service-description">Visualisation des logs et métriques du système de trading</p>
-                    <a href="http://localhost:3000" class="service-url" target="_blank">
+                    <p class="service-description">Interface principale Grafana pour la visualisation des logs et métriques</p>
+                    <a href="http://localhost:3001" class="service-url" target="_blank">
                         <span class="status-indicator status-unknown" id="status-grafana"></span>
                         Accéder à Grafana (admin/admin)
                     </a>
@@ -294,6 +303,81 @@
                     <a href="http://localhost:3100" class="service-url" target="_blank">
                         <span class="status-indicator status-unknown" id="status-loki"></span>
                         Accéder à Loki API
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="category">
+            <h2 class="category-title">📊 Dashboards Grafana - Logs & Monitoring</h2>
+            <div class="services-grid">
+                <div class="service-card">
+                    <span class="service-icon">🧪</span>
+                    <h3 class="service-title">Dashboard Test Simple</h3>
+                    <p class="service-description">Dashboard de test pour vérifier le bon fonctionnement du système de logging</p>
+                    <a href="http://localhost:3001/d/test-simple/dashboard-test-simple" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-test-dashboard"></span>
+                        Accéder au Dashboard Test
+                    </a>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">📈</span>
+                    <h3 class="service-title">Trading App - Logs Dashboard</h3>
+                    <p class="service-description">Dashboard principal pour l'application de trading avec signaux et positions</p>
+                    <a href="http://localhost:3001/d/trading-app-logs/trading-app-logs-dashboard" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-trading-logs"></span>
+                        Accéder au Dashboard Trading
+                    </a>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">🧹</span>
+                    <h3 class="service-title">Dashboard Logs - Version Propre</h3>
+                    <p class="service-description">Version propre et optimisée des logs avec visualisations claires</p>
+                    <a href="http://localhost:3001/d/comprehensive-logs-clean/dashboard-logs-version-propre" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-clean-logs"></span>
+                        Accéder au Dashboard Propre
+                    </a>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">🔧</span>
+                    <h3 class="service-title">Dashboard Complet - Tous les Logs</h3>
+                    <p class="service-description">Dashboard complet avec tous les types de logs et métriques détaillées</p>
+                    <a href="http://localhost:3001/d/comprehensive-logs-fixed/dashboard-complet-tous-les-logs-corrige" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-complete-logs"></span>
+                        Accéder au Dashboard Complet
+                    </a>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">⚠️</span>
+                    <h3 class="service-title">Dashboard Monitoring - Erreurs</h3>
+                    <p class="service-description">Monitoring spécialisé pour les erreurs, exceptions et problèmes système</p>
+                    <a href="http://localhost:3001/d/error-monitoring/dashboard-monitoring-erreurs" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-error-monitoring"></span>
+                        Accéder au Monitoring Erreurs
+                    </a>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">🐛</span>
+                    <h3 class="service-title">Dashboard Debug - Logs</h3>
+                    <p class="service-description">Dashboard de debug avec logs détaillés pour le développement et le troubleshooting</p>
+                    <a href="http://localhost:3001/d/debug-logs/dashboard-debug-logs" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-debug-logs"></span>
+                        Accéder au Dashboard Debug
+                    </a>
+                </div>
+
+                <div class="service-card">
+                    <span class="service-icon">📝</span>
+                    <h3 class="service-title">Dashboard Logs Simple</h3>
+                    <p class="service-description">Version simplifiée des logs pour une vue d'ensemble rapide</p>
+                    <a href="http://localhost:3001/d/simple-logs/dashboard-logs-simple" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-simple-logs"></span>
+                        Accéder au Dashboard Simple
                     </a>
                 </div>
             </div>
@@ -485,10 +569,18 @@
                 { url: 'http://localhost:8082', id: 'status-trading-app' },
                 { url: 'http://localhost:8080', id: 'status-symfony-app' },
                 { url: 'http://localhost:3000', id: 'status-frontend' },
-                { url: 'http://localhost:3000', id: 'status-grafana' },
+                { url: 'http://localhost:3001', id: 'status-grafana' },
                 { url: 'http://localhost:3100', id: 'status-loki' },
                 { url: 'http://localhost:8081', id: 'status-phpmyadmin' },
-                { url: 'http://localhost:8233', id: 'status-temporal' }
+                { url: 'http://localhost:8233', id: 'status-temporal' },
+                // Dashboards Grafana
+                { url: 'http://localhost:3001/d/test-simple/dashboard-test-simple', id: 'status-test-dashboard' },
+                { url: 'http://localhost:3001/d/trading-app-logs/trading-app-logs-dashboard', id: 'status-trading-logs' },
+                { url: 'http://localhost:3001/d/comprehensive-logs-clean/dashboard-logs-version-propre', id: 'status-clean-logs' },
+                { url: 'http://localhost:3001/d/comprehensive-logs-fixed/dashboard-complet-tous-les-logs-corrige', id: 'status-complete-logs' },
+                { url: 'http://localhost:3001/d/error-monitoring/dashboard-monitoring-erreurs', id: 'status-error-monitoring' },
+                { url: 'http://localhost:3001/d/debug-logs/dashboard-debug-logs', id: 'status-debug-logs' },
+                { url: 'http://localhost:3001/d/simple-logs/dashboard-logs-simple', id: 'status-simple-logs' }
             ];
 
             for (const service of services) {
@@ -503,10 +595,14 @@
                 'http://localhost:8082',  // Trading App
                 'http://localhost:8080',  // Symfony App
                 'http://localhost:3000',  // Frontend
-                'http://localhost:3000',  // Grafana
+                'http://localhost:3001',  // Grafana
                 'http://localhost:3100',  // Loki
                 'http://localhost:8081',  // phpMyAdmin
-                'http://localhost:8233'   // Temporal UI
+                'http://localhost:8233',  // Temporal UI
+                // Dashboards Grafana principaux
+                'http://localhost:3001/d/test-simple/dashboard-test-simple',
+                'http://localhost:3001/d/trading-app-logs/trading-app-logs-dashboard',
+                'http://localhost:3001/d/comprehensive-logs-clean/dashboard-logs-version-propre'
             ];
 
             urls.forEach(url => {
@@ -523,10 +619,19 @@
 • Trading App: http://localhost:8082
 • Symfony App: http://localhost:8080  
 • Frontend React: http://localhost:3000
-• Grafana: http://localhost:3000 (admin/admin)
+• Grafana: http://localhost:3001 (admin/admin)
 • Loki API: http://localhost:3100
 • phpMyAdmin: http://localhost:8081
 • Temporal UI: http://localhost:8233
+
+📈 Dashboards Grafana:
+• Test Simple: http://localhost:3001/d/test-simple/dashboard-test-simple
+• Trading Logs: http://localhost:3001/d/trading-app-logs/trading-app-logs-dashboard
+• Logs Propre: http://localhost:3001/d/comprehensive-logs-clean/dashboard-logs-version-propre
+• Logs Complet: http://localhost:3001/d/comprehensive-logs-fixed/dashboard-complet-tous-les-logs-corrige
+• Monitoring Erreurs: http://localhost:3001/d/error-monitoring/dashboard-monitoring-erreurs
+• Debug Logs: http://localhost:3001/d/debug-logs/dashboard-debug-logs
+• Logs Simple: http://localhost:3001/d/simple-logs/dashboard-logs-simple
 
 🗄️ Bases de Données:
 • PostgreSQL (Trading): localhost:5433
@@ -540,6 +645,115 @@
 • docker-compose ps - Voir l'état des services
 • docker-compose logs -f [service] - Voir les logs
 • ./scripts/start-logging-stack.sh - Démarrer la stack de logging
+• ./generate_test_logs.sh - Générer des logs de test
+            `;
+            
+            alert(info);
+        }
+
+        // =====================
+        // ACTIONS DASHBOARDS GRAFANA
+        // =====================
+
+        // Ouvrir tous les dashboards Grafana
+        function openGrafanaDashboards() {
+            const dashboardUrls = [
+                'http://localhost:3001/d/test-simple/dashboard-test-simple',
+                'http://localhost:3001/d/trading-app-logs/trading-app-logs-dashboard',
+                'http://localhost:3001/d/comprehensive-logs-clean/dashboard-logs-version-propre',
+                'http://localhost:3001/d/comprehensive-logs-fixed/dashboard-complet-tous-les-logs-corrige',
+                'http://localhost:3001/d/error-monitoring/dashboard-monitoring-erreurs',
+                'http://localhost:3001/d/debug-logs/dashboard-debug-logs',
+                'http://localhost:3001/d/simple-logs/dashboard-logs-simple'
+            ];
+
+            dashboardUrls.forEach(url => {
+                window.open(url, '_blank');
+            });
+        }
+
+        // Générer des logs de test
+        function generateTestLogs() {
+            const message = `
+🧪 Génération de Logs de Test
+
+Pour générer des logs de test pour les dashboards Grafana, exécutez cette commande dans le terminal :
+
+./generate_test_logs.sh
+
+Ou manuellement :
+• Les logs seront générés dans trading-app/var/log/
+• Promtail les collectera automatiquement
+• Les dashboards se mettront à jour en 1-2 minutes
+
+📊 Types de logs générés :
+• Signaux de trading (BUY/SELL)
+• Erreurs de validation
+• Warnings de positions
+• Logs par canal (signals, validation, positions)
+
+💡 Conseil : Commencez par le "Dashboard Test Simple" pour vérifier que tout fonctionne.
+            `;
+            
+            alert(message);
+        }
+
+        // Afficher les informations Grafana
+        function showGrafanaInfo() {
+            const info = `
+📊 Informations Grafana - TradingV3
+
+🔐 Connexion :
+• URL: http://localhost:3001
+• Utilisateur: admin
+• Mot de passe: admin
+
+📈 Dashboards Disponibles :
+
+🧪 Dashboard Test Simple
+• URL: /d/test-simple/dashboard-test-simple
+• Usage: Test du système de logging
+• Données: Logs de base et métriques simples
+
+📈 Trading App - Logs Dashboard
+• URL: /d/trading-app-logs/trading-app-logs-dashboard
+• Usage: Dashboard principal pour l'application de trading
+• Données: Signaux, positions, erreurs
+
+🧹 Dashboard Logs - Version Propre
+• URL: /d/comprehensive-logs-clean/dashboard-logs-version-propre
+• Usage: Version optimisée des logs
+• Données: Visualisations claires et organisées
+
+🔧 Dashboard Complet - Tous les Logs
+• URL: /d/comprehensive-logs-fixed/dashboard-complet-tous-les-logs-corrige
+• Usage: Vue complète de tous les logs
+• Données: Tous les types de logs et métriques
+
+⚠️ Dashboard Monitoring - Erreurs
+• URL: /d/error-monitoring/dashboard-monitoring-erreurs
+• Usage: Monitoring des erreurs et exceptions
+• Données: Erreurs, warnings, problèmes système
+
+🐛 Dashboard Debug - Logs
+• URL: /d/debug-logs/dashboard-debug-logs
+• Usage: Debug et développement
+• Données: Logs détaillés pour troubleshooting
+
+📝 Dashboard Logs Simple
+• URL: /d/simple-logs/dashboard-logs-simple
+• Usage: Vue d'ensemble rapide
+• Données: Logs simplifiés et essentiels
+
+🔧 Services Associés :
+• Loki API: http://localhost:3100
+• Promtail: Collecte automatique des logs
+• Logs sources: trading-app/var/log/
+
+💡 Conseils :
+• Actualisez les dashboards toutes les 5 secondes
+• Utilisez les filtres de temps pour analyser des périodes spécifiques
+• Les logs sont conservés pendant 30 jours
             `;
             
             alert(info);
