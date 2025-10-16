@@ -30,6 +30,7 @@ services:
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
+
     # MTF Services
     App\Domain\Mtf\Service\MtfTimeService:
         public: true
@@ -84,6 +85,16 @@ services:
             $clock: '@Psr\Clock\ClockInterface'
         public: true
 
+    bitmart.throttle_lock_store:
+        class: Symfony\Component\Lock\Store\FlockStore
+        arguments:
+            - '%kernel.project_dir%/var/lock'
+
+    bitmart.throttle_lock_factory:
+        class: Symfony\Component\Lock\LockFactory
+        arguments:
+            - '@bitmart.throttle_lock_store'
+
     # Configuration Bitmart
     App\Infrastructure\Config\BitmartConfig:
         factory: ['App\Infrastructure\Config\BitmartConfig', 'fromEnvironment']
@@ -128,6 +139,7 @@ services:
             $logger: '@logger'
             $clock: '@Psr\Clock\ClockInterface'
             $config: '@App\Infrastructure\Config\BitmartConfig'
+            $lockFactory: '@bitmart.throttle_lock_factory'
 
     # WebSocket dependencies
     React\EventLoop\LoopInterface:
@@ -377,7 +389,9 @@ services:
 
     App\Domain\Position\Service\PositionExecutionService:
         arguments:
-            $tradingProvider: '@App\Infrastructure\Http\BitmartClient'
+            $tradingProvider: '@App\Domain\Ports\Out\TradingProviderPort'
+            $exposureGuard: '@App\Domain\Trading\Exposure\ActiveExposureGuard'
+            $orderLifecycle: '@App\Domain\Trading\Order\OrderLifecycleService'
             $logger: '@logger'
             $clock: '@Psr\Clock\ClockInterface'
         public: true
@@ -390,6 +404,9 @@ services:
             $positionConfigService: '@App\Domain\Position\Service\PositionConfigService'
             $positionOpeningService: '@App\Domain\Position\Service\PositionOpeningService'
             $positionExecutionService: '@App\Domain\Position\Service\PositionExecutionService'
+            $klineRepository: '@App\Repository\KlineRepository'
+            $atrCalculator: '@App\Indicator\AtrCalculator'
+            $tradingParameters: '@App\Config\TradingParameters'
             $logger: '@logger'
             $clock: '@Psr\Clock\ClockInterface'
         public: true
@@ -409,3 +426,26 @@ services:
     # Service utilitaire pour le backtesting avec heure fixe
     App\Service\BacktestClockService:
         public: true
+
+    # WebSocket Services
+    App\Infra\WsDispatcher:
+        arguments:
+            $http: '@http_client'
+            $baseUrl: '%env(WS_GATEWAY)%'
+
+    App\Repository\HotKlineRepository:
+        arguments:
+            $registry: '@doctrine'
+
+    # WebSocket Dispatcher Services
+    App\Service\AssignmentStorageInterface: '@App\Service\CsvAssignmentStorage'
+
+    App\Service\CsvAssignmentStorage:
+        arguments:
+            $filePath: '%kernel.project_dir%/var/hot_assignment.csv'
+
+    App\Service\ContractDispatcher:
+        arguments:
+            $storage: '@App\Service\AssignmentStorageInterface'
+            $http: '@http_client'
+            $workersCsv: '%env(WS_WORKERS)%'

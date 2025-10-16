@@ -9,9 +9,10 @@ use App\Domain\Position\Dto\PositionConfigDto;
 use App\Domain\Position\Dto\PositionOpeningDto;
 use App\Domain\Position\Service\PositionExecutionService;
 use App\Domain\Ports\Out\TradingProviderPort;
+use App\Domain\Trading\Exposure\ActiveExposureGuard;
+use App\Domain\Trading\Order\OrderLifecycleService;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
-use Symfony\Component\Clock\TestClock;
 
 final class PositionExecutionServiceTest extends TestCase
 {
@@ -46,10 +47,32 @@ final class PositionExecutionServiceTest extends TestCase
                 $id = $payload['orderType'] === 'stop_loss' ? 'SL_ORDER' : 'TP_ORDER';
                 return ['code' => 1000, 'data' => ['order_id' => $id]];
             }
+
+            public function getOpenOrders(?string $symbol = null): array
+            {
+                return ['orders' => [], 'plan_orders' => []];
+            }
         };
 
-        $clock = new TestClock(new \DateTimeImmutable('2025-01-01T00:00:00Z'));
-        $service = new PositionExecutionService($provider, new NullLogger(), $clock);
+        $guard = new class extends ActiveExposureGuard {
+            public function __construct() {}
+            public function assertEligible(string $symbol, SignalSide $side): void {}
+        };
+
+        $orderLifecycle = new class extends OrderLifecycleService {
+            public function __construct() {}
+            public function registerEntryOrder(array $order, array $context): void {}
+            public function registerProtectiveOrder(array $order, string $kind): void {}
+            public function handleEvent(array $event): void {}
+        };
+
+        $clock = new class implements \Psr\Clock\ClockInterface {
+            public function now(): \DateTimeImmutable
+            {
+                return new \DateTimeImmutable('2025-01-01T00:00:00Z');
+            }
+        };
+        $service = new PositionExecutionService($provider, $guard, $orderLifecycle, new NullLogger(), $clock);
 
         $config = new PositionConfigDto(
             defaultRiskPercent: 2.0,

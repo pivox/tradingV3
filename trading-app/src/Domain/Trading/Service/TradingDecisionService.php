@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Domain\Trading\Service;
 
+use App\Config\TradingParameters;
 use App\Domain\Common\Enum\SignalSide;
+use App\Domain\Common\Enum\Timeframe;
 use App\Domain\Leverage\Dto\LeverageCalculationDto;
 use App\Domain\Leverage\Service\LeverageCalculationService;
 use App\Domain\Leverage\Service\LeverageConfigService;
@@ -12,8 +14,11 @@ use App\Domain\Position\Dto\PositionOpeningDto;
 use App\Domain\Position\Service\PositionConfigService;
 use App\Domain\Position\Service\PositionExecutionService;
 use App\Domain\Position\Service\PositionOpeningService;
+use App\Indicator\AtrCalculator;
+use App\Repository\KlineRepository;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
+use RuntimeException;
 
 class TradingDecisionService
 {
@@ -23,6 +28,9 @@ class TradingDecisionService
         private readonly PositionConfigService $positionConfigService,
         private readonly PositionOpeningService $positionOpeningService,
         private readonly PositionExecutionService $positionExecutionService,
+        private readonly KlineRepository $klineRepository,
+        private readonly AtrCalculator $atrCalculator,
+        private readonly TradingParameters $tradingParameters,
         private readonly LoggerInterface $logger,
         private readonly ClockInterface $clock
     ) {
@@ -42,7 +50,7 @@ class TradingDecisionService
             'symbol' => $symbol,
             'side' => $side->value,
             'current_price' => $currentPrice,
-            'atr' => $atr,
+            'atr_input' => $atr,
             'account_balance' => $accountBalance,
             'risk_percentage' => $riskPercentage,
             'is_high_conviction' => $isHighConviction
@@ -51,19 +59,22 @@ class TradingDecisionService
             'symbol' => $symbol,
             'side' => $side->value,
             'current_price' => $currentPrice,
-            'atr' => $atr,
+            'atr_input' => $atr,
             'account_balance' => $accountBalance,
             'risk_percentage' => $riskPercentage,
             'is_high_conviction' => $isHighConviction
         ]);
 
         try {
+            $atrPeriod = max(2, $this->tradingParameters->atrPeriod());
+            $atrOneMinute = $this->computeAtrOneMinute($symbol, $atrPeriod);
+
             // 1. Calculer le leverage
             $leverageCalculation = $this->calculateLeverage(
                 $symbol,
                 $riskPercentage,
                 $currentPrice,
-                $atr,
+                $atrOneMinute,
                 $isHighConviction,
                 $timeframeMultiplier
             );
@@ -73,7 +84,7 @@ class TradingDecisionService
                 $symbol,
                 $side,
                 $currentPrice,
-                $atr,
+                $atrOneMinute,
                 $accountBalance,
                 $leverageCalculation
             );
@@ -86,7 +97,9 @@ class TradingDecisionService
                 'symbol' => $symbol,
                 'leverage' => $leverageCalculation->finalLeverage,
                 'position_size' => $positionOpening->positionSize,
-                'risk_amount' => $positionOpening->riskAmount
+                'risk_amount' => $positionOpening->riskAmount,
+                'atr_1m' => $atrOneMinute,
+                'atr_period' => $atrPeriod
             ]);
 
             return [
@@ -112,6 +125,37 @@ class TradingDecisionService
                 'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
             ];
         }
+    }
+
+    private function computeAtrOneMinute(string $symbol, int $period): float
+    {
+        $symbolUpper = strtoupper($symbol);
+        $klines = $this->klineRepository->findBy(
+            ['symbol' => $symbolUpper, 'timeframe' => Timeframe::TF_1M],
+            ['openTime' => 'DESC'],
+            $period + 1
+        );
+
+        if (count($klines) <= $period) {
+            $this->logger->warning('[Trading Decision] Insufficient 1m klines for ATR', [
+                'symbol' => $symbolUpper,
+                'period' => $period,
+                'available' => count($klines),
+            ]);
+            throw new RuntimeException(sprintf('Insufficient 1m klines to compute ATR (need %d, got %d) for %s', $period + 1, count($klines), $symbolUpper));
+        }
+
+        $candles = array_reverse($klines);
+        $ohlc = [];
+        foreach ($candles as $kline) {
+            $ohlc[] = [
+                'high' => $kline->getHighPrice()->toFloat(),
+                'low' => $kline->getLowPrice()->toFloat(),
+                'close' => $kline->getClosePrice()->toFloat(),
+            ];
+        }
+
+        return $this->atrCalculator->compute($ohlc, $period, 'wilder');
     }
 
     private function calculateLeverage(
@@ -167,4 +211,3 @@ class TradingDecisionService
         return $this->positionExecutionService->executePosition($positionOpening, $positionConfig);
     }
 }
-

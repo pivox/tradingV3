@@ -45,5 +45,12 @@ interface TradingProviderPort
      * Soumet un ordre TP/SL lié à une position ouverte.
      */
     public function submitTpSlOrder(array $payload): array;
-}
 
+    /**
+     * Retourne la liste des ordres ouverts et planifiés pour un symbole (ou tous).
+     *
+     * @return array{orders: array<mixed>, plan_orders: array<mixed>}|
+     *         array<string,array<mixed>>
+     */
+    public function getOpenOrders(?string $symbol = null): array;
+}

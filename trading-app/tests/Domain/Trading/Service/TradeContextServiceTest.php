@@ -23,9 +23,10 @@ final class TradeContextServiceTest extends TestCase
             public function healthCheck(): array { return []; }
             public function setLeverage(string $symbol, int $leverage, string $openType = 'cross'): array { return []; }
             public function submitTpSlOrder(array $payload): array { return []; }
+            public function getOpenOrders(?string $symbol = null): array { return ['orders' => [], 'plan_orders' => []]; }
         };
 
-        $parameters = new TradingParameters(projectDir: dirname(__DIR__, 4));
+        $parameters = new TradingParameters(configFile: dirname(__DIR__, 4) . '/config/trading.yml');
         $previous = getenv('TRADING_ACCOUNT_BALANCE');
         putenv('TRADING_ACCOUNT_BALANCE'); // ensure unset
         $service = new TradeContextService($provider, $parameters, new NullLogger());
@@ -60,9 +61,10 @@ final class TradeContextServiceTest extends TestCase
             public function healthCheck(): array { return []; }
             public function setLeverage(string $symbol, int $leverage, string $openType = 'cross'): array { return []; }
             public function submitTpSlOrder(array $payload): array { return []; }
+            public function getOpenOrders(?string $symbol = null): array { return ['orders' => [], 'plan_orders' => []]; }
         };
 
-        $parameters = new TradingParameters(projectDir: dirname(__DIR__, 4));
+        $parameters = new TradingParameters(configFile: dirname(__DIR__, 4) . '/config/trading.yml');
         $service = new TradeContextService($provider, $parameters, new NullLogger());
 
         self::assertSame(1234.56, $service->getAccountBalance());
@@ -79,9 +81,10 @@ final class TradeContextServiceTest extends TestCase
             public function healthCheck(): array { return []; }
             public function setLeverage(string $symbol, int $leverage, string $openType = 'cross'): array { return []; }
             public function submitTpSlOrder(array $payload): array { return []; }
+            public function getOpenOrders(?string $symbol = null): array { return ['orders' => [], 'plan_orders' => []]; }
         };
 
-        $parameters = new TradingParameters(projectDir: dirname(__DIR__, 4));
+        $parameters = new TradingParameters(configFile: dirname(__DIR__, 4) . '/config/trading.yml');
         $service = new TradeContextService($provider, $parameters, new NullLogger());
 
         self::assertSame(0.5, $service->getTimeframeMultiplier('1m'));
@@ -100,9 +103,10 @@ final class TradeContextServiceTest extends TestCase
             public function healthCheck(): array { return []; }
             public function setLeverage(string $symbol, int $leverage, string $openType = 'cross'): array { return []; }
             public function submitTpSlOrder(array $payload): array { return []; }
+            public function getOpenOrders(?string $symbol = null): array { return ['orders' => [], 'plan_orders' => []]; }
         };
 
-        $parameters = new TradingParameters(projectDir: dirname(__DIR__, 4));
+        $parameters = new TradingParameters(configFile: dirname(__DIR__, 4) . '/config/trading.yml');
         $service = new TradeContextService($provider, $parameters, new NullLogger());
 
         self::assertSame(5.0, $service->getRiskPercentage());
