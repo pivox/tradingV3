@@ -12,7 +12,7 @@ $secret   = (string)$env('BITMART_SECRET_KEY', '');
 $memo     = $env('BITMART_MEMO');
 
 $baseUrl  = rtrim((string)$env('SYMFONY_BASE_URL', 'http://localhost:9000'), '/');
-$endpoint = (string)$env('SYMFONY_ORDERS_ENDPOINT', '/api/bitmart/orders');
+$endpoint = (string)$env('SYMFONY_ORDERS_ENDPOINT', '/api/orders/events');
 $token    = (string)$env('SYMFONY_WEBHOOK_TOKEN', '');
 
 $httpTimeout     = (int)$env('HTTP_TIMEOUT', '5');

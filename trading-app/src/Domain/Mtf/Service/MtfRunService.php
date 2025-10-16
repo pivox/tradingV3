@@ -13,6 +13,7 @@ use App\Repository\ContractRepository;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\Uuid;
+use Throwable;
 
 class MtfRunService
 {
@@ -75,16 +76,16 @@ class MtfRunService
             ]);
 
             // Activer le verrou si nécessaire (désactivé pour le moment)
-            // if (false && !$this->mtfLockRepository->acquireLock($lockKey, $processId, $lockTimeout, $lockMetadata)) {
-            //     $existingLockInfo = $this->mtfLockRepository->getLockInfo($lockKey);
-            //     $summary = [
-            //         'run_id' => $runId->toString(),
-            //         'status' => 'already_in_progress',
-            //         'existing_lock' => $existingLockInfo,
-            //         'current_tf' => $currentTf,
-            //     ];
-            //     return yield from $this->yieldFinalResult($summary, [], $startTime, $runId);
-            // }
+             if (!$this->mtfLockRepository->acquireLock($lockKey, $processId, $lockTimeout, $lockMetadata)) {
+                 $existingLockInfo = $this->mtfLockRepository->getLockInfo($lockKey);
+                 $summary = [
+                     'run_id' => $runId->toString(),
+                     'status' => 'already_in_progress',
+                     'existing_lock' => $existingLockInfo,
+                     'current_tf' => $currentTf,
+                 ];
+                 return yield from $this->yieldFinalResult($summary, [], $startTime, $runId);
+             }
             $lockAcquired = true;
             $this->logger->info('[MTF Run] Lock acquired', [
                 'run_id' => $runId->toString(),
@@ -133,14 +134,27 @@ class MtfRunService
             $now = $this->clock->now();
             $totalSymbols = count($symbols);
 
+            $accountBalance = 0.0;
+            $riskPercentage = 0.0;
+            if (!$dryRun) {
+                try {
+                    $accountBalance = max(0.0, $this->tradeContext->getAccountBalance());
+                    $riskPercentage = max(0.0, $this->tradeContext->getRiskPercentage());
+                } catch (Throwable $e) {
+                    $this->logger->warning('[MTF Run] Unable to resolve trading context', [
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
             foreach ($symbols as $index => $symbol) {
                 $mtfGenerator = $this->mtfService->runForSymbol($runId, $symbol, $now, $currentTf, $forceTimeframeCheck, $forceRun);
-                
+
                 // Consommer le generator de MtfService et récupérer le résultat
                 $result = null;
                 foreach ($mtfGenerator as $mtfYieldedData) {
                     $result = $mtfYieldedData['result'];
-                    
+
                     // Yield progress information avec les données de MtfService
                     $progress = [
                         'current' => $index + 1,
@@ -150,17 +164,48 @@ class MtfRunService
                         'status' => $result['status'] ?? 'unknown',
                         'mtf_progress' => $mtfYieldedData['progress'] ?? null,
                     ];
-                    
+
                     yield [
                         'symbol' => $symbol,
                         'result' => $result,
                         'progress' => $progress,
                     ];
                 }
-                
+
                 // Récupérer le résultat final du generator
                 $finalResult = $mtfGenerator->getReturn();
-                if ($finalResult !== null) {
+                $symbolResult = $finalResult ?? $result;
+
+                if ($symbolResult !== null) {
+                    $status = strtoupper((string)($symbolResult['status'] ?? ''));
+                    if ($status === 'READY') {
+                        if ($dryRun) {
+                            $symbolResult['trading_decision'] = [
+                                'status' => 'skipped',
+                                'reason' => 'dry_run',
+                            ];
+                        } elseif ($accountBalance > 0.0 && $riskPercentage > 0.0) {
+                            $symbolResult = $this->maybeExecuteTradingDecision(
+                                $symbol,
+                                $symbolResult,
+                                $accountBalance,
+                                $riskPercentage
+                            );
+                        } else {
+                            $this->logger->warning('[MTF Run] Skipping trading decision (missing trading context)', [
+                                'symbol' => $symbol,
+                                'account_balance' => $accountBalance,
+                                'risk_percentage' => $riskPercentage,
+                            ]);
+                            $symbolResult['trading_decision'] = [
+                                'status' => 'skipped',
+                                'reason' => 'missing_trading_context',
+                            ];
+                        }
+                    }
+
+                    $results[$symbol] = $symbolResult;
+                } elseif ($finalResult !== null) {
                     $results[$symbol] = $finalResult;
                 } elseif ($result !== null) {
                     $results[$symbol] = $result;
@@ -308,7 +353,7 @@ class MtfRunService
                 'execution_time' => round(microtime(true) - $startTime, 3),
             ],
         ];
-        
+
         // Return final result
         return ['summary' => $summary, 'results' => $results];
     }

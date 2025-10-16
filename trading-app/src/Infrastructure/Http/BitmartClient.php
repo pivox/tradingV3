@@ -9,6 +9,7 @@ use App\Infrastructure\Config\BitmartConfig;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
+use Throwable;
 use function usleep;
 
 final class BitmartClient implements TradingProviderPort
@@ -139,6 +140,44 @@ final class BitmartClient implements TradingProviderPort
         ]);
         
         return $this->makeAuthenticatedRequest('POST', $url, $data);
+    }
+
+    public function getOpenOrders(?string $symbol = null): array
+    {
+        $query = [];
+        if ($symbol !== null && $symbol !== '') {
+            $query['symbol'] = strtoupper($symbol);
+        }
+
+        $this->logger->debug('[BitMart Client] Fetching open orders', [
+            'symbol' => $query['symbol'] ?? 'ALL',
+        ]);
+
+        $ordersResponse = $this->makeAuthenticatedRequest('GET', $this->config->getOpenOrdersUrl(), $query);
+        $orders = $ordersResponse['data']['orders'] ?? $ordersResponse['data'] ?? $ordersResponse['orders'] ?? [];
+        if (!\is_array($orders)) {
+            $orders = [];
+        }
+
+        $planOrders = [];
+        try {
+            $planResponse = $this->makeAuthenticatedRequest('GET', $this->config->getCurrentPlanOrdersUrl(), $query);
+            $planOrders = $planResponse['data']['orders'] ?? $planResponse['data'] ?? $planResponse['plan_orders'] ?? [];
+            if (!\is_array($planOrders)) {
+                $planOrders = [];
+            }
+        } catch (Throwable $exception) {
+            $this->logger->warning('[BitMart Client] Failed to fetch plan orders', [
+                'symbol' => $query['symbol'] ?? 'ALL',
+                'error' => $exception->getMessage(),
+            ]);
+            $planOrders = [];
+        }
+
+        return [
+            'orders' => $orders,
+            'plan_orders' => $planOrders,
+        ];
     }
 
     /**

@@ -8,6 +8,8 @@ use App\Domain\Common\Enum\SignalSide;
 use App\Domain\Position\Dto\PositionOpeningDto;
 use App\Domain\Position\Dto\PositionConfigDto;
 use App\Domain\Ports\Out\TradingProviderPort;
+use App\Domain\Trading\Exposure\ActiveExposureGuard;
+use App\Domain\Trading\Order\OrderLifecycleService;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
@@ -16,6 +18,8 @@ class PositionExecutionService
 {
     public function __construct(
         private readonly TradingProviderPort $tradingProvider,
+        private readonly ActiveExposureGuard $exposureGuard,
+        private readonly OrderLifecycleService $orderLifecycle,
         private readonly LoggerInterface $logger,
         private readonly ClockInterface $clock
     ) {
@@ -69,6 +73,7 @@ class PositionExecutionService
     {
         try {
             // 1. Vérifier les conditions préalables
+            $this->exposureGuard->assertEligible($position->symbol, $position->side);
             $this->validatePreExecutionConditions($position, $config);
 
             // 2. Configurer le levier
@@ -210,6 +215,19 @@ class PositionExecutionService
 
         $orderId = $response['data']['order_id'] ?? null;
 
+        $context = [
+            'symbol' => strtoupper($position->symbol),
+            'side' => $position->side->value,
+            'size' => $position->positionSize,
+            'stop_loss_price' => $position->stopLossPrice,
+            'take_profit_price' => $position->takeProfitPrice,
+        ];
+
+        $this->orderLifecycle->registerEntryOrder(
+            array_merge($payload, ['order_id' => $orderId]),
+            $context
+        );
+
         return [
             'order_id' => $orderId,
             'client_order_id' => $clientOrderId,
@@ -250,6 +268,9 @@ class PositionExecutionService
             throw new RuntimeException('Failed to place stop loss order: ' . json_encode($response));
         }
 
+        $payload['order_id'] = $response['data']['order_id'] ?? null;
+        $this->orderLifecycle->registerProtectiveOrder($payload, 'STOP_LOSS');
+
         return [
             'order_id' => $response['data']['order_id'] ?? null,
             'client_order_id' => $clientOrderId,
@@ -286,6 +307,9 @@ class PositionExecutionService
         if ((int)($response['code'] ?? 0) !== 1000) {
             throw new RuntimeException('Failed to place take profit order: ' . json_encode($response));
         }
+
+        $payload['order_id'] = $response['data']['order_id'] ?? null;
+        $this->orderLifecycle->registerProtectiveOrder($payload, 'TAKE_PROFIT');
 
         return [
             'order_id' => $response['data']['order_id'] ?? null,

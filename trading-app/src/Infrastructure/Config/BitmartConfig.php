@@ -83,6 +83,16 @@ final class BitmartConfig
         return $this->privateApiUrl . '/contract/private/cancel-order';
     }
 
+    public function getOpenOrdersUrl(): string
+    {
+        return $this->privateApiUrl . '/contract/private/get-open-orders';
+    }
+
+    public function getCurrentPlanOrdersUrl(): string
+    {
+        return $this->privateApiUrl . '/contract/private/current-plan-order';
+    }
+
     public function getPositionsUrl(): string
     {
         return $this->privateApiUrl . '/contract/private/position-v2';
@@ -118,4 +128,3 @@ final class BitmartConfig
         return $this->privateApiUrl . '/contract/private/submit-tp-sl-order';
     }
 }
-
