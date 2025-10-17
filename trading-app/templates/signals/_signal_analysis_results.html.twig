@@ -1,0 +1,106 @@
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-diagram-3"></i> Analyse des signaux ({{ signals|length }})
+                </h6>
+            </div>
+            <div class="card-body">
+                {% if signals is empty %}
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle"></i>
+                        Aucun signal trouvé avec les critères sélectionnés.
+                    </div>
+                {% else %}
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>Signal</th>
+                                    <th>Indicateurs</th>
+                                    <th>Timeframes Parents</th>
+                                    <th>Klines</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for analysis in signals %}
+                                    <tr>
+                                        <td>
+                                            <div class="d-flex flex-column">
+                                                <strong>{{ analysis.signal.symbol }}</strong>
+                                                <small class="text-muted">{{ analysis.signal.timeframe.value }}</small>
+                                                <span class="badge {% if analysis.signal.side.value == 'LONG' %}bg-success{% elseif analysis.signal.side.value == 'SHORT' %}bg-danger{% else %}bg-secondary{% endif %}">
+                                                    {{ analysis.signal.side.value }}
+                                                </span>
+                                                {% if analysis.signal.score %}
+                                                    <small class="text-primary">Score: {{ analysis.signal.score|number_format(2) }}</small>
+                                                {% endif %}
+                                            </div>
+                                        </td>
+                                        <td>
+                                            {% if analysis.indicators %}
+                                                <div class="small">
+                                                    {% if analysis.indicators.rsi %}
+                                                        <div><strong>RSI:</strong> {{ analysis.indicators.rsi|number_format(2) }}</div>
+                                                    {% endif %}
+                                                    {% if analysis.indicators.ema20 %}
+                                                        <div><strong>EMA20:</strong> {{ analysis.indicators.ema20|number_format(4) }}</div>
+                                                    {% endif %}
+                                                    {% if analysis.indicators.ema50 %}
+                                                        <div><strong>EMA50:</strong> {{ analysis.indicators.ema50|number_format(4) }}</div>
+                                                    {% endif %}
+                                                    {% if analysis.indicators.macd %}
+                                                        <div><strong>MACD:</strong> {{ analysis.indicators.macd|number_format(6) }}</div>
+                                                    {% endif %}
+                                                </div>
+                                            {% else %}
+                                                <span class="text-muted">N/A</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% for parentTf, parentData in analysis.parent_analysis %}
+                                                <div class="small mb-1">
+                                                    <strong>{{ parentTf }}:</strong>
+                                                    {% if parentData.error %}
+                                                        <span class="text-danger">{{ parentData.error }}</span>
+                                                    {% else %}
+                                                        {% if parentData.indicators.rsi %}
+                                                            RSI: {{ parentData.indicators.rsi|number_format(2) }}
+                                                        {% endif %}
+                                                        <small class="text-muted">({{ parentData.klines_count }} klines)</small>
+                                                    {% endif %}
+                                                </div>
+                                            {% endfor %}
+                                        </td>
+                                        <td>
+                                            <div class="small">
+                                                <strong>{{ analysis.klines|length }} klines</strong>
+                                                {% if analysis.klines|length > 0 %}
+                                                    <div class="text-muted">
+                                                        Dernière: {{ analysis.klines|last.klineTime|date('H:i:s') }}
+                                                    </div>
+                                                {% endif %}
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                <button class="btn btn-outline-primary" onclick="showSignalDetails({{ analysis.signal.id }})" title="Voir détails complets">
+                                                    <i class="bi bi-eye"></i>
+                                                </button>
+                                                <button class="btn btn-outline-info" onclick="viewChart('{{ analysis.signal.symbol }}', '{{ analysis.signal.timeframe.value }}')" title="Voir graphique">
+                                                    <i class="bi bi-graph-up"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>

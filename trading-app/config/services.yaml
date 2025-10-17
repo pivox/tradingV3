@@ -30,6 +30,21 @@ services:
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
+    # Commands
+    App\Command\DiagnoseMtfSignalsCommand:
+        arguments:
+            $signalRepository: '@App\Repository\SignalRepository'
+            $klineRepository: '@App\Repository\KlineRepository'
+            $entityManager: '@doctrine.orm.entity_manager'
+            $indicatorService: '@App\Service\Indicator\HybridIndicatorService'
+            $sqlIndicatorService: '@App\Service\Indicator\SqlIndicatorService'
+            $phpIndicatorService: '@App\Service\Indicator\PhpIndicatorService'
+            $signalValidationService: '@App\Signal\SignalValidationService'
+            $mtfService: '@App\Domain\Mtf\Service\MtfService'
+            $tradingConfigService: '@App\Service\TradingConfigService'
+            $logger: '@logger'
+        tags: ['console.command']
+
 
     # MTF Services
     App\Domain\Mtf\Service\MtfTimeService:

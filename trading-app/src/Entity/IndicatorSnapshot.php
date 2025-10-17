@@ -32,6 +32,9 @@ class IndicatorSnapshot
     #[ORM\Column(type: Types::JSON)]
     private array $values = [];
 
+    #[ORM\Column(type: Types::STRING, length: 10, options: ['default' => 'PHP'])]
+    private string $source = 'PHP';
+
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, options: ['default' => 'CURRENT_TIMESTAMP'])]
     private \DateTimeImmutable $insertedAt;
 
@@ -101,6 +104,17 @@ class IndicatorSnapshot
     public function setValue(string $key, mixed $value): static
     {
         $this->values[$key] = $value;
+        return $this;
+    }
+
+    public function getSource(): string
+    {
+        return $this->source;
+    }
+
+    public function setSource(string $source): static
+    {
+        $this->source = $source;
         return $this;
     }
 

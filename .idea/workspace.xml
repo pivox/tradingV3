@@ -5,45 +5,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="73604acf-3471-46f2-a1fd-fdf73ef42078" name="Changes" comment="OpenedLockedSyncService conf">
-      <change beforePath="$PROJECT_DIR$/.env" beforeDir="false" afterPath="$PROJECT_DIR$/.env" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3/storage_v2/_src_/database/trading_app.A3Y0dg.meta" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3/storage_v2/_src_/database/trading_app.A3Y0dg/schema/information_schema.FNRwLQ.meta" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3/storage_v2/_src_/database/trading_app.A3Y0dg/schema/pg_catalog.0S1ZNQ.meta" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3/storage_v2/_src_/database/trading_app.A3Y0dg/schema/public.abK9xQ.meta" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3/storage_v2/_src_/database/trading_app.A3Y0dg/schema/public.abK9xQ.zip" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docker-compose.yml" beforeDir="false" afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/services/api.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/services/api.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/index.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitoring/grafana-dashboards/comprehensive-logs-dashboard.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitoring/grafana-dashboards/dashboard.yaml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitoring/grafana-dashboards/error-monitoring-dashboard.json" beforeDir="false" afterPath="$PROJECT_DIR$/monitoring/grafana-dashboards/error-monitoring-dashboard.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitoring/grafana-dashboards/trading-app-logs.json" beforeDir="false" afterPath="$PROJECT_DIR$/monitoring/grafana-dashboards/trading-app-logs.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitoring/grafana-dashboards/trading-logs-advanced.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/symfony-app/config/services.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/config/services.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/symfony-app/src/Command/ListenPositionsCommand.php" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/src/Command/ListenPositionsCommand.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/symfony-app/src/Controller/Bitmart/KlinesCallbackController.php" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/src/Controller/Bitmart/KlinesCallbackController.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/symfony-app/src/Dto/ContractDetailsCollection.php" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/src/Dto/ContractDetailsCollection.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/symfony-app/src/Service/Trading/PositionOpener.php" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/src/Service/Trading/PositionOpener.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/symfony-app/src/Service/Trading/PositionTpSlEnforcer.php" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/src/Service/Trading/PositionTpSlEnforcer.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/.env" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/.env" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/Dockerfile.mtf" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/Dockerfile.mtf" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/README_MTF_RUN.md" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/README_MTF_RUN.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/composer.json" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/composer.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/composer.lock" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/composer.lock" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/config/packages/monolog.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/packages/monolog.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/config/routes.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/routes.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/config/routes/framework.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/routes/framework.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/config/services_logging.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/services_logging.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/config/services.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/services.yaml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/trading-app/config/trading.yml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/trading.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/src/Command/Mtf/MtfRunCommand.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Command/Mtf/MtfRunCommand.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/src/Command/TestLoggingCommand.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Command/TestLoggingCommand.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/src/Controller/MtfController.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Controller/MtfController.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Service/TradeContextService.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Service/TradeContextService.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/src/Infrastructure/Http/BitmartRestClient.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Infrastructure/Http/BitmartRestClient.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/symfony.lock" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/symfony.lock" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/templates/base.html.twig" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/templates/base.html.twig" afterDir="false" />
     </list>
     <list id="0ec51621-5bf1-43ac-acaa-64de0476dee0" name="todo" comment="" />
     <option name="SHOW_DIALOG" value="false" />
@@ -1018,6 +982,8 @@
       <workItem from="1760616940169" duration="4914000" />
       <workItem from="1760632517649" duration="6859000" />
       <workItem from="1760644043755" duration="9393000" />
+      <workItem from="1760683534612" duration="8000" />
+      <workItem from="1760686008894" duration="673000" />
     </task>
     <task id="LOCAL-00050" summary="positions dans bitmart =&gt; nettyage">
       <option name="closed" value="true" />

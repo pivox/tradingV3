@@ -32,6 +32,11 @@
                     <i class="bi bi-list-ul"></i> Détails des signaux
                 </button>
             </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="signal-analysis-tab" data-bs-toggle="tab" data-bs-target="#signal-analysis" type="button" role="tab" aria-controls="signal-analysis" aria-selected="false">
+                    <i class="bi bi-diagram-3"></i> Analyse des signaux
+                </button>
+            </li>
         </ul>
     </div>
 </div>
@@ -46,6 +51,11 @@
     <!-- Onglet Détails -->
     <div class="tab-pane fade" id="details" role="tabpanel" aria-labelledby="details-tab">
         {% include 'signals/_details_tab.html.twig' %}
+    </div>
+    
+    <!-- Onglet Analyse des signaux -->
+    <div class="tab-pane fade" id="signal-analysis" role="tabpanel" aria-labelledby="signal-analysis-tab">
+        {% include 'signals/_signal_analysis_tab.html.twig' %}
     </div>
 </div>
 
