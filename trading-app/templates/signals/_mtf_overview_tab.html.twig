@@ -25,15 +25,25 @@
 
 <script>
 $(document).ready(function() {
-    // Auto-chargement à l'ouverture de l'onglet si visible
-    const tab = document.getElementById('mtf-overview');
-    if (tab && tab.classList.contains('active')) {
-        loadMtfOverview();
-    }
+    // Attendre que DataTables soit complètement chargé
+    function waitForDataTables() {
+        if (typeof $.fn.DataTable === 'undefined') {
+            setTimeout(waitForDataTables, 100);
+            return;
+        }
+        
+        // Auto-chargement à l'ouverture de l'onglet si visible
+        const tab = document.getElementById('mtf-overview');
+        if (tab && tab.classList.contains('active')) {
+            loadMtfOverview();
+        }
 
-    document.getElementById('mtf-overview-tab')?.addEventListener('shown.bs.tab', function () {
-        loadMtfOverview();
-    });
+        document.getElementById('mtf-overview-tab')?.addEventListener('shown.bs.tab', function () {
+            loadMtfOverview();
+        });
+    }
+    
+    waitForDataTables();
 });
 
 function loadMtfOverview() {
@@ -47,8 +57,10 @@ function loadMtfOverview() {
             $('#mtfOverviewLoading').hide();
             $('#mtfOverviewResults').html(data).show();
             
-            // Initialiser DataTables après le chargement des données
-            initializeMtfOverviewTable();
+            // Initialiser DataTables après le chargement des données avec un petit délai
+            setTimeout(function() {
+                initializeMtfOverviewTable();
+            }, 100);
         },
         error: function(xhr, status, error) {
             $('#mtfOverviewLoading').hide();
@@ -63,13 +75,35 @@ function loadMtfOverview() {
 }
 
 function initializeMtfOverviewTable() {
+    // Vérifier que jQuery et DataTables sont chargés
+    if (typeof $ === 'undefined') {
+        console.log('jQuery not loaded yet, retrying...');
+        setTimeout(initializeMtfOverviewTable, 100);
+        return;
+    }
+    
+    if (typeof $.fn.DataTable === 'undefined') {
+        console.log('DataTables not loaded yet, retrying...');
+        setTimeout(initializeMtfOverviewTable, 100);
+        return;
+    }
+    
+    console.log('Initializing MTF Overview DataTable...');
+    
+    // Vérifier que le tableau existe
+    if ($('#mtfOverviewTable').length === 0) {
+        console.log('Table #mtfOverviewTable not found, skipping initialization');
+        return;
+    }
+    
     // Détruire la table DataTables existante si elle existe
     if ($.fn.DataTable.isDataTable('#mtfOverviewTable')) {
         $('#mtfOverviewTable').DataTable().destroy();
+        console.log('Destroyed existing DataTable');
     }
     
     // Initialiser DataTables avec configuration personnalisée
-    $('#mtfOverviewTable').DataTable({
+    const table = $('#mtfOverviewTable').DataTable({
         "language": {
             "emptyTable": "Aucune donnée disponible dans le tableau",
             "info": "Affichage de _START_ à _END_ sur _TOTAL_ entrées",
@@ -92,26 +126,6 @@ function initializeMtfOverviewTable() {
         "order": [[0, "asc"]], // Tri par défaut sur la colonne Symbole
         "columnDefs": [
             {
-                "targets": [0], // Colonne Symbole
-                "orderable": true,
-                "type": "string"
-            },
-            {
-                "targets": [1], // Colonne Dernier H4
-                "orderable": true,
-                "type": "string"
-            },
-            {
-                "targets": [2, 3, 4, 5], // Colonnes H1, M15, M5, M1
-                "orderable": true,
-                "type": "num"
-            },
-            {
-                "targets": [6], // Colonne Total branches
-                "orderable": true,
-                "type": "num"
-            },
-            {
                 "targets": [7], // Colonne Actions
                 "orderable": false,
                 "searchable": false
@@ -123,6 +137,14 @@ function initializeMtfOverviewTable() {
         "responsive": true,
         "autoWidth": false
     });
+    
+    // Ajouter des événements de débogage pour le tri
+    table.on('order.dt', function() {
+        const order = table.order();
+        console.log(`MTF Overview - Tri changé: colonne ${order[0][0]}, direction ${order[0][1]}`);
+    });
+    
+    console.log('MTF Overview DataTable initialized successfully');
 }
 </script>
 
