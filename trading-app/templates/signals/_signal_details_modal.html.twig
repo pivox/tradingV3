@@ -148,7 +148,7 @@
             <div class="card-body">
                 {% if analysis.klines %}
                     <div class="table-responsive">
-                        <table class="table table-sm table-striped">
+                        <table class="table table-sm table-striped klines-table">
                             <thead>
                                 <tr>
                                     <th>Date</th>
@@ -198,7 +198,7 @@
                     <div class="row">
                         {% for parentTf, parentData in analysis.parent_analysis %}
                             <div class="col-md-4">
-                                <div class="card">
+                                <div class="card parent-timeframe-card">
                                     <div class="card-header">
                                         <h6 class="mb-0">{{ parentTf }}</h6>
                                     </div>
