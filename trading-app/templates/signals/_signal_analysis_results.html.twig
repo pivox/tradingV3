@@ -88,10 +88,10 @@
                                         </td>
                                         <td>
                                             <div class="btn-group btn-group-sm" role="group">
-                                                <button class="btn btn-outline-primary" onclick="showSignalDetails({{ analysis.signal.id }})" title="Voir détails complets">
+                                                <button class="btn btn-outline-primary btn-show-details" data-signal-id="{{ analysis.signal.id }}" title="Voir détails complets">
                                                     <i class="bi bi-eye"></i>
                                                 </button>
-                                                <button class="btn btn-outline-info" onclick="viewChart('{{ analysis.signal.symbol }}', '{{ analysis.signal.timeframe.value }}')" title="Voir graphique">
+                                                <button class="btn btn-outline-info btn-view-chart" data-symbol="{{ analysis.signal.symbol }}" data-timeframe="{{ analysis.signal.timeframe.value }}" title="Voir graphique">
                                                     <i class="bi bi-graph-up"></i>
                                                 </button>
                                             </div>

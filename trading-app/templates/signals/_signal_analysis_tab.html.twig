@@ -97,6 +97,19 @@
 $(document).ready(function() {
     // Charger l'analyse par défaut
     loadSignalAnalysis();
+    
+    // Event listener pour les boutons de détails
+    $(document).on('click', '.btn-show-details', function() {
+        const signalId = $(this).data('signal-id');
+        showSignalDetails(signalId);
+    });
+    
+    // Event listener pour les boutons de graphique
+    $(document).on('click', '.btn-view-chart', function() {
+        const symbol = $(this).data('symbol');
+        const timeframe = $(this).data('timeframe');
+        viewChart(symbol, timeframe);
+    });
 });
 
 function loadSignalAnalysis() {
@@ -142,16 +155,29 @@ function clearAnalysisFilters() {
 }
 
 function showSignalDetails(signalId) {
+    console.log('showSignalDetails appelé avec ID:', signalId);
+    
+    // Vérifier que l'ID est valide
+    if (!signalId || signalId === 'undefined') {
+        alert('ID de signal invalide');
+        return;
+    }
+    
+    // Afficher un indicateur de chargement
+    $('#signalDetailsContent').html('<div class="text-center"><div class="spinner-border" role="status"><span class="visually-hidden">Chargement...</span></div></div>');
+    $('#signalDetailsModal').modal('show');
+    
     // Charger les détails du signal via AJAX
     $.ajax({
         url: '{{ path("signals_details", {"id": 0}) }}'.replace('0', signalId),
         method: 'GET',
         success: function(data) {
+            console.log('Données reçues:', data);
             $('#signalDetailsContent').html(data);
-            $('#signalDetailsModal').modal('show');
         },
         error: function(xhr, status, error) {
-            alert('Erreur lors du chargement des détails du signal : ' + error);
+            console.error('Erreur AJAX:', xhr, status, error);
+            $('#signalDetailsContent').html('<div class="alert alert-danger">Erreur lors du chargement des détails du signal : ' + error + '</div>');
         }
     });
 }
