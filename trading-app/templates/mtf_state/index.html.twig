@@ -1,0 +1,354 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}États MTF - Trading{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="bi bi-layers"></i> États MTF (Multi-Timeframe)
+            </h1>
+            <div>
+                <div class="form-check form-switch d-inline-block me-3">
+                    <input class="form-check-input" type="checkbox" id="autoRefresh" checked>
+                    <label class="form-check-label" for="autoRefresh">
+                        Actualisation auto (30s)
+                    </label>
+                </div>
+                <button class="btn btn-primary" onclick="refreshTable()">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filtres -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-funnel"></i> Filtres
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <label for="filterSymbol" class="form-label">Symbole</label>
+                        <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                        <button class="btn btn-outline-secondary" onclick="clearFilters()">
+                            <i class="bi bi-x-circle"></i> Effacer
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Statistiques -->
+<div class="row mb-4">
+    <div class="col-md-2">
+        <div class="card bg-primary text-white">
+            <div class="card-body text-center">
+                <h5>{{ mtfStates|length }}</h5>
+                <small>États MTF</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-success text-white">
+            <div class="card-body text-center">
+                <h5 id="k4hCount">{{ mtfStates|filter(s => s.k4hTime)|length }}</h5>
+                <small>Avec K4h</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-info text-white">
+            <div class="card-body text-center">
+                <h5 id="k1hCount">{{ mtfStates|filter(s => s.k1hTime)|length }}</h5>
+                <small>Avec K1h</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-warning text-white">
+            <div class="card-body text-center">
+                <h5 id="k15mCount">{{ mtfStates|filter(s => s.k15mTime)|length }}</h5>
+                <small>Avec K15m</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-secondary text-white">
+            <div class="card-body text-center">
+                <h5 id="k5mCount">{{ mtfStates|filter(s => s.k5mTime)|length }}</h5>
+                <small>Avec K5m</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-dark text-white">
+            <div class="card-body text-center">
+                <h5 id="k1mCount">{{ mtfStates|filter(s => s.k1mTime)|length }}</h5>
+                <small>Avec K1m</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Table des états MTF -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-table"></i> Liste des États MTF ({{ mtfStates|length }})
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table id="mtfStatesTable" class="table table-striped table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>ID</th>
+                                <th>Symbole</th>
+                                <th>K4h</th>
+                                <th>K1h</th>
+                                <th>K15m</th>
+                                <th>K5m</th>
+                                <th>K1m</th>
+                                <th>Sides</th>
+                                <th>Mis à jour</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for state in mtfStates %}
+                            <tr>
+                                <td>
+                                    <code>{{ state.id }}</code>
+                                </td>
+                                <td>
+                                    <strong>{{ state.symbol }}</strong>
+                                </td>
+                                <td>
+                                    <div class="timeframe-cell">
+                                        <span class="badge bg-danger">4h</span>
+                                        {% if state.k4hTime %}
+                                            {% set k4hAge = (date()|date('U') - state.k4hTime|date('U')) / 60 %}
+                                            {% if k4hAge < 5 %}
+                                                <span class="badge bg-success">À jour</span>
+                                            {% elseif k4hAge < 15 %}
+                                                <span class="badge bg-warning">Récent</span>
+                                            {% else %}
+                                                <span class="badge bg-danger">Ancien</span>
+                                            {% endif %}
+                                            <div class="small text-muted">{{ state.k4hTime|date('d/m H:i') }}</div>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Manquant</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="timeframe-cell">
+                                        <span class="badge bg-success">1h</span>
+                                        {% if state.k1hTime %}
+                                            {% set k1hAge = (date()|date('U') - state.k1hTime|date('U')) / 60 %}
+                                            {% if k1hAge < 5 %}
+                                                <span class="badge bg-success">À jour</span>
+                                            {% elseif k1hAge < 15 %}
+                                                <span class="badge bg-warning">Récent</span>
+                                            {% else %}
+                                                <span class="badge bg-danger">Ancien</span>
+                                            {% endif %}
+                                            <div class="small text-muted">{{ state.k1hTime|date('d/m H:i') }}</div>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Manquant</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="timeframe-cell">
+                                        <span class="badge bg-warning">15m</span>
+                                        {% if state.k15mTime %}
+                                            {% set k15mAge = (date()|date('U') - state.k15mTime|date('U')) / 60 %}
+                                            {% if k15mAge < 5 %}
+                                                <span class="badge bg-success">À jour</span>
+                                            {% elseif k15mAge < 15 %}
+                                                <span class="badge bg-warning">Récent</span>
+                                            {% else %}
+                                                <span class="badge bg-danger">Ancien</span>
+                                            {% endif %}
+                                            <div class="small text-muted">{{ state.k15mTime|date('d/m H:i') }}</div>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Manquant</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="timeframe-cell">
+                                        <span class="badge bg-secondary">5m</span>
+                                        {% if state.k5mTime %}
+                                            {% set k5mAge = (date()|date('U') - state.k5mTime|date('U')) / 60 %}
+                                            {% if k5mAge < 5 %}
+                                                <span class="badge bg-success">À jour</span>
+                                            {% elseif k5mAge < 15 %}
+                                                <span class="badge bg-warning">Récent</span>
+                                            {% else %}
+                                                <span class="badge bg-danger">Ancien</span>
+                                            {% endif %}
+                                            <div class="small text-muted">{{ state.k5mTime|date('d/m H:i') }}</div>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Manquant</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="timeframe-cell">
+                                        <span class="badge bg-primary">1m</span>
+                                        {% if state.k1mTime %}
+                                            {% set k1mAge = (date()|date('U') - state.k1mTime|date('U')) / 60 %}
+                                            {% if k1mAge < 5 %}
+                                                <span class="badge bg-success">À jour</span>
+                                            {% elseif k1mAge < 15 %}
+                                                <span class="badge bg-warning">Récent</span>
+                                            {% else %}
+                                                <span class="badge bg-danger">Ancien</span>
+                                            {% endif %}
+                                            <div class="small text-muted">{{ state.k1mTime|date('d/m H:i') }}</div>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Manquant</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td>
+                                    {% if state.sides and state.sides|length > 0 %}
+                                        <div class="sides-container">
+                                            {% for timeframe, side in state.sides %}
+                                                <div class="side-item mb-1">
+                                                    <span class="badge bg-info">{{ timeframe }}</span>
+                                                    {% if side == 'long' %}
+                                                        <span class="badge bg-success">long</span>
+                                                    {% else %}
+                                                        <span class="badge bg-danger">short</span>
+                                                    {% endif %}
+                                                </div>
+                                            {% endfor %}
+                                        </div>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {{ state.updatedAt|date('d/m/Y H:i:s') }}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+let autoRefreshInterval;
+
+$(document).ready(function() {
+    // Initialisation de DataTables
+    $('#mtfStatesTable').DataTable({
+        pageLength: 25,
+        order: [[8, 'desc']], // Trier par date de mise à jour
+        columnDefs: [
+            { orderable: false, targets: [7] } // Sides column
+        ]
+    });
+
+    // Filtres
+    $('#filterSymbol').on('change keyup', function() {
+        applyFilters();
+    });
+
+    // Auto-refresh
+    $('#autoRefresh').on('change', function() {
+        if (this.checked) {
+            startAutoRefresh();
+        } else {
+            stopAutoRefresh();
+        }
+    });
+
+    // Démarrer l'auto-refresh par défaut
+    startAutoRefresh();
+});
+
+function applyFilters() {
+    const table = $('#mtfStatesTable').DataTable();
+    const symbol = $('#filterSymbol').val();
+
+    // Réinitialiser les filtres
+    table.search('').columns().search('').draw();
+
+    // Appliquer les filtres
+    if (symbol) {
+        table.column(1).search(symbol, false, false);
+    }
+
+    table.draw();
+}
+
+function clearFilters() {
+    $('#filterSymbol').val('');
+    $('#mtfStatesTable').DataTable().search('').columns().search('').draw();
+}
+
+function refreshTable() {
+    location.reload();
+}
+
+function startAutoRefresh() {
+    if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+    }
+    autoRefreshInterval = setInterval(function() {
+        location.reload();
+    }, 30000); // 30 secondes
+}
+
+function stopAutoRefresh() {
+    if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+    }
+}
+
+// Nettoyer l'intervalle quand la page se ferme
+window.addEventListener('beforeunload', function() {
+    stopAutoRefresh();
+});
+</script>
+
+<style>
+.timeframe-cell {
+    min-width: 120px;
+}
+
+.side-item {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+.sides-container {
+    max-width: 150px;
+}
+</style>
+{% endblock %}

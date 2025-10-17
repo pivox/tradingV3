@@ -104,7 +104,7 @@ final class BitmartFetcher implements ExchangeFetcherInterface
             }
 
             $cursor = $chunkEnd;
-            usleep(300_000); // respect des limites API
+            usleep(200_000); // respect des limites API
         }
 
         return $results;

@@ -1,0 +1,24 @@
+# Configuration pour le backtesting avec heure fixe
+# Ce fichier permet de définir une heure fixe pour tous les services
+
+parameters:
+    # Heure fixe pour le backtesting (null = temps réel)
+    # Format: 'Y-m-d H:i:s' en UTC
+    # Exemple: '2024-01-15 10:30:00'
+    app.clock.fixed_time: null
+
+    # Configuration du backtesting
+    app.backtest:
+        # Activer/désactiver le mode backtesting
+        enabled: false
+        
+        # Heure de début du backtesting
+        start_time: '2024-01-01 00:00:00'
+        
+        # Heure de fin du backtesting
+        end_time: '2024-12-31 23:59:59'
+        
+        # Pas de temps pour avancer l'heure (en minutes)
+        time_step: 15
+
+

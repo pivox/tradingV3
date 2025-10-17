@@ -1,0 +1,677 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Gestion des Abonnements WebSocket{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1><i class="bi bi-wifi"></i> Gestion des Abonnements WebSocket</h1>
+            <div class="btn-group" role="group">
+                <button type="button" class="btn btn-success" id="subscribeAllBtn">
+                    <i class="bi bi-play-circle"></i> S'abonner à tout
+                </button>
+                <button type="button" class="btn btn-danger" id="unsubscribeAllBtn">
+                    <i class="bi bi-stop-circle"></i> Se désabonner de tout
+                </button>
+                <button type="button" class="btn btn-primary" id="dispatchBtn">
+                    <i class="bi bi-shuffle"></i> Dispatcher
+                </button>
+                <button type="button" class="btn btn-info" id="rebalanceBtn">
+                    <i class="bi bi-arrow-repeat"></i> Rebalancer
+                </button>
+                <button type="button" class="btn btn-warning" id="refreshStatusBtn">
+                    <i class="bi bi-arrow-clockwise"></i> Rafraîchir statuts
+                </button>
+            </div>
+        </div>
+
+        <!-- Filtres -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-funnel"></i> Filtres</h5>
+            </div>
+            <div class="card-body">
+                <form method="GET" class="row g-3">
+                    <div class="col-md-4">
+                        <label for="status" class="form-label">Statut</label>
+                        <select class="form-select" id="status" name="status">
+                            <option value="">Tous les statuts</option>
+                            <option value="active" {{ app.request.query.get('status') == 'active' ? 'selected' : '' }}>Actif</option>
+                            <option value="inactive" {{ app.request.query.get('status') == 'inactive' ? 'selected' : '' }}>Inactif</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label for="symbol" class="form-label">Symbole</label>
+                        <input type="text" class="form-control" id="symbol" name="symbol" 
+                               value="{{ app.request.query.get('symbol') }}" 
+                               placeholder="Ex: BTCUSDT">
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                        <button type="submit" class="btn btn-primary me-2">
+                            <i class="bi bi-search"></i> Filtrer
+                        </button>
+                        <a href="{{ path('websocket_management') }}" class="btn btn-outline-secondary">
+                            <i class="bi bi-x-circle"></i> Effacer
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Configuration du Dispatcher -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-shuffle"></i> Configuration du Dispatcher</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <label for="dispatchStrategy" class="form-label">Stratégie</label>
+                        <select class="form-select" id="dispatchStrategy">
+                            <option value="hash">Hash (cohérent)</option>
+                            <option value="least">Least Loaded (équilibré)</option>
+                            <option value="worker">Worker spécifique</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label for="selectedWorker" class="form-label">Worker</label>
+                        <select class="form-select" id="selectedWorker">
+                            <option value="">Sélectionner un worker</option>
+                            {% for worker in workers %}
+                            <option value="{{ worker }}">{{ worker }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="capacity" class="form-label">Capacité</label>
+                        <input type="number" class="form-control" id="capacity" value="20" min="1" max="100">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">&nbsp;</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="liveMode" checked>
+                            <label class="form-check-label" for="liveMode">
+                                Mode Live
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button type="button" class="btn btn-outline-primary" id="loadAssignmentsBtn">
+                            <i class="bi bi-arrow-clockwise"></i> Charger
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Configuration des Timeframes -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-clock"></i> Timeframes sélectionnés</h5>
+                <span class="badge bg-primary" id="selectedTfCount">{{ timeframes|length }}</span>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    {% for tf in timeframes %}
+                    <div class="col-md-2 col-sm-4 col-6 mb-2">
+                        <div class="form-check">
+                            <input class="form-check-input timeframe-checkbox" type="checkbox" 
+                                   value="{{ tf }}" id="tf_{{ tf }}" checked>
+                            <label class="form-check-label" for="tf_{{ tf }}">
+                                <span class="badge bg-secondary">{{ tf }}</span>
+                            </label>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div class="mt-3">
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="selectAllTf">
+                        <i class="bi bi-check-all"></i> Tout sélectionner
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="deselectAllTf">
+                        <i class="bi bi-x-square"></i> Tout désélectionner
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-info" id="selectCommonTf">
+                        <i class="bi bi-star"></i> Timeframes courants (1m, 5m, 15m, 1h)
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Table des contrats -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-table"></i> Contrats disponibles</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover" id="contractsTable">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>
+                                    <input type="checkbox" id="selectAllContracts" class="form-check-input">
+                                </th>
+                                <th>Symbole</th>
+                                <th>Nom</th>
+                                <th>Statut</th>
+                                <th>Type</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for contract in contracts %}
+                            <tr data-symbol="{{ contract.symbol }}">
+                                <td>
+                                    <input type="checkbox" class="form-check-input contract-checkbox" 
+                                           value="{{ contract.symbol }}">
+                                </td>
+                                <td>
+                                    <strong>{{ contract.symbol }}</strong>
+                                </td>
+                                <td>{{ contract.name ?? '-' }}</td>
+                                <td>
+                                    {% if currentAssignments[contract.symbol] is defined %}
+                                        <span class="badge bg-success">Actif</span>
+                                        <small class="text-muted d-block">{{ currentAssignments[contract.symbol] }}</small>
+                                    {% else %}
+                                        <span class="badge bg-secondary">Inactif</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ contract.type ?? '-' }}</td>
+                                <td>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button type="button" class="btn btn-success subscribe-btn" 
+                                                data-symbol="{{ contract.symbol }}">
+                                            <i class="bi bi-play"></i>
+                                        </button>
+                                        <button type="button" class="btn btn-danger unsubscribe-btn" 
+                                                data-symbol="{{ contract.symbol }}">
+                                            <i class="bi bi-stop"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Statistiques des Workers -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-server"></i> Statistiques des Workers</h5>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="refreshStatsBtn">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="workersStats" class="row">
+                    <!-- Les statistiques seront chargées dynamiquement -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Zone de statut -->
+        <div class="card mt-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> Statut des opérations</h5>
+                <div class="d-flex gap-2">
+                    <span class="badge bg-success" id="successCount">0 succès</span>
+                    <span class="badge bg-danger" id="errorCount">0 erreurs</span>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="statusMessages" class="alert alert-info">
+                    <i class="bi bi-info-circle"></i> Prêt à gérer les abonnements WebSocket
+                </div>
+                <div id="operationHistory" class="mt-3" style="max-height: 200px; overflow-y: auto;">
+                    <!-- Historique des opérations -->
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+$(document).ready(function() {
+    // Configuration DataTables
+    $('#contractsTable').DataTable({
+        "pageLength": 25,
+        "order": [[1, "asc"]],
+        "columnDefs": [
+            { "orderable": false, "targets": [0, 5] }
+        ]
+    });
+
+    // Gestion de la sélection des timeframes
+    $('#selectAllTf').click(function() {
+        $('.timeframe-checkbox').prop('checked', true);
+        updateTfCount();
+    });
+
+    $('#deselectAllTf').click(function() {
+        $('.timeframe-checkbox').prop('checked', false);
+        updateTfCount();
+    });
+
+    $('#selectCommonTf').click(function() {
+        $('.timeframe-checkbox').prop('checked', false);
+        $('.timeframe-checkbox[value="1m"], .timeframe-checkbox[value="5m"], .timeframe-checkbox[value="15m"], .timeframe-checkbox[value="1h"]').prop('checked', true);
+        updateTfCount();
+    });
+
+    // Mise à jour du compteur de timeframes
+    function updateTfCount() {
+        var count = $('.timeframe-checkbox:checked').length;
+        $('#selectedTfCount').text(count);
+    }
+
+    // Écouter les changements sur les checkboxes de timeframes
+    $('.timeframe-checkbox').change(function() {
+        updateTfCount();
+    });
+
+    // Initialiser le compteur
+    updateTfCount();
+
+    // Gestion de la sélection des contrats
+    $('#selectAllContracts').change(function() {
+        $('.contract-checkbox').prop('checked', $(this).prop('checked'));
+    });
+
+    $('.contract-checkbox').change(function() {
+        var totalCheckboxes = $('.contract-checkbox').length;
+        var checkedCheckboxes = $('.contract-checkbox:checked').length;
+        $('#selectAllContracts').prop('checked', totalCheckboxes === checkedCheckboxes);
+    });
+
+    // Variables pour le suivi des statistiques
+    var successCount = 0;
+    var errorCount = 0;
+
+    // Fonction pour afficher les messages de statut
+    function showStatus(message, type = 'info') {
+        var icon = 'bi-info-circle';
+        var alertClass = 'alert-info';
+        
+        switch(type) {
+            case 'success':
+                icon = 'bi-check-circle';
+                alertClass = 'alert-success';
+                successCount++;
+                break;
+            case 'error':
+                icon = 'bi-exclamation-triangle';
+                alertClass = 'alert-danger';
+                errorCount++;
+                break;
+            case 'warning':
+                icon = 'bi-exclamation-circle';
+                alertClass = 'alert-warning';
+                break;
+        }
+        
+        // Mettre à jour le message principal
+        $('#statusMessages')
+            .removeClass('alert-info alert-success alert-danger alert-warning')
+            .addClass(alertClass)
+            .html('<i class="' + icon + '"></i> ' + message);
+        
+        // Ajouter à l'historique
+        addToHistory(message, type);
+        
+        // Mettre à jour les compteurs
+        updateCounters();
+    }
+
+    // Fonction pour ajouter une entrée à l'historique
+    function addToHistory(message, type) {
+        var timestamp = new Date().toLocaleTimeString();
+        var icon = type === 'success' ? 'bi-check-circle text-success' : 
+                   type === 'error' ? 'bi-exclamation-triangle text-danger' : 
+                   type === 'warning' ? 'bi-exclamation-circle text-warning' : 'bi-info-circle text-info';
+        
+        var historyEntry = `
+            <div class="d-flex justify-content-between align-items-center py-1 border-bottom">
+                <div>
+                    <i class="bi ${icon}"></i>
+                    <span class="ms-2">${message}</span>
+                </div>
+                <small class="text-muted">${timestamp}</small>
+            </div>
+        `;
+        
+        $('#operationHistory').prepend(historyEntry);
+        
+        // Limiter l'historique à 10 entrées
+        var entries = $('#operationHistory > div');
+        if (entries.length > 10) {
+            entries.slice(10).remove();
+        }
+    }
+
+    // Fonction pour mettre à jour les compteurs
+    function updateCounters() {
+        $('#successCount').text(successCount + ' succès');
+        $('#errorCount').text(errorCount + ' erreurs');
+    }
+
+    // Fonction pour mettre à jour le statut visuel d'un contrat
+    function updateContractStatus(symbol, status, worker = null) {
+        var row = $(`tr[data-symbol="${symbol}"]`);
+        if (row.length > 0) {
+            var statusCell = row.find('td:nth-child(4)');
+            if (status === 'active' && worker) {
+                statusCell.html('<span class="badge bg-success">Actif</span><small class="text-muted d-block">' + worker + '</small>');
+            } else {
+                statusCell.html('<span class="badge bg-secondary">Inactif</span>');
+            }
+        }
+    }
+
+    // Fonction pour obtenir les timeframes sélectionnés
+    function getSelectedTimeframes() {
+        return $('.timeframe-checkbox:checked').map(function() {
+            return $(this).val();
+        }).get();
+    }
+
+    // Fonction pour obtenir les symboles sélectionnés
+    function getSelectedSymbols() {
+        return $('.contract-checkbox:checked').map(function() {
+            return $(this).val();
+        }).get();
+    }
+
+    // Fonction pour effectuer une requête WebSocket
+    function performWebSocketAction(action, symbols, timeframes) {
+        if (symbols.length === 0) {
+            showStatus('Veuillez sélectionner au moins un contrat.', 'warning');
+            return;
+        }
+
+        if (timeframes.length === 0) {
+            showStatus('Veuillez sélectionner au moins un timeframe.', 'warning');
+            return;
+        }
+
+        showStatus(`Traitement en cours pour ${symbols.length} contrat(s)...`, 'info');
+
+        // Traiter chaque symbole avec un délai pour éviter la surcharge
+        var promises = symbols.map(function(symbol, index) {
+            return new Promise(function(resolve, reject) {
+                setTimeout(function() {
+                    $.ajax({
+                        url: '/ws/' + action,
+                        method: 'POST',
+                        contentType: 'application/json',
+                        timeout: 10000,
+                        data: JSON.stringify({
+                            symbol: symbol,
+                            tfs: timeframes
+                        })
+                    })
+                    .done(function(response) {
+                        resolve({symbol: symbol, response: response, success: true});
+                    })
+                    .fail(function(xhr, status, error) {
+                        resolve({symbol: symbol, error: error, success: false, status: xhr.status});
+                    });
+                }, index * 100); // Délai de 100ms entre chaque requête
+            });
+        });
+
+        Promise.all(promises)
+            .then(function(results) {
+                var successResults = results.filter(r => r.success);
+                var errorResults = results.filter(r => !r.success);
+                
+                if (successResults.length > 0) {
+                    var successMessages = successResults.map(r => r.response.message || `${r.symbol}: Succès`);
+                    showStatus(
+                        action === 'subscribe' 
+                            ? `✅ Abonnement réussi pour ${successResults.length}/${symbols.length} contrats`
+                            : `✅ Désabonnement réussi pour ${successResults.length}/${symbols.length} contrats`,
+                        'success'
+                    );
+                    
+                    // Mettre à jour les statuts visuels
+                    successResults.forEach(function(result) {
+                        if (action === 'subscribe') {
+                            // Pour l'abonnement, on peut supposer qu'il est assigné au premier worker
+                            updateContractStatus(result.symbol, 'active', 'tradingv3-ws-worker-1:8088');
+                        } else {
+                            // Pour le désabonnement, on met à jour vers inactif
+                            updateContractStatus(result.symbol, 'inactive');
+                        }
+                    });
+                }
+                
+                if (errorResults.length > 0) {
+                    var errorMessages = errorResults.map(r => `${r.symbol}: ${r.error || 'Erreur inconnue'}`);
+                    showStatus(
+                        `❌ Erreurs pour ${errorResults.length} contrat(s): ${errorMessages.join(', ')}`,
+                        'error'
+                    );
+                }
+            })
+            .catch(function(error) {
+                console.error('Erreur WebSocket:', error);
+                showStatus('Erreur lors de l\'opération: ' + (error.message || 'Erreur inconnue'), 'error');
+            });
+    }
+
+    // Actions individuelles
+    $('.subscribe-btn').click(function() {
+        var symbol = $(this).data('symbol');
+        var timeframes = getSelectedTimeframes();
+        performWebSocketAction('subscribe', [symbol], timeframes);
+    });
+
+    $('.unsubscribe-btn').click(function() {
+        var symbol = $(this).data('symbol');
+        var timeframes = getSelectedTimeframes();
+        performWebSocketAction('unsubscribe', [symbol], timeframes);
+    });
+
+    // Actions en lot
+    $('#subscribeAllBtn').click(function() {
+        var symbols = getSelectedSymbols();
+        var timeframes = getSelectedTimeframes();
+        performWebSocketAction('subscribe', symbols, timeframes);
+    });
+
+    $('#unsubscribeAllBtn').click(function() {
+        var symbols = getSelectedSymbols();
+        var timeframes = getSelectedTimeframes();
+        performWebSocketAction('unsubscribe', symbols, timeframes);
+    });
+
+    // Gestion du dispatcher
+    $('#dispatchStrategy').change(function() {
+        var strategy = $(this).val();
+        if (strategy === 'worker') {
+            $('#selectedWorker').prop('required', true).show();
+            $('#capacity').hide();
+        } else {
+            $('#selectedWorker').prop('required', false).hide();
+            $('#capacity').show();
+        }
+    });
+
+    // Actions du dispatcher
+    $('#dispatchBtn').click(function() {
+        var symbols = getSelectedSymbols();
+        var timeframes = getSelectedTimeframes();
+        var strategy = $('#dispatchStrategy').val();
+        var worker = $('#selectedWorker').val();
+        var capacity = parseInt($('#capacity').val());
+        var live = $('#liveMode').prop('checked');
+
+        if (symbols.length === 0) {
+            showStatus('Veuillez sélectionner au moins un contrat.', 'warning');
+            return;
+        }
+
+        if (timeframes.length === 0) {
+            showStatus('Veuillez sélectionner au moins un timeframe.', 'warning');
+            return;
+        }
+
+        if (strategy === 'worker' && !worker) {
+            showStatus('Veuillez sélectionner un worker.', 'warning');
+            return;
+        }
+
+        performDispatchAction('dispatch', {
+            symbols: symbols,
+            timeframes: timeframes,
+            strategy: strategy,
+            worker: worker,
+            capacity: capacity,
+            live: live
+        });
+    });
+
+    $('#rebalanceBtn').click(function() {
+        var symbols = getSelectedSymbols();
+        var timeframes = getSelectedTimeframes();
+        var live = $('#liveMode').prop('checked');
+
+        if (symbols.length === 0) {
+            showStatus('Veuillez sélectionner au moins un contrat.', 'warning');
+            return;
+        }
+
+        if (timeframes.length === 0) {
+            showStatus('Veuillez sélectionner au moins un timeframe.', 'warning');
+            return;
+        }
+
+        performDispatchAction('rebalance', {
+            symbols: symbols,
+            timeframes: timeframes,
+            live: live
+        });
+    });
+
+    // Charger les assignations
+    $('#loadAssignmentsBtn').click(function() {
+        loadAssignments();
+    });
+
+    // Actualiser les statistiques
+    $('#refreshStatsBtn').click(function() {
+        loadAssignments();
+    });
+
+    // Rafraîchir les statuts
+    $('#refreshStatusBtn').click(function() {
+        location.reload();
+    });
+
+    // Fonction pour effectuer une action de dispatch
+    function performDispatchAction(action, data) {
+        showStatus(`Traitement ${action} en cours...`, 'info');
+
+        $.ajax({
+            url: '/ws/' + action,
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(data),
+            timeout: 30000
+        })
+        .done(function(response) {
+            if (response.ok) {
+                showStatus(response.message, 'success');
+                if (response.assignments) {
+                    displayAssignments(response.assignments);
+                }
+                if (response.moves) {
+                    displayMoves(response.moves);
+                }
+                loadAssignments(); // Recharger les statistiques
+            } else {
+                showStatus('Erreur: ' + response.error, 'error');
+            }
+        })
+        .fail(function(xhr, status, error) {
+            showStatus(`Erreur ${action}: ${error}`, 'error');
+        });
+    }
+
+    // Fonction pour charger les assignations
+    function loadAssignments() {
+        $.ajax({
+            url: '/ws/assignments',
+            method: 'GET',
+            timeout: 10000
+        })
+        .done(function(response) {
+            if (response.ok) {
+                displayWorkerStats(response.stats);
+            }
+        })
+        .fail(function(xhr, status, error) {
+            console.error('Erreur lors du chargement des assignations:', error);
+        });
+    }
+
+    // Fonction pour afficher les statistiques des workers
+    function displayWorkerStats(stats) {
+        var html = '';
+        for (var worker in stats) {
+            var count = stats[worker];
+            var percentage = count > 0 ? Math.round((count / Object.values(stats).reduce((a, b) => a + b, 0)) * 100) : 0;
+            
+            html += `
+                <div class="col-md-2 col-sm-4 col-6 mb-3">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <h6 class="card-title">${worker.split(':')[0]}</h6>
+                            <h4 class="text-primary">${count}</h4>
+                            <small class="text-muted">${percentage}%</small>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        $('#workersStats').html(html);
+    }
+
+    // Fonction pour afficher les assignations
+    function displayAssignments(assignments) {
+        var html = '<h6>Assignations:</h6><ul>';
+        for (var symbol in assignments) {
+            html += `<li>${symbol} → ${assignments[symbol]}</li>`;
+        }
+        html += '</ul>';
+        addToHistory(html, 'info');
+    }
+
+    // Fonction pour afficher les mouvements
+    function displayMoves(moves) {
+        if (Object.keys(moves).length === 0) {
+            addToHistory('Aucun mouvement nécessaire', 'info');
+            return;
+        }
+
+        var html = '<h6>Mouvements:</h6><ul>';
+        for (var symbol in moves) {
+            var move = moves[symbol];
+            html += `<li>${symbol}: ${move[0]} → ${move[1]}</li>`;
+        }
+        html += '</ul>';
+        addToHistory(html, 'info');
+    }
+
+    // Charger les assignations au démarrage
+    loadAssignments();
+});
+</script>
+{% endblock %}

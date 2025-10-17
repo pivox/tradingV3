@@ -53,7 +53,30 @@ final class BitmartOrchestrator
         ?\DateTimeInterface $end   = null,
         ?string $note = null,
         ?string $batchId = null,
+        array $meta = []
     ): void {
+        // Valeurs par défaut : si $start ou $end sont null
+        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+
+        if ($end === null) {
+            $end = $now;
+        }
+
+        if ($start === null) {
+            // Exemple : on recule $limit * taille TF (en minutes) si pas précisé
+            $tfMap = [
+                '1m'  => 1,
+                '5m'  => 5,
+                '15m' => 15,
+                '1h'  => 60,
+                '4h'  => 240,
+                '1d'  => 1440,
+            ];
+            $minutes = $tfMap[$timeframe] ?? 60;
+            $start = (clone $end)->modify(sprintf('-%d minutes', ($limit - 1) * $minutes));
+        }
+
+        // Conversion timestamps
         $startTs = $start->getTimestamp();
         $endTs   = $end->getTimestamp();
 
@@ -72,6 +95,7 @@ final class BitmartOrchestrator
                 'end_ts'     => $endTs,
                 'note'       => $note,
                 'batch_id'   => $batchId,
+                'meta'       => $meta,
             ],
         ];
         if (!$this->workflowRef) {

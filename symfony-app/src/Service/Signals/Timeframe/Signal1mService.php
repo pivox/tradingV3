@@ -6,6 +6,7 @@ namespace App\Service\Signals\Timeframe;
 use App\Entity\Kline;
 use App\Service\Config\TradingParameters;
 use App\Service\Indicator\Trend\Ema;
+use App\Service\Indicator\Momentum\Rsi;
 use App\Service\Indicator\Volume\Vwap;
 use Psr\Log\LoggerInterface;
 
@@ -13,8 +14,8 @@ use Psr\Log\LoggerInterface;
  * Micro-structure 1m (affinage d'entrée/gestion).
  *
  * Idée simple et robuste : alignement EMA/VWAP en faveur du contexte.
- *  - LONG  : ema_20 > ema_50 && close > vwap
- *  - SHORT : ema_20 < ema_50 && close < vwap
+ *  - LONG  : ema_20 > ema_50 && close > vwap && rsi < 70
+ *  - SHORT : ema_20 < ema_50 && close < vwap && rsi > 30
  *
  * (On laisse de côté les figures/wicks complexes pour rester stable.)
  */
@@ -24,6 +25,7 @@ final class Signal1mService
         private LoggerInterface $validationLogger, // canal 'validation'
         private LoggerInterface $signalsLogger,    // canal 'signals'
         private Ema $ema,
+        private Rsi $rsi,
         private Vwap $vwap,
         private TradingParameters $params,
         // Defaults
@@ -32,6 +34,9 @@ final class Signal1mService
         private int   $defaultMinBars       = 120,
         private int   $defaultEmaFastPeriod = 20,
         private int   $defaultEmaSlowPeriod = 50,
+        private int    $defaultRsiPeriod    = 14,
+        private float  $defaultRsiLongMax   = 70.0,
+        private float  $defaultRsiShortMin  = 30.0,
         private string $defaultVwapSession  = 'daily'
     ) {}
 
@@ -58,6 +63,15 @@ final class Signal1mService
 
         $emaFastPeriod = $cfg['indicators']['ema']['fast']  ?? $this->defaultEmaFastPeriod; // 20
         $emaSlowPeriod = $cfg['indicators']['ema']['slow']  ?? $this->defaultEmaSlowPeriod; // 50
+
+        $rsiPeriod     = $cfg['indicators']['rsi']['period'] ?? $this->defaultRsiPeriod;
+        $rsiGuard      = $cfg['timeframes']['1m']['guards']['rsi'] ?? [];
+        $rsiLongMax    = is_array($rsiGuard) && array_key_exists('long_max', $rsiGuard)
+            ? (float)$rsiGuard['long_max']
+            : $this->defaultRsiLongMax;
+        $rsiShortMin   = is_array($rsiGuard) && array_key_exists('short_min', $rsiGuard)
+            ? (float)$rsiGuard['short_min']
+            : $this->defaultRsiShortMin;
 
         $vwapSession   = $cfg['indicators']['vwap']['session'] ?? $this->defaultVwapSession;
 
@@ -124,6 +138,15 @@ final class Signal1mService
         $emaUp   = ($emaFast > $emaSlow + $eps);
         $emaDown = ($emaSlow > $emaFast + $eps);
 
+        $rsiCloses = $closes;
+        if ($useLastClosed && count($rsiCloses) > 1) {
+            array_pop($rsiCloses);
+        }
+        $rsiSeries = $this->rsi->calculateFull($rsiCloses, (int)$rsiPeriod);
+        $rsiNow = !empty($rsiSeries['rsi']) ? (float) end($rsiSeries['rsi']) : 50.0;
+        $rsiBelowCap   = ($rsiNow <= $rsiLongMax - $eps);
+        $rsiAboveFloor = ($rsiNow >= $rsiShortMin + $eps);
+
         $closeAboveVwap = ($lastClose > $vwapVal + $eps);
         $closeBelowVwap = ($lastClose < $vwapVal - $eps);
 
@@ -131,12 +154,12 @@ final class Signal1mService
         $trigger = '';
         $path = 'micro_1m';
 
-        if ($emaUp && $closeAboveVwap) {
+        if ($emaUp && $closeAboveVwap && $rsiBelowCap) {
             $signal  = 'LONG';
-            $trigger = 'ema_fast_gt_slow & close_above_vwap';
-        } elseif ($emaDown && $closeBelowVwap) {
+            $trigger = 'ema_20_gt_50 & close_above_vwap & rsi_lt_70';
+        } elseif ($emaDown && $closeBelowVwap && $rsiAboveFloor) {
             $signal  = 'SHORT';
-            $trigger = 'ema_fast_lt_slow & close_below_vwap';
+            $trigger = 'ema_20_lt_50 & close_below_vwap & rsi_gt_30';
         }
 
         $validation = [
@@ -144,9 +167,11 @@ final class Signal1mService
             'ema_slow' => $emaSlow,
             'vwap'     => $vwapVal,
             'close'    => $lastClose,
+            'rsi'      => $rsiNow,
             'path'     => $path,
             'trigger'  => $trigger,
             'signal'   => $signal,
+            'date' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
         ];
 
         $this->signalsLogger->info('signals.tick', $validation);

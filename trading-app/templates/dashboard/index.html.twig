@@ -1,0 +1,152 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Dashboard - Trading{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">
+            <i class="bi bi-speedometer2"></i> Dashboard Trading
+        </h1>
+    </div>
+</div>
+
+<!-- Statistiques rapides -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card bg-primary text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ stats.contracts_count ?? 0 }}</h4>
+                        <p class="card-text">Contrats</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-currency-exchange fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-success text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ stats.long_signals_count ?? 0 }}</h4>
+                        <p class="card-text">Signaux LONG</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-arrow-up fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-info text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ stats.klines_count ?? 0 }}</h4>
+                        <p class="card-text">Klines</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-graph-up fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ stats.short_signals_count ?? 0 }}</h4>
+                        <p class="card-text">Signaux SHORT</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-arrow-down fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Accès rapide aux tables -->
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-table"></i> Tables Principales
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="list-group list-group-flush">
+                    <a href="{{ path('contracts_index') }}" class="list-group-item list-group-item-action">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">
+                                <i class="bi bi-currency-exchange"></i> Contrats
+                            </h6>
+                            <small class="text-muted">{{ stats.contracts_count ?? 0 }} entrées</small>
+                        </div>
+                        <p class="mb-1">Gestion des contrats de trading</p>
+                    </a>
+                    <a href="{{ path('klines_index') }}" class="list-group-item list-group-item-action">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">
+                                <i class="bi bi-graph-up"></i> Klines
+                            </h6>
+                            <small class="text-muted">{{ stats.klines_count ?? 0 }} entrées</small>
+                        </div>
+                        <p class="mb-1">Données de prix OHLCV</p>
+                    </a>
+                    <a href="{{ path('signals_index') }}" class="list-group-item list-group-item-action">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">
+                                <i class="bi bi-signal"></i> Signaux
+                            </h6>
+                            <small class="text-muted">{{ stats.signals_count ?? 0 }} entrées</small>
+                        </div>
+                        <p class="mb-1">Signaux de trading générés</p>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-tools"></i> Outils
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="list-group list-group-flush">
+                    <a href="{{ path('graph_index') }}" class="list-group-item list-group-item-action">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">
+                                <i class="bi bi-graph-up-arrow"></i> Graphiques
+                            </h6>
+                            <small class="text-muted">Visualisation</small>
+                        </div>
+                        <p class="mb-1">Graphiques de prix en temps réel</p>
+                    </a>
+                    <a href="{{ path('indicators_test') }}" class="list-group-item list-group-item-action">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">
+                                <i class="bi bi-clipboard-check"></i> Test Indicateurs
+                            </h6>
+                            <small class="text-muted">Validation</small>
+                        </div>
+                        <p class="mb-1">Interface de test et validation des indicateurs</p>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

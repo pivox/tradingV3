@@ -203,3 +203,29 @@ integration:
         atr: 'App\\Service\\Indicators\\AtrCalculator'
         position_sizer: 'App\\Service\\Risk\\PositionSizer'
         signal: 'App\\Service\\Signals\\SignalScalpingService'
+
+scalp_mode_trigger:
+    all:
+        - mtf_confirmed: true              # 15m & 5m alignés avec 1m (ema_20/50 + macd_hist)
+        - timeframe: '1m'                  # exécution micro
+        - atr_rel_in_range: [0.001, 0.004] # 0.1–0.4 % du prix
+        - volume_rel_gt_1_5x: true         # participation confirmée
+        - ema_20_gt_50_or_lt_50: true      # autorise long OU short selon sens
+        - macd_hist_sign_aligned: true     # signe MACD aligné avec le sens
+        - vwap_slope_stable: true
+    overrides:
+        time_stop: '5m'                    # sortie forcée max
+        sl_atr_mult: 0.75                  # SL initial = 0.75x ATR(1m)
+        tp_r_multiple: 2.0                 # TP = 2R
+        leverage_multiplier: 0.5           # prudence en micro (déjà dans tf_multiplier=0.5)
+    meta: >
+        N’active le scalping 1m que si 15m et 5m confirment la direction. Exige ATR/volume suffisants,
+        VWAP stable et momentum cohérent. Applique un time-stop court et un SL/TP rapides.
+
+
+orchestration:
+    retries:                             # utilisé en mode sequential (descente TF)
+        '1h':  { attempts: 3, back_to: '4h',  wait: '59m' }
+        '15m': { attempts: 3, back_to: '1h',  wait: '14m' }
+        '5m':  { attempts: 2, back_to: '15m', wait: '4m'  }
+        '1m':  { attempts: 4, back_to: '15m', wait: '2m'  }

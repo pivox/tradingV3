@@ -7,6 +7,7 @@ use App\Entity\Kline;
 use App\Service\Config\TradingParameters;
 use App\Service\Indicator\Trend\Ema;
 use App\Service\Indicator\Momentum\Macd;
+use App\Service\Indicator\Momentum\Rsi;
 use App\Service\Indicator\Volume\Vwap;
 use Psr\Log\LoggerInterface;
 
@@ -17,6 +18,7 @@ final class Signal5mService
         private LoggerInterface $signalsLogger,
         private Ema $ema,
         private Macd $macd,
+        private Rsi $rsi,
         private Vwap $vwap,
         private TradingParameters $params,
         private float $defaultEps = 1.0e-6,
@@ -27,6 +29,9 @@ final class Signal5mService
         private int $defaultMacdFast = 12,
         private int $defaultMacdSlow = 26,
         private int $defaultMacdSignal = 9,
+        private int $defaultRsiPeriod = 14,
+        private float $defaultRsiLongMax = 70.0,
+        private float $defaultRsiShortMin = 30.0,
         private string $defaultVwapTz = 'UTC',
         private bool $defaultVwapDaily = true
     ) {}
@@ -48,6 +53,15 @@ final class Signal5mService
         $macdFast      = (int)($cfg['indicators']['macd']['fast'] ?? $this->defaultMacdFast);
         $macdSlow      = (int)($cfg['indicators']['macd']['slow'] ?? $this->defaultMacdSlow);
         $macdSignal    = (int)($cfg['indicators']['macd']['signal'] ?? $this->defaultMacdSignal);
+
+        $rsiPeriod     = (int)($cfg['indicators']['rsi']['period'] ?? $this->defaultRsiPeriod);
+        $rsiGuard      = $cfg['timeframes']['5m']['guards']['rsi'] ?? [];
+        $rsiLongMax    = is_array($rsiGuard) && array_key_exists('long_max', $rsiGuard)
+            ? (float)$rsiGuard['long_max']
+            : $this->defaultRsiLongMax;
+        $rsiShortMin   = is_array($rsiGuard) && array_key_exists('short_min', $rsiGuard)
+            ? (float)$rsiGuard['short_min']
+            : $this->defaultRsiShortMin;
 
         $vwapDaily     = (bool) ($cfg['indicators']['vwap']['daily']    ?? $this->defaultVwapDaily);
         $vwapTimezone  = (string)($cfg['indicators']['vwap']['timezone'] ?? $this->defaultVwapTz);
@@ -111,23 +125,35 @@ final class Signal5mService
         $emaTrendDown   = ($emaSlow > $emaFast + $eps);
         $macdHistUp     = ($histNow > 0.0 + $eps);
         $macdHistDown   = ($histNow < 0.0 - $eps);
+
+        $rsiCloses = $closes;
+        if ($useLastClosed && count($rsiCloses) > 1) {
+            array_pop($rsiCloses);
+        }
+        $rsiSeries = $this->rsi->calculateFull($rsiCloses, $rsiPeriod);
+        $rsiNow = !empty($rsiSeries['rsi']) ? (float) end($rsiSeries['rsi']) : 50.0;
+        $rsiBelowCap   = ($rsiNow <= $rsiLongMax - $eps);
+        $rsiAboveFloor = ($rsiNow >= $rsiShortMin + $eps);
+
         $closeAboveVwap = ($lastClose > $vwapVal + $eps);
         $closeBelowVwap = ($lastClose < $vwapVal - $eps);
 
         $signal = 'NONE'; $trigger = ''; $path = 'execution_5m';
-        if ($emaTrendUp && $macdHistUp && $closeAboveVwap) {
+        if ($emaTrendUp && $macdHistUp && $closeAboveVwap && $rsiBelowCap) {
             $signal  = 'LONG';
-            $trigger = 'ema_fast_gt_slow & macd_hist_gt_0 & close_above_vwap_daily';
-        } elseif ($emaTrendDown && $macdHistDown && $closeBelowVwap) {
+            $trigger = 'ema_20_gt_50 & macd_hist_gt_0 & close_above_vwap & rsi_lt_70';
+        } elseif ($emaTrendDown && $macdHistDown && $closeBelowVwap && $rsiAboveFloor) {
             $signal  = 'SHORT';
-            $trigger = 'ema_fast_lt_slow & macd_hist_lt_0 & close_below_vwap_daily';
+            $trigger = 'ema_20_lt_50 & macd_hist_lt_0 & close_below_vwap & rsi_gt_30';
         }
 
         $validation = [
             'ema_fast' => $emaFast, 'ema_slow' => $emaSlow,
             'macd' => ['macd'=>$macdNow,'signal'=>$sigNow,'hist'=>$histNow],
             'vwap' => $vwapVal, 'close' => $lastClose,
+            'rsi'  => $rsiNow,
             'path' => $path, 'trigger' => $trigger, 'signal' => $signal,
+            'date' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
         ];
 
         $this->signalsLogger->info('signals.tick', $validation);

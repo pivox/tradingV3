@@ -1,0 +1,1750 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block stylesheets %}
+    {{ parent() }}
+    <style>
+        .indicator-test-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .test-panel {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+            flex-wrap: wrap;
+        }
+        
+        .button-group .btn {
+            margin: 0;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        
+        .btn-success {
+            background-color: #28a745;
+            color: white;
+        }
+        
+        .btn-warning {
+            background-color: #ffc107;
+            color: black;
+        }
+        
+        .btn:hover {
+            opacity: 0.8;
+        }
+        
+        .results-container {
+            margin-top: 20px;
+        }
+        
+        .summary-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .summary-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-item {
+            text-align: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .conditions-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        
+        .conditions-table th,
+        .conditions-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .conditions-table th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+        }
+        
+        .status-passed {
+            color: #28a745;
+            font-weight: bold;
+        }
+        
+        .status-failed {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        
+        .status-error {
+            color: #ffc107;
+            font-weight: bold;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 2s linear infinite;
+            margin: 0 auto 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .error-message {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        
+        .success-message {
+            background-color: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        
+        .custom-data-section {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 6px;
+        }
+        
+        .json-editor {
+            width: 100%;
+            height: 200px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        
+        .klines-json-section {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 15px;
+        }
+        
+        .timeframe-validation {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        
+        .validation-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 6px;
+            border: 1px solid #e9ecef;
+        }
+        
+        .validation-section h5 {
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+        
+        .validation-status {
+            margin-bottom: 15px;
+        }
+        
+        .conditions-list ul {
+            list-style: none;
+            padding: 0;
+            margin: 10px 0;
+        }
+        
+        .conditions-list li {
+            margin: 5px 0;
+        }
+        
+        .form-text {
+            margin-top: 5px;
+        }
+        
+        .alert {
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            border: 1px solid transparent;
+            border-radius: 6px;
+        }
+        
+        .alert-info {
+            color: #0c5460;
+            background-color: #d1ecf1;
+            border-color: #bee5eb;
+        }
+        
+        .contract-search {
+            position: relative;
+        }
+        
+        .contract-search input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .contract-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+        
+        .contract-option {
+            padding: 8px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .contract-option:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .contract-option.selected {
+            background-color: #007bff;
+            color: white;
+        }
+        
+        .selected-contracts {
+            margin-top: 10px;
+        }
+        
+        .selected-contract {
+            display: inline-block;
+            background: #007bff;
+            color: white;
+            padding: 4px 8px;
+            margin: 2px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        
+        .selected-contract .remove {
+            margin-left: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .date-input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .contract-main-row {
+            background-color: #f8f9fa;
+        }
+        
+        .contract-details-row {
+            background-color: #ffffff;
+        }
+        
+        .contract-details {
+            padding: 20px;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        
+        .conditions-details {
+            margin-bottom: 20px;
+        }
+        
+        .conditions-section {
+            margin-bottom: 15px;
+            padding: 15px;
+            border-radius: 6px;
+        }
+        
+        .conditions-section.passed {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .conditions-section.failed {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .conditions-section h6 {
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        
+        .conditions-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .conditions-list li {
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+        }
+        
+        .conditions-list li:last-child {
+            border-bottom: none;
+        }
+        
+        .klines-info {
+            background-color: #e9ecef;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #dee2e6;
+        }
+        
+        .klines-info h6 {
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        
+        .klines-data p {
+            margin: 5px 0;
+            font-size: 14px;
+        }
+        
+        .klines-used-section {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+        
+        .klines-used-section h6 {
+            color: #007bff;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        
+        .klines-used-section p {
+            margin: 5px 0;
+            font-size: 13px;
+        }
+        
+        .klines-used-section strong {
+            color: #495057;
+        }
+        
+        /* Styles pour la validation en cascade */
+        .cascade-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .cascade-header h4 {
+            margin: 0 0 15px 0;
+            font-size: 24px;
+        }
+        
+        .cascade-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .summary-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .summary-item strong {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            text-transform: uppercase;
+            opacity: 0.8;
+        }
+        
+        .timeframe-result {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+        
+        .timeframe-header {
+            background: #e9ecef;
+            padding: 15px 20px;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .timeframe-header h5 {
+            margin: 0;
+            color: #495057;
+            font-size: 18px;
+        }
+        
+        .timeframe-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        
+        .status-validated {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .status-pending {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        
+        .status-failed {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status-error {
+            background-color: #f5c6cb;
+            color: #721c24;
+        }
+        
+        .signal-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        
+        .signal-long {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .signal-short {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        .signal-none {
+            background-color: #e2e3e5;
+            color: #383d41;
+        }
+        
+        .signal-info, .validation-info {
+            margin-bottom: 15px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #6c757d;
+        }
+        
+        .signal-info h6, .validation-info h6 {
+            color: #495057;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        
+        .context-signals {
+            margin: 5px 0;
+            padding-left: 20px;
+        }
+        
+        .context-signals li {
+            margin: 3px 0;
+            font-size: 13px;
+        }
+        
+        .conditions-count {
+            font-size: 12px;
+            color: #6c757d;
+            background: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+        }
+        
+        .timeframe-content {
+            padding: 20px;
+        }
+        
+        .context-summary {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #e3f2fd;
+            border-radius: 5px;
+            border-left: 4px solid #2196f3;
+        }
+        
+        .context-summary h6 {
+            color: #1976d2;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        
+        .context-summary p {
+            margin: 5px 0;
+            font-size: 13px;
+        }
+        
+        .context-summary strong {
+            color: #424242;
+        }
+        
+        .badge {
+            font-size: 11px;
+            padding: 2px 6px;
+        }
+        
+        .btn-sm {
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+    </style>
+{% endblock %}
+
+{% block body %}
+<div class="indicator-test-container">
+    <h1>{{ title }}</h1>
+    
+    <!-- Panel de configuration -->
+    <div class="test-panel">
+        <h3>Configuration du Test</h3>
+        <form id="testForm">
+            <div class="form-group">
+                <label for="datetime">Date et heure de revalidation (UTC):</label>
+                <input type="datetime-local" id="datetime" name="datetime" class="date-input" value="{{ "now"|date("Y-m-d\\TH:i") }}">
+                <div class="form-text">
+                    <small class="text-muted">
+                        <i class="bi bi-info-circle"></i> 
+                        Date et heure UTC pour la revalidation des contrats (format: YYYY-MM-DDTHH:MM)
+                    </small>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="contracts">Contrats (recherchables):</label>
+                <div class="contract-search">
+                    <input type="text" id="contractSearch" placeholder="Rechercher un contrat..." autocomplete="off">
+                    <div id="contractDropdown" class="contract-dropdown"></div>
+                </div>
+                <div id="selectedContracts" class="selected-contracts"></div>
+                <div class="form-text">
+                    <small class="text-muted">
+                        <i class="bi bi-info-circle"></i> 
+                        Tapez pour rechercher et sélectionner plusieurs contrats
+                    </small>
+                </div>
+            </div>
+            
+            
+            <div class="form-group">
+                <label for="timeframe">Timeframe:</label>
+                <select id="timeframe" name="timeframe" class="form-control">
+                    {% for key, config in available_timeframes %}
+                        <option value="{{ key }}" data-min-bars="{{ config.min_bars }}" data-rules="{{ config.rules|json_encode }}">
+                            {{ config.label }} (min: {{ config.min_bars }} bars)
+                        </option>
+                    {% endfor %}
+        </select>
+                <div class="form-text">
+                    <small class="text-muted">
+                        <i class="bi bi-info-circle"></i> 
+                        Timeframes configurés dans trading.yml avec règles de validation spécifiques
+                    </small>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="useCustomData"> Utiliser des données personnalisées
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="useKlinesJson"> Utiliser des klines JSON
+                </label>
+            </div>
+            
+            <div id="customDataSection" class="custom-data-section" style="display: none;">
+                <h4>Données personnalisées (JSON)</h4>
+                <textarea id="customData" class="json-editor" placeholder='{
+  "closes": [50000, 50100, 50200, ...],
+  "highs": [50100, 50200, 50300, ...],
+  "lows": [49900, 50000, 50100, ...],
+  "volumes": [1000, 1100, 1200, ...]
+}'></textarea>
+            </div>
+            
+            <div id="klinesJsonSection" class="klines-json-section" style="display: none;">
+                <h4>Klines JSON</h4>
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle"></i>
+                    <strong>Format attendu:</strong> Tableau d'objets avec open_time, open, high, low, close, volume
+                </div>
+                <textarea id="klinesJson" class="json-editor" placeholder='[
+  {
+    "open_time": "2024-01-01 00:00:00",
+    "open": 50000.0,
+    "high": 50100.0,
+    "low": 49900.0,
+    "close": 50050.0,
+    "volume": 1000.0
+  },
+  {
+    "open_time": "2024-01-01 01:00:00",
+    "open": 50050.0,
+    "high": 50200.0,
+    "low": 50000.0,
+    "close": 50150.0,
+    "volume": 1200.0
+  }
+]'></textarea>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="loadExampleKlines()">
+                    <i class="bi bi-file-earmark-text"></i> Charger l'exemple
+                </button>
+            </div>
+            
+            <button type="button" class="btn btn-primary" onclick="evaluateIndicators()">
+                Évaluer les Indicateurs
+            </button>
+            
+            <button type="button" class="btn btn-success" onclick="runReplayTest()">
+                Test de Replay
+            </button>
+            
+            <div class="button-group">
+                <button type="button" class="btn btn-info" onclick="runRevalidation()">
+                    <i class="bi bi-arrow-clockwise"></i> Revalidation des Contrats
+                </button>
+                
+                <button type="button" class="btn btn-success" onclick="runCascadeValidation()">
+                    <i class="bi bi-diagram-3"></i> Validation en Cascade
+                </button>
+            </div>
+            
+            <button type="button" class="btn btn-warning" onclick="loadAvailableConditions()">
+                Charger les Conditions
+            </button>
+    </form>
+    </div>
+    
+    <!-- Zone de chargement -->
+    <div id="loading" class="loading">
+        <div class="spinner"></div>
+        <p>Traitement en cours...</p>
+    </div>
+    
+    <!-- Messages d'erreur/succès -->
+    <div id="messages"></div>
+    
+    <!-- Résultats -->
+    <div id="results" class="results-container" style="display: none;">
+        <div class="summary-card">
+            <h3>Résumé des Conditions</h3>
+            <div id="summaryStats" class="summary-stats"></div>
+        </div>
+        
+        <div class="summary-card">
+            <h3>Détails des Conditions</h3>
+            <table id="conditionsTable" class="conditions-table">
+                <thead>
+                    <tr>
+                        <th>Condition</th>
+                        <th>Statut</th>
+                        <th>Valeur</th>
+                        <th>Seuil</th>
+                        <th>Métadonnées</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        
+        <div class="summary-card">
+            <h3>Validation Timeframe</h3>
+            <div id="timeframeValidation"></div>
+        </div>
+        
+        <div class="summary-card">
+            <h3>Contexte des Indicateurs</h3>
+            <pre id="contextDisplay"></pre>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+    {{ parent() }}
+    <script>
+        // Variables globales
+        let currentResults = null;
+        let availableContracts = [];
+        let selectedContracts = [];
+        
+        // Initialisation
+        document.addEventListener('DOMContentLoaded', function() {
+            const useCustomDataCheckbox = document.getElementById('useCustomData');
+            const customDataSection = document.getElementById('customDataSection');
+            const useKlinesJsonCheckbox = document.getElementById('useKlinesJson');
+            const klinesJsonSection = document.getElementById('klinesJsonSection');
+            
+            useCustomDataCheckbox.addEventListener('change', function() {
+                customDataSection.style.display = this.checked ? 'block' : 'none';
+                if (this.checked) {
+                    useKlinesJsonCheckbox.checked = false;
+                    klinesJsonSection.style.display = 'none';
+                }
+            });
+            
+            useKlinesJsonCheckbox.addEventListener('change', function() {
+                klinesJsonSection.style.display = this.checked ? 'block' : 'none';
+                if (this.checked) {
+                    useCustomDataCheckbox.checked = false;
+                    customDataSection.style.display = 'none';
+                }
+            });
+            
+            // Charger l'exemple de klines
+            loadExampleKlines();
+            
+            // Charger les conditions disponibles au démarrage
+            loadAvailableConditions();
+            
+            // Charger les contrats disponibles
+            loadAvailableContracts();
+            
+            // Initialiser la recherche de contrats
+            initializeContractSearch();
+        });
+        
+        // Fonction pour évaluer les indicateurs
+        async function evaluateIndicators() {
+            showLoading(true);
+            clearMessages();
+            
+            try {
+                // Vérifier qu'au moins un contrat est sélectionné
+                if (selectedContracts.length === 0) {
+                    showError('Veuillez sélectionner au moins un contrat');
+                    showLoading(false);
+                    return;
+                }
+                
+                // Utiliser le premier contrat sélectionné pour l'évaluation
+                const formData = {
+                    symbol: selectedContracts[0],
+                    timeframe: document.getElementById('timeframe').value
+                };
+                
+                if (document.getElementById('useKlinesJson').checked) {
+                    const klinesJsonText = document.getElementById('klinesJson').value;
+                    if (klinesJsonText.trim()) {
+                        try {
+                            formData.klines_json = JSON.parse(klinesJsonText);
+                        } catch (e) {
+                            showError('Erreur dans le JSON des klines: ' + e.message);
+                            showLoading(false);
+                            return;
+                        }
+                    }
+                } else if (document.getElementById('useCustomData').checked) {
+                    const customDataText = document.getElementById('customData').value;
+                    if (customDataText.trim()) {
+                        try {
+                            formData.custom_data = JSON.parse(customDataText);
+                        } catch (e) {
+                            showError('Erreur dans le JSON des données personnalisées: ' + e.message);
+                            showLoading(false);
+                            return;
+                        }
+                    }
+                }
+                
+                const response = await fetch('/indicators/evaluate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentResults = data.data;
+                    displayResults(data.data);
+                    showSuccess('Évaluation terminée avec succès');
+                } else {
+                    showError('Erreur: ' + data.message);
+                }
+                
+            } catch (error) {
+                showError('Erreur de communication: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // Fonction pour le test de replay
+        async function runReplayTest() {
+            showLoading(true);
+            clearMessages();
+            
+            try {
+                // Vérifier qu'au moins un contrat est sélectionné
+                if (selectedContracts.length === 0) {
+                    showError('Veuillez sélectionner au moins un contrat');
+                    showLoading(false);
+                    return;
+                }
+                
+                const formData = {
+                    symbol: selectedContracts[0],
+                    timeframe: document.getElementById('timeframe').value,
+                    iterations: 5
+                };
+                
+                const response = await fetch('/indicators/replay', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayReplayResults(data.data);
+                    showSuccess('Test de replay terminé avec succès');
+                } else {
+                    showError('Erreur: ' + data.message);
+                }
+                
+            } catch (error) {
+                showError('Erreur de communication: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // Fonction pour charger les conditions disponibles
+        async function loadAvailableConditions() {
+            try {
+                const response = await fetch('/indicators/available-conditions');
+                const data = await response.json();
+                
+                if (data.success) {
+                    console.log('Conditions disponibles:', data.data.conditions);
+                    showSuccess(`${data.data.count} conditions chargées`);
+                } else {
+                    showError('Erreur lors du chargement des conditions: ' + data.message);
+                }
+                
+            } catch (error) {
+                showError('Erreur de communication: ' + error.message);
+            }
+        }
+        
+        // Fonction pour charger les contrats disponibles
+        async function loadAvailableContracts() {
+            try {
+                const response = await fetch('/indicators/available-contracts');
+                const data = await response.json();
+                
+                if (data.success) {
+                    availableContracts = data.data.contracts;
+                    console.log('Contrats disponibles:', availableContracts);
+                    showSuccess(`${data.data.count} contrats chargés`);
+                } else {
+                    showError('Erreur lors du chargement des contrats: ' + data.message);
+                }
+                
+            } catch (error) {
+                showError('Erreur de communication: ' + error.message);
+            }
+        }
+        
+        // Fonction pour initialiser la recherche de contrats
+        function initializeContractSearch() {
+            const searchInput = document.getElementById('contractSearch');
+            const dropdown = document.getElementById('contractDropdown');
+            
+            searchInput.addEventListener('input', function() {
+                const query = this.value.toLowerCase();
+                if (query.length < 2) {
+                    dropdown.style.display = 'none';
+                    return;
+                }
+                
+                const filteredContracts = availableContracts.filter(contract => 
+                    contract.toLowerCase().includes(query)
+                );
+                
+                if (filteredContracts.length > 0) {
+                    dropdown.innerHTML = filteredContracts.map(contract => 
+                        `<div class="contract-option" data-contract="${contract}">${contract}</div>`
+                    ).join('');
+                    dropdown.style.display = 'block';
+                } else {
+                    dropdown.style.display = 'none';
+                }
+            });
+            
+            // Gérer la sélection d'un contrat
+            dropdown.addEventListener('click', function(e) {
+                if (e.target.classList.contains('contract-option')) {
+                    const contract = e.target.dataset.contract;
+                    if (!selectedContracts.includes(contract)) {
+                        selectedContracts.push(contract);
+                        updateSelectedContractsDisplay();
+                    }
+                    searchInput.value = '';
+                    dropdown.style.display = 'none';
+                }
+            });
+            
+            // Masquer le dropdown quand on clique ailleurs
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('.contract-search')) {
+                    dropdown.style.display = 'none';
+                }
+            });
+        }
+        
+        // Fonction pour mettre à jour l'affichage des contrats sélectionnés
+        function updateSelectedContractsDisplay() {
+            const container = document.getElementById('selectedContracts');
+            container.innerHTML = selectedContracts.map(contract => 
+                `<span class="selected-contract">
+                    ${contract}
+                    <span class="remove" onclick="removeContract('${contract}')">×</span>
+                </span>`
+            ).join('');
+        }
+        
+        // Fonction pour supprimer un contrat sélectionné
+        function removeContract(contract) {
+            selectedContracts = selectedContracts.filter(c => c !== contract);
+            updateSelectedContractsDisplay();
+        }
+        
+        // Fonction pour la revalidation des contrats
+        async function runCascadeValidation() {
+            showLoading(true);
+            clearMessages();
+            
+            try {
+                const datetime = document.getElementById('datetime').value;
+                
+                if (!datetime) {
+                    showError('Veuillez sélectionner une date et heure');
+                    showLoading(false);
+                    return;
+                }
+                if (selectedContracts.length === 0) {
+                    showError('Veuillez sélectionner au moins un contrat');
+                    showLoading(false);
+                    return;
+                }
+                
+                // Pour la validation en cascade, on prend seulement le premier contrat
+                const contract = selectedContracts[0];
+                const dateObj = new Date(datetime);
+                const utcDate = dateObj.toISOString().split('T')[0];
+                
+                const formData = {
+                    date: utcDate,
+                    contract: contract
+                };
+                
+                const response = await fetch('/indicators/validate-cascade', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayCascadeResults(data.data);
+                    showSuccess('Validation en cascade terminée avec succès');
+                } else {
+                    showError('Erreur: ' + data.message);
+                }
+                
+            } catch (error) {
+                console.error('Erreur lors de la validation en cascade:', error);
+                if (error.message.includes('HTTP error! status: 404')) {
+                    showError('Erreur 404: Endpoint non trouvé. Vérifiez que le serveur est démarré.');
+                } else if (error.message.includes('HTTP error! status: 500')) {
+                    showError('Erreur 500: Erreur serveur interne.');
+                } else {
+                    showError('Erreur lors de la validation en cascade: ' + error.message);
+                }
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function runRevalidation() {
+            showLoading(true);
+            clearMessages();
+            
+            try {
+                const datetime = document.getElementById('datetime').value;
+                const timeframe = document.getElementById('timeframe').value;
+                
+                if (!datetime) {
+                    showError('Veuillez sélectionner une date et heure');
+                    showLoading(false);
+                    return;
+                }
+                
+                if (selectedContracts.length === 0) {
+                    showError('Veuillez sélectionner au moins un contrat');
+                    showLoading(false);
+                    return;
+                }
+                
+                // Convertir le datetime-local en format UTC (YYYY-MM-DD)
+                const dateObj = new Date(datetime);
+                const utcDate = dateObj.toISOString().split('T')[0]; // Format YYYY-MM-DD
+                
+                const formData = {
+                    date: utcDate,
+                    contracts: selectedContracts.join(','),
+                    timeframe: timeframe
+                };
+                
+                const response = await fetch('/indicators/revalidate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayRevalidationResults(data.data);
+                    showSuccess('Revalidation terminée avec succès');
+                } else {
+                    showError('Erreur: ' + data.message);
+                }
+                
+            } catch (error) {
+                console.error('Erreur lors de la revalidation:', error);
+                if (error.message.includes('HTTP error! status: 404')) {
+                    showError('Erreur 404: Endpoint non trouvé. Vérifiez que le serveur est démarré.');
+                } else if (error.message.includes('HTTP error! status: 500')) {
+                    showError('Erreur 500: Erreur serveur interne.');
+                } else {
+                    showError('Erreur lors de la revalidation: ' + error.message);
+                }
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        
+        // Fonction pour afficher le résumé
+        function displaySummary(summary) {
+            const summaryStats = document.getElementById('summaryStats');
+            summaryStats.innerHTML = `
+                <div class="stat-item">
+                    <div class="stat-value">${summary.total_conditions}</div>
+                    <div class="stat-label">Total</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value status-passed">${summary.passed}</div>
+                    <div class="stat-label">Passées</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value status-failed">${summary.failed}</div>
+                    <div class="stat-label">Échouées</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value status-error">${summary.errors}</div>
+                    <div class="stat-label">Erreurs</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${summary.success_rate}%</div>
+                    <div class="stat-label">Taux de réussite</div>
+                </div>
+            `;
+        }
+        
+        // Fonction pour afficher le tableau des conditions
+        function displayConditionsTable(conditions) {
+            const tbody = document.querySelector('#conditionsTable tbody');
+            tbody.innerHTML = '';
+            
+            for (const [name, result] of Object.entries(conditions)) {
+                const row = document.createElement('tr');
+                
+                let statusClass = 'status-failed';
+                let statusText = 'Échoué';
+                
+                if (result.meta && result.meta.error) {
+                    statusClass = 'status-error';
+                    statusText = 'Erreur';
+                } else if (result.passed) {
+                    statusClass = 'status-passed';
+                    statusText = 'Passé';
+                }
+                
+                row.innerHTML = `
+                    <td>${name}</td>
+                    <td><span class="${statusClass}">${statusText}</span></td>
+                    <td>${result.value !== null ? result.value : 'N/A'}</td>
+                    <td>${result.threshold !== null ? result.threshold : 'N/A'}</td>
+                    <td>${JSON.stringify(result.meta, null, 2)}</td>
+                `;
+                
+                tbody.appendChild(row);
+            }
+        }
+        
+        // Fonction pour afficher le contexte
+        function displayContext(context) {
+            const contextDisplay = document.getElementById('contextDisplay');
+            contextDisplay.textContent = JSON.stringify(context, null, 2);
+        }
+        
+        // Fonction pour afficher les résultats du replay
+        function displayReplayResults(data) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.style.display = 'block';
+            
+            // Créer un résumé du replay
+            const summaryStats = document.getElementById('summaryStats');
+            summaryStats.innerHTML = `
+                <div class="stat-item">
+                    <div class="stat-value">${data.iterations}</div>
+                    <div class="stat-label">Itérations</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${data.stability.success_rate_avg}%</div>
+                    <div class="stat-label">Taux de réussite moyen</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${data.stability.stability_score}%</div>
+                    <div class="stat-label">Score de stabilité</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${data.stability.success_rate_std}</div>
+                    <div class="stat-label">Écart-type</div>
+                </div>
+            `;
+            
+            // Afficher les résultats détaillés
+            const tbody = document.querySelector('#conditionsTable tbody');
+            tbody.innerHTML = '';
+            
+            data.results.forEach((result, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>Itération ${result.iteration}</td>
+                    <td><span class="status-passed">${result.summary.passed}</span> / <span class="status-failed">${result.summary.failed}</span></td>
+                    <td>${result.summary.success_rate}%</td>
+                    <td>${result.summary.total_conditions}</td>
+                    <td>Stable</td>
+                `;
+                tbody.appendChild(row);
+            });
+            
+            // Afficher le contexte de la dernière itération
+            displayContext(data.results[data.results.length - 1].context);
+        }
+        
+        // Fonctions utilitaires
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+        
+        function showError(message) {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.innerHTML = `<div class="error-message">${message}</div>`;
+        }
+        
+        function showSuccess(message) {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.innerHTML = `<div class="success-message">${message}</div>`;
+        }
+        
+        function clearMessages() {
+            document.getElementById('messages').innerHTML = '';
+        }
+        
+        // Fonction pour charger l'exemple de klines
+        function loadExampleKlines() {
+            const exampleKlines = {{ example_klines|json_encode|raw }};
+            document.getElementById('klinesJson').value = JSON.stringify(exampleKlines, null, 2);
+        }
+        
+        // Fonction pour afficher la validation du timeframe
+        function displayTimeframeValidation(validation) {
+            const validationDiv = document.getElementById('timeframeValidation');
+            
+            let html = '<div class="timeframe-validation">';
+            
+            // Validation Long
+            html += '<div class="validation-section">';
+            html += '<h5><i class="bi bi-arrow-up-circle text-success"></i> Validation Long</h5>';
+            html += '<div class="validation-status">';
+            html += `<span class="badge ${validation.long.all_passed ? 'bg-success' : 'bg-danger'}">`;
+            html += validation.long.all_passed ? 'Toutes les conditions passées' : 'Conditions échouées';
+            html += '</span>';
+            html += '</div>';
+            
+            if (validation.long.required_conditions.length > 0) {
+                html += '<div class="conditions-list">';
+                html += '<strong>Conditions requises:</strong>';
+                html += '<ul>';
+                validation.long.required_conditions.forEach(condition => {
+                    const status = validation.long.passed_conditions.includes(condition) ? 'success' : 'danger';
+                    html += `<li><span class="badge bg-${status}">${condition}</span></li>`;
+                });
+                html += '</ul>';
+                html += '</div>';
+            }
+            html += '</div>';
+            
+            // Validation Short
+            html += '<div class="validation-section">';
+            html += '<h5><i class="bi bi-arrow-down-circle text-danger"></i> Validation Short</h5>';
+            html += '<div class="validation-status">';
+            html += `<span class="badge ${validation.short.all_passed ? 'bg-success' : 'bg-danger'}">`;
+            html += validation.short.all_passed ? 'Toutes les conditions passées' : 'Conditions échouées';
+            html += '</span>';
+            html += '</div>';
+            
+            if (validation.short.required_conditions.length > 0) {
+                html += '<div class="conditions-list">';
+                html += '<strong>Conditions requises:</strong>';
+                html += '<ul>';
+                validation.short.required_conditions.forEach(condition => {
+                    const status = validation.short.passed_conditions.includes(condition) ? 'success' : 'danger';
+                    html += `<li><span class="badge bg-${status}">${condition}</span></li>`;
+                });
+                html += '</ul>';
+                html += '</div>';
+            }
+            html += '</div>';
+            
+            html += '</div>';
+            
+            validationDiv.innerHTML = html;
+        }
+        
+        // Fonction pour afficher les résultats avec validation timeframe
+        function displayResults(data) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.style.display = 'block';
+            
+            // Afficher le résumé
+            displaySummary(data.summary);
+            
+            // Afficher les détails des conditions
+            displayConditionsTable(data.conditions_results);
+            
+            // Afficher la validation du timeframe
+            if (data.timeframe_validation) {
+                displayTimeframeValidation(data.timeframe_validation);
+            }
+            
+            // Afficher le contexte
+            displayContext(data.context);
+        }
+        
+        // Fonction pour afficher les résultats de revalidation
+        function displayCascadeResults(data) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+            
+            // En-tête avec le résumé global
+            const headerHtml = `
+                <div class="cascade-header">
+                    <h4><i class="bi bi-diagram-3"></i> Validation en Cascade - ${data.contract}</h4>
+                    <div class="cascade-summary">
+                        <div class="summary-item">
+                            <strong>Date:</strong> ${data.date}
+                        </div>
+                        <div class="summary-item">
+                            <strong>Statut Global:</strong> 
+                            <span class="status-badge status-${data.overall_status}">${getStatusText(data.overall_status)}</span>
+                        </div>
+                        <div class="summary-item">
+                            <strong>Taux de Validation:</strong> ${data.summary.validation_rate}%
+                        </div>
+                        <div class="summary-item">
+                            <strong>Timeframes:</strong> ${data.summary.validated_timeframes}/${data.summary.total_timeframes} validés
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            resultsDiv.innerHTML = headerHtml;
+            
+            // Résultats par timeframe
+            const timeframes = ['4h', '1h', '15m', '5m', '1m'];
+            timeframes.forEach(timeframe => {
+                const result = data.timeframes_results[timeframe];
+                if (result) {
+                    const timeframeHtml = createTimeframeResultHtml(timeframe, result);
+                    resultsDiv.innerHTML += timeframeHtml;
+                }
+            });
+            
+            resultsDiv.style.display = 'block';
+        }
+        
+        function createTimeframeResultHtml(timeframe, result) {
+            const statusClass = `status-${result.status.toLowerCase()}`;
+            const statusText = getStatusText(result.status);
+            
+            let signalHtml = '';
+            if (result.signal) {
+                signalHtml = `<div class="signal-info">
+                    <h6><i class="bi bi-bullseye"></i> Signal</h6>
+                    <p><strong>Signal:</strong> <span class="signal-badge signal-${result.signal.toLowerCase()}">${result.signal}</span></p>
+                </div>`;
+            }
+            
+            let validationHtml = '';
+            if (result.validation_result) {
+                const validation = result.validation_result;
+                validationHtml = `<div class="validation-info">
+                    <h6><i class="bi bi-check2-square"></i> Validation MTF</h6>
+                    <p><strong>Statut:</strong> <span class="status-badge status-${validation.status.toLowerCase()}">${validation.status}</span></p>
+                    <p><strong>Signal Final:</strong> <span class="signal-badge signal-${validation.final?.signal?.toLowerCase() || 'none'}">${validation.final?.signal || 'NONE'}</span></p>
+                </div>`;
+            }
+            
+            // Informations sur les klines utilisées
+            let klinesHtml = '';
+            if (result.klines_used) {
+                klinesHtml = '<div class="klines-used-section">';
+                klinesHtml += '<h6><i class="bi bi-database"></i> Klines Utilisées</h6>';
+                klinesHtml += `<p><strong>Nombre:</strong> ${result.klines_used.count}</p>`;
+                klinesHtml += `<p><strong>Période:</strong> ${result.klines_used.date_range?.from || 'N/A'} → ${result.klines_used.date_range?.to || 'N/A'}</p>`;
+                
+                if (result.klines_used.ids && result.klines_used.ids.length > 0) {
+                    const displayIds = result.klines_used.ids.slice(0, 10);
+                    const hasMore = result.klines_used.ids.length > 10;
+                    klinesHtml += `<p><strong>IDs:</strong> ${displayIds.join(', ')}${hasMore ? ` (+${result.klines_used.ids.length - 10} autres)` : ''}</p>`;
+                }
+                
+                if (result.klines_used.timestamps && result.klines_used.timestamps.length > 0) {
+                    const displayTimestamps = result.klines_used.timestamps.slice(0, 5);
+                    const hasMoreTimestamps = result.klines_used.timestamps.length > 5;
+                    klinesHtml += `<p><strong>Timestamps:</strong> ${displayTimestamps.join(', ')}${hasMoreTimestamps ? ` (+${result.klines_used.timestamps.length - 5} autres)` : ''}</p>`;
+                }
+                
+                klinesHtml += '</div>';
+            }
+            
+            // Résumé du contexte MTF
+            let contextHtml = '';
+            if (result.context_summary) {
+                contextHtml = '<div class="context-summary">';
+                contextHtml += '<h6><i class="bi bi-diagram-3"></i> Contexte MTF</h6>';
+                contextHtml += `<p><strong>Aligné:</strong> ${result.context_summary.context_aligned ? 'Oui' : 'Non'}</p>`;
+                contextHtml += `<p><strong>Direction:</strong> <span class="signal-badge signal-${result.context_summary.context_dir?.toLowerCase() || 'none'}">${result.context_summary.context_dir || 'NONE'}</span></p>`;
+                contextHtml += `<p><strong>Complètement peuplé:</strong> ${result.context_summary.fully_populated ? 'Oui' : 'Non'}</p>`;
+                contextHtml += `<p><strong>Complètement aligné:</strong> ${result.context_summary.fully_aligned ? 'Oui' : 'Non'}</p>`;
+                
+                if (result.context_summary.context_signals && Object.keys(result.context_summary.context_signals).length > 0) {
+                    contextHtml += '<p><strong>Signaux par TF:</strong></p>';
+                    contextHtml += '<ul class="context-signals">';
+                    Object.entries(result.context_summary.context_signals).forEach(([tf, signal]) => {
+                        contextHtml += `<li><strong>${tf}:</strong> <span class="signal-badge signal-${signal?.toLowerCase() || 'none'}">${signal || 'NONE'}</span></li>`;
+                    });
+                    contextHtml += '</ul>';
+                }
+                contextHtml += '</div>';
+            }
+            
+            return `
+                <div class="timeframe-result">
+                    <div class="timeframe-header">
+                        <h5><i class="bi bi-clock"></i> Timeframe ${timeframe}</h5>
+                        <div class="timeframe-status">
+                            <span class="status-badge ${statusClass}">${statusText}</span>
+                            <span class="signal-badge signal-${result.signal?.toLowerCase() || 'none'}">${result.signal || 'NONE'}</span>
+                        </div>
+                    </div>
+                    <div class="timeframe-content">
+                        ${signalHtml}
+                        ${validationHtml}
+                        ${klinesHtml}
+                        ${contextHtml}
+                    </div>
+                </div>
+            `;
+        }
+        
+        function getStatusText(status) {
+            switch(status) {
+                case 'VALIDATED': return 'Validé';
+                case 'PENDING': return 'En Attente';
+                case 'FAILED': return 'Échoué';
+                case 'error': return 'Erreur';
+                default: return status;
+            }
+        }
+
+        function displayRevalidationResults(data) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.style.display = 'block';
+            
+            // Afficher le résumé global
+            const summaryStats = document.getElementById('summaryStats');
+            summaryStats.innerHTML = `
+                <div class="stat-item">
+                    <div class="stat-value">${data.global_summary.total_contracts}</div>
+                    <div class="stat-label">Contrats analysés</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value status-passed">${data.global_summary.successful_validations}</div>
+                    <div class="stat-label">Validations réussies</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value status-failed">${data.global_summary.failed_validations}</div>
+                    <div class="stat-label">Validations échouées</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${data.global_summary.success_rate}%</div>
+                    <div class="stat-label">Taux de succès</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${data.global_summary.date}</div>
+                    <div class="stat-label">Date analysée (UTC)</div>
+                </div>
+            `;
+            
+            // Afficher les résultats par contrat avec détails des conditions
+            const tbody = document.querySelector('#conditionsTable tbody');
+            tbody.innerHTML = '';
+            
+            for (const [contract, result] of Object.entries(data.contracts_results)) {
+                // Ligne principale du contrat
+                const mainRow = document.createElement('tr');
+                mainRow.className = 'contract-main-row';
+                
+                let statusClass = 'status-failed';
+                let statusText = 'Invalid';
+                
+                if (result.status === 'valid') {
+                    statusClass = 'status-passed';
+                    statusText = 'Valid';
+                } else if (result.status === 'partial') {
+                    statusClass = 'status-error';
+                    statusText = 'Partial';
+                } else if (result.status === 'error') {
+                    statusClass = 'status-error';
+                    statusText = 'Error';
+                }
+                
+                mainRow.innerHTML = `
+                    <td><strong>${contract}</strong></td>
+                    <td><span class="${statusClass}">${statusText}</span></td>
+                    <td>${result.summary ? result.summary.success_rate + '%' : 'N/A'}</td>
+                    <td>${result.summary ? result.summary.passed + '/' + result.summary.total_conditions : 'N/A'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-primary" onclick="toggleContractDetails('${contract}')">
+                            <i class="bi bi-chevron-down"></i> Détails
+                        </button>
+                    </td>
+                `;
+                
+                tbody.appendChild(mainRow);
+                
+                // Ligne des détails (masquée par défaut)
+                const detailsRow = document.createElement('tr');
+                detailsRow.id = `details-${contract}`;
+                detailsRow.className = 'contract-details-row';
+                detailsRow.style.display = 'none';
+                
+                // Séparer les conditions OK et KO
+                const conditions = result.conditions_results || {};
+                const passedConditions = Object.entries(conditions).filter(([_, cond]) => cond.passed);
+                const failedConditions = Object.entries(conditions).filter(([_, cond]) => !cond.passed);
+                
+                let conditionsHtml = '<div class="conditions-details">';
+                
+                // Conditions OK
+                if (passedConditions.length > 0) {
+                    conditionsHtml += '<div class="conditions-section passed">';
+                    conditionsHtml += '<h6><i class="bi bi-check-circle text-success"></i> Conditions OK (' + passedConditions.length + ')</h6>';
+                    conditionsHtml += '<ul class="conditions-list">';
+                    passedConditions.forEach(([name, cond]) => {
+                        conditionsHtml += `<li><strong>${name}</strong>`;
+                        if (cond.value !== null) {
+                            conditionsHtml += `: ${cond.value}`;
+                        }
+                        if (cond.meta && cond.meta.source) {
+                            conditionsHtml += ` <small class="text-muted">(${cond.meta.source})</small>`;
+                        }
+                        conditionsHtml += '</li>';
+                    });
+                    conditionsHtml += '</ul></div>';
+                }
+                
+                // Conditions KO
+                if (failedConditions.length > 0) {
+                    conditionsHtml += '<div class="conditions-section failed">';
+                    conditionsHtml += '<h6><i class="bi bi-x-circle text-danger"></i> Conditions KO (' + failedConditions.length + ')</h6>';
+                    conditionsHtml += '<ul class="conditions-list">';
+                    failedConditions.forEach(([name, cond]) => {
+                        conditionsHtml += `<li><strong>${name}</strong>`;
+                        if (cond.meta && cond.meta.not_applicable) {
+                            conditionsHtml += ` <span class="badge bg-secondary">Non applicable</span>`;
+                        } else if (cond.meta && cond.meta.missing_data) {
+                            conditionsHtml += ` <span class="badge bg-warning">Données manquantes</span>`;
+                        } else if (cond.value !== null) {
+                            conditionsHtml += `: ${cond.value}`;
+                            if (cond.threshold !== null) {
+                                conditionsHtml += ` (seuil: ${cond.threshold})`;
+                            }
+                        }
+                        if (cond.meta && cond.meta.source) {
+                            conditionsHtml += ` <small class="text-muted">(${cond.meta.source})</small>`;
+                        }
+                        conditionsHtml += '</li>';
+                    });
+                    conditionsHtml += '</ul></div>';
+                }
+                
+                conditionsHtml += '</div>';
+                
+                // Informations sur les klines
+                let klinesHtml = '';
+                if (result.context) {
+                    klinesHtml = '<div class="klines-info">';
+                    klinesHtml += '<h6><i class="bi bi-graph-up"></i> Données Klines</h6>';
+                    klinesHtml += '<div class="klines-data">';
+                    
+                    if (result.context.close) {
+                        klinesHtml += `<p><strong>Prix de clôture:</strong> ${result.context.close.toFixed(2)}</p>`;
+                    }
+                    if (result.context.ema) {
+                        klinesHtml += `<p><strong>EMA 20:</strong> ${result.context.ema[20]?.toFixed(2) || 'N/A'}</p>`;
+                        klinesHtml += `<p><strong>EMA 50:</strong> ${result.context.ema[50]?.toFixed(2) || 'N/A'}</p>`;
+                    }
+                    if (result.context.rsi) {
+                        klinesHtml += `<p><strong>RSI:</strong> ${result.context.rsi.toFixed(2)}</p>`;
+                    }
+                    if (result.context.macd) {
+                        klinesHtml += `<p><strong>MACD:</strong> ${result.context.macd.macd?.toFixed(2) || 'N/A'}</p>`;
+                        klinesHtml += `<p><strong>Signal:</strong> ${result.context.macd.signal?.toFixed(2) || 'N/A'}</p>`;
+                        klinesHtml += `<p><strong>Histogramme:</strong> ${result.context.macd.hist?.toFixed(2) || 'N/A'}</p>`;
+                    }
+                    if (result.context.vwap) {
+                        klinesHtml += `<p><strong>VWAP:</strong> ${result.context.vwap.toFixed(2)}</p>`;
+                    }
+                    if (result.context.atr) {
+                        klinesHtml += `<p><strong>ATR:</strong> ${result.context.atr.toFixed(2)}</p>`;
+                    }
+                    
+                    // Ajouter les informations des klines utilisées
+                    if (result.context.klines_used) {
+                        klinesHtml += '<div class="klines-used-section">';
+                        klinesHtml += '<h6><i class="bi bi-database"></i> Klines Utilisées</h6>';
+                        klinesHtml += `<p><strong>Nombre:</strong> ${result.context.klines_used.count}</p>`;
+                        klinesHtml += `<p><strong>Période:</strong> ${result.context.klines_used.date_range?.from || 'N/A'} → ${result.context.klines_used.date_range?.to || 'N/A'}</p>`;
+                        
+                        // Afficher les IDs des klines (limité à 10 pour éviter l'encombrement)
+                        if (result.context.klines_used.ids && result.context.klines_used.ids.length > 0) {
+                            const displayIds = result.context.klines_used.ids.slice(0, 10);
+                            const hasMore = result.context.klines_used.ids.length > 10;
+                            klinesHtml += `<p><strong>IDs:</strong> ${displayIds.join(', ')}${hasMore ? ` (+${result.context.klines_used.ids.length - 10} autres)` : ''}</p>`;
+                        }
+                        
+                        // Afficher les timestamps des klines (limité à 5)
+                        if (result.context.klines_used.timestamps && result.context.klines_used.timestamps.length > 0) {
+                            const displayTimestamps = result.context.klines_used.timestamps.slice(0, 5);
+                            const hasMoreTimestamps = result.context.klines_used.timestamps.length > 5;
+                            klinesHtml += `<p><strong>Timestamps:</strong> ${displayTimestamps.join(', ')}${hasMoreTimestamps ? ` (+${result.context.klines_used.timestamps.length - 5} autres)` : ''}</p>`;
+                        }
+                        
+                        klinesHtml += '</div>';
+                    }
+                    
+                    klinesHtml += '</div></div>';
+                }
+                
+                detailsRow.innerHTML = `
+                    <td colspan="5">
+                        <div class="contract-details">
+                            ${conditionsHtml}
+                            ${klinesHtml}
+                        </div>
+                    </td>
+                `;
+                
+                tbody.appendChild(detailsRow);
+            }
+            
+            // Mettre à jour l'en-tête du tableau
+            const thead = document.querySelector('#conditionsTable thead tr');
+            thead.innerHTML = `
+                <th>Contrat</th>
+                <th>Statut</th>
+                <th>Taux de succès</th>
+                <th>Conditions</th>
+                <th>Actions</th>
+            `;
+            
+            // Afficher le contexte du premier contrat (ou un message)
+            const contextDisplay = document.getElementById('contextDisplay');
+            const firstContract = Object.keys(data.contracts_results)[0];
+            if (firstContract && data.contracts_results[firstContract].context) {
+                contextDisplay.textContent = JSON.stringify(data.contracts_results[firstContract].context, null, 2);
+            } else {
+                contextDisplay.textContent = 'Aucun contexte disponible';
+            }
+            
+            // Masquer la validation timeframe pour la revalidation
+            const timeframeValidation = document.getElementById('timeframeValidation');
+            timeframeValidation.innerHTML = '<p>Validation timeframe non disponible pour la revalidation</p>';
+        }
+        
+        // Fonction pour basculer l'affichage des détails d'un contrat
+        function toggleContractDetails(contract) {
+            const detailsRow = document.getElementById(`details-${contract}`);
+            const button = event.target.closest('button');
+            const icon = button.querySelector('i');
+            
+            if (detailsRow.style.display === 'none') {
+                detailsRow.style.display = 'table-row';
+                icon.className = 'bi bi-chevron-up';
+                button.innerHTML = '<i class="bi bi-chevron-up"></i> Masquer';
+            } else {
+                detailsRow.style.display = 'none';
+                icon.className = 'bi bi-chevron-down';
+                button.innerHTML = '<i class="bi bi-chevron-down"></i> Détails';
+            }
+        }
+    </script>
+{% endblock %}

@@ -52,6 +52,17 @@ final class ContractDetailsCollection implements IteratorAggregate, Countable
         return $this->items[0] ?? null;
     }
 
+    public function findBySymbol(string $symbol): ?ContractDetailsDto
+    {
+        foreach ($this->items as $item) {
+            if (strcasecmp($item->symbol, $symbol) === 0) {
+                return $item;
+            }
+        }
+
+        return null;
+    }
+
     /** @return string[] */
     public function symbols(): array
     {

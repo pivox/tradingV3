@@ -1,0 +1,319 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Graphiques - Trading Dashboard{% endblock %}
+
+{% block stylesheets %}
+    {{ parent() }}
+    <!-- Chart.js et plugins - version simplifiée -->
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.min.js"></script>
+{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="bi bi-graph-up-arrow"></i> Graphiques de Trading
+            </h1>
+        </div>
+    </div>
+</div>
+
+<!-- Contrôles -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-sliders"></i> Paramètres du Graphique
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <label for="symbol" class="form-label">Contrat</label>
+                        <input type="text" class="form-control" id="symbol" value="BTCUSDT" placeholder="Ex: BTCUSDT">
+                    </div>
+                    <div class="col-md-3">
+                        <label for="interval" class="form-label">Timeframe</label>
+                        <select class="form-select" id="interval">
+                            <option value="1m">1 minute</option>
+                            <option value="5m">5 minutes</option>
+                            <option value="15m">15 minutes</option>
+                            <option value="1h">1 heure</option>
+                            <option value="4h" selected>4 heures</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label for="limit" class="form-label">Nombre de bougies</label>
+                        <select class="form-select" id="limit">
+                            <option value="50">50</option>
+                            <option value="100" selected>100</option>
+                            <option value="200">200</option>
+                            <option value="500">500</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3 d-flex align-items-end">
+                        <button type="button" class="btn btn-primary" id="loadChart">
+                            <i class="bi bi-arrow-clockwise"></i> Charger
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Contrats populaires -->
+                <div class="mt-3">
+                    <label class="form-label">Contrats populaires :</label>
+                    <div class="btn-group" role="group">
+                        <button type="button" class="btn btn-outline-primary btn-sm symbol-btn active" data-symbol="BTCUSDT">BTCUSDT</button>
+                        <button type="button" class="btn btn-outline-primary btn-sm symbol-btn" data-symbol="ETHUSDT">ETHUSDT</button>
+                        <button type="button" class="btn btn-outline-primary btn-sm symbol-btn" data-symbol="BNBUSDT">BNBUSDT</button>
+                        <button type="button" class="btn btn-outline-primary btn-sm symbol-btn" data-symbol="ADAUSDT">ADAUSDT</button>
+                        <button type="button" class="btn btn-outline-primary btn-sm symbol-btn" data-symbol="SOLUSDT">SOLUSDT</button>
+                        <button type="button" class="btn btn-outline-primary btn-sm symbol-btn" data-symbol="XRPUSDT">XRPUSDT</button>
+                        <button type="button" class="btn btn-outline-primary btn-sm symbol-btn" data-symbol="DOTUSDT">DOTUSDT</button>
+                        <button type="button" class="btn btn-outline-primary btn-sm symbol-btn" data-symbol="DOGEUSDT">DOGEUSDT</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Graphique -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-graph-up"></i> Graphique de Trading
+                </h5>
+            </div>
+            <div class="card-body">
+                <div id="loading" class="text-center py-5" style="display: none;">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Chargement...</span>
+                    </div>
+                    <p class="mt-2">Chargement du graphique...</p>
+                </div>
+                
+                <div id="error" class="alert alert-danger" style="display: none;" role="alert">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <span id="error-message"></span>
+                </div>
+                
+                <div id="plugin-info" class="alert alert-info" style="display: none;" role="alert">
+                    <i class="bi bi-info-circle"></i>
+                    <span id="plugin-message"></span>
+                </div>
+                
+                <div id="chart-container" style="position: relative; height: 500px;">
+                    <canvas id="candlestickChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+    {{ parent() }}
+    <script>
+        let chart = null;
+        const loadingEl = document.getElementById('loading');
+        const errorEl = document.getElementById('error');
+        const errorMessageEl = document.getElementById('error-message');
+        const pluginInfoEl = document.getElementById('plugin-info');
+        const pluginMessageEl = document.getElementById('plugin-message');
+        const chartContainer = document.getElementById('chart-container');
+
+        // Configuration simplifiée - pas de plugin financial
+        console.log('Utilisation du mode graphique en barres (simulation de chandeliers)');
+
+        function showLoading() {
+            loadingEl.style.display = 'block';
+            errorEl.style.display = 'none';
+            chartContainer.style.display = 'none';
+        }
+
+        function hideLoading() {
+            loadingEl.style.display = 'none';
+            chartContainer.style.display = 'block';
+        }
+
+        function showError(message) {
+            errorMessageEl.textContent = message;
+            errorEl.style.display = 'block';
+            loadingEl.style.display = 'none';
+            chartContainer.style.display = 'none';
+            pluginInfoEl.style.display = 'none';
+        }
+
+        function showPluginInfo(message) {
+            pluginMessageEl.textContent = message;
+            pluginInfoEl.style.display = 'block';
+        }
+
+        function hidePluginInfo() {
+            pluginInfoEl.style.display = 'none';
+        }
+
+        async function loadChart() {
+            const symbol = document.getElementById('symbol').value.toUpperCase();
+            const interval = document.getElementById('interval').value;
+            const limit = document.getElementById('limit').value;
+
+            showLoading();
+
+            try {
+                const url = `/api/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+                const response = await fetch(url);
+
+                if (!response.ok) {
+                    throw new Error(`Erreur ${response.status}: ${response.statusText}`);
+                }
+
+                const klines = await response.json();
+
+                if (!klines || klines.length === 0) {
+                    throw new Error('Aucune donnée disponible pour ce symbole et timeframe');
+                }
+
+                // Convertir les données pour un graphique en barres (simulation de chandeliers)
+                const data = klines.map((k, index) => ({
+                    x: index, // Index pour l'axe catégoriel
+                    y: parseFloat(k.closePrice),
+                    open: parseFloat(k.openPrice),
+                    high: parseFloat(k.highPrice),
+                    low: parseFloat(k.lowPrice),
+                    close: parseFloat(k.closePrice),
+                    timestamp: new Date(k.openTime) // Garder la date pour l'affichage
+                }));
+
+                // Détruire le graphique existant
+                if (chart) {
+                    chart.destroy();
+                }
+
+                // Créer le nouveau graphique en barres
+                const ctx = document.getElementById('candlestickChart').getContext('2d');
+                
+                chart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        datasets: [{
+                            label: `${symbol} (${interval}) - Prix de clôture`,
+                            data: data,
+                            backgroundColor: data.map(d => d.close >= d.open ? 'rgba(0, 183, 70, 0.8)' : 'rgba(239, 64, 60, 0.8)'),
+                            borderColor: data.map(d => d.close >= d.open ? '#00b746' : '#ef403c'),
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: {
+                                type: 'category',
+                                title: {
+                                    display: true,
+                                    text: 'Temps'
+                                },
+                                ticks: {
+                                    maxTicksLimit: 10,
+                                    callback: function(value, index, values) {
+                                        if (data[index] && data[index].timestamp) {
+                                            return data[index].timestamp.toLocaleString('fr-FR', {
+                                                month: 'short',
+                                                day: 'numeric',
+                                                hour: '2-digit',
+                                                minute: '2-digit'
+                                            });
+                                        }
+                                        return value;
+                                    }
+                                }
+                            },
+                            y: {
+                                title: {
+                                    display: true,
+                                    text: 'Prix (USDT)'
+                                }
+                            }
+                        },
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: `Graphique ${symbol} - ${interval} (${klines.length} bougies) - Barres colorées`
+                            },
+                            legend: {
+                                display: true
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    title: function(context) {
+                                        const data = context[0].raw;
+                                        return data.timestamp.toLocaleString('fr-FR', {
+                                            year: 'numeric',
+                                            month: 'long',
+                                            day: 'numeric',
+                                            hour: '2-digit',
+                                            minute: '2-digit'
+                                        });
+                                    },
+                                    afterLabel: function(context) {
+                                        const data = context.raw;
+                                        return [
+                                            `Ouverture: ${data.open.toFixed(8)}`,
+                                            `Plus haut: ${data.high.toFixed(8)}`,
+                                            `Plus bas: ${data.low.toFixed(8)}`,
+                                            `Fermeture: ${data.close.toFixed(8)}`
+                                        ];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                hideLoading();
+                showPluginInfo('Graphique en barres colorées (vert = hausse, rouge = baisse)');
+                
+            } catch (error) {
+                console.error('Erreur lors du chargement du graphique:', error);
+                showError(`Erreur: ${error.message}`);
+            }
+        }
+
+        // Gestionnaires d'événements
+        document.getElementById('loadChart').addEventListener('click', loadChart);
+        
+        document.getElementById('interval').addEventListener('change', loadChart);
+        document.getElementById('limit').addEventListener('change', loadChart);
+        
+        document.getElementById('symbol').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                loadChart();
+            }
+        });
+
+        // Gestion des boutons de symboles populaires
+        document.querySelectorAll('.symbol-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                // Retirer la classe active de tous les boutons
+                document.querySelectorAll('.symbol-btn').forEach(b => b.classList.remove('active'));
+                // Ajouter la classe active au bouton cliqué
+                this.classList.add('active');
+                
+                // Mettre à jour le champ de saisie et charger le graphique
+                const symbol = this.dataset.symbol;
+                document.getElementById('symbol').value = symbol;
+                loadChart();
+            });
+        });
+
+        // Chargement initial
+        loadChart();
+    </script>
+{% endblock %}

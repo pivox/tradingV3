@@ -15,7 +15,7 @@ class ContractProvider implements ProviderInterface
         private EntityManagerInterface $em
     ) {}
 
-    public function provide(Operation $operation, array $uriVariables = [], array $context = []): iterable
+    public function provide(Operation $operation, array $uriVariables = [], array $context = []): object|array|null
     {
         $exchange = $context['filters']['cex'] ?? null;
 
