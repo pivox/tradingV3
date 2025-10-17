@@ -7,6 +7,7 @@ namespace App\Infrastructure\Cache;
 use App\Domain\Common\Dto\ValidationStateDto;
 use App\Domain\Ports\Out\ValidationCachePort;
 use App\Repository\ValidationCacheRepository;
+use App\Service\TradingConfigService;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 
@@ -16,6 +17,7 @@ final class DbValidationCache implements ValidationCachePort
         private readonly ValidationCacheRepository $validationRepository,
         private readonly LoggerInterface $logger,
         private readonly ClockInterface $clock,
+        private readonly TradingConfigService $tradingConfigService,
     ) {
     }
 
@@ -25,9 +27,12 @@ final class DbValidationCache implements ValidationCachePort
     public function cacheValidationState(ValidationStateDto $state): void
     {
         try {
+            // Récupérer la version actuelle de la configuration
+            $version = $this->tradingConfigService->getVersion();
+            
             $cache = new \App\Entity\ValidationCache();
             $cache
-                ->setCacheKey($state->getCacheKey())
+                ->setCacheKey($state->getCacheKeyWithVersion($version))
                 ->setPayload([
                     'symbol' => $state->symbol,
                     'timeframe' => $state->timeframe->value,
@@ -35,17 +40,19 @@ final class DbValidationCache implements ValidationCachePort
                     'kline_time' => $state->klineTime->format('Y-m-d H:i:s'),
                     'details' => $state->details,
                     'cached_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
-                    'validation_hash' => md5(serialize($state->toArray()))
+                    'validation_hash' => md5(serialize($state->toArray())),
+                    'config_version' => $version
                 ])
                 ->setExpiresAt($state->expiresAt);
 
             $this->validationRepository->upsert($cache);
             
             $this->logger->info('Validation state cached', [
-                'cache_key' => $state->getCacheKey(),
+                'cache_key' => $state->getCacheKeyWithVersion($version),
                 'symbol' => $state->symbol,
                 'timeframe' => $state->timeframe->value,
                 'status' => $state->status,
+                'config_version' => $version,
                 'expires_at' => $state->expiresAt->format('Y-m-d H:i:s')
             ]);
         } catch (\Exception $e) {

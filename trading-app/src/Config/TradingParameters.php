@@ -8,11 +8,13 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 class TradingParameters implements MtfConfigProviderInterface
 {
     private ?array $cache = null;
+    private ?string $cachedVersion = null;
 
     public function __construct(
         private readonly string $configFile,
     ){
         $this->cache = $this->parseYamlFile($this->configFile);
+        $this->cachedVersion = $this->cache['version'] ?? null;
     }
 
     /**
@@ -21,9 +23,7 @@ class TradingParameters implements MtfConfigProviderInterface
      */
     public function getTradingConf($key): array
     {
-        if ($this->cache === null) {
-            $this->cache = $this->parseYamlFile($this->configFile);
-        }
+        $this->checkVersionAndRefresh();
         $val = $this->cache[$key] ?? [];
         return \is_array($val) ? $val : [];
     }
@@ -45,12 +45,8 @@ class TradingParameters implements MtfConfigProviderInterface
      */
     public function all(): array
     {
-        if ($this->cache !== null) {
-            return $this->cache;
-        }
-
-        $this->cache = $this->parseYamlFile($this->configFile);
-        return  $this->cache ;
+        $this->checkVersionAndRefresh();
+        return $this->cache;
     }
 
     public function riskPct(): float
@@ -92,6 +88,28 @@ class TradingParameters implements MtfConfigProviderInterface
         $cfg = $this->all();
         $multipliers = $cfg['leverage']['timeframe_multipliers'] ?? [];
         return \is_array($multipliers) ? $multipliers : [];
+    }
+
+    /**
+     * Vérifie si la version a changé et rafraîchit le cache si nécessaire
+     */
+    private function checkVersionAndRefresh(): void
+    {
+        if ($this->cache === null) {
+            $this->cache = $this->parseYamlFile($this->configFile);
+            $this->cachedVersion = $this->cache['version'] ?? null;
+            return;
+        }
+
+        // Vérifier si le fichier a été modifié
+        $currentConfig = $this->parseYamlFile($this->configFile);
+        $currentVersion = $currentConfig['version'] ?? null;
+
+        // Si la version a changé, rafraîchir le cache
+        if ($currentVersion !== $this->cachedVersion) {
+            $this->cache = $currentConfig;
+            $this->cachedVersion = $currentVersion;
+        }
     }
 
     /**
