@@ -14,7 +14,7 @@
                     </div>
                 {% else %}
                     <div class="table-responsive">
-                        <table class="table table-striped table-hover">
+                        <table class="table table-striped table-hover analysis-table">
                             <thead class="table-dark">
                                 <tr>
                                     <th>Signal</th>
@@ -31,7 +31,7 @@
                                             <div class="d-flex flex-column">
                                                 <strong>{{ analysis.signal.symbol }}</strong>
                                                 <small class="text-muted">{{ analysis.signal.timeframe.value }}</small>
-                                                <span class="badge {% if analysis.signal.side.value == 'LONG' %}bg-success{% elseif analysis.signal.side.value == 'SHORT' %}bg-danger{% else %}bg-secondary{% endif %}">
+                                                <span class="badge signal-badge {% if analysis.signal.side.value == 'LONG' %}bg-success{% elseif analysis.signal.side.value == 'SHORT' %}bg-danger{% else %}bg-secondary{% endif %}">
                                                     {{ analysis.signal.side.value }}
                                                 </span>
                                                 {% if analysis.signal.score %}
@@ -43,16 +43,16 @@
                                             {% if analysis.indicators %}
                                                 <div class="small">
                                                     {% if analysis.indicators.rsi %}
-                                                        <div><strong>RSI:</strong> {{ analysis.indicators.rsi|number_format(2) }}</div>
+                                                        <div><strong>RSI:</strong> <span class="indicator-value {% if analysis.indicators.rsi > 70 %}indicator-negative{% elseif analysis.indicators.rsi < 30 %}indicator-positive{% else %}indicator-neutral{% endif %}">{{ analysis.indicators.rsi|number_format(2) }}</span></div>
                                                     {% endif %}
                                                     {% if analysis.indicators.ema20 %}
-                                                        <div><strong>EMA20:</strong> {{ analysis.indicators.ema20|number_format(4) }}</div>
+                                                        <div><strong>EMA20:</strong> <span class="indicator-value">{{ analysis.indicators.ema20|number_format(4) }}</span></div>
                                                     {% endif %}
                                                     {% if analysis.indicators.ema50 %}
-                                                        <div><strong>EMA50:</strong> {{ analysis.indicators.ema50|number_format(4) }}</div>
+                                                        <div><strong>EMA50:</strong> <span class="indicator-value">{{ analysis.indicators.ema50|number_format(4) }}</span></div>
                                                     {% endif %}
                                                     {% if analysis.indicators.macd %}
-                                                        <div><strong>MACD:</strong> {{ analysis.indicators.macd|number_format(6) }}</div>
+                                                        <div><strong>MACD:</strong> <span class="indicator-value {% if analysis.indicators.macd > 0 %}indicator-positive{% elseif analysis.indicators.macd < 0 %}indicator-negative{% else %}indicator-neutral{% endif %}">{{ analysis.indicators.macd|number_format(6) }}</span></div>
                                                     {% endif %}
                                                 </div>
                                             {% else %}
