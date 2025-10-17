@@ -34,11 +34,14 @@ class SignalsController extends AbstractController
         $side = $request->query->get('side');
 
         $signals = $this->getSignalsWithFilters($symbol, $timeframe, $side);
+        // Calculs rapides uniquement; stats globales peuvent être coûteuses
         $stats = $this->getSignalsStats();
         
         // Données pour le tableau des derniers signaux par contrat
-        $lastSignalsByContract = $this->signalRepository->findLastSignalsGrouped();
+        // Préparer la liste des contrats actifs d'abord pour limiter les requêtes 
         $activeContracts = $this->contractRepository->allActiveSymbolNames();
+        // Récupérer uniquement les derniers signaux pour les contrats actifs
+        $lastSignalsByContract = $this->signalRepository->findLastSignalsGrouped();
         $timeframes = ['1m', '5m', '15m', '1h', '4h'];
 
         return $this->render('signals/index.html.twig', [
@@ -206,8 +209,9 @@ class SignalsController extends AbstractController
         $qb = $this->entityManager->createQueryBuilder();
         $qb->select('s')
             ->from(Signal::class, 's')
-            ->orderBy('s.insertedAt', 'DESC')
-            ->setMaxResults(1000); // Limiter pour les performances
+            // Utiliser klineTime (indexé) plutôt que insertedAt pour de meilleures perfs
+            ->orderBy('s.klineTime', 'DESC')
+            ->setMaxResults(300); // Réduire davantage pour éviter les 504
 
         if ($symbol) {
             $qb->andWhere('s.symbol LIKE :symbol')
