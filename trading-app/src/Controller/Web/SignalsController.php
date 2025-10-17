@@ -7,8 +7,6 @@ use App\Repository\SignalRepository;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Repository\IndicatorSnapshotRepository;
-use App\Service\Indicator\HybridIndicatorService;
-use App\Service\Signal\SignalValidationService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Request;
@@ -23,8 +21,6 @@ class SignalsController extends AbstractController
         private readonly ContractRepository $contractRepository,
         private readonly KlineRepository $klineRepository,
         private readonly IndicatorSnapshotRepository $indicatorRepository,
-        private readonly HybridIndicatorService $indicatorService,
-        private readonly SignalValidationService $signalValidationService,
         private readonly EntityManagerInterface $entityManager,
     ) {
     }
