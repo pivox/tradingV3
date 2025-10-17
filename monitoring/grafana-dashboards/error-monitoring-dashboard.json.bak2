@@ -104,7 +104,6 @@
           },
           "editorMode": "code",
           "expr": "sum(rate({job=\"symfony\", level=\"ERROR\"}[5m])) by (channel)",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -141,7 +140,6 @@
           },
           "editorMode": "code",
           "expr": "{job=\"symfony\", level=\"ERROR\"}",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -183,7 +181,6 @@
           },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"symfony\", level=\"ERROR\"}[1h]))",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -225,7 +222,6 @@
           },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"symfony\"} |= \"Exception\" [1h]))",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -267,7 +263,6 @@
           },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"symfony\"} |= \"Fatal\" [1h]))",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -304,7 +299,6 @@
           },
           "editorMode": "code",
           "expr": "{job=\"symfony\"} |= \"Exception\"",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -341,7 +335,6 @@
           },
           "editorMode": "code",
           "expr": "{job=\"symfony\"} |= \"Cannot use object\"",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -378,7 +371,6 @@
           },
           "editorMode": "code",
           "expr": "{job=\"symfony\"} |= \"Fatal\"",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -415,7 +407,6 @@
           },
           "editorMode": "code",
           "expr": "{job=\"symfony\"} |= \"Warning\"",
-          "queryType": "",
           "refId": "A"
         }
       ],
