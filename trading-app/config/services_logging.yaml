@@ -9,6 +9,67 @@ services:
       - { name: monolog.formatter, alias: custom_line }
   
   # =====================
+  # --- Temporal Logging Services ---
+  # =====================
+  
+  App\Logging\TemporalHttpClient:
+    arguments:
+      $http: '@http_client'
+      $temporalHttpBase: 'http://temporal:7243'
+      $namespace: 'default'
+    public: true
+    autowire: false
+    autoconfigure: false
+  
+  App\Logging\LogPublisher:
+    arguments:
+      $temporalClient: '@App\Logging\TemporalHttpClient'
+      $logger: '@logger'
+      $bufferSize: 50
+      $flushIntervalSeconds: 5
+    public: true
+    autowire: false
+    autoconfigure: false
+  
+  App\Logging\TemporalLogHandler:
+    arguments:
+      $logPublisher: '@App\Logging\LogPublisher'
+      $enabled: '%env(bool:ASYNC_LOGGING_ENABLED)%'
+      $level: 100
+      $bubble: true
+      $bufferSize: 10
+      $flushIntervalSeconds: 5
+    tags:
+      - { name: monolog.handler, handler: temporal_log_handler }
+  
+  App\Application\Activity\LogProcessingActivity:
+    arguments:
+      $logger: '@logger'
+    public: true
+  
+  App\Application\Worker\LogWorker:
+    arguments:
+      $logProcessingActivity: '@App\Application\Activity\LogProcessingActivity'
+      $logger: '@logger'
+    public: true
+    autowire: false
+    autoconfigure: false
+  
+  App\Command\LogWorkerCommand:
+    arguments:
+      $logWorker: '@App\Application\Worker\LogWorker'
+      $logger: '@logger'
+    tags: ['console.command']
+  
+  App\Command\TestLoggingCommand:
+    arguments:
+      $loggerHelper: '@App\Logging\LoggerHelper'
+      $logger: '@logger'
+    tags: ['console.command']
+    autowire: false
+    autoconfigure: false
+  
+  # =====================
   # --- Logger Helpers ---
   # =====================
   
@@ -16,6 +77,8 @@ services:
     arguments:
       $logger: '@monolog.logger'
     public: true
+    autowire: false
+    autoconfigure: false
   
   # =====================
   # --- Channel Loggers ---

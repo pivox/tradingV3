@@ -136,7 +136,7 @@ validation:
                 - macd_hist_gt_0
                 - price_regime_ok
             short:
-                - ema_20_lt_50
+                - close_below_ema_200
                 - macd_hist_lt_0
                 - price_regime_ok
         '15m':
@@ -242,7 +242,7 @@ entry:
     fallback_taker: true
     budget:
         mode: fixed_or_available
-        fixed_usdt_if_available: 100       # utilise 100 USDT si dispo, sinon solde dispo
+        fixed_usdt_if_available: 40       # utilise 40 USDT si dispo, sinon solde dispo
     quantization:
         price_tick: from_exchange
         qty_step: from_exchange
@@ -306,7 +306,7 @@ post_validation:
         depth_min_usd: 20000           # profondeur minimale en USD
         mark_index_gap_bps_max: 15.0   # écart Mark/Index max en bps
         quantize_to_exchange_step: true # quantification aux pas exchange
-    
+
     execution_timeframe:
         default: "5m"                  # timeframe par défaut
         upshift_to_1m:
@@ -317,14 +317,14 @@ post_validation:
         downshift_to_5m:
             atr_pct_lo: 0.07           # ATR < 0.07% pour downshift
             spread_bps_max: 4.0        # spread max pour downshift
-    
+
     sizing:
         risk_pct: 0.005                # 0.5% du capital risqué
         sl_mult_atr: 1.5               # SL = 1.5x ATR
         tp_r_multiple: 2.0             # TP = 2R
         budget_mode: fixed_or_available # budget fixe ou disponible
         budget_usdt: 100               # budget fixe en USDT
-    
+
     leverage:
         use_submit_leverage: true      # utiliser submit-leverage
         respect_bracket: true          # respecter les brackets exchange
@@ -338,7 +338,7 @@ post_validation:
         conviction:
             enabled: true
             cap_pct_of_exchange: 0.60  # boost conviction limité à 60%
-    
+
     order_plan:
         prefer_maker: true             # préférer les ordres maker
         maker:
@@ -353,7 +353,7 @@ post_validation:
             use_position_tp_sl: true   # utiliser submit-tp-sl-order
             price_type: last_price     # type de prix pour TP/SL
             plan_category: 2           # Position TP/SL
-    
+
     guards:
         stale_ticker_sec: 2            # données obsolètes après 2s
         max_slip_bps: 5                # slippage max en bps
@@ -361,11 +361,11 @@ post_validation:
         funding_cutoff_min: 5          # cutoff funding 5min avant
         max_funding_rate: 0.01         # funding rate max (1%)
         mark_index_gap_bps_max: 15.0   # écart Mark/Index max
-    
+
     idempotency:
         decision_key_tpl: "{symbol}:{timeframe}:{candle_close_ts}"
         max_attempts: 3                # max tentatives par décision
-    
+
     telemetry:
         audit_table: true              # table d'audit
         evidence: true                 # conservation des preuves

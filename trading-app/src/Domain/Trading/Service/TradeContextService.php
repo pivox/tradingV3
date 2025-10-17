@@ -113,7 +113,7 @@ final class TradeContextService
             }
         }
 
-        return 1000.0;
+        return 100.0;
     }
 
     /**
