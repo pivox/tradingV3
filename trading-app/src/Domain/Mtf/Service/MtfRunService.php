@@ -39,7 +39,7 @@ class MtfRunService
      * @param string[] $symbols
      * @return \Generator<int, array{symbol: string, result: array, progress: array}, array{summary: array, results: array}>
      */
-    public function run(array $symbols = [], bool $dryRun = true, bool $forceRun = false, ?string $currentTf = null, bool $forceTimeframeCheck = false): \Generator
+    public function run(array $symbols = [], bool $dryRun = true, bool $forceRun = false, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $lockPerSymbol = false): \Generator
     {
         $startTime = microtime(true);
         $runId = Uuid::uuid4();
@@ -71,6 +71,10 @@ class MtfRunService
             }
 
             $lockTimeout = 600; // 10 minutes
+            // Utiliser un verrou par symbole en mode worker (évite le blocage global en exécution parallèle)
+            if ($lockPerSymbol && count($symbols) === 1) {
+                $lockKey = 'mtf_execution:' . strtoupper((string) $symbols[0]);
+            }
             $lockMetadata = json_encode([
                 'run_id' => $runId->toString(),
                 'symbols' => $symbols,
@@ -88,6 +92,8 @@ class MtfRunService
                      'status' => 'already_in_progress',
                      'existing_lock' => $existingLockInfo,
                      'current_tf' => $currentTf,
+                     'dry_run' => $dryRun,
+                     'force_run' => $forceRun,
                  ];
                  return yield from $this->yieldFinalResult($summary, [], $startTime, $runId);
              }

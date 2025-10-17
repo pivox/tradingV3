@@ -1,4 +1,4 @@
-version: '2.2'
+version: '2.5.31'
 
 meta:
     name: SCALPING v2.0 - MTF + Pipeline + Leverage
@@ -20,7 +20,7 @@ symbols:
 risk:
     fixed_risk_pct: 5.0                  # % du capital risqué par trade (base)
     daily_max_loss_pct: 6.0
- #   max_concurrent_positions: 4
+    max_concurrent_positions: 4
     meta: >
         Risque fixe par trade, coupe-circuit journalier et limite de positions simultanées.
 
@@ -120,6 +120,7 @@ timeframes:
 
 # ======== LOGIC RULES ========
 validation:
+    start_from_timeframe: '15m'   # 4h | 1h | 15m | 5m | 1m
     timeframe:
         '4h':            # Contexte / structure (pas de MACD ici)
             long:
@@ -324,7 +325,7 @@ post_validation:
         sl_mult_atr: 1.5               # SL = 1.5x ATR
         tp_r_multiple: 2.0             # TP = 2R
         budget_mode: fixed_or_available # budget fixe ou disponible
-        budget_usdt: 100               # budget fixe en USDT
+        budget_usdt: 40               # budget fixe en USDT
 
     leverage:
         use_submit_leverage: true      # utiliser submit-leverage

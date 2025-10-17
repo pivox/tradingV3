@@ -81,10 +81,11 @@ final class BitmartClient implements TradingProviderPort
     {
         $url = $this->config->getSetLeverageUrl();
 
+        // BitMart attend généralement 'cross' | 'isolated' en clair
         $payload = [
             'symbol' => strtoupper($symbol),
-            'leverage' => (string)$leverage,
-            'open_type' => $openType,
+            'leverage' => (string) max(1, $leverage),
+            'open_type' => strtolower($openType),
         ];
 
         $this->logger->info('[BitMart Client] Setting leverage', $payload);

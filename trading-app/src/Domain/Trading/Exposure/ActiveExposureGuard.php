@@ -7,6 +7,7 @@ namespace App\Domain\Trading\Exposure;
 use App\Domain\Common\Enum\SignalSide;
 use App\Domain\Ports\Out\TradingProviderPort;
 use App\Domain\Trading\Exposure\Exception\ActiveExposureException;
+use App\Config\TradingParameters;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -16,6 +17,7 @@ class ActiveExposureGuard
         private readonly TradingProviderPort $tradingProvider,
         private readonly ContractCooldownService $cooldownService,
         private readonly LoggerInterface $logger,
+        private readonly TradingParameters $config,
     ) {
     }
 
@@ -36,10 +38,39 @@ class ActiveExposureGuard
             throw ActiveExposureException::forOrder($canonicalSymbol);
         }
 
+        // Limite globale de positions ouvertes
+        $maxOpen = (int)($this->config->getTradingConf('risk')['max_concurrent_positions'] ?? 0);
+        if ($maxOpen > 0) {
+            $globalOpen = $this->countAllOpenPositions();
+            if ($globalOpen >= $maxOpen) {
+                throw ActiveExposureException::forGlobalLimit($maxOpen);
+            }
+        }
+
         $this->logger->debug('[ExposureGuard] Symbol eligible for opening', [
             'symbol' => $canonicalSymbol,
             'side' => $side->value,
         ]);
+    }
+
+    private function countAllOpenPositions(): int
+    {
+        try {
+            $response = $this->tradingProvider->getPositions(null);
+        } catch (Throwable $exception) {
+            $this->logger->warning('[ExposureGuard] Failed to fetch all positions', [
+                'error' => $exception->getMessage(),
+            ]);
+            return 0;
+        }
+
+        $rows = $this->normalizeList($response['data'] ?? $response ?? []);
+        $count = 0;
+        foreach ($rows as $row) {
+            if (!\is_array($row)) { continue; }
+            if ($this->extractSize($row) > 0.0) { $count++; }
+        }
+        return $count;
     }
 
     /**

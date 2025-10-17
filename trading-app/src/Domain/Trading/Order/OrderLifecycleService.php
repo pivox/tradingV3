@@ -275,13 +275,14 @@ class OrderLifecycleService
             $payloadSl = [
                 'symbol' => $symbolUpper,
                 'orderType' => 'stop_loss',
+                'type' => 'stop_loss',
                 'side' => $closeSide,
                 'triggerPrice' => $this->formatPrice((float)$context['stop_loss_price']),
                 'executivePrice' => $this->formatPrice((float)$context['stop_loss_price']),
-                'priceType' => -1,
-                'plan_category' => -2,
-                'category' => 'market',
-                'size' => $size,
+                'priceType' => 2,
+                'plan_category' => '2',
+                'category' => 'limit',
+                'size' => (string) max(1, (int) round((float)$context['size'])),
                 'client_order_id' => $this->deriveClientId($entryOrder->getClientOrderId(), 'SL'),
             ];
             $resp = $this->tradingProvider->submitTpSlOrder($payloadSl);
@@ -300,13 +301,14 @@ class OrderLifecycleService
             $payloadTp = [
                 'symbol' => $symbolUpper,
                 'orderType' => 'take_profit',
+                'type' => 'take_profit',
                 'side' => $closeSide,
                 'triggerPrice' => $this->formatPrice((float)$context['take_profit_price']),
                 'executivePrice' => $this->formatPrice((float)$context['take_profit_price']),
-                'priceType' => -1,
-                'plan_category' => -2,
-                'category' => 'market',
-                'size' => $size,
+                'priceType' => 2,
+                'plan_category' => '2',
+                'category' => 'limit',
+                'size' => (string) max(1, (int) round((float)$context['size'])),
                 'client_order_id' => $this->deriveClientId($entryOrder->getClientOrderId(), 'TP'),
             ];
             $resp = $this->tradingProvider->submitTpSlOrder($payloadTp);

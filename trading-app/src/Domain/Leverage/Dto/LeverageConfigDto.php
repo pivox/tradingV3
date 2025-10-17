@@ -20,11 +20,31 @@ class LeverageConfigDto
     public function getSymbolCap(string $symbol): float
     {
         foreach ($this->perSymbolCaps as $cap) {
-            if (preg_match($cap['symbol_regex'], $symbol)) {
-                return $cap['cap'];
+            $patternRaw = isset($cap['symbol_regex']) && is_string($cap['symbol_regex']) ? $cap['symbol_regex'] : null;
+            $capValue = isset($cap['cap']) ? (float) $cap['cap'] : null;
+            if ($patternRaw === null || $capValue === null) {
+                continue;
+            }
+
+            $pattern = $this->normalizeRegex($patternRaw);
+            $match = @preg_match($pattern, $symbol);
+            if ($match === 1) {
+                return $capValue;
             }
         }
         return $this->exchangeCap; // Default to exchange cap if no specific cap found
+    }
+
+    private function normalizeRegex(string $pattern): string
+    {
+        $pattern = trim($pattern);
+        // Si déjà délimité (/, #, ~) avec éventuels flags, on ne modifie pas
+        if (preg_match('/^([\/\#\~]).*\1[imsxuADSUXJ]*$/', $pattern) === 1) {
+            return $pattern;
+        }
+        // Sinon, on échappe les / et on entoure avec des / ... /i
+        $escaped = str_replace('/', '\/', $pattern);
+        return '/'.$escaped.'/i';
     }
 }
 
