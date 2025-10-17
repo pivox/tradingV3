@@ -72,6 +72,17 @@ final readonly class ValidationStateDto
         );
     }
 
+    public function getCacheKeyWithVersion(string $version): string
+    {
+        return sprintf(
+            'mtf_validation_v%s_%s_%s_%s',
+            $version,
+            $this->symbol,
+            $this->timeframe->value,
+            $this->klineTime->format('Y-m-d_H-i-s')
+        );
+    }
+
     public function withStatus(string $status): self
     {
         return new self(

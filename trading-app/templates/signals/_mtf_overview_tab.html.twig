@@ -46,6 +46,9 @@ function loadMtfOverview() {
         success: function(data) {
             $('#mtfOverviewLoading').hide();
             $('#mtfOverviewResults').html(data).show();
+            
+            // Initialiser DataTables après le chargement des données
+            initializeMtfOverviewTable();
         },
         error: function(xhr, status, error) {
             $('#mtfOverviewLoading').hide();
@@ -56,6 +59,69 @@ function loadMtfOverview() {
                 </div>
             `).show();
         }
+    });
+}
+
+function initializeMtfOverviewTable() {
+    // Détruire la table DataTables existante si elle existe
+    if ($.fn.DataTable.isDataTable('#mtfOverviewTable')) {
+        $('#mtfOverviewTable').DataTable().destroy();
+    }
+    
+    // Initialiser DataTables avec configuration personnalisée
+    $('#mtfOverviewTable').DataTable({
+        "language": {
+            "emptyTable": "Aucune donnée disponible dans le tableau",
+            "info": "Affichage de _START_ à _END_ sur _TOTAL_ entrées",
+            "infoEmpty": "Affichage de 0 à 0 sur 0 entrées",
+            "infoFiltered": "(filtré sur _MAX_ entrées au total)",
+            "lengthMenu": "Afficher _MENU_ entrées",
+            "loadingRecords": "Chargement...",
+            "processing": "Traitement en cours...",
+            "search": "Rechercher:",
+            "zeroRecords": "Aucun enregistrement correspondant trouvé",
+            "paginate": {
+                "first": "Premier",
+                "last": "Dernier",
+                "next": "Suivant",
+                "previous": "Précédent"
+            }
+        },
+        "pageLength": 25,
+        "lengthMenu": [[10, 25, 50, 100, -1], [10, 25, 50, 100, "Tous"]],
+        "order": [[0, "asc"]], // Tri par défaut sur la colonne Symbole
+        "columnDefs": [
+            {
+                "targets": [0], // Colonne Symbole
+                "orderable": true,
+                "type": "string"
+            },
+            {
+                "targets": [1], // Colonne Dernier H4
+                "orderable": true,
+                "type": "string"
+            },
+            {
+                "targets": [2, 3, 4, 5], // Colonnes H1, M15, M5, M1
+                "orderable": true,
+                "type": "num"
+            },
+            {
+                "targets": [6], // Colonne Total branches
+                "orderable": true,
+                "type": "num"
+            },
+            {
+                "targets": [7], // Colonne Actions
+                "orderable": false,
+                "searchable": false
+            }
+        ],
+        "dom": '<"row"<"col-sm-12 col-md-6"l><"col-sm-12 col-md-6"f>>' +
+               '<"row"<"col-sm-12"tr>>' +
+               '<"row"<"col-sm-12 col-md-5"i><"col-sm-12 col-md-7"p>>',
+        "responsive": true,
+        "autoWidth": false
     });
 }
 </script>
