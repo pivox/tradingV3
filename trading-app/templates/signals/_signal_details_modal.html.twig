@@ -16,7 +16,7 @@
                     </div>
                     <div class="col-md-3">
                         <strong>Direction:</strong> 
-                        <span class="badge {% if signal.side.value == 'LONG' %}bg-success{% elseif signal.side.value == 'SHORT' %}bg-danger{% else %}bg-secondary{% endif %}">
+                        <span class="badge signal-badge {% if signal.side.value == 'LONG' %}bg-success{% elseif signal.side.value == 'SHORT' %}bg-danger{% else %}bg-secondary{% endif %}">
                             {{ signal.side.value }}
                         </span><br>
                         <strong>Score:</strong> {{ signal.score ? signal.score|number_format(2) : 'N/A' }}<br>
@@ -52,7 +52,7 @@
                     <div class="row">
                         <div class="col-md-4">
                             <h6>Moyennes mobiles</h6>
-                            <table class="table table-sm">
+                            <table class="table table-sm klines-table">
                                 <tr>
                                     <td><strong>EMA20:</strong></td>
                                     <td>{{ analysis.indicators.ema20 ? analysis.indicators.ema20|number_format(4) : 'N/A' }}</td>
@@ -73,12 +73,12 @@
                         </div>
                         <div class="col-md-4">
                             <h6>Oscillateurs</h6>
-                            <table class="table table-sm">
+                            <table class="table table-sm klines-table">
                                 <tr>
                                     <td><strong>RSI:</strong></td>
                                     <td>
                                         {% if analysis.indicators.rsi %}
-                                            {{ analysis.indicators.rsi|number_format(2) }}
+                                            <span class="indicator-value {% if analysis.indicators.rsi > 70 %}indicator-negative{% elseif analysis.indicators.rsi < 30 %}indicator-positive{% else %}indicator-neutral{% endif %}">{{ analysis.indicators.rsi|number_format(2) }}</span>
                                             {% if analysis.indicators.rsi > 70 %}
                                                 <span class="badge bg-warning">Survente</span>
                                             {% elseif analysis.indicators.rsi < 30 %}
@@ -105,7 +105,7 @@
                         </div>
                         <div class="col-md-4">
                             <h6>Autres indicateurs</h6>
-                            <table class="table table-sm">
+                            <table class="table table-sm klines-table">
                                 <tr>
                                     <td><strong>ATR:</strong></td>
                                     <td>{{ analysis.indicators.atr ? analysis.indicators.atr|number_format(4) : 'N/A' }}</td>

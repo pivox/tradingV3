@@ -14,6 +14,83 @@
         <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css">
         
         {% block stylesheets %}
+        <style>
+            /* Styles pour l'analyse des signaux */
+            .signal-analysis-card {
+                transition: transform 0.2s ease-in-out;
+            }
+            
+            .signal-analysis-card:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            }
+            
+            .indicator-value {
+                font-family: 'Courier New', monospace;
+                font-weight: bold;
+            }
+            
+            .indicator-positive {
+                color: #28a745;
+            }
+            
+            .indicator-negative {
+                color: #dc3545;
+            }
+            
+            .indicator-neutral {
+                color: #6c757d;
+            }
+            
+            .parent-timeframe-card {
+                border-left: 4px solid #007bff;
+            }
+            
+            .parent-timeframe-card.success {
+                border-left-color: #28a745;
+            }
+            
+            .parent-timeframe-card.warning {
+                border-left-color: #ffc107;
+            }
+            
+            .parent-timeframe-card.danger {
+                border-left-color: #dc3545;
+            }
+            
+            .signal-badge {
+                font-size: 0.8em;
+                padding: 0.25em 0.5em;
+            }
+            
+            .analysis-table th {
+                background-color: #f8f9fa;
+                border-top: none;
+            }
+            
+            .klines-table td {
+                font-family: 'Courier New', monospace;
+                font-size: 0.9em;
+            }
+            
+            .loading-spinner {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 200px;
+            }
+            
+            .modal-xl {
+                max-width: 95%;
+            }
+            
+            @media (max-width: 768px) {
+                .modal-xl {
+                    max-width: 100%;
+                    margin: 0;
+                }
+            }
+        </style>
         {% endblock %}
     </head>
     <body>
