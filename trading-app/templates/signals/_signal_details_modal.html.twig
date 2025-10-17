@@ -162,12 +162,12 @@
                             <tbody>
                                 {% for kline in analysis.klines %}
                                     <tr>
-                                        <td>{{ kline.klineTime|date('d/m H:i:s') }}</td>
-                                        <td>{{ kline.openPrice|number_format(4) }}</td>
-                                        <td>{{ kline.highPrice|number_format(4) }}</td>
-                                        <td>{{ kline.lowPrice|number_format(4) }}</td>
-                                        <td><strong>{{ kline.closePrice|number_format(4) }}</strong></td>
-                                        <td>{{ kline.volume|number_format(2) }}</td>
+                                        <td>{{ kline.openTime|date('d/m H:i:s') }}</td>
+                                        <td>{{ kline.openPrice.toFloat|number_format(4) }}</td>
+                                        <td>{{ kline.highPrice.toFloat|number_format(4) }}</td>
+                                        <td>{{ kline.lowPrice.toFloat|number_format(4) }}</td>
+                                        <td><strong>{{ kline.closePrice.toFloat|number_format(4) }}</strong></td>
+                                        <td>{{ kline.volume ? kline.volume.toFloat|number_format(2) : 'N/A' }}</td>
                                     </tr>
                                 {% endfor %}
                             </tbody>
@@ -203,21 +203,23 @@
                                         <h6 class="mb-0">{{ parentTf }}</h6>
                                     </div>
                                     <div class="card-body">
-                                        {% if parentData.error %}
+                                        {% if parentData.error is defined and parentData.error %}
                                             <div class="alert alert-danger">
                                                 <i class="bi bi-exclamation-triangle"></i>
                                                 {{ parentData.error }}
                                             </div>
                                         {% else %}
                                             <div class="small">
-                                                <strong>Klines:</strong> {{ parentData.klines_count }}<br>
-                                                {% if parentData.indicators.rsi %}
+                                                {% if parentData.klines_count is defined %}
+                                                    <strong>Klines:</strong> {{ parentData.klines_count }}<br>
+                                                {% endif %}
+                                                {% if parentData.indicators is defined and parentData.indicators.rsi is defined %}
                                                     <strong>RSI:</strong> {{ parentData.indicators.rsi|number_format(2) }}<br>
                                                 {% endif %}
-                                                {% if parentData.indicators.ema20 %}
+                                                {% if parentData.indicators is defined and parentData.indicators.ema20 is defined %}
                                                     <strong>EMA20:</strong> {{ parentData.indicators.ema20|number_format(4) }}<br>
                                                 {% endif %}
-                                                {% if parentData.indicators.ema50 %}
+                                                {% if parentData.indicators is defined and parentData.indicators.ema50 is defined %}
                                                     <strong>EMA50:</strong> {{ parentData.indicators.ema50|number_format(4) }}
                                                 {% endif %}
                                             </div>

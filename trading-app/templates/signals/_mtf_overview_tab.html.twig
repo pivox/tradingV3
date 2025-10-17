@@ -1,0 +1,63 @@
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="mb-0">
+                    <i class="bi bi-diagram-3"></i> MTF Overview (dernier 4h par contrat)
+                </h6>
+                <button class="btn btn-sm btn-outline-primary" onclick="loadMtfOverview()">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="mtfOverviewLoading" class="text-center" style="display: none;">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Chargement...</span>
+                    </div>
+                    <p class="mt-2">Chargement de l'overview MTF...</p>
+                </div>
+
+                <div id="mtfOverviewResults" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+$(document).ready(function() {
+    // Auto-chargement à l'ouverture de l'onglet si visible
+    const tab = document.getElementById('mtf-overview');
+    if (tab && tab.classList.contains('active')) {
+        loadMtfOverview();
+    }
+
+    document.getElementById('mtf-overview-tab')?.addEventListener('shown.bs.tab', function () {
+        loadMtfOverview();
+    });
+});
+
+function loadMtfOverview() {
+    $('#mtfOverviewLoading').show();
+    $('#mtfOverviewResults').hide();
+
+    $.ajax({
+        url: '{{ path("signals_mtf_overview") }}',
+        method: 'GET',
+        success: function(data) {
+            $('#mtfOverviewLoading').hide();
+            $('#mtfOverviewResults').html(data).show();
+        },
+        error: function(xhr, status, error) {
+            $('#mtfOverviewLoading').hide();
+            $('#mtfOverviewResults').html(`
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Erreur lors du chargement de l'overview MTF : ${error}
+                </div>
+            `).show();
+        }
+    });
+}
+</script>
+
+

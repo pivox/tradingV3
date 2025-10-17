@@ -7,6 +7,7 @@ use App\Repository\SignalRepository;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Repository\IndicatorSnapshotRepository;
+use App\Domain\Common\Enum\Timeframe;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Request;
@@ -99,6 +100,105 @@ class SignalsController extends AbstractController
             'signal' => $signal,
             'analysis' => $analysis,
         ]);
+    }
+
+    #[Route('/signals/{id}/meta', name: 'signals_meta', requirements: ['id' => '\d+'])]
+    public function meta(int $id): JsonResponse
+    {
+        $signal = $this->signalRepository->find($id);
+
+        if (!$signal) {
+            return new JsonResponse(['error' => 'Signal non trouvé'], Response::HTTP_NOT_FOUND);
+        }
+
+        return new JsonResponse([
+            'id' => $signal->getId(),
+            'symbol' => $signal->getSymbol(),
+            'timeframe' => $signal->getTimeframe()->value,
+            'side' => $signal->getSide()->value,
+            'score' => $signal->getScore(),
+            'kline_time' => $signal->getKlineTime()->format('Y-m-d H:i:s'),
+            'inserted_at' => $signal->getInsertedAt()->format('Y-m-d H:i:s'),
+            'updated_at' => $signal->getUpdatedAt()->format('Y-m-d H:i:s'),
+            'meta' => $signal->getMeta(),
+        ]);
+    }
+
+    #[Route('/signals/mtf-overview', name: 'signals_mtf_overview')]
+    public function mtfOverview(Request $request): Response
+    {
+        $activeSymbols = $this->contractRepository->allActiveSymbolNames();
+
+        $rows = [];
+
+        foreach ($activeSymbols as $symbol) {
+            $lastH4 = $this->signalRepository->findLastBySymbolAndTimeframe($symbol, Timeframe::TF_4H);
+            if (!$lastH4) {
+                continue;
+            }
+
+            $start = $lastH4->getKlineTime();
+            $end = $start->modify('+4 hours');
+
+            $counts = [
+                '1h' => 0,
+                '15m' => 0,
+                '5m' => 0,
+                '1m' => 0,
+            ];
+
+            $signals1h = $this->signalRepository->findBySymbolTimeframeAndDateRange($symbol, Timeframe::TF_1H, $start, $end);
+            $signals15m = $this->signalRepository->findBySymbolTimeframeAndDateRange($symbol, Timeframe::TF_15M, $start, $end);
+            $signals5m = $this->signalRepository->findBySymbolTimeframeAndDateRange($symbol, Timeframe::TF_5M, $start, $end);
+            $signals1m = $this->signalRepository->findBySymbolTimeframeAndDateRange($symbol, Timeframe::TF_1M, $start, $end);
+
+            $counts['1h'] = $this->countWindowsWithSignals($signals1h, $start, 60);
+            $counts['15m'] = $this->countWindowsWithSignals($signals15m, $start, 15);
+            $counts['5m'] = $this->countWindowsWithSignals($signals5m, $start, 5);
+            $counts['1m'] = $this->countWindowsWithSignals($signals1m, $start, 1);
+
+            $total = array_sum($counts);
+
+            $rows[] = [
+                'symbol' => $symbol,
+                'h4' => $lastH4,
+                'counts' => $counts,
+                'total' => $total,
+            ];
+        }
+
+        usort($rows, function ($a, $b) {
+            return $b['total'] <=> $a['total'];
+        });
+
+        return $this->render('signals/_mtf_overview_results.html.twig', [
+            'rows' => $rows,
+        ]);
+    }
+
+    /**
+     * @param Signal[] $signals
+     */
+    private function countWindowsWithSignals(array $signals, \DateTimeImmutable $start, int $windowSizeMinutes): int
+    {
+        $windowSeconds = $windowSizeMinutes * 60;
+        $startTs = $start->getTimestamp();
+        $covered = [];
+
+        foreach ($signals as $sig) {
+            if ($sig->getSide()->isNone()) {
+                continue;
+            }
+            $ts = $sig->getKlineTime()->getTimestamp();
+            if ($ts < $startTs || $ts >= $startTs + 4 * 3600) {
+                continue;
+            }
+            $offset = $ts - $startTs;
+            $windowIndex = intdiv($offset, $windowSeconds);
+            $covered[$windowIndex] = true;
+        }
+
+        return count($covered);
     }
 
     private function getSignalsWithFilters(?string $symbol, ?string $timeframe, ?string $side): array
