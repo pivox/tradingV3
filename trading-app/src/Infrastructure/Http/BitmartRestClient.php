@@ -13,16 +13,38 @@ use GuzzleHttp\Exception\GuzzleException;
 use Psr\Log\LoggerInterface;
 use Brick\Math\BigDecimal;
 use Psr\Clock\ClockInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\Lock\LockFactory;
+use function microtime;
+use function usleep;
+use function file_get_contents;
+use function file_put_contents;
+use function is_dir;
+use function is_file;
+use function mkdir;
+use function round;
+use function sprintf;
+use function trim;
 
 final class BitmartRestClient implements KlineProviderPort
 {
+    private const THROTTLE_SECONDS = 0.2;
+    private string $throttleStatePath;
+
     public function __construct(
         private readonly Client          $httpClient,
         private readonly LoggerInterface $logger,
         private readonly ClockInterface  $clock,
         private readonly BitmartConfig   $config,
+        private readonly LockFactory     $lockFactory,
+        #[Autowire('%kernel.project_dir%')] private readonly string $projectDir,
     )
     {
+        $stateDir = $this->projectDir . '/var/bitmart';
+        if (!is_dir($stateDir)) {
+            mkdir($stateDir, 0775, true);
+        }
+        $this->throttleStatePath = $stateDir . '/throttle.timestamp';
     }
 
     public function fetchKlines(string $symbol, Timeframe $timeframe, int $limit = 1000): array
@@ -59,7 +81,7 @@ final class BitmartRestClient implements KlineProviderPort
         $retryCount = 0;
         while ($retryCount < $this->config->getMaxRetries()) {
             try {
-                usleep(200_000);
+                $this->throttleBitmartRequest();
                 $response = $this->httpClient->get($url, [
                     'query' => $params,
                     'timeout' => $this->config->getTimeout()
@@ -162,7 +184,7 @@ final class BitmartRestClient implements KlineProviderPort
         $retryCount = 0;
         while ($retryCount < $this->config->getMaxRetries()) {
             try {
-                usleep(200_000);
+                $this->throttleBitmartRequest();
                 $response = $this->httpClient->get($url, [
                     'query' => $params,
                     'timeout' => $this->config->getTimeout(),
@@ -231,6 +253,7 @@ final class BitmartRestClient implements KlineProviderPort
         try {
             $this->logger->info('Fetching contracts from BitMart');
 
+            $this->throttleBitmartRequest();
             $response = $this->httpClient->get($url, [
                 'timeout' => $this->config->getTimeout()
             ]);
@@ -267,6 +290,7 @@ final class BitmartRestClient implements KlineProviderPort
         try {
             $this->logger->info('Fetching contract details from BitMart', ['symbol' => $symbol]);
 
+            $this->throttleBitmartRequest();
             $response = $this->httpClient->get($url, [
                 'query' => ['symbol' => $symbol],
                 'timeout' => $this->config->getTimeout()
@@ -338,5 +362,38 @@ final class BitmartRestClient implements KlineProviderPort
     {
         // Cette méthode sera implémentée avec la persistance
         return [];
+    }
+
+    /**
+     * Garantit un minimum de 200ms entre deux requêtes Bitmart.
+     */
+    private function throttleBitmartRequest(): void
+    {
+        $lock = $this->lockFactory->createLock('bitmart.throttle', 1.0);
+        $lock->acquire(true);
+
+        try {
+            $now = microtime(true);
+            $lastRequest = 0.0;
+
+            if (is_file($this->throttleStatePath)) {
+                $raw = trim((string) @file_get_contents($this->throttleStatePath));
+                if ($raw !== '') {
+                    $lastRequest = (float) $raw;
+                }
+            }
+
+            if ($lastRequest > 0.0) {
+                $elapsed = $now - $lastRequest;
+                if ($elapsed < self::THROTTLE_SECONDS) {
+                    usleep((int) round((self::THROTTLE_SECONDS - $elapsed) * 1_000_000));
+                    $now = microtime(true);
+                }
+            }
+
+            @file_put_contents($this->throttleStatePath, sprintf('%.6F', $now));
+        } finally {
+            $lock->release();
+        }
     }
 }

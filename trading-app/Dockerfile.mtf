@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
     zip \
     unzip \
     supervisor \
-    && docker-php-ext-install pdo pdo_pgsql mbstring exif pcntl bcmath gd \
+    && docker-php-ext-install pdo pdo_pgsql mbstring exif pcntl bcmath gd sockets \
     && pecl install xdebug \
     && docker-php-ext-enable xdebug
 

@@ -2,10 +2,21 @@ monolog:
   channels: ['mtf', 'validation', 'signals', 'positions', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
   handlers:
     # =====================
-    # --- Canaux Métier ---
+    # --- Handler Temporal (Asynchrone) ---
     # =====================
-    
-    # Canal MTF - Système Multi-Timeframe
+
+    # Handler principal qui publie vers Temporal via HTTP API
+    temporal_handler:
+      type: service
+      id: App\Logging\TemporalLogHandler
+      level: debug
+      channels: ['mtf', 'validation', 'signals', 'positions', 'indicators', 'highconviction', 'pipeline_exec']
+
+    # =====================
+    # --- Fallback Handlers (Synchrones) ---
+    # =====================
+
+    # Canal MTF - Système Multi-Timeframe (fallback)
     mtf_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/mtf.log'
@@ -13,16 +24,16 @@ monolog:
       level: '%env(MTF_LOG_LEVEL)%'
       channels: ['mtf']
       formatter: App\Logging\CustomLineFormatter
-    
+
     # Canal Validation - Règles MTF et conditions YAML
     validation_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/validation.log'
       max_files: 14
-      level: '%env(LOG_LEVEL_VALIDATION)%'
+      level: 'info'
       channels: ['validation']
       formatter: App\Logging\CustomLineFormatter
-    
+
     # Canal Signals - Signaux longs/shorts
     signals_rotating:
       type: rotating_file
@@ -31,7 +42,7 @@ monolog:
       level: '%env(LOG_LEVEL_SIGNALS)%'
       channels: ['signals']
       formatter: App\Logging\CustomLineFormatter
-    
+
     # Canal Positions - Suivi des positions ouvertes/SL/TP
     positions_rotating:
       type: rotating_file
@@ -40,7 +51,7 @@ monolog:
       level: '%env(LOG_LEVEL_POSITIONS)%'
       channels: ['positions']
       formatter: App\Logging\CustomLineFormatter
-    
+
     # Canal Indicators - Calculs d'indicateurs techniques
     indicators_rotating:
       type: rotating_file
@@ -49,7 +60,7 @@ monolog:
       level: '%env(LOG_LEVEL_INDICATORS)%'
       channels: ['indicators']
       formatter: App\Logging\CustomLineFormatter
-    
+
     # Canal High Conviction - Stratégies validées
     highconviction_rotating:
       type: rotating_file
@@ -58,7 +69,7 @@ monolog:
       level: '%env(LOG_LEVEL_HIGHCONVICTION)%'
       channels: ['highconviction']
       formatter: App\Logging\CustomLineFormatter
-    
+
     # Canal Pipeline Exec - Moteur d'exécution workflow
     pipeline_exec_rotating:
       type: rotating_file
@@ -67,11 +78,11 @@ monolog:
       level: '%env(LOG_LEVEL_PIPELINE_EXEC)%'
       channels: ['pipeline_exec']
       formatter: App\Logging\CustomLineFormatter
-    
+
     # =====================
     # --- Canaux Système ---
     # =====================
-    
+
     # Canal Deprecation - Messages de dépréciation
     deprecation:
       type: stream
@@ -79,7 +90,7 @@ monolog:
       level: notice
       channels: ['deprecation']
       formatter: App\Logging\CustomLineFormatter
-    
+
     # Canal Global Severity - Consolidation erreurs ≥ notice
     global_severity_rotating:
       type: rotating_file
@@ -88,18 +99,18 @@ monolog:
       level: error
       channels: ['global-severity']
       formatter: App\Logging\CustomLineFormatter
-    
+
     # =====================
     # --- Handlers Généraux ---
     # =====================
-    
+
     # Console pour développement
     console:
       type: console
       process_psr_3_messages: false
       channels: ['!event', '!doctrine', '!console']
       formatter: App\Logging\CustomLineFormatter
-    
+
     # Handler principal (fallback)
     main:
       type: stream

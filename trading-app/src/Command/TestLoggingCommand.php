@@ -1,8 +1,11 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Command;
 
-use App\Logging\LoggingExample;
+use App\Logging\LoggerHelper;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -10,138 +13,174 @@ use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
+/**
+ * Commande de test pour valider le système de logging asynchrone
+ */
 #[AsCommand(
     name: 'app:test-logging',
-    description: 'Teste le système de logging multi-canaux avec des exemples',
+    description: 'Teste le système de logging asynchrone avec worker Temporal'
 )]
-class TestLoggingCommand extends Command
+final class TestLoggingCommand extends Command
 {
-    private LoggingExample $loggingExample;
-
-    public function __construct(LoggingExample $loggingExample)
-    {
+    public function __construct(
+        private readonly LoggerHelper $loggerHelper,
+        private readonly LoggerInterface $logger
+    ) {
         parent::__construct();
-        $this->loggingExample = $loggingExample;
     }
 
     protected function configure(): void
     {
         $this
-            ->addOption('channel', 'c', InputOption::VALUE_OPTIONAL, 'Canal spécifique à tester (validation, signals, positions, indicators, highconviction, pipeline_exec, global-severity)')
-            ->addOption('count', null, InputOption::VALUE_OPTIONAL, 'Nombre d\'exemples à générer', 1)
-            ->setHelp('Cette commande teste le système de logging multi-canaux en générant des exemples de logs pour chaque canal.');
+            ->addOption('count', 'c', InputOption::VALUE_OPTIONAL, 'Nombre de logs à générer', 100)
+            ->addOption('batch', 'b', InputOption::VALUE_OPTIONAL, 'Taille du batch', 10)
+            ->addOption('delay', 'd', InputOption::VALUE_OPTIONAL, 'Délai entre les batches (ms)', 100)
+            ->setHelp('
+Cette commande teste le système de logging asynchrone en générant des logs
+de test et en mesurant les performances.
+
+Exemples:
+  php bin/console app:test-logging                    # Test standard (100 logs)
+  php bin/console app:test-logging --count=500       # Test avec 500 logs
+  php bin/console app:test-logging --batch=20        # Test avec batch de 20
+  php bin/console app:test-logging --delay=50        # Test avec délai de 50ms
+            ');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        $channel = $input->getOption('channel');
         $count = (int) $input->getOption('count');
+        $batchSize = (int) $input->getOption('batch');
+        $delay = (int) $input->getOption('delay');
 
-        $io->title('Test du Système de Logging Multi-Canaux');
+        $io->title('Test du Système de Logging Asynchrone');
+        $io->text([
+            "Nombre de logs: {$count}",
+            "Taille du batch: {$batchSize}",
+            "Délai entre batches: {$delay}ms",
+        ]);
 
-        if ($channel) {
-            $this->testSpecificChannel($io, $channel, $count);
-        } else {
-            $this->testAllChannels($io, $count);
+        $startTime = microtime(true);
+        $batches = (int) ceil($count / $batchSize);
+
+        $io->progressStart($batches);
+
+        for ($batch = 0; $batch < $batches; $batch++) {
+            $batchStart = microtime(true);
+            
+            // Générer un batch de logs
+            for ($i = 0; $i < $batchSize && ($batch * $batchSize + $i) < $count; $i++) {
+                $logIndex = $batch * $batchSize + $i;
+                $this->generateTestLog($logIndex);
+            }
+
+            $batchTime = microtime(true) - $batchStart;
+            
+            $io->progressAdvance();
+            
+            // Délai entre les batches
+            if ($delay > 0 && $batch < $batches - 1) {
+                usleep($delay * 1000);
+            }
         }
 
-        $io->success('Test de logging terminé ! Consultez les fichiers de logs dans var/log/');
-        $io->note('Pour visualiser les logs dans Grafana, accédez à http://localhost:3000');
+        $io->progressFinish();
+
+        $totalTime = microtime(true) - $startTime;
+        $logsPerSecond = $count / $totalTime;
+
+        $io->success([
+            'Test terminé avec succès !',
+            '',
+            'Résultats:',
+            "• Logs générés: {$count}",
+            "• Temps total: " . round($totalTime, 3) . "s",
+            "• Débit: " . round($logsPerSecond, 0) . " logs/seconde",
+            "• Temps moyen par log: " . round(($totalTime / $count) * 1000, 2) . "ms",
+        ]);
+
+        // Attendre un peu pour que les logs soient traités
+        $io->text('Attente du traitement des logs par le worker...');
+        sleep(2);
+
+        // Vérifier que les fichiers de logs ont été créés
+        $this->checkLogFiles($io);
 
         return Command::SUCCESS;
     }
 
-    private function testSpecificChannel(SymfonyStyle $io, string $channel, int $count): void
+    private function generateTestLog(int $index): void
     {
-        $io->section("Test du canal : {$channel}");
+        $channels = ['mtf', 'signals', 'positions', 'indicators', 'highconviction'];
+        $levels = ['info', 'warning', 'error'];
+        $symbols = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT', 'DOTUSDT'];
+        $timeframes = ['1m', '5m', '15m', '1h', '4h'];
+        $sides = ['BUY', 'SELL', 'NONE'];
 
-        for ($i = 1; $i <= $count; $i++) {
-            $io->writeln("Génération de l'exemple {$i}/{$count}...");
-            
-            switch ($channel) {
-                case 'validation':
-                    $this->loggingExample->logValidationExample();
-                    break;
-                case 'signals':
-                    $this->loggingExample->logSignalsExample();
-                    break;
-                case 'positions':
-                    $this->loggingExample->logPositionsExample();
-                    break;
-                case 'indicators':
-                    $this->loggingExample->logIndicatorsExample();
-                    break;
-                case 'highconviction':
-                    $this->loggingExample->logHighConvictionExample();
-                    break;
-                case 'pipeline_exec':
-                    $this->loggingExample->logPipelineExecExample();
-                    break;
-                case 'global-severity':
-                    $this->loggingExample->logGlobalSeverityExample();
-                    break;
-                default:
-                    $io->error("Canal inconnu : {$channel}");
-                    return;
-            }
-            
-            // Petite pause entre les exemples
-            usleep(100000); // 100ms
+        $channel = $channels[array_rand($channels)];
+        $level = $levels[array_rand($levels)];
+        $symbol = $symbols[array_rand($symbols)];
+        $timeframe = $timeframes[array_rand($timeframes)];
+        $side = $sides[array_rand($sides)];
+
+        $message = "Test log #{$index} - {$channel} - {$symbol} - {$timeframe} - {$side}";
+
+        switch ($channel) {
+            case 'signals':
+                $this->loggerHelper->logSignal($symbol, $timeframe, $side, $message, [
+                    'test_index' => $index,
+                    'timestamp' => time(),
+                ]);
+                break;
+
+            case 'positions':
+                $this->loggerHelper->logPosition($symbol, 'test', $side, [
+                    'test_index' => $index,
+                    'timestamp' => time(),
+                ]);
+                break;
+
+            case 'indicators':
+                $this->loggerHelper->logIndicator($symbol, $timeframe, 'EMA20', [
+                    'value' => rand(100, 1000),
+                    'test_index' => $index,
+                ], $message);
+                break;
+
+            case 'highconviction':
+                $this->loggerHelper->highConviction($message, [
+                    'test_index' => $index,
+                    'symbol' => $symbol,
+                    'timeframe' => $timeframe,
+                ]);
+                break;
+
+            default:
+                $this->loggerHelper->tradingLog($channel, $message, $symbol, $timeframe, $side, [
+                    'test_index' => $index,
+                    'timestamp' => time(),
+                ]);
+                break;
         }
-
-        $io->success("Généré {$count} exemple(s) pour le canal {$channel}");
     }
 
-    private function testAllChannels(SymfonyStyle $io, int $count): void
+    private function checkLogFiles(SymfonyStyle $io): void
     {
-        $channels = [
-            'validation' => 'Validation des règles MTF et conditions YAML',
-            'signals' => 'Signaux de trading (long/short)',
-            'positions' => 'Suivi des positions ouvertes/SL/TP',
-            'indicators' => 'Calculs d\'indicateurs techniques',
-            'highconviction' => 'Stratégies High Conviction',
-            'pipeline_exec' => 'Exécution du pipeline workflow',
-            'global-severity' => 'Erreurs globales (severity ≥ error)'
-        ];
+        $logDir = '/var/log/symfony';
+        $channels = ['mtf', 'signals', 'positions', 'indicators', 'highconviction'];
 
-        foreach ($channels as $channel => $description) {
-            $io->section("Test du canal : {$channel}");
-            $io->writeln("Description : {$description}");
+        $io->section('Vérification des fichiers de logs');
 
-            for ($i = 1; $i <= $count; $i++) {
-                $io->writeln("Génération de l'exemple {$i}/{$count}...");
-                
-                switch ($channel) {
-                    case 'validation':
-                        $this->loggingExample->logValidationExample();
-                        break;
-                    case 'signals':
-                        $this->loggingExample->logSignalsExample();
-                        break;
-                    case 'positions':
-                        $this->loggingExample->logPositionsExample();
-                        break;
-                    case 'indicators':
-                        $this->loggingExample->logIndicatorsExample();
-                        break;
-                    case 'highconviction':
-                        $this->loggingExample->logHighConvictionExample();
-                        break;
-                    case 'pipeline_exec':
-                        $this->loggingExample->logPipelineExecExample();
-                        break;
-                    case 'global-severity':
-                        $this->loggingExample->logGlobalSeverityExample();
-                        break;
-                }
-                
-                // Petite pause entre les exemples
-                usleep(100000); // 100ms
+        foreach ($channels as $channel) {
+            $logFile = "{$logDir}/{$channel}.log";
+            
+            if (file_exists($logFile)) {
+                $size = filesize($logFile);
+                $io->text("✅ {$channel}.log: " . number_format($size) . " bytes");
+            } else {
+                $io->text("❌ {$channel}.log: Fichier non trouvé");
             }
-
-            $io->success("Généré {$count} exemple(s) pour le canal {$channel}");
-            $io->newLine();
         }
     }
 }

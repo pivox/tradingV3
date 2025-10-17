@@ -183,6 +183,10 @@ php bin/console app:test-mtf-run --url=http://localhost:8082
 
 # Test en mode verbeux
 php bin/console app:test-mtf-run --verbose
+
+# Exécution directe avec parallélisation (4 workers)
+# (le throttle Bitmart global garde un délai minimum de 200ms entre chaque requête)
+php bin/console mtf:run --workers=4
 ```
 
 ### 3. Tests unitaires
@@ -342,7 +346,5 @@ Pour toute question ou problème :
 ---
 
 **Note** : Cet endpoint est conçu pour les tests et le déclenchement manuel. Pour la production, utilisez le workflow Temporal automatique avec `php bin/console mtf:workflow start`.
-
-
 
 

@@ -6,18 +6,22 @@ namespace App\Controller;
 
 use App\Domain\Mtf\Service\MtfService;
 use App\Domain\Mtf\Service\MtfRunService;
+use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Repository\MtfAuditRepository;
 use App\Repository\MtfLockRepository;
 use App\Repository\MtfStateRepository;
 use App\Repository\MtfSwitchRepository;
 use App\Repository\OrderPlanRepository;
+use Ramsey\Uuid\Uuid;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\Process\Process;
 use Symfony\Component\Routing\Annotation\Route;
 
 #[Route('', name: 'mtf_')]
@@ -33,7 +37,10 @@ class MtfController extends AbstractController
         private readonly OrderPlanRepository $orderPlanRepository,
         private readonly LoggerInterface $logger,
         private readonly MtfRunService $mtfRunService,
-        private readonly ClockInterface $clock
+        private readonly ClockInterface $clock,
+        private readonly ContractRepository $contractRepository,
+        #[Autowire('%kernel.project_dir%')]
+        private readonly string $projectDir,
     ) {
     }
 
@@ -544,19 +551,41 @@ class MtfController extends AbstractController
             $data = $request->query->all();
         }
         
-        $symbols = $data['symbols'] ?? [];
+        $symbolsInput = $data['symbols'] ?? [];
         $dryRun = filter_var($data['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN);
         $forceRun = filter_var($data['force_run'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $forceTimeframeCheck = filter_var($data['force_timeframe_check'] ?? false, FILTER_VALIDATE_BOOLEAN);
         $currentTf = $data['current_tf'] ?? null;
         $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
+        $workers = max(1, (int)($data['workers'] ?? 1));
+
+        $symbols = $this->resolveSymbols($symbolsInput);
 
         try {
-            $result = $this->mtfRunService->run($symbols, $dryRun, $forceRun, $currentTf);
+            if ($workers > 1) {
+                $result = $this->runParallelViaWorkers(
+                    $symbols,
+                    $dryRun,
+                    $forceRun,
+                    $currentTf,
+                    $forceTimeframeCheck,
+                    $workers
+                );
+            } else {
+                $result = $this->runSequential($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck);
+            }
+
+            $status = empty($result['errors']) ? 'success' : 'partial_success';
 
             return $this->json([
-                'status' => 'success',
+                'status' => $status,
                 'message' => 'MTF run completed',
-                'data' => $result,
+                'data' => [
+                    'summary' => $result['summary'] ?? [],
+                    'results' => $result['results'] ?? [],
+                    'errors' => $result['errors'] ?? [],
+                    'workers' => $workers,
+                ],
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('[MTF Controller] Failed to run MTF cycle', [
@@ -568,5 +597,224 @@ class MtfController extends AbstractController
                 'message' => $e->getMessage(),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /**
+     * @param mixed $symbolsInput
+     * @return string[]
+     */
+    private function resolveSymbols(mixed $symbolsInput): array
+    {
+        $symbols = [];
+        if (is_string($symbolsInput)) {
+            $symbols = array_filter(array_map('trim', explode(',', $symbolsInput)));
+        } elseif (is_array($symbolsInput)) {
+            foreach ($symbolsInput as $value) {
+                if (is_string($value) && $value !== '') {
+                    $symbols[] = trim($value);
+                }
+            }
+        }
+
+        $symbols = array_values(array_unique(array_filter($symbols)));
+        if ($symbols !== []) {
+            return $symbols;
+        }
+
+        try {
+            $fetched = $this->contractRepository->allActiveSymbolNames();
+            if (!empty($fetched)) {
+                return array_values(array_unique(array_map('strval', $fetched)));
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('[MTF Controller] Failed to load active symbols, using fallback', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT', 'DOTUSDT'];
+    }
+
+    /**
+     * @return array{summary: array, results: array, errors: array}
+     */
+    private function runSequential(array $symbols, bool $dryRun, bool $forceRun, ?string $currentTf, bool $forceTimeframeCheck): array
+    {
+        $generator = $this->mtfRunService->run($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck);
+
+        if (!$generator instanceof \Generator) {
+            return [
+                'summary' => is_array($generator) ? ($generator['summary'] ?? []) : [],
+                'results' => is_array($generator) ? ($generator['results'] ?? []) : [],
+                'errors' => [],
+            ];
+        }
+
+        $summary = [];
+        $results = [];
+
+        foreach ($generator as $yielded) {
+            $symbol = $yielded['symbol'] ?? null;
+            $result = $yielded['result'] ?? null;
+            if (is_string($symbol) && $symbol !== 'FINAL' && is_array($result)) {
+                $results[$symbol] = $result;
+            }
+        }
+
+        $final = $generator->getReturn();
+        if (is_array($final)) {
+            $summary = $final['summary'] ?? $summary;
+            $results = $final['results'] ?? $results;
+        }
+
+        return [
+            'summary' => $summary,
+            'results' => $results,
+            'errors' => [],
+        ];
+    }
+
+    /**
+     * @return array{summary: array, results: array, errors: array}
+     */
+    private function runParallelViaWorkers(
+        array $symbols,
+        bool $dryRun,
+        bool $forceRun,
+        ?string $currentTf,
+        bool $forceTimeframeCheck,
+        int $workers
+    ): array {
+        $queue = new \SplQueue();
+        foreach ($symbols as $symbol) {
+            $queue->enqueue($symbol);
+        }
+
+        $active = [];
+        $results = [];
+        $errors = [];
+        $startedAt = microtime(true);
+
+        $options = [
+            'dry_run' => $dryRun,
+            'force_run' => $forceRun,
+            'current_tf' => $currentTf,
+            'force_timeframe_check' => $forceTimeframeCheck,
+        ];
+
+        while (!$queue->isEmpty() || $active !== []) {
+            while (count($active) < $workers && !$queue->isEmpty()) {
+                $symbol = $queue->dequeue();
+                $process = new Process(
+                    $this->buildWorkerCommand($symbol, $options),
+                    $this->projectDir
+                );
+                $process->start();
+                $active[] = ['symbol' => $symbol, 'process' => $process];
+            }
+
+            foreach ($active as $index => $worker) {
+                $process = $worker['process'];
+                if ($process->isRunning()) {
+                    continue;
+                }
+
+                $symbol = $worker['symbol'];
+                unset($active[$index]);
+                $active = array_values($active);
+
+                if ($process->isSuccessful()) {
+                    $rawOutput = trim($process->getOutput());
+                    if ($rawOutput === '') {
+                        $errors[] = sprintf('Worker %s: empty output', $symbol);
+                        continue;
+                    }
+
+                    try {
+                        $payload = json_decode($rawOutput, true, 512, JSON_THROW_ON_ERROR);
+                    } catch (\JsonException $exception) {
+                        $errors[] = sprintf('Worker %s: invalid JSON output (%s)', $symbol, $exception->getMessage());
+                        continue;
+                    }
+
+                    $final = $payload['final'] ?? null;
+                    $workerResults = is_array($final) ? ($final['results'] ?? []) : [];
+                    if (empty($workerResults)) {
+                        $errors[] = sprintf('Worker %s: no results returned', $symbol);
+                        continue;
+                    }
+
+                    foreach ($workerResults as $resultSymbol => $info) {
+                        if (is_string($resultSymbol)) {
+                            $results[$resultSymbol] = $info;
+                        }
+                    }
+                } else {
+                    $errorOutput = trim($process->getErrorOutput());
+                    $errors[] = sprintf('Worker %s: %s', $symbol, $errorOutput !== '' ? $errorOutput : 'unknown error');
+                }
+            }
+
+            usleep(100_000);
+        }
+
+        $processed = count($results);
+        $successCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'SUCCESS'));
+        $failedCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'ERROR'));
+        $skippedCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'SKIPPED'));
+
+        $summary = [
+            'run_id' => Uuid::uuid4()->toString(),
+            'execution_time_seconds' => round(microtime(true) - $startedAt, 3),
+            'symbols_requested' => count($symbols),
+            'symbols_processed' => $processed,
+            'symbols_successful' => $successCount,
+            'symbols_failed' => $failedCount,
+            'symbols_skipped' => $skippedCount,
+            'success_rate' => $processed > 0 ? round(($successCount / $processed) * 100, 2) : 0.0,
+            'dry_run' => $dryRun,
+            'force_run' => $forceRun,
+            'current_tf' => $currentTf,
+            'timestamp' => $this->clock->now()->format('Y-m-d H:i:s'),
+            'status' => empty($errors) ? 'completed' : 'completed_with_errors',
+        ];
+
+        return [
+            'summary' => $summary,
+            'results' => $results,
+            'errors' => $errors,
+        ];
+    }
+
+    /**
+     * @param array{
+     *     dry_run: bool,
+     *     force_run: bool,
+     *     current_tf: ?string,
+     *     force_timeframe_check: bool,
+     * } $options
+     * @return string[]
+     */
+    private function buildWorkerCommand(string $symbol, array $options): array
+    {
+        $command = [
+            'php',
+            'bin/console',
+            'mtf:run-worker',
+            '--symbols=' . $symbol,
+            '--dry-run=' . ($options['dry_run'] ? '1' : '0'),
+        ];
+
+        if ($options['force_run']) {
+            $command[] = '--force-run';
+        }
+        if (!empty($options['current_tf'])) {
+            $command[] = '--tf=' . $options['current_tf'];
+        }
+        if ($options['force_timeframe_check']) {
+            $command[] = '--force-timeframe-check';
+        }
+
+        return $command;
     }
 }
