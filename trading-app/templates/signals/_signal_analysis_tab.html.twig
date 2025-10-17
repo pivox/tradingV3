@@ -144,7 +144,7 @@ function clearAnalysisFilters() {
 function showSignalDetails(signalId) {
     // Charger les détails du signal via AJAX
     $.ajax({
-        url: '{{ path("signals_details", {"id": "PLACEHOLDER"}) }}'.replace('PLACEHOLDER', signalId),
+        url: '{{ path("signals_details", {"id": 0}) }}'.replace('0', signalId),
         method: 'GET',
         success: function(data) {
             $('#signalDetailsContent').html(data);

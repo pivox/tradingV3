@@ -206,13 +206,26 @@ function viewDetails(id) {
 }
 
 function viewMeta(id) {
-    // Récupérer les métadonnées du signal (à implémenter côté serveur)
-    // Pour l'instant, on affiche un placeholder
     const metaContent = document.getElementById('metaContent');
-    metaContent.textContent = 'Métadonnées pour le signal ' + id + '\n\n' + 
-        'Cette fonctionnalité sera implémentée pour afficher les détails techniques du signal.';
-    
-    const modal = new bootstrap.Modal(document.getElementById('metaModal'));
-    modal.show();
+    metaContent.textContent = 'Chargement des métadonnées...';
+
+    fetch('{{ path("signals_meta", { id: 0 }) }}'.replace('0', id))
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status);
+            }
+            return response.json();
+        })
+        .then(data => {
+            // Afficher joliment le JSON
+            metaContent.textContent = JSON.stringify(data.meta ?? data, null, 2);
+            const modal = new bootstrap.Modal(document.getElementById('metaModal'));
+            modal.show();
+        })
+        .catch(error => {
+            metaContent.textContent = 'Erreur lors du chargement des métadonnées: ' + error;
+            const modal = new bootstrap.Modal(document.getElementById('metaModal'));
+            modal.show();
+        });
 }
 </script>

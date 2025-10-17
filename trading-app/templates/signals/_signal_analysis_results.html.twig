@@ -63,13 +63,15 @@
                                             {% for parentTf, parentData in analysis.parent_analysis %}
                                                 <div class="small mb-1">
                                                     <strong>{{ parentTf }}:</strong>
-                                                    {% if parentData.error %}
+                                                    {% if parentData.error is defined and parentData.error %}
                                                         <span class="text-danger">{{ parentData.error }}</span>
                                                     {% else %}
-                                                        {% if parentData.indicators.rsi %}
+                                                        {% if parentData.indicators is defined and parentData.indicators.rsi is defined %}
                                                             RSI: {{ parentData.indicators.rsi|number_format(2) }}
                                                         {% endif %}
-                                                        <small class="text-muted">({{ parentData.klines_count }} klines)</small>
+                                                        {% if parentData.klines_count is defined %}
+                                                            <small class="text-muted">({{ parentData.klines_count }} klines)</small>
+                                                        {% endif %}
                                                     {% endif %}
                                                 </div>
                                             {% endfor %}
@@ -79,7 +81,7 @@
                                                 <strong>{{ analysis.klines|length }} klines</strong>
                                                 {% if analysis.klines|length > 0 %}
                                                     <div class="text-muted">
-                                                        Dernière: {{ analysis.klines|last.klineTime|date('H:i:s') }}
+                                                        Dernière: {{ analysis.klines|last.openTime|date('H:i:s') }}
                                                     </div>
                                                 {% endif %}
                                             </div>
