@@ -21,7 +21,11 @@ final class EntryZoneDto
         public readonly float $depthTopUsd,
         public readonly bool $qualityPassed,
         public readonly array $evidence, // Métriques de preuve
-        public readonly int $timestamp
+        public readonly int $timestamp,
+        public readonly bool $isValidEntry = true,
+        public readonly ?int $cancelAfterTs = null,
+        public readonly ?float $suggestedLeverage = null,
+        public readonly ?float $suggestedStopPrice = null
     ) {
     }
 
@@ -52,7 +56,11 @@ final class EntryZoneDto
             'depth_top_usd' => $this->depthTopUsd,
             'quality_passed' => $this->qualityPassed,
             'evidence' => $this->evidence,
-            'timestamp' => $this->timestamp
+            'timestamp' => $this->timestamp,
+            'is_valid_entry' => $this->isValidEntry,
+            'cancel_after_ts' => $this->cancelAfterTs,
+            'suggested_leverage' => $this->suggestedLeverage,
+            'suggested_stop_price' => $this->suggestedStopPrice
         ];
     }
 }

@@ -1,4 +1,4 @@
-version: '2.5.31'
+version: '2.5.32'
 
 meta:
     name: SCALPING v2.0 - MTF + Pipeline + Leverage
@@ -120,7 +120,7 @@ timeframes:
 
 # ======== LOGIC RULES ========
 validation:
-    start_from_timeframe: '15m'   # 4h | 1h | 15m | 5m | 1m
+    start_from_timeframe: '4h'   # 4h | 1h | 15m | 5m | 1m
     timeframe:
         '4h':            # Contexte / structure (pas de MACD ici)
             long:

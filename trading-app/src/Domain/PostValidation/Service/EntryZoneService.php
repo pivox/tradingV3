@@ -55,6 +55,20 @@ final class EntryZoneService
         // Filtre de qualité
         $qualityPassed = $this->checkQualityFilters($marketData, $config);
 
+        // Conditions de validation spécifiques (RSI, anti-extension, VWAP side, volume)
+        $isValidEntry = $this->validateEntryConditions($side, $marketData, $executionTimeframe, $zoneWidth, $config);
+
+        // Validité temporelle 3-5 minutes
+        $validity = (int)($config['validity_seconds'] ?? 240); // défaut 4 minutes
+        $cancelAfter = time() + max(60, min(600, $validity));
+
+        // Levier suggéré basé sur ATR(5m)
+        $suggestedLev = $this->suggestLeverageFromAtr($marketData);
+
+        // Stop suggéré basé sur ATR(5m)
+        $mid = ($entryMin + $entryMax) / 2.0;
+        $stop = $this->computeStopFromAtr5m($mid, $side, $marketData, (float)($config['sl_mult_atr'] ?? 1.5));
+
         // Métriques de preuve
         $evidence = $this->buildEvidence($marketData, $atrValue, $zoneWidth, $qualityPassed);
 
@@ -70,7 +84,11 @@ final class EntryZoneService
             depthTopUsd: $marketData->depthTopUsd,
             qualityPassed: $qualityPassed,
             evidence: $evidence,
-            timestamp: time()
+            timestamp: time(),
+            isValidEntry: $isValidEntry,
+            cancelAfterTs: $cancelAfter,
+            suggestedLeverage: $suggestedLev,
+            suggestedStopPrice: $stop
         );
 
         $this->logger->info('[EntryZone] Entry zone calculated', [
@@ -233,5 +251,53 @@ final class EntryZoneService
     {
         $config = $this->config->getTradingConf('post_validation');
         return $config['entry_zone'] ?? [];
+    }
+
+    private function validateEntryConditions(string $side, MarketDataDto $m, string $tf, float $zoneWidth, array $config): bool
+    {
+        $sideLower = strtolower($side);
+        $isLong = $sideLower === 'long' || $sideLower === 'LONG';
+
+        // RSI
+        $rsi = $m->rsi1m;
+        $rsiOk = $isLong ? ($rsi < 70.0) : ($rsi > 30.0);
+
+        // Anti-extension (prix vs ancrage + 2*ATR1m pour long; -2*ATR1m pour short)
+        $anchor = $m->vwap; // ou MA21 si config
+        $antiExtOk = $isLong
+            ? ($m->lastPrice <= $anchor + 2.0 * $m->atr1m)
+            : ($m->lastPrice >= $anchor - 2.0 * $m->atr1m);
+
+        // Volume
+        $volOk = ($m->volumeRatio1m >= (float)($config['volume_ratio_min'] ?? 1.2));
+
+        // VWAP side cohérente
+        $vwapSideOk = $isLong ? ($m->lastPrice >= $anchor) : ($m->lastPrice <= $anchor);
+
+        // Validité temporelle sera gérée séparément
+
+        return $rsiOk && $antiExtOk && $volOk && $vwapSideOk;
+    }
+
+    private function suggestLeverageFromAtr(MarketDataDto $m): float
+    {
+        if ($m->atr5m <= 0.0 || $m->lastPrice <= 0.0) {
+            return 2.0;
+        }
+        $k = 1.0; // constante politique de risque
+        $lev = $k / ($m->atr5m / $m->lastPrice);
+        $lev = max(2.0, min(20.0, $lev));
+        // Respect du bracket exchange
+        $maxLev = 20.0;
+        foreach ($m->leverageBracket as $b) {
+            $maxLev = max($maxLev, (float)($b['initial_leverage'] ?? 0));
+        }
+        return min($lev, $maxLev);
+    }
+
+    private function computeStopFromAtr5m(float $entryMid, string $side, MarketDataDto $m, float $k): float
+    {
+        $distance = $k * $m->atr5m;
+        return strtolower($side) === 'long' ? ($entryMid - $distance) : ($entryMid + $distance);
     }
 }

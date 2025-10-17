@@ -53,8 +53,9 @@ final class MarketDataProvider
         // 4. Récupération du bracket de levier
         $leverageBracket = $this->getLeverageBracket($symbol);
         
-        // 5. Calcul des indicateurs (VWAP, ATR)
-        $indicators = $this->calculateIndicators($symbol);
+        // 5. Calcul des indicateurs (VWAP, ATR, RSI, volume_ratio)
+        $tickSize = (float)($contractDetails['tick_size'] ?? 0.0);
+        $indicators = $this->calculateIndicators($symbol, $tickSize);
         
         // 6. Récupération des données de funding et OI
         $fundingData = $this->getFundingData($symbol);
@@ -71,6 +72,8 @@ final class MarketDataProvider
             vwap: $indicators['vwap'],
             atr1m: $indicators['atr_1m'],
             atr5m: $indicators['atr_5m'],
+            rsi1m: $indicators['rsi_1m'],
+            volumeRatio1m: $indicators['volume_ratio_1m'],
             fundingRate: $fundingData['funding_rate'],
             openInterest: $fundingData['open_interest'],
             lastUpdateTimestamp: $priceData['timestamp'],
@@ -320,7 +323,7 @@ final class MarketDataProvider
     /**
      * Calcule les indicateurs (VWAP, ATR)
      */
-    private function calculateIndicators(string $symbol): array
+    private function calculateIndicators(string $symbol, float $tickSize): array
     {
         try {
             // VWAP intraday
@@ -331,17 +334,25 @@ final class MarketDataProvider
             $volumes = array_map(fn($k) => $k->getVolume(), $klines1m);
             $vwap = $this->vwapCalculator->calculate($highs, $lows, $closes, $volumes);
 
-            // ATR 1m et 5m
+            // ATR 1m et 5m (robustes)
             $klines5m = $this->klineRepository->findLatestKlines($symbol, '5m', 288); // 24h
             $ohlc1m = array_map(fn($k) => ['high' => $k->getHigh(), 'low' => $k->getLow(), 'close' => $k->getClose()], $klines1m);
             $ohlc5m = array_map(fn($k) => ['high' => $k->getHigh(), 'low' => $k->getLow(), 'close' => $k->getClose()], $klines5m);
-            $atr1m = $this->atrCalculator->compute($ohlc1m, 14);
-            $atr5m = $this->atrCalculator->compute($ohlc5m, 14);
+            $atr1m = $this->atrCalculator->computeWithRules($ohlc1m, 14, 'wilder', '1m', $tickSize);
+            $atr5m = $this->atrCalculator->computeWithRules($ohlc5m, 14, 'wilder', '5m', $tickSize);
+
+            // RSI(14) 1m
+            $rsi1m = $this->computeRsi14($closes);
+
+            // Volume ratio (dernier volume vs moyenne 50)
+            $volumeRatio = $this->computeVolumeRatio($volumes, 50);
 
             return [
                 'vwap' => $vwap,
                 'atr_1m' => $atr1m,
-                'atr_5m' => $atr5m
+                'atr_5m' => $atr5m,
+                'rsi_1m' => $rsi1m,
+                'volume_ratio_1m' => $volumeRatio
             ];
         } catch (\Exception $e) {
             $this->logger->warning('[MarketDataProvider] Indicators calculation failed', [
@@ -351,9 +362,44 @@ final class MarketDataProvider
             return [
                 'vwap' => 0.0,
                 'atr_1m' => 0.0,
-                'atr_5m' => 0.0
+                'atr_5m' => 0.0,
+                'rsi_1m' => 0.0,
+                'volume_ratio_1m' => 0.0
             ];
         }
+    }
+
+    private function computeRsi14(array $closes): float
+    {
+        $n = count($closes);
+        $period = 14;
+        if ($n <= $period) return 0.0;
+        $gains = $losses = [];
+        for ($i = 1; $i < $n; $i++) {
+            $d = (float)$closes[$i] - (float)$closes[$i - 1];
+            $gains[] = max(0.0, $d);
+            $losses[] = max(0.0, -$d);
+        }
+        $avgGain = array_sum(array_slice($gains, 0, $period)) / $period;
+        $avgLoss = array_sum(array_slice($losses, 0, $period)) / $period;
+        for ($i = $period; $i < count($gains); $i++) {
+            $avgGain = (($avgGain * ($period - 1)) + $gains[$i]) / $period;
+            $avgLoss = (($avgLoss * ($period - 1)) + $losses[$i]) / $period;
+        }
+        if ($avgLoss == 0.0) return 100.0;
+        $rs = $avgGain / $avgLoss;
+        return 100.0 - (100.0 / (1.0 + $rs));
+    }
+
+    private function computeVolumeRatio(array $volumes, int $window): float
+    {
+        $n = count($volumes);
+        if ($n === 0) return 0.0;
+        $last = (float) end($volumes);
+        $slice = array_slice($volumes, max(0, $n - $window));
+        $mean = array_sum($slice) / max(1, count($slice));
+        if ($mean <= 0.0) return 0.0;
+        return $last / $mean;
     }
 
     /**
