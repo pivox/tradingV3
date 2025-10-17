@@ -67,7 +67,7 @@ atr:
 # ======== INDICATOR CALCULATION MODE ========
 indicator_calculation:
     mode: sql                            # 'php' ou 'sql'
-    fallback_to_php: false                # fallback vers PHP si SQL échoue
+    fallback_to_php: true                # fallback vers PHP si SQL échoue
     performance_threshold_ms: 10        # seuil de performance pour switch automatique
     meta: >
         Mode de calcul des indicateurs: 'sql' utilise les vues matérialisées PostgreSQL,
@@ -121,58 +121,61 @@ timeframes:
 # ======== LOGIC RULES ========
 validation:
     timeframe:
-        '4h':
+        '4h':            # Contexte / structure (pas de MACD ici)
             long:
                 - ema_50_gt_200
-                - macd_hist_gt_0
                 - close_above_ema_200
+                - price_regime_ok_long
             short:
                 - ema_50_lt_200
-                - macd_hist_lt_0
                 - close_below_ema_200
-        '1h':
+                - price_regime_ok_short
+
+        '1h':            # Biais + momentum
             long:
                 - close_above_ema_200
                 - macd_hist_gt_0
-                - price_regime_ok
+                - price_regime_ok_long
             short:
                 - close_below_ema_200
                 - macd_hist_lt_0
-                - price_regime_ok
-        '15m':
+                - price_regime_ok_short
+
+        '15m':           # Exécution/timing (assoupli)
             long:
                 - ema_20_gt_50
                 - macd_hist_gt_0
                 - close_above_vwap
-                - rsi_lt_70                 # timing: éviter d’entrer en surachat
+                - rsi_lt_80                    # assoupli: 70 -> 80
             short:
                 - ema_20_lt_50
                 - macd_hist_lt_0
                 - close_below_vwap
-                - rsi_gt_30                 # timing: éviter d’entrer en survente
-        '5m':
+                - rsi_gt_20                    # assoupli: 30 -> 20
+
+        '5m':            # Exécution (assoupli - VWAP retiré)
             long:
                 - ema_20_gt_50
                 - macd_hist_gt_0
-                - close_above_vwap
-                - rsi_lt_70
+                - rsi_lt_80                    # assoupli: 70 -> 80, VWAP retiré
             short:
                 - ema_20_lt_50
                 - macd_hist_lt_0
-                - close_below_vwap
-                - rsi_gt_30
-        '1m':
+                - rsi_gt_20                    # assoupli: 30 -> 20, VWAP retiré
+
+        '1m':            # Micro-timing (ultra-assoupli)
             long:
                 - ema_20_gt_50
-                - close_above_vwap
-                - rsi_lt_70
+                - macd_hist_gt_0
+                - rsi_lt_85                    # très assoupli: 70 -> 85, VWAP retiré
             short:
                 - ema_20_lt_50
-                - close_below_vwap
-                - rsi_gt_30
+                - macd_hist_lt_0
+                - rsi_gt_15                    # très assoupli: 30 -> 15, VWAP retiré
+
     meta: >
-        Contexte strict (4h/1h) sur EMA/MACD/EMA200. Exécution (15m/5m/1m) ajoute VWAP
-        et RSI comme filtre de timing pour éviter entrées "au sommet/au fond".
+        Contexte strict (4h) sur structure EMA ; 1h ajoute le momentum (MACD).
+        L'exécution (15m/5m/1m) assouplie: RSI élargi, VWAP optionnel sur 5m/1m pour plus d'opportunités.
 
 # ======== HIGH-CONVICTION DETECTION ========
 conviction_high:
@@ -193,14 +196,12 @@ reversal_protection:
     none_of:
         - extended_above_ma21_2atr: true   # long: extension excessive
         - extended_below_ma21_2atr: true   # short: extension excessive
-        - rsi_gt_70: true                  # éviter longs en surachat
-        - rsi_lt_30: true                  # éviter shorts en survente
-        - bearish_divergence_rsi_macd: true
-        - bullish_divergence_rsi_macd: true
-        - exhaustion_candle: true          # mèches d’essoufflement (shooting star/hammer contraires)
+        - rsi_gt_85: true                  # éviter longs en surachat extrême (assoupli: 70->85)
+        - rsi_lt_15: true                  # éviter shorts en survente extrême (assoupli: 30->15)
+        # Divergences et exhaustion_candle retirés (trop restrictifs)
     meta: >
-        Garde-fous pour bloquer les entrées en zone d’épuisement ou divergence. Basé sur ATR/EMA21,
-        RSI, MACD et patterns de chandeliers.
+        Garde-fous assouplis: seules les extensions ATR et RSI extrêmes bloquent les entrées.
+        Divergences et patterns de chandeliers retirés pour plus d'opportunités.
 
 # ======== SCALP MODE TRIGGER (1–5 minutes) ========
 scalp_mode_trigger:

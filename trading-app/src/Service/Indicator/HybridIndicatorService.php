@@ -47,7 +47,28 @@ class HybridIndicatorService implements IndicatorProviderPort
                         'duration_ms' => $duration,
                         'threshold_ms' => $this->modeService->getPerformanceThreshold(),
                     ]);
-                    return $this->phpService->calculateIndicators($symbol, $timeframe, $klines);
+                    $phpSnapshot = $this->phpService->calculateIndicators($symbol, $timeframe, $klines);
+                    // Override source to indicate fallback
+                    return new IndicatorSnapshotDto(
+                        symbol: $phpSnapshot->symbol,
+                        timeframe: $phpSnapshot->timeframe,
+                        klineTime: $phpSnapshot->klineTime,
+                        ema20: $phpSnapshot->ema20,
+                        ema50: $phpSnapshot->ema50,
+                        macd: $phpSnapshot->macd,
+                        macdSignal: $phpSnapshot->macdSignal,
+                        macdHistogram: $phpSnapshot->macdHistogram,
+                        atr: $phpSnapshot->atr,
+                        rsi: $phpSnapshot->rsi,
+                        vwap: $phpSnapshot->vwap,
+                        bbUpper: $phpSnapshot->bbUpper,
+                        bbMiddle: $phpSnapshot->bbMiddle,
+                        bbLower: $phpSnapshot->bbLower,
+                        ma9: $phpSnapshot->ma9,
+                        ma21: $phpSnapshot->ma21,
+                        meta: $phpSnapshot->meta,
+                        source: 'PHP_FALLBACK'
+                    );
                 }
                 return $snapshot;
             } catch (\Exception $e) {
@@ -57,13 +78,55 @@ class HybridIndicatorService implements IndicatorProviderPort
                         'timeframe' => $timeframe->value,
                         'error' => $e->getMessage(),
                     ]);
-                    return $this->phpService->calculateIndicators($symbol, $timeframe, $klines);
+                    $phpSnapshot = $this->phpService->calculateIndicators($symbol, $timeframe, $klines);
+                    // Override source to indicate fallback
+                    return new IndicatorSnapshotDto(
+                        symbol: $phpSnapshot->symbol,
+                        timeframe: $phpSnapshot->timeframe,
+                        klineTime: $phpSnapshot->klineTime,
+                        ema20: $phpSnapshot->ema20,
+                        ema50: $phpSnapshot->ema50,
+                        macd: $phpSnapshot->macd,
+                        macdSignal: $phpSnapshot->macdSignal,
+                        macdHistogram: $phpSnapshot->macdHistogram,
+                        atr: $phpSnapshot->atr,
+                        rsi: $phpSnapshot->rsi,
+                        vwap: $phpSnapshot->vwap,
+                        bbUpper: $phpSnapshot->bbUpper,
+                        bbMiddle: $phpSnapshot->bbMiddle,
+                        bbLower: $phpSnapshot->bbLower,
+                        ma9: $phpSnapshot->ma9,
+                        ma21: $phpSnapshot->ma21,
+                        meta: $phpSnapshot->meta,
+                        source: 'PHP_FALLBACK'
+                    );
                 }
                 throw $e;
             }
         }
 
-        return $this->phpService->calculateIndicators($symbol, $timeframe, $klines);
+        $phpSnapshot = $this->phpService->calculateIndicators($symbol, $timeframe, $klines);
+        // Ensure source is set to PHP
+        return new IndicatorSnapshotDto(
+            symbol: $phpSnapshot->symbol,
+            timeframe: $phpSnapshot->timeframe,
+            klineTime: $phpSnapshot->klineTime,
+            ema20: $phpSnapshot->ema20,
+            ema50: $phpSnapshot->ema50,
+            macd: $phpSnapshot->macd,
+            macdSignal: $phpSnapshot->macdSignal,
+            macdHistogram: $phpSnapshot->macdHistogram,
+            atr: $phpSnapshot->atr,
+            rsi: $phpSnapshot->rsi,
+            vwap: $phpSnapshot->vwap,
+            bbUpper: $phpSnapshot->bbUpper,
+            bbMiddle: $phpSnapshot->bbMiddle,
+            bbLower: $phpSnapshot->bbLower,
+            ma9: $phpSnapshot->ma9,
+            ma21: $phpSnapshot->ma21,
+            meta: $phpSnapshot->meta,
+            source: 'PHP'
+        );
     }
 
     public function saveIndicatorSnapshot(IndicatorSnapshotDto $snapshot): void

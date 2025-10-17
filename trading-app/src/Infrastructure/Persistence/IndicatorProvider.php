@@ -41,6 +41,7 @@ final class IndicatorProvider implements IndicatorProviderPort
             ->setSymbol($snapshot->symbol)
             ->setTimeframe($snapshot->timeframe)
             ->setKlineTime($snapshot->klineTime)
+            ->setSource($snapshot->source)
             ->setValues([
                 'ema20' => $snapshot->ema20?->toFixed(12),
                 'ema50' => $snapshot->ema50?->toFixed(12),

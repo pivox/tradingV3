@@ -336,6 +336,205 @@ class SqlIndicatorService
     }
 
     /**
+     * Récupère le dernier snapshot d'indicateurs depuis les vues matérialisées
+     */
+    public function getLastIndicatorSnapshot(string $symbol, \App\Domain\Common\Enum\Timeframe $timeframe): ?\App\Domain\Common\Dto\IndicatorSnapshotDto
+    {
+        try {
+            // Récupérer tous les indicateurs depuis les vues matérialisées
+            $indicators = $this->getAllIndicators($symbol, $timeframe->value, 1);
+            
+            if (empty($indicators['ema']) && empty($indicators['rsi']) && empty($indicators['macd'])) {
+                $this->logger?->info('Aucun indicateur trouvé pour le symbole et timeframe', [
+                    'symbol' => $symbol,
+                    'timeframe' => $timeframe->value
+                ]);
+                return null;
+            }
+
+            // Déterminer le bucket le plus récent
+            $latestBucket = null;
+            foreach ($indicators as $indicatorType => $data) {
+                if (!empty($data)) {
+                    $bucket = $data[0]['bucket'] ?? null;
+                    if ($bucket && ($latestBucket === null || $bucket > $latestBucket)) {
+                        $latestBucket = $bucket;
+                    }
+                }
+            }
+
+            if ($latestBucket === null) {
+                return null;
+            }
+
+            // Extraire les valeurs des indicateurs pour le bucket le plus récent
+            $ema = $this->extractLatestValue($indicators['ema'], $latestBucket);
+            $rsi = $this->extractLatestValue($indicators['rsi'], $latestBucket);
+            $macd = $this->extractLatestValue($indicators['macd'], $latestBucket);
+            $vwap = $this->extractLatestValue($indicators['vwap'], $latestBucket);
+            $bollinger = $this->extractLatestValue($indicators['bollinger'], $latestBucket);
+
+            // Créer le DTO avec les valeurs extraites
+            return new \App\Domain\Common\Dto\IndicatorSnapshotDto(
+                symbol: $symbol,
+                timeframe: $timeframe,
+                klineTime: new \DateTimeImmutable($latestBucket, new \DateTimeZone('UTC')),
+                ema20: $ema ? \Brick\Math\BigDecimal::of($ema['ema21'] ?? 0) : null,
+                ema50: $ema ? \Brick\Math\BigDecimal::of($ema['ema50'] ?? 0) : null,
+                macd: $macd ? \Brick\Math\BigDecimal::of($macd['macd'] ?? 0) : null,
+                macdSignal: $macd ? \Brick\Math\BigDecimal::of($macd['signal'] ?? 0) : null,
+                macdHistogram: $macd ? \Brick\Math\BigDecimal::of($macd['histogram'] ?? 0) : null,
+                rsi: $rsi ? (float)$rsi['rsi'] : null,
+                vwap: $vwap ? \Brick\Math\BigDecimal::of($vwap['vwap'] ?? 0) : null,
+                bbUpper: $bollinger ? \Brick\Math\BigDecimal::of($bollinger['upper_band'] ?? 0) : null,
+                bbMiddle: $bollinger ? \Brick\Math\BigDecimal::of($bollinger['middle_band'] ?? 0) : null,
+                bbLower: $bollinger ? \Brick\Math\BigDecimal::of($bollinger['lower_band'] ?? 0) : null,
+                ma9: $ema ? \Brick\Math\BigDecimal::of($ema['ema9'] ?? 0) : null,
+                ma21: $ema ? \Brick\Math\BigDecimal::of($ema['ema21'] ?? 0) : null,
+                meta: [
+                    'source' => 'sql_materialized_views',
+                    'bucket' => $latestBucket,
+                    'indicators_available' => array_keys(array_filter($indicators, fn($data) => !empty($data)))
+                ]
+            );
+
+        } catch (\Exception $e) {
+            $this->logger?->error('Erreur lors de la récupération du dernier snapshot d\'indicateurs', [
+                'symbol' => $symbol,
+                'timeframe' => $timeframe->value,
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Récupère les snapshots d'indicateurs pour une période
+     */
+    public function getIndicatorSnapshots(string $symbol, \App\Domain\Common\Enum\Timeframe $timeframe, int $limit = 100): array
+    {
+        try {
+            // Récupérer tous les indicateurs depuis les vues matérialisées
+            $indicators = $this->getAllIndicators($symbol, $timeframe->value, $limit);
+            
+            if (empty($indicators['ema']) && empty($indicators['rsi']) && empty($indicators['macd'])) {
+                $this->logger?->info('Aucun indicateur trouvé pour le symbole et timeframe', [
+                    'symbol' => $symbol,
+                    'timeframe' => $timeframe->value
+                ]);
+                return [];
+            }
+
+            // Collecter tous les buckets uniques
+            $buckets = [];
+            foreach ($indicators as $indicatorType => $data) {
+                foreach ($data as $item) {
+                    $bucket = $item['bucket'] ?? null;
+                    if ($bucket && !in_array($bucket, $buckets)) {
+                        $buckets[] = $bucket;
+                    }
+                }
+            }
+
+            // Trier les buckets par ordre décroissant (plus récent en premier)
+            rsort($buckets);
+
+            // Limiter le nombre de buckets
+            $buckets = array_slice($buckets, 0, $limit);
+
+            $snapshots = [];
+            foreach ($buckets as $bucket) {
+                $snapshot = $this->createSnapshotForBucket($symbol, $timeframe, $bucket, $indicators);
+                if ($snapshot) {
+                    $snapshots[] = $snapshot;
+                }
+            }
+
+            return $snapshots;
+
+        } catch (\Exception $e) {
+            $this->logger?->error('Erreur lors de la récupération des snapshots d\'indicateurs', [
+                'symbol' => $symbol,
+                'timeframe' => $timeframe->value,
+                'limit' => $limit,
+                'error' => $e->getMessage()
+            ]);
+            return [];
+        }
+    }
+
+    /**
+     * Crée un snapshot pour un bucket donné
+     */
+    private function createSnapshotForBucket(
+        string $symbol, 
+        \App\Domain\Common\Enum\Timeframe $timeframe, 
+        string $bucket, 
+        array $indicators
+    ): ?\App\Domain\Common\Dto\IndicatorSnapshotDto {
+        // Extraire les valeurs des indicateurs pour ce bucket
+        $ema = $this->extractLatestValue($indicators['ema'], $bucket);
+        $rsi = $this->extractLatestValue($indicators['rsi'], $bucket);
+        $macd = $this->extractLatestValue($indicators['macd'], $bucket);
+        $vwap = $this->extractLatestValue($indicators['vwap'], $bucket);
+        $bollinger = $this->extractLatestValue($indicators['bollinger'], $bucket);
+
+        // Vérifier qu'au moins un indicateur a des données pour ce bucket
+        if (!$ema && !$rsi && !$macd && !$vwap && !$bollinger) {
+            return null;
+        }
+
+        return new \App\Domain\Common\Dto\IndicatorSnapshotDto(
+            symbol: $symbol,
+            timeframe: $timeframe,
+            klineTime: new \DateTimeImmutable($bucket, new \DateTimeZone('UTC')),
+            ema20: $ema ? \Brick\Math\BigDecimal::of($ema['ema21'] ?? 0) : null,
+            ema50: $ema ? \Brick\Math\BigDecimal::of($ema['ema50'] ?? 0) : null,
+            macd: $macd ? \Brick\Math\BigDecimal::of($macd['macd'] ?? 0) : null,
+            macdSignal: $macd ? \Brick\Math\BigDecimal::of($macd['signal'] ?? 0) : null,
+            macdHistogram: $macd ? \Brick\Math\BigDecimal::of($macd['histogram'] ?? 0) : null,
+            rsi: $rsi ? (float)$rsi['rsi'] : null,
+            vwap: $vwap ? \Brick\Math\BigDecimal::of($vwap['vwap'] ?? 0) : null,
+            bbUpper: $bollinger ? \Brick\Math\BigDecimal::of($bollinger['upper_band'] ?? 0) : null,
+            bbMiddle: $bollinger ? \Brick\Math\BigDecimal::of($bollinger['middle_band'] ?? 0) : null,
+            bbLower: $bollinger ? \Brick\Math\BigDecimal::of($bollinger['lower_band'] ?? 0) : null,
+            ma9: $ema ? \Brick\Math\BigDecimal::of($ema['ema9'] ?? 0) : null,
+            ma21: $ema ? \Brick\Math\BigDecimal::of($ema['ema21'] ?? 0) : null,
+            meta: [
+                'source' => 'sql_materialized_views',
+                'bucket' => $bucket,
+                'indicators_available' => array_keys(array_filter([
+                    'ema' => $ema,
+                    'rsi' => $rsi,
+                    'macd' => $macd,
+                    'vwap' => $vwap,
+                    'bollinger' => $bollinger
+                ]))
+            ]
+        );
+    }
+
+    /**
+     * Extrait la valeur la plus récente pour un bucket donné
+     */
+    private function extractLatestValue(array $data, string $targetBucket): ?array
+    {
+        if (empty($data)) {
+            return null;
+        }
+
+        // Chercher le bucket exact
+        foreach ($data as $item) {
+            if ($item['bucket'] === $targetBucket) {
+                return $item;
+            }
+        }
+
+        // Si pas trouvé, retourner le premier élément (le plus récent)
+        return $data[0];
+    }
+
+    /**
      * Rafraîchit les vues matérialisées
      */
     public function refreshMaterializedViews(): void

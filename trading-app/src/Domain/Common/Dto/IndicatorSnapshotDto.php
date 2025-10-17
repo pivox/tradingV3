@@ -26,7 +26,8 @@ final readonly class IndicatorSnapshotDto
         public ?BigDecimal $bbLower = null,
         public ?BigDecimal $ma9 = null,
         public ?BigDecimal $ma21 = null,
-        public array $meta = []
+        public array $meta = [],
+        public string $source = 'PHP'
     ) {
     }
 
@@ -50,6 +51,7 @@ final readonly class IndicatorSnapshotDto
             'ma9' => $this->ma9?->toFixed(12),
             'ma21' => $this->ma21?->toFixed(12),
             'meta' => $this->meta,
+            'source' => $this->source,
         ];
     }
 
@@ -72,7 +74,8 @@ final readonly class IndicatorSnapshotDto
             bbLower: isset($data['bb_lower']) ? BigDecimal::of($data['bb_lower']) : null,
             ma9: isset($data['ma9']) ? BigDecimal::of($data['ma9']) : null,
             ma21: isset($data['ma21']) ? BigDecimal::of($data['ma21']) : null,
-            meta: $data['meta'] ?? []
+            meta: $data['meta'] ?? [],
+            source: $data['source'] ?? 'PHP'
         );
     }
 

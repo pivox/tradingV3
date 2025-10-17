@@ -7,12 +7,15 @@ namespace App\Domain\Mtf\Service;
 use App\Domain\Common\Enum\SignalSide;
 use App\Domain\Trading\Service\TradingDecisionService;
 use App\Domain\Trading\Service\TradeContextService;
+use App\Event\MtfRunCompletedEvent;
 use App\Repository\MtfLockRepository;
 use App\Repository\MtfSwitchRepository;
 use App\Repository\ContractRepository;
+use App\Service\Indicator\SqlIndicatorService;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\Uuid;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Throwable;
 
 class MtfRunService
@@ -26,6 +29,8 @@ class MtfRunService
         private readonly ClockInterface $clock,
         private readonly TradingDecisionService $tradingDecisionService,
         private readonly TradeContextService $tradeContext,
+        private readonly SqlIndicatorService $sqlIndicatorService,
+        private readonly EventDispatcherInterface $eventDispatcher,
     ) {
     }
 
@@ -228,6 +233,12 @@ class MtfRunService
                 'status' => 'completed',
             ];
 
+            // Rafraîchir les vues matérialisées après le traitement de tous les symboles
+            $this->refreshMaterializedViewsAfterRun($runId);
+
+            // Déclencher l'événement de completion
+            $this->dispatchMtfRunCompletedEvent($runId, $symbols, $summary, $results, $startTime);
+
             $this->logger->info('[MTF Run] Completed', $summary);
             return yield from $this->yieldFinalResult($summary, $results, $startTime, $runId);
         } finally {
@@ -328,6 +339,64 @@ class MtfRunService
         $signalSide = strtoupper((string)($result['signal_side'] ?? 'NONE'));
 
         return $aligned && $contextDir !== 'NONE' && $contextDir === $signalSide;
+    }
+
+    /**
+     * Rafraîchit les vues matérialisées après le traitement de tous les symboles
+     */
+    private function refreshMaterializedViewsAfterRun(\Ramsey\Uuid\UuidInterface $runId): void
+    {
+        try {
+            $this->logger->info('[MTF Run] Refreshing materialized views', [
+                'run_id' => $runId->toString(),
+            ]);
+
+            $this->sqlIndicatorService->refreshMaterializedViews();
+
+            $this->logger->info('[MTF Run] Materialized views refreshed successfully', [
+                'run_id' => $runId->toString(),
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->error('[MTF Run] Failed to refresh materialized views', [
+                'run_id' => $runId->toString(),
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+        }
+    }
+
+    /**
+     * Déclenche l'événement de completion du cycle MTF
+     */
+    private function dispatchMtfRunCompletedEvent(
+        \Ramsey\Uuid\UuidInterface $runId,
+        array $symbols,
+        array $summary,
+        array $results,
+        float $startTime
+    ): void {
+        try {
+            $event = new MtfRunCompletedEvent(
+                $runId->toString(),
+                $symbols,
+                count($symbols),
+                microtime(true) - $startTime,
+                $summary,
+                $results
+            );
+
+            $this->eventDispatcher->dispatch($event, MtfRunCompletedEvent::NAME);
+
+            $this->logger->info('[MTF Run] Event dispatched', [
+                'run_id' => $runId->toString(),
+                'event_name' => MtfRunCompletedEvent::NAME,
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->error('[MTF Run] Failed to dispatch completion event', [
+                'run_id' => $runId->toString(),
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
