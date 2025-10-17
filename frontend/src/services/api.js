@@ -184,6 +184,174 @@ const api = {
             body: JSON.stringify({ symbol, interval, indicators })
         });
         return handleResponse(response);
+    },
+
+    // Order Plans
+    async getOrderPlans(params = {}) {
+        const queryParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== '' && value !== null && value !== undefined) {
+                queryParams.append(key, value);
+            }
+        });
+        const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+        const response = await fetch(`${config.apiUrl}/api/order-plans${queryString}`);
+        return handleResponse(response);
+    },
+
+    // MTF Switches
+    async getMtfSwitches(params = {}) {
+        const queryParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== '' && value !== null && value !== undefined) {
+                queryParams.append(key, value);
+            }
+        });
+        const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+        const response = await fetch(`${config.apiUrl}/api/mtf-switches${queryString}`);
+        return handleResponse(response);
+    },
+
+    async toggleMtfSwitch(switchId) {
+        const response = await fetch(`${config.apiUrl}/api/mtf-switches/${switchId}/toggle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        return handleResponse(response);
+    },
+
+    async addMtfSwitch(payload) {
+        const response = await fetch(`${config.apiUrl}/api/mtf-switches`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return handleResponse(response);
+    },
+
+    // Missing Klines
+    async getMissingKlines(params) {
+        const queryParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== '' && value !== null && value !== undefined) {
+                queryParams.append(key, value);
+            }
+        });
+        const response = await fetch(`${config.apiUrl}/api/klines/missing?${queryParams.toString()}`);
+        return handleResponse(response);
+    },
+
+    async triggerBackfill(payload) {
+        const response = await fetch(`${config.apiUrl}/api/klines/backfill`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return handleResponse(response);
+    },
+
+    // MTF States
+    async getMtfStates(params = {}) {
+        const queryParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== '' && value !== null && value !== undefined) {
+                queryParams.append(key, value);
+            }
+        });
+        const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+        const response = await fetch(`${config.apiUrl}/api/mtf-states${queryString}`);
+        return handleResponse(response);
+    },
+
+    // MTF Audits
+    async getMtfAudits(params = {}) {
+        const queryParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== '' && value !== null && value !== undefined) {
+                queryParams.append(key, value);
+            }
+        });
+        const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+        const response = await fetch(`${config.apiUrl}/api/mtf-audits${queryString}`);
+        return handleResponse(response);
+    },
+
+    // MTF Locks
+    async getMtfLocks(params = {}) {
+        const queryParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== '' && value !== null && value !== undefined) {
+                queryParams.append(key, value);
+            }
+        });
+        const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+        const response = await fetch(`${config.apiUrl}/api/mtf-locks${queryString}`);
+        return handleResponse(response);
+    },
+
+    // Indicator Snapshots
+    async getIndicatorSnapshots(params = {}) {
+        const queryParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== '' && value !== null && value !== undefined) {
+                queryParams.append(key, value);
+            }
+        });
+        const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+        const response = await fetch(`${config.apiUrl}/api/indicator-snapshots${queryString}`);
+        return handleResponse(response);
+    },
+
+    // Validation Cache
+    async getValidationCacheEntries(params = {}) {
+        const queryParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== '' && value !== null && value !== undefined) {
+                queryParams.append(key, value);
+            }
+        });
+        const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+        const response = await fetch(`${config.apiUrl}/api/validation-cache${queryString}`);
+        return handleResponse(response);
+    },
+
+    // Blacklisted Contracts
+    async getBlacklistedContracts(params = {}) {
+        const queryParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== '' && value !== null && value !== undefined) {
+                queryParams.append(key, value);
+            }
+        });
+        const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+        const response = await fetch(`${config.apiUrl}/api/blacklisted-contracts${queryString}`);
+        return handleResponse(response);
+    },
+
+    // Signals
+    async getSignals(params = {}) {
+        const queryParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== '' && value !== null && value !== undefined) {
+                queryParams.append(key, value);
+            }
+        });
+        const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+        const response = await fetch(`${config.apiUrl}/api/signals${queryString}`);
+        return handleResponse(response);
+    },
+
+    // Runtime History
+    async getRuntimeHistory(params = {}) {
+        const queryParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== '' && value !== null && value !== undefined) {
+                queryParams.append(key, value);
+            }
+        });
+        const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+        const response = await fetch(`${config.apiUrl}/api/runtime-history${queryString}`);
+        return handleResponse(response);
     }
 };
 

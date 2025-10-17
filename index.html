@@ -297,6 +297,16 @@
                 </div>
 
                 <div class="service-card">
+                    <span class="service-icon">🧭</span>
+                    <h3 class="service-title">MTF Overview Dashboard</h3>
+                    <p class="service-description">Vue synthétique des états MTF (sides actuels, audits, distribution des signaux)</p>
+                    <a href="http://localhost:3001/d/mtf-overview/mtf-overview" class="service-url" target="_blank">
+                        <span class="status-indicator status-unknown" id="status-mtf-overview"></span>
+                        Accéder au Dashboard MTF Overview
+                    </a>
+                </div>
+
+                <div class="service-card">
                     <span class="service-icon">🔍</span>
                     <h3 class="service-title">Loki API</h3>
                     <p class="service-description">API de logs centralisés pour l'agrégation des données</p>
@@ -574,6 +584,7 @@
                 { url: 'http://localhost:8081', id: 'status-phpmyadmin' },
                 { url: 'http://localhost:8233', id: 'status-temporal' },
                 // Dashboards Grafana
+                { url: 'http://localhost:3001/d/mtf-overview/mtf-overview', id: 'status-mtf-overview' },
                 { url: 'http://localhost:3001/d/test-simple/dashboard-test-simple', id: 'status-test-dashboard' },
                 { url: 'http://localhost:3001/d/trading-app-logs/trading-app-logs-dashboard', id: 'status-trading-logs' },
                 { url: 'http://localhost:3001/d/comprehensive-logs-clean/dashboard-logs-version-propre', id: 'status-clean-logs' },
@@ -600,6 +611,7 @@
                 'http://localhost:8081',  // phpMyAdmin
                 'http://localhost:8233',  // Temporal UI
                 // Dashboards Grafana principaux
+                'http://localhost:3001/d/mtf-overview/mtf-overview',
                 'http://localhost:3001/d/test-simple/dashboard-test-simple',
                 'http://localhost:3001/d/trading-app-logs/trading-app-logs-dashboard',
                 'http://localhost:3001/d/comprehensive-logs-clean/dashboard-logs-version-propre'
@@ -625,6 +637,7 @@
 • Temporal UI: http://localhost:8233
 
 📈 Dashboards Grafana:
+• MTF Overview: http://localhost:3001/d/mtf-overview/mtf-overview
 • Test Simple: http://localhost:3001/d/test-simple/dashboard-test-simple
 • Trading Logs: http://localhost:3001/d/trading-app-logs/trading-app-logs-dashboard
 • Logs Propre: http://localhost:3001/d/comprehensive-logs-clean/dashboard-logs-version-propre
@@ -658,6 +671,7 @@
         // Ouvrir tous les dashboards Grafana
         function openGrafanaDashboards() {
             const dashboardUrls = [
+                'http://localhost:3001/d/mtf-overview/mtf-overview',
                 'http://localhost:3001/d/test-simple/dashboard-test-simple',
                 'http://localhost:3001/d/trading-app-logs/trading-app-logs-dashboard',
                 'http://localhost:3001/d/comprehensive-logs-clean/dashboard-logs-version-propre',
@@ -709,6 +723,11 @@ Ou manuellement :
 • Mot de passe: admin
 
 📈 Dashboards Disponibles :
+
+🧭 MTF Overview Dashboard
+• URL: /d/mtf-overview/mtf-overview
+• Usage: Surveille les sides courants, répartition des signaux et historique des audits
+• Données: Tables `mtf_state` et `mtf_audit`
 
 🧪 Dashboard Test Simple
 • URL: /d/test-simple/dashboard-test-simple
