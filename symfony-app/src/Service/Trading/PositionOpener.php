@@ -150,6 +150,9 @@ final class PositionOpener
         $orderId = null;
 
         try {
+            /* ------------------ 0) Exposure guard ------------------ */
+            $this->ensureNoActiveExposure($symbol, $side, '[Market]');
+
             /* ------------------ 1) Config ------------------ */
             $cfg = $this->tradingParameters->all();
             $this->positionsLogger->info('Loaded trading config', $cfg);
@@ -698,6 +701,182 @@ final class PositionOpener
         return floor($v / $step) * $step;
     }
 
+
+    // ================= Exposure guards =================
+
+    private function ensureNoActiveExposure(string $symbol, string $side, string $context): void
+    {
+        $existingPosition = $this->findActivePosition($symbol);
+        if ($existingPosition !== null) {
+            $this->positionsLogger->warning("$context Position already open, skip order", [
+                'symbol' => $symbol,
+                'side' => $side,
+                'position' => $existingPosition,
+            ]);
+            throw new RuntimeException("Une position est déjà ouverte sur $symbol");
+        }
+
+        $existingOrder = $this->findPendingOrder($symbol);
+        if ($existingOrder !== null) {
+            $this->positionsLogger->warning("$context Order already pending, skip order", [
+                'symbol' => $symbol,
+                'side' => $side,
+                'order' => $existingOrder,
+            ]);
+            throw new RuntimeException("Un ordre est déjà en attente sur $symbol");
+        }
+    }
+
+    private function findActivePosition(string $symbol): ?array
+    {
+        try {
+            $response = $this->bitmartPositions->list(['symbol' => $symbol]);
+        } catch (Throwable $e) {
+            $this->positionsLogger->warning('Position lookup failed', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        $rows = $this->normalizePositionRows($response['data'] ?? []);
+        foreach ($rows as $row) {
+            if (!\is_array($row)) {
+                continue;
+            }
+            $sym = strtoupper((string)($row['symbol'] ?? $row['contract_symbol'] ?? ''));
+            if ($sym !== strtoupper($symbol)) {
+                continue;
+            }
+            if ($this->extractPositionSize($row) > 0.0) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizePositionRows(mixed $payload): array
+    {
+        if (!\is_array($payload)) {
+            return [];
+        }
+
+        if (isset($payload['positions']) && \is_array($payload['positions'])) {
+            return $this->normalizePositionRows($payload['positions']);
+        }
+
+        if (isset($payload['position']) && \is_array($payload['position'])) {
+            return $this->normalizePositionRows($payload['position']);
+        }
+
+        if (isset($payload['data']) && \is_array($payload['data'])) {
+            return $this->normalizePositionRows($payload['data']);
+        }
+
+        if (isset($payload['list']) && \is_array($payload['list'])) {
+            return $this->normalizePositionRows($payload['list']);
+        }
+
+        if ($this->isList($payload)) {
+            return array_values(array_filter($payload, static fn($row) => \is_array($row)));
+        }
+
+        return array_values(array_filter($payload, static fn($row) => \is_array($row)));
+    }
+
+    private function extractPositionSize(array $row): float
+    {
+        foreach (['size', 'hold_volume', 'volume'] as $key) {
+            if (!isset($row[$key])) {
+                continue;
+            }
+            $value = (float)$row[$key];
+            if ($value > 0.0) {
+                return $value;
+            }
+        }
+
+        return 0.0;
+    }
+
+    private function findPendingOrder(string $symbol): ?array
+    {
+        try {
+            $response = $this->ordersService->open(['symbol' => $symbol]);
+        } catch (Throwable $e) {
+            $this->positionsLogger->warning('Open orders lookup failed', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        $orders = $this->normalizeOrdersPayload($response['orders'] ?? []);
+        if ($orders !== []) {
+            return $orders[0];
+        }
+
+        $planOrders = $this->normalizeOrdersPayload($response['plan_orders'] ?? []);
+        if ($planOrders !== []) {
+            return $planOrders[0];
+        }
+
+        return null;
+    }
+
+    private function normalizeOrdersPayload(mixed $payload): array
+    {
+        if (!\is_array($payload)) {
+            return [];
+        }
+
+        if (isset($payload['order_list']) && \is_array($payload['order_list'])) {
+            return array_values(array_filter($payload['order_list'], static fn($row) => \is_array($row)));
+        }
+
+        if (isset($payload['orders']) && \is_array($payload['orders'])) {
+            return $this->normalizeOrdersPayload($payload['orders']);
+        }
+
+        if (isset($payload['data']) && \is_array($payload['data'])) {
+            return $this->normalizeOrdersPayload($payload['data']);
+        }
+
+        if (isset($payload['list']) && \is_array($payload['list'])) {
+            return $this->normalizeOrdersPayload($payload['list']);
+        }
+
+        if ($this->isList($payload)) {
+            return array_values(array_filter($payload, static fn($row) => \is_array($row)));
+        }
+
+        return array_values(array_filter(
+            $payload,
+            static fn($row) => \is_array($row) && (
+                isset($row['order_id'])
+                || isset($row['client_order_id'])
+                || isset($row['client_oid'])
+            )
+        ));
+    }
+
+    private function isList(array $array): bool
+    {
+        if (function_exists('array_is_list')) {
+            return array_is_list($array);
+        }
+
+        $expected = 0;
+        foreach ($array as $key => $_) {
+            if ($key !== $expected) {
+                return false;
+            }
+            $expected++;
+        }
+
+        return true;
+    }
 
     // ================= Helpers métier =================
 

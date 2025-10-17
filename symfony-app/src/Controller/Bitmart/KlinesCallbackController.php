@@ -615,7 +615,7 @@ final class KlinesCallbackController extends AbstractController
                     $this->positionOpener->openLimitAutoLevWithSr(
                         symbol:         $symbol,
                         finalSideUpper: $finalSide,
-                        marginUsdt:     40,//$config->getScalpMarginUsdt(),
+                        marginUsdt:     70,//$config->getScalpMarginUsdt(),
                         riskMaxPct:     $config->getScalpRiskMaxPct(),
                         rMultiple:      $config->getScalpRMultiple()
                     );

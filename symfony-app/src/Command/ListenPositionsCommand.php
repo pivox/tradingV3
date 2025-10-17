@@ -164,9 +164,10 @@ final class ListenPositionsCommand extends Command
             'side'          => $side,
             'entry_price'   => (float)($p['avg_open_price'] ?? $p['open_avg_price'] ?? 0.0),
             'size'          => (int)max(1, (float)($p['hold_volume'] ?? 0.0)), // contrats
-            // Optionnel: si tu as déjà des niveaux calculés côté store/DB :
-            // 'tp_price'   => isset($p['tp_price']) ? (float)$p['tp_price'] : null,
-            // 'sl_price'   => isset($p['sl_price']) ? (float)$p['sl_price'] : null,
+            'tp_price'      => $this->extractFloat($p, ['tp_price', 'take_profit', 'preset_take_profit_price']),
+            'sl_price'      => $this->extractFloat($p, ['sl_price', 'stop_loss', 'preset_stop_loss_price']),
+            'tp_order_id'   => $this->extractString($p, ['tp_order_id', 'take_profit_order_id', 'preset_take_profit_order_id']),
+            'sl_order_id'   => $this->extractString($p, ['sl_order_id', 'stop_loss_order_id', 'preset_stop_loss_order_id']),
         ];
     }
 
@@ -190,5 +191,49 @@ final class ListenPositionsCommand extends Command
         }
         $tf = $pipeline['current_timeframe'] ?? '1m';
         return [$tf];
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @param string[] $keys
+     */
+    private function extractFloat(array $payload, array $keys): ?float
+    {
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $payload)) {
+                continue;
+            }
+            $value = $payload[$key];
+            if (is_numeric($value)) {
+                return (float) $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @param string[] $keys
+     */
+    private function extractString(array $payload, array $keys): ?string
+    {
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $payload)) {
+                continue;
+            }
+            $value = $payload[$key];
+            if (is_string($value) && $value !== '') {
+                return $value;
+            }
+            if (is_int($value) || is_float($value)) {
+                $stringValue = (string) $value;
+                if ($stringValue !== '') {
+                    return $stringValue;
+                }
+            }
+        }
+
+        return null;
     }
 }
