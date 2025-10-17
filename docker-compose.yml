@@ -235,6 +235,65 @@ services:
       - temporal-net
       - shared-net
 
+  cron-symfony-mtf-workers:
+    build: ./cron_symfony_mtf_workers
+    container_name: cron_symfony_mtf_workers
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TASK_QUEUE_NAME=cron_symfony_mtf_workers
+      - MTF_WORKERS_URL=http://trading-app-nginx:80/api/mtf/run
+      - MTF_WORKERS_COUNT=5
+    depends_on:
+      temporal:
+        condition: service_healthy
+    networks:
+      - temporal-net
+      - shared-net
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana-datasources:/etc/grafana/provisioning/datasources
+      - ./monitoring/grafana-provisioning/alerting:/etc/grafana/provisioning/alerting
+      - ./monitoring/grafana-dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      trading-app-db:
+        condition: service_healthy
+    networks:
+      - shared-net
+  loki:
+    image: grafana/loki:2.9.3
+    container_name: loki
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./monitoring/loki-config.yaml:/etc/loki/local-config.yaml
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    networks:
+      - shared-net
+
+  promtail:
+    image: grafana/promtail:2.9.3
+    container_name: promtail
+    command: -config.file=/etc/promtail/config.yaml
+    volumes:
+      - ./monitoring/promtail-config.yaml:/etc/promtail/config.yaml
+      - ./trading-app/var/log:/var/log/symfony
+    depends_on:
+      - loki
+    networks:
+      - shared-net
+
+
   # --- Nouveau: listener des positions Bitmart via console Symfony
   symfony-positions-listener:
     build: ./symfony-app
@@ -289,70 +348,28 @@ services:
       - backend-net
       - shared-net
 
-  ##################################
-  # LOGGING STACK (Loki + Promtail + Grafana)
-  ##################################
-  loki:
-    image: grafana/loki:3.0.0
-    container_name: loki
-    ports:
-      - "3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
+  ws-worker:
+    build: ./ws-worker
+    image: ws-worker:latest
+    working_dir: /var/www/html
     volumes:
-      - ./monitoring/loki-config.yaml:/etc/loki/local-config.yaml
-      - loki-data:/tmp/loki
-    networks:
-      - shared-net
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
-  promtail:
-    image: grafana/promtail:3.0.0
-    container_name: promtail
-    volumes:
-      - ./monitoring/promtail-config.yaml:/etc/promtail/config.yml
-      - ./trading-app/var/log:/var/log/symfony:ro
-      - ./symfony-app/var/log:/var/log/symfony-legacy:ro
-    command: -config.file=/etc/promtail/config.yml
-    depends_on:
-      loki:
-        condition: service_healthy
-    networks:
-      - shared-net
-    restart: unless-stopped
+      - ./ws-worker:/var/www/html
+    command: ["php", "bin/console", "ws:run"]
     environment:
-      - APP_ENV=${APP_ENV:-dev}
-
-  grafana:
-    image: grafana/grafana:10.4.0
-    container_name: grafana
-    ports:
-      - "3001:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_INSTALL_PLUGINS=grafana-piechart-panel
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana-dashboards:/etc/grafana/provisioning/dashboards
-      - ./monitoring/grafana-datasources:/etc/grafana/provisioning/datasources
+      <<: *global-env
+      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
+      CTRL_ADDR: 0.0.0.0:8088
+      BITMART_API_SECRET: ${BITMART_SECRET_KEY}
+      BITMART_PUBLIC_WS_URI: wss://openapi-ws-v2.bitmart.com/api?protocol=1.1
+      BITMART_PRIVATE_WS_URI: wss://openapi-ws-v2.bitmart.com/user?protocol=1.1
     depends_on:
-      loki:
-        condition: service_healthy
-    networks:
-      - shared-net
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      - trading-app-db
+    networks: 
+      - backend-net
+      - trading-app-net
+    deploy:
+      replicas: 5   # ← démarre pour ~100 contrats (5 sockets ~500 canaux)
+    restart: always
 
   ##################################
   # TRADING-APP (nouvelle application)
@@ -369,54 +386,29 @@ services:
     environment:
       <<: *global-env
       DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
-      DEFAULT_URI: ${DEFAULT_URI:-http://localhost:8082}
-      # MTF Configuration
-      MTF_LOG_LEVEL: info
-      MTF_LOG_CHANNEL: mtf
-      MTF_RATE_LIMIT_CAPACITY: 6
-      MTF_RATE_LIMIT_REFILL_RATE: 6
-      MTF_RATE_LIMIT_REFILL_INTERVAL: 1000
-      MTF_GRACE_WINDOW_MINUTES: 4
-      MTF_MAX_CANDLES_PER_REQUEST: 500
-      MTF_MAX_RETRIES: 3
-      # Database Configuration
-      MTF_DB_HOST: trading-app-db
-      MTF_DB_PORT: 5432
-      MTF_DB_NAME: trading_app
-      MTF_DB_USER: postgres
-      MTF_DB_PASSWORD: password
-      # Cache Configuration
-      MTF_CACHE_TTL_DEFAULT: 3600
-      MTF_CACHE_TTL_VALIDATION: 1800
-      # Security Configuration
-      MTF_MAX_CLOCK_DRIFT_SECONDS: 3
-      MTF_SIGNATURE_TIMEOUT_SECONDS: 30
-      # Monitoring Configuration
-      MTF_METRICS_ENABLED: true
-      MTF_HEALTH_CHECK_INTERVAL: 60
-      # Multi-Channel Logging Configuration
-      LOG_LEVEL_VALIDATION: info
+      LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
+      LOG_LEVEL_MAIN: info
+      DEFAULT_URI: http://localhost:8082
+      WS_WORKERS: tradingv3-ws-worker-1:8088,tradingv3-ws-worker-2:8088,tradingv3-ws-worker-3:8088,tradingv3-ws-worker-4:8088,tradingv3-ws-worker-5:8088
       LOG_LEVEL_SIGNALS: info
-      LOG_LEVEL_POSITIONS: info
-      LOG_LEVEL_INDICATORS: info
       LOG_LEVEL_HIGHCONVICTION: info
       LOG_LEVEL_PIPELINE_EXEC: info
-      LOG_LEVEL_MAIN: info
+      LOG_LEVEL_GLOBAL_SEVERITY: error
+      ASYNC_LOGGING_ENABLED: '0'
+      APP_ENV: dev
+      APP_DEBUG: '1'
+      MAILER_DSN: 'smtp://localhost'
     depends_on:
       trading-app-db:
         condition: service_healthy
     networks:
       - trading-app-net
       - shared-net
-    # Réinstalle si vendor absent OU si composer.json plus récent que vendor/autoload.php
     command: >-
-      sh -c "if [ ! -f vendor/autoload.php ] || [ composer.json -nt vendor/autoload.php ]; then \
-        echo '[trading-app-php] (re)installing composer deps (with scripts)'; \
-        rm -rf vendor; \
+      sh -c "if [ ! -f vendor/autoload.php ]; then \
+        echo '[trading-app-php] vendor missing -> composer install'; \
         composer install --no-dev --optimize-autoloader --no-interaction; \
-      else \
-        echo '[trading-app-php] vendor up-to-date'; \
-      fi && php-fpm"
+      fi; php-fpm"
 
   trading-app-nginx:
     image: nginx:latest
@@ -445,6 +437,7 @@ services:
       - "5433:5432"
     networks:
       - trading-app-net
+      - shared-net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -452,52 +445,6 @@ services:
       retries: 5
       start_period: 20s
 
-  # --- Nouveau: Worker MTF Temporal
-  mtf-worker:
-    build: 
-      context: ./trading-app
-      dockerfile: Dockerfile.mtf
-    container_name: mtf_worker
-    working_dir: /var/www/html
-    volumes:
-      - ./trading-app:/var/www/html
-    environment:
-      <<: *global-env
-      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
-      TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_NAMESPACE: default
-      MTF_RATE_LIMIT_CAPACITY: 6
-      MTF_RATE_LIMIT_REFILL_RATE: 6
-      MTF_RATE_LIMIT_REFILL_INTERVAL: 1000
-      MTF_GRACE_WINDOW_MINUTES: 4
-      MTF_MAX_CANDLES_PER_REQUEST: 500
-      MTF_MAX_RETRIES: 3
-    depends_on:
-      trading-app-db:
-        condition: service_healthy
-      temporal:
-        condition: service_healthy
-    networks:
-      - trading-app-net
-      - temporal-net
-      - shared-net
-    restart: always
-    # Réinstalle si vendor absent OU composer.json plus récent
-    command: >-
-      sh -c "if [ ! -f vendor/autoload.php ] || [ composer.json -nt vendor/autoload.php ]; then \
-        echo '[mtf-worker] (re)installing composer deps (with scripts)'; \
-        rm -rf vendor; \
-        composer install --no-dev --optimize-autoloader --no-interaction; \
-        chown -R www-data:www-data vendor; \
-      else \
-        echo '[mtf-worker] vendor up-to-date'; \
-      fi; exec /usr/local/bin/start-mtf-worker.sh"
-    healthcheck:
-      test: ["CMD-SHELL", "php bin/console mtf:workflow status > /dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
 
 volumes:
   mysql-data:
