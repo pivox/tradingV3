@@ -197,20 +197,37 @@ final class PositionOpener
         $quantity = $sizingData['quantity'];
         $side = $entryZone->side;
         
-        // Ordre principal dans la zone d'entrée
-        $entryPrice = $entryZone->getMidPrice();
+        // Split 0.4 / 0.4 / 0.2 si l'entrée est valide
+        $fractions = $entryZone->isValidEntry ? [0.4, 0.4, 0.2] : [1.0];
+        $prices = [];
+        $mid = $entryZone->getMidPrice();
+        // répartir les prix au sein de la zone [entryMin, entryMax]
+        if (count($fractions) === 3) {
+            $prices = [
+                $entryZone->entryMin,
+                $mid,
+                $entryZone->entryMax,
+            ];
+        } else {
+            $prices = [$mid];
+        }
+
         $orderType = $side === 'LONG' ? 'buy_open_long' : 'sell_open_short';
-        
-        $orders[] = [
-            'symbol' => $entryZone->symbol,
-            'side' => $orderType,
-            'type' => 'LIMIT',
-            'price' => $entryPrice,
-            'quantity' => $quantity,
-            'time_in_force' => $makerConfig['mode'] ?? 'GTC',
-            'maker_only' => $makerConfig['maker_only'] ?? true,
-            'client_order_id' => $this->generateClientOrderId($entryZone->symbol, $side, 'maker')
-        ];
+        foreach ($fractions as $idx => $f) {
+            $qtyPart = max(0.0, $quantity * $f);
+            if ($qtyPart <= 0.0) continue;
+            $price = $prices[min($idx, count($prices)-1)];
+            $orders[] = [
+                'symbol' => $entryZone->symbol,
+                'side' => $orderType,
+                'type' => 'LIMIT',
+                'price' => $price,
+                'quantity' => $qtyPart,
+                'time_in_force' => $makerConfig['mode'] ?? 'GTC',
+                'maker_only' => $makerConfig['maker_only'] ?? true,
+                'client_order_id' => $this->generateClientOrderId($entryZone->symbol, $side, 'maker_'.$idx)
+            ];
+        }
 
         return $orders;
     }

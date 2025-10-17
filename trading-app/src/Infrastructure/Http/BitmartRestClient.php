@@ -396,4 +396,21 @@ final class BitmartRestClient implements KlineProviderPort
             $lock->release();
         }
     }
+
+    /**
+     * Récupère un ticker simplifié (mock/REST futur) pour compatibilité avec MarketDataProvider.
+     * Retourne un tableau avec clé 'data'.
+     */
+    public function getTicker(string $symbol): array
+    {
+        // TODO: Implémenter l'appel REST réel si nécessaire. Mock pour l'instant.
+        $price = 43250.0 + (rand(-100, 100) / 100);
+        return [
+            'data' => [
+                'last_price' => $price,
+                'bid_price' => $price - 0.5,
+                'ask_price' => $price + 0.5,
+            ],
+        ];
+    }
 }
