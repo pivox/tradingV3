@@ -62,9 +62,26 @@ final class MtfTimeService
     public function isInGraceWindow(\DateTimeImmutable $now, Timeframe $timeframe, int $graceMinutes = 4): bool
     {
         $alignedNow = $this->alignTimeframe($now, $timeframe);
+
+        // Si aucun 3e argument explicite n'a été fourni, appliquer la politique par timeframe
+        //  - 4h / 1h  => 4 minutes
+        //  - 15m      => 2 minutes
+        //  - 5m       => 1 minute
+        //  - 1m       => 0 minute (pas de fenêtre de grâce)
+        if (\func_num_args() < 3) {
+            $graceMinutes = match ($timeframe) {
+                Timeframe::TF_4H, Timeframe::TF_1H => 4,
+                Timeframe::TF_15M => 2,
+                Timeframe::TF_5M => 0,
+                Timeframe::TF_1M => 0,
+            };
+        }
+
+        if ($graceMinutes <= 0) {
+            return false; // aucune fenêtre de grâce
+        }
+
         $graceSeconds = $graceMinutes * 60;
-        
-        // Fenêtre de grâce : de l'ouverture à +4 minutes
         $graceEnd = $alignedNow->modify("+{$graceSeconds} seconds");
 
         return $now >= $alignedNow && $now <= $graceEnd;

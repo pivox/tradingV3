@@ -21,6 +21,8 @@ class PositionConfigDto
         public readonly bool $enableStopLoss,
         public readonly bool $enableTakeProfit,
         public readonly string $openType,
+        public readonly string $budgetMode = 'fixed_or_available',
+        public readonly float $fixedUsdtIfAvailable = 40.0,
         public bool $dryRun = false
     ) {
     }

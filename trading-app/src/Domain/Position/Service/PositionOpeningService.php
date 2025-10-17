@@ -35,6 +35,10 @@ class PositionOpeningService
 
         // Calculer la taille de position basée sur le risque
         $riskAmount = $accountBalance * ($leverageCalculation->riskPercent / 100);
+        // Appliquer le budget fixe si disponible (utilise 40 USDT si dispo, sinon au plus le solde)
+        if (strtolower($config->budgetMode) === 'fixed_or_available' && $config->fixedUsdtIfAvailable > 0) {
+            $riskAmount = min($config->fixedUsdtIfAvailable, $accountBalance);
+        }
         $positionSize = $this->calculatePositionSize($riskAmount, $stopDistance, $leverageCalculation->finalLeverage);
 
         // Appliquer les limites de taille de position

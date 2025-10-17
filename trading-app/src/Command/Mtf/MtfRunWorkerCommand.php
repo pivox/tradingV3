@@ -52,7 +52,8 @@ final class MtfRunWorkerCommand extends Command
         $switchDuration = (string) $input->getOption('switch-duration');
 
         try {
-            $generator = $this->mtfRunService->run($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck);
+            // En mode worker, activer le verrou par symbole pour éviter le blocage global
+            $generator = $this->mtfRunService->run($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck, true);
             $yielded = iterator_to_array($generator);
             $final = $generator->getReturn();
 

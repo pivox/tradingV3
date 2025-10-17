@@ -31,14 +31,16 @@ class PositionConfigService
             slAtrMultiplier: 2.0,
             tpAtrMultiplier: 4.0,
             maxPositionSize: 5000.0,
-            orderType: 'MARKET',
+            orderType: 'LIMIT',
             timeInForce: 'GTC',
             enablePartialFills: true,
             minOrderSize: 5.0,
             maxOrderSize: 10000.0,
             enableStopLoss: true,
             enableTakeProfit: true,
-            openType: 'cross'
+            openType: 'isolated',
+            budgetMode: 'fixed_or_available',
+            fixedUsdtIfAvailable: 40.0
         );
 
         $this->logger->info('[Position Config] Configuration loaded', [

@@ -27,10 +27,8 @@ final class ContractCooldownRepository extends ServiceEntityRepository
         return $this->createQueryBuilder('cooldown')
             ->andWhere('cooldown.symbol = :symbol')
             ->andWhere('cooldown.activeUntil > :now')
-            ->setParameters([
-                'symbol' => strtoupper($symbol),
-                'now' => $now,
-            ])
+            ->setParameter('symbol', strtoupper($symbol))
+            ->setParameter('now', $now)
             ->orderBy('cooldown.activeUntil', 'DESC')
             ->setMaxResults(1)
             ->getQuery()

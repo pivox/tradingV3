@@ -10,6 +10,7 @@ use App\Domain\Position\Dto\PositionConfigDto;
 use App\Domain\Ports\Out\TradingProviderPort;
 use App\Domain\Trading\Exposure\ActiveExposureGuard;
 use App\Domain\Trading\Order\OrderLifecycleService;
+use App\Repository\ContractRepository;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
@@ -20,6 +21,7 @@ class PositionExecutionService
         private readonly TradingProviderPort $tradingProvider,
         private readonly ActiveExposureGuard $exposureGuard,
         private readonly OrderLifecycleService $orderLifecycle,
+        private readonly ContractRepository $contractRepository,
         private readonly LoggerInterface $logger,
         private readonly ClockInterface $clock
     ) {
@@ -82,11 +84,13 @@ class PositionExecutionService
             // 3. Placer l'ordre principal
             $mainOrder = $this->placeMainOrder($position, $config);
 
-            // 4. Placer l'ordre de stop loss
-            $stopLossOrder = $this->placeStopLossOrder($position, $config);
-
-            // 5. Placer l'ordre de take profit
-            $takeProfitOrder = $this->placeTakeProfitOrder($position, $config);
+            // 4-5. Si LIMIT avec presets TP/SL, ne pas soumettre d'ordres TP/SL séparés
+            $stopLossOrder = null;
+            $takeProfitOrder = null;
+            if (strtolower($config->orderType) !== 'limit') {
+                $stopLossOrder = $this->placeStopLossOrder($position, $config);
+                $takeProfitOrder = $this->placeTakeProfitOrder($position, $config);
+            }
 
             $this->logger->info('[Position Execution] Position executed successfully', [
                 'symbol' => $position->symbol,
@@ -162,7 +166,7 @@ class PositionExecutionService
     private function setLeverage(PositionOpeningDto $position, PositionConfigDto $config): void
     {
         $leverageInt = max(1, (int) round($position->leverage));
-        $openType = $position->executionParams['open_type'] ?? $config->openType;
+        $openType = 'isolated'; // forcé isolé
 
         $this->logger->info('[Position Execution] Setting leverage', [
             'symbol' => $position->symbol,
@@ -186,24 +190,34 @@ class PositionExecutionService
     {
         $clientOrderId = $this->generateClientOrderId($position->symbol, 'OPEN');
         $orderType = strtolower($config->orderType);
+        // Ajuster la taille exécutée si le levier d'exécution diffère du levier calculé
+        $submittedLeverage = max(1, (int) round($position->leverage));
+        $leverageCalc = max(1.0, (float) $position->leverage);
+        $execSize = max(1, (int) floor($position->positionSize * ($submittedLeverage / $leverageCalc)));
         $payload = [
             'symbol' => strtoupper($position->symbol),
             'client_order_id' => $clientOrderId,
             'side' => $this->mapOpenSide($position->side),
-            'mode' => 1,
+            'mode' => 1, // BitMart exige un mode (1=GTC)
             'type' => $orderType,
-            'open_type' => $config->openType,
-            'size' => $this->formatDecimal($position->positionSize, 6),
-            'leverage' => (string) max(1, (int) round($position->leverage)),
+            'open_type' => 'isolated',
+            // BitMart attend un entier (contrats) pour size
+            'size' => $execSize,
+            'leverage' => (string) $submittedLeverage,
         ];
 
-        if ($orderType !== 'market') {
-            $payload['price'] = $this->formatDecimal($position->entryPrice, 6);
+        // Paramètres spécifiques LIMIT uniquement (mode/time_in_force/prix/partial)
+        if ($orderType === 'limit') {
+            $payload['price'] = $this->quantizeToTick($position->symbol, $position->entryPrice);
             $payload['time_in_force'] = strtolower($config->timeInForce);
-        }
-
-        if (!$config->enablePartialFills) {
-            $payload['allow_partial'] = 0;
+            if (!$config->enablePartialFills) {
+                $payload['allow_partial'] = 0;
+            }
+            // Presets TP/SL sur l'ordre d'entrée (évite submit-tp-sl-order)
+            $payload['preset_take_profit_price_type'] = 2; // mark
+            $payload['preset_stop_loss_price_type'] = 2;   // mark
+            $payload['preset_take_profit_price'] = $this->quantizeToTick($position->symbol, $position->takeProfitPrice);
+            $payload['preset_stop_loss_price'] = $this->quantizeToTick($position->symbol, $position->stopLossPrice);
         }
 
         $this->logger->info('[Position Execution] Placing main order', $payload);
@@ -248,16 +262,21 @@ class PositionExecutionService
         }
 
         $clientOrderId = $this->generateClientOrderId($position->symbol, 'SL');
+        $submittedLeverage = max(1, (int) round($position->leverage));
+        $leverageCalc = max(1.0, (float) $position->leverage);
+        $execSize = max(1, (int) floor($position->positionSize * ($submittedLeverage / $leverageCalc)));
         $payload = [
             'symbol' => strtoupper($position->symbol),
             'orderType' => 'stop_loss',
+            'type' => 'stop_loss',
             'side' => $this->mapCloseSide($position->side),
             'triggerPrice' => $this->formatDecimal($position->stopLossPrice, 6),
+            // Pour category=limit: executivePrice = triggerPrice
             'executivePrice' => $this->formatDecimal($position->stopLossPrice, 6),
-            'priceType' => -1,
-            'plan_category' => -2,
-            'category' => 'market',
-            'size' => $this->formatDecimal($position->positionSize, 6),
+            'priceType' => 2,
+            'plan_category' => '2',
+            'category' => 'limit',
+            'size' => (string) $execSize,
             'client_order_id' => $clientOrderId,
         ];
 
@@ -288,16 +307,20 @@ class PositionExecutionService
         }
 
         $clientOrderId = $this->generateClientOrderId($position->symbol, 'TP');
+        $submittedLeverage = max(1, (int) round($position->leverage));
+        $leverageCalc = max(1.0, (float) $position->leverage);
+        $execSize = max(1, (int) floor($position->positionSize * ($submittedLeverage / $leverageCalc)));
         $payload = [
             'symbol' => strtoupper($position->symbol),
             'orderType' => 'take_profit',
+            'type' => 'take_profit',
             'side' => $this->mapCloseSide($position->side),
             'triggerPrice' => $this->formatDecimal($position->takeProfitPrice, 6),
             'executivePrice' => $this->formatDecimal($position->takeProfitPrice, 6),
-            'priceType' => -1,
-            'plan_category' => -2,
-            'category' => 'market',
-            'size' => $this->formatDecimal($position->positionSize, 6),
+            'priceType' => 2,
+            'plan_category' => '2',
+            'category' => 'limit',
+            'size' => (string) $execSize,
             'client_order_id' => $clientOrderId,
         ];
 
@@ -335,6 +358,31 @@ class PositionExecutionService
         $formatted = number_format($value, $precision, '.', '');
         $formatted = rtrim(rtrim($formatted, '0'), '.');
         return $formatted === '' ? '0' : $formatted;
+    }
+
+    private function quantizeToTick(string $symbol, float $price): string
+    {
+        try {
+            $contract = $this->contractRepository->findBySymbol(strtoupper($symbol));
+            $tick = $contract?->getTickSize();
+            $tickF = $tick !== null ? (float) $tick : 0.00001;
+            if ($tickF <= 0) {
+                $tickF = 0.00001;
+            }
+            $steps = floor($price / $tickF);
+            $q = $steps * $tickF;
+            // déduire précision à partir du tick
+            $precision = max(0, strlen(substr(strrchr(rtrim((string)$tick, '0'), '.'), 1)) ?: 0);
+            return $this->formatDecimal($q, max(0, (int)$precision));
+        } catch (\Throwable $e) {
+            // Fallback: déduire une précision minimale par tranche de prix
+            $precision = 2;
+            if ($price < 1) { $precision = 4; }
+            elseif ($price < 10) { $precision = 3; }
+            elseif ($price < 100) { $precision = 2; }
+            else { $precision = 2; }
+            return $this->formatDecimal($price, $precision);
+        }
     }
 
     private function mapOpenSide(SignalSide $side): int

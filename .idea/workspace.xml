@@ -5,9 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="73604acf-3471-46f2-a1fd-fdf73ef42078" name="Changes" comment="OpenedLockedSyncService conf">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/config/services.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/services.yaml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/trading-app/config/trading.yml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/trading.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfService.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfService.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfTimeService.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfTimeService.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Exposure/ActiveExposureGuard.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Exposure/ActiveExposureGuard.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Exposure/Exception/ActiveExposureException.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Exposure/Exception/ActiveExposureException.php" afterDir="false" />
     </list>
     <list id="0ec51621-5bf1-43ac-acaa-64de0476dee0" name="todo" comment="" />
     <option name="SHOW_DIALOG" value="false" />
@@ -984,6 +986,7 @@
       <workItem from="1760644043755" duration="9393000" />
       <workItem from="1760683534612" duration="8000" />
       <workItem from="1760686008894" duration="673000" />
+      <workItem from="1760699771735" duration="40000" />
     </task>
     <task id="LOCAL-00050" summary="positions dans bitmart =&gt; nettyage">
       <option name="closed" value="true" />
@@ -1500,12 +1503,12 @@
         </line-breakpoint>
         <line-breakpoint enabled="true" type="php">
           <url>file://$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfService.php</url>
-          <line>177</line>
+          <line>178</line>
           <option name="timeStamp" value="9" />
         </line-breakpoint>
         <line-breakpoint enabled="true" type="php">
           <url>file://$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfService.php</url>
-          <line>657</line>
+          <line>669</line>
           <option name="timeStamp" value="10" />
         </line-breakpoint>
       </breakpoints>

@@ -22,5 +22,10 @@ final class ActiveExposureException extends RuntimeException
     {
         return new self(sprintf('Le contrat %s est en cooldown jusqu\'à %s', strtoupper($symbol), $until));
     }
+
+    public static function forGlobalLimit(int $max): self
+    {
+        return new self(sprintf('Nombre maximum de positions ouvertes atteint (%d)', $max));
+    }
 }
 
