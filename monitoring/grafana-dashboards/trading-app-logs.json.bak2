@@ -104,7 +104,6 @@
           },
           "editorMode": "code",
           "expr": "sum(rate({job=\"symfony\", app=\"trading-app\"}[5m])) by (channel)",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -165,7 +164,6 @@
           },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"symfony\", app=\"trading-app\"}[1h])) by (channel)",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -202,7 +200,6 @@
           },
           "editorMode": "code",
           "expr": "{job=\"symfony\", app=\"trading-app\"}",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -291,7 +288,6 @@
           },
           "editorMode": "code",
           "expr": "sum(rate({job=\"symfony\", channel=\"signals\"}[5m])) by (symbol)",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -380,7 +376,6 @@
           },
           "editorMode": "code",
           "expr": "sum(rate({job=\"symfony\", channel=\"positions\"}[5m])) by (action)",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -417,7 +412,6 @@
           },
           "editorMode": "code",
           "expr": "{job=\"symfony\", channel=\"signals\"}",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -454,7 +448,6 @@
           },
           "editorMode": "code",
           "expr": "{job=\"symfony\", channel=\"positions\"}",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -518,7 +511,6 @@
           },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"symfony\", level=\"error\"}[1h]))",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -582,7 +574,6 @@
           },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"symfony\", level=\"warning\"}[1h]))",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -646,7 +637,6 @@
           },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"symfony\", channel=\"signals\"}[1h]))",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -710,7 +700,6 @@
           },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"symfony\", channel=\"positions\"}[1h]))",
-          "queryType": "",
           "refId": "A"
         }
       ],

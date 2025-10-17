@@ -1,0 +1,48 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: trading-positions
+    folder: Trading Alerts
+    interval: 1m
+    rules:
+      - uid: positions_new_entry
+        title: Positions - New Entry Detected
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 60
+              to: 0
+            datasourceUid: loki
+            model:
+              datasource:
+                type: loki
+                uid: loki
+              editorMode: code
+              expr: count_over_time({job="symfony", channel="positions"} |= "Position open"[1m])
+              interval: ""
+              intervalMs: 1000
+              legendFormat: ""
+              maxDataPoints: 43200
+              queryType: range
+              range: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              expression: A
+              reducer: last
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              expression: B > 0
+              type: math
+        for: 0s
+        annotations:
+          summary: "Une nouvelle position vient d'être ouverte"
+        labels:
+          severity: high
+        noDataState: NoData
+        execErrState: Error

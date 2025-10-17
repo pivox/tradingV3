@@ -104,6 +104,7 @@
           },
           "editorMode": "code",
           "expr": "sum(rate({job=\"symfony\"} |= \"[MTF]\" [5m])) by (symbol)",
+          "queryType": "",
           "refId": "A"
         }
       ],

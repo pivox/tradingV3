@@ -103,12 +103,13 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(rate({job=\"symfony\", app=\"trading-app\"}[5m])) by (channel)",
+          "editorMode": "code",
+          "expr": "sum(rate({job=\"symfony\"}[5m])) by (channel)",
           "queryType": "",
           "refId": "A"
         }
       ],
-      "title": "Logs par Canal (Rate)",
+      "title": "Taux de Logs par Canal (5m)",
       "type": "timeseries"
     },
     {
@@ -164,12 +165,164 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({job=\"symfony\", app=\"trading-app\"}[1h])) by (channel)",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({job=\"symfony\"}[1h])) by (channel)",
           "queryType": "",
           "refId": "A"
         }
       ],
-      "title": "Distribution des Logs par Canal",
+      "title": "Distribution des Logs par Canal (1h)",
+      "type": "piechart"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "vis": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "editorMode": "code",
+          "expr": "sum(rate({job=\"symfony\"}[5m])) by (level)",
+          "queryType": "",
+          "refId": "A"
+        }
+      ],
+      "title": "Taux de Logs par Niveau (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "vis": false
+            }
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "pieType": "pie",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({job=\"symfony\"}[1h])) by (level)",
+          "refId": "A"
+        }
+      ],
+      "title": "Distribution des Logs par Niveau (1h)",
       "type": "piechart"
     },
     {
@@ -178,199 +331,21 @@
         "uid": "loki"
       },
       "gridPos": {
-        "h": 8,
+        "h": 12,
         "w": 24,
         "x": 0,
-        "y": 8
-      },
-      "id": 3,
-      "options": {
-        "showTime": true,
-        "showLabels": false,
-        "showCommonLabels": false,
-        "wrapLogMessage": true,
-        "prettifyLogMessage": true,
-        "enableLogDetails": true,
-        "dedupStrategy": "none",
-        "sortOrder": "Descending"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "{job=\"symfony\", app=\"trading-app\"}",
-          "queryType": "",
-          "refId": "A"
-        }
-      ],
-      "title": "Logs en Temps Réel",
-      "type": "logs"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "vis": false
-            },
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 16
-      },
-      "id": 4,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate({job=\"symfony\", channel=\"signals\"}[5m])) by (symbol)",
-          "queryType": "",
-          "refId": "A"
-        }
-      ],
-      "title": "Signaux par Symbole",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "vis": false
-            },
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
         "y": 16
       },
       "id": 5,
       "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
       },
       "targets": [
         {
@@ -379,13 +354,13 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(rate({job=\"symfony\", channel=\"positions\"}[5m])) by (action)",
-          "queryType": "",
+          "editorMode": "code",
+          "expr": "{job=\"symfony\"}",
           "refId": "A"
         }
       ],
-      "title": "Actions de Position",
-      "type": "timeseries"
+      "title": "Tous les Logs en Temps Réel",
+      "type": "logs"
     },
     {
       "datasource": {
@@ -394,21 +369,26 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
-        "y": 24
+        "y": 28
       },
       "id": 6,
       "options": {
-        "showTime": true,
-        "showLabels": false,
-        "showCommonLabels": false,
-        "wrapLogMessage": true,
-        "prettifyLogMessage": true,
-        "enableLogDetails": true,
-        "dedupStrategy": "none",
-        "sortOrder": "Descending"
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
       },
+      "pluginVersion": "10.4.0",
       "targets": [
         {
           "datasource": {
@@ -416,13 +396,13 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{job=\"symfony\", channel=\"signals\"}",
-          "queryType": "",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({job=\"symfony\", level=\"ERROR\"}[1h]))",
           "refId": "A"
         }
       ],
-      "title": "Logs de Signaux",
-      "type": "logs"
+      "title": "Erreurs (1h)",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -431,21 +411,26 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 24
+        "w": 8,
+        "x": 8,
+        "y": 28
       },
       "id": 7,
       "options": {
-        "showTime": true,
-        "showLabels": false,
-        "showCommonLabels": false,
-        "wrapLogMessage": true,
-        "prettifyLogMessage": true,
-        "enableLogDetails": true,
-        "dedupStrategy": "none",
-        "sortOrder": "Descending"
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
       },
+      "pluginVersion": "10.4.0",
       "targets": [
         {
           "datasource": {
@@ -453,46 +438,24 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{job=\"symfony\", channel=\"positions\"}",
-          "queryType": "",
+          "editorMode": "code",
+          "expr": "sum(count_over_time({job=\"symfony\", level=\"INFO\"}[1h]))",
           "refId": "A"
         }
       ],
-      "title": "Logs de Positions",
-      "type": "logs"
+      "title": "Infos (1h)",
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 32
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 28
       },
       "id": 8,
       "options": {
@@ -517,136 +480,8 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({job=\"symfony\", level=\"error\"}[1h]))",
-          "queryType": "",
-          "refId": "A"
-        }
-      ],
-      "title": "Erreurs (1h)",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 32
-      },
-      "id": 9,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "sum(count_over_time({job=\"symfony\", level=\"warning\"}[1h]))",
-          "queryType": "",
-          "refId": "A"
-        }
-      ],
-      "title": "Warnings (1h)",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 32
-      },
-      "id": 10,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"symfony\", channel=\"signals\"}[1h]))",
-          "queryType": "",
           "refId": "A"
         }
       ],
@@ -658,50 +493,23 @@
         "type": "loki",
         "uid": "loki"
       },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 32
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
       },
-      "id": 11,
+      "id": 9,
       "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
       },
-      "pluginVersion": "10.4.0",
       "targets": [
         {
           "datasource": {
@@ -709,13 +517,124 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({job=\"symfony\", channel=\"positions\"}[1h]))",
-          "queryType": "",
+          "editorMode": "code",
+          "expr": "{job=\"symfony\", channel=\"signals\"}",
           "refId": "A"
         }
       ],
-      "title": "Positions (1h)",
-      "type": "stat"
+      "title": "Logs de Signaux",
+      "type": "logs"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "id": 10,
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "editorMode": "code",
+          "expr": "{job=\"symfony\", level=\"ERROR\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "Logs d'Erreurs",
+      "type": "logs"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "id": 11,
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "editorMode": "code",
+          "expr": "{job=\"symfony\", channel=\"app\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "Logs d'Application",
+      "type": "logs"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "id": 12,
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "editorMode": "code",
+          "expr": "{job=\"symfony\", channel=\"request\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "Logs de Requêtes",
+      "type": "logs"
     }
   ],
   "refresh": "5s",
@@ -724,7 +643,8 @@
   "tags": [
     "trading",
     "logs",
-    "symfony"
+    "symfony",
+    "comprehensive"
   ],
   "templating": {
     "list": [
@@ -741,7 +661,7 @@
         "definition": "label_values({job=\"symfony\"}, channel)",
         "hide": 0,
         "includeAll": true,
-        "label": "Channel",
+        "label": "Canal",
         "multi": true,
         "name": "channel",
         "options": [],
@@ -762,14 +682,14 @@
           "type": "loki",
           "uid": "loki"
         },
-        "definition": "label_values({job=\"symfony\"}, symbol)",
+        "definition": "label_values({job=\"symfony\"}, level)",
         "hide": 0,
         "includeAll": true,
-        "label": "Symbol",
+        "label": "Niveau",
         "multi": true,
-        "name": "symbol",
+        "name": "level",
         "options": [],
-        "query": "label_values({job=\"symfony\"}, symbol)",
+        "query": "label_values({job=\"symfony\"}, level)",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
@@ -786,14 +706,14 @@
           "type": "loki",
           "uid": "loki"
         },
-        "definition": "label_values({job=\"symfony\"}, timeframe)",
+        "definition": "label_values({job=\"symfony\"}, app)",
         "hide": 0,
         "includeAll": true,
-        "label": "Timeframe",
+        "label": "Application",
         "multi": true,
-        "name": "timeframe",
+        "name": "app",
         "options": [],
-        "query": "label_values({job=\"symfony\"}, timeframe)",
+        "query": "label_values({job=\"symfony\"}, app)",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
@@ -808,8 +728,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Trading App - Logs Dashboard",
-  "uid": "trading-app-logs",
+  "title": "Dashboard Complet - Tous les Logs",
+  "uid": "comprehensive-logs",
   "version": 1,
   "weekStart": ""
 }
