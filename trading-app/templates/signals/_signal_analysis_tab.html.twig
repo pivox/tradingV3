@@ -1,0 +1,166 @@
+<!-- Filtres pour l'analyse -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-funnel"></i> Filtres d'analyse
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <label for="analysisSymbol" class="form-label">Symbole</label>
+                        <select class="form-select" id="analysisSymbol">
+                            <option value="">Tous les symboles</option>
+                            {% for contract in activeContracts %}
+                                <option value="{{ contract }}">{{ contract }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="analysisTimeframe" class="form-label">Timeframe</label>
+                        <select class="form-select" id="analysisTimeframe">
+                            <option value="">Tous</option>
+                            {% for tf in timeframes %}
+                                <option value="{{ tf }}">{{ tf }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="analysisSide" class="form-label">Direction</label>
+                        <select class="form-select" id="analysisSide">
+                            <option value="">Tous</option>
+                            <option value="LONG">LONG</option>
+                            <option value="SHORT">SHORT</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="analysisLimit" class="form-label">Limite</label>
+                        <select class="form-select" id="analysisLimit">
+                            <option value="10">10 signaux</option>
+                            <option value="25" selected>25 signaux</option>
+                            <option value="50">50 signaux</option>
+                            <option value="100">100 signaux</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3 d-flex align-items-end">
+                        <button class="btn btn-primary me-2" onclick="loadSignalAnalysis()">
+                            <i class="bi bi-search"></i> Analyser
+                        </button>
+                        <button class="btn btn-outline-secondary" onclick="clearAnalysisFilters()">
+                            <i class="bi bi-x-circle"></i> Effacer
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Zone de chargement -->
+<div id="analysisLoading" class="text-center" style="display: none;">
+    <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Chargement...</span>
+    </div>
+    <p class="mt-2">Analyse des signaux en cours...</p>
+</div>
+
+<!-- Résultats de l'analyse -->
+<div id="analysisResults" style="display: none;">
+    <!-- Les résultats seront chargés ici dynamiquement -->
+</div>
+
+<!-- Modal déplacé dans signals/index.html.twig pour disponibilité globale -->
+
+<script>
+$(document).ready(function() {
+    // Charger l'analyse par défaut
+    loadSignalAnalysis();
+    
+    // Event listener pour les boutons de détails
+    $(document).on('click', '.btn-show-details', function() {
+        const signalId = $(this).data('signal-id');
+        showSignalDetails(signalId);
+    });
+    
+    // Event listener pour les boutons de graphique
+    $(document).on('click', '.btn-view-chart', function() {
+        const symbol = $(this).data('symbol');
+        const timeframe = $(this).data('timeframe');
+        viewChart(symbol, timeframe);
+    });
+});
+
+function loadSignalAnalysis() {
+    const symbol = $('#analysisSymbol').val();
+    const timeframe = $('#analysisTimeframe').val();
+    const side = $('#analysisSide').val();
+    const limit = $('#analysisLimit').val();
+    
+    // Afficher le loader
+    $('#analysisLoading').show();
+    $('#analysisResults').hide();
+    
+    // Faire la requête AJAX
+    $.ajax({
+        url: '{{ path("signals_analysis") }}',
+        method: 'GET',
+        data: {
+            symbol: symbol,
+            timeframe: timeframe,
+            side: side,
+            limit: limit
+        },
+        success: function(data) {
+            $('#analysisLoading').hide();
+            $('#analysisResults').html(data).show();
+        },
+        error: function(xhr, status, error) {
+            $('#analysisLoading').hide();
+            $('#analysisResults').html(`
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Erreur lors du chargement de l'analyse : ${error}
+                </div>
+            `).show();
+        }
+    });
+}
+
+function clearAnalysisFilters() {
+    $('#analysisSymbol, #analysisTimeframe, #analysisSide').val('');
+    $('#analysisLimit').val('25');
+    loadSignalAnalysis();
+}
+
+function showSignalDetails(signalId) {
+    console.log('showSignalDetails appelé avec ID:', signalId);
+    
+    // Vérifier que l'ID est valide
+    if (!signalId || signalId === 'undefined') {
+        alert('ID de signal invalide');
+        return;
+    }
+    
+    // Afficher un indicateur de chargement
+    $('#signalDetailsContent').html('<div class="text-center"><div class="spinner-border" role="status"><span class="visually-hidden">Chargement...</span></div></div>');
+    const modalEl = document.getElementById('signalDetailsModal');
+    const modalInstance = bootstrap.Modal.getOrCreateInstance(modalEl);
+    modalInstance.show();
+    
+    // Charger les détails du signal via AJAX
+    $.ajax({
+        url: '{{ path("signals_details", {"id": 0}) }}'.replace('0', signalId),
+        method: 'GET',
+        success: function(data) {
+            console.log('Données reçues:', data);
+            $('#signalDetailsContent').html(data);
+        },
+        error: function(xhr, status, error) {
+            console.error('Erreur AJAX:', xhr, status, error);
+            $('#signalDetailsContent').html('<div class="alert alert-danger">Erreur lors du chargement des détails du signal : ' + error + '</div>');
+        }
+    });
+}
+</script>

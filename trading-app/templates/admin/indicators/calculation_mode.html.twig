@@ -1,0 +1,307 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Gestion des Modes de Calcul des Indicateurs{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <h1 class="h3 mb-4">Gestion des Modes de Calcul des Indicateurs</h1>
+        </div>
+    </div>
+
+    <!-- Mode de calcul actuel -->
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Mode de Calcul Actuel</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex align-items-center mb-3">
+                        <span class="badge badge-{{ current_mode == 'sql' ? 'success' : 'warning' }} fs-6 me-3">
+                            {{ current_mode|upper }}
+                        </span>
+                        <span class="text-muted">
+                            {{ current_mode == 'sql' ? 'Calculs via vues matérialisées PostgreSQL' : 'Calculs en mémoire PHP' }}
+                        </span>
+                    </div>
+                    
+                    <div class="btn-group" role="group">
+                        <button type="button" 
+                                class="btn btn-{{ current_mode == 'sql' ? 'success' : 'outline-success' }}"
+                                onclick="switchMode('sql')">
+                            <i class="fas fa-database"></i> SQL
+                        </button>
+                        <button type="button" 
+                                class="btn btn-{{ current_mode == 'php' ? 'warning' : 'outline-warning' }}"
+                                onclick="switchMode('php')">
+                            <i class="fas fa-code"></i> PHP
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Actions</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-2">
+                        <button type="button" class="btn btn-primary" onclick="refreshSqlViews()">
+                            <i class="fas fa-sync"></i> Rafraîchir Vues SQL
+                        </button>
+                        <button type="button" class="btn btn-info" onclick="testPerformance()">
+                            <i class="fas fa-tachometer-alt"></i> Test Performance
+                        </button>
+                        <button type="button" class="btn btn-secondary" onclick="resetMetrics()">
+                            <i class="fas fa-trash"></i> Réinitialiser Métriques
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Résumé des performances -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Résumé des Performances</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h4 class="text-primary">{{ performance_summary.total_indicators }}</h4>
+                                <small class="text-muted">Indicateurs Trackés</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h4 class="text-info">{{ "%.1f"|format(performance_summary.avg_performance_ms) }}ms</h4>
+                                <small class="text-muted">Performance Moyenne</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h4 class="text-success">{{ "%.1f"|format(performance_summary.success_rate) }}%</h4>
+                                <small class="text-muted">Taux de Succès</small>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h4 class="text-warning">{{ performance_summary.slowest_indicator ?: 'N/A' }}</h4>
+                                <small class="text-muted">Plus Lent</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Métriques détaillées -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Métriques Détaillées par Indicateur</h5>
+                </div>
+                <div class="card-body">
+                    {% if performance_metrics is empty %}
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-chart-line fa-3x mb-3"></i>
+                            <p>Aucune métrique disponible. Les métriques sont collectées lors des calculs d'indicateurs.</p>
+                        </div>
+                    {% else %}
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>Indicateur</th>
+                                        <th>Symbole</th>
+                                        <th>Timeframe</th>
+                                        <th>Calculs</th>
+                                        <th>Succès</th>
+                                        <th>Échecs</th>
+                                        <th>Temps Moyen</th>
+                                        <th>Statut</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for key, metrics in performance_metrics %}
+                                        {% set parts = key|split(':') %}
+                                        {% set indicator = parts[0] %}
+                                        {% set symbol = parts[1] %}
+                                        {% set timeframe = parts[2] %}
+                                        <tr>
+                                            <td><span class="badge badge-info">{{ indicator|upper }}</span></td>
+                                            <td>{{ symbol }}</td>
+                                            <td>{{ timeframe }}</td>
+                                            <td>{{ metrics.count }}</td>
+                                            <td><span class="text-success">{{ metrics.success_count }}</span></td>
+                                            <td><span class="text-danger">{{ metrics.failure_count }}</span></td>
+                                            <td>{{ "%.1f"|format(metrics.avg_time_ms) }}ms</td>
+                                            <td>
+                                                {% if metrics.avg_time_ms < 50 %}
+                                                    <span class="badge badge-success">Excellent</span>
+                                                {% elseif metrics.avg_time_ms < 100 %}
+                                                    <span class="badge badge-warning">Bon</span>
+                                                {% else %}
+                                                    <span class="badge badge-danger">Lent</span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal pour les résultats de test -->
+<div class="modal fade" id="performanceModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Résultats du Test de Performance</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="performanceResults">
+                <!-- Contenu dynamique -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function switchMode(mode) {
+    fetch('{{ path('admin_indicators_switch_calculation_mode') }}', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ mode: mode })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert('Erreur: ' + data.message);
+        }
+    })
+    .catch(error => {
+        console.error('Erreur:', error);
+        alert('Erreur lors du changement de mode');
+    });
+}
+
+function refreshSqlViews() {
+    if (confirm('Rafraîchir les vues matérialisées SQL ?')) {
+        fetch('{{ path('admin_indicators_refresh_sql_views') }}', {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            alert(data.message);
+        })
+        .catch(error => {
+            console.error('Erreur:', error);
+            alert('Erreur lors du rafraîchissement');
+        });
+    }
+}
+
+function testPerformance() {
+    const modal = new bootstrap.Modal(document.getElementById('performanceModal'));
+    document.getElementById('performanceResults').innerHTML = '<div class="text-center"><i class="fas fa-spinner fa-spin"></i> Test en cours...</div>';
+    modal.show();
+
+    fetch('{{ path('admin_indicators_test_performance') }}', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            symbol: 'BTCUSDT',
+            timeframe: '5m',
+            iterations: 10
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const results = data.results;
+            const recommendation = data.recommendation;
+            
+            document.getElementById('performanceResults').innerHTML = `
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>SQL (Vues Matérialisées)</h6>
+                        <ul>
+                            <li>Succès: ${results.sql.success}</li>
+                            <li>Échecs: ${results.sql.errors}</li>
+                            <li>Temps moyen: ${results.sql.avg_ms.toFixed(1)}ms</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>PHP (Calculs en Mémoire)</h6>
+                        <ul>
+                            <li>Succès: ${results.php.success}</li>
+                            <li>Échecs: ${results.php.errors}</li>
+                            <li>Temps moyen: ${results.php.avg_ms.toFixed(1)}ms</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="alert alert-${recommendation === 'sql' ? 'success' : 'warning'}">
+                    <strong>Recommandation:</strong> Utiliser le mode <strong>${recommendation.toUpperCase()}</strong>
+                </div>
+            `;
+        } else {
+            document.getElementById('performanceResults').innerHTML = '<div class="alert alert-danger">Erreur lors du test</div>';
+        }
+    })
+    .catch(error => {
+        console.error('Erreur:', error);
+        document.getElementById('performanceResults').innerHTML = '<div class="alert alert-danger">Erreur lors du test</div>';
+    });
+}
+
+function resetMetrics() {
+    if (confirm('Réinitialiser toutes les métriques de performance ?')) {
+        fetch('{{ path('admin_indicators_reset_performance_metrics') }}', {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            alert(data.message);
+            location.reload();
+        })
+        .catch(error => {
+            console.error('Erreur:', error);
+            alert('Erreur lors de la réinitialisation');
+        });
+    }
+}
+
+// Auto-refresh des métriques toutes les 30 secondes
+setInterval(() => {
+    fetch('{{ path('admin_indicators_performance_metrics') }}')
+    .then(response => response.json())
+    .then(data => {
+        // Mettre à jour les métriques sans recharger la page
+        // (optionnel, pour une expérience plus fluide)
+    })
+    .catch(error => console.error('Erreur auto-refresh:', error));
+}, 30000);
+</script>
+{% endblock %}

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="fr">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{% block title %}Trading Dashboard{% endblock %}</title>
+        <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 128 128%22><text y=%221.2em%22 font-size=%2296%22>📈</text></svg>">
+        
+        <!-- Bootstrap CSS -->
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        <!-- Bootstrap Icons -->
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+        <!-- DataTables CSS -->
+        <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css">
+        
+        <!-- jQuery (chargé tôt pour les scripts inline des onglets) -->
+        <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+        
+        {% block stylesheets %}
+        <style>
+            /* Styles pour l'analyse des signaux */
+            .signal-analysis-card {
+                transition: transform 0.2s ease-in-out;
+            }
+            
+            .signal-analysis-card:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            }
+            
+            .indicator-value {
+                font-family: 'Courier New', monospace;
+                font-weight: bold;
+            }
+            
+            .indicator-positive {
+                color: #28a745;
+            }
+            
+            .indicator-negative {
+                color: #dc3545;
+            }
+            
+            .indicator-neutral {
+                color: #6c757d;
+            }
+            
+            .parent-timeframe-card {
+                border-left: 4px solid #007bff;
+            }
+            
+            .parent-timeframe-card.success {
+                border-left-color: #28a745;
+            }
+            
+            .parent-timeframe-card.warning {
+                border-left-color: #ffc107;
+            }
+            
+            .parent-timeframe-card.danger {
+                border-left-color: #dc3545;
+            }
+            
+            .signal-badge {
+                font-size: 0.8em;
+                padding: 0.25em 0.5em;
+            }
+            
+            .analysis-table th {
+                background-color: #f8f9fa;
+                border-top: none;
+            }
+            
+            .klines-table td {
+                font-family: 'Courier New', monospace;
+                font-size: 0.9em;
+            }
+            
+            .loading-spinner {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 200px;
+            }
+            
+            .modal-xl {
+                max-width: 95%;
+            }
+            
+            @media (max-width: 768px) {
+                .modal-xl {
+                    max-width: 100%;
+                    margin: 0;
+                }
+            }
+        </style>
+        {% endblock %}
+    </head>
+    <body>
+        <!-- Navigation -->
+        <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="{{ path('dashboard') }}">
+                    <i class="bi bi-graph-up"></i> Trading Dashboard
+                </a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="navbarNav">
+                    <ul class="navbar-nav me-auto">
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ path('dashboard') }}">
+                                <i class="bi bi-house"></i> Dashboard
+                            </a>
+                        </li>
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                                <i class="bi bi-table"></i> Tables
+                            </a>
+                            <ul class="dropdown-menu">
+                                <li><a class="dropdown-item" href="{{ path('contracts_index') }}">
+                                    <i class="bi bi-currency-exchange"></i> Contrats
+                                </a></li>
+                                <li><a class="dropdown-item" href="{{ path('klines_index') }}">
+                                    <i class="bi bi-graph-up"></i> Klines
+                                </a></li>
+                                <li><a class="dropdown-item" href="{{ path('signals_index') }}">
+                                    <i class="bi bi-signal"></i> Signaux
+                                </a></li>
+                            </ul>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ path('graph_index') }}">
+                                <i class="bi bi-graph-up-arrow"></i> Graphiques
+                            </a>
+                        </li>
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                                <i class="bi bi-tools"></i> Outils
+                            </a>
+                            <ul class="dropdown-menu">
+                                <li><a class="dropdown-item" href="{{ path('indicators_test') }}">
+                                    <i class="bi bi-clipboard-check"></i> Test Indicateurs
+                                </a></li>
+                                <li><a class="dropdown-item" href="{{ path('websocket_management') }}">
+                                    <i class="bi bi-wifi"></i> WebSocket
+                                </a></li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="container-fluid mt-4">
+            {% block body %}{% endblock %}
+        </div>
+
+        <!-- Bootstrap JS -->
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+        <!-- DataTables JS -->
+        <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+        <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+                <script>
+                // Configuration DataTables en français
+                $.extend($.fn.dataTable.defaults, {
+                    "language": {
+                        "emptyTable": "Aucune donnée disponible dans le tableau",
+                        "loadingRecords": "Chargement...",
+                        "processing": "Traitement...",
+                        "info": "Affichage de _START_ à _END_ sur _TOTAL_ entrées",
+                        "infoEmpty": "Affichage de 0 à 0 sur 0 entrées",
+                        "infoFiltered": "(filtrées depuis un total de _MAX_ entrées)",
+                        "lengthMenu": "Afficher _MENU_ entrées",
+                        "search": "Rechercher :",
+                        "zeroRecords": "Aucune entrée correspondante trouvée",
+                        "paginate": {
+                            "first": "Première",
+                            "last": "Dernière",
+                            "next": "Suivante",
+                            "previous": "Précédente"
+                        },
+                        "aria": {
+                            "sortAscending": " : activer pour trier la colonne par ordre croissant",
+                            "sortDescending": " : activer pour trier la colonne par ordre décroissant"
+                        }
+                    }
+                });
+                </script>
+
+                {% block javascripts %}
+                {% endblock %}
+    </body>
+</html>

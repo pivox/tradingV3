@@ -20,3 +20,6 @@
 **/.DS_Store
 **/*.log
 mysql-data/
+
+# IDE
+.idea/

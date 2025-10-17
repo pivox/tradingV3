@@ -1,0 +1,116 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Signaux - Trading{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="bi bi-signal"></i> Signaux de Trading
+            </h1>
+            <div>
+                <button class="btn btn-primary" onclick="refreshTable()">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Onglets -->
+<div class="row mb-4">
+    <div class="col-12">
+        <ul class="nav nav-tabs" id="signalsTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview" type="button" role="tab" aria-controls="overview" aria-selected="true">
+                    <i class="bi bi-grid-3x3-gap"></i> Vue d'ensemble
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="details-tab" data-bs-toggle="tab" data-bs-target="#details" type="button" role="tab" aria-controls="details" aria-selected="false">
+                    <i class="bi bi-list-ul"></i> Détails des signaux
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="signal-analysis-tab" data-bs-toggle="tab" data-bs-target="#signal-analysis" type="button" role="tab" aria-controls="signal-analysis" aria-selected="false">
+                    <i class="bi bi-diagram-3"></i> Analyse des signaux
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="mtf-overview-tab" data-bs-toggle="tab" data-bs-target="#mtf-overview" type="button" role="tab" aria-controls="mtf-overview" aria-selected="false">
+                    <i class="bi bi-diagram-3-fill"></i> MTF Overview
+                </button>
+            </li>
+        </ul>
+    </div>
+</div>
+
+<!-- Contenu des onglets -->
+<div class="tab-content" id="signalsTabsContent">
+    <!-- Onglet Vue d'ensemble -->
+    <div class="tab-pane fade show active" id="overview" role="tabpanel" aria-labelledby="overview-tab">
+        {% include 'signals/_overview_tab.html.twig' %}
+    </div>
+    
+    <!-- Onglet Détails -->
+    <div class="tab-pane fade" id="details" role="tabpanel" aria-labelledby="details-tab">
+        {% include 'signals/_details_tab.html.twig' %}
+    </div>
+    
+    <!-- Onglet Analyse des signaux -->
+    <div class="tab-pane fade" id="signal-analysis" role="tabpanel" aria-labelledby="signal-analysis-tab">
+        {% include 'signals/_signal_analysis_tab.html.twig' %}
+    </div>
+
+    <!-- Onglet MTF Overview -->
+    <div class="tab-pane fade" id="mtf-overview" role="tabpanel" aria-labelledby="mtf-overview-tab">
+        {% include 'signals/_mtf_overview_tab.html.twig' %}
+    </div>
+</div>
+
+<!-- Modal global pour les détails d'un signal -->
+<div class="modal fade" id="signalDetailsModal" tabindex="-1" aria-labelledby="signalDetailsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="signalDetailsModalLabel">
+                    <i class="bi bi-diagram-3"></i> Détails du signal
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="signalDetailsContent"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fermer</button>
+            </div>
+        </div>
+    </div>
+    </div>
+
+<!-- Modal pour les métadonnées -->
+<div class="modal fade" id="metaModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Métadonnées du Signal</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <pre id="metaContent" class="bg-light p-3"></pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+// Le JavaScript pour les DataTables est maintenant géré dans les templates d'onglets
+
+function refreshTable() {
+    location.reload();
+}
+</script>
+{% endblock %}

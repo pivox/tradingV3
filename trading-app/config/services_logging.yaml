@@ -1,0 +1,141 @@
+services:
+  # =====================
+  # --- Logging Services ---
+  # =====================
+  
+  App\Logging\CustomLineFormatter:
+    public: true
+    tags:
+      - { name: monolog.formatter, alias: custom_line }
+  
+  # =====================
+  # --- Temporal Logging Services ---
+  # =====================
+  
+  App\Logging\TemporalHttpClient:
+    arguments:
+      $http: '@http_client'
+      $temporalHttpBase: 'http://temporal:7243'
+      $namespace: 'default'
+    public: true
+    autowire: false
+    autoconfigure: false
+  
+  App\Logging\LogPublisher:
+    arguments:
+      $temporalClient: '@App\Logging\TemporalHttpClient'
+      $logger: '@logger'
+      $bufferSize: 50
+      $flushIntervalSeconds: 5
+    public: true
+    autowire: false
+    autoconfigure: false
+  
+  App\Logging\TemporalLogHandler:
+    arguments:
+      $logPublisher: '@App\Logging\LogPublisher'
+      $enabled: '%env(bool:ASYNC_LOGGING_ENABLED)%'
+      $level: 100
+      $bubble: true
+      $bufferSize: 10
+      $flushIntervalSeconds: 5
+    tags:
+      - { name: monolog.handler, handler: temporal_log_handler }
+  
+  App\Application\Activity\LogProcessingActivity:
+    arguments:
+      $logger: '@logger'
+    public: true
+  
+  App\Application\Worker\LogWorker:
+    arguments:
+      $logProcessingActivity: '@App\Application\Activity\LogProcessingActivity'
+      $logger: '@logger'
+    public: true
+    autowire: false
+    autoconfigure: false
+  
+  App\Command\LogWorkerCommand:
+    arguments:
+      $logWorker: '@App\Application\Worker\LogWorker'
+      $logger: '@logger'
+    tags: ['console.command']
+  
+  App\Command\TestLoggingCommand:
+    arguments:
+      $loggerHelper: '@App\Logging\LoggerHelper'
+      $logger: '@logger'
+    tags: ['console.command']
+    autowire: false
+    autoconfigure: false
+  
+  # =====================
+  # --- Logger Helpers ---
+  # =====================
+  
+  App\Logging\LoggerHelper:
+    arguments:
+      $logger: '@monolog.logger'
+    public: true
+    autowire: false
+    autoconfigure: false
+  
+  # =====================
+  # --- Channel Loggers ---
+  # =====================
+  
+  # Logger pour le canal validation
+  monolog.logger.validation:
+    parent: monolog.logger
+    arguments: ['validation']
+    tags:
+      - { name: monolog.logger, channel: validation }
+  
+  # Logger pour le canal signals
+  monolog.logger.signals:
+    parent: monolog.logger
+    arguments: ['signals']
+    tags:
+      - { name: monolog.logger, channel: signals }
+  
+  # Logger pour le canal positions
+  monolog.logger.positions:
+    parent: monolog.logger
+    arguments: ['positions']
+    tags:
+      - { name: monolog.logger, channel: positions }
+  
+  # Logger pour le canal indicators
+  monolog.logger.indicators:
+    parent: monolog.logger
+    arguments: ['indicators']
+    tags:
+      - { name: monolog.logger, channel: indicators }
+  
+  # Logger pour le canal highconviction
+  monolog.logger.highconviction:
+    parent: monolog.logger
+    arguments: ['highconviction']
+    tags:
+      - { name: monolog.logger, channel: highconviction }
+  
+  # Logger pour le canal pipeline_exec
+  monolog.logger.pipeline_exec:
+    parent: monolog.logger
+    arguments: ['pipeline_exec']
+    tags:
+      - { name: monolog.logger, channel: pipeline_exec }
+  
+  # Logger pour le canal deprecation
+  monolog.logger.deprecation:
+    parent: monolog.logger
+    arguments: ['deprecation']
+    tags:
+      - { name: monolog.logger, channel: deprecation }
+  
+  # Logger pour le canal global-severity
+  monolog.logger.global_severity:
+    parent: monolog.logger
+    arguments: ['global-severity']
+    tags:
+      - { name: monolog.logger, channel: global-severity }

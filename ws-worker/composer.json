@@ -1,0 +1,16 @@
+{
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    },
+    "require": {
+        "symfony/console": "^7.3",
+        "symfony/framework-bundle": "^7.3",
+        "symfony/http-client": "^7.3",
+        "ratchet/pawl": "^0.4.3",
+        "react/event-loop": "^1.5",
+        "react/http": "^1.11",
+        "symfony/yaml": "^7.3"
+    }
+}

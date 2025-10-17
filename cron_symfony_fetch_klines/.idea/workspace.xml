@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="04a167a6-fe25-4c3b-9ea2-db539c81cbe1" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/../doc.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../doc_court.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/config/packages/high_conviction.yml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Command/OpenLimitPositionCommand.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Entity/TradeEvent.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Logging/CustomLineFormatter.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Config/BitmartConfig.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Risk/HighConvictionDecision.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Risk/HighConvictionGuard.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Temporal/Dto/EnvelopeFactory.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Temporal/Dto/UrlType.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Trading/TradeJournal.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../api_rate_limiter/activities/api_activities.py" beforeDir="false" afterPath="$PROJECT_DIR$/../api_rate_limiter/activities/api_activities.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../api_rate_limiter/models/api_call_request.py" beforeDir="false" afterPath="$PROJECT_DIR$/../api_rate_limiter/models/api_call_request.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../api_rate_limiter/workflows/api_rate_limiter_workflow.py" beforeDir="false" afterPath="$PROJECT_DIR$/../api_rate_limiter/workflows/api_rate_limiter_workflow.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/.env.dev" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/.env.dev" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/config/packages/monolog.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/config/packages/monolog.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/config/packages/trading.scalping.yml" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/config/packages/trading.scalping.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/config/services.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/config/services.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Controller/Bitmart/BitmartKlinesCallbackController.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Controller/Bitmart/KlinesCallbackController.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Controller/Bitmart/KlinesByTimeframeGetController.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Controller/Bitmart/KlinesByTimeframeGetController.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Controller/RefreshOpenedLockedController.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Controller/RefreshOpenedLockedController.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Entity/ContractPipeline.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Entity/ContractPipeline.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Repository/ContractPipelineRepository.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Repository/ContractPipelineRepository.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Service/Account/Bitmart/BitmartFuturesClient.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Account/Bitmart/BitmartFuturesClient.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Service/Config/TradingParameters.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Config/TradingParameters.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Service/Pipeline/ContractPipelineService.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Pipeline/ContractPipelineService.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Service/Temporal/Orchestrators/BitmartOrchestrator.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Temporal/Orchestrators/BitmartOrchestrator.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Service/Temporal/TemporalWorkflowGateway.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Temporal/TemporalWorkflowGateway.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Service/Trading/OrderPlanner.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Trading/OrderPlanner.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Service/Trading/PositionOpener.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Trading/PositionOpener.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../symfony-app/src/Service/Trading/TradingService.php" beforeDir="false" afterPath="$PROJECT_DIR$/../symfony-app/src/Service/Trading/TradingService.php" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/.." />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 3
+}</component>
+  <component name="ProjectId" id="33EmV4pYu8z0vZdXtJhdPkoTWs4" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/haythem.mabrouk/workspace/perso/tradingV3/cron_symfony_fetch_klines&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;MTFeaturesSettingsConfigurable&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  }
+}</component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-e03c56caf84a-JavaScript-PY-252.23892.439" />
+        <option value="bundled-python-sdk-b3ae9b5d7125-f0eec537fc84-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-252.23892.439" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="04a167a6-fe25-4c3b-9ea2-db539c81cbe1" name="Changes" comment="" />
+      <created>1758890625719</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1758890625719</updated>
+      <workItem from="1758890626908" duration="1565000" />
+      <workItem from="1758898735791" duration="3152000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+</project>

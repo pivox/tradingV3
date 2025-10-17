@@ -38,7 +38,15 @@ final class MtfSignalGateway
         if (!isset($map[$tf])) return false;
 
         [$svc, $limit] = $map[$tf];
-        $candles = $klines->fetchRecent($symbol, $tf, $limit);
+        $intervalMap = [
+            '1m' => 1,
+            '5m' => 5,
+            '15m' => 15,
+            '1h' => 60,
+            '4h' => 240,
+            '1d' => 1440,
+        ];
+        $candles = $klines->fetchRecent($symbol, $intervalMap[$tf], $limit);
 
         // Tous les services TF d’exécution exposeront validateExecution() (patch ci-dessous)
         return $svc->validateExecution($candles);

@@ -65,8 +65,19 @@ final class SignalService
         };
         $this->validationLogger->info(" --- Evaluated signal $tf --- ", ['result' => $currentEval]);
 
+        $signalsRef = [
+            '4h'  => strtoupper((string)($knownSignals['4h']['signal'] ?? 'NONE')),
+            '1h'  => strtoupper((string)($knownSignals['1h']['signal'] ?? 'NONE')),
+            '15m' => strtoupper((string)($knownSignals['15m']['signal'] ?? 'NONE')),
+            '5m'  => strtoupper((string)($knownSignals['5m']['signal'] ?? 'NONE')),
+        ];
+
+        if (in_array($tf, ['5m', '1m'], true) && $this->shouldSuppressMicro($signalsRef)) {
+            $currentEval = $this->suppressSignal($currentEval, 'blocked_by_15m_desync');
+        }
+
         $curr = strtoupper((string)($currentEval['signal'] ?? 'NONE'));
-        $get  = static fn(string $k): string => strtoupper((string)($knownSignals[$k]['signal'] ?? 'NONE'));
+        $get  = static fn(string $k): string => $signalsRef[$k] ?? 'NONE';
 
         // 2) Statut selon vos règles (correction d’un petit typo : pour 1m on compare 4h,1h,15m,5m et 1m)
         // 4h : LONG/SHORT => PENDING ; sinon FAILED
@@ -111,9 +122,11 @@ final class SignalService
 
         // Logs ciblés
         $this->signalsLogger->info('signals.tick', ['tf' => $tf, 'current' => $currentEval, 'status' => $status]);
-        ($status === 'FAILED' ? $this->validationLogger->warning(...) : $this->validationLogger->info(...))(
-            'validation.status', ['tf' => $tf, 'status' => $status]
-        );
+        if ($status === 'FAILED') {
+            $this->validationLogger->warning('validation.status', ['tf' => $tf, 'status' => $status]);
+        } else {
+            $this->validationLogger->info('validation.status', ['tf' => $tf, 'status' => $status]);
+        }
 
         return $out;
     }
@@ -137,6 +150,42 @@ final class SignalService
             $knownSignals[$tf] = $res['final'];
         }
         return $results;
+    }
+
+
+    /**
+     * Force 5m/1m to NONE when the 15m context is missing or out of sync with 1h/4h.
+     */
+    private function shouldSuppressMicro(array $signals): bool
+    {
+        $s4 = $signals['4h'] ?? 'NONE';
+        $s1 = $signals['1h'] ?? 'NONE';
+        $s15 = $signals['15m'] ?? 'NONE';
+
+        if (in_array('NONE', [$s4, $s1, $s15], true)) {
+            return true;
+        }
+
+        return !($s4 === $s1 && $s1 === $s15);
+    }
+
+    private function suppressSignal(array $payload, string $reason): array
+    {
+        $prev = $payload['signal'] ?? 'NONE';
+        $payload['signal'] = 'NONE';
+        $existingTrigger = (string)($payload['trigger'] ?? '');
+        if ($existingTrigger === '') {
+            $payload['trigger'] = $reason;
+        } elseif (!str_contains($existingTrigger, $reason)) {
+            $payload['trigger'] = $existingTrigger.'|'.$reason;
+        }
+        $payload['suppressed'] = true;
+        $payload['suppressed_reason'] = $reason;
+        if ($prev !== 'NONE' && !isset($payload['previous_signal'])) {
+            $payload['previous_signal'] = $prev;
+        }
+
+        return $payload;
     }
 
 

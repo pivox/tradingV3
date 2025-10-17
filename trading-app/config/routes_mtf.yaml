@@ -1,0 +1,8 @@
+mtf_api:
+  resource: '../src/Controller/MtfController.php'
+  type: attribute
+  prefix: /api/mtf
+
+
+
+

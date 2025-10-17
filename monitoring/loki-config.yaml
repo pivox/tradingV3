@@ -1,0 +1,89 @@
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+common:
+  path_prefix: /tmp/loki
+  storage:
+    filesystem:
+      chunks_directory: /tmp/loki/chunks
+      rules_directory: /tmp/loki/rules
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 100
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: boltdb-shipper
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+ruler:
+  alertmanager_url: http://localhost:9093
+
+# Configuration pour la rétention des logs
+limits_config:
+  # Limite de débit d'ingestion (16 MB/s)
+  ingestion_rate_mb: 16
+  # Taille de burst d'ingestion (32 MB)
+  ingestion_burst_size_mb: 32
+  # Nombre maximum de streams par utilisateur (0 = illimité)
+  max_streams_per_user: 0
+  # Rétention des logs (30 jours)
+  retention_period: 720h
+  # Taille maximale des entrées par chunk (250000)
+  max_entries_limit_per_query: 250000
+  # Désactiver les métadonnées structurées pour éviter les erreurs
+  allow_structured_metadata: false
+
+# Configuration pour les performances
+ingester:
+  # Active le WAL (Write-Ahead Log) pour la durabilité
+  wal:
+    enabled: true
+    dir: /tmp/loki/wal
+  # Période d'inactivité avant flush (3 minutes)
+  chunk_idle_period: 3m
+  # Période de rétention des chunks (1 minute)
+  chunk_retain_period: 1m
+  # Période de flush (1 heure)
+  chunk_target_size: 1048576
+
+# Configuration du stockage
+storage_config:
+  boltdb_shipper:
+    active_index_directory: /tmp/loki/index
+    cache_location: /tmp/loki/cache
+  filesystem:
+    directory: /tmp/loki/chunks
+
+# Configuration des requêtes
+query_scheduler:
+  max_outstanding_requests_per_tenant: 2048
+
+frontend:
+  max_outstanding_per_tenant: 2048
+
+# Configuration des compressions
+compactor:
+  working_directory: /tmp/loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+  delete_request_store: filesystem

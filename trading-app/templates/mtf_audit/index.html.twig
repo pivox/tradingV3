@@ -1,0 +1,218 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Audits MTF - Trading{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="bi bi-clipboard-data"></i> Audits MTF
+            </h1>
+            <div>
+                <button class="btn btn-primary" onclick="refreshTable()">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filtres -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-funnel"></i> Filtres
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-2">
+                        <label for="filterSymbol" class="form-label">Symbole</label>
+                        <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterAction" class="form-label">Action</label>
+                        <select class="form-select" id="filterAction">
+                            <option value="">Toutes</option>
+                            <option value="create">Création</option>
+                            <option value="update">Mise à jour</option>
+                            <option value="delete">Suppression</option>
+                            <option value="switch">Switch</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterDateFrom" class="form-label">Date Début</label>
+                        <input type="date" class="form-control" id="filterDateFrom">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterDateTo" class="form-label">Date Fin</label>
+                        <input type="date" class="form-control" id="filterDateTo">
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button class="btn btn-outline-secondary" onclick="clearFilters()">
+                            <i class="bi bi-x-circle"></i> Effacer
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Table des audits -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-table"></i> Liste des Audits MTF ({{ audits|length }})
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table id="auditsTable" class="table table-striped table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>ID</th>
+                                <th>Symbole</th>
+                                <th>Action</th>
+                                <th>Détails</th>
+                                <th>Créé le</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for audit in audits %}
+                            <tr>
+                                <td>
+                                    <code>{{ audit.id }}</code>
+                                </td>
+                                <td>
+                                    <strong>{{ audit.symbol }}</strong>
+                                </td>
+                                <td>
+                                    {% if audit.action|lower == 'create' %}
+                                        <span class="badge bg-success">Création</span>
+                                    {% elseif audit.action|lower == 'update' %}
+                                        <span class="badge bg-info">Mise à jour</span>
+                                    {% elseif audit.action|lower == 'delete' %}
+                                        <span class="badge bg-danger">Suppression</span>
+                                    {% elseif audit.action|lower == 'switch' %}
+                                        <span class="badge bg-warning">Switch</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ audit.action }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if audit.details and audit.details|length > 0 %}
+                                        <button class="btn btn-sm btn-outline-info" onclick="viewDetails({{ audit.id }})">
+                                            <i class="bi bi-eye"></i> Voir
+                                        </button>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {{ audit.createdAt|date('d/m/Y H:i:s') }}
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-primary" onclick="viewChart('{{ audit.symbol }}')" title="Voir graphique">
+                                            <i class="bi bi-graph-up"></i>
+                                        </button>
+                                        <button class="btn btn-outline-info" onclick="viewDetails({{ audit.id }})" title="Voir détails">
+                                            <i class="bi bi-eye"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal pour les détails -->
+<div class="modal fade" id="detailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Détails de l'Audit</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <pre id="detailsContent" class="bg-light p-3"></pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+$(document).ready(function() {
+    // Initialisation de DataTables
+    $('#auditsTable').DataTable({
+        pageLength: 25,
+        order: [[4, 'desc']], // Trier par date de création
+        columnDefs: [
+            { orderable: false, targets: [3, 5] } // Détails et Actions columns
+        ]
+    });
+
+    // Filtres
+    $('#filterSymbol, #filterAction, #filterDateFrom, #filterDateTo').on('change keyup', function() {
+        applyFilters();
+    });
+});
+
+function applyFilters() {
+    const table = $('#auditsTable').DataTable();
+    const symbol = $('#filterSymbol').val();
+    const action = $('#filterAction').val();
+
+    // Réinitialiser les filtres
+    table.search('').columns().search('').draw();
+
+    // Appliquer les filtres
+    if (symbol) {
+        table.column(1).search(symbol, false, false);
+    }
+    if (action) {
+        table.column(2).search(action, false, false);
+    }
+
+    table.draw();
+}
+
+function clearFilters() {
+    $('#filterSymbol, #filterAction, #filterDateFrom, #filterDateTo').val('');
+    $('#auditsTable').DataTable().search('').columns().search('').draw();
+}
+
+function refreshTable() {
+    location.reload();
+}
+
+function viewChart(symbol) {
+    // Rediriger vers les graphiques avec le symbole
+    window.location.href = '{{ path('graph_index') }}?symbol=' + symbol;
+}
+
+function viewDetails(id) {
+    // Récupérer les détails de l'audit (à implémenter côté serveur)
+    const detailsContent = document.getElementById('detailsContent');
+    detailsContent.textContent = 'Détails de l\'audit ' + id + '\n\n' + 
+        'Cette fonctionnalité sera implémentée pour afficher les détails de l\'audit.';
+    
+    const modal = new bootstrap.Modal(document.getElementById('detailsModal'));
+    modal.show();
+}
+</script>
+{% endblock %}

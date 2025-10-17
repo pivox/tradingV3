@@ -1,7 +1,34 @@
 name: tradingv3
 
+x-global-variables: &global-env
+  BITMART_API_KEY: "${BITMART_API_KEY}"
+  BITMART_SECRET_KEY: "${BITMART_SECRET_KEY}"
+  BITMART_BASE_URL: "${BITMART_BASE_URL}"
+  BITMART_WS_PRIVATE_URL: "${BITMART_WS_PRIVATE_URL}"
+  BITMART_WS_DEVICE: "${BITMART_WS_DEVICE}"
+  BITMART_API_MEMO: "${BITMART_API_MEMO}"
+
 services:
 
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: phpmyadmin
+    environment:
+      - PMA_HOST=db              # hôte MySQL (service "db")
+      - PMA_PORT=3306
+      - PMA_USER=symfony         # facultatif : identifiant par défaut
+      - PMA_PASSWORD=symfony     # facultatif : mot de passe par défaut
+      - UPLOAD_LIMIT=256M        # augmenter la taille d’upload si besoin
+      # - PMA_ARBITRARY=1        # (optionnel) autorise la saisie d'autres hôtes
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8081:80"                # phpMyAdmin accessible sur http://localhost:8081
+    restart: always
+    networks:
+      - backend-net
+      - shared-net
   ##################################
   # FRONTEND (isolé)
   ##################################
@@ -30,10 +57,8 @@ services:
     volumes:
       - ./symfony-app:/var/www/html
     environment:
-      - DATABASE_URL=mysql://symfony:symfony@db:3306/symfony_db
-      - BITMART_API_KEY=afdc00c7ea826a230afc307ed8bf8a8eabff4448
-      - BITMART_SECRET_KEY=1737627899f7735994cee455c0c78d21f95b14ae07b79006a330e6cc33233623
-      - BITMART_API_MEMO=tradingDemo
+      <<: *global-env
+      DATABASE_URL: ${DATABASE_URL:-mysql://symfony:symfony@db:3306/symfony_db}
     depends_on:
       - db
     networks:
@@ -157,7 +182,7 @@ services:
       - shared-net
     restart: always
     healthcheck:
-      test: [ "CMD-SHELL", "temporal operator cluster health --address=$(hostname -i):7233 >/dev/null 2>&1 || tctl --address=$(hostname -i):7233 cluster health >/dev/null 2>&1" ]
+      test: [ "CMD-SHELL", "ADDR=$$(ifconfig eth0 | awk '/inet addr/ {print $$2}' | cut -d: -f2); temporal operator cluster health --address $${ADDR}:7233 >/dev/null 2>&1 || tctl --address $${ADDR}:7233 cluster health >/dev/null 2>&1" ]
       interval: 10s
       timeout: 5s
       retries: 60
@@ -197,31 +222,6 @@ services:
       - temporal-net
       - shared-net
 
-  bitmart-position-sync:
-    build: ./bitmart_positions_sync
-    container_name: bitmart_position_sync
-    ports:
-      - "9000:9000"
-    environment:
-      - DB_HOST=db
-      - DB_PORT=3306
-      - DB_NAME=symfony_db
-      - DB_USER=symfony
-      - DB_PASSWORD=symfony
-      - BITMART_API_KEY=afdc00c7ea826a230afc307ed8bf8a8eabff4448
-      - BITMART_SECRET_KEY=1737627899f7735994cee455c0c78d21f95b14ae07b79006a330e6cc33233623
-      - BITMART_API_MEMO=tradingDemo
-      - BITMART_WS_CHANNELS=futures/position
-      - BITMART_POLL_SECONDS=180
-      - BITMART_SYNC_PORT=9000
-      - BITMART_AUTO_START=1
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - backend-net
-      - shared-net
-
   cron-symfony-fetch-klines-worker:
     build: ./cron_symfony_fetch_klines
     container_name: cron_symfony_fetch_klines_worker
@@ -235,8 +235,222 @@ services:
       - temporal-net
       - shared-net
 
+  cron-symfony-mtf-workers:
+    build: ./cron_symfony_mtf_workers
+    container_name: cron_symfony_mtf_workers
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TASK_QUEUE_NAME=cron_symfony_mtf_workers
+      - MTF_WORKERS_URL=http://trading-app-nginx:80/api/mtf/run
+      - MTF_WORKERS_COUNT=5
+    depends_on:
+      temporal:
+        condition: service_healthy
+    networks:
+      - temporal-net
+      - shared-net
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana-datasources:/etc/grafana/provisioning/datasources
+      - ./monitoring/grafana-provisioning/alerting:/etc/grafana/provisioning/alerting
+      - ./monitoring/grafana-dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      trading-app-db:
+        condition: service_healthy
+    networks:
+      - shared-net
+  loki:
+    image: grafana/loki:2.9.3
+    container_name: loki
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./monitoring/loki-config.yaml:/etc/loki/local-config.yaml
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    networks:
+      - shared-net
+
+  promtail:
+    image: grafana/promtail:2.9.3
+    container_name: promtail
+    command: -config.file=/etc/promtail/config.yaml
+    volumes:
+      - ./monitoring/promtail-config.yaml:/etc/promtail/config.yaml
+      - ./trading-app/var/log:/var/log/symfony
+    depends_on:
+      - loki
+    networks:
+      - shared-net
+
+
+  # --- Nouveau: listener des positions Bitmart via console Symfony
+  symfony-positions-listener:
+    build: ./symfony-app
+    container_name: symfony_positions_listener
+    working_dir: /var/www/html
+    volumes:
+      - ./symfony-app:/var/www/html
+    env_file:
+      - ./.env
+    environment:
+      <<: *global-env
+      DATABASE_URL: ${DATABASE_URL:-mysql://symfony:symfony@db:3306/symfony_db}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >-
+      sh -c "
+      while true; do
+        php bin/console bitmart:listen-positions || true;
+        echo '[positions-listener] process ended, restarting in 5s...';
+        sleep 5;
+      done"
+    restart: always
+    networks:
+      - backend-net
+      - shared-net
+
+  # --- Nouveau: listener des ordres Bitmart via console Symfony
+  symfony-orders-listener:
+    build: ./symfony-app
+    container_name: symfony_orders_listener
+    working_dir: /var/www/html
+    volumes:
+      - ./symfony-app:/var/www/html
+    env_file:
+      - ./.env
+    environment:
+      <<: *global-env
+      DATABASE_URL: ${DATABASE_URL:-mysql://symfony:symfony@db:3306/symfony_db}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >-
+      sh -c "
+      while true; do
+        php bin/console bitmart:listen-orders || true;
+        echo '[orders-listener] process ended, restarting in 5s...';
+        sleep 5;
+      done"
+    restart: always
+    networks:
+      - backend-net
+      - shared-net
+
+  ws-worker:
+    build: ./ws-worker
+    image: ws-worker:latest
+    working_dir: /var/www/html
+    volumes:
+      - ./ws-worker:/var/www/html
+    command: ["php", "bin/console", "ws:run"]
+    environment:
+      <<: *global-env
+      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
+      CTRL_ADDR: 0.0.0.0:8088
+      BITMART_API_SECRET: ${BITMART_SECRET_KEY}
+      BITMART_PUBLIC_WS_URI: wss://openapi-ws-v2.bitmart.com/api?protocol=1.1
+      BITMART_PRIVATE_WS_URI: wss://openapi-ws-v2.bitmart.com/user?protocol=1.1
+    depends_on:
+      - trading-app-db
+    networks: 
+      - backend-net
+      - trading-app-net
+    deploy:
+      replicas: 5   # ← démarre pour ~100 contrats (5 sockets ~500 canaux)
+    restart: always
+
+  ##################################
+  # TRADING-APP (nouvelle application)
+  ##################################
+  trading-app-php:
+    build:
+      context: ./trading-app
+      dockerfile: Dockerfile.mtf
+    container_name: trading_app_php
+    working_dir: /var/www/html
+    volumes:
+      - ./trading-app:/var/www/html
+      - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
+    environment:
+      <<: *global-env
+      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
+      LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
+      LOG_LEVEL_MAIN: info
+      DEFAULT_URI: http://localhost:8082
+      WS_WORKERS: tradingv3-ws-worker-1:8088,tradingv3-ws-worker-2:8088,tradingv3-ws-worker-3:8088,tradingv3-ws-worker-4:8088,tradingv3-ws-worker-5:8088
+      LOG_LEVEL_SIGNALS: info
+      LOG_LEVEL_HIGHCONVICTION: info
+      LOG_LEVEL_PIPELINE_EXEC: info
+      LOG_LEVEL_GLOBAL_SEVERITY: error
+      ASYNC_LOGGING_ENABLED: '0'
+      APP_ENV: dev
+      APP_DEBUG: '1'
+      MAILER_DSN: 'smtp://localhost'
+    depends_on:
+      trading-app-db:
+        condition: service_healthy
+    networks:
+      - trading-app-net
+      - shared-net
+    command: >-
+      sh -c "if [ ! -f vendor/autoload.php ]; then \
+        echo '[trading-app-php] vendor missing -> composer install'; \
+        composer install --no-dev --optimize-autoloader --no-interaction; \
+      fi; php-fpm"
+
+  trading-app-nginx:
+    image: nginx:latest
+    container_name: trading_app_nginx
+    ports:
+      - "8082:80"
+    volumes:
+      - ./trading-app/public:/var/www/html/public
+      - ./nginx/trading-app.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - trading-app-php
+    networks:
+      - trading-app-net
+      - shared-net
+
+  trading-app-db:
+    image: postgres:15
+    container_name: trading_app_postgres
+    environment:
+      - POSTGRES_DB=trading_app
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - trading-app-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - trading-app-net
+      - shared-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+
 volumes:
   mysql-data:
+  trading-app-postgres-data:
+  loki-data:
+  grafana-data:
 
 networks:
   frontend-net:
@@ -248,6 +462,9 @@ networks:
   temporal-net:
     driver: bridge
     name: tradingv3_temporal-net
+  trading-app-net:
+    driver: bridge
+    name: tradingv3_trading-app-net
   shared-net:
     driver: bridge
     name: tradingv3_shared-net

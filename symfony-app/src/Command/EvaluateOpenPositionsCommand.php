@@ -2,11 +2,12 @@
 
 namespace App\Command;
 
-use App\Entity\ContractPipeline;
-use App\Repository\ContractPipelineRepository;
 use App\Service\Trading\OpenedLockedSyncService;
 use App\Service\Trading\PositionEvaluator;
 use App\Service\Trading\PositionFetcher;
+use App\Service\Pipeline\MtfPipelineViewService;
+use App\Service\Pipeline\MtfStateService;
+use App\Repository\ContractRepository;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -20,7 +21,9 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 class EvaluateOpenPositionsCommand extends Command
 {
     public function __construct(
-        private readonly ContractPipelineRepository $pipelineRepo,
+        private readonly MtfPipelineViewService $pipelineView,
+        private readonly MtfStateService $mtfState,
+        private readonly ContractRepository $contracts,
         private readonly PositionFetcher $positionFetcher,
         private readonly PositionEvaluator $positionEvaluator,
         private readonly OpenedLockedSyncService $openedLockedSync
@@ -42,14 +45,18 @@ class EvaluateOpenPositionsCommand extends Command
         }
 
         // 1) Récupérer les pipelines "lockés" (OPENED_LOCKED)
-        $openPipes = $this->pipelineRepo->findBy(['status' => ContractPipeline::STATUS_OPENED_LOCKED]);
-        if (!$openPipes) {
+        $lockedPipelines = array_filter(
+            $this->pipelineView->list(),
+            fn(array $row) => $this->isLockedPipeline($row)
+        );
+
+        if ($lockedPipelines === []) {
             $io->success('Aucune position ouverte trouvée dans le pipeline.');
             return Command::SUCCESS;
         }
 
-        foreach ($openPipes as $pipe) {
-            $symbol = $pipe->getContract()->getSymbol();
+        foreach ($lockedPipelines as $pipeline) {
+            $symbol = $pipeline['symbol'];
 
             $io->section("Contrat $symbol");
 
@@ -58,10 +65,13 @@ class EvaluateOpenPositionsCommand extends Command
 
             if (!$position) {
                 $io->warning("Pas de position trouvée pour $symbol (peut-être fermée).");
+                $eventId = $this->buildEventId('POSITION_CLOSED', $symbol);
+                $this->mtfState->applyPositionClosed($eventId, $symbol, ['1m','5m']);
                 continue;
             }
 
-            $contractSize = (float) ($pipe->getContract()->getContractSize() ?? 1.0);
+            $contract = $this->contracts->find($symbol);
+            $contractSize = (float) ($contract?->getContractSize() ?? 1.0);
             if ($contractSize <= 0) {
                 $contractSize = 1.0;
             }
@@ -164,5 +174,21 @@ class EvaluateOpenPositionsCommand extends Command
         }
 
         return Command::SUCCESS;
+    }
+
+    private function isLockedPipeline(array $pipeline): bool
+    {
+        foreach ($pipeline['eligibility'] ?? [] as $row) {
+            $status = strtoupper((string)($row['status'] ?? ''));
+            if (in_array($status, ['LOCKED_POSITION','LOCKED_ORDER'], true)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function buildEventId(string $type, string $symbol): string
+    {
+        return sprintf('%s|%s|%s', $type, strtoupper($symbol), (int) (microtime(true) * 1000));
     }
 }

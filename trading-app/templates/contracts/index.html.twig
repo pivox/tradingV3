@@ -1,0 +1,219 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Contrats - Trading{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="bi bi-currency-exchange"></i> Contrats
+            </h1>
+            <div>
+                <button class="btn btn-primary" onclick="refreshTable()">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filtres -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-funnel"></i> Filtres
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <label for="filterExchange" class="form-label">Exchange</label>
+                        <select class="form-select" id="filterExchange">
+                            <option value="">Tous</option>
+                            <option value="bitmart">BitMart</option>
+                            <option value="binance">Binance</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label for="filterStatus" class="form-label">Statut</label>
+                        <select class="form-select" id="filterStatus">
+                            <option value="">Tous</option>
+                            <option value="Trading">Trading</option>
+                            <option value="Delisted">Delisted</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label for="filterSymbol" class="form-label">Symbole</label>
+                        <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
+                    </div>
+                    <div class="col-md-3 d-flex align-items-end">
+                        <button class="btn btn-outline-secondary" onclick="clearFilters()">
+                            <i class="bi bi-x-circle"></i> Effacer
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Table des contrats -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-table"></i> Liste des Contrats ({{ contracts|length }})
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table id="contractsTable" class="table table-striped table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Symbole</th>
+                                <th>Exchange</th>
+                                <th>Statut</th>
+                                <th>Type</th>
+                                <th>Prix Actuel</th>
+                                <th>Volume 24h</th>
+                                <th>Change 24h</th>
+                                <th>Leverage</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for contract in contracts %}
+                            <tr>
+                                <td>
+                                    <strong>{{ contract.symbol }}</strong>
+                                    {% if contract.baseCurrency and contract.quoteCurrency %}
+                                        <br><small class="text-muted">{{ contract.baseCurrency }}/{{ contract.quoteCurrency }}</small>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="badge bg-secondary">Trading</span>
+                                </td>
+                                <td>
+                                    {% if contract.status == 'Trading' %}
+                                        <span class="badge bg-success">{{ contract.status }}</span>
+                                    {% elseif contract.status == 'Delisted' %}
+                                        <span class="badge bg-danger">{{ contract.status }}</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ contract.status ?? 'N/A' }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if contract.productType == 1 %}
+                                        <span class="badge bg-info">Linéaire</span>
+                                    {% elseif contract.productType == 2 %}
+                                        <span class="badge bg-warning">Inverse</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ contract.productType ?? 'N/A' }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if contract.lastPrice %}
+                                        <strong>${{ contract.lastPrice|number_format(2) }}</strong>
+                                    {% else %}
+                                        <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if contract.volume24h %}
+                                        {{ contract.volume24h|number_format(0) }}
+                                    {% else %}
+                                        <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="text-muted">N/A</span>
+                                </td>
+                                <td>
+                                    <span class="text-muted">N/A</span>
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-primary" onclick="viewContract('{{ contract.symbol }}')" title="Voir détails">
+                                            <i class="bi bi-eye"></i>
+                                        </button>
+                                        <button class="btn btn-outline-info" onclick="viewKlines('{{ contract.symbol }}')" title="Voir Klines">
+                                            <i class="bi bi-graph-up"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+$(document).ready(function() {
+    // Initialisation de DataTables
+    $('#contractsTable').DataTable({
+        pageLength: 25,
+        order: [[0, 'asc']],
+        columnDefs: [
+            { orderable: false, targets: [8] } // Actions column
+        ]
+    });
+
+    // Filtres
+    $('#filterExchange, #filterStatus, #filterSymbol').on('change keyup', function() {
+        applyFilters();
+    });
+});
+
+function applyFilters() {
+    const table = $('#contractsTable').DataTable();
+    const exchange = $('#filterExchange').val();
+    const status = $('#filterStatus').val();
+    const symbol = $('#filterSymbol').val();
+
+    // Réinitialiser les filtres
+    table.search('').columns().search('').draw();
+
+    // Appliquer les filtres
+    if (exchange) {
+        table.column(1).search(exchange, false, false);
+    }
+    if (status) {
+        table.column(2).search(status, false, false);
+    }
+    if (symbol) {
+        table.column(0).search(symbol, false, false);
+    }
+
+    table.draw();
+}
+
+function clearFilters() {
+    $('#filterExchange, #filterStatus, #filterSymbol').val('');
+    $('#contractsTable').DataTable().search('').columns().search('').draw();
+}
+
+function refreshTable() {
+    location.reload();
+}
+
+function viewContract(symbol) {
+    // TODO: Implémenter la vue détaillée du contrat
+    alert('Vue détaillée pour ' + symbol);
+}
+
+function viewKlines(symbol) {
+    // Rediriger vers les graphiques avec le symbole
+    window.location.href = '{{ path('graph_index') }}?symbol=' + symbol;
+}
+</script>
+{% endblock %}

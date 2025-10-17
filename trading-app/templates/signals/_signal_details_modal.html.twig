@@ -1,0 +1,257 @@
+<!-- Informations générales du signal -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-info-circle"></i> Informations du signal
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <strong>ID:</strong> {{ signal.id }}<br>
+                        <strong>Symbole:</strong> {{ signal.symbol }}<br>
+                        <strong>Timeframe:</strong> {{ signal.timeframe.value }}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Direction:</strong> 
+                        <span class="badge signal-badge {% if signal.side.value == 'LONG' %}bg-success{% elseif signal.side.value == 'SHORT' %}bg-danger{% else %}bg-secondary{% endif %}">
+                            {{ signal.side.value }}
+                        </span><br>
+                        <strong>Score:</strong> {{ signal.score ? signal.score|number_format(2) : 'N/A' }}<br>
+                        <strong>Date:</strong> {{ signal.klineTime|date('d/m/Y H:i:s') }}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Créé le:</strong> {{ signal.insertedAt|date('d/m/Y H:i:s') }}<br>
+                        <strong>Mis à jour:</strong> {{ signal.updatedAt|date('d/m/Y H:i:s') }}
+                    </div>
+                    <div class="col-md-3">
+                        {% if signal.meta %}
+                            <strong>Métadonnées:</strong><br>
+                            <small class="text-muted">{{ signal.meta|json_encode }}</small>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Indicateurs techniques -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-graph-up"></i> Indicateurs techniques
+                </h6>
+            </div>
+            <div class="card-body">
+                {% if analysis.indicators %}
+                    <div class="row">
+                        <div class="col-md-4">
+                            <h6>Moyennes mobiles</h6>
+                            <table class="table table-sm klines-table">
+                                <tr>
+                                    <td><strong>EMA20:</strong></td>
+                                    <td>{{ analysis.indicators.ema20 ? analysis.indicators.ema20|number_format(4) : 'N/A' }}</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>EMA50:</strong></td>
+                                    <td>{{ analysis.indicators.ema50 ? analysis.indicators.ema50|number_format(4) : 'N/A' }}</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>MA9:</strong></td>
+                                    <td>{{ analysis.indicators.ma9 ? analysis.indicators.ma9|number_format(4) : 'N/A' }}</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>MA21:</strong></td>
+                                    <td>{{ analysis.indicators.ma21 ? analysis.indicators.ma21|number_format(4) : 'N/A' }}</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="col-md-4">
+                            <h6>Oscillateurs</h6>
+                            <table class="table table-sm klines-table">
+                                <tr>
+                                    <td><strong>RSI:</strong></td>
+                                    <td>
+                                        {% if analysis.indicators.rsi %}
+                                            <span class="indicator-value {% if analysis.indicators.rsi > 70 %}indicator-negative{% elseif analysis.indicators.rsi < 30 %}indicator-positive{% else %}indicator-neutral{% endif %}">{{ analysis.indicators.rsi|number_format(2) }}</span>
+                                            {% if analysis.indicators.rsi > 70 %}
+                                                <span class="badge bg-warning">Survente</span>
+                                            {% elseif analysis.indicators.rsi < 30 %}
+                                                <span class="badge bg-info">Survente</span>
+                                            {% endif %}
+                                        {% else %}
+                                            N/A
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>MACD:</strong></td>
+                                    <td>{{ analysis.indicators.macd ? analysis.indicators.macd|number_format(6) : 'N/A' }}</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>MACD Signal:</strong></td>
+                                    <td>{{ analysis.indicators.macd_signal ? analysis.indicators.macd_signal|number_format(6) : 'N/A' }}</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>MACD Histogram:</strong></td>
+                                    <td>{{ analysis.indicators.macd_histogram ? analysis.indicators.macd_histogram|number_format(6) : 'N/A' }}</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="col-md-4">
+                            <h6>Autres indicateurs</h6>
+                            <table class="table table-sm klines-table">
+                                <tr>
+                                    <td><strong>ATR:</strong></td>
+                                    <td>{{ analysis.indicators.atr ? analysis.indicators.atr|number_format(4) : 'N/A' }}</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>VWAP:</strong></td>
+                                    <td>{{ analysis.indicators.vwap ? analysis.indicators.vwap|number_format(4) : 'N/A' }}</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>BB Upper:</strong></td>
+                                    <td>{{ analysis.indicators.bb_upper ? analysis.indicators.bb_upper|number_format(4) : 'N/A' }}</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>BB Lower:</strong></td>
+                                    <td>{{ analysis.indicators.bb_lower ? analysis.indicators.bb_lower|number_format(4) : 'N/A' }}</td>
+                                </tr>
+                            </table>
+                        </div>
+                    </div>
+                {% else %}
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        Aucun indicateur technique disponible pour ce signal.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Klines récentes -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-bar-chart"></i> Klines récentes ({{ analysis.klines|length }})
+                </h6>
+            </div>
+            <div class="card-body">
+                {% if analysis.klines %}
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped klines-table">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Open</th>
+                                    <th>High</th>
+                                    <th>Low</th>
+                                    <th>Close</th>
+                                    <th>Volume</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for kline in analysis.klines %}
+                                    <tr>
+                                        <td>{{ kline.openTime|date('d/m H:i:s') }}</td>
+                                        <td>{{ kline.openPrice.toFloat|number_format(4) }}</td>
+                                        <td>{{ kline.highPrice.toFloat|number_format(4) }}</td>
+                                        <td>{{ kline.lowPrice.toFloat|number_format(4) }}</td>
+                                        <td><strong>{{ kline.closePrice.toFloat|number_format(4) }}</strong></td>
+                                        <td>{{ kline.volume ? kline.volume.toFloat|number_format(2) : 'N/A' }}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        Aucune kline disponible pour ce signal.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Analyse des timeframes parents -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-diagram-3"></i> Analyse des timeframes parents
+                </h6>
+            </div>
+            <div class="card-body">
+                {% if analysis.parent_analysis %}
+                    <div class="row">
+                        {% for parentTf, parentData in analysis.parent_analysis %}
+                            <div class="col-md-4">
+                                <div class="card parent-timeframe-card">
+                                    <div class="card-header">
+                                        <h6 class="mb-0">{{ parentTf }}</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        {% if parentData.error is defined and parentData.error %}
+                                            <div class="alert alert-danger">
+                                                <i class="bi bi-exclamation-triangle"></i>
+                                                {{ parentData.error }}
+                                            </div>
+                                        {% else %}
+                                            <div class="small">
+                                                {% if parentData.klines_count is defined %}
+                                                    <strong>Klines:</strong> {{ parentData.klines_count }}<br>
+                                                {% endif %}
+                                                {% if parentData.indicators is defined and parentData.indicators.rsi is defined %}
+                                                    <strong>RSI:</strong> {{ parentData.indicators.rsi|number_format(2) }}<br>
+                                                {% endif %}
+                                                {% if parentData.indicators is defined and parentData.indicators.ema20 is defined %}
+                                                    <strong>EMA20:</strong> {{ parentData.indicators.ema20|number_format(4) }}<br>
+                                                {% endif %}
+                                                {% if parentData.indicators is defined and parentData.indicators.ema50 is defined %}
+                                                    <strong>EMA50:</strong> {{ parentData.indicators.ema50|number_format(4) }}
+                                                {% endif %}
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle"></i>
+                        Aucune analyse des timeframes parents disponible.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Erreurs éventuelles -->
+{% if analysis.errors %}
+    <div class="row">
+        <div class="col-12">
+            <div class="alert alert-danger">
+                <h6><i class="bi bi-exclamation-triangle"></i> Erreurs détectées</h6>
+                <ul class="mb-0">
+                    {% for error in analysis.errors %}
+                        <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+{% endif %}

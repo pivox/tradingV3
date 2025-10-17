@@ -7,7 +7,7 @@ use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
- * @extends ServiceEntityRepository<Kline>
+ * @extends ServiceEntityRepository<Contract>
  */
 class ContractRepository extends ServiceEntityRepository
 {
@@ -19,7 +19,7 @@ class ContractRepository extends ServiceEntityRepository
     public function allActiveSymbols(): array
     {
         $date = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-            ->modify('-1080 hours')
+            ->modify('-880 hours')
             ->getTimestamp();
 
         $qb = $this->createQueryBuilder('contract');
@@ -29,7 +29,7 @@ class ContractRepository extends ServiceEntityRepository
             ->andWhere('contract.openInterest <= :openInterest')
             ->setParameter('quoteCurrency', 'USDT')
             ->setParameter('status', 'Trading')
-            ->setParameter('volume24h', 2_000_000)
+            ->setParameter('volume24h', 500_000)
             ->setParameter('openInterest', $date);
 
         $qb->andWhere($qb->expr()->notIn(
@@ -45,21 +45,30 @@ class ContractRepository extends ServiceEntityRepository
 
     public function allActiveSymbolNames(): array
     {
+
         $date = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-            ->modify('-1080 hours')
+            ->modify('-880 hours')
             ->getTimestamp();
 
-        $qb = $this->createQueryBuilder('contract');
-        $qb->select('contract.symbol')
-            ->andWhere('contract.quoteCurrency = :quoteCurrency')
-            ->andWhere('contract.status = :status')
-            ->andWhere('contract.volume24h > :volume24h')
-            ->andWhere('contract.openInterest <= :openInterest')
-            ->setParameter('quoteCurrency', 'USDT')
-            ->setParameter('status', 'Trading')
-            ->setParameter('volume24h', 2_000_000)
-            ->setParameter('openInterest', $date);
+        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
 
+        $qb = $this->createQueryBuilder('contract');
+        $qb
+            ->andWhere('contract.status = :status')
+            ->andWhere('contract.quoteCurrency = :quoteCurrency')
+            ->andWhere('(contract.expireTimestamp IS NULL OR contract.expireTimestamp > :now)')
+            ->andWhere('(contract.delistTime IS NULL OR contract.delistTime > :now)')
+            ->andWhere('contract.maxLeverage > 0')
+            ->andWhere('contract.openInterest > 0')
+            ->andWhere('contract.indexPrice BETWEEN contract.low24h AND contract.high24h')
+            ->andWhere('contract.openInterest <= :openInterest')
+            ->setParameter('openInterest', $date)
+            ->setParameter('status', 'Trading')
+            ->setParameter('quoteCurrency', 'USDT')
+            ->setParameter('now', $now);
+        ;
+
+        // Exclure les contrats blacklistés
         $qb->andWhere($qb->expr()->notIn(
             'contract.symbol',
             $this->getEntityManager()->createQueryBuilder()
@@ -68,7 +77,7 @@ class ContractRepository extends ServiceEntityRepository
                 ->getDQL()
         ));
 
-        return array_column($qb->getQuery()->getResult(), 'symbol');
+        return array_map(fn($contract) => $contract->getSymbol(), $qb->getQuery()->getResult());
     }
 
     public function findTopByVolumeOrOI(int $limit = 100): array
@@ -97,9 +106,34 @@ class ContractRepository extends ServiceEntityRepository
     public function normalizeSubset(array $subset): array
     {
         return array_column($this->createQueryBuilder('contract')
-            ->where('contract.symbol in (\''.implode('\',\'', $subset).'\')')
+            ->where('contract.symbol in (\'' . implode('\',\'', $subset) . '\')')
             ->select('contract.symbol')
             ->getQuery()
             ->getResult(), 'symbol');
+    }
+
+    public function findWithFilters(?string $exchange = null, ?string $status = null, ?string $symbol = null): array
+    {
+        $qb = $this->createQueryBuilder('c')
+            ->leftJoin('c.exchange', 'e')
+            ->addSelect('e')
+            ->orderBy('c.symbol', 'ASC');
+
+        if ($exchange) {
+            $qb->andWhere('e.name = :exchange')
+                ->setParameter('exchange', $exchange);
+        }
+
+        if ($status) {
+            $qb->andWhere('c.status = :status')
+                ->setParameter('status', $status);
+        }
+
+        if ($symbol) {
+            $qb->andWhere('c.symbol LIKE :symbol')
+                ->setParameter('symbol', '%' . $symbol . '%');
+        }
+
+        return $qb->getQuery()->getResult();
     }
 }
