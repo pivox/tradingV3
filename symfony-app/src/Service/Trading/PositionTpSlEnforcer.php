@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace App\Service\Trading;
 
 use App\Bitmart\Http\BitmartHttpClientPublic;
+use App\Dto\ContractDetailsCollection;
+use App\Dto\ContractDetailsDto;
 use Psr\Log\LoggerInterface;
 use App\Service\Trading\Idempotency\ClientOrderIdFactory;
 use App\Service\Bitmart\Private\OrdersService; // <-- ton service existant qui fait le POST REST
@@ -59,25 +61,32 @@ final class PositionTpSlEnforcer
         $coidSl = $this->coid->make('sl', $symbol, $side, $positionId, 3600);
 
         // 4) Payloads Position TP/SL (plan_category=2 + market)
+        $reduceSide = ($side === 'long') ? 3 : 2; // BitMart close side values
+        $sizeContracts = (int)($position['size'] ?? 0);
+        if ($sizeContracts <= 0) {
+            $sizeContracts = 1;
+        }
+
         $payloadTp = [
             'symbol'          => $symbol,
-            // 'side' pour close: 3 = sell_close_long, 2 = buy_close_short (selon docs/SDK)
-            'side'            => ($side === 'long') ? 3 : 2,
-            'order_type'      => 'take_profit',
+            'side'            => $reduceSide,
+            'type'            => 'take_profit',
             'trigger_price'   => (string)$tp,
             'price_type'      => 1,         // 1=last, 2=fair/mark
             'plan_category'   => 2,         // Position TP/SL
-            'category'        => 'market',  // défaut plan_category=2
+            'category'        => 'market',
+            'size'            => $sizeContracts,
             'client_order_id' => $coidTp,
         ];
         $payloadSl = [
             'symbol'          => $symbol,
-            'side'            => ($side === 'long') ? 3 : 2,
-            'order_type'      => 'stop_loss',
+            'side'            => $reduceSide,
+            'type'            => 'stop_loss',
             'trigger_price'   => (string)$sl,
             'price_type'      => 1,
             'plan_category'   => 2,
             'category'        => 'market',
+            'size'            => $sizeContracts,
             'client_order_id' => $coidSl,
         ];
 
@@ -106,12 +115,36 @@ final class PositionTpSlEnforcer
 
         // 1) Détails contrat pour tick
         $details = $this->bitmartHttpClientPublic->getContractDetails($symbol);
-        $tick    = (float)($details['price_precision'] ?? 0.0);
-        $ctSize  = (float)($details['contract_size'] ?? 0.0);
+        $contract = $this->resolveContractDetails($symbol, $details);
+
+        if ($contract === null) {
+            $this->positionsLogger->warning('[TP/SL] enforceAuto: aucun détail contrat trouvé', [
+                'symbol' => $symbol,
+            ]);
+            return;
+        }
+
+        $tickValue = (float) $contract->pricePrecision;
+        $tick = $tickValue > 0.0 ? $tickValue : null;
+
+        $ctSizeValue = (float) $contract->contractSize;
+        $ctSize = $ctSizeValue > 0.0 ? $ctSizeValue : 1.0;
 
         // 2) Si la position porte déjà des prix, on les prend, sinon fallback conf abs_usdt
         $tpPrice = isset($position['tp_price']) ? (float)$position['tp_price'] : null;
         $slPrice = isset($position['sl_price']) ? (float)$position['sl_price'] : null;
+
+        $tpOrderId = $this->extractString($position, ['tp_order_id', 'take_profit_order_id', 'preset_take_profit_order_id']);
+        $slOrderId = $this->extractString($position, ['sl_order_id', 'stop_loss_order_id', 'preset_stop_loss_order_id']);
+
+        if ($tpOrderId !== null || $slOrderId !== null) {
+            $this->positionsLogger->info('[TP/SL] enforceAuto: contrats TP/SL déjà présents, skip', [
+                'symbol' => $symbol,
+                'tp_order_id' => $tpOrderId,
+                'sl_order_id' => $slOrderId,
+            ]);
+            return;
+        }
 
         if ($tpPrice && $slPrice) {
             $tpTarget = $tpPrice;
@@ -133,6 +166,46 @@ final class PositionTpSlEnforcer
 
         // 3) Appel de la méthode existante
         $this->enforce($position, $tpTarget, $slTarget, $tick);
+    }
+
+    private function resolveContractDetails(string $symbol, ContractDetailsCollection $collection): ?ContractDetailsDto
+    {
+        if ($collection->isEmpty()) {
+            return null;
+        }
+
+        $contract = $collection->findBySymbol($symbol);
+        if ($contract !== null) {
+            return $contract;
+        }
+
+        return $collection->first();
+    }
+
+    /**
+     * @param array<string, mixed> $position
+     * @param string[] $keys
+     */
+    private function extractString(array $position, array $keys): ?string
+    {
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $position)) {
+                continue;
+            }
+
+            $value = $position[$key];
+            if (is_string($value) && $value !== '') {
+                return $value;
+            }
+            if (is_int($value) || is_float($value)) {
+                $stringValue = (string) $value;
+                if ($stringValue !== '') {
+                    return $stringValue;
+                }
+            }
+        }
+
+        return null;
     }
 
 }
