@@ -4,7 +4,47 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="73604acf-3471-46f2-a1fd-fdf73ef42078" name="Changes" comment="OpenedLockedSyncService conf" />
+    <list default="true" id="73604acf-3471-46f2-a1fd-fdf73ef42078" name="Changes" comment="OpenedLockedSyncService conf">
+      <change beforePath="$PROJECT_DIR$/.env" beforeDir="false" afterPath="$PROJECT_DIR$/.env" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3/storage_v2/_src_/database/trading_app.A3Y0dg.meta" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3/storage_v2/_src_/database/trading_app.A3Y0dg/schema/information_schema.FNRwLQ.meta" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3/storage_v2/_src_/database/trading_app.A3Y0dg/schema/pg_catalog.0S1ZNQ.meta" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3/storage_v2/_src_/database/trading_app.A3Y0dg/schema/public.abK9xQ.meta" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources/3efcf1d4-4b26-4b71-b40d-ef9aeb0e8bc3/storage_v2/_src_/database/trading_app.A3Y0dg/schema/public.abK9xQ.zip" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docker-compose.yml" beforeDir="false" afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/services/api.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/services/api.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitoring/grafana-dashboards/comprehensive-logs-dashboard.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitoring/grafana-dashboards/dashboard.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitoring/grafana-dashboards/error-monitoring-dashboard.json" beforeDir="false" afterPath="$PROJECT_DIR$/monitoring/grafana-dashboards/error-monitoring-dashboard.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitoring/grafana-dashboards/trading-app-logs.json" beforeDir="false" afterPath="$PROJECT_DIR$/monitoring/grafana-dashboards/trading-app-logs.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitoring/grafana-dashboards/trading-logs-advanced.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/symfony-app/config/services.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/config/services.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/symfony-app/src/Command/ListenPositionsCommand.php" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/src/Command/ListenPositionsCommand.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/symfony-app/src/Controller/Bitmart/KlinesCallbackController.php" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/src/Controller/Bitmart/KlinesCallbackController.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/symfony-app/src/Dto/ContractDetailsCollection.php" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/src/Dto/ContractDetailsCollection.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/symfony-app/src/Service/Trading/PositionOpener.php" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/src/Service/Trading/PositionOpener.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/symfony-app/src/Service/Trading/PositionTpSlEnforcer.php" beforeDir="false" afterPath="$PROJECT_DIR$/symfony-app/src/Service/Trading/PositionTpSlEnforcer.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/.env" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/.env" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/Dockerfile.mtf" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/Dockerfile.mtf" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/README_MTF_RUN.md" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/README_MTF_RUN.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/composer.json" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/composer.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/composer.lock" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/composer.lock" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/config/packages/monolog.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/packages/monolog.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/config/routes.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/routes.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/config/routes/framework.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/routes/framework.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/config/services_logging.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/services_logging.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/config/trading.yml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/trading.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Command/Mtf/MtfRunCommand.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Command/Mtf/MtfRunCommand.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Command/TestLoggingCommand.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Command/TestLoggingCommand.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Controller/MtfController.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Controller/MtfController.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Service/TradeContextService.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Service/TradeContextService.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Infrastructure/Http/BitmartRestClient.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Infrastructure/Http/BitmartRestClient.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/symfony.lock" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/symfony.lock" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/templates/base.html.twig" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/templates/base.html.twig" afterDir="false" />
+    </list>
     <list id="0ec51621-5bf1-43ac-acaa-64de0476dee0" name="todo" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -15,6 +55,12 @@
     <option name="groupingKeys">
       <option value="directory" />
       <option value="repository" />
+    </option>
+  </component>
+  <component name="ComposerConfigs">
+    <option name="configs">
+      <option value="$PROJECT_DIR$/trading-app/composer.json" />
+      <option value="$PROJECT_DIR$/bitmart-ws-forwarder/composer.json" />
     </option>
   </component>
   <component name="ComposerSettings" synchronizationState="SYNCHRONIZE">
@@ -53,6 +99,7 @@
     <file url="jar://$APPLICATION_HOME_DIR$/plugins/restClient/lib/restClient.jar!/com/intellij/ws/rest/client/requests/collection/post-requests.http" environment="test" />
     <file url="file:///private/var/folders/zm/xxmsn8rj14vb619z02pz6y6h0000gq/T/whats-new-dir/whats-new.http" environment="test" />
   </component>
+  <component name="PhpDebugGeneral" break_at_first_line="true" ignore_connections_through_unregistered_servers="false" max_simultaneous_connections="1" />
   <component name="PhpServers">
     <servers>
       <server host="localhost" id="1bbb65da-f106-4331-a224-c8ca6c490892" name="trading-app-php" use_path_mappings="true">
@@ -231,6 +278,143 @@
       <path value="$PROJECT_DIR$/symfony-app/vendor/masterminds/html5" />
       <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/browser-kit" />
       <path value="$PROJECT_DIR$/symfony-app/vendor/symfony/dom-crawler" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/doctrine-migrations-bundle" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/inflector" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/dbal" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/lexer" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/migrations" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/event-manager" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/orm" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/instantiator" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/persistence" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/doctrine-bundle" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/deprecations" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/sql-formatter" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/doctrine/collections" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/guzzlehttp/psr7" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/guzzlehttp/promises" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/ralouphie/getallheaders" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/evenement/evenement" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/guzzlehttp/guzzle" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/composer" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/flex" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/psr/http-message" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/psr/event-dispatcher" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/psr/cache" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/psr/clock" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/psr/log" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/psr/http-client" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/psr/container" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/react/event-loop" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/brick/math" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/twig/twig" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/psr/http-factory" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/react/dns" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/react/stream" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/react/cache" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/monolog/monolog" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/ramsey/uuid" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/ramsey/collection" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/react/socket" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/monolog-bundle" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/framework-bundle" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/ratchet/pawl" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/ratchet/rfc6455" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/validator" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/dotenv" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/polyfill-php80" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/serializer" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/translation-contracts" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/polyfill-ctype" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/cache" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/monolog-bridge" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/lock" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/runtime" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/event-dispatcher" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/config" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/twig-bridge" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/options-resolver" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/filesystem" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/var-dumper" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/finder" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/twig-bundle" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/event-dispatcher-contracts" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/polyfill-intl-normalizer" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/stopwatch" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/http-client" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/polyfill-php84" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/polyfill-php83" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/string" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/rate-limiter" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/yaml" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/http-kernel" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/http-client-contracts" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/service-contracts" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/routing" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/deprecation-contracts" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/error-handler" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/var-exporter" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/doctrine-bridge" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/http-foundation" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/process" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/clock" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/dependency-injection" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/cache-contracts" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/polyfill-intl-grapheme" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/polyfill-mbstring" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/console" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/roadrunner-php/roadrunner-api-dto" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/roadrunner-php/version-checker" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/temporal/sdk" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/psr/simple-cache" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/grpc/grpc" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/internal/promise" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/internal/destroy" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/carbonphp/carbon-doctrine-types" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/spiral/interceptors" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/spiral/tokenizer" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/spiral/roadrunner-cli" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/spiral/attributes" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/spiral/roadrunner-worker" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/spiral/core" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/spiral/logger" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/nesbot/carbon" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/spiral/roadrunner-kv" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/spiral/security" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/translation" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/google/common-protos" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/spiral/hmvc" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/spiral/goridge" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/google/protobuf" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/symfony/maker-bundle" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/staabm/side-effects-detector" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/phpstan/phpstan" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/nikic/php-parser" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/myclabs/deep-copy" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/phpunit/php-timer" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/phpunit/phpunit" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/phpunit/php-text-template" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/phpunit/php-code-coverage" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/phar-io/manifest" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/phpunit/php-invoker" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/phar-io/version" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/phpunit/php-file-iterator" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/comparator" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/code-unit-reverse-lookup" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/diff" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/recursion-context" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/lines-of-code" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/global-state" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/object-enumerator" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/object-reflector" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/complexity" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/environment" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/exporter" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/type" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/version" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/cli-parser" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/sebastian/code-unit" />
+      <path value="$PROJECT_DIR$/trading-app/vendor/theseer/tokenizer" />
     </include_path>
   </component>
   <component name="PhpXdebugProxy" ide_key="PHPSTORM" host="client_host=host.docker.internal" port="9003" />
@@ -251,6 +435,8 @@
   <component name="PropertiesComponent">{
   &quot;keyToString&quot;: {
     &quot;Docker.docker-compose.yml.bitmart-positions-forwarder: Compose Deployment.executor&quot;: &quot;Run&quot;,
+    &quot;Docker.docker-compose.yml.symfony-positions-listener: Compose Deployment.executor&quot;: &quot;Run&quot;,
+    &quot;Docker.docker-compose.yml.trading-app-php: Compose Deployment.executor&quot;: &quot;Run&quot;,
     &quot;HTTP Request.All in rest-api.executor&quot;: &quot;Run&quot;,
     &quot;HTTP Request.All in rest-api_1.executor&quot;: &quot;Run&quot;,
     &quot;HTTP Request.All in rest-api_2.executor&quot;: &quot;Run&quot;,
@@ -298,7 +484,7 @@
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
     &quot;php.override.implement.member.chooser.php.doc&quot;: &quot;NONE&quot;,
     &quot;run.code.analysis.last.selected.profile&quot;: &quot;pProject Default&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;reference.webide.settings.project.settings.php&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;reference.webide.settings.project.settings.php.debug&quot;,
     &quot;ts.external.directory.path&quot;: &quot;/Applications/PhpStorm.app/Contents/plugins/javascript-plugin/jsLanguageServicesImpl/external&quot;,
     &quot;two.files.diff.last.used.folder&quot;: &quot;/Users/haythem.mabrouk/workspace/perso/tradingDev/api_rate_limiter/workflows&quot;,
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
@@ -326,7 +512,16 @@
       <recent name="$PROJECT_DIR$/cron_symfony_fetch_klines/tools" />
     </key>
   </component>
-  <component name="RunManager" selected="Docker.docker-compose.yml.bitmart-positions-forwarder: Compose Deployment">
+  <component name="RunManager" selected="PHP Script.xdebug trading">
+    <configuration default="true" type="docker-deploy" factoryName="docker-compose.yml" temporary="true">
+      <deployment type="docker-compose.yml">
+        <settings />
+      </deployment>
+      <method v="2" />
+    </configuration>
+    <configuration name="All in rest-api_1" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" path="$APPLICATION_CONFIG_DIR$/scratches/rest-api_1.http">
+      <method v="2" />
+    </configuration>
     <configuration name="All in rest-api_1" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" path="$APPLICATION_CONFIG_DIR$/scratches/rest-api_1.http">
       <method v="2" />
     </configuration>
@@ -336,7 +531,7 @@
     <configuration name="bitmart | #2" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/bitmart.http" executionIdentifier="#2" index="2" runType="Run single request">
       <method v="2" />
     </configuration>
-    <configuration name="bitmart | #2" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/bitmart.http" executionIdentifier="#2" index="2" runType="Run single request">
+    <configuration name="eval | GET request to example server" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/eval.http" executionIdentifier="GET request to example server" runType="Run single request">
       <method v="2" />
     </configuration>
     <configuration name="eval | GET request to example server" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/eval.http" executionIdentifier="GET request to example server" runType="Run single request">
@@ -351,7 +546,20 @@
     <configuration name="kline | #2" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/kline.http" executionIdentifier="#2" index="2" runType="Run single request">
       <method v="2" />
     </configuration>
-    <configuration name="refresh | #6" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$APPLICATION_CONFIG_DIR$/scratches/refresh.http" executionIdentifier="#6" index="6" runType="Run single request">
+    <configuration name="trading-app" type="PHPUnitRunConfigurationType" factoryName="PHPUnit">
+      <TestRunner configuration_file="$PROJECT_DIR$/trading-app/phpunit.xml.dist" scope="XML" use_alternative_configuration_file="true" />
+      <method v="2" />
+    </configuration>
+    <configuration name="trading-app" type="PHPUnitRunConfigurationType" factoryName="PHPUnit">
+      <TestRunner configuration_file="$PROJECT_DIR$/trading-app/phpunit.xml.dist" scope="XML" use_alternative_configuration_file="true" />
+      <method v="2" />
+    </configuration>
+    <configuration name="xdebug trading" type="PhpLocalRunConfigurationType" factoryName="PHP Console" path="bin/console" scriptParameters="mtf:run ">
+      <CommandLine>
+        <PhpTestInterpreterSettings>
+          <option name="interpreterName" value="trading-app-php" />
+        </PhpTestInterpreterSettings>
+      </CommandLine>
       <method v="2" />
     </configuration>
     <configuration name="xdebug trading" type="PhpLocalRunConfigurationType" factoryName="PHP Console" path="bin/console" scriptParameters="mtf:run --symbols=BTCUSDT">
@@ -360,6 +568,21 @@
           <option name="interpreterName" value="trading-app-php" />
         </PhpTestInterpreterSettings>
       </CommandLine>
+      <method v="2" />
+    </configuration>
+    <configuration name="RESOLVUSDT sync" type="ShConfigurationType">
+      <option name="SCRIPT_TEXT" value="docker compose exec php php bin/console bitmart:kline:sync-all --symbol=RESOLVUSDT " />
+      <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+      <option name="SCRIPT_PATH" value="" />
+      <option name="SCRIPT_OPTIONS" value="docker compose exec php php bin/console bitmart:kline:sync-all --symbol=RESOLVUSDT" />
+      <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+      <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="INDEPENDENT_INTERPRETER_PATH" value="true" />
+      <option name="INTERPRETER_PATH" value="/bin/zsh" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="EXECUTE_IN_TERMINAL" value="true" />
+      <option name="EXECUTE_SCRIPT_FILE" value="false" />
+      <envs />
       <method v="2" />
     </configuration>
     <configuration name="RESOLVUSDT sync" type="ShConfigurationType">
@@ -409,6 +632,36 @@
     </configuration>
     <configuration name="SOLUSDT sync" type="ShConfigurationType">
       <option name="SCRIPT_TEXT" value="docker compose exec php php bin/console bitmart:kline:sync-all --symbol=RESOLVUSDT " />
+      <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+      <option name="SCRIPT_PATH" value="" />
+      <option name="SCRIPT_OPTIONS" value="" />
+      <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+      <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="INDEPENDENT_INTERPRETER_PATH" value="true" />
+      <option name="INTERPRETER_PATH" value="/bin/zsh" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="EXECUTE_IN_TERMINAL" value="true" />
+      <option name="EXECUTE_SCRIPT_FILE" value="false" />
+      <envs />
+      <method v="2" />
+    </configuration>
+    <configuration name="SOLUSDT sync" type="ShConfigurationType">
+      <option name="SCRIPT_TEXT" value="docker compose exec php php bin/console bitmart:kline:sync-all --symbol=RESOLVUSDT " />
+      <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+      <option name="SCRIPT_PATH" value="" />
+      <option name="SCRIPT_OPTIONS" value="" />
+      <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+      <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="INDEPENDENT_INTERPRETER_PATH" value="true" />
+      <option name="INTERPRETER_PATH" value="/bin/zsh" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="EXECUTE_IN_TERMINAL" value="true" />
+      <option name="EXECUTE_SCRIPT_FILE" value="false" />
+      <envs />
+      <method v="2" />
+    </configuration>
+    <configuration name="worker" type="ShConfigurationType">
+      <option name="SCRIPT_TEXT" value="docker compose exec python python temporal/workers/task_processor/worker.py" />
       <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
       <option name="SCRIPT_PATH" value="" />
       <option name="SCRIPT_OPTIONS" value="" />
@@ -471,6 +724,67 @@
       </deployment>
       <method v="2" />
     </configuration>
+    <configuration name="docker-compose.yml.bitmart-positions-forwarder: Compose Deployment" type="docker-deploy" factoryName="docker-compose.yml" temporary="true" server-name="Docker">
+      <deployment type="docker-compose.yml">
+        <settings>
+          <option name="services">
+            <list>
+              <option value="bitmart-positions-forwarder" />
+            </list>
+          </option>
+          <option name="sourceFilePath" value="docker-compose.yml" />
+        </settings>
+      </deployment>
+      <method v="2" />
+    </configuration>
+    <configuration name="docker-compose.yml.symfony-positions-listener: Compose Deployment" type="docker-deploy" factoryName="docker-compose.yml" temporary="true" server-name="Docker">
+      <deployment type="docker-compose.yml">
+        <settings>
+          <option name="services">
+            <list>
+              <option value="symfony-positions-listener" />
+            </list>
+          </option>
+          <option name="sourceFilePath" value="docker-compose.yml" />
+        </settings>
+      </deployment>
+      <method v="2" />
+    </configuration>
+    <configuration name="docker-compose.yml.symfony-positions-listener: Compose Deployment" type="docker-deploy" factoryName="docker-compose.yml" temporary="true" server-name="Docker">
+      <deployment type="docker-compose.yml">
+        <settings>
+          <option name="services">
+            <list>
+              <option value="symfony-positions-listener" />
+            </list>
+          </option>
+          <option name="sourceFilePath" value="docker-compose.yml" />
+        </settings>
+      </deployment>
+      <method v="2" />
+    </configuration>
+    <configuration name="docker-compose.yml.trading-app-php: Compose Deployment" type="docker-deploy" factoryName="docker-compose.yml" temporary="true" server-name="Docker">
+      <deployment type="docker-compose.yml">
+        <settings>
+          <option name="services">
+            <list>
+              <option value="trading-app-php" />
+            </list>
+          </option>
+          <option name="sourceFilePath" value="docker-compose.yml" />
+        </settings>
+      </deployment>
+      <method v="2" />
+    </configuration>
+    <configuration name="docker" type="docker-deploy" factoryName="docker-compose.yml" server-name="Docker">
+      <deployment type="docker-compose.yml">
+        <settings>
+          <option name="envFilePath" value="" />
+          <option name="sourceFilePath" value="docker-compose.yml" />
+        </settings>
+      </deployment>
+      <method v="2" />
+    </configuration>
     <configuration name="docker" type="docker-deploy" factoryName="docker-compose.yml" server-name="Docker">
       <deployment type="docker-compose.yml">
         <settings>
@@ -491,24 +805,26 @@
     </configuration>
     <list>
       <item itemvalue="Docker.docker" />
+      <item itemvalue="Docker.docker-compose.yml.trading-app-php: Compose Deployment" />
       <item itemvalue="Docker.docker-compose.yml.bitmart-positions-forwarder: Compose Deployment" />
-      <item itemvalue="HTTP Request.All in rest-api_1" />
+      <item itemvalue="Docker.docker-compose.yml.symfony-positions-listener: Compose Deployment" />
       <item itemvalue="HTTP Request.bitmart | #2" />
-      <item itemvalue="HTTP Request.eval | GET request to example server" />
       <item itemvalue="HTTP Request.kline | #2" />
-      <item itemvalue="HTTP Request.refresh | #6" />
+      <item itemvalue="HTTP Request.All in rest-api_1" />
+      <item itemvalue="HTTP Request.eval | GET request to example server" />
       <item itemvalue="PHP Script.xdebug trading" />
+      <item itemvalue="PHPUnit.trading-app" />
       <item itemvalue="Shell Script.RESOLVUSDT sync" />
       <item itemvalue="Shell Script.SOLUSDT sync" />
       <item itemvalue="Shell Script.worker" />
     </list>
     <recent_temporary>
       <list>
+        <item itemvalue="Docker.docker-compose.yml.trading-app-php: Compose Deployment" />
+        <item itemvalue="Docker.docker-compose.yml.symfony-positions-listener: Compose Deployment" />
         <item itemvalue="Docker.docker-compose.yml.bitmart-positions-forwarder: Compose Deployment" />
         <item itemvalue="HTTP Request.eval | GET request to example server" />
         <item itemvalue="HTTP Request.All in rest-api_1" />
-        <item itemvalue="HTTP Request.kline | #2" />
-        <item itemvalue="HTTP Request.bitmart | #2" />
       </list>
     </recent_temporary>
   </component>
@@ -689,6 +1005,19 @@
       <workItem from="1760428930709" duration="67000" />
       <workItem from="1760430018552" duration="71000" />
       <workItem from="1760441101669" duration="1635000" />
+      <workItem from="1760515885301" duration="42000" />
+      <workItem from="1760515946187" duration="29000" />
+      <workItem from="1760522690844" duration="1863000" />
+      <workItem from="1760524690442" duration="4586000" />
+      <workItem from="1760535185956" duration="273000" />
+      <workItem from="1760540419091" duration="124000" />
+      <workItem from="1760542492432" duration="226000" />
+      <workItem from="1760555679123" duration="1920000" />
+      <workItem from="1760606485229" duration="287000" />
+      <workItem from="1760613814557" duration="1829000" />
+      <workItem from="1760616940169" duration="4914000" />
+      <workItem from="1760632517649" duration="6859000" />
+      <workItem from="1760644043755" duration="9393000" />
     </task>
     <task id="LOCAL-00050" summary="positions dans bitmart =&gt; nettyage">
       <option name="closed" value="true" />
@@ -1159,6 +1488,62 @@
     <MESSAGE value="OpenedLockedSyncService conf" />
     <option name="LAST_COMMIT_MESSAGE" value="OpenedLockedSyncService conf" />
     <option name="NON_MODAL_COMMIT_POSTPONE_SLOW_CHECKS" value="false" />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" type="php">
+          <url>file://$PROJECT_DIR$/trading-app/src/Infrastructure/Http/BitmartRestClient.php</url>
+          <line>186</line>
+          <option name="timeStamp" value="1" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="php">
+          <url>file://$PROJECT_DIR$/trading-app/src/Infrastructure/Http/BitmartRestClient.php</url>
+          <line>187</line>
+          <option name="timeStamp" value="2" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="php">
+          <url>file://$PROJECT_DIR$/trading-app/src/Command/Mtf/MtfRunCommand.php</url>
+          <line>168</line>
+          <option name="timeStamp" value="3" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="php">
+          <url>file://$PROJECT_DIR$/trading-app/src/Command/Mtf/MtfRunCommand.php</url>
+          <line>54</line>
+          <option name="timeStamp" value="4" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="php">
+          <url>file://$PROJECT_DIR$/trading-app/src/Command/Mtf/MtfRunCommand.php</url>
+          <line>88</line>
+          <option name="timeStamp" value="5" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="php">
+          <url>file://$PROJECT_DIR$/trading-app/src/Command/Mtf/MtfRunCommand.php</url>
+          <line>176</line>
+          <option name="timeStamp" value="6" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="php">
+          <url>file://$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfRunService.php</url>
+          <line>38</line>
+          <option name="timeStamp" value="7" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="php">
+          <url>file://$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfRunService.php</url>
+          <line>96</line>
+          <option name="timeStamp" value="8" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="php">
+          <url>file://$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfService.php</url>
+          <line>177</line>
+          <option name="timeStamp" value="9" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="php">
+          <url>file://$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfService.php</url>
+          <line>657</line>
+          <option name="timeStamp" value="10" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
