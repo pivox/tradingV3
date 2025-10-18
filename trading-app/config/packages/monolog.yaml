@@ -75,7 +75,7 @@ monolog:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/bitmart.log'
       max_files: 14
-      level: '%env(LOG_LEVEL_BITMART)%'
+      level: 'info'
       channels: ['bitmart']
       formatter: App\Logging\CustomLineFormatter
 
