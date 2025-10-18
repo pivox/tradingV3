@@ -1,4 +1,4 @@
-version: '2.5.32'
+version: '2.5.34'
 
 meta:
     name: SCALPING v2.0 - MTF + Pipeline + Leverage
@@ -112,17 +112,41 @@ timeframes:
     '1h':  { guards: { min_bars: 200 } }
     '15m': { guards: { min_bars: 50 } }
     '5m':  { guards: { min_bars: 50 } }
-    '1m':  { guards: { min_bars: 50 } }
+    '1m':  { guards: { min_bars: 200 } }
     meta: >
         min_bars = max des exigences par indicateur utilisé sur le TF.
         VWAP est intraday (reset quotidien), pas de plancher fixe au-delà du TF lui-même.
 
 
 # ======== LOGIC RULES ========
+rules:
+    macd_hist_gt_eps:
+        op: '>'
+        left: 'macd_hist'
+        right: 0.0
+        eps: 1.0e-6
+    ema20_over_50_with_tolerance:
+        any_of:
+            - ema_20_gt_50
+            - ema_20_minus_ema_50_gt: -0.0008
+    ema_above_200_with_tolerance:
+        any_of:
+            - close_above_ema_200
+            - close_minus_ema_200_gt: -0.0015
+    ema_below_200_with_tolerance:
+        any_of:
+            - close_below_ema_200
+            - close_minus_ema_200_lt: 0.0015
+    rsi_lt_softcap: { lt: 78 }
+    rsi_gt_softfloor: { gt: 22 }
+    atr_rel_in_range_15m: { between_pct: [0.001, 0.004] }
+    atr_rel_in_range_5m:  { between_pct: [0.0008, 0.0035] }
+
 validation:
-    start_from_timeframe: '4h'   # 4h | 1h | 15m | 5m | 1m
+    start_from_timeframe: '1h'
+
     timeframe:
-        '4h':            # Contexte / structure (pas de MACD ici)
+        '4h':
             long:
                 - ema_50_gt_200
                 - close_above_ema_200
@@ -132,51 +156,58 @@ validation:
                 - close_below_ema_200
                 - price_regime_ok_short
 
-        '1h':            # Biais + momentum
+        '1h':
             long:
-                - close_above_ema_200
-                - macd_hist_gt_0
+                - ema_above_200_with_tolerance
+                - macd_hist_gt_eps
                 - price_regime_ok_long
             short:
-                - close_below_ema_200
+                - ema_below_200_with_tolerance
                 - macd_hist_lt_0
                 - price_regime_ok_short
 
-        '15m':           # Exécution/timing (assoupli)
+        '15m':
             long:
-                - ema_20_gt_50
-                - macd_hist_gt_0
+                - ema20_over_50_with_tolerance
+                - macd_hist_gt_eps
                 - close_above_vwap
-                - rsi_lt_80                    # assoupli: 70 -> 80
+                - rsi_lt_softcap
+                - atr_rel_in_range_15m
             short:
                 - ema_20_lt_50
                 - macd_hist_lt_0
                 - close_below_vwap
-                - rsi_gt_20                    # assoupli: 30 -> 20
+                - rsi_gt_softfloor
+                - atr_rel_in_range_15m
 
-        '5m':            # Exécution (assoupli - VWAP retiré)
+        '5m':
+            long:
+                - any_of:
+                    - [ ema20_over_50_with_tolerance, macd_hist_gt_eps ]
+                    - [ ema20_over_50_with_tolerance, rsi_lt_softcap ]
+                    - [ macd_hist_gt_eps, rsi_lt_softcap ]
+                - atr_rel_in_range_5m
+            short:
+                - any_of:
+                    - [ ema_20_lt_50, macd_hist_lt_0 ]
+                    - [ ema_20_lt_50, rsi_gt_softfloor ]
+                    - [ macd_hist_lt_0,  rsi_gt_softfloor ]
+                - atr_rel_in_range_5m
+
+        '1m':
             long:
                 - ema_20_gt_50
-                - macd_hist_gt_0
-                - rsi_lt_80                    # assoupli: 70 -> 80, VWAP retiré
+                - macd_hist_gt_eps
+                - rsi_lt_85
             short:
                 - ema_20_lt_50
                 - macd_hist_lt_0
-                - rsi_gt_20                    # assoupli: 30 -> 20, VWAP retiré
-
-        '1m':            # Micro-timing (ultra-assoupli)
-            long:
-                - ema_20_gt_50
-                - macd_hist_gt_0
-                - rsi_lt_85                    # très assoupli: 70 -> 85, VWAP retiré
-            short:
-                - ema_20_lt_50
-                - macd_hist_lt_0
-                - rsi_gt_15                    # très assoupli: 30 -> 15, VWAP retiré
+                - rsi_gt_15
 
     meta: >
-        Contexte strict (4h) sur structure EMA ; 1h ajoute le momentum (MACD).
-        L'exécution (15m/5m/1m) assouplie: RSI élargi, VWAP optionnel sur 5m/1m pour plus d'opportunités.
+        4h conserve la lecture de structure EMA. 1h applique des tolérances sur EMA200 et MACD (+eps).
+        15m et 5m utilisent des règles souples (tolérances EMA, RSI softcap/softfloor) et des combinaisons any_of pour exiger 2 signaux sur 3.
+        Les filtres ATR relatifs sont calibrés par TF (15m vs 5m) pour encadrer la volatilité utile.
 
 # ======== HIGH-CONVICTION DETECTION ========
 conviction_high:

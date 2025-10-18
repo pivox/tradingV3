@@ -19,7 +19,7 @@ from activities.mtf_activities import (
 
 
 # Configuration
-TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
+TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal-grpc:7233")
 TEMPORAL_NAMESPACE = os.getenv("TEMPORAL_NAMESPACE", "default")
 TASK_QUEUE = os.getenv("TASK_QUEUE_NAME", "mtf-ping-pong-queue")
 WORKER_IDENTITY = os.getenv("WORKER_IDENTITY", "mtf-ping-pong-worker")

@@ -20,7 +20,7 @@ load_dotenv()
 
 class ApiRateLimiterClient:
     def __init__(self):
-        self.temporal_address = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
+        self.temporal_address = os.getenv("TEMPORAL_ADDRESS", "temporal-grpc:7233")
         self.task_queue = os.getenv("TASK_QUEUE_NAME", "cron_symfony_4h")
         self.workflow_id = "api-rate-limiter-workflow"
         self.client: Optional[Client] = None

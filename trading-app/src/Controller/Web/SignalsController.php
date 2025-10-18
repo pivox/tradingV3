@@ -14,6 +14,7 @@ use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\Routing\Annotation\Route;
+use App\Repository\MtfAuditStatsRepository;
 
 class SignalsController extends AbstractController
 {
@@ -23,6 +24,7 @@ class SignalsController extends AbstractController
         private readonly KlineRepository $klineRepository,
         private readonly IndicatorSnapshotRepository $indicatorRepository,
         private readonly EntityManagerInterface $entityManager,
+        private readonly MtfAuditStatsRepository $mtfAuditStatsRepository,
     ) {
     }
 
@@ -176,6 +178,24 @@ class SignalsController extends AbstractController
 
         return $this->render('signals/_mtf_overview_results.html.twig', [
             'rows' => $rows,
+        ]);
+    }
+
+    #[Route('/signals/audit-stats', name: 'signals_audit_stats')]
+    public function auditStats(Request $request): JsonResponse
+    {
+        $symbol = $request->query->get('symbol');
+        $tf = $request->query->get('tf');
+        $limit = (int)($request->query->get('limit') ?? 50);
+
+        $stats = $this->mtfAuditStatsRepository->getSummary(
+            is_string($symbol) ? $symbol : null,
+            is_string($tf) ? $tf : null,
+            $limit
+        );
+
+        return new JsonResponse([
+            'data' => $stats,
         ]);
     }
 

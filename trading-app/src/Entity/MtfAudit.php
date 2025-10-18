@@ -42,6 +42,12 @@ class MtfAudit
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, options: ['default' => 'CURRENT_TIMESTAMP'])]
     private \DateTimeImmutable $createdAt;
 
+    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, options: ['comment' => 'Heure de clôture de la bougie concernée'])]
+    private ?\DateTimeImmutable $candleCloseTs = null;
+
+    #[ORM\Column(type: Types::SMALLINT, options: ['default' => 0, 'comment' => 'Niveau de sévérité 0..n'])]
+    private int $severity = 0;
+
     public function __construct()
     {
         $this->createdAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
@@ -137,6 +143,28 @@ class MtfAudit
     public function setCreatedAt(\DateTimeImmutable $createdAt): static
     {
         $this->createdAt = $createdAt;
+        return $this;
+    }
+
+    public function getCandleCloseTs(): ?\DateTimeImmutable
+    {
+        return $this->candleCloseTs;
+    }
+
+    public function setCandleCloseTs(?\DateTimeImmutable $ts): static
+    {
+        $this->candleCloseTs = $ts;
+        return $this;
+    }
+
+    public function getSeverity(): int
+    {
+        return $this->severity;
+    }
+
+    public function setSeverity(int $severity): static
+    {
+        $this->severity = $severity;
         return $this;
     }
 }

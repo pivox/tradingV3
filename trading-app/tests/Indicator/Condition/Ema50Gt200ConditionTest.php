@@ -36,7 +36,7 @@ class Ema50Gt200ConditionTest extends TestCase
         $this->assertInstanceOf(ConditionResult::class, $result);
         $this->assertEquals('ema_50_gt_200', $result->name);
         $this->assertTrue($result->passed);
-        $this->assertEquals(0.04, $result->value); // (52000/50000) - 1 = 0.04
+        $this->assertEqualsWithDelta(0.04, $result->value, 1e-6); // (52000/50000) - 1 = 0.04
         $this->assertNull($result->threshold);
         $this->assertArrayHasKey('ema50', $result->meta);
         $this->assertArrayHasKey('ema200', $result->meta);
@@ -62,7 +62,7 @@ class Ema50Gt200ConditionTest extends TestCase
         $this->assertInstanceOf(ConditionResult::class, $result);
         $this->assertEquals('ema_50_gt_200', $result->name);
         $this->assertFalse($result->passed);
-        $this->assertEquals(-0.0625, $result->value); // (3000/3200) - 1 = -0.0625
+        $this->assertEqualsWithDelta(-0.0625, $result->value, 1e-6); // (3000/3200) - 1 = -0.0625
         $this->assertNull($result->threshold);
         $this->assertEquals(3000.0, $result->meta['ema50']);
         $this->assertEquals(3200.0, $result->meta['ema200']);
@@ -263,4 +263,3 @@ class Ema50Gt200ConditionTest extends TestCase
         $this->assertEquals(500000.0, $result->meta['ema200']);
     }
 }
-

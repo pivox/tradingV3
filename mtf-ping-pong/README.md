@@ -60,7 +60,7 @@ python start_workflow.py status <workflow_id>
 ### 3. Variables d'environnement
 
 ```bash
-TEMPORAL_ADDRESS=temporal:7233
+TEMPORAL_ADDRESS=temporal-grpc:7233
 TEMPORAL_NAMESPACE=default
 TASK_QUEUE_NAME=mtf-ping-pong-queue
 WORKER_IDENTITY=mtf-ping-pong-worker
@@ -133,7 +133,7 @@ mtf-ping-pong/
 python -c "from activities.mtf_activities import health_check_activity; print('OK')"
 
 # Test de connexion Temporal
-python -c "import asyncio; from temporalio.client import Client; asyncio.run(Client.connect('temporal:7233'))"
+python -c "import asyncio; from temporalio.client import Client; asyncio.run(Client.connect('temporal-grpc:7233'))"
 ```
 
 ## Intégration

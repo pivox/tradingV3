@@ -5,7 +5,7 @@
 echo "🚀 Démarrage du service MTF Ping-Pong"
 echo "📅 $(date)"
 echo "🔧 Configuration:"
-echo "   - Temporal Address: ${TEMPORAL_ADDRESS:-temporal:7233}"
+echo "   - Temporal Address: ${TEMPORAL_ADDRESS:-temporal-grpc:7233}"
 echo "   - Namespace: ${TEMPORAL_NAMESPACE:-default}"
 echo "   - Task Queue: ${TASK_QUEUE_NAME:-mtf-ping-pong-queue}"
 echo "   - Worker Identity: ${WORKER_IDENTITY:-mtf-ping-pong-worker}"

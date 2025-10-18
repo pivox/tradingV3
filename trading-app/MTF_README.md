@@ -42,7 +42,7 @@ Pour chaque symbole:
 
 ```bash
 # Temporal
-TEMPORAL_ADDRESS=temporal:7233
+TEMPORAL_ADDRESS=temporal-grpc:7233
 TEMPORAL_NAMESPACE=default
 
 # BitMart API

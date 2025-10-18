@@ -3,6 +3,7 @@
 namespace App\Tests\Indicator\Condition;
 
 use App\Indicator\Context\IndicatorContextBuilder;
+use App\Indicator\Condition\ConditionInterface;
 use App\Indicator\Condition\ConditionRegistry;
 use App\Indicator\Momentum\Rsi;
 use App\Indicator\Momentum\Macd;
@@ -28,7 +29,23 @@ class AllConditionsTest extends TestCase
         $atrCalc = new AtrCalculator();
 
         $this->contextBuilder = new IndicatorContextBuilder($rsi, $macd, $ema, $adx, $vwap, $atrCalc);
-        $this->conditionRegistry = new ConditionRegistry();
+
+        $conditions = [];
+        $projectRoot = dirname(dirname(dirname(__DIR__)));
+        $conditionDir = $projectRoot . '/src/Indicator/Condition';
+        foreach (glob($conditionDir . '/*Condition.php') ?: [] as $file) {
+            $class = 'App\\Indicator\\Condition\\' . basename($file, '.php');
+            if (!is_subclass_of($class, ConditionInterface::class)) {
+                continue;
+            }
+            $reflection = new \ReflectionClass($class);
+            if ($reflection->isAbstract()) {
+                continue;
+            }
+            $conditions[] = $reflection->newInstance();
+        }
+
+        $this->conditionRegistry = new ConditionRegistry($conditions);
     }
 
     public function testAllConditionsWithValidData(): void
@@ -65,8 +82,10 @@ class AllConditionsTest extends TestCase
             $this->assertIsArray($result['meta'], "Le champ 'meta' de '$conditionName' doit être un tableau");
         }
 
-        // Afficher un résumé pour debug
-        $this->displayResultsSummary($results);
+        // Afficher un résumé pour debug uniquement si demandé explicitement
+        if (getenv('SHOW_CONDITION_SUMMARY')) {
+            $this->displayResultsSummary($results);
+        }
     }
 
     public function testAllConditionsWithInsufficientData(): void
@@ -79,6 +98,8 @@ class AllConditionsTest extends TestCase
             ->build();
 
         $results = $this->conditionRegistry->evaluate($context);
+
+        $this->assertNotEmpty($results, 'Les conditions devraient être évaluées même avec données insuffisantes');
 
         // Vérifier que les conditions gèrent correctement les données manquantes
         foreach ($results as $conditionName => $result) {
@@ -106,6 +127,8 @@ class AllConditionsTest extends TestCase
             ->build();
 
         $results = $this->conditionRegistry->evaluate($context);
+
+        $this->assertNotEmpty($results, 'Les conditions devraient être évaluées sur des données constantes');
 
         // Vérifier que les conditions gèrent les valeurs constantes
         foreach ($results as $conditionName => $result) {
@@ -140,4 +163,3 @@ class AllConditionsTest extends TestCase
         echo "=============================\n";
     }
 }
-

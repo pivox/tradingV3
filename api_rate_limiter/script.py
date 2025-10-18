@@ -31,7 +31,7 @@ from models.envelope_utils import build_kline_envelope, TF_TO_BUCKET
 load_dotenv()
 
 # Config par défaut
-TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
+TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal-grpc:7233")
 TASK_QUEUE = os.getenv("TASK_QUEUE_NAME", "api_rate_limiter_queue")
 WORKFLOW_ID = os.getenv("WORKFLOW_ID", "api-rate-limiter-workflow")
 

@@ -6,7 +6,7 @@ from typing import List, Optional
 from temporalio.client import Client
 
 # Reuse env defaults (same as create_new_schedules.py)
-TEMPORAL_ADDRESS   = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
+TEMPORAL_ADDRESS   = os.getenv("TEMPORAL_ADDRESS", "temporal-grpc:7233")
 TEMPORAL_NAMESPACE = os.getenv("TEMPORAL_NAMESPACE", "default")
 
 # Optional import of the SCHEDULES dict from create_new_schedules.py to get known IDs

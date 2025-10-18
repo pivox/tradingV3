@@ -104,6 +104,13 @@ services:
     arguments: ['positions']
     tags:
       - { name: monolog.logger, channel: positions }
+
+  # Logger pour le canal positions_flow (flux post-validation → ordre)
+  monolog.logger.positions_flow:
+    parent: monolog.logger
+    arguments: ['positions_flow']
+    tags:
+      - { name: monolog.logger, channel: positions_flow }
   
   # Logger pour le canal indicators
   monolog.logger.indicators:

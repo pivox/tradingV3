@@ -23,6 +23,7 @@ class PositionExecutionService
         private readonly OrderLifecycleService $orderLifecycle,
         private readonly ContractRepository $contractRepository,
         private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $positionsFlowLogger,
         private readonly ClockInterface $clock
     ) {
     }
@@ -82,7 +83,26 @@ class PositionExecutionService
             $this->setLeverage($position, $config);
 
             // 3. Placer l'ordre principal
+            try {
+                $this->positionsFlowLogger->info('[PositionsFlow] Placing main order', [
+                    'symbol' => $position->symbol,
+                    'side' => $position->side->value,
+                    'order_type' => strtolower($config->orderType),
+                    'size' => $position->positionSize,
+                    'leverage' => $position->leverage,
+                ]);
+            } catch (\Throwable) {}
+
             $mainOrder = $this->placeMainOrder($position, $config);
+
+            try {
+                $this->positionsFlowLogger->info('[PositionsFlow] Main order submitted', [
+                    'symbol' => $position->symbol,
+                    'order_id' => $mainOrder['order_id'] ?? null,
+                    'client_order_id' => $mainOrder['client_order_id'] ?? null,
+                    'status' => $mainOrder['status'] ?? null,
+                ]);
+            } catch (\Throwable) {}
 
             // 4-5. Si LIMIT avec presets TP/SL, ne pas soumettre d'ordres TP/SL séparés
             $stopLossOrder = null;

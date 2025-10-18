@@ -1,0 +1,126 @@
+# --- Mode de calcul des indicateurs (PHP only) ---
+indicator_calculation:
+  mode: php
+  fallback_to_php: false
+  performance_threshold_ms: 10
+  meta: >
+    Calcul 100% côté PHP (services Symfony).
+    On désactive SQL pour éviter toute divergence pendant la phase de calibration.
+
+# --- Règles génériques réutilisées par 1h / 15m / 5m / 1m ---
+rules:
+  # MACD histogram proche de 0 : éviter les faux négatifs
+  macd_hist_gt_eps:
+    op: '>'
+    left: 'macd_hist'
+    right: 0.0
+    eps: 1.0e-6
+
+  # EMA200 avec petite tolérance (pullback sain)
+  ema_above_200_with_tolerance:
+    any_of:
+      - close_above_ema_200
+      - close_minus_ema_200_gt: -0.0015     # -0.15%
+  ema_below_200_with_tolerance:
+    any_of:
+      - close_below_ema_200
+      - close_minus_ema_200_lt: 0.0015      # +0.15%
+
+  # EMA20/50 avec petite tolérance
+  ema20_over_50_with_tolerance:
+    any_of:
+      - ema_20_gt_50
+      - ema_20_minus_ema_50_gt: -0.0008     # -0.08%
+
+  # RSI soft caps pour intraday
+  rsi_lt_softcap:   { lt: 78 }
+  rsi_gt_softfloor: { gt: 22 }
+
+  # Fenêtres de régime de volatilité (ATR relatif = ATR/prix)
+  atr_rel_in_range_15m: { between_pct: [0.0010, 0.0040] }   # 0.10%–0.40%
+  atr_rel_in_range_5m:  { between_pct: [0.0008, 0.0035] }   # 0.08%–0.35%
+
+# --- Validation MTF (tu as déjà collé le bloc ci-dessous ; gardé tel quel) ---
+validation:
+  start_from_timeframe: '15m'
+
+  timeframe:
+    '4h':
+      long:
+        - ema_50_gt_200
+        - close_above_ema_200
+        - price_regime_ok_long
+      short:
+        - ema_50_lt_200
+        - close_below_ema_200
+        - price_regime_ok_short
+
+    '1h':
+      long:
+        - ema_above_200_with_tolerance
+        - macd_hist_gt_eps
+        - price_regime_ok_long
+      short:
+        - ema_below_200_with_tolerance
+        - macd_hist_lt_0
+        - price_regime_ok_short
+
+    '15m':
+      long:
+        - ema20_over_50_with_tolerance
+        - macd_hist_gt_eps
+        - close_above_vwap
+        - rsi_lt_softcap
+        - atr_rel_in_range_15m
+      short:
+        - ema_20_lt_50
+        - macd_hist_lt_0
+        - close_below_vwap
+        - rsi_gt_softfloor
+        - atr_rel_in_range_15m
+
+    '5m':
+      long:
+        - any_of:
+            - [ ema20_over_50_with_tolerance, macd_hist_gt_eps ]
+            - [ ema20_over_50_with_tolerance, rsi_lt_softcap ]
+            - [ macd_hist_gt_eps, rsi_lt_softcap ]
+        - atr_rel_in_range_5m
+      short:
+        - any_of:
+            - [ ema_20_lt_50, macd_hist_lt_0 ]
+            - [ ema_20_lt_50, rsi_gt_softfloor ]
+            - [ macd_hist_lt_0,  rsi_gt_softfloor ]
+        - atr_rel_in_range_5m
+
+    '1m':
+      long:
+        - ema_20_gt_50
+        - macd_hist_gt_eps
+        - rsi_lt_85
+      short:
+        - ema_20_lt_50
+        - macd_hist_lt_0
+        - rsi_gt_15
+
+# --- Garde-fous par timeframe (semences EMA/MACD + bougies clôturées) ---
+runtime:
+  use_last_closed: true
+  eps: 1.0e-6
+timeframes:
+  '1h':  { guards: { min_bars: 200 } }
+  '15m': { guards: { min_bars: 200 } }
+  '5m':  { guards: { min_bars: 200 } }
+  '1m':  { guards: { min_bars: 100 } }
+  meta: >
+    min_bars élevés pour stabiliser EMA50/200 et MACD.
+
+# --- Logging/Audit enrichi pour mtf_audit ---
+logging:
+  audit_table: true
+  evidence:
+    store_condition_evidence: true
+    include_metrics: true
+  meta: >
+    Enregistre dans mtf_audit.details : passed/failed, métriques (ema, macd_hist, rsi, atr_rel, vwap),
+    guards (spread_bps, depth_usd, mark_index_gap_bps), and source='php'.

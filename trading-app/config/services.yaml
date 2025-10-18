@@ -70,12 +70,14 @@ services:
             $contractRepository: '@App\Repository\ContractRepository'
             $signalValidationService: '@App\Signal\SignalValidationService'
             $logger: '@logger'
+            $positionsFlowLogger: '@monolog.logger.positions_flow'
             $mtfConfig: '@App\Config\MtfConfigProviderInterface'
             $klineProvider: '@App\Infrastructure\Http\BitmartRestClient'
             $entityManager: '@doctrine.orm.entity_manager'
             $clock: '@Psr\Clock\ClockInterface'
             $signalPersistenceService: '@App\Infrastructure\Persistence\SignalPersistenceService'
             $validationCache: '@App\Infrastructure\Cache\DbValidationCache'
+            $klineJsonIngestion: '@App\Infrastructure\Persistence\KlineJsonIngestionService'
         public: true
 
     App\Domain\Mtf\Service\MtfRunService:
@@ -408,6 +410,7 @@ services:
             $exposureGuard: '@App\Domain\Trading\Exposure\ActiveExposureGuard'
             $orderLifecycle: '@App\Domain\Trading\Order\OrderLifecycleService'
             $logger: '@logger'
+            $positionsFlowLogger: '@monolog.logger.positions_flow'
             $clock: '@Psr\Clock\ClockInterface'
         public: true
 

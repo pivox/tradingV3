@@ -3,16 +3,29 @@ import asyncio
 import os
 from typing import Any, Dict
 
-from temporalio.client import Client, Schedule
-from temporalio.client.schedule import (
-    ScheduleActionStartWorkflow,
-    ScheduleHandle,
-    SchedulePolicy,
-    ScheduleSpec,
-)
+from temporalio.client import Client
+from temporalio.api.enums.v1 import ScheduleOverlapPolicy
+
+# Support both modern (>=1.6) and legacy (<1.6) Temporal Python SDK layouts
+try:
+    from temporalio.client import (
+        Schedule,
+        ScheduleActionStartWorkflow,
+        ScheduleHandle,
+        SchedulePolicy,
+        ScheduleSpec,
+    )
+except ImportError:  # pragma: no cover - backward compatibility
+    from temporalio.client.schedule import (  # type: ignore[attr-defined]
+        Schedule,
+        ScheduleActionStartWorkflow,
+        ScheduleHandle,
+        SchedulePolicy,
+        ScheduleSpec,
+    )
 
 
-TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
+TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal-grpc:7233")
 TEMPORAL_NAMESPACE = os.getenv("TEMPORAL_NAMESPACE", "default")
 TASK_QUEUE = os.getenv("TASK_QUEUE_NAME", "cron_symfony_mtf_workers")
 TIME_ZONE = os.getenv("TZ", "UTC")
@@ -21,6 +34,11 @@ SCHEDULE_ID = os.getenv("MTF_WORKERS_SCHEDULE_ID", "cron-symfony-mtf-workers-1m"
 WORKFLOW_ID = os.getenv("MTF_WORKERS_WORKFLOW_ID", "cron-symfony-mtf-workers-runner")
 WORKFLOW_TYPE = "CronSymfonyMtfWorkersWorkflow"
 CRON_EXPRESSION = os.getenv("MTF_WORKERS_CRON", "*/1 * * * *")
+
+try:
+    OVERLAP_POLICY_BUFFER_ONE = ScheduleOverlapPolicy.BUFFER_ONE
+except AttributeError:  # pragma: no cover - compatibility with < 1.6
+    OVERLAP_POLICY_BUFFER_ONE = ScheduleOverlapPolicy.SCHEDULE_OVERLAP_POLICY_BUFFER_ONE
 
 DEFAULT_URL = os.getenv("MTF_WORKERS_URL", "http://trading-app-nginx:80/api/mtf/run")
 DEFAULT_WORKERS = int(os.getenv("MTF_WORKERS_COUNT", "5"))
@@ -52,7 +70,7 @@ async def create_schedule(client: Client, dry_run: bool) -> None:
             cron_expressions=[CRON_EXPRESSION],
             time_zone_name=TIME_ZONE,
         ),
-        policy=SchedulePolicy(overlap=SchedulePolicy.OverlapPolicy.BUFFER_ONE),
+        policy=SchedulePolicy(overlap=OVERLAP_POLICY_BUFFER_ONE),
     )
 
     if dry_run:
@@ -61,7 +79,19 @@ async def create_schedule(client: Client, dry_run: bool) -> None:
         )
         return
 
-    await client.create_schedule(SCHEDULE_ID, schedule)
+    try:
+        await client.create_schedule(SCHEDULE_ID, schedule)
+    except Exception as exc:
+        from temporalio.client import ScheduleAlreadyRunningError
+
+        if isinstance(exc, ScheduleAlreadyRunningError):
+            print(
+                f"⚠️ schedule '{SCHEDULE_ID}' already exists (Temporal reported it as running)."
+                " Use 'status' to inspect or 'delete' before recreating."
+            )
+            return
+        raise
+
     print(f"✅ created schedule '{SCHEDULE_ID}' → cron='{CRON_EXPRESSION}' → job={job}")
 
 

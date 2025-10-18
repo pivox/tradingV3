@@ -11,7 +11,7 @@ echo "[LOG-WORKER] Starting Log Worker..."
 echo "[LOG-WORKER] Checking Temporal connection..."
 if ! php bin/console app:test-temporal > /dev/null 2>&1; then
     echo "[LOG-WORKER] ERROR: Cannot connect to Temporal server"
-    echo "[LOG-WORKER] Make sure Temporal is running on ${TEMPORAL_ADDRESS:-temporal:7233}"
+    echo "[LOG-WORKER] Make sure Temporal is running on ${TEMPORAL_ADDRESS:-temporal-grpc:7233}"
     exit 1
 fi
 

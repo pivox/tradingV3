@@ -4,6 +4,7 @@ namespace App\Signal;
 
 use App\Entity\Contract;
 use App\Config\TradingParameters;
+use App\Indicator\Condition\CompositeConditionEvaluator;
 use App\Indicator\Condition\ConditionRegistry;
 use App\Indicator\Context\IndicatorContextBuilder;
 use App\Entity\Kline;
@@ -67,6 +68,47 @@ abstract class AbstractSignal implements SignalServiceInterface
             }
         }
         return $conditions;
+    }
+
+    /**
+     * @param array<string,mixed> $context
+     * @param array<int,mixed> $longDefinition
+     * @param array<int,mixed> $shortDefinition
+     * @return array{
+     *     long_results: array<string,array>,
+     *     short_results: array<string,array>,
+     *     long_evaluation: array{passed:bool,requirements:array<int,array<string,mixed>>},
+     *     short_evaluation: array{passed:bool,requirements:array<int,array<string,mixed>>}
+     * }
+     */
+    protected function evaluateCompositeSides(array $context, array $longDefinition, array $shortDefinition): array
+    {
+        $longNames = CompositeConditionEvaluator::extractConditionNames($longDefinition);
+        $shortNames = CompositeConditionEvaluator::extractConditionNames($shortDefinition);
+        $allNames = array_values(array_unique(array_merge($longNames, $shortNames)));
+
+        $allResults = $allNames === [] ? [] : $this->conditionRegistry->evaluate($context, $allNames);
+
+        return [
+            'long_results' => $this->filterResultsByNames($allResults, $longNames),
+            'short_results' => $this->filterResultsByNames($allResults, $shortNames),
+            'long_evaluation' => CompositeConditionEvaluator::evaluateRequirements($longDefinition, $allResults),
+            'short_evaluation' => CompositeConditionEvaluator::evaluateRequirements($shortDefinition, $allResults),
+        ];
+    }
+
+    /**
+     * @param array<string,array> $results
+     * @param string[] $names
+     * @return array<string,array>
+     */
+    private function filterResultsByNames(array $results, array $names): array
+    {
+        if ($names === []) {
+            return [];
+        }
+
+        return array_intersect_key($results, array_flip($names));
     }
 
     abstract public function evaluate(Contract $contract, array $klines, array $config): array;

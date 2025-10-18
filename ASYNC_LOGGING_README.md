@@ -108,7 +108,7 @@ docker-compose exec trading-app-php php bin/console app:test-logging --count=50
 ### Variables d'Environnement
 ```bash
 # Temporal
-TEMPORAL_ADDRESS=temporal:7233
+TEMPORAL_ADDRESS=temporal-grpc:7233
 TEMPORAL_NAMESPACE=default
 
 # Logging (optionnel)

@@ -28,7 +28,7 @@ final class LogWorker
         $this->logger = $logger;
         
         // Créer le service client
-        $serviceClient = ServiceClient::create($_ENV['TEMPORAL_ADDRESS'] ?? 'temporal:7233');
+        $serviceClient = ServiceClient::create($_ENV['TEMPORAL_ADDRESS'] ?? 'temporal-grpc:7233');
         
         // Créer le worker factory
         $workerFactory = WorkerFactory::create($serviceClient);
