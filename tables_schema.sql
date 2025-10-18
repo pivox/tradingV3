@@ -56,6 +56,118 @@ CREATE FUNCTION public.ema(value numeric, alpha numeric) RETURNS numeric
 
 
 --
+-- Helper functions to mirror indicator condition tolerances (kept in sync with PHP conditions)
+--
+
+CREATE FUNCTION public.macd_hist_gt_eps(hist numeric, eps numeric DEFAULT 1.0e-6)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+        WHEN hist IS NULL THEN FALSE
+        ELSE hist >= (0 - abs(COALESCE(eps, 0)))
+    END;
+$$;
+
+CREATE FUNCTION public.ema_ratio_gte_with_tolerance(fast numeric, slow numeric, tolerance numeric DEFAULT 0.0008)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+        WHEN fast IS NULL OR slow IS NULL OR slow = 0 THEN FALSE
+        ELSE (fast / slow) - 1 >= -abs(COALESCE(tolerance, 0))
+    END;
+$$;
+
+CREATE FUNCTION public.close_gte_ema_with_tolerance(close_price numeric, ema numeric, tolerance numeric DEFAULT 0.0015)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+        WHEN close_price IS NULL OR ema IS NULL OR ema = 0 THEN FALSE
+        ELSE (close_price / ema) - 1 >= -abs(COALESCE(tolerance, 0))
+    END;
+$$;
+
+CREATE FUNCTION public.close_lte_ema_with_tolerance(close_price numeric, ema numeric, tolerance numeric DEFAULT 0.0015)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+        WHEN close_price IS NULL OR ema IS NULL OR ema = 0 THEN FALSE
+        ELSE (close_price / ema) - 1 <= abs(COALESCE(tolerance, 0))
+    END;
+$$;
+
+CREATE FUNCTION public.rsi_lt_softcap(value numeric, threshold numeric DEFAULT 78.0)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+        WHEN value IS NULL THEN FALSE
+        ELSE value < COALESCE(threshold, 78.0)
+    END;
+$$;
+
+CREATE FUNCTION public.rsi_gt_softfloor(value numeric, threshold numeric DEFAULT 22.0)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+        WHEN value IS NULL THEN FALSE
+        ELSE value > COALESCE(threshold, 22.0)
+    END;
+$$;
+
+CREATE FUNCTION public.atr_rel_in_range(atr numeric, close_price numeric, min_pct numeric, max_pct numeric)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+        WHEN atr IS NULL OR close_price IS NULL OR close_price <= 0 THEN FALSE
+        ELSE (atr / close_price) BETWEEN COALESCE(min_pct, 0) AND COALESCE(max_pct, 1)
+    END;
+$$;
+
+CREATE FUNCTION public.atr_rel_in_range_15m(atr numeric, close_price numeric)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$ SELECT public.atr_rel_in_range(atr, close_price, 0.001, 0.004); $$;
+
+CREATE FUNCTION public.atr_rel_in_range_5m(atr numeric, close_price numeric)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$ SELECT public.atr_rel_in_range(atr, close_price, 0.0008, 0.0035); $$;
+
+CREATE FUNCTION public.ema20_over_50_with_tolerance(ema20 numeric, ema50 numeric, tolerance numeric DEFAULT 0.0008)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$ SELECT public.ema_ratio_gte_with_tolerance(ema20, ema50, tolerance); $$;
+
+CREATE FUNCTION public.ema_above_200_with_tolerance(close_price numeric, ema200 numeric, tolerance numeric DEFAULT 0.0015)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$ SELECT public.close_gte_ema_with_tolerance(close_price, ema200, tolerance); $$;
+
+CREATE FUNCTION public.ema_below_200_with_tolerance(close_price numeric, ema200 numeric, tolerance numeric DEFAULT 0.0015)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$ SELECT public.close_lte_ema_with_tolerance(close_price, ema200, tolerance); $$;
+
+
+--
 -- Name: get_missing_kline_chunks(text, text, timestamp with time zone, timestamp with time zone, integer); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1460,4 +1572,3 @@ CREATE UNIQUE INDEX ux_signals_symbol_tf_time ON public.signals USING btree (sym
 --
 
 \unrestrict 7J8GeQh8zmZ6yIactUioHhtfBytzI1WAJ5eh78MjTqJaA7qtAJhhaTTEEgMPIsp
-

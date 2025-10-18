@@ -216,7 +216,7 @@ BITMART_SECRET_KEY=your-secret-key
 BITMART_BASE_URL=https://api-cloud-v2.bitmart.com
 
 # Configuration Temporal
-TEMPORAL_ADDRESS=temporal:7233
+TEMPORAL_ADDRESS=temporal-grpc:7233
 TEMPORAL_NAMESPACE=default
 ```
 

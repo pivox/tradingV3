@@ -22,7 +22,7 @@ RUN chmod +x script.py
 
 
 # Valeurs par défaut (surchageables)
-ENV TEMPORAL_ADDRESS=temporal:7233 \
+ENV TEMPORAL_ADDRESS=temporal-grpc:7233 \
     TASK_QUEUE_NAME=api_rate_limiter_queue
 
 # ⬇️ LANCE LE WORKER AUTOMATIQUEMENT

@@ -38,6 +38,7 @@ final class MtfService
         private readonly ContractRepository $contractRepository,
         private readonly SignalValidationService $signalValidationService,
         private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $positionsFlowLogger,
         private readonly MtfConfigProviderInterface $mtfConfig,
         private readonly KlineProviderPort $klineProvider,
         private readonly EntityManagerInterface $entityManager,
@@ -241,8 +242,19 @@ final class MtfService
         $result4h = null;
         if ($include4h) {
             $result4h = $this->processTimeframe($symbol, Timeframe::TF_4H, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
-            if (($result4h['status'] ?? null) !== 'VALID') {
-                $this->auditStep($runId, $symbol, '4H_VALIDATION_FAILED', $result4h['reason'] ?? '4H validation failed');
+        if (($result4h['status'] ?? null) !== 'VALID') {
+            $this->auditStep($runId, $symbol, '4H_VALIDATION_FAILED', $result4h['reason'] ?? '4H validation failed', [
+                'timeframe' => '4h',
+                'kline_time' => $result4h['kline_time'] ?? null,
+                'failed_conditions_long' => $result4h['failed_conditions_long'] ?? [],
+                'failed_conditions_short' => $result4h['failed_conditions_short'] ?? [],
+                'conditions_long' => $result4h['conditions_long'] ?? [],
+                'conditions_short' => $result4h['conditions_short'] ?? [],
+                'current_price' => $result4h['current_price'] ?? null,
+                'atr' => $result4h['atr'] ?? null,
+                'passed' => false,
+                'severity' => 2,
+            ]);
                 return $result4h + ['failed_timeframe' => '4h'];
             }
             $state->setK4hTime($result4h['kline_time']);
@@ -252,16 +264,30 @@ final class MtfService
         $result1h = null;
         if ($include1h) {
             $result1h = $this->processTimeframe($symbol, Timeframe::TF_1H, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
-            if (($result1h['status'] ?? null) !== 'VALID') {
-                $this->auditStep($runId, $symbol, '1H_VALIDATION_FAILED', $result1h['reason'] ?? '1H validation failed');
+        if (($result1h['status'] ?? null) !== 'VALID') {
+            $this->auditStep($runId, $symbol, '1H_VALIDATION_FAILED', $result1h['reason'] ?? '1H validation failed', [
+                'timeframe' => '1h',
+                'kline_time' => $result1h['kline_time'] ?? null,
+                'failed_conditions_long' => $result1h['failed_conditions_long'] ?? [],
+                'failed_conditions_short' => $result1h['failed_conditions_short'] ?? [],
+                'conditions_long' => $result1h['conditions_long'] ?? [],
+                'conditions_short' => $result1h['conditions_short'] ?? [],
+                'current_price' => $result1h['current_price'] ?? null,
+                'atr' => $result1h['atr'] ?? null,
+                'passed' => false,
+                'severity' => 2,
+            ]);
                 return $result1h + ['failed_timeframe' => '1h'];
             }
             if ($include4h) {
                 // Règle: 1h doit matcher 4h si 4h inclus
                 if (strtoupper((string)($result1h['signal_side'] ?? 'NONE')) !== strtoupper((string)($result4h['signal_side'] ?? 'NONE'))) {
-                    $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '1h side != 4h side', [
+            $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '1h side != 4h side', [
                         '4h' => $result4h['signal_side'] ?? 'NONE',
                         '1h' => $result1h['signal_side'] ?? 'NONE',
+                'timeframe' => '1h',
+                'passed' => false,
+                'severity' => 1,
                     ]);
                     $extra = [];
                     foreach (['conditions_long','conditions_short','failed_conditions_long','failed_conditions_short'] as $k) {
@@ -278,16 +304,30 @@ final class MtfService
         $result15m = null;
         if ($include15m) {
             $result15m = $this->processTimeframe($symbol, Timeframe::TF_15M, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
-            if (($result15m['status'] ?? null) !== 'VALID') {
-                $this->auditStep($runId, $symbol, '15M_VALIDATION_FAILED', $result15m['reason'] ?? '15M validation failed');
+        if (($result15m['status'] ?? null) !== 'VALID') {
+            $this->auditStep($runId, $symbol, '15M_VALIDATION_FAILED', $result15m['reason'] ?? '15M validation failed', [
+                'timeframe' => '15m',
+                'kline_time' => $result15m['kline_time'] ?? null,
+                'failed_conditions_long' => $result15m['failed_conditions_long'] ?? [],
+                'failed_conditions_short' => $result15m['failed_conditions_short'] ?? [],
+                'conditions_long' => $result15m['conditions_long'] ?? [],
+                'conditions_short' => $result15m['conditions_short'] ?? [],
+                'current_price' => $result15m['current_price'] ?? null,
+                'atr' => $result15m['atr'] ?? null,
+                'passed' => false,
+                'severity' => 2,
+            ]);
                 return $result15m + ['failed_timeframe' => '15m'];
             }
             // Règle: 15m doit matcher 1h si 1h est inclus
             if ($include1h && is_array($result1h)) {
                 if (strtoupper((string)($result15m['signal_side'] ?? 'NONE')) !== strtoupper((string)($result1h['signal_side'] ?? 'NONE'))) {
-                    $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '15m side != 1h side', [
+            $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '15m side != 1h side', [
                         '1h' => $result1h['signal_side'] ?? 'NONE',
                         '15m' => $result15m['signal_side'] ?? 'NONE',
+                'timeframe' => '15m',
+                'passed' => false,
+                'severity' => 1,
                     ]);
                     $extra = [];
                     foreach (['conditions_long','conditions_short','failed_conditions_long','failed_conditions_short'] as $k) {
@@ -304,16 +344,30 @@ final class MtfService
         $result5m = null;
         if ($include5m) {
             $result5m = $this->processTimeframe($symbol, Timeframe::TF_5M, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
-            if (($result5m['status'] ?? null) !== 'VALID') {
-                $this->auditStep($runId, $symbol, '5M_VALIDATION_FAILED', $result5m['reason'] ?? '5M validation failed');
+        if (($result5m['status'] ?? null) !== 'VALID') {
+            $this->auditStep($runId, $symbol, '5M_VALIDATION_FAILED', $result5m['reason'] ?? '5M validation failed', [
+                'timeframe' => '5m',
+                'kline_time' => $result5m['kline_time'] ?? null,
+                'failed_conditions_long' => $result5m['failed_conditions_long'] ?? [],
+                'failed_conditions_short' => $result5m['failed_conditions_short'] ?? [],
+                'conditions_long' => $result5m['conditions_long'] ?? [],
+                'conditions_short' => $result5m['conditions_short'] ?? [],
+                'current_price' => $result5m['current_price'] ?? null,
+                'atr' => $result5m['atr'] ?? null,
+                'passed' => false,
+                'severity' => 2,
+            ]);
                 return $result5m + ['failed_timeframe' => '5m'];
             }
             // Règle: 5m doit matcher 15m si 15m est inclus
             if ($include15m && is_array($result15m)) {
                 if (strtoupper((string)($result5m['signal_side'] ?? 'NONE')) !== strtoupper((string)($result15m['signal_side'] ?? 'NONE'))) {
-                    $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '5m side != 15m side', [
+            $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '5m side != 15m side', [
                         '15m' => $result15m['signal_side'] ?? 'NONE',
                         '5m' => $result5m['signal_side'] ?? 'NONE',
+                'timeframe' => '5m',
+                'passed' => false,
+                'severity' => 1,
                     ]);
                     $extra = [];
                     foreach (['conditions_long','conditions_short','failed_conditions_long','failed_conditions_short'] as $k) {
@@ -329,16 +383,41 @@ final class MtfService
         $result1m = null;
         if ($include1m) {
             $result1m = $this->processTimeframe($symbol, Timeframe::TF_1M, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
-            if (($result1m['status'] ?? null) !== 'VALID') {
-                $this->auditStep($runId, $symbol, '1M_VALIDATION_FAILED', $result1m['reason'] ?? '1M validation failed');
+        if (($result1m['status'] ?? null) !== 'VALID') {
+            $this->auditStep($runId, $symbol, '1M_VALIDATION_FAILED', $result1m['reason'] ?? '1M validation failed', [
+                'timeframe' => '1m',
+                'kline_time' => $result1m['kline_time'] ?? null,
+                'failed_conditions_long' => $result1m['failed_conditions_long'] ?? [],
+                'failed_conditions_short' => $result1m['failed_conditions_short'] ?? [],
+                'conditions_long' => $result1m['conditions_long'] ?? [],
+                'conditions_short' => $result1m['conditions_short'] ?? [],
+                'current_price' => $result1m['current_price'] ?? null,
+                'atr' => $result1m['atr'] ?? null,
+                'passed' => false,
+                'severity' => 2,
+            ]);
                 return $result1m + ['failed_timeframe' => '1m'];
             }
+
+            // Log dédié après validation 1m (positions_flow)
+            try {
+                $this->positionsFlowLogger->info('[PositionsFlow] 1m VALIDATED', [
+                    'symbol' => $symbol,
+                    'signal_side' => $result1m['signal_side'] ?? 'NONE',
+                    'kline_time' => isset($result1m['kline_time']) && $result1m['kline_time'] instanceof \DateTimeImmutable ? $result1m['kline_time']->format('Y-m-d H:i:s') : null,
+                    'current_price' => $result1m['current_price'] ?? null,
+                    'atr' => $result1m['atr'] ?? null,
+                ]);
+            } catch (\Throwable) {}
             // Règle: 1m doit matcher 5m si 5m est inclus
             if ($include5m && is_array($result5m)) {
                 if (strtoupper((string)($result1m['signal_side'] ?? 'NONE')) !== strtoupper((string)($result5m['signal_side'] ?? 'NONE'))) {
-                    $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '1m side != 5m side', [
+            $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '1m side != 5m side', [
                         '5m' => $result5m['signal_side'] ?? 'NONE',
                         '1m' => $result1m['signal_side'] ?? 'NONE',
+                'timeframe' => '1m',
+                'passed' => false,
+                'severity' => 1,
                     ]);
                     $extra = [];
                     foreach (['conditions_long','conditions_short','failed_conditions_long','failed_conditions_short'] as $k) {
@@ -385,7 +464,7 @@ final class MtfService
 
         $contextSummary = $this->signalValidationService->buildContextSummary($knownSignals, $currentTf, $currentSignal);
         $this->logger->info('[MTF] Context summary', [ 'symbol' => $symbol, 'current_tf' => $currentTf ] + $contextSummary);
-        $this->auditStep($runId, $symbol, 'MTF_CONTEXT', null, ['current_tf' => $currentTf] + $contextSummary);
+        $this->auditStep($runId, $symbol, 'MTF_CONTEXT', null, ['current_tf' => $currentTf, 'timeframe' => $currentTf, 'passed' => $currentSignal !== 'NONE', 'severity' => 0] + $contextSummary);
 
         // Déterminer le côté cohérent minimal (respecte start_from_timeframe)
         $states = [];
@@ -394,7 +473,7 @@ final class MtfService
         if ($include15m) { $states[] = ['tf'=>'15m','side'=> (is_array($result15m) ? ($result15m['signal_side'] ?? 'NONE') : 'NONE')]; }
         $consistentSide = $this->getConsistentSideSimple($states);
         if ($consistentSide === 'NONE') {
-            $this->auditStep($runId, $symbol, 'NO_CONSISTENT_SIDE', 'No consistent signal side across 4h/1h/15m');
+            $this->auditStep($runId, $symbol, 'NO_CONSISTENT_SIDE', 'No consistent signal side across 4h/1h/15m', [ 'passed' => false, 'severity' => 1 ]);
             return ['status' => 'NO_CONSISTENT_SIDE', 'failed_timeframe' => 'multi-tf'];
         }
 
@@ -738,10 +817,18 @@ final class MtfService
             if (!(($data['passed'] ?? false) === true)) { $failedShort[] = (string)$name; }
         }
 
+        $reason = $this->resolveInvalidReason(
+            $eval,
+            $conditionsLong,
+            $conditionsShort,
+            $failedLong,
+            $failedShort
+        );
+
         if ($sig === 'NONE') {
             return [
                 'status' => 'INVALID',
-                'reason' => $eval['reason'] ?? 'NO_SIGNAL',
+                'reason' => $reason,
                 'kline_time' => $lastClosedTime,
                 'signal_side' => 'NONE',
                 'conditions_long' => $conditionsLong,
@@ -785,6 +872,52 @@ final class MtfService
         }
     }
 
+    private function resolveInvalidReason(
+        array $evaluation,
+        array $conditionsLong,
+        array $conditionsShort,
+        array $failedLong,
+        array $failedShort
+    ): string {
+        $provided = $evaluation['reason'] ?? null;
+        if (is_string($provided)) {
+            $normalized = strtoupper(trim($provided));
+            if ($normalized !== '' && $normalized !== 'NO_SIGNAL') {
+                return $provided;
+            }
+        }
+
+        return $this->buildFailedConditionsReason($conditionsLong, $conditionsShort, $failedLong, $failedShort);
+    }
+
+    private function buildFailedConditionsReason(
+        array $conditionsLong,
+        array $conditionsShort,
+        array $failedLong,
+        array $failedShort
+    ): string {
+        $parts = [];
+
+        if ($conditionsLong === []) {
+            $parts[] = 'LONG_NOT_CONFIGURED';
+        } elseif ($failedLong !== []) {
+            $parts[] = 'LONG_FAILED(' . implode(',', $failedLong) . ')';
+        }
+
+        if ($conditionsShort === []) {
+            $parts[] = 'SHORT_NOT_CONFIGURED';
+        } elseif ($failedShort !== []) {
+            $parts[] = 'SHORT_FAILED(' . implode(',', $failedShort) . ')';
+        }
+
+        $parts = array_values(array_filter($parts, fn($part) => $part !== ''));
+        if ($parts === []) {
+            return 'CONDITIONS_NOT_MET';
+        }
+
+        return implode(' | ', $parts);
+    }
+
     private function getConsistentSideSimple(array $states): string
     {
         $sides = array_map(fn($s) => strtoupper((string)($s['side'] ?? $s['signal_side'] ?? 'NONE')), $states);
@@ -804,7 +937,44 @@ final class MtfService
         $audit->setSymbol($symbol);
         $audit->setStep($step);
         $audit->setCause($message);
-        $audit->setDetails($data);
+        // Enrichir les détails avec structure standard si présente dans $data
+        $details = $data;
+        if (!array_key_exists('passed', $details)) {
+            $details['passed'] = (bool)($data['passed'] ?? false);
+        }
+        if (!array_key_exists('conditions_passed', $details) && isset($data['conditions_long'], $data['conditions_short'])) {
+            $details['conditions_passed'] = array_keys(array_filter(array_merge($data['conditions_long'] ?? [], $data['conditions_short'] ?? []), fn($v) => is_array($v) ? (($v['passed'] ?? false) === true) : (bool)$v));
+        }
+        if (!array_key_exists('conditions_failed', $details) && isset($data['failed_conditions_long'], $data['failed_conditions_short'])) {
+            $details['conditions_failed'] = array_values(array_merge($data['failed_conditions_long'] ?? [], $data['failed_conditions_short'] ?? []));
+        }
+        if (!array_key_exists('metrics', $details) && isset($data['current_price'], $data['atr'])) {
+            $details['metrics'] = [
+                'price' => $data['current_price'],
+                'atr' => $data['atr'],
+                'atr_rel' => (isset($data['current_price'], $data['atr']) && (float)$data['current_price'] > 0) ? ((float)$data['atr'] / (float)$data['current_price']) : null,
+            ];
+        }
+        if (!array_key_exists('guard_values', $details) && isset($data['min_bars'], $data['bars_count'])) {
+            $details['guard_values'] = [
+                'min_bars' => $data['min_bars'],
+                'bars_count' => $data['bars_count'],
+            ];
+        }
+        $audit->setDetails($details);
+
+        // Optionnel: timeframe & candle_close_ts si fournis
+        if (isset($data['timeframe']) && is_string($data['timeframe'])) {
+            try {
+                $audit->setTimeframe(\App\Domain\Common\Enum\Timeframe::from($data['timeframe']));
+            } catch (\Throwable) {}
+        }
+        if (isset($data['kline_time']) && $data['kline_time'] instanceof \DateTimeImmutable) {
+            $audit->setCandleCloseTs($data['kline_time']);
+        }
+        if (isset($data['severity']) && is_numeric($data['severity'])) {
+            $audit->setSeverity((int)$data['severity']);
+        }
         $audit->setCreatedAt($this->clock->now());
         $this->mtfAuditRepository->getEntityManager()->persist($audit);
         $this->mtfAuditRepository->getEntityManager()->flush();

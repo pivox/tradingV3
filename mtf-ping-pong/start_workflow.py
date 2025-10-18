@@ -12,7 +12,7 @@ from workflows.mtf_ping_pong_workflow import MtfPingPongWorkflow, MtfPingPongCon
 
 
 # Configuration
-TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
+TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal-grpc:7233")
 TEMPORAL_NAMESPACE = os.getenv("TEMPORAL_NAMESPACE", "default")
 TASK_QUEUE = os.getenv("TASK_QUEUE_NAME", "mtf-ping-pong-queue")
 

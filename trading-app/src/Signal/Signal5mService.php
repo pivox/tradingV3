@@ -54,16 +54,26 @@ final class Signal5mService extends AbstractSignal
         }
 
         $tfBlock = $cfg[self::VALIDATION_KEY]['timeframe'][$tf] ?? [];
-        $longNames  = $tfBlock['long']  ?? [];
-        $shortNames = $tfBlock['short'] ?? [];
+        $longDefinition = $tfBlock['long'] ?? [];
+        $shortDefinition = $tfBlock['short'] ?? [];
+
+        if (!\is_array($longDefinition)) {
+            $longDefinition = [];
+        }
+        if (!\is_array($shortDefinition)) {
+            $shortDefinition = [];
+        }
 
         $context = $this->buildIndicatorContext($tf, $klines, $contract);
 
-        $longResults  = $this->conditionRegistry->evaluate($context, $longNames);
-        $shortResults = $this->conditionRegistry->evaluate($context, $shortNames);
+        $composite = $this->evaluateCompositeSides($context, $longDefinition, $shortDefinition);
+        $longResults = $composite['long_results'];
+        $shortResults = $composite['short_results'];
+        $longEvaluation = $composite['long_evaluation'];
+        $shortEvaluation = $composite['short_evaluation'];
 
-        $longPass  = $longNames === [] ? false : $this->allPassed($longResults, $longNames);
-        $shortPass = $shortNames === [] ? false : $this->allPassed($shortResults, $shortNames);
+        $longPass = $longDefinition === [] ? false : ($longEvaluation['passed'] ?? false);
+        $shortPass = $shortDefinition === [] ? false : ($shortEvaluation['passed'] ?? false);
 
         $signal = 'NONE';
         if ($longPass && !$shortPass) {
@@ -85,19 +95,10 @@ final class Signal5mService extends AbstractSignal
             'signal' => $signal,
             'conditions_long' => $longResults,
             'conditions_short' => $shortResults,
+            'requirements_long' => $longEvaluation['requirements'] ?? [],
+            'requirements_short' => $shortEvaluation['requirements'] ?? [],
             'timestamp' => time(),
             'indicator_context' => $context,
         ];
-    }
-
-    private function allPassed(array $results, array $expectedOrder): bool
-    {
-        foreach ($expectedOrder as $name) {
-            if (!isset($results[$name]) || ($results[$name]['passed'] ?? false) !== true) {
-                return false;
-            }
-        }
-
-        return true;
     }
 }

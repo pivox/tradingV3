@@ -18,7 +18,7 @@ appelle l'activité `mtf_api_call` qui poste la charge utile sur Symfony.
 
 | Variable                 | Valeur par défaut                            |
 |--------------------------|----------------------------------------------|
-| `TEMPORAL_ADDRESS`       | `temporal:7233`                              |
+| `TEMPORAL_ADDRESS`       | `temporal-grpc:7233`                              |
 | `TEMPORAL_NAMESPACE`     | `default`                                    |
 | `TASK_QUEUE_NAME`        | `cron_symfony_mtf_workers`                   |
 | `MTF_WORKERS_URL`        | `http://trading-app-nginx:80/api/mtf/run`    |

@@ -3,6 +3,7 @@
 namespace App\Controller\Web;
 
 use App\Indicator\Context\IndicatorContextBuilder;
+use App\Indicator\Condition\CompositeConditionEvaluator;
 use App\Indicator\Condition\ConditionRegistry;
 use App\Service\TradingConfigService;
 use App\Service\KlineDataService;
@@ -839,60 +840,63 @@ class IndicatorTestController extends AbstractController
 
     private function evaluateTimeframeRules(array $results, array $timeframeRules): array
     {
-        $validation = [
+        $longDefinition = $timeframeRules['long'] ?? [];
+        $shortDefinition = $timeframeRules['short'] ?? [];
+
+        if (!\is_array($longDefinition)) {
+            $longDefinition = [];
+        }
+        if (!\is_array($shortDefinition)) {
+            $shortDefinition = [];
+        }
+
+        $longEval = CompositeConditionEvaluator::evaluateRequirements($longDefinition, $results);
+        $shortEval = CompositeConditionEvaluator::evaluateRequirements($shortDefinition, $results);
+
+        $longNames = CompositeConditionEvaluator::extractConditionNames($longDefinition);
+        $shortNames = CompositeConditionEvaluator::extractConditionNames($shortDefinition);
+
+        [$longPassed, $longFailed] = $this->splitPassedFailed($results, $longNames);
+        [$shortPassed, $shortFailed] = $this->splitPassedFailed($results, $shortNames);
+
+        return [
             'long' => [
-                'required_conditions' => $timeframeRules['long'] ?? [],
-                'passed_conditions' => [],
-                'failed_conditions' => [],
-                'all_passed' => true
+                'required_conditions' => $longDefinition,
+                'passed_conditions' => $longPassed,
+                'failed_conditions' => $longFailed,
+                'all_passed' => $longDefinition === [] ? true : ($longEval['passed'] ?? false),
+                'composite_evaluation' => $longEval['requirements'] ?? [],
             ],
             'short' => [
-                'required_conditions' => $timeframeRules['short'] ?? [],
-                'passed_conditions' => [],
-                'failed_conditions' => [],
-                'all_passed' => true
-            ]
+                'required_conditions' => $shortDefinition,
+                'passed_conditions' => $shortPassed,
+                'failed_conditions' => $shortFailed,
+                'all_passed' => $shortDefinition === [] ? true : ($shortEval['passed'] ?? false),
+                'composite_evaluation' => $shortEval['requirements'] ?? [],
+            ],
         ];
+    }
 
-        // Créer un index des résultats par nom de condition
-        $resultsIndex = [];
-        foreach ($results as $name => $result) {
-            $resultsIndex[$name] = $result;
-        }
+    /**
+     * @param array<string,array> $results
+     * @param string[] $names
+     * @return array{0: string[], 1: string[]}
+     */
+    private function splitPassedFailed(array $results, array $names): array
+    {
+        $passed = [];
+        $failed = [];
 
-        // Évaluer les règles long
-        foreach ($validation['long']['required_conditions'] as $conditionName) {
-            if (isset($resultsIndex[$conditionName])) {
-                $result = $resultsIndex[$conditionName];
-                if ($result['passed']) {
-                    $validation['long']['passed_conditions'][] = $conditionName;
-                } else {
-                    $validation['long']['failed_conditions'][] = $conditionName;
-                    $validation['long']['all_passed'] = false;
-                }
+        foreach ($names as $name) {
+            $condition = $results[$name] ?? null;
+            if (($condition['passed'] ?? false) === true) {
+                $passed[] = $name;
             } else {
-                $validation['long']['failed_conditions'][] = $conditionName;
-                $validation['long']['all_passed'] = false;
+                $failed[] = $name;
             }
         }
 
-        // Évaluer les règles short
-        foreach ($validation['short']['required_conditions'] as $conditionName) {
-            if (isset($resultsIndex[$conditionName])) {
-                $result = $resultsIndex[$conditionName];
-                if ($result['passed']) {
-                    $validation['short']['passed_conditions'][] = $conditionName;
-                } else {
-                    $validation['short']['failed_conditions'][] = $conditionName;
-                    $validation['short']['all_passed'] = false;
-                }
-            } else {
-                $validation['short']['failed_conditions'][] = $conditionName;
-                $validation['short']['all_passed'] = false;
-            }
-        }
-
-        return $validation;
+        return [$passed, $failed];
     }
 
     private function getTimeframeLabel(string $timeframe): string

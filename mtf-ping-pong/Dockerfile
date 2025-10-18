@@ -24,7 +24,7 @@ USER app
 
 # Variables d'environnement
 ENV PYTHONPATH=/app
-ENV TEMPORAL_ADDRESS=temporal:7233
+ENV TEMPORAL_ADDRESS=temporal-grpc:7233
 ENV TEMPORAL_NAMESPACE=default
 ENV TASK_QUEUE_NAME=mtf-ping-pong-queue
 ENV WORKER_IDENTITY=mtf-ping-pong-worker

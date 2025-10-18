@@ -59,7 +59,7 @@ docker exec mtf_ping_pong_worker python start_workflow.py status <workflow_id>
 ### Variables d'environnement
 
 ```bash
-TEMPORAL_ADDRESS=temporal:7233
+TEMPORAL_ADDRESS=temporal-grpc:7233
 TEMPORAL_NAMESPACE=default
 TASK_QUEUE_NAME=mtf-ping-pong-queue
 WORKER_IDENTITY=mtf-ping-pong-worker
@@ -124,7 +124,7 @@ docker-compose up -d mtf-ping-pong-worker
    docker logs mtf_ping_pong_worker
    
    # Vérifier la connectivité Temporal
-   docker exec mtf_ping_pong_worker python -c "import asyncio; from temporalio.client import Client; asyncio.run(Client.connect('temporal:7233'))"
+   docker exec mtf_ping_pong_worker python -c "import asyncio; from temporalio.client import Client; asyncio.run(Client.connect('temporal-grpc:7233'))"
    ```
 
 2. **Workflow ne démarre pas**

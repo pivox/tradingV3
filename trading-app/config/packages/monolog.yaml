@@ -1,5 +1,5 @@
 monolog:
-  channels: ['mtf', 'validation', 'signals', 'positions', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
+  channels: ['mtf', 'validation', 'signals', 'positions', 'positions_flow', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
   handlers:
     # =====================
     # --- Handler Temporal (Asynchrone) ---
@@ -52,6 +52,15 @@ monolog:
       channels: ['positions']
       formatter: App\Logging\CustomLineFormatter
 
+    # Canal Positions Flow - Traçage du flux 1m → placement d'ordre
+    positions_flow_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/positions-flow.log'
+      max_files: 14
+      level: 'info'
+      channels: ['positions_flow']
+      formatter: App\Logging\CustomLineFormatter
+
     # Canal Indicators - Calculs d'indicateurs techniques
     indicators_rotating:
       type: rotating_file
@@ -98,6 +107,15 @@ monolog:
       max_files: 30
       level: error
       channels: ['global-severity']
+      formatter: App\Logging\CustomLineFormatter
+
+    # Canal Above Error - Collecte tous les logs > error (critical+)
+    above_error_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/above-error.log'
+      max_files: 30
+      level: critical
+      channels: ['!event', '!doctrine', '!console']
       formatter: App\Logging\CustomLineFormatter
 
     # =====================

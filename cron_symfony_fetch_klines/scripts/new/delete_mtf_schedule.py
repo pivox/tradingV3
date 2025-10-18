@@ -5,7 +5,7 @@ from typing import List
 from temporalio.client import Client
 
 # Reuse env defaults (same as create_mtf_schedule.py)
-TEMPORAL_ADDRESS   = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
+TEMPORAL_ADDRESS   = os.getenv("TEMPORAL_ADDRESS", "temporal-grpc:7233")
 TEMPORAL_NAMESPACE = os.getenv("TEMPORAL_NAMESPACE", "default")
 
 # Schedule ID du MTF

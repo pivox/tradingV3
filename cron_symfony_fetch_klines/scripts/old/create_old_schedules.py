@@ -11,7 +11,7 @@ from temporalio.client import (
 from tools.endpoint_types import EndpointJob
 
 # --------- Paramètres via env (avec valeurs par défaut) ---------
-TEMPORAL_ADDRESS   = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
+TEMPORAL_ADDRESS   = os.getenv("TEMPORAL_ADDRESS", "temporal-grpc:7233")
 TEMPORAL_NAMESPACE = os.getenv("TEMPORAL_NAMESPACE", "default")
 TASK_QUEUE         = os.getenv("TASK_QUEUE_NAME", "cron_symfony_refresh")
 TIME_ZONE          = os.getenv("TZ", "Africa/Tunis")

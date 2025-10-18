@@ -80,7 +80,7 @@ python3 scripts/new/manage_mtf_schedule.py status
 
 Les scripts utilisent les variables d'environnement suivantes :
 
-- `TEMPORAL_ADDRESS` (défaut: `temporal:7233`)
+- `TEMPORAL_ADDRESS` (défaut: `temporal-grpc:7233`)
 - `TEMPORAL_NAMESPACE` (défaut: `default`)
 - `TASK_QUEUE_NAME` (défaut: `cron_symfony_refresh`)
 - `TZ` (défaut: `Africa/Tunis`)

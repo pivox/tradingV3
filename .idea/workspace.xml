@@ -5,11 +5,89 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="73604acf-3471-46f2-a1fd-fdf73ef42078" name="Changes" comment="OpenedLockedSyncService conf">
+      <change afterPath="$PROJECT_DIR$/trading-app/config/validation.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/migrations/Version20251017140000.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/migrations/Version20251017140500.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/migrations/Version20251017223924.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/scripts/run_mtf_after_5m_close.sh" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/src/Indicator/Condition/AtrRelInRange15mCondition.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/src/Indicator/Condition/AtrRelInRange5mCondition.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/src/Indicator/Condition/CompositeConditionEvaluator.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/src/Indicator/Condition/Ema20Over50WithToleranceCondition.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/src/Indicator/Condition/EmaAbove200WithToleranceCondition.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/src/Indicator/Condition/EmaBelow200WithToleranceCondition.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/src/Indicator/Condition/MacdHistGtEpsCondition.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/src/Indicator/Condition/RsiGtSoftfloorCondition.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/src/Indicator/Condition/RsiLtSoftcapCondition.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/src/Repository/MtfAuditStatsRepository.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/AtrRelInRange15mConditionTest.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/AtrRelInRange5mConditionTest.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/Ema20Over50WithToleranceConditionTest.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/EmaAbove200WithToleranceConditionTest.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/EmaBelow200WithToleranceConditionTest.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/MacdHistGtEpsConditionTest.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/RsiGtSoftfloorConditionTest.php" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/RsiLtSoftcapConditionTest.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ASYNC_LOGGING_README.md" beforeDir="false" afterPath="$PROJECT_DIR$/ASYNC_LOGGING_README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/api_rate_limiter/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/api_rate_limiter/Dockerfile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/api_rate_limiter/script.py" beforeDir="false" afterPath="$PROJECT_DIR$/api_rate_limiter/script.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/api_rate_limiter/worker.py" beforeDir="false" afterPath="$PROJECT_DIR$/api_rate_limiter/worker.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/Dockerfile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/README_MTF.md" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/README_MTF.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/script.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/script.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/create_mtf_schedule.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/create_mtf_schedule.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/create_new_schedules.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/create_new_schedules.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/delete_mtf_schedule.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/delete_mtf_schedule.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/delete_new_schedules.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/delete_new_schedules.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/manage_mtf_schedule.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/manage_mtf_schedule.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/pause_mtf_schedule.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/pause_mtf_schedule.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/pause_new_schedules.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/pause_new_schedules.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/resume_mtf_schedule.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/resume_mtf_schedule.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/resume_new_schedules.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/new/resume_new_schedules.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/old/create_old_schedules.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/old/create_old_schedules.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/old/delete_old_schedules.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/old/delete_old_schedules.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/old/pause_old_schedules.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/old/pause_old_schedules.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/old/resume_old_schedules.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/scripts/old/resume_old_schedules.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_fetch_klines/worker.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_fetch_klines/worker.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_mtf_workers/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_mtf_workers/Dockerfile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_mtf_workers/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_mtf_workers/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_mtf_workers/scripts/new/manage_mtf_workers_schedule.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_mtf_workers/scripts/new/manage_mtf_workers_schedule.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cron_symfony_mtf_workers/worker.py" beforeDir="false" afterPath="$PROJECT_DIR$/cron_symfony_mtf_workers/worker.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docker-compose.yml" beforeDir="false" afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/log_processing_worker/worker.py" beforeDir="false" afterPath="$PROJECT_DIR$/log_processing_worker/worker.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitoring/grafana-provisioning/dashboards/dashboard.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/monitoring/grafana-provisioning/dashboards/dashboard.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mtf-ping-pong/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/mtf-ping-pong/Dockerfile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mtf-ping-pong/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/mtf-ping-pong/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mtf-ping-pong/USAGE.md" beforeDir="false" afterPath="$PROJECT_DIR$/mtf-ping-pong/USAGE.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mtf-ping-pong/entrypoint.sh" beforeDir="false" afterPath="$PROJECT_DIR$/mtf-ping-pong/entrypoint.sh" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mtf-ping-pong/start_workflow.py" beforeDir="false" afterPath="$PROJECT_DIR$/mtf-ping-pong/start_workflow.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mtf-ping-pong/test_workflow.py" beforeDir="false" afterPath="$PROJECT_DIR$/mtf-ping-pong/test_workflow.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mtf-ping-pong/worker.py" beforeDir="false" afterPath="$PROJECT_DIR$/mtf-ping-pong/worker.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tables_schema.sql" beforeDir="false" afterPath="$PROJECT_DIR$/tables_schema.sql" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/LOGGING_ASYNC_ARCHITECTURE.md" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/LOGGING_ASYNC_ARCHITECTURE.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/MTF_README.md" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/MTF_README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/README_MTF_RUN.md" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/README_MTF_RUN.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/config/env.example" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/env.example" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/config/services.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/services.yaml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/trading-app/config/trading.yml" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/config/trading.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/migrations/Version20251017121000.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/migrations/Version20251017121000.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/migrations/Version20251017121500.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/migrations/Version20251017121500.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Application/Worker/LogWorker.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Application/Worker/LogWorker.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Controller/Web/IndicatorTestController.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Controller/Web/IndicatorTestController.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Controller/Web/SignalsController.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Controller/Web/SignalsController.php" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfService.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfService.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfTimeService.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Domain/Mtf/Service/MtfTimeService.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Exposure/ActiveExposureGuard.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Exposure/ActiveExposureGuard.php" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Exposure/Exception/ActiveExposureException.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Domain/Trading/Exposure/Exception/ActiveExposureException.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Entity/MtfAudit.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Entity/MtfAudit.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Indicator/Condition/Ema20Gt50Condition.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Indicator/Condition/Ema20Gt50Condition.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Signal/AbstractSignal.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Signal/AbstractSignal.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Signal/Signal15mService.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Signal/Signal15mService.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Signal/Signal1hService.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Signal/Signal1hService.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Signal/Signal1mService.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Signal/Signal1mService.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Signal/Signal4hService.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Signal/Signal4hService.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/src/Signal/Signal5mService.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/src/Signal/Signal5mService.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/start-log-worker.sh" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/start-log-worker.sh" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/AllConditionsTest.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/AllConditionsTest.php" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/Ema50Gt200ConditionTest.php" beforeDir="false" afterPath="$PROJECT_DIR$/trading-app/tests/Indicator/Condition/Ema50Gt200ConditionTest.php" afterDir="false" />
     </list>
     <list id="0ec51621-5bf1-43ac-acaa-64de0476dee0" name="todo" comment="" />
     <option name="SHOW_DIALOG" value="false" />
@@ -441,7 +519,7 @@
     &quot;com.jetbrains.php.lang.actions.generation.PhpGenerateFieldAccessorHandlerBase$MyMemberChooser.fluent.setters.last.selected&quot;: &quot;true&quot;,
     &quot;credentialsType com.jetbrains.php.remote.interpreter.ui.PhpCreateRemoteSdkForm&quot;: &quot;Docker Compose&quot;,
     &quot;credentialsType com.jetbrains.php.remote.interpreter.ui.PhpInplaceEditRemoteSdkForm&quot;: &quot;Docker Compose&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;develop&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
     &quot;last_opened_file_path&quot;: &quot;/Users/haythem.mabrouk/workspace/perso/tradingV3&quot;,
     &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
     &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
@@ -987,6 +1065,9 @@
       <workItem from="1760683534612" duration="8000" />
       <workItem from="1760686008894" duration="673000" />
       <workItem from="1760699771735" duration="40000" />
+      <workItem from="1760740447115" duration="4000" />
+      <workItem from="1760744466176" duration="1378000" />
+      <workItem from="1760766785699" duration="5365000" />
     </task>
     <task id="LOCAL-00050" summary="positions dans bitmart =&gt; nettyage">
       <option name="closed" value="true" />

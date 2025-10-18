@@ -43,27 +43,36 @@ final class Signal1hService extends AbstractSignal
             ];
         }
         $tfBlock = $cfg[self::VALIDATION_KEY]['timeframe'][$tf] ?? [];
-        $longNames  = $tfBlock['long']  ?? [];
-        $shortNames = $tfBlock['short'] ?? [];
+        $longDefinition  = $tfBlock['long']  ?? [];
+        $shortDefinition = $tfBlock['short'] ?? [];
+        if (!\is_array($longDefinition)) $longDefinition = [];
+        if (!\is_array($shortDefinition)) $shortDefinition = [];
+
         $context = $this->buildIndicatorContext($tf, $klines, $contract);
-        $longResults  = $this->conditionRegistry->evaluate($context,$longNames);
-        $shortResults = $this->conditionRegistry->evaluate($context,$shortNames);
-        $longPass  = $longNames  === [] ? false : $this->allPassed($longResults,$longNames);
-        $shortPass = $shortNames === [] ? false : $this->allPassed($shortResults,$shortNames);
+        $composite = $this->evaluateCompositeSides($context, $longDefinition, $shortDefinition);
+        $longResults = $composite['long_results'];
+        $shortResults = $composite['short_results'];
+        $longEvaluation = $composite['long_evaluation'];
+        $shortEvaluation = $composite['short_evaluation'];
+
+        $longPass  = $longDefinition  === [] ? false : ($longEvaluation['passed'] ?? false);
+        $shortPass = $shortDefinition === [] ? false : ($shortEvaluation['passed'] ?? false);
         $signal='NONE';
         if ($longPass && !$shortPass) $signal='LONG';
         elseif ($shortPass && !$longPass) $signal='SHORT';
         elseif ($longPass && $shortPass) $signal='LONG';
-        $out=[ 'timeframe'=>$tf,'signal'=>$signal,'conditions_long'=>$longResults,'conditions_short'=>$shortResults,'timestamp'=>time(),'indicator_context'=>$context ];
+        $out=[
+            'timeframe'=>$tf,
+            'signal'=>$signal,
+            'conditions_long'=>$longResults,
+            'conditions_short'=>$shortResults,
+            'requirements_long'=>$longEvaluation['requirements'] ?? [],
+            'requirements_short'=>$shortEvaluation['requirements'] ?? [],
+            'timestamp'=>time(),
+            'indicator_context'=>$context
+        ];
         $this->signalsLogger->info('signals.tick',['tf'=>$tf,'signal'=>$signal]);
         return $out;
     }
 
-    private function allPassed(array $results, array $expected): bool
-    {
-        foreach ($expected as $n) {
-            if (!isset($results[$n]) || ($results[$n]['passed']??false)!==true) return false;
-        }
-        return true;
-    }
 }
