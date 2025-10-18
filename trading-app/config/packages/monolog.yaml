@@ -1,5 +1,5 @@
 monolog:
-  channels: ['mtf', 'validation', 'signals', 'positions', 'positions_flow', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
+  channels: ['mtf', 'validation', 'signals', 'positions', 'positions_flow', 'bitmart', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
   handlers:
     # =====================
     # --- Handler Temporal (Asynchrone) ---
@@ -68,6 +68,15 @@ monolog:
       max_files: 14
       level: '%env(LOG_LEVEL_INDICATORS)%'
       channels: ['indicators']
+      formatter: App\Logging\CustomLineFormatter
+
+    # Canal Bitmart - Traçage des appels API Bitmart (REST/Privé)
+    bitmart_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/bitmart.log'
+      max_files: 14
+      level: '%env(LOG_LEVEL_BITMART)%'
+      channels: ['bitmart']
       formatter: App\Logging\CustomLineFormatter
 
     # Canal High Conviction - Stratégies validées

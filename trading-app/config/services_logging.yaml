@@ -118,6 +118,13 @@ services:
     arguments: ['indicators']
     tags:
       - { name: monolog.logger, channel: indicators }
+
+  # Logger pour le canal bitmart (appels Bitmart)
+  monolog.logger.bitmart:
+    parent: monolog.logger
+    arguments: ['bitmart']
+    tags:
+      - { name: monolog.logger, channel: bitmart }
   
   # Logger pour le canal highconviction
   monolog.logger.highconviction:
