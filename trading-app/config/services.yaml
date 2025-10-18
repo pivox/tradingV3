@@ -121,7 +121,7 @@ services:
     App\Infrastructure\Http\BitmartClient:
         arguments:
             $httpClient: '@http_client'
-            $logger: '@logger'
+            $logger: '@monolog.logger.bitmart'
             $config: '@App\Infrastructure\Config\BitmartConfig'
             $clock: '@Psr\Clock\ClockInterface'
         public: true
@@ -153,7 +153,7 @@ services:
     App\Infrastructure\Http\BitmartRestClient:
         arguments:
             $httpClient: '@GuzzleHttp\Client'
-            $logger: '@logger'
+            $logger: '@monolog.logger.bitmart'
             $clock: '@Psr\Clock\ClockInterface'
             $config: '@App\Infrastructure\Config\BitmartConfig'
             $lockFactory: '@bitmart.throttle_lock_factory'
