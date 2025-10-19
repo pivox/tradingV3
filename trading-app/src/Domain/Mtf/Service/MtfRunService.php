@@ -722,7 +722,7 @@ class MtfRunService
     {
         $this->logger->debug($message, $context);
 
-        if (null === $this->logMessageBus) {
+        if ($this->asyncDebugLoggingAvailable || null === $this->logMessageBus || !$this->isDebugLevelEnabled()) {
             return;
         }
 
@@ -739,22 +739,6 @@ class MtfRunService
         }
 
         $timestamp = new \DateTimeImmutable();
-        $record = null;
-        if (!$this->asyncDebugLoggingAvailable) {
-            $record = new LogRecordMessage(
-                app: $this->resolvedLogAppName,
-                channel: $this->logChannel,
-                level: 'DEBUG',
-                message: $message,
-                context: $contextForRecord,
-                extra: [
-                    'forwarded_by' => self::class,
-                ],
-                datetime: $timestamp->format(\DateTimeInterface::ATOM),
-                correlationId: $correlationId,
-            );
-        }
-
         $logMessage = new LogMessage(
             channel: $this->logChannel,
             level: 'DEBUG',
@@ -763,10 +747,21 @@ class MtfRunService
             createdAt: $timestamp,
         );
 
+        $record = new LogRecordMessage(
+            app: $this->resolvedLogAppName,
+            channel: $this->logChannel,
+            level: 'DEBUG',
+            message: $message,
+            context: $contextForRecord,
+            extra: [
+                'forwarded_by' => self::class,
+            ],
+            datetime: $timestamp->format(\DateTimeInterface::ATOM),
+            correlationId: $correlationId,
+        );
+
         try {
-            if ($record !== null) {
-                $this->logMessageBus->dispatch($record);
-            }
+            $this->logMessageBus->dispatch($record);
             $this->logMessageBus->dispatch($logMessage);
         } catch (Throwable $exception) {
             $this->logger->warning('[MTF Run] Failed to forward debug log to messenger', [
@@ -802,5 +797,14 @@ class MtfRunService
 
         // Return final result
         return ['summary' => $summary, 'results' => $results];
+    }
+
+    private function isDebugLevelEnabled(): bool
+    {
+        if ($this->logger instanceof MonologLogger) {
+            return $this->logger->isHandling(Level::Debug);
+        }
+
+        return true;
     }
 }
