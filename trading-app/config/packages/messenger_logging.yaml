@@ -1,19 +1,19 @@
 framework:
-    messenger:
-        transports:
-            async_logging:
-                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
-                options: { stream: log-messages, auto_setup: true, retry_interval: 1000 }
-                serializer: messenger.transport.native_php_serializer
-            failed_logs_doctrine:
-                dsn: 'doctrine://default?table_name=messenger_messages_failed'
-                options:
-                    auto_setup: true
-#            failed_logs:
-#                dsn: 'redis://redis:6379/failed-log-messages'
-#                options: { stream: failed-log-messages, auto_setup: true }
+#    messenger:
+#        transports:
+#            async_logging:
+#                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+#                options: { stream: log-messages, auto_setup: true, retry_interval: 1000 }
 #                serializer: messenger.transport.native_php_serializer
-        failure_transport: failed_logs_doctrine
-        routing:
-            App\Message\LogRecord: async_logging
-            App\Logging\Message\LogMessage: async_logging
+#            failed_logs_doctrine:
+#                dsn: 'doctrine://default?table_name=messenger_messages_failed'
+#                options:
+#                    auto_setup: true
+##            failed_logs:
+##                dsn: 'redis://redis:6379/failed-log-messages'
+##                options: { stream: failed-log-messages, auto_setup: true }
+##                serializer: messenger.transport.native_php_serializer
+#        failure_transport: failed_logs_doctrine
+#        routing:
+#            App\Message\LogRecord: async_logging
+#            App\Logging\Message\LogMessage: async_logging
