@@ -13,11 +13,12 @@
     "symfony/dotenv": "^7.1",
     "symfony/runtime": "^7.1",
     "symfony/http-client": "^7.1",
-    "symfony/monolog-bundle": "^3.10",
+    "symfony/monolog-bundle": "^3.8",
     "symfony/rate-limiter": "^7.1",
     "symfony/lock": "^7.1",
+    "symfony/messenger": "^7.1",
     "symfony/process": "^7.1",
-    "symfony/serializer": "^7.1",
+    "symfony/serializer": "7.1.*",
     "symfony/validator": "^7.1",
     "doctrine/orm": "^3.3",
     "doctrine/doctrine-bundle": "^2.13",
@@ -32,13 +33,16 @@
     "symfony/clock": "*",
     "symfony/twig-bundle": "*",
     "symfony/flex": "^2.4",
-    "temporal/sdk": "*"
+    "symfony/redis-messenger": "7.1.*",
+    "predis/predis": "^3.2",
+    "symfony/doctrine-messenger": "7.1.*"
   },
   "require-dev": {
     "symfony/var-dumper": "^7.1",
     "phpstan/phpstan": "^1.11",
     "phpunit/phpunit": "^11.3",
-    "symfony/maker-bundle": "*"
+    "symfony/maker-bundle": "*",
+    "symfony/web-profiler-bundle": "^7.1"
   },
   "autoload": {
     "psr-4": {

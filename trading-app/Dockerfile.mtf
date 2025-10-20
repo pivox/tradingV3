@@ -1,57 +1,46 @@
-FROM php:8.2-fpm
+FROM php:8.3-fpm
+ARG APP_ENV=dev
+ENV APP_ENV=${APP_ENV}
 
-# ARG pour l'environnement (prod par défaut)
-ARG APP_ENV=prod
-ENV APP_ENV=${APP_ENV} \
-    APP_DEBUG=0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git curl zip unzip \
+      libpng-dev libonig-dev libxml2-dev libpq-dev \
+      $PHPIZE_DEPS \
+  && docker-php-ext-install pdo pdo_pgsql mbstring exif pcntl bcmath gd sockets \
+  \
+  # ---- Redis via PECL ----
+  && pecl install redis-6.0.2 \
+  && echo "extension=redis" > /usr/local/etc/php/conf.d/20-redis.ini \
+  \
+  # ---- Xdebug en dev ----
+  && if [ "$APP_ENV" != "prod" ]; then pecl install xdebug-3.3.2 && docker-php-ext-enable xdebug; fi \
+  \
+  # ---- (optionnel) Sanity check au build : échoue si Redis n'est pas chargé ----
+  && php -m | grep -iq '^redis$' \
+  && php -r 'echo "redis:", phpversion("redis"), PHP_EOL;' \
+  \
+  # ---- Nettoyage ----
+  && apt-get purge -y --auto-remove $PHPIZE_DEPS \
+  && rm -rf /var/lib/apt/lists/* /tmp/pear
 
-# Installer les dépendances système
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    libpng-dev \
-    libonig-dev \
-    libxml2-dev \
-    libpq-dev \
-    zip \
-    unzip \
-    supervisor \
-    && docker-php-ext-install pdo pdo_pgsql mbstring exif pcntl bcmath gd sockets \
-    && pecl install xdebug \
-    && docker-php-ext-enable xdebug
+# ⬇️ Génère le fichier d’options Xdebug si l’extension est chargée
+RUN if php -m | grep -qi xdebug; then \
+      { \
+        echo "xdebug.mode=develop,debug"; \
+        echo "xdebug.start_with_request=yes"; \
+        echo "xdebug.client_port=9003"; \
+        echo "xdebug.client_host=host.docker.internal"; \
+        echo "xdebug.log_level=0"; \
+      } > /usr/local/etc/php/conf.d/99-xdebug.ini; \
+    fi
 
-# Installer Composer (via installeur officiel)
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
-
-# Définir le répertoire de travail
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 WORKDIR /var/www/html
-
-# Copier les fichiers de configuration
 COPY composer.json composer.lock ./
-
-# Installer les dépendances PHP (sans scripts, le code applicatif n'est pas encore présent)
-RUN composer install --no-dev --no-scripts --optimize-autoloader --no-interaction \
-    && composer clear-cache
-
-# Copier le code source
+RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interaction
 COPY . .
-
-# Créer les répertoires nécessaires
-RUN mkdir -p var/log var/run var/cache
-
-# Configurer les permissions
-RUN chown -R www-data:www-data var/
-RUN chmod -R 755 var/
-
-# Configuration Supervisor pour le worker MTF
-COPY docker/supervisor/mtf-worker.conf /etc/supervisor/conf.d/mtf-worker.conf
-
-# Script de démarrage
-COPY docker/scripts/start-mtf-worker.sh /usr/local/bin/start-mtf-worker.sh
-RUN chmod +x /usr/local/bin/start-mtf-worker.sh
-
-# Exposer le port (si nécessaire pour l'API)
-EXPOSE 8082
-
-# Commande par défaut (FPM)
+RUN chown -R www-data:www-data /var/www/html \
+ && chmod -R 755 /var/www/html \
+ && echo "memory_limit = 2G" >> /usr/local/etc/php/conf.d/memory.ini
+EXPOSE 9000
 CMD ["php-fpm"]

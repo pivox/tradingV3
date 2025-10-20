@@ -7,6 +7,9 @@
 #
 # See https://symfony.com/doc/current/configuration.html#importing-the-routing-configuration
 
+imports:
+    - { resource: 'services_logging.yaml' }
+
 parameters:
     app.mtf_log_level: 'info'
     # Configuration pour le backtesting avec une heure fixe
@@ -25,6 +28,7 @@ services:
         exclude:
             - '../src/DependencyInjection/'
             - '../src/Entity/'
+            - '../src/Logging/'
             - '../src/Kernel.php'
 
     # add more service definitions when explicit configuration is needed
@@ -80,13 +84,15 @@ services:
             $klineJsonIngestion: '@App\Infrastructure\Persistence\KlineJsonIngestionService'
         public: true
 
+
     App\Domain\Mtf\Service\MtfRunService:
         arguments:
             $mtfService: '@App\Domain\Mtf\Service\MtfService'
             $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
             $mtfLockRepository: '@App\Repository\MtfLockRepository'
             $contractRepository: '@App\Repository\ContractRepository'
-            $logger: '@logger'
+            $logger: '@monolog.logger.mtf'
+            $positionsFlowLogger: '@monolog.logger.positions_flow'
             $clock: '@Psr\Clock\ClockInterface'
             $tradingDecisionService: '@App\Domain\Trading\Service\TradingDecisionService'
             $tradeContext: '@App\Domain\Trading\Service\TradeContextService'
@@ -116,6 +122,9 @@ services:
     App\Infrastructure\Config\BitmartConfig:
         factory: ['App\Infrastructure\Config\BitmartConfig', 'fromEnvironment']
         public: true
+    App\Config\MtfContractsConfig:
+        arguments:
+            $path: '%kernel.project_dir%/config/app/mtf_contracts.yaml'
 
     # BitMart HTTP Client
     App\Infrastructure\Http\BitmartClient:
@@ -412,6 +421,7 @@ services:
             $logger: '@logger'
             $positionsFlowLogger: '@monolog.logger.positions_flow'
             $clock: '@Psr\Clock\ClockInterface'
+            $mtfLockRepository: '@App\Repository\MtfLockRepository'
         public: true
 
     # Trading Decision Service
@@ -467,3 +477,48 @@ services:
             $storage: '@App\Service\AssignmentStorageInterface'
             $http: '@http_client'
             $workersCsv: '%env(WS_WORKERS)%'
+    # === Consumer des logs (écrit NDJSON) ===
+#    App\MessageHandler\LogRecordHandler:
+#        arguments:
+#            $projectDir: '%kernel.project_dir%'
+
+#    App\Logging\MessageHandler\LogMessageHandler:
+#        arguments:
+#            $logDir: '%kernel.logs_dir%'
+#    App\Logging\LoggerHelper:
+#        arguments:
+#            $loggers: !service_locator
+#                validation: '@monolog.logger.validation'
+#                signals: '@monolog.logger.signals'
+#                positions: '@monolog.logger.positions'
+#                positions_flow: '@monolog.logger.positions_flow'
+#                indicators: '@monolog.logger.indicators'
+#                highconviction: '@monolog.logger.highconviction'
+#                pipeline_exec: '@monolog.logger.pipeline_exec'
+#                bitmart: '@monolog.logger.bitmart'
+#                mtf: '@monolog.logger.mtf'
+#                test_temporal: '@monolog.logger.test_temporal'
+#                global_severity: '@monolog.logger.global_severity'
+#            $defaultLogger: '@monolog.logger'
+#        public: true
+#        autowire: false
+#        autoconfigure: false
+    # === Handler Monolog qui publie dans Messenger (Async) ===
+    # On le rend public pour pouvoir le référencer depuis monolog.yaml (type: service, id: ...)
+    App\Indicator\Condition\CloseMinusEma200GtCondition:
+        arguments:
+            $defaultThreshold: -0.0015   # comme ton YAML
+            $eps: 1.0e-12
+        tags: ['app.indicator.condition']
+
+    App\Indicator\Condition\CloseMinusEma200LtCondition:
+        arguments:
+            $defaultThreshold: -0.0015   # ex: exiger close < ema200 de 0,15% ou plus
+            $eps: 1.0e-12
+        tags: ['app.indicator.condition']
+
+    App\Indicator\Condition\Ema20MinusEma50GtCondition:
+        arguments:
+            $defaultThreshold: -0.0008   # comme ton YAML
+            $eps: 1.0e-12
+        tags: ['app.indicator.condition']
