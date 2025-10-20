@@ -1,4 +1,4 @@
-version: '2.5.34'
+version: '2.5.92'
 
 meta:
     name: SCALPING v2.0 - MTF + Pipeline + Leverage
@@ -8,6 +8,27 @@ meta:
         Indicateurs utilisés: EMA, MACD, VWAP, ATR (+ RSI pour le timing d'exécution).
     created_at: '2025-10-05'
 
+contract:
+    filter:
+        status: 'Trading'
+        delist_time:
+            - op: '>'
+              data_type: 'timestamp'
+              left: 'delist_time'
+              right: 'now() + interval \'37 days\''
+        volume_24h_usdt: '> 50000'          # volume minimal 50k USDT
+        quote_currency: 'USDT'
+        open_time:
+            - op: '<='
+              data_type: 'timestamp'
+              left: 'open_time'
+              right: 'now() - interval \'37 days\''
+    tri:
+        sort_by: 'volume_24h_usdt'
+        order: 'desc'
+        limit: 100
+    meta: >
+        Filtre de contrat pour ne retenir que les contrats perpétuels en trading actif,
 # ======== UNIVERSE ========
 symbols:
     allowed_quotes: [USDT]
@@ -30,6 +51,7 @@ leverage:
     exchange_cap: 20.0
     per_symbol_caps:
         - { symbol_regex: "^(BTC|ETH).*", cap: 10.0 }
+        - { symbol_regex: "^NVDAXUSDT$", cap: 5.0 }
     timeframe_multipliers:
         '4h': 1.0
         '1h': 1.0
@@ -66,7 +88,7 @@ atr:
 
 # ======== INDICATOR CALCULATION MODE ========
 indicator_calculation:
-    mode: sql                            # 'php' ou 'sql'
+    mode: php                            # 'php' ou 'sql'
     fallback_to_php: true                # fallback vers PHP si SQL échoue
     performance_threshold_ms: 10        # seuil de performance pour switch automatique
     meta: >
@@ -120,27 +142,47 @@ timeframes:
 
 # ======== LOGIC RULES ========
 rules:
+    # --- EXISTANTS (inchangés) ---
     macd_hist_gt_eps:
         op: '>'
         left: 'macd_hist'
         right: 0.0
         eps: 1.0e-6
+
     ema20_over_50_with_tolerance:
         any_of:
             - ema_20_gt_50
             - ema_20_minus_ema_50_gt: -0.0008
+
     ema_above_200_with_tolerance:
         any_of:
             - close_above_ema_200
             - close_minus_ema_200_gt: -0.0015
+
+    # --- FIX ICI (corrige le signe) ---
     ema_below_200_with_tolerance:
         any_of:
             - close_below_ema_200
-            - close_minus_ema_200_lt: 0.0015
-    rsi_lt_softcap: { lt: 78 }
+            - close_minus_ema_200_lt: -0.0015   # ⬅️ AVANT: 0.0015 (permettait un close légèrement AU-DESSUS)
+
+    rsi_lt_softcap:   { lt: 78 }
     rsi_gt_softfloor: { gt: 22 }
-    atr_rel_in_range_15m: { between_pct: [0.001, 0.004] }
-    atr_rel_in_range_5m:  { between_pct: [0.0008, 0.0035] }
+
+    # --- MACD SHORT plus souple (choisis A, B ou C, ou combine B+C) ---
+    macd_hist_lt_eps:         # Option A: tolérance sur l'histogramme
+        op: '<'
+        left: 'macd_hist'
+        right: 0.05             # autorise un léger >0 (rebond en fin de course)
+        eps: 1.0e-6
+
+    macd_line_below_signal:   # Option B: relation MACD vs Signal
+        lt_fields: ['macd', 'macd_signal']  # macd < signal
+
+    macd_hist_decreasing_n:   # Option C: essoufflement sur n bougies (config ci-dessous)
+        decreasing:
+            field: 'macd_hist'
+            n: 2                   # ex: 2 bougies de baisse consécutives
+
 
 validation:
     start_from_timeframe: '1h'
@@ -356,7 +398,7 @@ post_validation:
         sl_mult_atr: 1.5               # SL = 1.5x ATR
         tp_r_multiple: 2.0             # TP = 2R
         budget_mode: fixed_or_available # budget fixe ou disponible
-        budget_usdt: 40               # budget fixe en USDT
+        budget_usdt: 20               # budget fixe en USDT
 
     leverage:
         use_submit_leverage: true      # utiliser submit-leverage
