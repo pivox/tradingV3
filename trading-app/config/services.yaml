@@ -477,32 +477,6 @@ services:
             $storage: '@App\Service\AssignmentStorageInterface'
             $http: '@http_client'
             $workersCsv: '%env(WS_WORKERS)%'
-    # === Consumer des logs (écrit NDJSON) ===
-#    App\MessageHandler\LogRecordHandler:
-#        arguments:
-#            $projectDir: '%kernel.project_dir%'
-
-#    App\Logging\MessageHandler\LogMessageHandler:
-#        arguments:
-#            $logDir: '%kernel.logs_dir%'
-#    App\Logging\LoggerHelper:
-#        arguments:
-#            $loggers: !service_locator
-#                validation: '@monolog.logger.validation'
-#                signals: '@monolog.logger.signals'
-#                positions: '@monolog.logger.positions'
-#                positions_flow: '@monolog.logger.positions_flow'
-#                indicators: '@monolog.logger.indicators'
-#                highconviction: '@monolog.logger.highconviction'
-#                pipeline_exec: '@monolog.logger.pipeline_exec'
-#                bitmart: '@monolog.logger.bitmart'
-#                mtf: '@monolog.logger.mtf'
-#                test_temporal: '@monolog.logger.test_temporal'
-#                global_severity: '@monolog.logger.global_severity'
-#            $defaultLogger: '@monolog.logger'
-#        public: true
-#        autowire: false
-#        autoconfigure: false
     # === Handler Monolog qui publie dans Messenger (Async) ===
     # On le rend public pour pouvoir le référencer depuis monolog.yaml (type: service, id: ...)
     App\Indicator\Condition\CloseMinusEma200GtCondition:
