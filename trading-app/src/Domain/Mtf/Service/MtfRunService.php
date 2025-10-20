@@ -13,8 +13,6 @@ use App\Repository\MtfSwitchRepository;
 use App\Repository\ContractRepository;
 use App\Logging\AsyncBusLogHandler;
 use App\Logging\MessengerLogHandler;
-use App\Logging\Message\LogMessage;
-use App\Message\LogRecord as LogRecordMessage;
 use App\Service\Indicator\SqlIndicatorService;
 use Monolog\Level;
 use Monolog\Logger as MonologLogger;
@@ -43,7 +41,6 @@ class MtfRunService
         private readonly TradeContextService $tradeContext,
         private readonly SqlIndicatorService $sqlIndicatorService,
         private readonly EventDispatcherInterface $eventDispatcher,
-        private readonly ?MessageBusInterface $logMessageBus = null,
         private readonly ?string $logAppName = null,
     ) {
         $this->asyncDebugLoggingAvailable = $this->detectAsyncDebugLogging($this->logger);
@@ -70,7 +67,7 @@ class MtfRunService
         $startTime = microtime(true);
         $runId = Uuid::uuid4();
         $runIdString = $runId->toString();
-        $this->logDebug('[MTF Run] Run invoked', [
+        $this->logger->debug('[MTF Run] Run invoked', [
             'run_id' => $runIdString,
             'dry_run' => $dryRun,
             'force_run' => $forceRun,
@@ -95,7 +92,7 @@ class MtfRunService
             ]);
 
             if (!$forceRun && !$this->mtfSwitchRepository->isGlobalSwitchOn()) {
-                $this->logDebug('[MTF Run] Global switch OFF, aborting run', [
+                $this->logger->debug('[MTF Run] Global switch OFF, aborting run', [
                     'run_id' => $runIdString,
                     'force_run' => $forceRun,
                 ]);
@@ -125,7 +122,7 @@ class MtfRunService
                 'started_at' => $this->clock->now()->format('Y-m-d H:i:s'),
             ]);
 
-            $this->logDebug('[MTF Run] Attempting lock acquisition', [
+            $this->logger->debug('[MTF Run] Attempting lock acquisition', [
                 'run_id' => $runIdString,
                 'lock_key' => $lockKey,
                 'timeout_seconds' => $lockTimeout,
@@ -135,7 +132,7 @@ class MtfRunService
             // Activer le verrou si nécessaire (désactivé pour le moment)
              if (!$this->mtfLockRepository->acquireLock($lockKey, $processId, $lockTimeout, $lockMetadata)) {
                  $existingLockInfo = $this->mtfLockRepository->getLockInfo($lockKey);
-                 $this->logDebug('[MTF Run] Lock already held by another process', [
+                 $this->logger->debug('[MTF Run] Lock already held by another process', [
                      'run_id' => $runIdString,
                      'lock_key' => $lockKey,
                      'existing_lock' => $existingLockInfo,
@@ -164,7 +161,7 @@ class MtfRunService
                     $this->logger->info('[MTF Run] Loaded active symbols from repository', [
                         'count' => count($symbols),
                     ]);
-                    $this->logDebug('[MTF Run] Active symbols loaded', [
+                    $this->logger->debug('[MTF Run] Active symbols loaded', [
                         'run_id' => $runIdString,
                         'symbols_count' => count($symbols),
                         'symbols_preview' => array_slice($symbols, 0, 20),
@@ -173,7 +170,7 @@ class MtfRunService
                     $this->logger->warning('[MTF Run] Failed to load active symbols, using fallback list', [
                         'error' => $e->getMessage(),
                     ]);
-                    $this->logDebug('[MTF Run] Falling back to default symbols list', [
+                    $this->logger->debug('[MTF Run] Falling back to default symbols list', [
                         'run_id' => $runIdString,
                         'error' => $e->getMessage(),
                     ]);
@@ -200,7 +197,7 @@ class MtfRunService
                     'status' => 'no_active_symbols',
                 ];
                 $this->logger->info('[MTF Run] Completed - no active symbols');
-                $this->logDebug('[MTF Run] Completion without symbols', [
+                $this->logger->debug('[MTF Run] Completion without symbols', [
                     'run_id' => $runIdString,
                     'execution_time_seconds' => round($executionTime, 3),
                 ]);
@@ -217,7 +214,7 @@ class MtfRunService
                 try {
                     $accountBalance = max(0.0, $this->tradeContext->getAccountBalance());
                     $riskPercentage = max(0.0, $this->tradeContext->getRiskPercentage());
-                    $this->logDebug('[MTF Run] Trading context resolved', [
+                    $this->logger->debug('[MTF Run] Trading context resolved', [
                         'run_id' => $runIdString,
                         'account_balance' => $accountBalance,
                         'risk_percentage' => $riskPercentage,
@@ -226,21 +223,21 @@ class MtfRunService
                     $this->logger->warning('[MTF Run] Unable to resolve trading context', [
                         'error' => $e->getMessage(),
                     ]);
-                    $this->logDebug('[MTF Run] Trading context resolution failed', [
+                    $this->logger->debug('[MTF Run] Trading context resolution failed', [
                         'run_id' => $runIdString,
                         'error' => $e->getMessage(),
                     ]);
                 }
             }
 
-            $this->logDebug('[MTF Run] Starting symbol iteration', [
+            $this->logger->debug('[MTF Run] Starting symbol iteration', [
                 'run_id' => $runIdString,
                 'total_symbols' => $totalSymbols,
                 'dry_run' => $dryRun,
                 'now' => $now->format('Y-m-d H:i:s'),
             ]);
             foreach ($symbols as $index => $symbol) {
-                $this->logDebug('[MTF Run] Processing symbol', [
+                $this->logger->debug('[MTF Run] Processing symbol', [
                     'run_id' => $runIdString,
                     'symbol' => $symbol,
                     'position' => $index + 1,
@@ -289,7 +286,7 @@ class MtfRunService
                                 'status' => 'skipped',
                                 'reason' => 'dry_run',
                             ];
-                            $this->logDebug('[MTF Run] Trading decision skipped during dry run', [
+                            $this->logger->debug('[MTF Run] Trading decision skipped during dry run', [
                                 'run_id' => $runIdString,
                                 'symbol' => $symbol,
                             ]);
@@ -325,7 +322,7 @@ class MtfRunService
                                 'account_balance' => $accountBalance,
                                 'risk_percentage' => $riskPercentage,
                             ]);
-                            $this->logDebug('[MTF Run] Trading decision skipped (missing trading context)', [
+                            $this->logger->debug('[MTF Run] Trading decision skipped (missing trading context)', [
                                 'run_id' => $runIdString,
                                 'symbol' => $symbol,
                                 'account_balance' => $accountBalance,
@@ -345,7 +342,7 @@ class MtfRunService
                         }
                     }
 
-                    $this->logDebug('[MTF Run] Symbol processed', [
+                    $this->logger->debug('[MTF Run] Symbol processed', [
                         'run_id' => $runIdString,
                         'symbol' => $symbol,
                         'status' => $symbolResult['status'] ?? null,
@@ -356,14 +353,14 @@ class MtfRunService
                     ]);
                     $results[$symbol] = $symbolResult;
                 } elseif ($finalResult !== null) {
-                    $this->logDebug('[MTF Run] Symbol processed using generator return', [
+                    $this->logger->debug('[MTF Run] Symbol processed using generator return', [
                         'run_id' => $runIdString,
                         'symbol' => $symbol,
                         'status' => $finalResult['status'] ?? null,
                     ]);
                     $results[$symbol] = $finalResult;
                 } elseif ($result !== null) {
-                    $this->logDebug('[MTF Run] Symbol processed using last yielded result', [
+                    $this->logger->debug('[MTF Run] Symbol processed using last yielded result', [
                         'run_id' => $runIdString,
                         'symbol' => $symbol,
                         'status' => $result['status'] ?? null,
@@ -395,7 +392,7 @@ class MtfRunService
             $this->dispatchMtfRunCompletedEvent($runId, $symbols, $summary, $results, $startTime);
 
             $this->logger->info('[MTF Run] Completed', $summary);
-            $this->logDebug('[MTF Run] Run summary prepared', array_merge($summary, [
+            $this->logger->debug('[MTF Run] Run summary prepared', array_merge($summary, [
                 'symbol_keys' => array_keys($results),
             ]));
             return yield from $this->yieldFinalResult($summary, $results, $startTime, $runId);
@@ -407,7 +404,7 @@ class MtfRunService
                     'lock_key' => $lockKey,
                     'error' => $e->getMessage(),
                 ]);
-                $this->logDebug('[MTF Run] Exception caught during run', [
+                $this->logger->debug('[MTF Run] Exception caught during run', [
                     'run_id' => $runIdString,
                     'lock_key' => $lockKey,
                     'error' => $e->getMessage(),
@@ -423,7 +420,7 @@ class MtfRunService
                     'lock_key' => $lockKey,
                     'released' => $released,
                 ]);
-                $this->logDebug('[MTF Run] Lock release processed', [
+                $this->logger->debug('[MTF Run] Lock release processed', [
                     'run_id' => $runIdString,
                     'lock_key' => $lockKey,
                     'released' => $released,
@@ -440,7 +437,7 @@ class MtfRunService
         }
 
         $executionTf = strtolower((string)($result['execution_tf'] ?? ''));
-        $this->logDebug('[MTF Run] Evaluating trading decision', [
+        $this->logger->debug('[MTF Run] Evaluating trading decision', [
             'symbol' => $symbol,
             'signal_side' => $signalSideRaw,
             'execution_tf' => $executionTf,
@@ -463,7 +460,7 @@ class MtfRunService
                 'reason' => 'execution_tf_not_1m',
                 'execution_tf' => $result['execution_tf'] ?? null,
             ];
-            $this->logDebug('[MTF Run] Trading decision skipped (execution timeframe mismatch)', [
+            $this->logger->debug('[MTF Run] Trading decision skipped (execution timeframe mismatch)', [
                 'symbol' => $symbol,
                 'execution_tf' => $result['execution_tf'] ?? null,
             ]);
@@ -471,7 +468,7 @@ class MtfRunService
         }
 
         if (!isset($result['current_price'], $result['atr'])) {
-            $this->logDebug('[MTF Run] Missing price or ATR, skipping trading decision', [
+            $this->logger->debug('[MTF Run] Missing price or ATR, skipping trading decision', [
                 'symbol' => $symbol,
                 'has_price' => isset($result['current_price']),
                 'has_atr' => isset($result['atr']),
@@ -489,7 +486,7 @@ class MtfRunService
         $currentPrice = (float) $result['current_price'];
         $atr = (float) $result['atr'];
         if ($currentPrice <= 0.0 || $atr <= 0.0) {
-            $this->logDebug('[MTF Run] Invalid price/ATR values, skipping trading decision', [
+            $this->logger->debug('[MTF Run] Invalid price/ATR values, skipping trading decision', [
                 'symbol' => $symbol,
                 'price' => $currentPrice,
                 'atr' => $atr,
@@ -549,7 +546,7 @@ class MtfRunService
                     'sl_order_id' => is_array($slOrder) ? ($slOrder['order_id'] ?? null) : null,
                     'main_order_code' => is_array($mainOrder) ? ($mainOrder['raw_response']['code'] ?? null) : null,
                 ]);
-                $this->logDebug('[MTF Run] Trading decision evaluated', [
+                $this->logger->debug('[MTF Run] Trading decision evaluated', [
                     'symbol' => $symbol,
                     'status' => $decision['status'] ?? null,
                     'execution_tf' => $executionTf,
@@ -574,7 +571,7 @@ class MtfRunService
                 'symbol' => $symbol,
                 'error' => $e->getMessage(),
             ]);
-            $this->logDebug('[MTF Run] Trading decision execution failed', [
+            $this->logger->debug('[MTF Run] Trading decision execution failed', [
                 'symbol' => $symbol,
                 'error' => $e->getMessage(),
             ]);
@@ -716,59 +713,6 @@ class MtfRunService
         }
 
         return 'mtf';
-    }
-
-    private function logDebug(string $message, array $context = []): void
-    {
-        $this->logger->debug($message, $context);
-
-        if ($this->asyncDebugLoggingAvailable || null === $this->logMessageBus || !$this->isDebugLevelEnabled()) {
-            return;
-        }
-
-        $contextForRecord = $context;
-        if (!isset($contextForRecord['run_id']) && isset($contextForRecord['runId'])) {
-            $contextForRecord['run_id'] = (string) $contextForRecord['runId'];
-        }
-
-        $correlationId = null;
-        if (isset($contextForRecord['correlation_id'])) {
-            $correlationId = (string) $contextForRecord['correlation_id'];
-        } elseif (isset($contextForRecord['run_id'])) {
-            $correlationId = (string) $contextForRecord['run_id'];
-        }
-
-        $timestamp = new \DateTimeImmutable();
-        $logMessage = new LogMessage(
-            channel: $this->logChannel,
-            level: 'DEBUG',
-            message: $message,
-            context: $contextForRecord,
-            createdAt: $timestamp,
-        );
-
-        $record = new LogRecordMessage(
-            app: $this->resolvedLogAppName,
-            channel: $this->logChannel,
-            level: 'DEBUG',
-            message: $message,
-            context: $contextForRecord,
-            extra: [
-                'forwarded_by' => self::class,
-            ],
-            datetime: $timestamp->format(\DateTimeInterface::ATOM),
-            correlationId: $correlationId,
-        );
-
-        try {
-            $this->logMessageBus->dispatch($record);
-            $this->logMessageBus->dispatch($logMessage);
-        } catch (Throwable $exception) {
-            $this->logger->warning('[MTF Run] Failed to forward debug log to messenger', [
-                'error' => $exception->getMessage(),
-                'message' => $message,
-            ]);
-        }
     }
 
     /**
