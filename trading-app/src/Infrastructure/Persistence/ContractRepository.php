@@ -36,7 +36,6 @@ final class ContractRepository
             'total_upserted' => $upsertedCount,
             'total_input' => count($contracts)
         ]);
-
         return $upsertedCount;
     }
 
@@ -127,7 +126,7 @@ final class ContractRepository
             $openDate = new \DateTimeImmutable('@' . ($openTimestamp / 1000));
             $minDate = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
                 ->modify('-880 hours');
-            
+
             if ($openDate > $minDate) {
                 return false;
             }
