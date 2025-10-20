@@ -3,17 +3,29 @@
 namespace App\Logging;
 
 use Psr\Log\LoggerInterface;
+use Symfony\Contracts\Service\ServiceProviderInterface;
 
 /**
  * Helper pour faciliter l'utilisation des canaux de logging métier
  */
 class LoggerHelper
 {
-    private LoggerInterface $logger;
+    private ServiceProviderInterface $loggers;
+    private LoggerInterface $defaultLogger;
 
-    public function __construct(LoggerInterface $logger)
+    public function __construct(ServiceProviderInterface $loggers, LoggerInterface $defaultLogger)
     {
-        $this->logger = $logger;
+        $this->loggers = $loggers;
+        $this->defaultLogger = $defaultLogger;
+    }
+
+    private function getLogger(string $channel): LoggerInterface
+    {
+        if ($this->loggers->has($channel)) {
+            return $this->loggers->get($channel);
+        }
+
+        return $this->defaultLogger->withName($channel);
     }
 
     /**
@@ -21,7 +33,7 @@ class LoggerHelper
      */
     public function validation(string $message, array $context = []): void
     {
-        $this->logger->withName('validation')->info($message, $context);
+        $this->getLogger('validation')->info($message, $context);
     }
 
     /**
@@ -29,7 +41,7 @@ class LoggerHelper
      */
     public function signal(string $message, array $context = []): void
     {
-        $this->logger->withName('signals')->info($message, $context);
+        $this->getLogger('signals')->info($message, $context);
     }
 
     /**
@@ -37,7 +49,7 @@ class LoggerHelper
      */
     public function position(string $message, array $context = []): void
     {
-        $this->logger->withName('positions')->info($message, $context);
+        $this->getLogger('positions')->info($message, $context);
     }
 
     /**
@@ -45,7 +57,7 @@ class LoggerHelper
      */
     public function indicator(string $message, array $context = []): void
     {
-        $this->logger->withName('indicators')->info($message, $context);
+        $this->getLogger('indicators')->info($message, $context);
     }
 
     /**
@@ -53,7 +65,7 @@ class LoggerHelper
      */
     public function highConviction(string $message, array $context = []): void
     {
-        $this->logger->withName('highconviction')->info($message, $context);
+        $this->getLogger('highconviction')->info($message, $context);
     }
 
     /**
@@ -61,7 +73,7 @@ class LoggerHelper
      */
     public function pipelineExec(string $message, array $context = []): void
     {
-        $this->logger->withName('pipeline_exec')->info($message, $context);
+        $this->getLogger('pipeline_exec')->info($message, $context);
     }
 
     /**
@@ -69,7 +81,7 @@ class LoggerHelper
      */
     public function globalSeverity(string $message, array $context = []): void
     {
-        $this->logger->withName('global-severity')->error($message, $context);
+        $this->getLogger('global-severity')->error($message, $context);
     }
 
     /**
@@ -89,7 +101,7 @@ class LoggerHelper
             'side' => $side,
         ]);
 
-        $this->logger->withName($channel)->info($message, $enrichedContext);
+        $this->getLogger($channel)->info($message, $enrichedContext);
     }
 
     /**

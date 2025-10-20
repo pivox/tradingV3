@@ -1,179 +1,84 @@
-# Architecture de Logging Asynchrone avec Worker Temporal
+# Architecture de Logging Asynchrone avec Symfony Messenger & Redis
 
 ## 🎯 Objectif
 
-Remplacer l'écriture directe des logs sur filesystem par un système asynchrone utilisant un worker Temporal dédié. Cela améliore les performances, la fiabilité et la scalabilité du système de logging.
+Acheminer les logs métier sans bloquer le cycle d'exécution Symfony en les déposant dans Redis via Symfony Messenger, puis en les traitant par un consumer dédié. Cette approche supprime la dépendance à Temporal pour le logging tout en conservant un fallback local en cas de panne de la file.
 
 ## 🏗️ Architecture
 
-### Flux des Logs
-
 ```
-Symfony App → LogPublisher → Temporal Queue → LogWorker → Filesystem → Promtail → Loki
+Symfony App → MessengerLogHandler → Redis (stream) → Consumer Messenger → Filesystem → Promtail → Loki
 ```
 
 ### Composants
 
-1. **LogPublisher** : Service qui publie les logs vers Temporal
-2. **TemporalLogHandler** : Handler Monolog personnalisé avec buffering
-3. **LogProcessingWorkflow** : Workflow Temporal pour orchestrer le traitement
-4. **LogProcessingActivity** : Activité qui écrit réellement sur filesystem
-5. **LogWorker** : Worker Temporal dédié aux logs
-6. **LogWorkerCommand** : Commande pour démarrer le worker
+1. **MessengerLogHandler** : handler Monolog qui expédie chaque LogRecord sur le bus Messenger.
+2. **Redis (async_logging)** : transport configuré pour stocker les messages `LogMessage`.
+3. **LogMessage** : DTO immuable contenant canal, niveau, message, contexte et timestamp.
+4. **LogMessageHandler** : consumer Messenger qui écrit les logs sur disque (`var/log/<canal>-YYYY-MM-DD.log`).
+5. **messenger:consume** : commande à lancer dans un conteneur séparé pour traiter la file en continu.
 
-## 📋 Avantages
+## ✅ Avantages
 
-### Performance
-- **Non-bloquant** : L'application principale n'est plus bloquée par l'I/O filesystem
-- **Buffering** : Les logs sont groupés par batch pour optimiser l'écriture
-- **Asynchrone** : Traitement en arrière-plan via Temporal
-
-### Fiabilité
-- **Retry automatique** : En cas d'échec d'écriture, retry avec backoff exponentiel
-- **Fallback** : Si Temporal n'est pas disponible, fallback vers logging synchrone
-- **Monitoring** : Visibilité complète via Temporal UI
-
-### Scalabilité
-- **Worker dédié** : Traitement des logs isolé de l'application principale
-- **Batch processing** : Traitement par lots pour optimiser les performances
-- **Queue management** : Gestion des pics de charge via les queues Temporal
+- **Non-bloquant** : dispatch rapide sur Redis, pas d'attente d'I/O côté application.
+- **Tolérance aux pannes** : fallback fichier intégré si Redis est indisponible lors du dispatch.
+- **Scalable** : plusieurs consumers peuvent être lancés pour absorber les pics.
+- **Intégration Symfony native** : Messenger gère retries, DLQ, monitoring via `messenger:failed`.
 
 ## 🔧 Configuration
 
-### Variables d'Environnement
+### Variables d'environnement
 
 ```bash
-# Temporal
-TEMPORAL_ADDRESS=temporal-grpc:7233
-TEMPORAL_NAMESPACE=default
-
-# Logging
-LOG_BUFFER_SIZE=10
-LOG_FLUSH_INTERVAL=5
+# .env / .env.local
+MESSENGER_TRANSPORT_DSN=redis://redis:6379/log-messages
+ASYNC_LOGGING_ENABLED=1
 ```
 
-### Services Docker
+### Monolog (`config/packages/monolog.yaml`)
+
+Le handler `async_messenger` pointe maintenant vers `App\Logging\MessengerLogHandler`. Les handlers rotatifs existants servent de fallback et d'archivage local.
+
+### Messenger (`config/packages/messenger.yaml`)
 
 ```yaml
-# Worker de logs
-log-worker:
-  build: ./trading-app
-  command: php bin/console app:log-worker --daemon
-  volumes:
-    - ./trading-app/var/log:/var/log/symfony
-  depends_on:
-    - temporal
+framework:
+    messenger:
+        transports:
+            async_logging: '%env(MESSENGER_TRANSPORT_DSN)%'
+        routing:
+            App\Logging\Message\LogMessage: async_logging
 ```
 
-## 🚀 Utilisation
+## 🚀 Consommation
 
-### Démarrage du Worker
+Lancer un worker dédié (dans un conteneur `consumer-logs`, par exemple) :
 
 ```bash
-# Mode normal
-php bin/console app:log-worker
-
-# Mode daemon
-php bin/console app:log-worker --daemon
+php bin/console messenger:consume async_logging --time-limit=3600 --sleep=1
 ```
 
-### Monitoring
+Monter `var/log` en volume si vous souhaitez exposer les fichiers aux autres services/Promtail.
 
-```bash
-# Statut du worker
-docker logs log_worker
+## 🗂️ Fichiers générés
 
-# Temporal UI
-http://localhost:8233
-```
+- Les fichiers sont nommés `var/log/<channel>-YYYY-MM-DD.log`.
+- Les messages incluent contexte sérialisé clé=valeur.
+- En cas d'échec du dispatch Messenger, le handler écrit localement avec `__messenger_error=<message>` dans le contexte.
 
-## 📊 Monitoring et Observabilité
+## 🪛 Dépannage rapide
 
-### Métriques Disponibles
+| Problème | Vérification | Résolution |
+|----------|--------------|------------|
+| Pas de logs côté consumer | `redis-cli LRANGE log-messages 0 -1` | Vérifier que l'app envoie bien (`ASYNC_LOGGING_ENABLED=1`) et que Redis est accessible. |
+| Erreurs de dispatch | Chercher `__messenger_error` dans les fichiers `var/log/*` | Corriger DSN/Redis, relancer consumer. |
+| Messages bloqués | `php bin/console messenger:failed:show` | Relancer `messenger:consume` ou purger la file. |
 
-- **Logs traités** : Nombre de logs écrits avec succès
-- **Erreurs** : Nombre d'échecs d'écriture
-- **Latence** : Temps de traitement des logs
-- **Queue size** : Taille de la queue Temporal
+## 🔄 Migration depuis Temporal
 
-### Dashboards Grafana
+1. Supprimer les composants Temporal (`LogPublisher`, `TemporalLogHandler`, workers et workflows associés`).
+2. Ajouter Redis (ou reconfigurer un cluster existant) et déployer le consumer Messenger.
+3. Vérifier `php bin/console app:test-logging --count=10` pour générer des messages et confirmer la présence des fichiers `var/log/<channel>-<date>.log`.
 
-- **Log Processing Status** : Statut du worker de logs
-- **Log Volume** : Volume de logs par canal
-- **Error Rate** : Taux d'erreur de traitement
-
-## 🔄 Migration
-
-### Étape 1 : Déploiement
-1. Déployer le nouveau worker de logs
-2. Mettre à jour la configuration Monolog
-3. Redémarrer les services
-
-### Étape 2 : Validation
-1. Vérifier que les logs arrivent dans Loki
-2. Monitorer les performances
-3. Valider la fiabilité
-
-### Étape 3 : Optimisation
-1. Ajuster les paramètres de buffering
-2. Optimiser les timeouts
-3. Configurer les alertes
-
-## 🛠️ Dépannage
-
-### Problèmes Courants
-
-#### Worker ne démarre pas
-```bash
-# Vérifier les logs
-docker logs log_worker
-
-# Vérifier la connexion Temporal
-docker exec log_worker php bin/console app:test-temporal
-```
-
-#### Logs manquants
-```bash
-# Vérifier la queue Temporal
-curl http://localhost:8233/api/v1/namespaces/default/queues/log-processing-queue
-
-# Vérifier les fichiers de logs
-docker exec log_worker ls -la /var/log/symfony/
-```
-
-#### Performance dégradée
-```bash
-# Ajuster le buffer size
-LOG_BUFFER_SIZE=20
-
-# Ajuster l'intervalle de flush
-LOG_FLUSH_INTERVAL=3
-```
-
-## 📈 Métriques de Performance
-
-### Avant (Synchrone)
-- **Latence** : 5-50ms par log
-- **Throughput** : 100-500 logs/seconde
-- **CPU** : 10-20% pour I/O
-
-### Après (Asynchrone)
-- **Latence** : <1ms par log (publication)
-- **Throughput** : 1000-5000 logs/seconde
-- **CPU** : <5% pour I/O
-
-## 🔮 Évolutions Futures
-
-### Fonctionnalités Avancées
-- **Log routing** : Routage intelligent par canal
-- **Compression** : Compression des logs avant stockage
-- **Encryption** : Chiffrement des logs sensibles
-- **Retention policies** : Politiques de rétention automatiques
-
-### Intégrations
-- **Elasticsearch** : Indexation pour recherche avancée
-- **Kafka** : Streaming des logs en temps réel
-- **S3** : Archivage long terme
-- **Alerting** : Alertes basées sur les patterns de logs
-
+Cette architecture reste compatible avec Loki/Promtail : il suffit de pointer Promtail sur `var/log` ou sur tout volume partagé par le consumer.
 

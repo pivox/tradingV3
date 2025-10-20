@@ -6,11 +6,6 @@ monolog:
     # =====================
 
     # Handler principal qui publie vers Temporal via HTTP API
-    temporal_handler:
-      type: service
-      id: App\Logging\TemporalLogHandler
-      level: debug
-      channels: ['mtf', 'validation', 'signals', 'positions', 'indicators', 'highconviction', 'pipeline_exec']
 
     # =====================
     # --- Fallback Handlers (Synchrones) ---

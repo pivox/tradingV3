@@ -4,4 +4,6 @@ framework:
   session: false
   php_errors:
     log: true
+  serializer:
+    enable_attributes: true
 
