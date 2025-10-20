@@ -65,6 +65,65 @@ class Contract
 
     #[ORM\Column(type: Types::DECIMAL, precision: 24, scale: 12, nullable: true)]
     private ?string $multiplier = null;
+// À placer dans la classe Contract
+
+    #[ORM\Column(name: 'index_price', type: Types::DECIMAL, precision: 24, scale: 12, nullable: true)]
+    private ?string $indexPrice = null;
+
+    #[ORM\Column(name: 'index_name', type: Types::STRING, length: 50, nullable: true)]
+    private ?string $indexName = null;
+
+    #[ORM\Column(name: 'contract_size', type: Types::DECIMAL, precision: 24, scale: 12, nullable: true)]
+    private ?string $contractSize = null;
+
+    #[ORM\Column(name: 'min_leverage', type: Types::DECIMAL, precision: 8, scale: 2, nullable: true)]
+    private ?string $minLeverage = null;
+
+    #[ORM\Column(name: 'max_leverage', type: Types::DECIMAL, precision: 8, scale: 2, nullable: true)]
+    private ?string $maxLeverage = null;
+
+    #[ORM\Column(name: 'price_precision', type: Types::STRING, length: 20, nullable: true)]
+    private ?string $pricePrecision = null;
+
+    #[ORM\Column(name: 'vol_precision', type: Types::STRING, length: 20, nullable: true)]
+    private ?string $volPrecision = null;
+
+    #[ORM\Column(name: 'max_volume', type: Types::DECIMAL, precision: 28, scale: 12, nullable: true)]
+    private ?string $maxVolume = null;
+
+    #[ORM\Column(name: 'market_max_volume', type: Types::DECIMAL, precision: 28, scale: 12, nullable: true)]
+    private ?string $marketMaxVolume = null;
+
+    #[ORM\Column(name: 'min_volume', type: Types::DECIMAL, precision: 28, scale: 12, nullable: true)]
+    private ?string $minVolume = null;
+
+    #[ORM\Column(name: 'funding_rate', type: Types::DECIMAL, precision: 18, scale: 8, nullable: true)]
+    private ?string $fundingRate = null;
+
+    #[ORM\Column(name: 'expected_funding_rate', type: Types::DECIMAL, precision: 18, scale: 8, nullable: true)]
+    private ?string $expectedFundingRate = null;
+
+    #[ORM\Column(name: 'open_interest', type: Types::DECIMAL, precision: 28, scale: 12, nullable: true)]
+    private ?string $openInterest = null;
+
+    #[ORM\Column(name: 'open_interest_value', type: Types::DECIMAL, precision: 28, scale: 12, nullable: true)]
+    private ?string $openInterestValue = null;
+
+    #[ORM\Column(name: 'high_24h', type: Types::DECIMAL, precision: 24, scale: 12, nullable: true)]
+    private ?string $high24h = null;
+
+    #[ORM\Column(name: 'low_24h', type: Types::DECIMAL, precision: 24, scale: 12, nullable: true)]
+    private ?string $low24h = null;
+
+    #[ORM\Column(name: 'change_24h', type: Types::DECIMAL, precision: 18, scale: 8, nullable: true)]
+    private ?string $change24h = null;
+
+    #[ORM\Column(name: 'funding_interval_hours', type: Types::INTEGER, nullable: true)]
+    private ?int $fundingIntervalHours = null;
+
+    #[ORM\Column(name: 'delist_time', type: Types::BIGINT, nullable: true)]
+    private ?int $delistTime = null;
+
 
     #[ORM\Column(type: Types::DATETIME_IMMUTABLE)]
     private \DateTimeImmutable $insertedAt;
@@ -283,8 +342,8 @@ class Contract
 
     public function isActive(): bool
     {
-        return $this->status === 'Trading' && 
-               $this->quoteCurrency === 'USDT' && 
+        return $this->status === 'Trading' &&
+               $this->quoteCurrency === 'USDT' &&
                floatval($this->volume24h ?? 0) >= 500_000;
     }
 
@@ -295,4 +354,140 @@ class Contract
         }
         return new \DateTimeImmutable('@' . ($this->openTimestamp / 1000), new \DateTimeZone('UTC'));
     }
+
+    /**
+     * @return string|null
+     */
+    public function getIndexPrice(): ?string
+    {
+        return $this->indexPrice;
+    }
+
+    /**
+     * @param string|null $indexPrice
+     * @return Contract
+     */
+    public function setIndexPrice(?string $indexPrice): Contract
+    {
+        $this->indexPrice = $indexPrice;
+        return $this;
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getIndexName(): ?string
+    {
+        return $this->indexName;
+    }
+
+    /**
+     * @param string|null $indexName
+     * @return Contract
+     */
+    public function setIndexName(?string $indexName): Contract
+    {
+        $this->indexName = $indexName;
+        return $this;
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getContractSize(): ?string
+    {
+        return $this->contractSize;
+    }
+
+    /**
+     * @param string|null $contractSize
+     * @return Contract
+     */
+    public function setContractSize(?string $contractSize): static
+    {
+        $this->contractSize = $contractSize;
+        return $this;
+    }
+    public function setMinLeverage(?string $minLeverage): static
+    {
+        $this->minLeverage = $minLeverage;
+        return $this;
+    }
+    public function setMaxLeverage(?string $maxLeverage): static
+    {
+        $this->maxLeverage = $maxLeverage;
+        return $this;
+    }
+    public function setPricePrecision(?string $pricePrecision): static
+    {
+        $this->pricePrecision = $pricePrecision;
+        return $this;
+    }
+    public function setVolPrecision(?string $volPrecision): static
+    {
+        $this->volPrecision = $volPrecision;
+        return $this;
+    }
+    public function setMaxVolume(?string $maxVolume): static
+    {
+        $this->maxVolume = $maxVolume;
+        return $this;
+    }
+    public function setMarketMaxVolume(?string $marketMaxVolume): static
+    {
+        $this->marketMaxVolume = $marketMaxVolume;
+        return $this;
+    }
+    public function setMinVolume(?string $minVolume): static
+    {
+        $this->minVolume = $minVolume;
+        return $this;
+    }
+    public function setFundingRate(?string $fundingRate): static
+    {
+        $this->fundingRate = $fundingRate;
+        return $this;
+    }
+    public function setExpectedFundingRate(?string $expectedFundingRate): static
+    {
+        $this->expectedFundingRate = $expectedFundingRate;
+        return $this;
+    }
+    public function setOpenInterest(?string $openInterest): static
+    {
+        $this->openInterest = $openInterest;
+        return $this;
+    }
+    public function setOpenInterestValue(?string $openInterestValue): static
+    {
+        $this->openInterestValue = $openInterestValue;
+        return $this;
+    }
+    public function setHigh24h(?string $high24h): static
+    {
+        $this->high24h = $high24h;
+        return $this;
+    }
+    public function setLow24h(?string $low24h): static
+    {
+        $this->low24h = $low24h;
+        return $this;
+    }
+    public function setChange24h(?string $change24h): static
+    {
+        $this->change24h = $change24h;
+        return $this;
+    }
+    public function setFundingIntervalHours(?int $fundingIntervalHours): static
+    {
+        $this->fundingIntervalHours = $fundingIntervalHours;
+        return $this;
+    }
+    public function setDelistTime(?int $delistTime): static
+    {
+        $this->delistTime = $delistTime;
+        return $this;
+    }
+
+
 }
