@@ -5,8 +5,8 @@ namespace App\Indicator\Condition;
 final class AtrRelInRange15mCondition extends AbstractCondition
 {
     private const NAME = 'atr_rel_in_range_15m';
-    private const MIN = 0.001;  // 0.1%
-    private const MAX = 0.004;  // 0.4%
+    private const MIN = 0.0010;  // élargi
+    private const MAX = 0.0250;  // élargi
 
     public function getName(): string
     {
