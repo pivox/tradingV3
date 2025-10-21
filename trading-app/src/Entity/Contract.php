@@ -433,15 +433,32 @@ class Contract
         $this->maxVolume = $maxVolume;
         return $this;
     }
+
+    public function getMaxVolume(): ?string
+    {
+        return $this->maxVolume;
+    }
+
     public function setMarketMaxVolume(?string $marketMaxVolume): static
     {
         $this->marketMaxVolume = $marketMaxVolume;
         return $this;
     }
+
+    public function getMarketMaxVolume(): ?string
+    {
+        return $this->marketMaxVolume;
+    }
+
     public function setMinVolume(?string $minVolume): static
     {
         $this->minVolume = $minVolume;
         return $this;
+    }
+
+    public function getMinVolume(): ?string
+    {
+        return $this->minVolume;
     }
     public function setFundingRate(?string $fundingRate): static
     {
