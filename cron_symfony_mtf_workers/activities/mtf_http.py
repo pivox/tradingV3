@@ -9,7 +9,7 @@ from temporalio import activity
 @activity.defn(name="mtf_api_call")
 async def mtf_api_call(url: str, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
     """Call the Symfony MTF endpoint with a JSON payload."""
-    timeout = 300
+    timeout = 900  # 15 minutes
     data = payload or {}
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
