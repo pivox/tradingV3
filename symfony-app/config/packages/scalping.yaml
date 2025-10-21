@@ -1,2 +1,0 @@
-parameters:
-    trading.scalping.file: '%kernel.project_dir%/config/trading.scalping.yml'
