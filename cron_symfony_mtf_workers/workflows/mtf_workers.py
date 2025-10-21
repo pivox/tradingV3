@@ -37,7 +37,7 @@ class CronSymfonyMtfWorkersWorkflow:
                 result = await workflow.execute_activity(
                     "mtf_api_call",
                     args=[job.url, payload],
-                    start_to_close_timeout=timedelta(minutes=5),
+                    start_to_close_timeout=timedelta(minutes=15),
                 )
                 workflow.logger.info("[CronMtfWorkers] response %s", result)
             except Exception as exc:  # noqa: BLE001
