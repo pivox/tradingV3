@@ -268,7 +268,7 @@ class ContractRepository extends ServiceEntityRepository
         $minTurnover       = (float)  $this->config->getFilter('min_turnover', 500000);
         $midMaxTurnover    = (float)  $this->config->getFilter('mid_max_turnover', 2000000);
         $requireNotExpired = (bool)   $this->config->getFilter('require_not_expired', true);
-        $expireUnit        = (string) $this->config->getFilter('expire_unit', 's'); // 's' | 'ms'
+        $expireUnit        = (string) $this->config->getFilter('expire_unit', false); // 's' | 'ms'
         $maxAgeHours       = (int)    $this->config->getFilter('max_age_hours', 880);
         $openUnit          = (string) $this->config->getFilter('open_unit', 's');   // ✅ seconds
 
@@ -279,6 +279,7 @@ class ContractRepository extends ServiceEntityRepository
         $validOrder = ['ASC', 'DESC'];
         if (!in_array($orderTop, $validOrder, true)) $orderTop = 'DESC';
         if (!in_array($orderMid, $validOrder, true)) $orderMid = 'ASC';
+        
 
         // --- Horloge & unités ---
         $now    = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
@@ -291,6 +292,9 @@ class ContractRepository extends ServiceEntityRepository
             : null;
         // ✅ ta colonne open_timestamp est en secondes
         $openTsMin = $openTsMinSec; // pas de *1000
+        $openTsMinSet = !is_null($openTsMin);
+        
+        
 
         // --- Expression turnover (caster si stocké en texte) ---
         $turnoverExpr = 'turnover_24h'; // si TEXT: "CAST(turnover_24h AS DECIMAL(38,10))"
@@ -379,8 +383,8 @@ SELECT symbol FROM (
         $stmt->bindValue('dtnow', $now, Types::DATETIME_IMMUTABLE);
         $stmt->bindValue('symbolPattern', 'SYMBOL:%');
         $stmt->bindValue('isOff', false, ParameterType::BOOLEAN);
-        $stmt->bindValue('openTsMinSet', $openTsMinSet, \Doctrine\DBAL\ParameterType::BOOLEAN);
-        $stmt->bindValue('openTsMin',    $openTsMin,    \Doctrine\DBAL\ParameterType::INTEGER);
+        $stmt->bindValue('openTsMinSet', $openTsMinSet, ParameterType::BOOLEAN);
+        $stmt->bindValue('openTsMin',    $openTsMin,    ParameterType::INTEGER);
         if ($topN > 0) $stmt->bindValue('topN', $topN, ParameterType::INTEGER);
         if ($midN > 0) $stmt->bindValue('midN', $midN, ParameterType::INTEGER);
 

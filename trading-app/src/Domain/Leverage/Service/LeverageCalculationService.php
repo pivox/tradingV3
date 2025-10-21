@@ -22,7 +22,9 @@ class LeverageCalculationService
         LeverageConfigDto $config,
         bool $isHighConviction = false,
         bool $isUpstreamStale = false,
-        bool $isTieBreakerUsed = false
+        bool $isTieBreakerUsed = false,
+        float $timeframeMultiplier = 1.0,
+        ?float $symbolHardCap = null
     ): LeverageCalculationDto {
         $calculationSteps = [];
         
@@ -47,6 +49,17 @@ class LeverageCalculationService
             'result' => $adjustedLeverage
         ];
 
+        $timeframeMultiplier = max(0.01, $timeframeMultiplier);
+        if ($timeframeMultiplier !== 1.0) {
+            $beforeTf = $adjustedLeverage;
+            $adjustedLeverage *= $timeframeMultiplier;
+            $calculationSteps['timeframe_multiplier'] = [
+                'multiplier' => $timeframeMultiplier,
+                'calculation' => "{$beforeTf} * {$timeframeMultiplier}",
+                'result' => $adjustedLeverage
+            ];
+        }
+
         // Étape 3: Application du cap de conviction si applicable
         $convictionCap = $this->calculateConvictionCap($config, $isHighConviction);
         if ($convictionCap > 0) {
@@ -60,11 +73,20 @@ class LeverageCalculationService
 
         // Étape 4: Application des caps (exchange et symbole)
         $symbolCap = $config->getSymbolCap($symbol);
-        $cappedLeverage = min($adjustedLeverage, $config->exchangeCap, $symbolCap);
+        if ($symbolHardCap !== null) {
+            $symbolCap = min($symbolCap, $symbolHardCap);
+        }
+
+        $capsToApply = [$adjustedLeverage, $config->exchangeCap, $symbolCap];
+        if ($symbolHardCap !== null) {
+            $capsToApply[] = $symbolHardCap;
+        }
+
+        $cappedLeverage = min($capsToApply);
         $calculationSteps['caps_application'] = [
             'exchange_cap' => $config->exchangeCap,
             'symbol_cap' => $symbolCap,
-            'calculation' => "min({$adjustedLeverage}, {$config->exchangeCap}, {$symbolCap})",
+            'calculation' => sprintf('min(%s)', implode(', ', array_map(static fn($v) => (string) $v, $capsToApply))),
             'result' => $cappedLeverage
         ];
 
@@ -161,7 +183,3 @@ class LeverageCalculationService
         }
     }
 }
-
-
-
-

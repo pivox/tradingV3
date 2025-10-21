@@ -34,7 +34,7 @@ class PositionConfigService
             orderType: 'LIMIT',
             timeInForce: 'GTC',
             enablePartialFills: true,
-            minOrderSize: 5.0,
+            minOrderSize: 1.0,
             maxOrderSize: 10000.0,
             enableStopLoss: true,
             enableTakeProfit: true,

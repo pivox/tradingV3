@@ -127,4 +127,9 @@ final class BitmartConfig
     {
         return $this->privateApiUrl . '/contract/private/submit-tp-sl-order';
     }
+
+    public function getLastPriceUrl(string $symbol): string
+    {
+        return $this->privateApiUrl . '/contract/public/market-trade';
+    }
 }

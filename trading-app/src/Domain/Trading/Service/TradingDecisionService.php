@@ -10,6 +10,7 @@ use App\Domain\Common\Enum\Timeframe;
 use App\Domain\Leverage\Dto\LeverageCalculationDto;
 use App\Domain\Leverage\Service\LeverageCalculationService;
 use App\Domain\Leverage\Service\LeverageConfigService;
+use App\Domain\Leverage\Service\SymbolLeverageRegistry;
 use App\Domain\Position\Dto\PositionOpeningDto;
 use App\Domain\Position\Service\PositionConfigService;
 use App\Domain\Position\Service\PositionExecutionService;
@@ -32,7 +33,8 @@ class TradingDecisionService
         private readonly AtrCalculator $atrCalculator,
         private readonly TradingParameters $tradingParameters,
         private readonly LoggerInterface $logger,
-        private readonly ClockInterface $clock
+        private readonly ClockInterface $clock,
+        private readonly SymbolLeverageRegistry $symbolLeverageRegistry
     ) {
     }
 
@@ -46,15 +48,6 @@ class TradingDecisionService
         bool $isHighConviction = false,
         float $timeframeMultiplier = 1.0
     ): array {
-        dump('[Trading Decision] Making trading decision', [
-            'symbol' => $symbol,
-            'side' => $side->value,
-            'current_price' => $currentPrice,
-            'atr_input' => $atr,
-            'account_balance' => $accountBalance,
-            'risk_percentage' => $riskPercentage,
-            'is_high_conviction' => $isHighConviction
-        ]);
         $this->logger->info('[Trading Decision] Making trading decision', [
             'symbol' => $symbol,
             'side' => $side->value,
@@ -62,14 +55,32 @@ class TradingDecisionService
             'atr_input' => $atr,
             'account_balance' => $accountBalance,
             'risk_percentage' => $riskPercentage,
-            'is_high_conviction' => $isHighConviction
+            'is_high_conviction' => $isHighConviction,
+            'timeframe_multiplier' => $timeframeMultiplier,
         ]);
 
         try {
             $atrPeriod = max(2, $this->tradingParameters->atrPeriod());
+            $this->logger->info('[Trading Decision] Computing ATR(1m)', [
+                'symbol' => $symbol,
+                'period' => $atrPeriod,
+            ]);
             $atrOneMinute = $this->computeAtrOneMinute($symbol, $atrPeriod);
+            $this->logger->info('[Trading Decision] ATR(1m) computed', [
+                'symbol' => $symbol,
+                'atr_1m' => $atrOneMinute,
+                'period' => $atrPeriod,
+            ]);
 
             // 1. Calculer le leverage
+            $this->logger->info('[Trading Decision] Calculating leverage', [
+                'symbol' => $symbol,
+                'risk_percentage' => $riskPercentage,
+                'current_price' => $currentPrice,
+                'atr_1m' => $atrOneMinute,
+                'timeframe_multiplier' => $timeframeMultiplier,
+                'is_high_conviction' => $isHighConviction,
+            ]);
             $leverageCalculation = $this->calculateLeverage(
                 $symbol,
                 $riskPercentage,
@@ -78,8 +89,25 @@ class TradingDecisionService
                 $isHighConviction,
                 $timeframeMultiplier
             );
+            $this->logger->info('[Trading Decision] Leverage calculated', [
+                'symbol' => $symbol,
+                'final_leverage' => $leverageCalculation->finalLeverage,
+                'calculated_leverage' => $leverageCalculation->calculatedLeverage,
+                'exchange_cap' => $leverageCalculation->exchangeCap,
+                'symbol_cap' => $leverageCalculation->symbolCap,
+                'resolved_symbol_cap' => $this->symbolLeverageRegistry->resolve($symbol),
+                'confidence_multiplier' => $leverageCalculation->confidenceMultiplier,
+                'is_high_conviction' => $leverageCalculation->isHighConviction,
+            ]);
 
             // 2. Calculer l'ouverture de position
+            $this->logger->info('[Trading Decision] Calculating position opening', [
+                'symbol' => $symbol,
+                'side' => $side->value,
+                'current_price' => $currentPrice,
+                'atr_1m' => $atrOneMinute,
+                'account_balance' => $accountBalance,
+            ]);
             $positionOpening = $this->calculatePositionOpening(
                 $symbol,
                 $side,
@@ -88,10 +116,36 @@ class TradingDecisionService
                 $accountBalance,
                 $leverageCalculation
             );
-            dump($positionOpening);
+            $this->logger->info('[Trading Decision] Position opening calculated', [
+                'symbol' => $symbol,
+                'position' => $positionOpening->toArray(),
+            ]);
 
             // 3. Exécuter la position (ou simuler en dry run)
+            $this->logger->info('[Trading Decision] Executing position', [
+                'symbol' => $symbol,
+            ]);
             $executionResult = $this->executePosition($positionOpening);
+            if (($executionResult['status'] ?? null) !== 'success') {
+                $this->logger->error('[Trading Decision] Execution failed', [
+                    'symbol' => $symbol,
+                    'execution_result' => $executionResult,
+                ]);
+                return [
+                    'status' => 'error',
+                    'symbol' => $symbol,
+                    'error' => 'Execution failed',
+                    'execution_result' => $executionResult,
+                    'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
+                ];
+            }
+            $this->logger->info('[Trading Decision] Execution completed', [
+                'symbol' => $symbol,
+                'status' => $executionResult['status'] ?? null,
+                'main_order_id' => $executionResult['main_order']['order_id'] ?? null,
+                'tp_order_id' => $executionResult['take_profit_order']['order_id'] ?? null,
+                'sl_order_id' => $executionResult['stop_loss_order']['order_id'] ?? null,
+            ]);
 
             $this->logger->info('[Trading Decision] Trading decision completed successfully', [
                 'symbol' => $symbol,
@@ -167,17 +221,22 @@ class TradingDecisionService
         float $timeframeMultiplier
     ): LeverageCalculationDto {
         $leverageConfig = $this->leverageConfigService->getConfig();
-        
+
         // Calculer la distance de stop basée sur l'ATR
         $stopLossPercentage = ($atr * 2.0) / $currentPrice * 100; // 2x ATR comme stop
 
         // Appel direct au service avec les bons arguments
+        $symbolHardCap = $this->symbolLeverageRegistry->resolve($symbol);
         $finalLeverageDto = $this->leverageCalculationService->calculateLeverage(
             $symbol,
             $riskPercentage,
             $stopLossPercentage,
             $leverageConfig,
-            $isHighConviction
+            $isHighConviction,
+            false,
+            false,
+            $timeframeMultiplier,
+            $symbolHardCap
         );
 
         return $finalLeverageDto;

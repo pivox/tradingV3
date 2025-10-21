@@ -35,21 +35,21 @@ final class BitmartClient implements TradingProviderPort
         int $limit = 500
     ): array {
         $url = $this->config->getKlinesUrl();
-        
+
         $params = [
             'symbol' => $symbol,
             'step' => $step,
             'limit' => $limit
         ];
-        
+
         if ($startTime !== null) {
             $params['start_time'] = $startTime;
         }
-        
+
         if ($endTime !== null) {
             $params['end_time'] = $endTime;
         }
-        
+
         $this->logger->debug('[BitMart Client] Fetching klines', [
             'symbol' => $symbol,
             'step' => $step,
@@ -57,7 +57,7 @@ final class BitmartClient implements TradingProviderPort
             'end_time' => $endTime,
             'limit' => $limit
         ]);
-        
+
         return $this->makeRequest('GET', $url, $params);
     }
 
@@ -67,14 +67,20 @@ final class BitmartClient implements TradingProviderPort
     public function submitOrder(array $orderData): array
     {
         $url = $this->config->getOrderUrl();
-        
+
         $this->logger->info('[BitMart Client] Submitting order', [
             'symbol' => $orderData['symbol'] ?? 'unknown',
             'side' => $orderData['side'] ?? 'unknown',
-            'type' => $orderData['type'] ?? 'unknown'
+            'type' => $orderData['type'] ?? 'unknown',
+            'payload' => $orderData,
         ]);
-        
-        return $this->makeAuthenticatedRequest('POST', $url, $orderData);
+
+        $response = $this->makeAuthenticatedRequest('POST', $url, $orderData);
+        $this->logger->info('[BitMart Client] Order response', [
+            'code' => $response['code'] ?? null,
+            'data' => $response['data'] ?? null,
+        ]);
+        return $response;
     }
 
     public function setLeverage(string $symbol, int $leverage, string $openType = 'cross'): array
@@ -90,7 +96,12 @@ final class BitmartClient implements TradingProviderPort
 
         $this->logger->info('[BitMart Client] Setting leverage', $payload);
 
-        return $this->makeAuthenticatedRequest('POST', $url, $payload);
+        $response = $this->makeAuthenticatedRequest('POST', $url, $payload);
+        $this->logger->info('[BitMart Client] Set leverage response', [
+            'code' => $response['code'] ?? null,
+            'data' => $response['data'] ?? null,
+        ]);
+        return $response;
     }
 
     public function submitTpSlOrder(array $payload): array
@@ -100,9 +111,15 @@ final class BitmartClient implements TradingProviderPort
         $this->logger->info('[BitMart Client] Submitting TP/SL order', [
             'symbol' => $payload['symbol'] ?? 'unknown',
             'orderType' => $payload['orderType'] ?? 'unknown',
+            'payload' => $payload,
         ]);
 
-        return $this->makeAuthenticatedRequest('POST', $url, $payload);
+        $response = $this->makeAuthenticatedRequest('POST', $url, $payload);
+        $this->logger->info('[BitMart Client] TP/SL response', [
+            'code' => $response['code'] ?? null,
+            'data' => $response['data'] ?? null,
+        ]);
+        return $response;
     }
 
     /**
@@ -111,17 +128,17 @@ final class BitmartClient implements TradingProviderPort
     public function cancelOrder(string $symbol, string $orderId): array
     {
         $url = $this->config->getCancelOrderUrl();
-        
+
         $data = [
             'symbol' => $symbol,
             'order_id' => $orderId
         ];
-        
+
         $this->logger->info('[BitMart Client] Canceling order', [
             'symbol' => $symbol,
             'order_id' => $orderId
         ]);
-        
+
         return $this->makeAuthenticatedRequest('POST', $url, $data);
     }
 
@@ -131,15 +148,15 @@ final class BitmartClient implements TradingProviderPort
     public function cancelAllOrders(string $symbol): array
     {
         $url = $this->config->getPrivateApiUrl() . '/contract/private/cancel-orders';
-        
+
         $data = [
             'symbol' => $symbol
         ];
-        
+
         $this->logger->info('[BitMart Client] Canceling all orders', [
             'symbol' => $symbol
         ]);
-        
+
         return $this->makeAuthenticatedRequest('POST', $url, $data);
     }
 
@@ -187,16 +204,16 @@ final class BitmartClient implements TradingProviderPort
     public function getPositions(?string $symbol = null): array
     {
         $url = $this->config->getPositionsUrl();
-        
+
         $params = [];
         if ($symbol !== null) {
             $params['symbol'] = $symbol;
         }
-        
+
         $this->logger->debug('[BitMart Client] Fetching positions', [
             'symbol' => $symbol
         ]);
-        
+
         return $this->makeAuthenticatedRequest('GET', $url, $params);
     }
 
@@ -206,9 +223,9 @@ final class BitmartClient implements TradingProviderPort
     public function getAssetsDetail(): array
     {
         $url = $this->config->getAssetsUrl();
-        
+
         $this->logger->debug('[BitMart Client] Fetching assets detail');
-        
+
         return $this->makeAuthenticatedRequest('GET', $url);
     }
 
@@ -224,13 +241,13 @@ final class BitmartClient implements TradingProviderPort
                 'User-Agent' => 'MTF-Trading-System/1.0'
             ]
         ];
-        
+
         if ($method === 'GET' && !empty($params)) {
             $url .= '?' . http_build_query($params);
         } elseif ($method === 'POST' && !empty($params)) {
             $options['json'] = $params;
         }
-        
+
         return $this->executeRequest($method, $url, $options);
     }
 
@@ -273,7 +290,7 @@ final class BitmartClient implements TradingProviderPort
     private function executeRequest(string $method, string $url, array $options): array
     {
         $lastException = null;
-        
+
         $maxRetries = max(1, $this->config->getMaxRetries());
         for ($attempt = 0; $attempt < $maxRetries; $attempt++) {
             usleep(self::THROTTLE_MICROSECONDS);
@@ -283,11 +300,11 @@ final class BitmartClient implements TradingProviderPort
                     'url' => $url,
                     'attempt' => $attempt + 1
                 ]);
-                
+
                 $response = $this->httpClient->request($method, $url, $options);
                 $statusCode = $response->getStatusCode();
                 $content = $response->toArray(false);
-                
+
                 if ($statusCode >= 200 && $statusCode < 300) {
                     $this->logger->debug('[BitMart Client] Request successful', [
                         'status_code' => $statusCode,
@@ -295,22 +312,22 @@ final class BitmartClient implements TradingProviderPort
                     ]);
                     return $content;
                 }
-                
+
                 if ($statusCode === 429) {
                     // Rate limit hit
                     $this->logger->warning('[BitMart Client] Rate limit hit', [
                         'status_code' => $statusCode,
                         'attempt' => $attempt + 1
                     ]);
-                    
+
                     if ($attempt < $maxRetries - 1) {
                         sleep(2); // Attendre 2 secondes
                         continue;
                     }
                 }
-                
+
                 throw new \RuntimeException("HTTP {$statusCode}: " . json_encode($content));
-                
+
             } catch (\Exception $e) {
                 $lastException = $e;
                 $this->logger->warning('[BitMart Client] Request failed', [
@@ -319,7 +336,7 @@ final class BitmartClient implements TradingProviderPort
                     'attempt' => $attempt + 1,
                     'error' => $e->getMessage()
                 ]);
-                
+
                 if ($attempt < $maxRetries - 1) {
                     $delay = (int) pow(2, $attempt); // Backoff exponentiel
                     $this->logger->info('[BitMart Client] Retrying request', [
@@ -370,9 +387,9 @@ final class BitmartClient implements TradingProviderPort
                 'step' => 1,
                 'limit' => 1
             ];
-            
+
             $response = $this->makeRequest('GET', $url, $params);
-            
+
             return [
                 'status' => 'healthy',
                 'response_time' => microtime(true),
@@ -393,9 +410,9 @@ final class BitmartClient implements TradingProviderPort
     public function getContracts(): array
     {
         $url = $this->config->getContractsUrl();
-        
+
         $this->logger->debug('[BitMart Client] Fetching contracts');
-        
+
         return $this->makeRequest('GET', $url);
     }
 
@@ -405,15 +422,32 @@ final class BitmartClient implements TradingProviderPort
     public function getTicker(string $symbol): array
     {
         $url = $this->config->getTickerUrl();
-        
+
         $params = [
             'symbol' => $symbol
         ];
-        
+
         $this->logger->debug('[BitMart Client] Fetching ticker', [
             'symbol' => $symbol
         ]);
-        
+
         return $this->makeRequest('GET', $url, $params);
+    }
+
+    public function getLastPrice(string $symbol): float
+    {
+        $url = $this->config->getLastPriceUrl($symbol);
+
+        $params = [
+            'symbol' => $symbol,
+            'limit' => 1
+        ];
+        $this->logger->debug('[BitMart Client] Fetching Last price', $params);
+        $result = $this->makeRequest('GET', $url, $params);
+        if (isset($result['data']['price'])) {
+            return (float) $result['data']['price'];
+        }
+
+        throw new \RuntimeException('Unable to fetch last price for symbol: ' . $symbol);
     }
 }
