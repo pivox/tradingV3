@@ -1042,20 +1042,28 @@ final class MtfService
                     'persisted_by' => 'mtf_service'
                 ];
 
+                // Calculer l'expiration selon le timeframe (moins 1 seconde pour éviter les problèmes de timing)
+                $now = $this->timeService->getCurrentAlignedUtc();
+                $expirationTime = $this->timeService->getValidationCacheTtl($now, $timeframe);
+                $expirationTime = $expirationTime->modify('-1 second');
+                $expirationMinutes = (int) ceil(($expirationTime->getTimestamp() - $now->getTimestamp()) / 60);
+                
                 $this->validationCache->cacheMtfValidation(
                     $symbol,
                     $timeframe,
                     $klineTime,
                     $status,
                     $details,
-                    5 // 5 minutes d'expiration
+                    $expirationMinutes
                 );
 
                 $this->logger->info('MTF validation cached', [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe->value,
                     'status' => $status,
-                    'kline_time' => $klineTime->format('Y-m-d H:i:s')
+                    'kline_time' => $klineTime->format('Y-m-d H:i:s'),
+                    'expiration_minutes' => $expirationMinutes,
+                    'expiration_time' => $expirationTime->format('Y-m-d H:i:s')
                 ]);
             }
         } catch (\Exception $e) {
