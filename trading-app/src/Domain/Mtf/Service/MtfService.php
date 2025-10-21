@@ -26,6 +26,8 @@ use Psr\Clock\ClockInterface;
 use App\Infrastructure\Persistence\SignalPersistenceService;
 use App\Infrastructure\Persistence\KlineJsonIngestionService;
 use App\Infrastructure\Cache\DbValidationCache;
+use App\Event\MtfAuditEvent;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 
 final class MtfService
 {
@@ -43,6 +45,7 @@ final class MtfService
         private readonly KlineProviderPort $klineProvider,
         private readonly EntityManagerInterface $entityManager,
         private readonly ClockInterface $clock,
+        private readonly EventDispatcherInterface $eventDispatcher,
         private readonly ?SignalPersistenceService $signalPersistenceService = null,
         private readonly ?DbValidationCache $validationCache = null,
         private readonly ?KlineJsonIngestionService $klineJsonIngestion = null,
@@ -61,10 +64,10 @@ final class MtfService
     public function executeMtfCycle(UuidInterface $runId): \Generator
     {
         $this->logger->info('[MTF] Starting MTF cycle', ['run_id' => $runId->toString()]);
-        
+
         $results = [];
         $now = $this->timeService->getCurrentAlignedUtc();
-        
+
         // Vérifier le kill switch global
         if (!$this->mtfSwitchRepository->isGlobalSwitchOn()) {
             $this->logger->warning('[MTF] Global kill switch is OFF, skipping cycle');
@@ -79,7 +82,7 @@ final class MtfService
 
         // Récupérer tous les symboles actifs depuis la base de données
         $activeSymbols = $this->contractRepository->allActiveSymbolNames();
-        
+
         if (empty($activeSymbols)) {
             $this->logger->warning('[MTF] No active symbols found');
             $this->auditStep($runId, 'GLOBAL', 'NO_ACTIVE_SYMBOLS', 'No active symbols found');
@@ -102,7 +105,7 @@ final class MtfService
                 // Laisser la logique interne gérer start_from_timeframe (pipeline complet)
                 $result = $this->processSymbol($symbol, $runId, $now, null);
                 $results[$symbol] = $result;
-                
+
                 // Yield progress information
                 $progress = [
                     'current' => $index + 1,
@@ -111,7 +114,7 @@ final class MtfService
                     'symbol' => $symbol,
                     'status' => $result['status'] ?? 'unknown',
                 ];
-                
+
                 yield [
                     'symbol' => $symbol,
                     'result' => $result,
@@ -126,7 +129,7 @@ final class MtfService
                 $this->auditStep($runId, $symbol, 'ERROR', $e->getMessage());
                 $errorResult = ['status' => 'ERROR', 'error' => $e->getMessage()];
                 $results[$symbol] = $errorResult;
-                
+
                 // Yield error information
                 $progress = [
                     'current' => $index + 1,
@@ -135,7 +138,7 @@ final class MtfService
                     'symbol' => $symbol,
                     'status' => 'ERROR',
                 ];
-                
+
                 yield [
                     'symbol' => $symbol,
                     'result' => $errorResult,
@@ -178,7 +181,7 @@ final class MtfService
     private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false): array
     {
         $this->logger->debug('[MTF] Processing symbol', ['symbol' => $symbol]);
-        
+
         // Vérifier le kill switch du symbole (sauf si force-run est activé)
         if (!$forceRun && !$this->mtfSwitchRepository->canProcessSymbol($symbol)) {
             $this->logger->debug('[MTF] Symbol kill switch is OFF', ['symbol' => $symbol, 'force_run' => $forceRun]);
@@ -199,13 +202,13 @@ final class MtfService
                 '1m' => Timeframe::TF_1M,
                 default => throw new \InvalidArgumentException("Invalid timeframe: $currentTf")
             };
-            
+
             $result = $this->processTimeframe($symbol, $timeframe, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
             if (($result['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, strtoupper($currentTf) . '_VALIDATION_FAILED', $result['reason'] ?? "$currentTf validation failed");
                 return $result + ['failed_timeframe' => $currentTf];
             }
-            
+
             // Mettre à jour l'état pour le timeframe spécifique
             match($currentTf) {
                 '4h' => $state->setK4hTime($result['kline_time'])->set4hSide($result['signal_side']),
@@ -214,9 +217,9 @@ final class MtfService
                 '5m' => $state->setK5mTime($result['kline_time'])->set5mSide($result['signal_side']),
                 '1m' => $state->setK1mTime($result['kline_time'])->set1mSide($result['signal_side']),
             };
-            
+
             $this->mtfStateRepository->getEntityManager()->flush();
-            
+
             return [
                 'status' => 'READY',
                 'signal_side' => $result['signal_side'],
@@ -400,25 +403,23 @@ final class MtfService
             }
 
             // Log dédié après validation 1m (positions_flow)
-            try {
-                $this->positionsFlowLogger->info('[PositionsFlow] 1m VALIDATED', [
-                    'symbol' => $symbol,
-                    'signal_side' => $result1m['signal_side'] ?? 'NONE',
-                    'kline_time' => isset($result1m['kline_time']) && $result1m['kline_time'] instanceof \DateTimeImmutable ? $result1m['kline_time']->format('Y-m-d H:i:s') : null,
-                    'current_price' => $result1m['current_price'] ?? null,
-                    'atr' => $result1m['atr'] ?? null,
-                ]);
-            } catch (\Throwable) {}
+            $this->positionsFlowLogger->info('[PositionsFlow] 1m VALIDATED', [
+                'symbol' => $symbol,
+                'signal_side' => $result1m['signal_side'] ?? 'NONE',
+                'kline_time' => isset($result1m['kline_time']) && $result1m['kline_time'] instanceof \DateTimeImmutable ? $result1m['kline_time']->format('Y-m-d H:i:s') : null,
+                'current_price' => $result1m['current_price'] ?? null,
+                'atr' => $result1m['atr'] ?? null,
+            ]);
             // Règle: 1m doit matcher 5m si 5m est inclus
             if ($include5m && is_array($result5m)) {
                 if (strtoupper((string)($result1m['signal_side'] ?? 'NONE')) !== strtoupper((string)($result5m['signal_side'] ?? 'NONE'))) {
-            $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '1m side != 5m side', [
+                $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '1m side != 5m side', [
                         '5m' => $result5m['signal_side'] ?? 'NONE',
                         '1m' => $result1m['signal_side'] ?? 'NONE',
-                'timeframe' => '1m',
-                'passed' => false,
-                'severity' => 1,
-                    ]);
+                        'timeframe' => '1m',
+                        'passed' => false,
+                        'severity' => 1,
+                            ]);
                     $extra = [];
                     foreach (['conditions_long','conditions_short','failed_conditions_long','failed_conditions_short'] as $k) {
                         if (isset($result1m[$k])) { $extra[$k] = $result1m[$k]; }
@@ -449,7 +450,9 @@ final class MtfService
             '5m'  => is_array($result5m) ? ($result5m['signal_side'] ?? 'NONE') : 'NONE',
             '1m'  => is_array($result1m) ? ($result1m['signal_side'] ?? 'NONE') : 'NONE',
         ];
-        $prefOrder = ['15m','5m','1m'];
+        // Option B: privilégier 1m (si validé et aligné), sinon 5m, sinon 15m
+        // Les vérifications d'alignement 1m↔5m et 5m↔15m ont déjà été effectuées plus haut.
+        $prefOrder = ['1m','5m','15m'];
         $currentTf = '1m';
         foreach ($prefOrder as $tf) {
             $side = strtoupper((string)($available[$tf] ?? 'NONE'));
@@ -494,9 +497,9 @@ final class MtfService
      * NOUVELLE MÉTHODE : Remplit les klines manquantes en masse
      */
     private function fillMissingKlinesInBulk(
-        string $symbol, 
-        Timeframe $timeframe, 
-        int $requiredLimit, 
+        string $symbol,
+        Timeframe $timeframe,
+        int $requiredLimit,
         \DateTimeImmutable $now,
         UuidInterface $runId
     ): void {
@@ -514,7 +517,7 @@ final class MtfService
         // Calculer la période à récupérer
         $intervalMinutes = $timeframe->getStepInMinutes();
         $startDate = (clone $now)->sub(new \DateInterval('PT' . ($requiredLimit * $intervalMinutes) . 'M'));
-        
+
         // Fetch toutes les klines manquantes d'un coup
         $fetchedKlines = $this->klineProvider->fetchKlinesInWindow(
             $symbol,
@@ -534,7 +537,7 @@ final class MtfService
 
         // Insertion en masse via la fonction SQL JSON
         $result = $this->klineJsonIngestion->ingestKlinesBatch($fetchedKlines);
-        
+
         $this->logger->info('[MTF] Bulk klines insertion completed', [
             'symbol' => $symbol,
             'timeframe' => $timeframe->value,
@@ -547,7 +550,7 @@ final class MtfService
     /**
      * Valide un timeframe via SignalValidationService. Retourne INVALID si signal = NONE.
      * Ajoute l'état minimal dans $collector pour construire le contexte MTF.
-     * 
+     *
      * NOUVELLE LOGIQUE : Insertion en masse au lieu de backfill complexe
      */
     private function processTimeframe(string $symbol, Timeframe $timeframe, UuidInterface $runId, \DateTimeImmutable $now, array &$collector, bool $forceTimeframeCheck = false, bool $forceRun = false): array
@@ -561,9 +564,9 @@ final class MtfService
         } catch (\Throwable $ex) {
             $this->logger->error("[MTF] Error loading config for {$timeframe->value}, using default limit", ['error' => $ex->getMessage()]);
         }
-        
+
         $klines = $this->klineRepository->findBySymbolAndTimeframe($symbol, $timeframe, $limit);
-        
+
         // 🔥 NOUVELLE LOGIQUE : Si pas assez de klines → INSÉRER EN MASSE
         if (count($klines) < $limit) {
             $this->logger->info('[MTF] Insufficient klines, filling in bulk', [
@@ -572,19 +575,19 @@ final class MtfService
                 'current_count' => count($klines),
                 'required_count' => $limit
             ]);
-            
+
             // Remplir les klines manquantes en masse
             $this->fillMissingKlinesInBulk($symbol, $timeframe, $limit, $now, $runId);
-            
+
             // Recharger les klines après insertion
             $klines = $this->klineRepository->findBySymbolAndTimeframe($symbol, $timeframe, $limit);
-            
+
             // Si toujours pas assez après insertion → désactiver temporairement
             if (count($klines) < $limit) {
                 $missingBars = $limit - count($klines);
                 $duration = ($missingBars * $timeframe->getStepInMinutes() + $timeframe->getStepInMinutes()) . ' minutes';
                 $this->mtfSwitchRepository->turnOffSymbolForDuration($symbol, $duration);
-                
+
                 $this->auditStep($runId, $symbol, "{$timeframe->value}_INSUFFICIENT_DATA_AFTER_FILL", "Still insufficient bars after bulk fill", [
                     'timeframe' => $timeframe->value,
                     'bars_count' => count($klines),
@@ -663,7 +666,7 @@ final class MtfService
                 try {
                     $chunkStart = \DateTimeImmutable::createFromFormat('U', (string)$chunk['from']);
                     $chunkEnd = \DateTimeImmutable::createFromFormat('U', (string)$chunk['to']);
-                    
+
                     if ($chunkStart && $chunkEnd) {
                         $fetchedKlines = $this->klineProvider->fetchKlinesInWindow(
                             $symbol,
@@ -671,7 +674,7 @@ final class MtfService
                             $chunkStart,
                             $chunkEnd
                         );
-                        
+
                         if (!empty($fetchedKlines)) {
                             $allNewKlines = array_merge($allNewKlines, $fetchedKlines);
                         }
@@ -688,12 +691,12 @@ final class MtfService
                 // Filtrer les doublons avant de sauvegarder
                 $firstChunkStart = \DateTimeImmutable::createFromFormat('U', (string)$missingChunks[0]['from']);
                 $lastChunkEnd = \DateTimeImmutable::createFromFormat('U', (string)end($missingChunks)['to']);
-                
+
                 if ($firstChunkStart && $lastChunkEnd) {
                     $existingKlinesInRange = $this->klineRepository->findBySymbolTimeframeAndDateRange(
-                        $symbol, 
-                        $timeframe, 
-                        $firstChunkStart, 
+                        $symbol,
+                        $timeframe,
+                        $firstChunkStart,
                         $lastChunkEnd
                     );
                     $existingOpenTimes = array_map(fn($k) => $k->getOpenTime()->getTimestamp(), $existingKlinesInRange);
@@ -706,7 +709,7 @@ final class MtfService
                             'timeframe' => $timeframe->value,
                             'new_klines_count' => count($uniqueNewKlines)
                         ]);
-                        
+
                         // Recharger les klines pour garantir la fraîcheur et la complétude des données
                         $klines = $this->klineRepository->findBySymbolAndTimeframe($symbol, $timeframe, $limit);
                         usort($klines, fn($a, $b) => $a->getOpenTime() <=> $b->getOpenTime());
@@ -730,7 +733,7 @@ final class MtfService
         $klineDtoCount = 0;
         $klineEntityCount = 0;
         $unknownCount = 0;
-        
+
         foreach ($klines as $kline) {
             if ($kline instanceof \App\Domain\Common\Dto\KlineDto) {
                 $klineDtoCount++;
@@ -753,7 +756,7 @@ final class MtfService
                 ]);
             }
         }
-        
+
         $this->logger->info('[MTF] Klines filtering results', [
             'symbol' => $symbol,
             'timeframe' => $timeframe->value,
@@ -775,7 +778,7 @@ final class MtfService
                 'kline_dto_count' => $klineDtoCount,
                 'unknown_count' => $unknownCount
             ]);
-            
+
             // Retourner un résultat d'erreur au lieu de faire planter
             return [
                 'status' => 'ERROR',
@@ -854,7 +857,7 @@ final class MtfService
             'atr' => $atrValue,
             'indicator_context' => $indicatorContext,
         ];
-        
+
         } catch (\Throwable $e) {
             $this->logger->error('[MTF] Error in processTimeframe', [
                 'symbol' => $symbol,
@@ -862,7 +865,7 @@ final class MtfService
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
-            
+
             return [
                 'status' => 'ERROR',
                 'reason' => 'PROCESS_TIMEFRAME_ERROR',
@@ -976,8 +979,8 @@ final class MtfService
             $audit->setSeverity((int)$data['severity']);
         }
         $audit->setCreatedAt($this->clock->now());
-        $this->mtfAuditRepository->getEntityManager()->persist($audit);
-        $this->mtfAuditRepository->getEntityManager()->flush();
+        // Dispatcher l'événement pour déléger la persistance au subscriber
+        $this->eventDispatcher->dispatch(new MtfAuditEvent($audit), MtfAuditEvent::NAME);
     }
 
     /**
@@ -1072,7 +1075,7 @@ final class MtfService
     public function runForSymbol(\Ramsey\Uuid\UuidInterface $runId, string $symbol, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false): \Generator
     {
         $result = $this->processSymbol($symbol, $runId, $now, $currentTf, $forceTimeframeCheck, $forceRun);
-        
+
         // Yield progress information for single symbol
         $progress = [
             'current' => 1,
@@ -1081,13 +1084,13 @@ final class MtfService
             'symbol' => $symbol,
             'status' => $result['status'] ?? 'unknown',
         ];
-        
+
         yield [
             'symbol' => $symbol,
             'result' => $result,
             'progress' => $progress,
         ];
-        
+
         return $result;
     }
 }
