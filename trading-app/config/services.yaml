@@ -349,6 +349,9 @@ services:
 
     # Alias pour l’interface de configuration MTF -> implémentation TradingParameters
     App\Config\MtfConfigProviderInterface: '@App\Config\TradingParameters'
+    App\Config\MtfValidationConfig:
+        arguments:
+            $path: '%kernel.project_dir%/config/app/mtf_validations.yaml'
 
     # Auto-tag des Conditions d'indicateurs et des services de signaux par timeframe
     _instanceof:
@@ -362,6 +365,15 @@ services:
         arguments:
             $conditions: !tagged_iterator 'app.indicator.condition'
             $logger: '@logger'
+    App\Indicator\ConditionLoader\ConditionRegistry:
+        arguments:
+            $indicatorConditions: !tagged_iterator 'app.indicator.condition'
+            $logger: '@logger'
+        calls:
+            - [ load, ['@App\Config\MtfValidationConfig'] ]
+    App\Indicator\ConditionLoader\TimeframeEvaluator:
+        arguments:
+            $registry: '@App\Indicator\ConditionLoader\ConditionRegistry'
 
     # Builder de contexte pour les indicateurs
     App\Indicator\Context\IndicatorContextBuilder:
@@ -384,6 +396,7 @@ services:
         arguments:
             $contextBuilder: '@App\Indicator\Context\IndicatorContextBuilder'
             $conditionRegistry: '@App\Indicator\Condition\ConditionRegistry'
+            $timeframeEvaluator: '@App\Indicator\ConditionLoader\TimeframeEvaluator'
             $tradingConfigService: '@App\Service\TradingConfigService'
             $klineDataService: '@App\Service\KlineDataService'
         tags: ['controller.service_arguments']
