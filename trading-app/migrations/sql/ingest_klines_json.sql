@@ -24,11 +24,12 @@ BEGIN
 */
 
 INSERT INTO klines (
-    symbol, timeframe, open_time,
+    id, symbol, timeframe, open_time,
     open_price, high_price, low_price, close_price, volume,
     source, inserted_at, updated_at
 )
 SELECT
+    nextval('klines_id_seq'),
     t.symbol,
     t.timeframe,
     (t.open_time)::timestamptz,
