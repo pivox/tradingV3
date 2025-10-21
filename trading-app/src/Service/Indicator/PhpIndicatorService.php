@@ -7,10 +7,12 @@ namespace App\Service\Indicator;
 use App\Domain\Common\Dto\IndicatorSnapshotDto;
 use App\Domain\Common\Enum\Timeframe;
 use App\Domain\Ports\Out\IndicatorProviderPort;
+use App\Entity\IndicatorSnapshot;
 use App\Indicator\Trend\Ema;
 use App\Indicator\Momentum\Rsi;
 use App\Indicator\Momentum\Macd;
 use App\Indicator\Volume\Vwap;
+use App\Repository\IndicatorSnapshotRepository;
 use Psr\Log\LoggerInterface;
 
 class PhpIndicatorService implements IndicatorProviderPort
@@ -20,7 +22,8 @@ class PhpIndicatorService implements IndicatorProviderPort
         private readonly Macd $macdService,
         private readonly Rsi $rsiService,
         private readonly Vwap $vwapService,
-        private readonly ?LoggerInterface $logger = null
+        private readonly LoggerInterface $logger,
+        private readonly IndicatorSnapshotRepository $indicatorRepository
     ) {
     }
 
@@ -77,8 +80,32 @@ class PhpIndicatorService implements IndicatorProviderPort
             'symbol' => $snapshot->symbol,
             'timeframe' => $snapshot->timeframe->value,
         ]);
-        // In PHP mode, we might save to a cache or database
-        // For now, we'll just log it
+        $entity = new IndicatorSnapshot();
+        $entity
+            ->setSymbol($snapshot->symbol)
+            ->setTimeframe($snapshot->timeframe)
+            ->setKlineTime($snapshot->klineTime)
+            ->setSource($snapshot->source)
+            ->setValues([
+                'ema20' => $snapshot->ema20?->toFixed(12),
+                'ema50' => $snapshot->ema50?->toFixed(12),
+                'macd' => $snapshot->macd?->toFixed(12),
+                'macd_signal' => $snapshot->macdSignal?->toFixed(12),
+                'macd_histogram' => $snapshot->macdHistogram?->toFixed(12),
+                'atr' => $snapshot->atr?->toFixed(12),
+                'rsi' => $snapshot->rsi,
+                'vwap' => $snapshot->vwap?->toFixed(12),
+                'bb_upper' => $snapshot->bbUpper?->toFixed(12),
+                'bb_middle' => $snapshot->bbMiddle?->toFixed(12),
+                'bb_lower' => $snapshot->bbLower?->toFixed(12),
+                'ma9' => $snapshot->ma9?->toFixed(12),
+                'ma21' => $snapshot->ma21?->toFixed(12),
+                'meta' => $snapshot->meta,
+                'created_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
+                'snapshot_hash' => md5(serialize($snapshot->toArray()))
+            ]);
+
+        $this->indicatorRepository->upsert($entity);
     }
 
     public function getLastIndicatorSnapshot(string $symbol, Timeframe $timeframe): ?IndicatorSnapshotDto
@@ -134,7 +161,7 @@ class PhpIndicatorService implements IndicatorProviderPort
         $lows = array_column($klines, 'low_price');
         $closes = array_column($klines, 'close_price');
         $volumes = array_column($klines, 'volume');
-        
+
         $result = $this->vwapService->calculate($highs, $lows, $closes, $volumes);
         return is_array($result) ? $result : [$result];
     }
