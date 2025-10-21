@@ -1,0 +1,141 @@
+mtf_validation:
+    rules:
+        macd_hist_gt_eps:
+            op: '>'
+            left: 'macd_hist'
+            right: 0.0
+            eps: 1.0e-6
+
+        ema20_over_50_with_tolerance:
+            any_of:
+                - ema_20_gt_50
+                -   ema_20_minus_ema_50_gt: -0.0008   # -0,08% toléré
+
+        ema_above_200_with_tolerance:
+            any_of:
+                - close_above_ema_200
+                -   close_minus_ema_200_gt: -0.0030   # -0,30% toléré
+
+        ema_below_200_with_tolerance:
+            any_of:
+                - close_below_ema_200
+                -   close_minus_ema_200_lt: -0.0015   # < -0,15% (strictement en dessous)
+
+        rsi_lt_softcap: { lt: 78 }
+        rsi_gt_softfloor: { gt: 30 }            # ← relevé (22 → 30)
+
+        macd_line_below_signal:
+            lt_fields: [ 'macd', 'macd_signal' ]
+
+        macd_line_above_signal:
+            gt_fields: [ 'macd', 'macd_signal' ]
+
+        macd_hist_increasing_n:
+            increasing: { field: 'macd_hist', n: 2 }
+
+        macd_hist_decreasing_n:
+            decreasing: { field: 'macd_hist', n: 2 }
+
+        ema200_slope_pos:
+            op: '>'
+            left: 'ema_200_slope'
+            right: 0.0
+            eps: 1.0e-12
+
+        close_above_vwap_or_ma9:
+            any_of: [ close_above_vwap, close_above_ma_9 ]
+
+        rsi_lt_70: { lt: 70 }
+
+        price_below_ma21_plus_2atr:
+            lt_fields: [ 'close', 'ma_21_plus_2atr' ]
+
+        pullback_confirmed:
+            any_of:
+                - ma9_cross_up_ma21
+                -   near_vwap: true
+
+    validation:
+        start_from_timeframe: '1h'
+
+        timeframe:
+            '4h':
+                long:
+                    all_of:
+                        - ema_50_gt_200
+                        - close_above_ema_200
+                        - price_regime_ok_long
+                short:
+                    all_of:
+                        - ema_50_lt_200
+                        - close_below_ema_200
+                        - price_regime_ok_short
+
+            '1h':
+                long:
+                    -   any_of:
+                            -   all_of: [ ema_above_200_with_tolerance ]
+                            -   all_of: [ ema200_slope_pos ]
+                            -   all_of: [ ema_50_gt_200 ]
+                    -   any_of:
+                            -   all_of: [ macd_hist_gt_eps ]
+                            -   all_of: [ macd_line_above_signal ]
+                            -   all_of: [ macd_hist_increasing_n ]
+                    - price_regime_ok_long
+
+                short:
+                    - ema_below_200_with_tolerance
+                    -   any_of: # Harmonisation: B + C
+                            -   all_of: [ macd_line_below_signal ]
+                            -   all_of: [ macd_hist_decreasing_n ]
+                    - price_regime_ok_short
+
+            '15m':
+                long:
+                    -   any_of:
+                            -   all_of: [ ema20_over_50_with_tolerance, macd_hist_gt_eps ]
+                            -   all_of: [ ema20_over_50_with_tolerance, close_above_vwap_or_ma9 ]
+                            -   all_of: [ macd_hist_gt_eps, close_above_vwap_or_ma9 ]
+                    - rsi_lt_70
+                    - price_below_ma21_plus_2atr
+                    - atr_rel_in_range_15m
+                short:
+                    -   any_of:
+                            -   all_of: [ ema_20_lt_50, macd_line_below_signal ]       # B
+                            -   all_of: [ macd_hist_decreasing_n ]                      # C
+                    - rsi_gt_softfloor
+                    - atr_rel_in_range_15m
+
+            '5m':
+                long:
+                    -   any_of:
+                            -   all_of: [ ema20_over_50_with_tolerance, macd_hist_gt_eps ]
+                            -   all_of: [ ema20_over_50_with_tolerance, rsi_lt_softcap ]
+                            -   all_of: [ macd_hist_gt_eps, rsi_lt_softcap ]
+                    - pullback_confirmed
+                    - atr_rel_in_range_5m
+                short:
+                    -   any_of:
+                            -   all_of: [ ema_20_lt_50, macd_line_below_signal ]       # B
+                            -   all_of: [ macd_hist_decreasing_n ]                      # C
+                            -   all_of: [ ema_20_lt_50, rsi_gt_softfloor ]
+                    - atr_rel_in_range_5m
+
+            '1m':
+                long:
+                    - all_of:
+                        - ema_20_gt_50
+                        -   any_of:
+                                -   all_of: [ macd_hist_gt_eps ]
+                                -   all_of: [ macd_line_above_signal ]
+                        - rsi_lt_80                                   # 85 → 80 (moins permissif)
+                        - close_above_vwap_or_ma9                     # + pullback timing
+                        - price_below_ma21_plus_2atr                  # + anti-extension
+                short:
+                    - all_of:
+                        - ema_20_lt_50
+                        -   any_of:
+                                -   all_of: [ macd_line_below_signal ]
+                                -   all_of: [ macd_hist_decreasing_n ]
+                        - rsi_gt_softfloor
+

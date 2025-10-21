@@ -3,8 +3,8 @@
 namespace App\Controller\Web;
 
 use App\Indicator\Context\IndicatorContextBuilder;
-use App\Indicator\Condition\CompositeConditionEvaluator;
 use App\Indicator\Condition\ConditionRegistry;
+use App\Indicator\ConditionLoader\TimeframeEvaluator;
 use App\Service\TradingConfigService;
 use App\Service\KlineDataService;
 use App\Domain\Common\Enum\Timeframe;
@@ -24,6 +24,7 @@ class IndicatorTestController extends AbstractController
 {
     private IndicatorContextBuilder $contextBuilder;
     private ConditionRegistry $conditionRegistry;
+    private TimeframeEvaluator $timeframeEvaluator;
     private TradingConfigService $tradingConfigService;
     private KlineDataService $klineDataService;
     private ContractRepository $contractRepository;
@@ -34,6 +35,7 @@ class IndicatorTestController extends AbstractController
     public function __construct(
         IndicatorContextBuilder $contextBuilder,
         ConditionRegistry $conditionRegistry,
+        TimeframeEvaluator $timeframeEvaluator,
         TradingConfigService $tradingConfigService,
         KlineDataService $klineDataService,
         ContractRepository $contractRepository,
@@ -43,6 +45,7 @@ class IndicatorTestController extends AbstractController
     ) {
         $this->contextBuilder = $contextBuilder;
         $this->conditionRegistry = $conditionRegistry;
+        $this->timeframeEvaluator = $timeframeEvaluator;
         $this->tradingConfigService = $tradingConfigService;
         $this->klineDataService = $klineDataService;
         $this->contractRepository = $contractRepository;
@@ -142,21 +145,23 @@ class IndicatorTestController extends AbstractController
                 $context = $this->createRealisticContext($symbol, $timeframe);
             }
 
-            // Évaluer toutes les conditions
-            $results = $this->conditionRegistry->evaluate($context);
+            // Évaluer toutes les conditions élémentaires
+            $conditionResults = $this->conditionRegistry->evaluate($context);
 
-            // Évaluer les règles spécifiques au timeframe
+            // Évaluer les règles spécifiques au timeframe via le moteur MTF
+            $timeframeEvaluation = $this->timeframeEvaluator->evaluate($timeframe, $context);
+            $timeframeValidation = $this->formatTimeframeEvaluation($timeframeEvaluation);
+
             $timeframeRules = $this->tradingConfigService->getTimeframeValidationRules($timeframe);
-            $timeframeValidation = $this->evaluateTimeframeRules($results, $timeframeRules);
 
             // Générer un résumé
-            $summary = $this->generateSummary($results);
+            $summary = $this->generateSummary($conditionResults);
 
             return new JsonResponse([
                 'success' => true,
                 'data' => [
                     'context' => $context,
-                    'conditions_results' => $results,
+                    'conditions_results' => $conditionResults,
                     'timeframe_validation' => $timeframeValidation,
                     'summary' => $summary,
                     'trading_config' => [
@@ -284,15 +289,19 @@ class IndicatorTestController extends AbstractController
             
             for ($i = 0; $i < $iterations; $i++) {
                 // Créer un contexte avec des données légèrement différentes
-                $context = $this->createRealisticContext($symbol, $timeframe, $i);
-                $conditionsResults = $this->conditionRegistry->evaluate($context);
-                $summary = $this->generateSummary($conditionsResults);
-                
-                $results[] = [
-                    'iteration' => $i + 1,
-                    'summary' => $summary,
-                    'context' => $context
-                ];
+                    $context = $this->createRealisticContext($symbol, $timeframe, $i);
+                    $conditionsResults = $this->conditionRegistry->evaluate($context);
+                    $timeframeEvaluation = $this->timeframeEvaluator->evaluate($timeframe, $context);
+                    $timeframeValidation = $this->formatTimeframeEvaluation($timeframeEvaluation);
+                    $summary = $this->generateSummary($conditionsResults);
+                    
+                    $results[] = [
+                        'iteration' => $i + 1,
+                        'summary' => $summary,
+                        'timeframe_validation' => $timeframeValidation,
+                        'conditions_results' => $conditionsResults,
+                        'context' => $context
+                    ];
             }
 
             // Analyser la stabilité des résultats
@@ -601,10 +610,8 @@ class IndicatorTestController extends AbstractController
                     
                     // Évaluer toutes les conditions
                     $conditionsResults = $this->conditionRegistry->evaluate($context);
-                    
-                    // Évaluer les règles spécifiques au timeframe
-                    $timeframeRules = $this->tradingConfigService->getTimeframeValidationRules($timeframe);
-                    $timeframeValidation = $this->evaluateTimeframeRules($conditionsResults, $timeframeRules);
+                    $timeframeEvaluation = $this->timeframeEvaluator->evaluate($timeframe, $context);
+                    $timeframeValidation = $this->formatTimeframeEvaluation($timeframeEvaluation);
                     
                     // Générer un résumé
                     $summary = $this->generateSummary($conditionsResults);
@@ -838,65 +845,30 @@ class IndicatorTestController extends AbstractController
             ->build();
     }
 
-    private function evaluateTimeframeRules(array $results, array $timeframeRules): array
+    private function formatTimeframeEvaluation(array $evaluation): array
     {
-        $longDefinition = $timeframeRules['long'] ?? [];
-        $shortDefinition = $timeframeRules['short'] ?? [];
+        $longConditions = $evaluation['long']['conditions'] ?? [];
+        $shortConditions = $evaluation['short']['conditions'] ?? [];
 
-        if (!\is_array($longDefinition)) {
-            $longDefinition = [];
-        }
-        if (!\is_array($shortDefinition)) {
-            $shortDefinition = [];
-        }
-
-        $longEval = CompositeConditionEvaluator::evaluateRequirements($longDefinition, $results);
-        $shortEval = CompositeConditionEvaluator::evaluateRequirements($shortDefinition, $results);
-
-        $longNames = CompositeConditionEvaluator::extractConditionNames($longDefinition);
-        $shortNames = CompositeConditionEvaluator::extractConditionNames($shortDefinition);
-
-        [$longPassed, $longFailed] = $this->splitPassedFailed($results, $longNames);
-        [$shortPassed, $shortFailed] = $this->splitPassedFailed($results, $shortNames);
+        $longPassed = array_keys(array_filter($longConditions, fn ($result) => ($result['passed'] ?? false) === true));
+        $shortPassed = array_keys(array_filter($shortConditions, fn ($result) => ($result['passed'] ?? false) === true));
 
         return [
             'long' => [
-                'required_conditions' => $longDefinition,
+                'required_conditions' => array_keys($longConditions),
                 'passed_conditions' => $longPassed,
-                'failed_conditions' => $longFailed,
-                'all_passed' => $longDefinition === [] ? true : ($longEval['passed'] ?? false),
-                'composite_evaluation' => $longEval['requirements'] ?? [],
+                'failed_conditions' => $evaluation['long']['failed'] ?? [],
+                'all_passed' => $evaluation['passed']['long'] ?? false,
+                'composite_evaluation' => $evaluation['long']['requirements'] ?? [],
             ],
             'short' => [
-                'required_conditions' => $shortDefinition,
+                'required_conditions' => array_keys($shortConditions),
                 'passed_conditions' => $shortPassed,
-                'failed_conditions' => $shortFailed,
-                'all_passed' => $shortDefinition === [] ? true : ($shortEval['passed'] ?? false),
-                'composite_evaluation' => $shortEval['requirements'] ?? [],
+                'failed_conditions' => $evaluation['short']['failed'] ?? [],
+                'all_passed' => $evaluation['passed']['short'] ?? false,
+                'composite_evaluation' => $evaluation['short']['requirements'] ?? [],
             ],
         ];
-    }
-
-    /**
-     * @param array<string,array> $results
-     * @param string[] $names
-     * @return array{0: string[], 1: string[]}
-     */
-    private function splitPassedFailed(array $results, array $names): array
-    {
-        $passed = [];
-        $failed = [];
-
-        foreach ($names as $name) {
-            $condition = $results[$name] ?? null;
-            if (($condition['passed'] ?? false) === true) {
-                $passed[] = $name;
-            } else {
-                $failed[] = $name;
-            }
-        }
-
-        return [$passed, $failed];
     }
 
     private function getTimeframeLabel(string $timeframe): string
