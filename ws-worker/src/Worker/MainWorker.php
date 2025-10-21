@@ -4,6 +4,8 @@ namespace App\Worker;
 use App\Infra\BitmartWsClient;
 use App\Infra\AuthHandler;
 use React\EventLoop\Loop;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 final class MainWorker
 {
@@ -24,18 +26,21 @@ final class MainWorker
         private int $subscribeBatch = 20,
         private int $subscribeDelayMs = 200,
         private int $pingIntervalS = 15,
-        private int $reconnectDelayS = 5
-    ) {}
+        private int $reconnectDelayS = 5,
+        private ?LoggerInterface $logger = null,
+    ) {
+        $this->logger = $this->logger ?? new NullLogger();
+    }
 
     public function run(): void
     {
         if ($this->isRunning) {
-            fwrite(STDERR, "[MAIN] Worker is already running\n");
-            return;
+        $this->logger?->warning('Worker is already running', ['channel' => 'ws-main']);
+        return;
         }
 
         $this->isRunning = true;
-        fwrite(STDOUT, "[MAIN] Starting BitMart WebSocket workers...\n");
+        $this->logger?->info('Starting BitMart WebSocket workers...', ['channel' => 'ws-main']);
 
         $this->initializeWorkers();
         $this->startWorkers();
@@ -45,42 +50,46 @@ final class MainWorker
     private function initializeWorkers(): void
     {
         // Client WebSocket public (pour les klines)
-        $this->publicWsClient = new BitmartWsClient($this->publicWsUri);
+        $this->publicWsClient = new BitmartWsClient($this->publicWsUri, logger: $this->logger);
         
         // Client WebSocket privé (pour les ordres et positions)
         $this->privateWsClient = new BitmartWsClient(
             $this->privateWsUri,
             $this->apiKey,
             $this->apiSecret,
-            $this->apiMemo
+            $this->apiMemo,
+            $this->logger
         );
 
         // Gestionnaire d'authentification
-        $this->authHandler = new AuthHandler($this->privateWsClient);
+        $this->authHandler = new AuthHandler($this->privateWsClient, $this->logger);
 
         // Workers
         $this->klineWorker = new KlineWorker(
             $this->publicWsClient,
             $this->subscribeBatch,
             $this->subscribeDelayMs,
-            $this->pingIntervalS
+            $this->pingIntervalS,
+            $this->logger
         );
 
         $this->orderWorker = new OrderWorker(
             $this->privateWsClient,
             $this->authHandler,
             $this->subscribeBatch,
-            $this->subscribeDelayMs
+            $this->subscribeDelayMs,
+            $this->logger
         );
 
         $this->positionWorker = new PositionWorker(
             $this->privateWsClient,
             $this->authHandler,
             $this->subscribeBatch,
-            $this->subscribeDelayMs
+            $this->subscribeDelayMs,
+            $this->logger
         );
 
-        fwrite(STDOUT, "[MAIN] Workers initialized\n");
+        $this->logger?->info('Workers initialized', ['channel' => 'ws-main']);
     }
 
     private function startWorkers(): void
@@ -96,18 +105,18 @@ final class MainWorker
 
         // Authentification pour les canaux privés
         $this->privateWsClient->onOpen(function() {
-            fwrite(STDOUT, "[MAIN] Private WebSocket connected, authenticating...\n");
+        $this->logger?->info('Private WebSocket connected, authenticating...', ['channel' => 'ws-main']);
             $this->authHandler->authenticate();
         });
 
-        fwrite(STDOUT, "[MAIN] All workers started\n");
+        $this->logger?->info('All workers started', ['channel' => 'ws-main']);
     }
 
     private function setupReconnectionHandlers(): void
     {
         // Reconnexion automatique pour le client public
         $this->publicWsClient->onClose(function() {
-            fwrite(STDOUT, "[MAIN] Public WebSocket disconnected, reconnecting in {$this->reconnectDelayS}s...\n");
+            $this->logger?->warning('Public WebSocket disconnected, reconnecting', ['channel' => 'ws-main', 'delay_s' => $this->reconnectDelayS]);
             Loop::addTimer($this->reconnectDelayS, function() {
                 $this->publicWsClient->connect();
             });
@@ -115,7 +124,7 @@ final class MainWorker
 
         // Reconnexion automatique pour le client privé
         $this->privateWsClient->onClose(function() {
-            fwrite(STDOUT, "[MAIN] Private WebSocket disconnected, reconnecting in {$this->reconnectDelayS}s...\n");
+            $this->logger?->warning('Private WebSocket disconnected, reconnecting', ['channel' => 'ws-main', 'delay_s' => $this->reconnectDelayS]);
             $this->authHandler->onConnectionLost();
             Loop::addTimer($this->reconnectDelayS, function() {
                 $this->privateWsClient->connect();
@@ -124,11 +133,11 @@ final class MainWorker
 
         // Gestion des erreurs
         $this->publicWsClient->onError(function(\Throwable $e) {
-            fwrite(STDERR, "[MAIN] Public WebSocket error: " . $e->getMessage() . "\n");
+            $this->logger?->error('Public WebSocket error', ['channel' => 'ws-main', 'error' => $e->getMessage()]);
         });
 
         $this->privateWsClient->onError(function(\Throwable $e) {
-            fwrite(STDERR, "[MAIN] Private WebSocket error: " . $e->getMessage() . "\n");
+            $this->logger?->error('Private WebSocket error', ['channel' => 'ws-main', 'error' => $e->getMessage()]);
         });
     }
 
@@ -136,67 +145,67 @@ final class MainWorker
     public function subscribeToKlines(string $symbol, array $timeframes): void
     {
         if (!$this->klineWorker) {
-            fwrite(STDERR, "[MAIN] KlineWorker not initialized\n");
+            $this->logger?->error('KlineWorker not initialized', ['channel' => 'ws-main']);
             return;
         }
 
         $this->klineWorker->subscribe($symbol, $timeframes);
-        fwrite(STDOUT, "[MAIN] Subscribed to klines: {$symbol} " . implode(',', $timeframes) . "\n");
+        $this->logger?->info('Subscribed to klines', ['channel' => 'ws-main', 'symbol' => $symbol, 'tfs' => $timeframes]);
     }
 
     public function unsubscribeFromKlines(string $symbol, array $timeframes): void
     {
         if (!$this->klineWorker) {
-            fwrite(STDERR, "[MAIN] KlineWorker not initialized\n");
+            $this->logger?->error('KlineWorker not initialized', ['channel' => 'ws-main']);
             return;
         }
 
         $this->klineWorker->unsubscribe($symbol, $timeframes);
-        fwrite(STDOUT, "[MAIN] Unsubscribed from klines: {$symbol} " . implode(',', $timeframes) . "\n");
+        $this->logger?->info('Unsubscribed from klines', ['channel' => 'ws-main', 'symbol' => $symbol, 'tfs' => $timeframes]);
     }
 
     public function subscribeToOrders(): void
     {
         if (!$this->orderWorker) {
-            fwrite(STDERR, "[MAIN] OrderWorker not initialized\n");
+            $this->logger?->error('OrderWorker not initialized', ['channel' => 'ws-main']);
             return;
         }
 
         $this->orderWorker->subscribeToOrders();
-        fwrite(STDOUT, "[MAIN] Subscribed to orders\n");
+        $this->logger?->info('Subscribed to orders', ['channel' => 'ws-main']);
     }
 
     public function unsubscribeFromOrders(): void
     {
         if (!$this->orderWorker) {
-            fwrite(STDERR, "[MAIN] OrderWorker not initialized\n");
+            $this->logger?->error('OrderWorker not initialized', ['channel' => 'ws-main']);
             return;
         }
 
         $this->orderWorker->unsubscribeFromOrders();
-        fwrite(STDOUT, "[MAIN] Unsubscribed from orders\n");
+        $this->logger?->info('Unsubscribed from orders', ['channel' => 'ws-main']);
     }
 
     public function subscribeToPositions(): void
     {
         if (!$this->positionWorker) {
-            fwrite(STDERR, "[MAIN] PositionWorker not initialized\n");
+            $this->logger?->error('PositionWorker not initialized', ['channel' => 'ws-main']);
             return;
         }
 
         $this->positionWorker->subscribeToPositions();
-        fwrite(STDOUT, "[MAIN] Subscribed to positions\n");
+        $this->logger?->info('Subscribed to positions', ['channel' => 'ws-main']);
     }
 
     public function unsubscribeFromPositions(): void
     {
         if (!$this->positionWorker) {
-            fwrite(STDERR, "[MAIN] PositionWorker not initialized\n");
+            $this->logger?->error('PositionWorker not initialized', ['channel' => 'ws-main']);
             return;
         }
 
         $this->positionWorker->unsubscribeFromPositions();
-        fwrite(STDOUT, "[MAIN] Unsubscribed from positions\n");
+        $this->logger?->info('Unsubscribed from positions', ['channel' => 'ws-main']);
     }
 
     // Méthodes pour obtenir l'état des workers
@@ -221,7 +230,7 @@ final class MainWorker
         }
 
         $this->isRunning = false;
-        fwrite(STDOUT, "[MAIN] Stopping workers...\n");
+        $this->logger?->info('Stopping workers...', ['channel' => 'ws-main']);
 
         // Fermer les connexions WebSocket
         if ($this->publicWsClient && $this->publicWsClient->isConnected()) {
@@ -232,11 +241,9 @@ final class MainWorker
             $this->privateWsClient->send(['action' => 'close']);
         }
 
-        fwrite(STDOUT, "[MAIN] Workers stopped\n");
+        $this->logger?->info('Workers stopped', ['channel' => 'ws-main']);
     }
 }
-
-
 
 
 

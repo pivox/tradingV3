@@ -6,6 +6,8 @@ namespace App\Worker;
 use React\EventLoop\Loop;
 use App\Infra\BitmartWsClient;
 use PDO;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 final class KlineWorker
 {
@@ -32,13 +34,16 @@ final class KlineWorker
     ];
 
     private ?PDO $pdo = null;
+    private LoggerInterface $logger;
 
     public function __construct(
         private BitmartWsClient $ws,
         private int $subscribeBatch,
         private int $subscribeDelayMs,
         private int $pingIntervalS,
+        ?LoggerInterface $logger = null,
     ) {
+        $this->logger = $logger ?? new NullLogger();
         $this->initDatabase();
     }
 
@@ -54,7 +59,7 @@ final class KlineWorker
             if (!isset($this->active[$ch])) {
                 $this->active[$ch] = true;
                 $this->pendingSubscriptions[] = $ch;
-                fwrite(STDOUT, "[KLINE] Queued subscription: {$ch}\n");
+                $this->logger->info('Queued subscription', ['channel' => 'ws-kline', 'ch' => $ch]);
             }
         }
     }
@@ -67,7 +72,7 @@ final class KlineWorker
             if (isset($this->active[$ch])) {
                 unset($this->active[$ch]);
                 $this->pendingUnsubscriptions[] = $ch;
-                fwrite(STDOUT, "[KLINE] Queued unsubscription: {$ch}\n");
+                $this->logger->info('Queued unsubscription', ['channel' => 'ws-kline', 'ch' => $ch]);
             }
         }
     }
@@ -84,7 +89,7 @@ final class KlineWorker
         Loop::addPeriodicTimer($this->pingIntervalS, function () {
             if ($this->ws->isConnected()) {
                 $this->ws->ping();
-                fwrite(STDOUT, "[PING] sent\n");
+                $this->logger->debug('Ping sent', ['channel' => 'ws-kline']);
             }
         });
 
@@ -99,7 +104,7 @@ final class KlineWorker
 
         $this->ws->onMessage(function (string $raw) {
             // === LOG BRUT DU MESSAGE WS ===
-            error_log("[WS_RAW] ".$raw);
+            $this->logger->debug('[WS_RAW] '.$raw, ['channel' => 'ws-kline']);
             $this->handleMessage($raw);
         });
     }
@@ -129,8 +134,8 @@ final class KlineWorker
         if (!empty($batch)) {
             $this->ws->subscribe($batch);
             // === LOG BRUT DES REQUÊTES SUB ===
-            error_log("[SUB_REQ] " . json_encode(['action' => 'subscribe', 'args' => $batch]));
-            fwrite(STDOUT, "[KLINE] Subscribed to: " . implode(', ', $batch) . "\n");
+            $this->logger->info('[SUB_REQ]', ['channel' => 'ws-kline', 'args' => $batch]);
+            $this->logger->info('Subscribed to', ['channel' => 'ws-kline', 'channels' => $batch]);
         }
     }
 
@@ -143,8 +148,8 @@ final class KlineWorker
         if (!empty($batch)) {
             $this->ws->unsubscribe($batch);
             // === LOG BRUT DES REQUÊTES UNSUB ===
-            error_log("[UNSUB_REQ] " . json_encode(['action' => 'unsubscribe', 'args' => $batch]));
-            fwrite(STDOUT, "[KLINE] Unsubscribed from: " . implode(', ', $batch) . "\n");
+            $this->logger->info('[UNSUB_REQ]', ['channel' => 'ws-kline', 'args' => $batch]);
+            $this->logger->info('Unsubscribed from', ['channel' => 'ws-kline', 'channels' => $batch]);
         }
     }
 
@@ -154,13 +159,13 @@ final class KlineWorker
 
     private function handleConnectionOpened(): void
     {
-        fwrite(STDOUT, "[KLINE] WebSocket connection opened\n");
+        $this->logger->info('WebSocket connection opened', ['channel' => 'ws-kline']);
         // Les souscriptions en attente seront traitées par le timer.
     }
 
     private function handleConnectionLost(): void
     {
-        fwrite(STDOUT, "[KLINE] WebSocket connection lost, requeue subscriptions\n");
+        $this->logger->warning('WebSocket connection lost, requeue subscriptions', ['channel' => 'ws-kline']);
         // Snapshot AVANT reset
         $channels = array_keys($this->active);
         $this->active = [];
@@ -174,7 +179,7 @@ final class KlineWorker
     {
         $d = json_decode($raw, true);
         if (!is_array($d)) {
-            error_log("[KLINE_DEBUG] Non-JSON or invalid JSON payload");
+            $this->logger->warning('[KLINE_DEBUG] Non-JSON or invalid JSON payload', ['channel' => 'ws-kline']);
             return;
         }
 
@@ -186,7 +191,7 @@ final class KlineWorker
             $this->processKlineData($d, $raw);
         } elseif ($group && str_starts_with($group, 'futures/klineBin') && isset($d['action'])) {
             // Message de confirmation d'abonnement/désabonnement - on l'ignore
-            fwrite(STDOUT, "[KLINE] Confirmation: {$d['action']} for {$group}\n");
+            $this->logger->debug('Confirmation', ['channel' => 'ws-kline', 'action' => $d['action'], 'group' => $group]);
         }
     }
 
@@ -201,7 +206,7 @@ final class KlineWorker
 
         // data peut être un objet kline ou une liste (multi-kline)
         if (!is_array($payload)) {
-            error_log("[KLINE_DEBUG] 'data' missing or not array");
+            $this->logger->warning("[KLINE_DEBUG] 'data' missing or not array", ['channel' => 'ws-kline']);
             return;
         }
 
@@ -211,7 +216,7 @@ final class KlineWorker
             if (!empty($items)) {
                 $payload = end($items); // Prendre le dernier item
             } else {
-                error_log("[KLINE_DEBUG] Empty items array");
+                $this->logger->warning('[KLINE_DEBUG] Empty items array', ['channel' => 'ws-kline']);
                 return;
             }
         }
@@ -224,7 +229,7 @@ final class KlineWorker
         }
 
         if (!preg_match('/futures\/klineBin(\w+):([A-Z0-9_]+)/', $group, $m)) {
-            error_log("[KLINE_DEBUG] Group pattern not matched: {$group}");
+            $this->logger->warning('[KLINE_DEBUG] Group pattern not matched', ['channel' => 'ws-kline', 'group' => $group]);
             return;
         }
         $bitmartTf = $m[1];
@@ -232,7 +237,7 @@ final class KlineWorker
         $tf        = $this->convertTimeframeFromBitmart($bitmartTf);
 
         // === LOG BRUT DU KLINE PARSE ===
-        error_log("[KLINE_RAW] group={$group} symbol={$symbol} tf={$tf} data=" . json_encode($payload));
+        $this->logger->debug('[KLINE_RAW]', ['channel' => 'ws-kline', 'group' => $group, 'symbol' => $symbol, 'tf' => $tf, 'data' => $payload]);
 
         // Extraction stricte
         $open  = $this->extract($payload, ['o', 'open']);
@@ -243,14 +248,14 @@ final class KlineWorker
         $ts    = $this->extract($payload, ['ts', 'open_time']);
 
         if ($open === null || $high === null || $low === null || $close === null || $vol === null || $ts === null) {
-            fwrite(STDERR, "[KLINE_DEBUG] Missing fields for {$symbol} {$tf}. keys=" . implode(',', array_keys($payload)) . "\n");
+            $this->logger->warning('[KLINE_DEBUG] Missing fields', ['channel' => 'ws-kline', 'symbol' => $symbol, 'tf' => $tf, 'keys' => array_keys($payload)]);
             return;
         }
 
         // Normalisation ts: BitMart en secondes -> ms
         $tsMs = $this->normalizeTsSecondsToMs($ts);
         if ($tsMs === null) {
-            fwrite(STDERR, "[KLINE_DEBUG] Invalid ts for {$symbol} {$tf}: {$ts}\n");
+            $this->logger->warning('[KLINE_DEBUG] Invalid ts', ['channel' => 'ws-kline', 'symbol' => $symbol, 'tf' => $tf, 'ts' => $ts]);
             return;
         }
 
@@ -261,12 +266,12 @@ final class KlineWorker
             (float)$low   == 0.0 &&
             (float)$close == 0.0
         ) {
-            error_log("[KLINE_GUARD] Zero-frame ignored {$symbol} {$tf} ts={$tsMs}");
+            $this->logger->notice('[KLINE_GUARD] Zero-frame ignored', ['channel' => 'ws-kline', 'symbol' => $symbol, 'tf' => $tf, 'ts' => $tsMs]);
             return;
         }
 
         // Log valeurs extraites
-        fwrite(STDOUT, "[KLINE_DEBUG] {$symbol} {$tf} | O={$open} H={$high} L={$low} C={$close} V={$vol} TS(ms)={$tsMs}\n");
+        $this->logger->debug('[KLINE_DEBUG] extracted', ['channel' => 'ws-kline', 'symbol' => $symbol, 'tf' => $tf, 'o' => $open, 'h' => $high, 'l' => $low, 'c' => $close, 'v' => $vol, 'ts_ms' => $tsMs]);
 
         // Fermeture éventuelle de la bougie précédente
         $prev = $this->lastOpen[$symbol][$tf] ?? null;
@@ -316,22 +321,29 @@ final class KlineWorker
             ]);
 
             // === LOG BRUT D'ECRITURE DB ===
-            error_log("[HOT_KLINE_UPSERT] ".json_encode([
+            $this->logger->info('[HOT_KLINE_UPSERT]', [
+                'channel' => 'ws-kline',
                 'symbol' => $symbol,
                 'tf' => $tf,
                 'open_time' => $openTime->format('Y-m-d H:i:s'),
                 'ohlc' => $ohlc,
                 'is_closed' => false,
-            ]));
+            ]);
 
-            fwrite(STDOUT, sprintf(
-                "[HOT_KLINE] Saved: %s %s | O:%s H:%s L:%s C:%s V:%s\n",
-                $symbol, $tf, $open, $high, $low, $close, $volume
-            ));
+            $this->logger->info('[HOT_KLINE] Saved', [
+                'channel' => 'ws-kline',
+                'symbol' => $symbol,
+                'tf' => $tf,
+                'o' => $open,
+                'h' => $high,
+                'l' => $low,
+                'c' => $close,
+                'v' => $volume,
+            ]);
 
         } catch (\Throwable $e) {
-            fwrite(STDERR, "[HOT_KLINE] Database save failed: " . $e->getMessage() . "\n");
-            error_log("[HOT_KLINE_ERR] ".$e->getTraceAsString());
+            $this->logger->error('[HOT_KLINE] Database save failed', ['channel' => 'ws-kline', 'error' => $e->getMessage()]);
+            $this->logger->error('[HOT_KLINE_ERR]', ['channel' => 'ws-kline', 'trace' => $e->getTraceAsString()]);
         }
     }
 
@@ -347,14 +359,15 @@ final class KlineWorker
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute([$symbol, $tf, $prevTime->format('Y-m-d H:i:s')]);
 
-            error_log("[HOT_KLINE_CLOSE] ".json_encode([
+            $this->logger->info('[HOT_KLINE_CLOSE]', [
+                'channel' => 'ws-kline',
                 'symbol' => $symbol,
                 'tf' => $tf,
                 'open_time' => $prevTime->format('Y-m-d H:i:s'),
                 'closed' => true,
-            ]));
+            ]);
         } catch (\Throwable $e) {
-            fwrite(STDERR, "[HOT_KLINE] Mark previous closed failed: " . $e->getMessage() . "\n");
+            $this->logger->error('[HOT_KLINE] Mark previous closed failed', ['channel' => 'ws-kline', 'error' => $e->getMessage()]);
         }
     }
 
@@ -403,7 +416,7 @@ final class KlineWorker
         try {
             $databaseUrl = $_ENV['DATABASE_URL'] ?? null;
             if (!$databaseUrl) {
-                fwrite(STDERR, "[KLINE] DATABASE_URL not configured, persistence disabled\n");
+                $this->logger->warning('DATABASE_URL not configured, persistence disabled', ['channel' => 'ws-kline']);
                 return;
             }
 
@@ -423,9 +436,9 @@ final class KlineWorker
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             ]);
 
-            fwrite(STDOUT, "[KLINE] Database connection established\n");
+            $this->logger->info('Database connection established', ['channel' => 'ws-kline']);
         } catch (\Throwable $e) {
-            fwrite(STDERR, "[KLINE] Database connection failed: " . $e->getMessage() . "\n");
+            $this->logger->error('Database connection failed', ['channel' => 'ws-kline', 'error' => $e->getMessage()]);
             $this->pdo = null;
         }
     }

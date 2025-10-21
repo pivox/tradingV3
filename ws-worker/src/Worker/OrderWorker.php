@@ -4,31 +4,37 @@ namespace App\Worker;
 use App\Infra\BitmartWsClient;
 use App\Infra\AuthHandler;
 use React\EventLoop\Loop;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 final class OrderWorker
 {
     private array $subscribedChannels = [];
     private array $pendingSubscriptions = [];
     private array $pendingUnsubscriptions = [];
+    private LoggerInterface $logger;
 
     public function __construct(
         private BitmartWsClient $wsClient,
         private AuthHandler $authHandler,
         private int $subscribeBatch = 10,
-        private int $subscribeDelayMs = 200
-    ) {}
+        private int $subscribeDelayMs = 200,
+        ?LoggerInterface $logger = null
+    ) {
+        $this->logger = $logger ?? new NullLogger();
+    }
 
     public function subscribeToOrders(): void
     {
         $channel = 'futures/order';
         
         if (in_array($channel, $this->subscribedChannels)) {
-            fwrite(STDOUT, "[ORDER] Already subscribed to orders channel\n");
+            $this->logger->info('Already subscribed to orders channel', ['channel' => 'ws-order']);
             return;
         }
 
         $this->pendingSubscriptions[] = $channel;
-        fwrite(STDOUT, "[ORDER] Queued subscription to orders channel\n");
+        $this->logger->info('Queued subscription to orders channel', ['channel' => 'ws-order']);
     }
 
     public function unsubscribeFromOrders(): void
@@ -36,12 +42,12 @@ final class OrderWorker
         $channel = 'futures/order';
         
         if (!in_array($channel, $this->subscribedChannels)) {
-            fwrite(STDOUT, "[ORDER] Not subscribed to orders channel\n");
+            $this->logger->info('Not subscribed to orders channel', ['channel' => 'ws-order']);
             return;
         }
 
         $this->pendingUnsubscriptions[] = $channel;
-        fwrite(STDOUT, "[ORDER] Queued unsubscription from orders channel\n");
+        $this->logger->info('Queued unsubscription from orders channel', ['channel' => 'ws-order']);
     }
 
     public function run(): void
@@ -81,7 +87,7 @@ final class OrderWorker
         if (!empty($batch)) {
             $this->wsClient->subscribe($batch);
             $this->subscribedChannels = array_merge($this->subscribedChannels, $batch);
-            fwrite(STDOUT, "[ORDER] Subscribed to channels: " . implode(', ', $batch) . "\n");
+            $this->logger->info('Subscribed to order channels', ['channel' => 'ws-order', 'channels' => $batch]);
         }
     }
 
@@ -95,7 +101,7 @@ final class OrderWorker
         if (!empty($batch)) {
             $this->wsClient->unsubscribe($batch);
             $this->subscribedChannels = array_diff($this->subscribedChannels, $batch);
-            fwrite(STDOUT, "[ORDER] Unsubscribed from channels: " . implode(', ', $batch) . "\n");
+            $this->logger->info('Unsubscribed from order channels', ['channel' => 'ws-order', 'channels' => $batch]);
         }
     }
 
@@ -162,18 +168,18 @@ final class OrderWorker
             default => 'UNKNOWN'
         };
 
-        fwrite(STDOUT, sprintf(
-            "[ORDER] %s | %s | %s | %s | Price: %s | Size: %s | Deal: %s@%s | State: %s\n",
-            $actionText,
-            $orderId,
-            $symbol,
-            $type,
-            $price,
-            $size,
-            $dealSize,
-            $dealAvgPrice,
-            $stateText
-        ));
+        $this->logger->info('[ORDER]', [
+            'channel' => 'ws-order',
+            'action' => $actionText,
+            'order_id' => $orderId,
+            'symbol' => $symbol,
+            'type' => $type,
+            'price' => $price,
+            'size' => $size,
+            'deal_size' => $dealSize,
+            'deal_avg_price' => $dealAvgPrice,
+            'state' => $stateText,
+        ]);
 
         // Ici vous pouvez ajouter votre logique de persistance ou de notification
         // Par exemple : envoyer vers une base de données, un message queue, etc.
@@ -181,13 +187,13 @@ final class OrderWorker
 
     private function handleConnectionOpened(): void
     {
-        fwrite(STDOUT, "[ORDER] WebSocket connection opened\n");
+        $this->logger->info('Order WS connection opened', ['channel' => 'ws-order']);
         // Les souscriptions seront traitées automatiquement par le timer
     }
 
     private function handleConnectionLost(): void
     {
-        fwrite(STDOUT, "[ORDER] WebSocket connection lost, clearing subscriptions\n");
+        $this->logger->warning('Order WS connection lost, clearing subscriptions', ['channel' => 'ws-order']);
         $this->subscribedChannels = [];
         $this->authHandler->onConnectionLost();
     }
@@ -202,7 +208,6 @@ final class OrderWorker
         return in_array('futures/order', $this->subscribedChannels);
     }
 }
-
 
 
 

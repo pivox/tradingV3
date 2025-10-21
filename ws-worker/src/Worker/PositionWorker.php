@@ -4,6 +4,8 @@ namespace App\Worker;
 use App\Infra\BitmartWsClient;
 use App\Infra\AuthHandler;
 use React\EventLoop\Loop;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 final class PositionWorker
 {
@@ -11,25 +13,29 @@ final class PositionWorker
     private array $pendingSubscriptions = [];
     private array $pendingUnsubscriptions = [];
     private array $lastPositions = [];
+    private LoggerInterface $logger;
 
     public function __construct(
         private BitmartWsClient $wsClient,
         private AuthHandler $authHandler,
         private int $subscribeBatch = 10,
-        private int $subscribeDelayMs = 200
-    ) {}
+        private int $subscribeDelayMs = 200,
+        ?LoggerInterface $logger = null
+    ) {
+        $this->logger = $logger ?? new NullLogger();
+    }
 
     public function subscribeToPositions(): void
     {
         $channel = 'futures/position';
         
         if (in_array($channel, $this->subscribedChannels)) {
-            fwrite(STDOUT, "[POSITION] Already subscribed to positions channel\n");
+            $this->logger->info('Already subscribed to positions channel', ['channel' => 'ws-position']);
             return;
         }
 
         $this->pendingSubscriptions[] = $channel;
-        fwrite(STDOUT, "[POSITION] Queued subscription to positions channel\n");
+        $this->logger->info('Queued subscription to positions channel', ['channel' => 'ws-position']);
     }
 
     public function unsubscribeFromPositions(): void
@@ -37,12 +43,12 @@ final class PositionWorker
         $channel = 'futures/position';
         
         if (!in_array($channel, $this->subscribedChannels)) {
-            fwrite(STDOUT, "[POSITION] Not subscribed to positions channel\n");
+            $this->logger->info('Not subscribed to positions channel', ['channel' => 'ws-position']);
             return;
         }
 
         $this->pendingUnsubscriptions[] = $channel;
-        fwrite(STDOUT, "[POSITION] Queued unsubscription from positions channel\n");
+        $this->logger->info('Queued unsubscription from positions channel', ['channel' => 'ws-position']);
     }
 
     public function run(): void
@@ -82,7 +88,7 @@ final class PositionWorker
         if (!empty($batch)) {
             $this->wsClient->subscribe($batch);
             $this->subscribedChannels = array_merge($this->subscribedChannels, $batch);
-            fwrite(STDOUT, "[POSITION] Subscribed to channels: " . implode(', ', $batch) . "\n");
+            $this->logger->info('Subscribed to position channels', ['channel' => 'ws-position', 'channels' => $batch]);
         }
     }
 
@@ -96,7 +102,7 @@ final class PositionWorker
         if (!empty($batch)) {
             $this->wsClient->unsubscribe($batch);
             $this->subscribedChannels = array_diff($this->subscribedChannels, $batch);
-            fwrite(STDOUT, "[POSITION] Unsubscribed from channels: " . implode(', ', $batch) . "\n");
+            $this->logger->info('Unsubscribed from position channels', ['channel' => 'ws-position', 'channels' => $batch]);
         }
     }
 
@@ -165,18 +171,18 @@ final class PositionWorker
         }
 
         if ($hasChanged) {
-            fwrite(STDOUT, sprintf(
-                "[POSITION] %s | %s | %s | Volume: %s | Avg Price: %s | Liq Price: %s | Mode: %s | Frozen: %s | Close: %s\n",
-                $symbol,
-                $positionTypeText,
-                $openTypeText,
-                $holdVolume,
-                $holdAvgPrice,
-                $liquidatePrice,
-                $positionMode,
-                $frozenVolume,
-                $closeVolume
-            ));
+            $this->logger->info('[POSITION]', [
+                'channel' => 'ws-position',
+                'symbol' => $symbol,
+                'position_type' => $positionTypeText,
+                'open_type' => $openTypeText,
+                'hold_volume' => $holdVolume,
+                'hold_avg_price' => $holdAvgPrice,
+                'liquidate_price' => $liquidatePrice,
+                'position_mode' => $positionMode,
+                'frozen_volume' => $frozenVolume,
+                'close_volume' => $closeVolume,
+            ]);
 
             // Mettre à jour le cache des positions
             $this->lastPositions[$positionKey] = [
@@ -196,13 +202,13 @@ final class PositionWorker
 
     private function handleConnectionOpened(): void
     {
-        fwrite(STDOUT, "[POSITION] WebSocket connection opened\n");
+        $this->logger->info('Position WS connection opened', ['channel' => 'ws-position']);
         // Les souscriptions seront traitées automatiquement par le timer
     }
 
     private function handleConnectionLost(): void
     {
-        fwrite(STDOUT, "[POSITION] WebSocket connection lost, clearing subscriptions\n");
+        $this->logger->warning('Position WS connection lost, clearing subscriptions', ['channel' => 'ws-position']);
         $this->subscribedChannels = [];
         $this->authHandler->onConnectionLost();
     }
@@ -232,7 +238,6 @@ final class PositionWorker
         return null;
     }
 }
-
 
 
 
