@@ -8,12 +8,12 @@ use App\Domain\Common\Enum\SignalSide;
 use App\Domain\Trading\Service\TradingDecisionService;
 use App\Domain\Trading\Service\TradeContextService;
 use App\Event\MtfRunCompletedEvent;
+use App\Infrastructure\Http\BitmartClient;
 use App\Repository\MtfLockRepository;
 use App\Repository\MtfSwitchRepository;
 use App\Repository\ContractRepository;
-use App\Logging\AsyncBusLogHandler;
-use App\Logging\MessengerLogHandler;
 use App\Service\Indicator\SqlIndicatorService;
+use App\Service\Price\TradingPriceResolver;
 use Monolog\Level;
 use Monolog\Logger as MonologLogger;
 use Psr\Clock\ClockInterface;
@@ -25,7 +25,6 @@ use Throwable;
 
 class MtfRunService
 {
-    private bool $asyncDebugLoggingAvailable;
     private string $resolvedLogAppName;
     private string $logChannel;
 
@@ -41,9 +40,10 @@ class MtfRunService
         private readonly TradeContextService $tradeContext,
         private readonly SqlIndicatorService $sqlIndicatorService,
         private readonly EventDispatcherInterface $eventDispatcher,
+        private readonly BitmartClient $bitmartClient,
+        private readonly TradingPriceResolver $tradingPriceResolver,
         private readonly ?string $logAppName = null,
     ) {
-        $this->asyncDebugLoggingAvailable = $this->detectAsyncDebugLogging($this->logger);
         $this->resolvedLogAppName = $this->logAppName ?? 'trading-app';
         $this->logChannel = $this->resolveLoggerChannel($this->logger);
     }
@@ -435,6 +435,7 @@ class MtfRunService
         if ($signalSideRaw === 'NONE') {
             return $result;
         }
+        $signalSide = SignalSide::from($signalSideRaw);
 
         $executionTf = strtolower((string)($result['execution_tf'] ?? ''));
         $this->logger->debug('[MTF Run] Evaluating trading decision', [
@@ -483,8 +484,53 @@ class MtfRunService
             return $result;
         }
 
-        $currentPrice = (float) $result['current_price'];
         $atr = (float) $result['atr'];
+        $snapshotPrice = isset($result['current_price']) ? (float) $result['current_price'] : null;
+        $priceResolution = $this->tradingPriceResolver->resolve($symbol, $signalSide, $snapshotPrice, $atr);
+
+        if ($priceResolution === null) {
+            $this->logger->warning('[MTF Run] Unable to resolve current price for trading decision', [
+                'symbol' => $symbol,
+                'snapshot_price' => $snapshotPrice,
+                'atr' => $atr,
+            ]);
+            try {
+                $this->positionsFlowLogger->warning('[PositionsFlow] Skipped trading decision (no_price_after_fallback)', [
+                    'symbol' => $symbol,
+                ]);
+            } catch (\Throwable) {}
+            return $result;
+        }
+
+        $currentPrice = $priceResolution->price;
+
+        $this->logger->debug('[MTF Run] Price selection resolved', [
+            'symbol' => $symbol,
+            'selected_source' => $priceResolution->source,
+            'selected_price' => $priceResolution->price,
+            'snapshot_price' => $priceResolution->snapshotPrice,
+            'provider_price' => $priceResolution->providerPrice,
+            'fallback_price' => $priceResolution->fallbackPrice,
+            'best_bid' => $priceResolution->bestBid,
+            'best_ask' => $priceResolution->bestAsk,
+            'relative_diff' => $priceResolution->relativeDiff,
+            'allowed_diff' => $priceResolution->allowedDiff,
+            'fallback_engaged' => $priceResolution->fallbackEngaged,
+        ]);
+
+        if ($priceResolution->fallbackEngaged && $priceResolution->source === 'bitmart_last_price') {
+            try {
+                $this->positionsFlowLogger->info('[PositionsFlow] Price fallback engaged', [
+                    'symbol' => $symbol,
+                    'snapshot_price' => $priceResolution->snapshotPrice,
+                    'provider_price' => $priceResolution->providerPrice,
+                    'selected_price' => $priceResolution->price,
+                    'relative_diff' => $priceResolution->relativeDiff,
+                    'allowed_diff' => $priceResolution->allowedDiff,
+                ]);
+            } catch (\Throwable) {}
+        }
+
         if ($currentPrice <= 0.0 || $atr <= 0.0) {
             $this->logger->debug('[MTF Run] Invalid price/ATR values, skipping trading decision', [
                 'symbol' => $symbol,
@@ -510,7 +556,7 @@ class MtfRunService
             } catch (\Throwable) {}
             $decision = $this->tradingDecisionService->makeTradingDecision(
                 $symbol,
-                SignalSide::from($signalSideRaw),
+                $signalSide,
                 $currentPrice,
                 $atr,
                 $accountBalance,
@@ -668,20 +714,6 @@ class MtfRunService
         }
     }
 
-    private function detectAsyncDebugLogging(LoggerInterface $logger): bool
-    {
-        if (!$logger instanceof MonologLogger) {
-            return false;
-        }
-
-        foreach ($logger->getHandlers() as $handler) {
-            if (($handler instanceof AsyncBusLogHandler || $handler instanceof MessengerLogHandler) && $this->handlerHandlesDebugLevel($handler)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     private function handlerHandlesDebugLevel(object $handler): bool
     {
