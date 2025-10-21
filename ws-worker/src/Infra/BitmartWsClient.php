@@ -4,6 +4,8 @@ namespace App\Infra;
 use Ratchet\Client\Connector;
 use Ratchet\Client\WebSocket;
 use React\EventLoop\Loop;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 final class BitmartWsClient
 {
@@ -14,12 +16,17 @@ final class BitmartWsClient
     private array $onError = [];
     private bool $isAuthenticated = false;
 
+    private LoggerInterface $logger;
+
     public function __construct(
         private string $bitmartWsUri,
         private ?string $apiKey = null,
         private ?string $apiSecret = null,
-        private ?string $apiMemo = null
-    ) {}
+        private ?string $apiMemo = null,
+        ?LoggerInterface $logger = null,
+    ) {
+        $this->logger = $logger ?? new NullLogger();
+    }
 
     public function connect(): void
     {
@@ -40,13 +47,13 @@ final class BitmartWsClient
                     if (isset($data['action']) && $data['action'] === 'access') {
                         $this->isAuthenticated = $data['success'] ?? false;
                         if (!$this->isAuthenticated) {
-                            fwrite(STDERR, "[WS] Authentication failed: " . ($data['error'] ?? 'Unknown error') . "\n");
+                            $this->logger->error('WS Authentication failed', ['channel' => 'ws-client', 'error' => $data['error'] ?? 'Unknown error']);
                         }
                     }
                     
                     // Gestion des erreurs de souscription
                     if (isset($data['success']) && !$data['success']) {
-                        fwrite(STDERR, "[WS] Subscription error: " . ($data['error'] ?? 'Unknown error') . "\n");
+                        $this->logger->error('WS Subscription error', ['channel' => 'ws-client', 'error' => $data['error'] ?? 'Unknown error']);
                     }
                     
                     array_map(fn($cb) => $cb($message), $this->onMessage);
@@ -59,12 +66,12 @@ final class BitmartWsClient
                 });
                 
                 $c->on('error', function(\Throwable $e) {
-                    fwrite(STDERR, "[WS] Connection error: " . $e->getMessage() . "\n");
+                    $this->logger->error('WS Connection error', ['channel' => 'ws-client', 'error' => $e->getMessage()]);
                     foreach ($this->onError as $cb) $cb($e);
                 });
             },
             function(\Throwable $e) {
-                fwrite(STDERR, "[WS] Connect error: " . $e->getMessage() . "\n");
+                $this->logger->error('WS Connect error', ['channel' => 'ws-client', 'error' => $e->getMessage()]);
                 foreach ($this->onError as $cb) $cb($e);
             }
         );
@@ -73,7 +80,7 @@ final class BitmartWsClient
     public function authenticate(): void
     {
         if (!$this->conn || !$this->apiKey || !$this->apiSecret || !$this->apiMemo) {
-            fwrite(STDERR, "[WS] Cannot authenticate: missing credentials\n");
+            $this->logger->warning('Cannot authenticate: missing credentials or connection', ['channel' => 'ws-client']);
             return;
         }
 
@@ -91,7 +98,7 @@ final class BitmartWsClient
     public function subscribe(array $channels): void
     {
         if (!$this->conn) {
-            fwrite(STDERR, "[WS] Cannot subscribe: not connected\n");
+            $this->logger->warning('Cannot subscribe: not connected', ['channel' => 'ws-client']);
             return;
         }
 
@@ -106,7 +113,7 @@ final class BitmartWsClient
     public function unsubscribe(array $channels): void
     {
         if (!$this->conn) {
-            fwrite(STDERR, "[WS] Cannot unsubscribe: not connected\n");
+            $this->logger->warning('Cannot unsubscribe: not connected', ['channel' => 'ws-client']);
             return;
         }
 

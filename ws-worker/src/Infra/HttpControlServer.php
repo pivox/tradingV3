@@ -4,16 +4,22 @@ namespace App\Infra;
 use Psr\Http\Message\ServerRequestInterface;
 use React\Http\HttpServer;
 use React\Socket\SocketServer;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 final class HttpControlServer
 {
     private HttpServer $server;
     private SocketServer $socket;
 
+    private LoggerInterface $logger;
+
     public function __construct(
         private \App\Worker\MainWorker $mainWorker,
-        string $ctrlAddress
+        string $ctrlAddress,
+        ?LoggerInterface $logger = null
     ){
+        $this->logger = $logger ?? new NullLogger();
         $this->server = new HttpServer(function (ServerRequestInterface $req) {
             return $this->handleRequest($req);
         });
@@ -21,7 +27,7 @@ final class HttpControlServer
         $this->socket = new SocketServer($ctrlAddress);
         $this->server->listen($this->socket);
         
-        fwrite(STDOUT, "[HTTP] Control server listening on {$ctrlAddress}\n");
+        $this->logger->info('Control server listening', ['channel' => 'ws-http', 'address' => $ctrlAddress]);
     }
 
     private function handleRequest(ServerRequestInterface $req): \React\Http\Message\Response

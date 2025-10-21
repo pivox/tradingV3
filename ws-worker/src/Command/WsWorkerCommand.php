@@ -4,6 +4,7 @@ namespace App\Command;
 use App\Infra\HttpControlServer;
 use App\Worker\MainWorker;
 use React\EventLoop\Loop;
+use App\Logging\HttpMessengerLogger;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -40,6 +41,10 @@ final class WsWorkerCommand extends Command
             $out->writeln('<comment>Variables requises: BITMART_API_KEY, BITMART_API_SECRET, BITMART_API_MEMO</comment>');
         }
 
+        // Créer le logger distant (PSR-3) → trading-app (Messenger/Redis)
+        $logEndpoint = $_ENV['TRADING_LOG_ENDPOINT'] ?? 'http://localhost:8082/internal/log';
+        $logger = new HttpMessengerLogger($logEndpoint, app: 'ws-worker', channel: 'ws');
+
         // Créer le worker principal
         $mainWorker = new MainWorker(
             $publicWsUri,
@@ -50,11 +55,12 @@ final class WsWorkerCommand extends Command
             $subscribeBatch,
             $subscribeDelayMs,
             $pingIntervalS,
-            $reconnectDelayS
+            $reconnectDelayS,
+            $logger
         );
 
         // Créer le serveur HTTP de contrôle
-        $httpServer = new HttpControlServer($mainWorker, $ctrlAddress);
+        $httpServer = new HttpControlServer($mainWorker, $ctrlAddress, $logger);
         
         // Démarrer le worker
         $mainWorker->run();
