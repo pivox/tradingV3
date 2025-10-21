@@ -248,7 +248,7 @@ final class BitmartWsClient
             Timeframe::TF_4H => '4h'
         ];
 
-        $tfString = $tfMap[$timeframe] ?? '1m';
+        $tfString = $tfMap[$timeframe->value] ?? '1m';
         return "futures/klineBin{$tfString}:{$symbol}";
     }
 
