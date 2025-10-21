@@ -121,7 +121,7 @@ Exemples:
         if (count($contracts) === 1) {
             $contract = $contracts[0];
             $io->section('Détails du contrat');
-            
+
             $details = [
                 'Symbole' => $contract['symbol'] ?? 'N/A',
                 'Nom' => $contract['name'] ?? 'N/A',
@@ -133,7 +133,7 @@ Exemples:
                 'Tick size' => $contract['tick_size'] ?? 'N/A',
                 'Multiplicateur' => $contract['multiplier'] ?? 'N/A',
                 'Statut' => $contract['status'] ?? 'N/A',
-                'Date de création' => isset($contract['create_time']) 
+                'Date de création' => isset($contract['create_time'])
                     ? (new \DateTimeImmutable('@' . $contract['create_time'], new \DateTimeZone('UTC')))->format('Y-m-d H:i:s')
                     : 'N/A'
             ];
