@@ -12,6 +12,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && pecl install redis-6.0.2 \
   && echo "extension=redis" > /usr/local/etc/php/conf.d/20-redis.ini \
   \
+    # ===== TA-Lib (lib C) =====
+    && curl -L -o /tmp/ta-lib.tar.gz https://github.com/TA-Lib/ta-lib/releases/download/v0.6.4/ta-lib-0.6.4-src.tar.gz \
+    && tar -xzf /tmp/ta-lib.tar.gz -C /tmp \
+    && cd /tmp/ta-lib-0.6.4 && ./configure --prefix=/usr && make -j"$(nproc)" && make install \
+    \
+    # ===== Extension PECL 'trader' =====
+    && pecl install trader && docker-php-ext-enable trader \
+  \
+
   # ---- Xdebug en dev ----
   && if [ "$APP_ENV" != "prod" ]; then pecl install xdebug-3.3.2 && docker-php-ext-enable xdebug; fi \
   \
@@ -21,7 +30,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   \
   # ---- Nettoyage ----
   && apt-get purge -y --auto-remove $PHPIZE_DEPS \
-  && rm -rf /var/lib/apt/lists/* /tmp/pear
+  && rm -rf /var/lib/apt/lists/* /tmp/pear \
+&& php -m | grep -iq '^trader$' \
+&& php -r 'echo "trader: OK", PHP_EOL;'
 
 # ⬇️ Génère le fichier d’options Xdebug si l’extension est chargée
 RUN if php -m | grep -qi xdebug; then \
