@@ -3,6 +3,8 @@ namespace App\Worker;
 
 use App\Infra\BitmartWsClient;
 use App\Infra\AuthHandler;
+use App\Order\OrderSignalDispatcher;
+use App\Order\OrderSignalFactory;
 use React\EventLoop\Loop;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -12,6 +14,7 @@ final class OrderWorker
     private array $subscribedChannels = [];
     private array $pendingSubscriptions = [];
     private array $pendingUnsubscriptions = [];
+    private array $dispatchedClientOrderIds = [];
     private LoggerInterface $logger;
 
     public function __construct(
@@ -19,7 +22,9 @@ final class OrderWorker
         private AuthHandler $authHandler,
         private int $subscribeBatch = 10,
         private int $subscribeDelayMs = 200,
-        ?LoggerInterface $logger = null
+        ?LoggerInterface $logger = null,
+        private ?OrderSignalDispatcher $signalDispatcher = null,
+        private ?OrderSignalFactory $signalFactory = null,
     ) {
         $this->logger = $logger ?? new NullLogger();
     }
@@ -183,6 +188,13 @@ final class OrderWorker
 
         // Ici vous pouvez ajouter votre logique de persistance ou de notification
         // Par exemple : envoyer vers une base de données, un message queue, etc.
+        $this->maybeDispatchOrderSignal(
+            $order,
+            (int) $action,
+            $orderData,
+            $actionText,
+            $stateText
+        );
     }
 
     private function handleConnectionOpened(): void
@@ -207,8 +219,44 @@ final class OrderWorker
     {
         return in_array('futures/order', $this->subscribedChannels);
     }
-}
 
+    /**
+     * @param array<string,mixed> $order
+     * @param array<string,mixed> $rawEvent
+     */
+    private function maybeDispatchOrderSignal(array $order, int $action, array $rawEvent, string $actionText, string $stateText): void
+    {
+        if ($this->signalDispatcher === null || $this->signalFactory === null) {
+            return;
+        }
+
+        if ($action !== 2) { // SUBMIT_ORDER uniquement
+            return;
+        }
+
+        $clientOrderId = (string)($order['client_order_id'] ?? '');
+        if ($clientOrderId === '' || isset($this->dispatchedClientOrderIds[$clientOrderId])) {
+            return;
+        }
+
+        try {
+            $signal = $this->signalFactory->createFromBitmartEvent($order, $rawEvent, $action, $actionText, $stateText);
+            if ($signal !== null) {
+                $this->signalDispatcher->dispatch($signal);
+                $this->dispatchedClientOrderIds[$clientOrderId] = true;
+                $this->logger->info('[OrderWorker] Dispatching order signal', [
+                    'client_order_id' => $clientOrderId,
+                    'trace_id' => $signal->traceId(),
+                ]);
+            }
+        } catch (\Throwable $exception) {
+            $this->logger->error('[OrderWorker] Failed to dispatch order signal', [
+                'client_order_id' => $clientOrderId,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+    }
+}
 
 
 

@@ -40,6 +40,9 @@ class OrderLifecycle
     #[ORM\Column(type: Types::STRING, length: 32, nullable: true)]
     private ?string $lastAction;
 
+    #[ORM\Column(type: Types::STRING, length: 24, options: ['default' => 'ENTRY'])]
+    private string $kind = 'ENTRY';
+
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE)]
     private \DateTimeImmutable $lastEventAt;
 
@@ -84,6 +87,14 @@ class OrderLifecycle
         return $this->orderId;
     }
 
+    public function setOrderId(string $orderId): self
+    {
+        $this->orderId = $orderId;
+        $this->touch();
+
+        return $this;
+    }
+
     public function getClientOrderId(): ?string
     {
         return $this->clientOrderId;
@@ -92,6 +103,19 @@ class OrderLifecycle
     public function setClientOrderId(?string $clientOrderId): self
     {
         $this->clientOrderId = $clientOrderId;
+        $this->touch();
+
+        return $this;
+    }
+
+    public function getKind(): string
+    {
+        return $this->kind;
+    }
+
+    public function setKind(string $kind): self
+    {
+        $this->kind = strtoupper($kind);
         $this->touch();
 
         return $this;
@@ -196,4 +220,3 @@ class OrderLifecycle
         $this->updatedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
     }
 }
-

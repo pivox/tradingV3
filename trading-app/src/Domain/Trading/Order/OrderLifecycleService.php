@@ -74,6 +74,7 @@ class OrderLifecycleService
             ->setClientOrderId($clientOrderId)
             ->setSide($side)
             ->setType($order['type'] ?? null)
+            ->setKind(self::KIND_ENTRY)
             ->replacePayload($payload);
 
         $this->persist($entity);
@@ -113,6 +114,7 @@ class OrderLifecycleService
         $entity
             ->setClientOrderId($clientOrderId)
             ->setType($order['orderType'] ?? $order['type'] ?? null)
+            ->setKind($kind)
             ->mergePayload($payload);
 
         $this->persist($entity);
@@ -152,6 +154,7 @@ class OrderLifecycleService
             ->setStatus($status, $this->eventTimestamp($event))
             ->setLastAction($this->determineAction($event))
             ->setType($event['type'] ?? $entity->getType())
+            ->setKind($this->determineKind($entity))
             ->mergePayload([
                 'last_event' => $event,
             ]);

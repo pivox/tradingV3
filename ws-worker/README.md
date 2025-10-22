@@ -14,7 +14,8 @@ ws-worker/
 │  ├─ Command/WsWorkerCommand.php    # Commande principale
 │  ├─ Infra/BitmartWsClient.php      # Client WebSocket Bitmart
 │  ├─ Infra/HttpControlServer.php    # Serveur HTTP de contrôle
-│  └─ Worker/KlineWorker.php         # Worker pour les klines
+│  ├─ Order/                         # DTO + dispatcher des signaux ordre
+│  └─ Worker/                        # Workers Kline / Orders / Positions
 ├─ .env                       # Variables d'environnement
 └─ Dockerfile                 # Image Docker
 ```
@@ -28,6 +29,12 @@ CTRL_ADDR=0.0.0.0:8089
 SUBSCRIBE_BATCH=20
 SUBSCRIBE_DELAY_MS=200
 PING_INTERVAL_S=15
+TRADING_APP_BASE_URI=http://localhost:8080
+TRADING_APP_ORDER_SIGNAL_PATH=/api/ws-worker/orders
+TRADING_APP_SHARED_SECRET=change-me
+TRADING_APP_REQUEST_TIMEOUT=2.0
+TRADING_APP_SIGNAL_MAX_RETRIES=5
+TRADING_APP_SIGNAL_FAILURE_LOG=var/order-signal-failures.log
 ```
 
 ## Utilisation
@@ -74,15 +81,16 @@ docker run -p 8089:8089 ws-worker
 - ✅ Gestion des souscriptions par lots (anti-burst)
 - ✅ Ping/pong automatique
 - ✅ Traitement des messages klines
+- ✅ Emission d’un signal REST vers trading-app à chaque nouvel ordre détecté
 - ✅ Configuration via variables d'environnement
 - ✅ Docker ready
 
 ## Notes
 
 - Le worker traite les messages klines mais ne les persiste pas (à implémenter selon vos besoins)
+- Les signaux d’ordres sont envoyés vers trading-app si les variables `TRADING_APP_*` sont renseignées. Un fichier `var/order-signal-failures.log` garde la trace des envois échoués après retries.
 - Les abonnements sont gérés par lots pour éviter de surcharger l'API Bitmart
 - Le serveur HTTP de contrôle permet de gérer dynamiquement les abonnements sans redémarrer
-
 
 
 
