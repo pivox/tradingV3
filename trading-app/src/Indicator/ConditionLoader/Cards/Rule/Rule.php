@@ -76,6 +76,15 @@ class Rule extends AbstractCard
             return $this->evaluateCustomOperation($spec, $context);
         }
 
+        if ($this->isMacdCrossHysteresisSpec($spec)) {
+            $direction = str_contains($this->name, '_down_') ? 'down' : 'up';
+            return $this->evaluateMacdCrossWithHysteresis($spec, $context, $direction);
+        }
+
+        if ($this->isDerivativeSpec($spec)) {
+            return $this->evaluateDerivative($spec, $context);
+        }
+
         if (count($spec) === 1) {
             $name = (string) key($spec);
             $value = current($spec);
@@ -310,6 +319,264 @@ class Rule extends AbstractCard
             $subset[$n] ?? null,
             $meta + ['comparisons' => count($diffs)]
         );
+    }
+
+    /** @todo voir si on peut la mettre dans une classe appart */
+    private function evaluateMacdCrossWithHysteresis(array $spec, array $context, string $direction): ConditionResult
+    {
+        $minGap = isset($spec['min_gap']) && is_numeric($spec['min_gap'])
+            ? abs((float) $spec['min_gap'])
+            : 0.0;
+        $coolDown = isset($spec['cool_down_bars']) ? max(0, (int) $spec['cool_down_bars']) : 0;
+        $requirePrev = $direction === 'up'
+            ? (bool) ($spec['require_prev_below'] ?? false)
+            : (bool) ($spec['require_prev_above'] ?? false);
+
+        $series = $this->extractSeries($context, 'macd_hist');
+        $threshold = $direction === 'up' ? $minGap : ($minGap > 0.0 ? -$minGap : 0.0);
+
+        $meta = [
+            'rule' => $this->name,
+            'type' => 'macd_cross_hysteresis',
+            'direction' => $direction,
+            'min_gap' => $minGap,
+            'cool_down_bars' => $coolDown,
+            'require_prev' => $requirePrev,
+        ];
+
+        if ($series === null) {
+            return new ConditionResult(
+                $this->name,
+                false,
+                null,
+                $threshold,
+                $meta + ['missing_data' => true, 'reason' => 'series_unavailable']
+            );
+        }
+
+        if (count($series) < 2) {
+            return new ConditionResult(
+                $this->name,
+                false,
+                $series[0] ?? null,
+                $threshold,
+                $meta + ['missing_data' => true, 'reason' => 'insufficient_points', 'available_points' => count($series)]
+            );
+        }
+
+        $maxOffset = min($coolDown, count($series) - 2);
+        $barsSinceCross = null;
+        $triggerGap = null;
+        $prevGap = null;
+        $passed = false;
+        $hadNull = false;
+
+        for ($offset = 0; $offset <= $maxOffset; $offset++) {
+            $curr = $series[$offset] ?? null;
+            $prev = $series[$offset + 1] ?? null;
+
+            if ($curr === null || $prev === null) {
+                $hadNull = true;
+                continue;
+            }
+
+            if (
+                $this->gapMatchesDirection($direction, $curr, $minGap)
+                && $this->previousGapMatchesRequirement($direction, $prev, $minGap, $requirePrev)
+                && $this->recentValuesRespectDirection($series, $offset, $direction, $minGap)
+            ) {
+                $passed = true;
+                $barsSinceCross = $offset;
+                $triggerGap = $curr;
+                $prevGap = $prev;
+                break;
+            }
+        }
+
+        $meta += [
+            'bars_since_cross' => $barsSinceCross,
+            'trigger_gap' => $triggerGap,
+            'previous_gap' => $prevGap,
+            'evaluated_pairs' => $maxOffset + 1,
+            'series_sample' => array_slice($series, 0, max(3, $coolDown + 2)),
+            'current_gap' => $series[0] ?? null,
+        ];
+
+        if (!$passed) {
+            $meta['reason'] = $hadNull ? 'insufficient_series_values' : 'no_recent_cross';
+            if ($hadNull) {
+                $meta['missing_data'] = true;
+            }
+        }
+
+        return new ConditionResult(
+            $this->name,
+            $passed,
+            $series[0] ?? null,
+            $threshold,
+            $meta
+        );
+    }
+
+    private function gapMatchesDirection(string $direction, float $value, float $minGap): bool
+    {
+        $gap = $minGap > 0.0 ? $minGap : 0.0;
+        if ($direction === 'up') {
+            return $value >= $gap;
+        }
+
+        return $value <= ($gap > 0.0 ? -$gap : 0.0);
+    }
+
+    private function previousGapMatchesRequirement(string $direction, float $value, float $minGap, bool $requirePrev): bool
+    {
+        $gap = $minGap > 0.0 ? $minGap : 0.0;
+        if (!$requirePrev) {
+            return $direction === 'up' ? $value <= 0.0 : $value >= 0.0;
+        }
+
+        if ($direction === 'up') {
+            return $value <= ($gap > 0.0 ? -$gap : 0.0);
+        }
+
+        return $value >= $gap;
+    }
+
+    private function recentValuesRespectDirection(array $series, int $offset, string $direction, float $minGap): bool
+    {
+        if ($offset === 0) {
+            return true;
+        }
+
+        $tolerance = $minGap > 0.0 ? $minGap * 0.25 : 0.0;
+        for ($i = 0; $i < $offset; $i++) {
+            $value = $series[$i];
+            if ($value === null) {
+                return false;
+            }
+            if ($direction === 'up') {
+                if ($value < -$tolerance) {
+                    return false;
+                }
+            } else {
+                if ($value > $tolerance) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private function evaluateDerivative(array $spec, array $context): ConditionResult
+    {
+        $direction = isset($spec['derivative_lt']) ? 'lt' : 'gt';
+        $threshold = isset($spec["derivative_{$direction}"]) && is_numeric($spec["derivative_{$direction}"])
+            ? (float) $spec["derivative_{$direction}"]
+            : 0.0;
+        $persist = max(1, (int) ($spec['persist_n'] ?? 1));
+        $eps = isset($spec['eps']) && is_numeric($spec['eps']) ? (float) $spec['eps'] : 1.0e-8;
+        $field = $this->resolveDerivativeField($spec);
+
+        $series = $this->extractSeries($context, $field);
+        $meta = [
+            'rule' => $this->name,
+            'type' => 'derivative',
+            'direction' => $direction,
+            'threshold' => $threshold,
+            'persist_n' => $persist,
+            'field' => $field,
+            'eps' => $eps,
+        ];
+
+        if ($series === null) {
+            return new ConditionResult(
+                $this->name,
+                false,
+                null,
+                $threshold,
+                $meta + ['missing_data' => true, 'reason' => 'series_unavailable']
+            );
+        }
+
+        if (count($series) < $persist + 1) {
+            return new ConditionResult(
+                $this->name,
+                false,
+                $series[0] ?? null,
+                $threshold,
+                $meta + ['missing_data' => true, 'reason' => 'insufficient_points', 'available_points' => count($series)]
+            );
+        }
+
+        $diffs = [];
+        $passed = true;
+        for ($i = 0; $i < $persist; $i++) {
+            $curr = $series[$i];
+            $prev = $series[$i + 1];
+            if ($curr === null || $prev === null) {
+                $passed = false;
+                $meta['missing_data'] = true;
+                $meta['reason'] = 'insufficient_series_values';
+                break;
+            }
+            $diff = $curr - $prev;
+            $diffs[] = $diff;
+
+            if ($direction === 'gt') {
+                if (!($diff > $threshold + $eps)) {
+                    $passed = false;
+                    $meta['reason'] = 'derivative_not_gt';
+                    $meta['failed_at'] = $i;
+                    break;
+                }
+            } else {
+                if (!($diff < $threshold - $eps)) {
+                    $passed = false;
+                    $meta['reason'] = 'derivative_not_lt';
+                    $meta['failed_at'] = $i;
+                    break;
+                }
+            }
+        }
+
+        $meta['diffs'] = $diffs;
+        $meta['series_sample'] = array_slice($series, 0, $persist + 1);
+
+        return new ConditionResult(
+            $this->name,
+            $passed,
+            $series[0] ?? null,
+            $threshold,
+            $meta
+        );
+    }
+
+    private function resolveDerivativeField(array $spec): string
+    {
+        if (isset($spec['field']) && is_string($spec['field']) && $spec['field'] !== '') {
+            return $spec['field'];
+        }
+
+        if (preg_match('/(macd_hist|macd|ema_\d+|rsi)/', $this->name, $matches)) {
+            return $matches[1] === 'macd' ? 'macd_hist' : $matches[1];
+        }
+
+        return 'macd_hist';
+    }
+
+    private function isDerivativeSpec(array $spec): bool
+    {
+        return isset($spec['derivative_gt']) || isset($spec['derivative_lt']);
+    }
+
+    private function isMacdCrossHysteresisSpec(array $spec): bool
+    {
+        if (!preg_match('/^macd_line_cross_(up|down)_with_hysteresis$/', $this->name)) {
+            return false;
+        }
+
+        return isset($spec['min_gap']) || isset($spec['cool_down_bars']) || isset($spec['require_prev_below']) || isset($spec['require_prev_above']);
     }
 
     private function extractSeries(array $context, ?string $fieldName): ?array
