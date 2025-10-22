@@ -5,10 +5,13 @@ use App\Infra\HttpControlServer;
 use App\Worker\MainWorker;
 use React\EventLoop\Loop;
 use App\Logging\HttpMessengerLogger;
+use App\Order\OrderSignalDispatcher;
+use App\Order\OrderSignalFactory;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\HttpClient\HttpClient;
 
 #[AsCommand(name: 'ws:run', description: 'Lance le worker WS BitMart (ordres, positions, klines)')]
 final class WsWorkerCommand extends Command
@@ -45,6 +48,31 @@ final class WsWorkerCommand extends Command
         $logEndpoint = $_ENV['TRADING_LOG_ENDPOINT'] ?? 'http://localhost:8082/internal/log';
         $logger = new HttpMessengerLogger($logEndpoint, app: 'ws-worker', channel: 'ws');
 
+        // Configuration du signal trading-app
+        $tradingAppBaseUri = rtrim((string)($_ENV['TRADING_APP_BASE_URI'] ?? ''), '/');
+        $tradingAppPath = $_ENV['TRADING_APP_ORDER_SIGNAL_PATH'] ?? '/api/ws-worker/orders';
+        $tradingAppSecret = $_ENV['TRADING_APP_SHARED_SECRET'] ?? null;
+        $tradingAppTimeout = (float)($_ENV['TRADING_APP_REQUEST_TIMEOUT'] ?? 2.0);
+        $tradingAppMaxRetries = (int)($_ENV['TRADING_APP_SIGNAL_MAX_RETRIES'] ?? 5);
+        $failureLogPath = $_ENV['TRADING_APP_SIGNAL_FAILURE_LOG'] ?? dirname(__DIR__, 2) . '/var/order-signal-failures.log';
+
+        $orderSignalDispatcher = null;
+        if ($tradingAppBaseUri === '' || $tradingAppSecret === null || $tradingAppSecret === '') {
+            $out->writeln('<comment>Attention: TRADING_APP_BASE_URI ou TRADING_APP_SHARED_SECRET non configuré. Synchronisation des ordres désactivée.</comment>');
+        } else {
+            $endpoint = rtrim($tradingAppBaseUri, '/') . '/' . ltrim($tradingAppPath, '/');
+            $orderSignalDispatcher = new OrderSignalDispatcher(
+                HttpClient::create(),
+                $endpoint,
+                $tradingAppSecret,
+                $tradingAppTimeout,
+                $tradingAppMaxRetries,
+                backoffDelays: [0.0, 5.0, 15.0, 45.0, 120.0],
+                logger: $logger,
+                failureLogPath: $failureLogPath
+            );
+        }
+
         // Créer le worker principal
         $mainWorker = new MainWorker(
             $publicWsUri,
@@ -56,7 +84,9 @@ final class WsWorkerCommand extends Command
             $subscribeDelayMs,
             $pingIntervalS,
             $reconnectDelayS,
-            $logger
+            $logger,
+            $orderSignalDispatcher,
+            new OrderSignalFactory()
         );
 
         // Créer le serveur HTTP de contrôle

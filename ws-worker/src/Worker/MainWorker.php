@@ -3,6 +3,8 @@ namespace App\Worker;
 
 use App\Infra\BitmartWsClient;
 use App\Infra\AuthHandler;
+use App\Order\OrderSignalDispatcher;
+use App\Order\OrderSignalFactory;
 use React\EventLoop\Loop;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -16,6 +18,8 @@ final class MainWorker
     private ?KlineWorker $klineWorker = null;
     private ?OrderWorker $orderWorker = null;
     private ?PositionWorker $positionWorker = null;
+    private ?OrderSignalDispatcher $orderSignalDispatcher = null;
+    private ?OrderSignalFactory $orderSignalFactory = null;
 
     public function __construct(
         private string $publicWsUri,
@@ -28,8 +32,12 @@ final class MainWorker
         private int $pingIntervalS = 15,
         private int $reconnectDelayS = 5,
         private ?LoggerInterface $logger = null,
+        ?OrderSignalDispatcher $orderSignalDispatcher = null,
+        ?OrderSignalFactory $orderSignalFactory = null,
     ) {
         $this->logger = $this->logger ?? new NullLogger();
+        $this->orderSignalDispatcher = $orderSignalDispatcher;
+        $this->orderSignalFactory = $orderSignalFactory ?? new OrderSignalFactory();
     }
 
     public function run(): void
@@ -78,7 +86,9 @@ final class MainWorker
             $this->authHandler,
             $this->subscribeBatch,
             $this->subscribeDelayMs,
-            $this->logger
+            $this->logger,
+            $this->orderSignalDispatcher,
+            $this->orderSignalFactory
         );
 
         $this->positionWorker = new PositionWorker(
@@ -244,6 +254,5 @@ final class MainWorker
         $this->logger?->info('Workers stopped', ['channel' => 'ws-main']);
     }
 }
-
 
 

@@ -23,6 +23,11 @@ final class OrderLifecycleRepository extends ServiceEntityRepository
         return $this->findOneBy(['orderId' => $orderId]);
     }
 
+    public function findOneByClientOrderId(string $clientOrderId): ?OrderLifecycle
+    {
+        return $this->findOneBy(['clientOrderId' => strtoupper($clientOrderId)]);
+    }
+
     /**
      * @return OrderLifecycle[]
      */
@@ -37,4 +42,3 @@ final class OrderLifecycleRepository extends ServiceEntityRepository
             ->getResult();
     }
 }
-
