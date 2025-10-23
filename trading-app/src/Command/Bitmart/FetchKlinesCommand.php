@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace App\Command\Bitmart;
 
 use App\Domain\Common\Enum\Timeframe;
+use App\Entity\Kline;
 use App\Infrastructure\Http\BitmartRestClient;
+use App\Provider\Bitmart\Dto\ListKlinesDto;
+use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
+use App\Repository\KlineRepository;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -21,7 +25,8 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 final class FetchKlinesCommand extends Command
 {
     public function __construct(
-        private readonly BitmartRestClient $bitmartClient
+        private readonly BitmartHttpClientPublic $bitmartClient,
+        private readonly KlineRepository $klineRepository,
     ) {
         parent::__construct();
     }
@@ -51,7 +56,7 @@ Exemples:
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        
+
         $symbol = strtoupper($input->getArgument('symbol'));
         $timeframeStr = $input->getOption('timeframe');
         $limit = (int) $input->getOption('limit');
@@ -89,8 +94,7 @@ Exemples:
             }
 
             // Récupération des klines
-            $klines = $this->bitmartClient->fetchKlines($symbol, $timeframe, $limit);
-
+            $klines = $this->bitmartClient->getFuturesKlines(symbol: $symbol, step: $timeframe->value, limit: $limit);
             if (empty($klines)) {
                 $io->warning('Aucune kline trouvée');
                 return Command::SUCCESS;
@@ -98,11 +102,6 @@ Exemples:
 
             $io->success(sprintf('Récupéré %d kline(s)', count($klines)));
 
-            // Filtrage par dates si spécifié
-            if ($fromDate || $toDate) {
-                $klines = $this->filterKlinesByDate($klines, $fromDate, $toDate);
-                $io->info(sprintf('Après filtrage: %d kline(s)', count($klines)));
-            }
 
             // Affichage des résultats
             switch ($outputFormat) {
@@ -119,12 +118,16 @@ Exemples:
             // Sauvegarde optionnelle
             if ($save) {
                 $io->info('Sauvegarde des klines en base de données...');
-                // TODO: Implémenter la sauvegarde en base
-                $io->note('La sauvegarde en base de données sera implémentée prochainement');
+                $this->klineRepository->saveKlines($klines, $symbol, $timeframe);
+                $kline = $this->klineRepository->findOneBy(['symbol' => $symbol, 'timeframe' => $timeframe]);
+                if ($kline) {
+                    $io->info('Sauvegarde des klines en base de données réussie');
+                } else  {
+                    $io->warning('Aucune kline sauvegardée');
+                }
             }
 
             // Statistiques
-            $this->displayStatistics($io, $klines);
 
             return Command::SUCCESS;
 
@@ -146,24 +149,8 @@ Exemples:
         };
     }
 
-    private function filterKlinesByDate(array $klines, ?\DateTimeImmutable $from, ?\DateTimeImmutable $to): array
-    {
-        return array_filter($klines, function ($kline) use ($from, $to) {
-            $klineTime = $kline->openTime;
-            
-            if ($from && $klineTime < $from) {
-                return false;
-            }
-            
-            if ($to && $klineTime > $to) {
-                return false;
-            }
-            
-            return true;
-        });
-    }
 
-    private function displayKlinesTable(SymfonyStyle $io, array $klines): void
+    private function displayKlinesTable(SymfonyStyle $io, ListKlinesDto $klines): void
     {
         $headers = ['Date/Heure', 'Open', 'High', 'Low', 'Close', 'Volume', 'Source'];
         $rows = [];
@@ -183,7 +170,7 @@ Exemples:
         $io->table($headers, $rows);
     }
 
-    private function outputJson(OutputInterface $output, array $klines): void
+    private function outputJson(OutputInterface $output, ListKlinesDto $klines): void
     {
         $data = array_map(function ($kline) {
             return [
@@ -197,20 +184,18 @@ Exemples:
                 'volume' => $kline->volume->toScale(12)->__toString(),
                 'source' => $kline->source
             ];
-        }, $klines);
+        }, $klines->toArray());
 
         $output->writeln(json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
     }
 
-    private function outputCsv(OutputInterface $output, array $klines): void
+    private function outputCsv(OutputInterface $output, ListKlinesDto $klines): void
     {
-        $output->writeln('symbol,timeframe,open_time,open,high,low,close,volume,source');
-        
+        $output->writeln('open_time,open,high,low,close,volume,source');
+
         foreach ($klines as $kline) {
             $output->writeln(sprintf(
-                '%s,%s,%s,%s,%s,%s,%s,%s,%s',
-                $kline->symbol,
-                $kline->timeframe->value,
+                '%s,%s,%s,%s,%s,%s,%s',
                 $kline->openTime->format('Y-m-d H:i:s'),
                 $kline->open->toScale(12)->__toString(),
                 $kline->high->toScale(12)->__toString(),
@@ -219,43 +204,6 @@ Exemples:
                 $kline->volume->toScale(12)->__toString(),
                 $kline->source
             ));
-        }
-    }
-
-    private function displayStatistics(SymfonyStyle $io, array $klines): void
-    {
-        if (empty($klines)) {
-            return;
-        }
-
-        $io->section('Statistiques');
-
-        $firstKline = $klines[0];
-        $lastKline = end($klines);
-        
-        $prices = array_map(fn($k) => $k->close->toFloat(), $klines);
-        $volumes = array_map(fn($k) => $k->volume->toFloat(), $klines);
-
-        $stats = [
-            'Période' => sprintf(
-                '%s à %s',
-                $firstKline->openTime->format('Y-m-d H:i:s'),
-                $lastKline->openTime->format('Y-m-d H:i:s')
-            ),
-            'Nombre de klines' => count($klines),
-            'Prix min' => number_format(min($prices), 8),
-            'Prix max' => number_format(max($prices), 8),
-            'Prix moyen' => number_format(array_sum($prices) / count($prices), 8),
-            'Volume total' => number_format(array_sum($volumes), 2),
-            'Volume moyen' => number_format(array_sum($volumes) / count($volumes), 2),
-            'Variation' => sprintf(
-                '%+.2f%%',
-                (($lastKline->close->toFloat() - $firstKline->open->toFloat()) / $firstKline->open->toFloat()) * 100
-            )
-        ];
-
-        foreach ($stats as $key => $value) {
-            $io->writeln(sprintf('<info>%s:</info> %s', $key, $value));
         }
     }
 }

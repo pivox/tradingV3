@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace App\Provider\Bitmart\Dto;
 
-use App\Domain\Common\Enum\Timeframe;
 use Brick\Math\BigDecimal;
-use Brick\Math\RoundingMode;
 
 final readonly class KlineDto
 {
@@ -58,41 +56,5 @@ final readonly class KlineDto
         }
         // Sinon, on considère une string au format ISO/SQL déjà UTC
         return new \DateTimeImmutable((string) $tsOrStr, new \DateTimeZone('UTC'));
-    }
-
-    public function isBullish(): bool
-    {
-        // compareTo() est sûr sur toutes versions brick/math
-        return $this->close->compareTo($this->open) > 0;
-    }
-
-    public function isBearish(): bool
-    {
-        return $this->close->compareTo($this->open) < 0;
-    }
-
-    public function getBodySize(): BigDecimal
-    {
-        $diff = $this->close->minus($this->open);
-        return $diff->isNegative() ? $diff->negated() : $diff; // abs()
-    }
-
-    public function getWickSize(): BigDecimal
-    {
-        $total = $this->high->minus($this->low);
-        $wick  = $total->minus($this->getBodySize());
-        return $wick->isNegative() ? BigDecimal::zero() : $wick;
-    }
-
-    public function getBodyPercentage(): float
-    {
-        $totalRange = $this->high->minus($this->low);
-        if ($totalRange->isZero()) {
-            return 0.0;
-        }
-        // ⚠️ dividedBy() nécessite un scale (et parfois un mode)
-        return $this->getBodySize()
-            ->dividedBy($totalRange, 12, RoundingMode::HALF_UP)
-            ->toFloat();
     }
 }

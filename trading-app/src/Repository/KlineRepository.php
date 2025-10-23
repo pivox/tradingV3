@@ -6,6 +6,8 @@ namespace App\Repository;
 
 use App\Entity\Kline;
 use App\Domain\Common\Enum\Timeframe;
+use App\Provider\Bitmart\Dto\KlineDto;
+use App\Provider\Bitmart\Dto\ListKlinesDto;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\Connection;
 use Doctrine\Persistence\ManagerRegistry;
@@ -121,9 +123,9 @@ class KlineRepository extends ServiceEntityRepository
      * Récupère les klines dans une plage de temps
      */
     public function findBySymbolTimeframeAndDateRange(
-        string $symbol, 
-        Timeframe $timeframe, 
-        \DateTimeImmutable $startDate, 
+        string $symbol,
+        Timeframe $timeframe,
+        \DateTimeImmutable $startDate,
         \DateTimeImmutable $endDate
     ): array {
         return $this->createQueryBuilder('k')
@@ -146,7 +148,7 @@ class KlineRepository extends ServiceEntityRepository
     public function hasGaps(string $symbol, Timeframe $timeframe): bool
     {
         $qb = $this->createQueryBuilder('k');
-        
+
         $result = $qb->select('COUNT(k.id) as count')
             ->where('k.symbol = :symbol')
             ->andWhere('k.timeframe = :timeframe')
@@ -203,18 +205,18 @@ class KlineRepository extends ServiceEntityRepository
 
     /**
      * Sauvegarde plusieurs klines (DTOs) en lot.
-     * @param \App\Domain\Common\Dto\KlineDto[] $klineDtos
+     * @param KlineDto[] $klineDtos
      */
-    public function saveKlines(array $klineDtos): void
+    public function saveKlines(ListKlinesDto $listKlinesDto, string $symbol, Timeframe $timeframe): void
     {
         $em = $this->getEntityManager();
         $batchSize = 100;
         $i = 0;
 
-        foreach ($klineDtos as $klineDto) {
+        foreach ($listKlinesDto as $klineDto) {
             $kline = new Kline();
-            $kline->setSymbol($klineDto->symbol);
-            $kline->setTimeframe($klineDto->timeframe);
+            $kline->setSymbol($symbol);
+            $kline->setTimeframe($timeframe);
             $kline->setOpenTime($klineDto->openTime);
             $kline->setOpenPrice($klineDto->open);
             $kline->setHighPrice($klineDto->high);
