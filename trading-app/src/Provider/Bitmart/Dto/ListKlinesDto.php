@@ -11,12 +11,13 @@ use App\Util\Dto\DtoList;
 class ListKlinesDto extends DtoList
 {
     public function __construct(
-        array $items = []
+        array $data = []
     ) {
-        foreach ($items as $item) {
-            $this->items[] = new KlineDto($item);
+        $items = [];
+        foreach ($data as $dataItem) {
+            $this->items[] = $dataItem instanceof KlineDto ? $dataItem : new KlineDto($dataItem);
         }
-        parent::__construct($this->items);
+        parent::__construct($items);
     }
 
     /**
