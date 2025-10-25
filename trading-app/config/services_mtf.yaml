@@ -1,67 +1,26 @@
 services:
   # Services MTF
-  App\Domain\Mtf\Service\MtfTimeService:
+  App\MtfValidator\Service\MtfTimeService:
     arguments:
       $logger: '@logger'
 
-  App\Domain\Mtf\Service\MtfBackfillService:
+  App\MtfValidator\Service\MtfBackfillService:
     arguments:
-      $bitmartClient: '@App\Infrastructure\Http\BitmartClient'
+      $klineProvider: '@app.provider.kline'
       $klineRepository: '@App\Repository\KlineRepository'
       $rateLimiter: '@App\Infrastructure\RateLimiter\TokenBucketRateLimiter'
-      $timeService: '@App\Domain\Mtf\Service\MtfTimeService'
+      $timeService: '@App\MtfValidator\Service\MtfTimeService'
       $logger: '@logger'
 
-  App\Domain\Mtf\Service\MtfService:
-    arguments:
-      $timeService: '@App\Domain\Mtf\Service\MtfTimeService'
-      $klineRepository: '@App\Repository\KlineRepository'
-      $mtfStateRepository: '@App\Repository\MtfStateRepository'
-      $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
-      $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
-      $signalValidationService: '@App\Signal\SignalValidationService'
-      $logger: '@logger'
-      $mtfConfig: '@App\Config\MtfConfigProviderInterface'
-
-  # Rate Limiter
-  App\Infrastructure\RateLimiter\TokenBucketRateLimiter:
-    arguments:
-      $capacity: 6
-      $refillRate: 6
-      $refillInterval: 1000
-      $logger: '@logger'
-
-  # HTTP Client
-  App\Infrastructure\Http\BitmartClient:
-    arguments:
-      $httpClient: '@http_client'
-      $logger: '@logger'
+  # HTTP Client (utilise maintenant BitmartHttpClientPublic)
+  # App\Infrastructure\Http\BitmartClient: supprimé, utilise App\Provider\Bitmart\Http\BitmartHttpClientPublic
 
   # Temporal Services
-  App\Application\Activity\MtfActivity:
-    arguments:
-      $mtfService: '@App\Domain\Mtf\Service\MtfService'
-      $backfillService: '@App\Domain\Mtf\Service\MtfBackfillService'
-      $timeService: '@App\Domain\Mtf\Service\MtfTimeService'
-      $klineRepository: '@App\Repository\KlineRepository'
-      $mtfStateRepository: '@App\Repository\MtfStateRepository'
-      $logger: '@logger'
-
-  App\Application\Worker\MtfWorker:
-    arguments:
-      $workerFactory: '@temporal.worker_factory'
-      $mtfActivity: '@App\Application\Activity\MtfActivity'
-      $logger: '@logger'
-
-  App\Application\Service\MtfWorkflowService:
-    arguments:
-      $workflowClient: '@temporal.workflow_client'
-      $logger: '@logger'
 
   # Controllers
   App\Controller\MtfController:
     arguments:
-      $mtfService: '@App\Domain\Mtf\Service\MtfService'
+      $mtfService: '@App\MtfValidator\Service\MtfService'
       $klineRepository: '@App\Repository\KlineRepository'
       $mtfStateRepository: '@App\Repository\MtfStateRepository'
       $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
@@ -69,7 +28,7 @@ services:
       $mtfLockRepository: '@App\Repository\MtfLockRepository'
       $orderPlanRepository: '@App\Repository\OrderPlanRepository'
       $logger: '@logger'
-      $mtfRunService: '@App\Domain\Mtf\Service\MtfRunService'
+      $mtfRunService: '@App\MtfValidator\Service\MtfRunService'
     tags: ['controller.service_arguments']
 
   # Commands

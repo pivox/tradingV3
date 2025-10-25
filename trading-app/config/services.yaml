@@ -15,6 +15,8 @@ parameters:
     # Configuration pour le backtesting avec une heure fixe
     app.clock.fixed_time: null  # null = temps réel, sinon DateTimeImmutable pour backtesting
     trading.file: '%kernel.project_dir%/config/trading.yml'
+    bitmart_public_base_uri: '%env(string:BITMART_PUBLIC_API_URL)%'
+    bitmart_private_base_uri: '%env(string:BITMART_PRIVATE_API_URL)%'
 services:
     # default configuration for services in *this* file
     _defaults:
@@ -30,83 +32,109 @@ services:
             - '../src/Entity/'
             - '../src/Logging/'
             - '../src/Kernel.php'
+            - '../src/*/LookAtit'
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
-    # Commands
-    App\Command\DiagnoseMtfSignalsCommand:
-        arguments:
-            $signalRepository: '@App\Repository\SignalRepository'
-            $klineRepository: '@App\Repository\KlineRepository'
-            $entityManager: '@doctrine.orm.entity_manager'
-            $indicatorService: '@App\Service\Indicator\HybridIndicatorService'
-            $sqlIndicatorService: '@App\Service\Indicator\SqlIndicatorService'
-            $phpIndicatorService: '@App\Service\Indicator\PhpIndicatorService'
-            $signalValidationService: '@App\Signal\SignalValidationService'
-            $mtfService: '@App\Domain\Mtf\Service\MtfService'
-            $tradingConfigService: '@App\Service\TradingConfigService'
-            $logger: '@logger'
-        tags: ['console.command']
 
 
     # MTF Services
-    App\Domain\Mtf\Service\MtfTimeService:
+    App\MtfValidator\Service\MtfTimeService:
         public: true
 
-    App\Domain\Mtf\Service\MtfBackfillService:
+    # Services de timeframe MTF
+    App\MtfValidator\Service\Timeframe\Timeframe4hService:
         arguments:
-            $bitmartClient: '@App\Infrastructure\Http\BitmartClient'
-            $klineRepository: '@App\Repository\KlineRepository'
-            $rateLimiter: '@App\Infrastructure\RateLimiter\TokenBucketRateLimiter'
-            $timeService: '@App\Domain\Mtf\Service\MtfTimeService'
-            $logger: '@logger'
-            $clock: '@Psr\Clock\ClockInterface'
-        public: true
-
-    App\Domain\Mtf\Service\MtfService:
-        arguments:
-            $timeService: '@App\Domain\Mtf\Service\MtfTimeService'
+            $timeService: '@App\MtfValidator\Service\MtfTimeService'
             $klineRepository: '@App\Repository\KlineRepository'
             $mtfStateRepository: '@App\Repository\MtfStateRepository'
             $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
             $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
-            $contractRepository: '@App\Repository\ContractRepository'
             $signalValidationService: '@App\Signal\SignalValidationService'
-            $logger: '@logger'
-            $positionsFlowLogger: '@monolog.logger.positions_flow'
+            $logger: '@monolog.logger.mtf'
             $mtfConfig: '@App\Config\MtfConfigProviderInterface'
-            $klineProvider: '@App\Infrastructure\Http\BitmartRestClient'
+            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
             $entityManager: '@doctrine.orm.entity_manager'
             $clock: '@Psr\Clock\ClockInterface'
-            $signalPersistenceService: '@App\Infrastructure\Persistence\SignalPersistenceService'
-            $validationCache: '@App\Infrastructure\Cache\DbValidationCache'
-            $klineJsonIngestion: '@App\Infrastructure\Persistence\KlineJsonIngestionService'
-        public: true
+            $klineJsonIngestionService: '@App\Provider\Bitmart\Service\KlineJsonIngestionService'
 
-
-    App\Domain\Mtf\Service\MtfRunService:
+    App\MtfValidator\Service\Timeframe\Timeframe1hService:
         arguments:
-            $mtfService: '@App\Domain\Mtf\Service\MtfService'
+            $timeService: '@App\MtfValidator\Service\MtfTimeService'
+            $klineRepository: '@App\Repository\KlineRepository'
+            $mtfStateRepository: '@App\Repository\MtfStateRepository'
             $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
-            $mtfLockRepository: '@App\Repository\MtfLockRepository'
-            $contractRepository: '@App\Repository\ContractRepository'
+            $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
+            $signalValidationService: '@App\Signal\SignalValidationService'
             $logger: '@monolog.logger.mtf'
-            $positionsFlowLogger: '@monolog.logger.positions_flow'
+            $mtfConfig: '@App\Config\MtfConfigProviderInterface'
+            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
+            $entityManager: '@doctrine.orm.entity_manager'
             $clock: '@Psr\Clock\ClockInterface'
-            $tradingDecisionService: '@App\Domain\Trading\Service\TradingDecisionService'
-            $tradeContext: '@App\Domain\Trading\Service\TradeContextService'
-        public: true
+            $klineJsonIngestionService: '@App\Provider\Bitmart\Service\KlineJsonIngestionService'
+
+    App\MtfValidator\Service\Timeframe\Timeframe15mService:
+        arguments:
+            $timeService: '@App\MtfValidator\Service\MtfTimeService'
+            $klineRepository: '@App\Repository\KlineRepository'
+            $mtfStateRepository: '@App\Repository\MtfStateRepository'
+            $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
+            $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
+            $signalValidationService: '@App\Signal\SignalValidationService'
+            $logger: '@monolog.logger.mtf'
+            $mtfConfig: '@App\Config\MtfConfigProviderInterface'
+            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
+            $entityManager: '@doctrine.orm.entity_manager'
+            $clock: '@Psr\Clock\ClockInterface'
+            $klineJsonIngestionService: '@App\Provider\Bitmart\Service\KlineJsonIngestionService'
+
+    App\MtfValidator\Service\Timeframe\Timeframe5mService:
+        arguments:
+            $timeService: '@App\MtfValidator\Service\MtfTimeService'
+            $klineRepository: '@App\Repository\KlineRepository'
+            $mtfStateRepository: '@App\Repository\MtfStateRepository'
+            $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
+            $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
+            $signalValidationService: '@App\Signal\SignalValidationService'
+            $logger: '@monolog.logger.mtf'
+            $mtfConfig: '@App\Config\MtfConfigProviderInterface'
+            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
+            $entityManager: '@doctrine.orm.entity_manager'
+            $clock: '@Psr\Clock\ClockInterface'
+            $klineJsonIngestionService: '@App\Provider\Bitmart\Service\KlineJsonIngestionService'
+
+    App\MtfValidator\Service\Timeframe\Timeframe1mService:
+        arguments:
+            $timeService: '@App\MtfValidator\Service\MtfTimeService'
+            $klineRepository: '@App\Repository\KlineRepository'
+            $mtfStateRepository: '@App\Repository\MtfStateRepository'
+            $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
+            $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
+            $signalValidationService: '@App\Signal\SignalValidationService'
+            $logger: '@monolog.logger.mtf'
+            $mtfConfig: '@App\Config\MtfConfigProviderInterface'
+            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
+            $entityManager: '@doctrine.orm.entity_manager'
+            $clock: '@Psr\Clock\ClockInterface'
+            $klineJsonIngestionService: '@App\Provider\Bitmart\Service\KlineJsonIngestionService'
+
+
+#    App\MtfValidator\Service\MtfRunService:
+#        arguments:
+#            $mtfService: '@App\MtfValidator\Service\MtfService'
+#            $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
+#            $mtfLockRepository: '@App\Repository\MtfLockRepository'
+#            $contractRepository: '@App\Repository\ContractRepository'
+#            $logger: '@monolog.logger.mtf'
+#            $positionsFlowLogger: '@monolog.logger.positions_flow'
+#            $clock: '@Psr\Clock\ClockInterface'
+#            $tradingDecisionService: '@App\EntryPosition\Service\TradingDecisionService'
+#            $tradeContext: '@App\EntryPosition\Service\TradeContextService'
+#            $providerService: '@App\Provider\ProviderService'
+#        public: true
 
     # Rate Limiter
-    App\Infrastructure\RateLimiter\TokenBucketRateLimiter:
-        arguments:
-            $capacity: 6
-            $refillRate: 6
-            $refillInterval: 1000
-            $logger: '@logger'
-            $clock: '@Psr\Clock\ClockInterface'
-        public: true
 
     bitmart.throttle_lock_store:
         class: Symfony\Component\Lock\Store\FlockStore
@@ -119,28 +147,33 @@ services:
             - '@bitmart.throttle_lock_store'
 
     # Configuration Bitmart
-    App\Infrastructure\Config\BitmartConfig:
-        factory: ['App\Infrastructure\Config\BitmartConfig', 'fromEnvironment']
+    App\Provider\Bitmart\Http\BitmartConfig:
+        arguments:
+            $apiKey: '%env(BITMART_API_KEY)%'
+            $apiSecret: '%env(BITMART_SECRET_KEY)%'
+            $apiMemo: '%env(BITMART_API_MEMO)%'
         public: true
     App\Config\MtfContractsConfig:
         arguments:
             $path: '%kernel.project_dir%/config/app/mtf_contracts.yaml'
 
     # BitMart HTTP Client
-    App\Infrastructure\Http\BitmartClient:
+    App\Provider\Bitmart\Http\BitmartHttpClientPublic:
         arguments:
-            $httpClient: '@http_client'
-            $logger: '@monolog.logger.bitmart'
-            $config: '@App\Infrastructure\Config\BitmartConfig'
-            $clock: '@Psr\Clock\ClockInterface'
+            $bitmartFuturesV2: '@http_client.bitmart_futures_v2'
+            $bitmartSystem: '@http_client.bitmart_system'
+            $lockFactory: '@bitmart.throttle_lock_factory'
+            $projectDir: '%kernel.project_dir%'
         public: true
 
-    App\Domain\Ports\Out\TradingProviderPort: '@App\Infrastructure\Http\BitmartClient'
+    App\Domain\Ports\Out\TradingProviderPort: '@App\Infrastructure\Trading\BitmartTradingProvider'
+
+    # Kline Provider
 
     # MTF Controller
     App\Controller\MtfController:
         arguments:
-            $mtfService: '@App\Domain\Mtf\Service\MtfService'
+            $mtfService: '@App\MtfValidator\Service\MtfService'
             $klineRepository: '@App\Repository\KlineRepository'
             $mtfStateRepository: '@App\Repository\MtfStateRepository'
             $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
@@ -148,7 +181,7 @@ services:
             $mtfLockRepository: '@App\Repository\MtfLockRepository'
             $orderPlanRepository: '@App\Repository\OrderPlanRepository'
             $logger: '@logger'
-            $mtfRunService: '@App\Domain\Mtf\Service\MtfRunService'
+            $mtfRunService: '@App\MtfValidator\Service\MtfRunService'
             $clock: '@Psr\Clock\ClockInterface'
         public: true
 
@@ -158,14 +191,8 @@ services:
             - timeout: 10
             - connect_timeout: 5
 
-    # BitMart REST Client
-    App\Infrastructure\Http\BitmartRestClient:
-        arguments:
-            $httpClient: '@GuzzleHttp\Client'
-            $logger: '@monolog.logger.bitmart'
-            $clock: '@Psr\Clock\ClockInterface'
-            $config: '@App\Infrastructure\Config\BitmartConfig'
-            $lockFactory: '@bitmart.throttle_lock_factory'
+    # BitMart REST Client (utilise maintenant BitmartHttpClientPublic)
+    # App\Infrastructure\Http\BitmartRestClient: supprimé, utilise App\Provider\Bitmart\Http\BitmartHttpClientPublic
 
     # WebSocket dependencies
     React\EventLoop\LoopInterface:
@@ -178,11 +205,6 @@ services:
             - loop: '@React\EventLoop\LoopInterface'
 
     # BitMart WebSocket Client
-    App\Infrastructure\WebSocket\BitmartWsClient:
-        arguments:
-            $loop: '@React\EventLoop\LoopInterface'
-            $connector: '@React\Socket\ConnectorInterface'
-            $logger: '@logger'
 
     # Repositories
     App\Repository\KlineRepository:
@@ -192,160 +214,6 @@ services:
     App\Repository\ContractRepository:
         arguments:
             $registry: '@doctrine'
-
-    # Infrastructure Repositories
-    App\Infrastructure\Persistence\KlineRepository:
-        arguments:
-            $baseRepository: '@App\Repository\KlineRepository'
-            $entityManager: '@doctrine.orm.entity_manager'
-            $logger: '@logger'
-
-    App\Infrastructure\Persistence\ContractRepository:
-        arguments:
-            $baseRepository: '@App\Repository\ContractRepository'
-            $entityManager: '@doctrine.orm.entity_manager'
-            $logger: '@logger'
-
-    App\Repository\IndicatorSnapshotRepository:
-        arguments:
-            $registry: '@doctrine'
-
-    App\Repository\SignalRepository:
-        arguments:
-            $registry: '@doctrine'
-
-    App\Repository\ValidationCacheRepository:
-        arguments:
-            $registry: '@doctrine'
-
-    App\Repository\MtfAuditRepository:
-        arguments:
-            $registry: '@doctrine'
-
-    App\Repository\OrderPlanRepository:
-        arguments:
-            $registry: '@doctrine'
-
-    # Domain Services
-    App\Domain\Kline\Service\KlineFetcher:
-        arguments:
-            $klineProvider: '@App\Infrastructure\Http\BitmartRestClient'
-            $clock: '@Psr\Clock\ClockInterface'
-
-    App\Domain\Indicator\Service\IndicatorEngine:
-        arguments:
-            $indicatorProvider: '@App\Infrastructure\Persistence\IndicatorProvider'
-            $logger: '@logger'
-
-    App\Domain\Trade\Service\OrderPlanner:
-        # Pas d'arguments pour l'instant
-
-    # Signal Domain Services
-    App\Domain\Signal\Service\SignalGenerator:
-        arguments:
-            $strategies: !tagged_iterator signal.strategy
-            $signalPersistenceService: '@App\Infrastructure\Persistence\SignalPersistenceService'
-            $logger: '@logger'
-
-    App\Domain\Signal\Service\SignalValidator:
-        # Pas d'arguments pour l'instant
-
-    App\Domain\Signal\Service\SignalAggregator:
-        # Pas d'arguments pour l'instant
-
-    App\Domain\Signal\Service\SignalFilter:
-        # Pas d'arguments pour l'instant
-
-    # Strategy Domain Services
-    App\Domain\Strategy\Service\StrategyEngine:
-        arguments:
-            $strategies: !tagged_iterator strategy.interface
-
-    App\Domain\Strategy\Service\StrategySelector:
-        # Pas d'arguments pour l'instant
-
-    App\Domain\Strategy\Service\StrategyOptimizer:
-        # Pas d'arguments pour l'instant
-
-    App\Domain\Strategy\Service\StrategyBacktester:
-        arguments:
-            $strategies: !tagged_iterator strategy.interface
-            $clock: '@Psr\Clock\ClockInterface'
-
-    # Signal Strategies
-    App\Domain\Signal\Strategy\RsiStrategy:
-        tags: ['signal.strategy', 'strategy.interface']
-
-    App\Domain\Signal\Strategy\MacdStrategy:
-        tags: ['signal.strategy', 'strategy.interface']
-
-    App\Domain\Signal\Strategy\BollingerBandsStrategy:
-        tags: ['signal.strategy', 'strategy.interface']
-
-    App\Domain\Signal\Strategy\MovingAverageStrategy:
-        tags: ['signal.strategy', 'strategy.interface']
-
-    # Infrastructure Services
-    App\Infrastructure\Persistence\IndicatorProvider:
-        arguments:
-            $indicatorRepository: '@App\Repository\IndicatorSnapshotRepository'
-
-    App\Infrastructure\Persistence\SignalPersistenceService:
-        arguments:
-            $signalRepository: '@App\Repository\SignalRepository'
-            $logger: '@logger'
-
-    App\Infrastructure\Cache\DbValidationCache:
-        arguments:
-            $validationRepository: '@App\Repository\ValidationCacheRepository'
-            $logger: '@logger'
-            $clock: '@Psr\Clock\ClockInterface'
-
-    # Commands
-    App\Command\Populate\IndicatorSnapshotPopulateCommand:
-        arguments:
-            $indicatorProvider: '@App\Infrastructure\Persistence\IndicatorProvider'
-
-    App\Command\Populate\SignalPopulateCommand:
-        arguments:
-            $signalPersistenceService: '@App\Infrastructure\Persistence\SignalPersistenceService'
-
-    App\Command\Populate\ValidationCachePopulateCommand:
-        arguments:
-            $validationCache: '@App\Infrastructure\Cache\DbValidationCache'
-
-    App\Command\Populate\TestAllEntitiesCommand:
-        arguments:
-            $indicatorProvider: '@App\Infrastructure\Persistence\IndicatorProvider'
-            $signalPersistenceService: '@App\Infrastructure\Persistence\SignalPersistenceService'
-            $validationCache: '@App\Infrastructure\Cache\DbValidationCache'
-
-    App\Command\Bitmart\FetchContractsCommand:
-        arguments:
-            $bitmartClient: '@App\Infrastructure\Http\BitmartRestClient'
-            $contractRepository: '@App\Infrastructure\Persistence\ContractRepository'
-
-    App\Command\Bitmart\FetchKlinesCommand:
-        arguments:
-            $bitmartClient: '@App\Infrastructure\Http\BitmartRestClient'
-
-    App\Command\Bitmart\FetchAllKlinesCommand:
-        arguments:
-            $bitmartClient: '@App\Infrastructure\Http\BitmartRestClient'
-            $klineRepository: '@App\Infrastructure\Persistence\KlineRepository'
-
-    App\Command\Bitmart\CheckKlinesCommand:
-        arguments:
-            $klineRepository: '@App\Infrastructure\Persistence\KlineRepository'
-
-    # Backtest Commands
-    App\Command\Backtest\RunBacktestCommand:
-        arguments:
-            $strategyBacktester: '@App\Domain\Strategy\Service\StrategyBacktester'
-
-    App\Command\Backtest\ListStrategiesCommand:
-        arguments:
-            $strategyBacktester: '@App\Domain\Strategy\Service\StrategyBacktester'
 
     # Alias pour l’interface de configuration MTF -> implémentation TradingParameters
     App\Config\MtfConfigProviderInterface: '@App\Config\TradingParameters'
@@ -408,56 +276,7 @@ services:
 
     App\Service\KlineDataService: ~
 
-    # Leverage Services
-    App\Domain\Leverage\Service\LeverageConfigService:
-        public: true
 
-    App\Domain\Leverage\Service\LeverageCalculationService:
-        arguments:
-            $logger: '@logger'
-        public: true
-
-    # Position Services
-    App\Domain\Position\Service\PositionConfigService:
-        public: true
-
-    App\Domain\Position\Service\PositionOpeningService:
-        arguments:
-            $logger: '@logger'
-        public: true
-
-    App\Domain\Position\Service\PositionExecutionService:
-        arguments:
-            $tradingProvider: '@App\Domain\Ports\Out\TradingProviderPort'
-            $exposureGuard: '@App\Domain\Trading\Exposure\ActiveExposureGuard'
-            $orderLifecycle: '@App\Domain\Trading\Order\OrderLifecycleService'
-            $logger: '@logger'
-            $positionsFlowLogger: '@monolog.logger.positions_flow'
-            $clock: '@Psr\Clock\ClockInterface'
-            $mtfLockRepository: '@App\Repository\MtfLockRepository'
-        public: true
-
-    # Trading Decision Service
-    App\Domain\Trading\Service\TradingDecisionService:
-        arguments:
-            $leverageConfigService: '@App\Domain\Leverage\Service\LeverageConfigService'
-            $leverageCalculationService: '@App\Domain\Leverage\Service\LeverageCalculationService'
-            $positionConfigService: '@App\Domain\Position\Service\PositionConfigService'
-            $positionOpeningService: '@App\Domain\Position\Service\PositionOpeningService'
-            $positionExecutionService: '@App\Domain\Position\Service\PositionExecutionService'
-            $klineRepository: '@App\Repository\KlineRepository'
-            $atrCalculator: '@App\Indicator\AtrCalculator'
-            $tradingParameters: '@App\Config\TradingParameters'
-            $logger: '@logger'
-            $clock: '@Psr\Clock\ClockInterface'
-        public: true
-
-    App\Domain\Trading\Service\TradeContextService:
-        arguments:
-            $tradingProvider: '@App\Domain\Ports\Out\TradingProviderPort'
-            $tradingParameters: '@App\Config\TradingParameters'
-            $logger: '@logger'
-        public: true
 
     # Config Services
     App\Config\TradingParameters:
@@ -467,12 +286,6 @@ services:
     # Service utilitaire pour le backtesting avec heure fixe
     App\Service\BacktestClockService:
         public: true
-
-    # WebSocket Services
-    App\Infra\WsDispatcher:
-        arguments:
-            $http: '@http_client'
-            $baseUrl: '%env(WS_GATEWAY)%'
 
     App\Repository\HotKlineRepository:
         arguments:
@@ -509,3 +322,7 @@ services:
             $defaultThreshold: -0.0008   # comme ton YAML
             $eps: 1.0e-12
         tags: ['app.indicator.condition']
+
+    # Formateur de logging personnalisé
+    App\Logging\CustomLineFormatter:
+        public: true

@@ -2,9 +2,10 @@
 
 namespace App\Provider\Bitmart\Http;
 
-use App\Domain\Common\Enum\Timeframe;
+use App\Provider\Bitmart\Dto\ListContractDto;
 use App\Provider\Bitmart\Dto\ListKlinesDto;
 use App\Util\GranularityHelper;
+use Psr\Clock\ClockInterface;
 use RuntimeException;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Lock\LockFactory;
@@ -12,8 +13,8 @@ use Symfony\Contracts\HttpClient\Exception\ClientExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\DecodingExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\RedirectionExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\ServerExceptionInterface;
-use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\TimeoutExceptionInterface;
+use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 
@@ -45,6 +46,8 @@ class BitmartHttpClientPublic
 
         private readonly LockFactory     $lockFactory,
         #[Autowire('%kernel.project_dir%')] private readonly string $projectDir,
+
+        private readonly ClockInterface $clock,
     ) {
         $stateDir = $this->projectDir . '/var/bitmart';
         if (!is_dir($stateDir)) {
@@ -70,7 +73,7 @@ class BitmartHttpClientPublic
                 if (($json['code'] ?? null) !== 1000 || !isset($json['data']['server_time'])) {
                     throw new RuntimeException('BitMart: /system/time invalide');
                 }
-                return (int) $json['data']['server_time'];
+                return (float) $json['data']['server_time'];
             } catch (TransportExceptionInterface|ServerExceptionInterface|TimeoutExceptionInterface $e) {
                 if ($attempt >= self::RETRY_COUNT) {
                     throw $e;
@@ -92,55 +95,28 @@ class BitmartHttpClientPublic
      *
      * @param string $symbol ex. 'BTCUSDT'
      * @param int|string $step
-     * @param int|null $fromTs
-     * @param int|null $toTs
+     * @param int|null $startTs
+     * @param int|null $endTs
      * @param int $limit
-     * @return array
-     * @throws ServerExceptionInterface
-     * @throws TimeoutExceptionInterface
-     * @throws TransportExceptionInterface
+     * @return ListKlinesDto
      */
     public function getFuturesKlines(
         string $symbol,
         int|string $step,
-        ?int $fromTs = null,
-        ?int $toTs   = null,
+        ?int $startTs = null,
+        ?int $endTs   = null,
         int $limit   = 100
     ): ListKlinesDto {
         $stepMinutes = GranularityHelper::normalizeToMinutes($step);
-        $nowSec      = (int) floor($this->getSystemTimeMs() / 1000);
-
+       // $nowSec      = (int) floor($this->getSystemTimeMs() / 1000);
+        $endTs = $endTs ?? $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->getTimestamp();
+        $nowSec = $endTs;
         [$defaultFrom, $computedLastClose, $stepSec] = $this->computeWindow($nowSec, $stepMinutes, $limit);
-
-        $targetLastClose = $computedLastClose;
-        if ($toTs !== null) {
-            $alignedTo = $this->alignDown($toTs, $stepSec);
-            $targetLastClose = min($alignedTo, $computedLastClose);
-        }
-
-        if ($fromTs === null) {
-            $fromTs = $defaultFrom;
-        } else {
-            if ($fromTs > $targetLastClose) {
-                $fromTs = $targetLastClose - ($limit * $stepSec);
-            }
-            $fromTs = $this->alignDown($fromTs, $stepSec);
-        }
-
-        if ($fromTs < 0) {
-            $fromTs = 0;
-        }
-
-        $requestEnd = $targetLastClose + $stepSec;
-        if ($requestEnd <= $fromTs) {
-            $requestEnd = $fromTs + $stepSec;
-        }
-
         $payload = $this->requestJson('GET', self::PATH_KLINE, [
             'symbol'     => $symbol,
             'step'       => $stepMinutes,
-            'start_time' => $fromTs,
-            'end_time'   => $requestEnd,
+            'start_time' => $defaultFrom,
+            'end_time'   => $computedLastClose,
         ]);
 
         if (($payload['code'] ?? null) !== 1000 || !isset($payload['data']) || !\is_array($payload['data'])) {
@@ -151,9 +127,9 @@ class BitmartHttpClientPublic
                 'BitMart: réponse kline invalide (symbol=%s, step=%s, start_time=%d, end_time=%d, targetLastClose=%d, data_count=%d, code=%s, message=%s)',
                 $symbol,
                 (string) $stepMinutes,
-                (int) $fromTs,
-                (int) $requestEnd,
-                (int) $targetLastClose,
+                (int) $startTs,
+                (int) $defaultFrom,
+                (int) $computedLastClose,
                 $count,
                 (string) $code,
                 (string) $msg,
@@ -245,7 +221,7 @@ class BitmartHttpClientPublic
         return \is_array($data) ? $data : [];
     }
 
-    public function getContractDetails(?string $symbol = null): array
+    public function getContractDetails(?string $symbol = null): ListContractDto
     {
         $query = [];
         if ($symbol !== null && $symbol !== '') {
@@ -258,7 +234,7 @@ class BitmartHttpClientPublic
             throw new RuntimeException('BitMart: /contract/public/details invalide');
         }
 
-        return $payload['data']['symbols'] ?? [];
+        return new ListContractDto($payload['data']['symbols'] ?? []);
     }
 
     /**
@@ -305,21 +281,58 @@ class BitmartHttpClientPublic
     /**
      * Calque computeWindow() pour déterminer la dernière clôture terminée.
      */
-    private function computeWindow(int $nowTs, int $stepMinutes, int $limit): array
+    private function computeWindow(int $nowTs = null, int $stepMinutes, int $limit): array
     {
-        $stepSec   = $stepMinutes * 60;
-        $lastClose = intdiv($nowTs, $stepSec) * $stepSec;
-        if ($nowTs === $lastClose) {
-            $lastClose -= $stepSec;
+       // Génère toutes les heures/minutes sous forme "HH:MM"
+        $times = function (array $hours, array $minutes): array {
+            $out = [];
+            foreach ($hours as $h) {
+                foreach ($minutes as $m) {
+                    $out[] = sprintf('%02d:%02d', (int)$h, (int)$m);
+                }
+            }
+            return $out;
+        };
+
+        $hours    = range(0, 23);
+        $hours4   = array_filter(range(0, 23), fn(int $h) => $h % 4 === 0);
+        $minutes5 = range(0, 59, 5);
+        $minutes15= range(0, 59, 15);
+
+        $window = [
+            240 => $times($hours4, [0]),          // 00:00, 04:00, 08:00, ...
+            60  => $times($hours,  [0]),          // 00:00, 01:00, 02:00, ...
+            15  => $times($hours,  $minutes15),   // xx:00, xx:15, xx:30, xx:45
+            5   => $times($hours,  $minutes5),    // xx:00, xx:05, xx:10, ...
+            1   => $times($hours,  range(0, 59)), // xx:00 → xx:59
+        ];
+        //@todo HMA utiliser $window pour valider les timestamps
+        $now = (new \DateTimeImmutable())->setTimestamp($nowTs)->setTimezone(new \DateTimeZone('UTC'));
+        $dec = $now->format('s') > 0 ? 1 : 0;
+        $hour =  $now->format('H');
+        $minute = sprintf('%02d', (int) $now->format('i') - $dec);
+        $dateWindow = (new \DateTimeImmutable('now'))->setTimestamp($nowTs)->setTime(23, 59, 0);
+        for ($i = count($window[$stepMinutes]) -1 ; $i>=0; $i--) {
+            list($h, $m) = explode(':', $window[$stepMinutes][$i]);
+            $dateWindow = (new \DateTimeImmutable('now'))->setTimezone(new \DateTimeZone('UTC'))->setTimestamp($nowTs)->setTime((int)($h), (int)($m), 0);
+            if( $dateWindow->getTimestamp() >= $nowTs) {
+                unset($window[$stepMinutes][$i]);
+                continue;
+            }
+            break;
+        }
+        list($h, $m) = [$dateWindow->format('H'), $dateWindow->format('i')];;
+
+    $endTs = $dateWindow->getTimestamp();
+        $minToSubtract = $stepMinutes * $limit;
+        $start = $dateWindow->modify("- $minToSubtract minutes");
+        $startTs = $start->getTimestamp();
+        if ($dateWindow->getTimestamp() === $startTs) {
+            $startTs -= $dateWindow->modify("- $stepMinutes minutes");
         }
 
-        $count = max(1, $limit);
-        $firstOpen = $lastClose - ($count * $stepSec);
-        if ($count > 1) {
-            $firstOpen += $stepSec;
-        }
 
-        return [$firstOpen, $lastClose, $stepSec];
+        return [$startTs, $endTs, $stepMinutes * 60];
     }
 
     private function alignDown(int $timestamp, int $stepSec): int
@@ -330,5 +343,81 @@ class BitmartHttpClientPublic
     /**
      * Garantit un minimum de 200ms entre deux requêtes Bitmart.
      */
+
+    /**
+     * Récupère tous les contrats disponibles
+     * Alias pour getContractDetails() sans symbole spécifique
+     */
+    public function fetchContracts(): array
+    {
+        $contractDetails = $this->getContractDetails();
+        return $contractDetails->toArray();
+    }
+
+    /**
+     * Récupère tous les contrats disponibles (alias)
+     */
+    public function getContracts(): array
+    {
+        return $this->fetchContracts();
+    }
+
+    /**
+     * Vérifie la santé de l'API Bitmart
+     */
+    public function healthCheck(): bool
+    {
+        try {
+            $this->getSystemTimeMs();
+            return true;
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Récupère les klines (alias pour getFuturesKlines)
+     */
+    public function getKlines(
+        string $symbol,
+        int $step,
+        ?int $startTime = null,
+        ?int $endTime = null,
+        int $limit = 500
+    ): array {
+        $klinesDto = $this->getFuturesKlines($symbol, $step, $startTime, $endTime, $limit);
+        return $klinesDto->toArray();
+    }
+
+    /**
+     * Récupère les détails d'un contrat spécifique
+     */
+    public function fetchContractDetails(string $symbol): array
+    {
+        $contractDetails = $this->getContractDetails($symbol);
+        $contracts = $contractDetails->toArray();
+        return $contracts[0] ?? [];
+    }
+
+    /**
+     * Récupère le dernier prix d'un symbole
+     */
+    public function getLastPrice(string $symbol): ?float
+    {
+        try {
+            $contractDetails = $this->fetchContractDetails($symbol);
+            return isset($contractDetails['last_price']) ? (float) $contractDetails['last_price'] : null;
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Récupère les trades récents d'un symbole
+     */
+    public function getMarketTrade(string $symbol, int $limit = 100): array
+    {
+        return $this->getRecentTrades($symbol, $limit);
+    }
 
 }

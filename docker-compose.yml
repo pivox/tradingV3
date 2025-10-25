@@ -4,9 +4,11 @@ x-global-variables: &global-env
   BITMART_API_KEY: "${BITMART_API_KEY}"
   BITMART_SECRET_KEY: "${BITMART_SECRET_KEY}"
   BITMART_BASE_URL: "${BITMART_BASE_URL}"
+  BITMART_PRIVATE_API_URL: "${BITMART_PRIVATE_API_URL}"
   BITMART_WS_PRIVATE_URL: "${BITMART_WS_PRIVATE_URL}"
   BITMART_WS_DEVICE: "${BITMART_WS_DEVICE}"
   BITMART_API_MEMO: "${BITMART_API_MEMO}"
+  BITMART_PUBLIC_API_URL: "${BITMART_PUBLIC_API_URL}"   # ← AJOUT ICI
 
 services:
 
@@ -273,10 +275,16 @@ services:
 #      BITMART_API_SECRET: ${BITMART_SECRET_KEY}
 #      BITMART_PUBLIC_WS_URI: wss://openapi-ws-v2.bitmart.com/api?protocol=1.1
 #      BITMART_PRIVATE_WS_URI: wss://openapi-ws-v2.bitmart.com/user?protocol=1.1
+#      TRADING_APP_BASE_URI: ${TRADING_APP_BASE_URI:-http://trading-app-nginx}
+#      TRADING_APP_ORDER_SIGNAL_PATH: ${TRADING_APP_ORDER_SIGNAL_PATH:-/api/ws-worker/orders}
+#      TRADING_APP_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
+#      TRADING_APP_REQUEST_TIMEOUT: ${TRADING_APP_REQUEST_TIMEOUT:-2.0}
+#      TRADING_APP_SIGNAL_MAX_RETRIES: ${TRADING_APP_SIGNAL_MAX_RETRIES:-5}
+#      TRADING_APP_SIGNAL_FAILURE_LOG: ${TRADING_APP_SIGNAL_FAILURE_LOG:-/var/log/trading/order-signal-failures.log}
 #    depends_on:
 #      - trading-app-db
 #    networks:
-#      - backend-net
+#      - shared-net
 #      - trading-app-net
 #    deploy:
 #      replicas: 5   # ← démarre pour ~100 contrats (5 sockets ~500 canaux)
@@ -314,6 +322,8 @@ services:
       MTF_LOG_LEVEL: debug
       MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
       APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
+      WS_WORKER_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
+      BITMART_PUBLIC_API_URL: ${BITMART_PUBLIC_API_URL}
     depends_on:
       trading-app-db:
         condition: service_healthy

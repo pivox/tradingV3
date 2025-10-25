@@ -24,7 +24,12 @@ final class BitmartHttpClientPrivate
 
         private readonly LockFactory     $lockFactory,
         #[Autowire('%kernel.project_dir%')] private readonly string $projectDir,
-    ) {}
+    ) {
+        $stateDir = $this->projectDir . '/var/bitmart';
+        if (!is_dir($stateDir)) {
+            mkdir($stateDir, 0775, true);
+        }
+        $this->throttleStatePath = $stateDir . '/throttle.timestamp';    }
 
     /**
      * Envoie une requête privée signée vers BitMart Futures V2.
