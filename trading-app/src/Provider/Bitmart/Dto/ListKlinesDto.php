@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Provider\Bitmart\Dto;
 
 use App\Util\Dto\DtoList;
+use App\Contract\Provider\Dto\KlineDto as ContractKlineDto;
 
 /**
  * @extends DtoList<KlineDto>
@@ -15,7 +16,14 @@ class ListKlinesDto extends DtoList
     ) {
         $items = [];
         foreach ($data as $dataItem) {
-            $this->items[] = $dataItem instanceof KlineDto ? $dataItem : new KlineDto($dataItem);
+            if ($dataItem instanceof ContractKlineDto || $dataItem instanceof KlineDto) {
+                $items[] = $dataItem;
+                continue;
+            }
+            if( is_array($dataItem)) {
+                $items[] = new KlineDto($dataItem);
+                continue;
+            }
         }
         parent::__construct($items);
     }

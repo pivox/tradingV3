@@ -5,7 +5,7 @@ doctrine:
     dbal:
         url: '%env(resolve:DATABASE_URL)%'
         types:
-            postgres_timestamp: App\Infrastructure\Doctrine\Type\PostgresTimestampType
+            postgres_timestamp: App\Repository\Doctrine\Type\PostgresTimestampType
         mapping_types:
             timeframe: string
             signal_side: string

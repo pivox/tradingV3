@@ -36,8 +36,6 @@ services:
     php_indicator_service: '@App\Service\Indicator\PhpIndicatorService'
     hybrid_indicator_service: '@App\Service\Indicator\HybridIndicatorService'
 
-    # Alias principal pour l'interface IndicatorProviderPort
-    App\Domain\Ports\Out\IndicatorProviderPort: '@App\Service\Indicator\HybridIndicatorService'
 
     # Configuration des contrôleurs d'administration
     App\Controller\Admin\IndicatorCalculationController:

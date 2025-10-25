@@ -6,4 +6,26 @@ framework:
     log: true
   serializer:
     enable_attributes: true
+  http_client:
+      scoped_clients:
+          http_client.bitmart_futures_v2:
+              base_uri: '%bitmart_private_base_uri%'
+              headers:
+                  Accept: 'application/json'
+                  User-Agent: 'YourApp/1.0 (+https://example.com)'
+              timeout: 10
+              retry_failed: { enabled: false }
+
+          http_client.bitmart_futures_v2_private:
+              base_uri: '%bitmart_private_base_uri%'
+              headers:
+                  Accept: 'application/json'
+                  User-Agent: 'YourApp/1.0 (+https://example.com)'
+              timeout: 10
+              retry_failed: { enabled: false }
+
+          # ➜ ajoute/normalise le client "system" (c’est celui qui cassait)
+          http_client.bitmart_system:
+              base_uri: '%bitmart_public_base_uri%'
+              timeout: 10
 
