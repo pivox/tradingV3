@@ -50,4 +50,7 @@ interface OrderProviderInterface
      * Annule tous les ordres ouverts pour un symbole
      */
     public function cancelAllOrders(string $symbol): bool;
+
+    public function getOrderBookTop(string $symbol): ?array;
+
 }
