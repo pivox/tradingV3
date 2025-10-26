@@ -7,6 +7,7 @@ namespace App\Contract\Provider;
 use App\Contract\Provider\Dto\OrderDto;
 use App\Common\Enum\OrderSide;
 use App\Common\Enum\OrderType;
+use App\Contract\Provider\Dto\SymbolBidAskDto;
 
 /**
  * Interface pour les providers d'ordres
@@ -51,6 +52,6 @@ interface OrderProviderInterface
      */
     public function cancelAllOrders(string $symbol): bool;
 
-    public function getOrderBookTop(string $symbol): ?array;
+    public function getOrderBookTop(string $symbol): SymbolBidAskDto;
 
 }

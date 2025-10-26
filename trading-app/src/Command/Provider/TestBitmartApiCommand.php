@@ -70,7 +70,7 @@ class TestBitmartApiCommand extends Command
                 $io->writeln("❌ Impossible de récupérer le bid/ask");
                 return Command::FAILURE;
             }
-            $io->writeln("💰 Bid: " . number_format($bidAsk['bid'], 2) . " | Ask: " . number_format($bidAsk['ask'], 2));
+            $io->writeln("💰 Bid: " . number_format($bidAsk->bid, 2) . " | Ask: " . number_format($bidAsk->ask, 2));
 
             $io->writeln("✅ " . count($klines) . " klines récupérées");
 
