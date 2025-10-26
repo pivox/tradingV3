@@ -35,6 +35,7 @@ class BitmartHttpClientPublic
     private const PATH_MARKPRICE_KLINE = '/contract/public/markprice-kline';
     private const PATH_LEVERAGE_BRACKET = '/contract/public/leverage-bracket';
     private const PATH_CONTRACT_DETAILS = '/contract/public/details';
+    private const PATH_CONTRACT_DEPTH = '/contract/public/depth';
 
 
     public function __construct(
@@ -69,11 +70,11 @@ class BitmartHttpClientPublic
                 $resp = $this->bitmartSystem->request('GET', self::PATH_SYSTEM_TIME, [
                     'timeout' => self::TIMEOUT,
                 ]);
-                $json = $resp->toArray(false);
-                if (($json['code'] ?? null) !== 1000 || !isset($json['data']['server_time'])) {
+                $response = $resp->toArray(false);
+                if (($response['code'] ?? null) !== 1000 || !isset($response['data']['server_time'])) {
                     throw new RuntimeException('BitMart: /system/time invalide');
                 }
-                return (float) $json['data']['server_time'];
+                return (float) $response['data']['server_time'];
             } catch (TransportExceptionInterface|ServerExceptionInterface|TimeoutExceptionInterface $e) {
                 if ($attempt >= self::RETRY_COUNT) {
                     throw $e;
@@ -267,15 +268,15 @@ class BitmartHttpClientPublic
             throw new RuntimeException("BitMart HTTP $status: ".$response->getContent(false));
         }
 
-        $json = $response->toArray(false);
+        $response = $response->toArray(false);
 
-        if (!isset($json['code']) || (int) $json['code'] !== 1000) {
-            $code = $json['code'] ?? 'unknown';
-            $msg  = $json['message'] ?? 'unknown';
+        if (!isset($response['code']) || (int) $response['code'] !== 1000) {
+            $code = $response['code'] ?? 'unknown';
+            $msg  = $response['message'] ?? 'unknown';
             throw new RuntimeException("BitMart API error: code=$code message=$msg");
         }
 
-        return $json;
+        return $response;
     }
 
     /**
@@ -418,6 +419,25 @@ class BitmartHttpClientPublic
     public function getMarketTrade(string $symbol, int $limit = 100): array
     {
         return $this->getRecentTrades($symbol, $limit);
+    }
+
+    public function getOrderBookTop(string $symbol): ?array {
+
+        $response = $this->requestJson('GET', self::PATH_CONTRACT_DEPTH, [
+            'symbol' => $symbol,
+            'limit'  => 5,
+        ]);
+        if ($response['code'] !== 1000) {
+            throw new RuntimeException('BitMart: '.self::PATH_CONTRACT_DEPTH.' invalide: symbol='.$symbol);
+        }
+        if (!isset($response['data']['bids'][0][0], $response['data']['asks'][0][0])) {
+            return null;
+        }
+        return [
+            'bid' => (float)$response['data']['bids'][0][0],
+            'ask' => (float)$response['data']['asks'][0][0],
+            'ts'  => (int)($response['data']['timestamp'] ?? 0),
+        ];
     }
 
 }
