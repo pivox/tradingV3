@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Repository;
 
+use App\Common\Enum\Timeframe;
 use App\Entity\IndicatorSnapshot;
-use App\Domain\Common\Enum\Timeframe;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -39,9 +39,9 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
      * Récupère les snapshots d'indicateurs pour une période
      */
     public function findBySymbolTimeframeAndDateRange(
-        string $symbol, 
-        Timeframe $timeframe, 
-        \DateTimeImmutable $startDate, 
+        string $symbol,
+        Timeframe $timeframe,
+        \DateTimeImmutable $startDate,
         \DateTimeImmutable $endDate
     ): array {
         return $this->createQueryBuilder('i')

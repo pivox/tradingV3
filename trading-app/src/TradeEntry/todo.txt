@@ -1,0 +1,540 @@
+Trade Entry Box et de ses sous-boxes, sans vendor, sans couche infra, prête à coller dans ton projet Symfony (ou pur PHP).
+Elle suit exactement le flux : PreOrder → EntryZone → RiskSizer → OrderPlan → Execution.
+(Aucune source externe nécessaire ici — architecture interne.)
+
+🌿 Arborescence (à créer)
+src/TradeEntry/
+  TradeEntryBox.php
+
+  PreOrder/PreOrderBuilder.php
+
+  EntryZone/EntryZoneBox.php
+  EntryZone/EntryZoneCalculator.php
+  EntryZone/EntryZoneFilters.php
+
+  RiskSizer/RiskSizerBox.php
+  RiskSizer/LeverageCalculator.php
+
+  OrderPlan/OrderPlanBox.php
+  OrderPlan/OrderPlanBuilder.php
+  OrderPlan/OrderPlanModel.php
+
+  Execution/ExecutionBox.php
+  Execution/ExecutionResult.php
+
+  Types/Side.php
+
+  Dto/TradeEntryRequest.php
+  Dto/EntryZone.php
+  Dto/RiskDecision.php
+
+src/TradeEntry/Types/Side.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\Types;
+
+enum Side: string
+{
+    case LONG = 'long';
+    case SHORT = 'short';
+}
+
+src/TradeEntry/Dto/TradeEntryRequest.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\Dto;
+
+use App\TradeEntry\Types\Side;
+
+final class TradeEntryRequest
+{
+    public function __construct(
+        public string $symbol,
+        public Side $side,
+        // Données marché minimales
+        public float $entryPriceBase,    // prix de référence (milieu de zone ou meilleur limit)
+        public float $atrValue,          // ATR déjà calculé (simple) 
+        public float $pivotPrice,        // VWAP ou MA21 (passé en entrée pour rester simple)
+        // Gestion du risque
+        public float $riskPct,           // ex. 2.0 (% capital)
+        public float $budgetUsdt,        // marge initiale allouée (ex. 100 USDT)
+        public float $equityUsdt,        // capital total (pour risk_abs)
+        // Contexte exécution (facultatif)
+        public ?float $rsi = null,       // pour filtre RSI<cap
+        public ?float $volumeRatio = null, // >=1.5 recommandé
+        public ?bool $pullbackConfirmed = null,
+        // Contraintes simples
+        public float $tickSize = 0.1,    // quantization prix
+        // Paramètres de zone/TTL
+        public int $zoneTtlSec = 240,    // 3–5 min
+        public float $kLow = 1.2,        // zone bas = pivot - kLow*ATR
+        public float $kHigh = 0.4,       // zone haut = pivot + kHigh*ATR
+        // Paramètres SL/TP
+        public float $kStopAtr = 1.5,    // distance SL en ATR
+        public float $tp1R = 2.0,        // TP1 = 2R
+        public int $tp1SizePct = 60,     // 60% à TP1
+        // Caps levier
+        public float $levMin = 2.0,
+        public float $levMax = 20.0,
+        public float $kDynamic = 10.0,   // borne dynamique min(kDynamic/stopPct, levMax)
+        // Filtres d’exécution
+        public float $rsiCap = 70.0,
+        public bool $requirePullback = true,
+        public float $minVolumeRatio = 1.5
+    ) {}
+}
+
+src/TradeEntry/Dto/EntryZone.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\Dto;
+
+final class EntryZone
+{
+    public function __construct(
+        public float $low,
+        public float $high,
+        public \DateTimeImmutable $expiresAt
+    ) {}
+
+    public function isValid(): bool
+    {
+        return $this->low <= $this->high && (new \DateTimeImmutable()) < $this->expiresAt;
+    }
+
+    public function clampToTick(float $tick): self
+    {
+        $round = static fn(float $p) => floor($p / $tick) * $tick;
+        return new self($round($this->low), $round($this->high), $this->expiresAt);
+    }
+}
+
+src/TradeEntry/Dto/RiskDecision.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\Dto;
+
+final class RiskDecision
+{
+    public function __construct(
+        public float $stopPct,
+        public float $riskUsdt,
+        public float $leverage,
+        public float $quantity   // qty de l'ordre principal
+    ) {}
+}
+
+src/TradeEntry/PreOrder/PreOrderBuilder.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\PreOrder;
+
+use App\TradeEntry\Dto\TradeEntryRequest;
+
+final class PreOrderBuilder
+{
+    public function build(array $input): TradeEntryRequest
+    {
+        // Ici on mappe simplement le tableau → DTO (validation minimale).
+        return new TradeEntryRequest(
+            symbol:           (string)$input['symbol'],
+            side:             $input['side'],
+            entryPriceBase:   (float)$input['entry_price_base'],
+            atrValue:         (float)$input['atr_value'],
+            pivotPrice:       (float)$input['pivot_price'],
+            riskPct:          (float)$input['risk_pct'],
+            budgetUsdt:       (float)$input['budget_usdt'],
+            equityUsdt:       (float)$input['equity_usdt'],
+            rsi:              $input['rsi'] ?? null,
+            volumeRatio:      $input['volume_ratio'] ?? null,
+            pullbackConfirmed:$input['pullback_confirmed'] ?? null,
+            tickSize:         (float)($input['tick_size'] ?? 0.1),
+            zoneTtlSec:       (int)($input['zone_ttl_sec'] ?? 240),
+            kLow:             (float)($input['k_low'] ?? 1.2),
+            kHigh:            (float)($input['k_high'] ?? 0.4),
+            kStopAtr:         (float)($input['k_stop_atr'] ?? 1.5),
+            tp1R:             (float)($input['tp1_r'] ?? 2.0),
+            tp1SizePct:       (int)($input['tp1_size_pct'] ?? 60),
+            levMin:           (float)($input['lev_min'] ?? 2.0),
+            levMax:           (float)($input['lev_max'] ?? 20.0),
+            kDynamic:         (float)($input['k_dynamic'] ?? 10.0),
+            rsiCap:           (float)($input['rsi_cap'] ?? 70.0),
+            requirePullback:  (bool)($input['require_pullback'] ?? true),
+            minVolumeRatio:   (float)($input['min_volume_ratio'] ?? 1.5),
+        );
+    }
+}
+
+src/TradeEntry/EntryZone/EntryZoneCalculator.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\EntryZone;
+
+use App\TradeEntry\Dto\EntryZone;
+use App\TradeEntry\Dto\TradeEntryRequest;
+
+final class EntryZoneCalculator
+{
+    public function compute(TradeEntryRequest $req): EntryZone
+    {
+        $low  = $req->pivotPrice - $req->kLow  * $req->atrValue;
+        $high = $req->pivotPrice + $req->kHigh * $req->atrValue;
+        $expires = (new \DateTimeImmutable())->modify(sprintf('+%d seconds', $req->zoneTtlSec));
+        $zone = new EntryZone($low, $high, $expires);
+        return $zone->clampToTick($req->tickSize);
+    }
+}
+
+src/TradeEntry/EntryZone/EntryZoneFilters.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\EntryZone;
+
+use App\TradeEntry\Dto\TradeEntryRequest;
+use App\TradeEntry\Dto\EntryZone;
+
+final class EntryZoneFilters
+{
+    public function passes(TradeEntryRequest $req, EntryZone $zone): bool
+    {
+        if (!$zone->isValid()) return false;
+
+        if ($req->rsi !== null && $req->rsi > $req->rsiCap) return false;
+
+        if ($req->requirePullback && $req->pullbackConfirmed === false) return false;
+
+        if ($req->volumeRatio !== null && $req->volumeRatio < $req->minVolumeRatio) return false;
+
+        // Garde simple pour éviter d'acheter une extension trop loin du pivot :
+        $maxDistPct = 2.0 * $req->atrValue / max(1e-9, $req->pivotPrice);
+        // Si la base d'entrée dépasse pivot + 2*ATR → invalide.
+        if ($req->entryPriceBase > ($req->pivotPrice + 2.0 * $req->atrValue)) return false;
+
+        return true;
+    }
+}
+
+src/TradeEntry/EntryZone/EntryZoneBox.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\EntryZone;
+
+use App\TradeEntry\Dto\TradeEntryRequest;
+use App\TradeEntry\Dto\EntryZone;
+
+final class EntryZoneBox
+{
+    public function __construct(
+        private EntryZoneCalculator $calculator,
+        private EntryZoneFilters $filters
+    ) {}
+
+    public function compute(TradeEntryRequest $req): ?EntryZone
+    {
+        $zone = $this->calculator->compute($req);
+        return $this->filters->passes($req, $zone) ? $zone : null;
+    }
+}
+
+src/TradeEntry/RiskSizer/LeverageCalculator.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\RiskSizer;
+
+final class LeverageCalculator
+{
+    /**
+     * leverage = risk_usdt / (stop_pct * budget_usdt)
+     * puis bornes : min/max et dynamique min(kDynamic/stop_pct, max)
+     */
+    public function compute(float $riskUsdt, float $stopPct, float $budgetUsdt, float $levMin, float $levMax, float $kDynamic): float
+    {
+        $base = $riskUsdt / max(1e-9, ($stopPct * max(1e-9, $budgetUsdt)));
+        $dynCap = min($levMax, $kDynamic / max(1e-9, $stopPct));
+        return max($levMin, min($base, $dynCap));
+    }
+}
+
+src/TradeEntry/RiskSizer/RiskSizerBox.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\RiskSizer;
+
+use App\TradeEntry\Dto\RiskDecision;
+use App\TradeEntry\Dto\TradeEntryRequest;
+use App\TradeEntry\Dto\EntryZone;
+
+final class RiskSizerBox
+{
+    public function __construct(private LeverageCalculator $levCalc) {}
+
+    public function compute(TradeEntryRequest $req, EntryZone $zone): RiskDecision
+    {
+        // Stop en prix selon side (SL sous la zone pour long, au-dessus pour short).
+        $slDistance = $req->kStopAtr * $req->atrValue;
+        $stopPrice = match ($req->side->value) {
+            'long'  => $req->entryPriceBase - $slDistance,
+            'short' => $req->entryPriceBase + $slDistance,
+        };
+        $stopPct = abs($req->entryPriceBase - $stopPrice) / max(1e-9, $req->entryPriceBase);
+
+        $riskUsdt = $req->equityUsdt * ($req->riskPct / 100.0);
+
+        $lev = $this->levCalc->compute(
+            riskUsdt:   $riskUsdt,
+            stopPct:    $stopPct,
+            budgetUsdt: $req->budgetUsdt,
+            levMin:     $req->levMin,
+            levMax:     $req->levMax,
+            kDynamic:   $req->kDynamic
+        );
+
+        $qty = ($req->budgetUsdt * $lev) / max(1e-9, $req->entryPriceBase);
+
+        // Quantization très simple: arrondi qty à 1e-6 (tu ajusteras selon le symbole)
+        $qty = floor($qty * 1_000_000) / 1_000_000;
+
+        return new RiskDecision(
+            stopPct:   $stopPct,
+            riskUsdt:  $riskUsdt,
+            leverage:  $lev,
+            quantity:  $qty
+        );
+    }
+}
+
+src/TradeEntry/OrderPlan/OrderPlanModel.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\OrderPlan;
+
+use App\TradeEntry\Types\Side;
+
+final class OrderPlanModel
+{
+    public function __construct(
+        public string $symbol,
+        public Side $side,
+        public float $entryPrice,
+        public float $quantity,
+        public float $slPrice,
+        public float $tp1Price,
+        public int $tp1SizePct
+    ) {}
+}
+
+src/TradeEntry/OrderPlan/OrderPlanBuilder.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\OrderPlan;
+
+use App\TradeEntry\Dto\TradeEntryRequest;
+use App\TradeEntry\Dto\EntryZone;
+use App\TradeEntry\Dto\RiskDecision;
+
+final class OrderPlanBuilder
+{
+    public function build(TradeEntryRequest $req, EntryZone $zone, RiskDecision $risk): OrderPlanModel
+    {
+        $slDistance = $req->kStopAtr * $req->atrValue;
+        $sl = match ($req->side->value) {
+            'long'  => $req->entryPriceBase - $slDistance,
+            'short' => $req->entryPriceBase + $slDistance,
+        };
+
+        // TP1 = entry ± (R * slDistance)
+        $tp1 = match ($req->side->value) {
+            'long'  => $req->entryPriceBase + ($req->tp1R * $slDistance),
+            'short' => $req->entryPriceBase - ($req->tp1R * $slDistance),
+        };
+
+        return new OrderPlanModel(
+            symbol:     $req->symbol,
+            side:       $req->side,
+            entryPrice: $req->entryPriceBase,
+            quantity:   $risk->quantity,
+            slPrice:    $sl,
+            tp1Price:   $tp1,
+            tp1SizePct: $req->tp1SizePct
+        );
+    }
+}
+
+src/TradeEntry/OrderPlan/OrderPlanBox.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\OrderPlan;
+
+use App\TradeEntry\Dto\EntryZone;
+use App\TradeEntry\Dto\RiskDecision;
+use App\TradeEntry\Dto\TradeEntryRequest;
+
+final class OrderPlanBox
+{
+    public function __construct(private OrderPlanBuilder $builder) {}
+
+    public function build(TradeEntryRequest $req, EntryZone $zone, RiskDecision $risk): OrderPlanModel
+    {
+        return $this->builder->build($req, $zone, $risk);
+    }
+}
+
+src/TradeEntry/Execution/ExecutionResult.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\Execution;
+
+final class ExecutionResult
+{
+    private function __construct(
+        public string $status,   // cancelled | order_opened | position_opened
+        public array $data = []
+    ) {}
+
+    public static function cancelled(string $reason, array $meta = []): self
+    {
+        return new self('cancelled', ['reason' => $reason] + $meta);
+    }
+
+    public static function orderOpened(array $payload): self
+    {
+        return new self('order_opened', $payload);
+    }
+
+    public static function positionOpened(array $payload): self
+    {
+        return new self('position_opened', $payload);
+    }
+}
+
+src/TradeEntry/Execution/ExecutionBox.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\Execution;
+
+use App\TradeEntry\OrderPlan\OrderPlanModel;
+
+final class ExecutionBox
+{
+    /**
+     * Version minimale : on simule l'ouverture de l'ordre principal,
+     * et on renvoie un "order_opened" avec un order_id factice.
+     * (Tu brancheras l'exchange plus tard.)
+     */
+    public function execute(OrderPlanModel $plan): ExecutionResult
+    {
+        $orderId = 'SIM-' . bin2hex(random_bytes(4));
+        return ExecutionResult::orderOpened([
+            'order_id'   => $orderId,
+            'symbol'     => $plan->symbol,
+            'side'       => $plan->side->value,
+            'price'      => $plan->entryPrice,
+            'quantity'   => $plan->quantity,
+            'sl_price'   => $plan->slPrice,
+            'tp1_price'  => $plan->tp1Price,
+            'tp1_size_pct' => $plan->tp1SizePct,
+        ]);
+    }
+}
+
+src/TradeEntry/TradeEntryBox.php
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry;
+
+use App\TradeEntry\PreOrder\PreOrderBuilder;
+use App\TradeEntry\EntryZone\EntryZoneBox;
+use App\TradeEntry\RiskSizer\RiskSizerBox;
+use App\TradeEntry\OrderPlan\OrderPlanBox;
+use App\TradeEntry\Execution\ExecutionBox;
+use App\TradeEntry\Execution\ExecutionResult;
+
+final class TradeEntryBox
+{
+    public function __construct(
+        private PreOrderBuilder $preOrder,
+        private EntryZoneBox $entryZone,
+        private RiskSizerBox $riskSizer,
+        private OrderPlanBox $orderPlan,
+        private ExecutionBox $executor
+    ) {}
+
+    /**
+     * @param array $input voir TradeEntryRequest::__construct pour les clés
+     */
+    public function handle(array $input): ExecutionResult
+    {
+        $req  = $this->preOrder->build($input);
+
+        $zone = $this->entryZone->compute($req);
+        if ($zone === null) {
+            return ExecutionResult::cancelled('entry_zone_invalid_or_filters_failed');
+        }
+
+        $risk = $this->riskSizer->compute($req, $zone);
+        $plan = $this->orderPlan->build($req, $zone, $risk);
+
+        return $this->executor->execute($plan);
+    }
+}
+
+✅ Exemple d’appel (dans un test ou une commande)
+$box = new \App\TradeEntry\TradeEntryBox(
+    new \App\TradeEntry\PreOrder\PreOrderBuilder(),
+    new \App\TradeEntry\EntryZone\EntryZoneBox(
+        new \App\TradeEntry\EntryZone\EntryZoneCalculator(),
+        new \App\TradeEntry\EntryZone\EntryZoneFilters()
+    ),
+    new \App\TradeEntry\RiskSizer\RiskSizerBox(
+        new \App\TradeEntry\RiskSizer\LeverageCalculator()
+    ),
+    new \App\TradeEntry\OrderPlan\OrderPlanBox(
+        new \App\TradeEntry\OrderPlan\OrderPlanBuilder()
+    ),
+    new \App\TradeEntry\Execution\ExecutionBox()
+);
+
+use App\TradeEntry\Types\Side;
+
+$result = $box->handle([
+    'symbol' => 'BTCUSDT',
+    'side' => Side::LONG,
+    'entry_price_base' => 67250.0,
+    'atr_value' => 35.0,
+    'pivot_price' => 67220.0,
+    'risk_pct' => 2.0,
+    'budget_usdt' => 100.0,
+    'equity_usdt' => 1000.0,
+    'rsi' => 54.0,
+    'volume_ratio' => 1.8,
+    'pullback_confirmed' => true,
+    'tick_size' => 0.1,
+]);
+
+// $result->status === 'order_opened'
+
+Notes
+
+Quantization prix faite dans la zone (tick). Quantization qty simplifiée (1e-6).
+
+Les filtres (RSI, pullback, volume) sont optionnels et ultra-simples.
+
+Le levier est dérivé du risk%, stop% et budget, avec caps et borne dynamique.
+
+L’ExecutionBox simule l’ouverture (tu pluggeras l’exchange plus tard).

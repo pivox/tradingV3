@@ -2,8 +2,8 @@
 
 namespace App\Service;
 
-use App\Domain\Common\Dto\KlineDto;
-use App\Domain\Common\Enum\Timeframe;
+use App\Provider\Bitmart\Dto\KlineDto;
+use App\Common\Enum\Timeframe;
 use Brick\Math\BigDecimal;
 
 class KlineDataService
@@ -14,7 +14,7 @@ class KlineDataService
     public function parseKlinesFromJson(array $jsonData, string $symbol, Timeframe $timeframe): array
     {
         $klines = [];
-        
+
         // Format attendu: array d'objets avec open_time, open, high, low, close, volume
         foreach ($jsonData as $klineData) {
             $klines[] = new KlineDto(
@@ -29,7 +29,7 @@ class KlineDataService
                 source: 'JSON_UPLOAD'
             );
         }
-        
+
         return $klines;
     }
 
@@ -65,14 +65,14 @@ class KlineDataService
     public function validateKlinesJson(array $jsonData): array
     {
         $errors = [];
-        
+
         if (empty($jsonData)) {
             $errors[] = 'Les données de klines ne peuvent pas être vides';
             return $errors;
         }
 
         $requiredFields = ['open_time', 'open', 'high', 'low', 'close', 'volume'];
-        
+
         foreach ($jsonData as $index => $klineData) {
             if (!is_array($klineData)) {
                 $errors[] = "Kline $index: doit être un objet";

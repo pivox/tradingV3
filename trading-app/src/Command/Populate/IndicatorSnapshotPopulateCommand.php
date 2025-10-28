@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Command\Populate;
 
-use App\Domain\Common\Dto\IndicatorSnapshotDto;
-use App\Domain\Common\Enum\Timeframe;
-use App\Infrastructure\Persistence\IndicatorProvider;
+use App\Common\Dto\IndicatorSnapshotDto;
+use App\Common\Enum\Timeframe;
+use App\Contract\Indicator\IndicatorProviderInterface;
 use Brick\Math\BigDecimal;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -23,7 +23,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 class IndicatorSnapshotPopulateCommand extends Command
 {
     public function __construct(
-        private readonly IndicatorProvider $indicatorProvider
+        private readonly IndicatorProviderInterface $indicatorProvider
     ) {
         parent::__construct();
     }
@@ -41,7 +41,7 @@ class IndicatorSnapshotPopulateCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        
+
         $symbol = strtoupper($input->getArgument('symbol'));
         $timeframe = Timeframe::from($input->getArgument('timeframe'));
         $count = (int) $input->getOption('count');
@@ -63,7 +63,7 @@ class IndicatorSnapshotPopulateCommand extends Command
             try {
                 $klineTime = $this->calculateKlineTime($startDate, $timeframe, $i);
                 $snapshot = $this->createTestSnapshot($symbol, $timeframe, $klineTime);
-                
+
                 $this->indicatorProvider->saveIndicatorSnapshot($snapshot);
                 $successCount++;
 

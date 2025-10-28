@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command\Audit;
 
-use App\Domain\Common\Enum\Timeframe;
+use App\Common\Enum\Timeframe;
 use App\Repository\IndicatorSnapshotRepository;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;

@@ -3,6 +3,7 @@
 namespace App\Indicator\ConditionLoader\Cards\Validation;
 
 use App\Indicator\ConditionLoader\Cards\AbstractCard;
+use App\Indicator\ConditionLoader\ConditionRegistry;
 
 class SideElementConditional extends AbstractCard implements SideElementInterface
 {
@@ -12,6 +13,10 @@ class SideElementConditional extends AbstractCard implements SideElementInterfac
     private string $conditionType = self::CONDITION_ALL_OF;
     private ListSideElements $elements;
 
+    public function __construct(
+        private readonly ConditionRegistry $conditionRegistry
+    ) {}
+
     /**
      * @throws \Exception
      */
@@ -20,7 +25,7 @@ class SideElementConditional extends AbstractCard implements SideElementInterfac
         $this->conditionType = (string) array_key_first($data);
         $payload = current($data);
         $payload = is_array($payload) ? $payload : [$payload];
-        $this->elements = (new ListSideElements())->fill($payload);
+        $this->elements = (new ListSideElements($this->conditionRegistry))->fill($payload);
         return $this;
     }
 

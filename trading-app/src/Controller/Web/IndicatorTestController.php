@@ -2,21 +2,20 @@
 
 namespace App\Controller\Web;
 
-use App\Indicator\Context\IndicatorContextBuilder;
-use App\Indicator\Condition\ConditionRegistry;
+use App\Common\Enum\Timeframe;
 use App\Indicator\ConditionLoader\TimeframeEvaluator;
-use App\Service\TradingConfigService;
-use App\Service\KlineDataService;
-use App\Domain\Common\Enum\Timeframe;
+use App\Indicator\Context\IndicatorContextBuilder;
+use App\Indicator\Registry\ConditionRegistry;
+use App\Kline\Port\KlineProviderPort;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
-use App\Domain\Ports\Out\KlineProviderPort;
+use App\Service\KlineDataService;
+use App\Service\TradingConfigService;
 use App\Signal\SignalValidationService;
-use App\Entity\Contract;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\Routing\Annotation\Route;
 
 #[Route('/indicators', name: 'indicators_')]
@@ -59,7 +58,7 @@ class IndicatorTestController extends AbstractController
     {
         $tradingConfig = $this->tradingConfigService->getConfig();
         $availableTimeframes = $this->tradingConfigService->getTimeframes();
-        
+
         // Créer un mapping des timeframes avec leurs règles de validation
         $timeframesWithRules = [];
         foreach ($availableTimeframes as $tf) {
@@ -73,7 +72,7 @@ class IndicatorTestController extends AbstractController
 
         // Récupérer les contrats actifs depuis la base de données
         $activeContracts = $this->contractRepository->allActiveSymbolNames();
-        
+
         return $this->render('indicators/test.html.twig', [
             'title' => 'Test des Indicateurs',
             'available_symbols' => $activeContracts,
@@ -88,7 +87,7 @@ class IndicatorTestController extends AbstractController
     {
         try {
             $data = json_decode($request->getContent(), true);
-            
+
             if (json_last_error() !== JSON_ERROR_NONE) {
                 return new JsonResponse([
                     'success' => false,
@@ -188,10 +187,10 @@ class IndicatorTestController extends AbstractController
         try {
             // Créer un contexte de test
             $context = $this->createRealisticContext('BTCUSDT', '1h');
-            
+
             // Évaluer la condition spécifique
             $results = $this->conditionRegistry->evaluate($context, [$conditionName]);
-            
+
             if (!isset($results[$conditionName])) {
                 return new JsonResponse([
                     'success' => false,
@@ -224,7 +223,7 @@ class IndicatorTestController extends AbstractController
     {
         try {
             $conditionNames = $this->conditionRegistry->names();
-            
+
             return new JsonResponse([
                 'success' => true,
                 'data' => [
@@ -248,7 +247,7 @@ class IndicatorTestController extends AbstractController
     {
         try {
             $activeContracts = $this->contractRepository->allActiveSymbolNames();
-            
+
             return new JsonResponse([
                 'success' => true,
                 'data' => [
@@ -272,7 +271,7 @@ class IndicatorTestController extends AbstractController
     {
         try {
             $data = json_decode($request->getContent(), true);
-            
+
             if (json_last_error() !== JSON_ERROR_NONE) {
                 return new JsonResponse([
                     'success' => false,
@@ -286,7 +285,7 @@ class IndicatorTestController extends AbstractController
             $iterations = (int) ($data['iterations'] ?? 10);
 
             $results = [];
-            
+
             for ($i = 0; $i < $iterations; $i++) {
                 // Créer un contexte avec des données légèrement différentes
                     $context = $this->createRealisticContext($symbol, $timeframe, $i);
@@ -294,7 +293,7 @@ class IndicatorTestController extends AbstractController
                     $timeframeEvaluation = $this->timeframeEvaluator->evaluate($timeframe, $context);
                     $timeframeValidation = $this->formatTimeframeEvaluation($timeframeEvaluation);
                     $summary = $this->generateSummary($conditionsResults);
-                    
+
                     $results[] = [
                         'iteration' => $i + 1,
                         'summary' => $summary,
@@ -331,7 +330,7 @@ class IndicatorTestController extends AbstractController
     {
         try {
             $data = json_decode($request->getContent(), true);
-            
+
             if (!$data) {
                 return new JsonResponse([
                     'success' => false,
@@ -410,21 +409,21 @@ class IndicatorTestController extends AbstractController
 
                     $tradingConfig = $this->tradingConfigService->getConfig();
                     $minBars = $tradingConfig['timeframes'][$timeframe]['guards']['min_bars'] ?? 220;
-                    
+
                     $intervalMinutes = $timeframeEnum->getStepInMinutes();
                     $startDate = $targetDate->sub(new \DateInterval('PT' . ($minBars * $intervalMinutes) . 'M'));
-                    
+
                     $existingKlines = $this->klineRepository->findBySymbolAndTimeframe($contract, $timeframeEnum, $minBars);
                     usort($existingKlines, fn($a, $b) => $a->getOpenTime() <=> $b->getOpenTime());
-                    
+
                     $this->fillMissingKlines($contract, $timeframeEnum, $existingKlines, $startDate, $targetDate);
-                    
+
                     $klines = $this->klineRepository->findBySymbolAndTimeframe($contract, $timeframeEnum, $minBars);
                     usort($klines, fn($a, $b) => $a->getOpenTime() <=> $b->getOpenTime());
-                    
+
                     // Utiliser SignalValidationService pour la validation
                     $validationResult = $this->signalValidationService->validate($timeframe, $klines, $knownSignals, $contractEntity);
-                    
+
                     // Extraire les informations des klines utilisées
                     $klinesInfo = [
                         'count' => count($klines),
@@ -435,10 +434,10 @@ class IndicatorTestController extends AbstractController
                             'to' => !empty($klines) ? end($klines)->getOpenTime()->format('Y-m-d H:i:s') : null
                         ]
                     ];
-                    
+
                     // Mettre à jour les signaux connus pour le contexte MTF
                     $knownSignals[$timeframe] = $validationResult['signals'][$timeframe] ?? [];
-                    
+
                     $results[$timeframe] = [
                         'status' => $validationResult['status'],
                         'signal' => $validationResult['final']['signal'],
@@ -452,14 +451,14 @@ class IndicatorTestController extends AbstractController
                             'fully_aligned' => $validationResult['context']['fully_aligned'] ?? false,
                         ]
                     ];
-                    
+
                     // Mettre à jour le statut global basé sur le statut MTF
                     if ($validationResult['status'] === 'FAILED' && $overallStatus === 'valid') {
                         $overallStatus = 'partial';
                     } elseif ($validationResult['status'] === 'VALIDATED') {
                         $overallStatus = 'valid';
                     }
-                    
+
                 } catch (\Exception $e) {
                     $results[$timeframe] = [
                         'status' => 'error',
@@ -511,7 +510,7 @@ class IndicatorTestController extends AbstractController
     {
         try {
             $data = json_decode($request->getContent(), true);
-            
+
             if (json_last_error() !== JSON_ERROR_NONE) {
                 return new JsonResponse([
                     'success' => false,
@@ -551,7 +550,7 @@ class IndicatorTestController extends AbstractController
                     'message' => 'Format de date invalide. Utilisez YYYY-MM-DD'
                 ], Response::HTTP_BAD_REQUEST);
             }
-            
+
             // Vérifier que la date n'est pas dans le futur
             $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
             if ($targetDate > $now) {
@@ -587,7 +586,7 @@ class IndicatorTestController extends AbstractController
             // Validation des contrats contre la vraie liste des contrats actifs
             $availableSymbols = $this->contractRepository->allActiveSymbolNames();
             $invalidContracts = array_diff($contractList, $availableSymbols);
-            
+
             if (!empty($invalidContracts)) {
                 return new JsonResponse([
                     'success' => false,
@@ -607,18 +606,18 @@ class IndicatorTestController extends AbstractController
                 try {
                     // Créer un contexte historique pour la date donnée
                     $context = $this->createHistoricalContext($contract, $timeframe, $targetDate);
-                    
+
                     // Évaluer toutes les conditions
                     $conditionsResults = $this->conditionRegistry->evaluate($context);
                     $timeframeEvaluation = $this->timeframeEvaluator->evaluate($timeframe, $context);
                     $timeframeValidation = $this->formatTimeframeEvaluation($timeframeEvaluation);
-                    
+
                     // Générer un résumé
                     $summary = $this->generateSummary($conditionsResults);
-                    
+
                     // Déterminer le statut global
                     $overallStatus = $this->determineOverallStatus($timeframeValidation, $summary);
-                    
+
                     $results[$contract] = [
                         'contract' => $contract,
                         'date' => $targetDate->format('Y-m-d'),
@@ -681,7 +680,7 @@ class IndicatorTestController extends AbstractController
     private function createRealisticContext(string $symbol, string $timeframe, int $variation = 0): array
     {
         $basePrice = 50000 + ($variation * 100);
-        
+
         return $this->contextBuilder
             ->symbol($symbol)
             ->timeframe($timeframe)
@@ -810,7 +809,7 @@ class IndicatorTestController extends AbstractController
     {
         $successRates = array_map(fn($r) => $r['summary']['success_rate'], $results);
         $passedCounts = array_map(fn($r) => $r['summary']['passed'], $results);
-        
+
         return [
             'success_rate_avg' => round(array_sum($successRates) / count($successRates), 2),
             'success_rate_min' => min($successRates),
@@ -901,39 +900,39 @@ class IndicatorTestController extends AbstractController
         // Récupérer le nombre minimum de bars requis depuis la configuration
         $tradingConfig = $this->tradingConfigService->getConfig();
         $minBars = $tradingConfig['timeframes'][$timeframe]['guards']['min_bars'] ?? 220;
-        
+
         // Calculer la date de début pour récupérer suffisamment de klines
         $intervalMinutes = $timeframeEnum->getStepInMinutes();
         $startDate = $targetDate->sub(new \DateInterval('PT' . ($minBars * $intervalMinutes) . 'M'));
-        
+
         // Récupérer les klines existantes depuis la base de données
         $existingKlines = $this->klineRepository->findBySymbolAndTimeframe($symbol, $timeframeEnum, $minBars);
-        
+
         // Trier par ordre chronologique
         usort($existingKlines, fn($a, $b) => $a->getOpenTime() <=> $b->getOpenTime());
-        
+
         // Détecter et combler les trous dans les klines
         $this->fillMissingKlines($symbol, $timeframeEnum, $existingKlines, $startDate, $targetDate);
-        
+
         // Recharger les klines après comblement
         $klines = $this->klineRepository->findBySymbolAndTimeframe($symbol, $timeframeEnum, $minBars);
         usort($klines, fn($a, $b) => $a->getOpenTime() <=> $b->getOpenTime());
-        
+
         // Si on n'a toujours pas assez de klines, utiliser des données simulées
         if (count($klines) < $minBars) {
             return $this->createSimulatedContext($symbol, $timeframe, $targetDate);
         }
-        
+
         // Construire le contexte avec les vraies klines
         $closes = array_map(fn($k) => $k->getClosePriceFloat(), $klines);
         $highs = array_map(fn($k) => $k->getHighPriceFloat(), $klines);
         $lows = array_map(fn($k) => $k->getLowPriceFloat(), $klines);
         $volumes = array_map(fn($k) => $k->getVolumeFloat(), $klines);
-        
+
         // Extraire les IDs et timestamps des klines pour le debug
         $klineIds = array_map(fn($k) => $k->getId(), $klines);
         $klineTimestamps = array_map(fn($k) => $k->getOpenTime()->format('Y-m-d H:i:s'), $klines);
-        
+
         $context = $this->contextBuilder
             ->symbol($symbol)
             ->timeframe($timeframe)
@@ -943,7 +942,7 @@ class IndicatorTestController extends AbstractController
             ->volumes($volumes)
             ->withDefaults()
             ->build();
-            
+
         // Ajouter les informations des klines utilisées
         $context['klines_used'] = [
             'count' => count($klines),
@@ -954,7 +953,7 @@ class IndicatorTestController extends AbstractController
                 'to' => !empty($klines) ? end($klines)->getOpenTime()->format('Y-m-d H:i:s') : null
             ]
         ];
-        
+
         return $context;
     }
 
@@ -963,10 +962,10 @@ class IndicatorTestController extends AbstractController
         if (empty($conditionsResults)) {
             return 'error';
         }
-        
+
         $passedCount = count(array_filter($conditionsResults, fn($c) => $c['passed']));
         $totalCount = count($conditionsResults);
-        
+
         if ($passedCount === $totalCount) {
             return 'valid';
         } elseif ($passedCount === 0) {
@@ -984,7 +983,7 @@ class IndicatorTestController extends AbstractController
         }
 
         // Vérifier si au moins une direction (long ou short) est valide
-        if (($timeframeValidation['long']['all_passed'] ?? false) || 
+        if (($timeframeValidation['long']['all_passed'] ?? false) ||
             ($timeframeValidation['short']['all_passed'] ?? false)) {
             return 'valid';
         }
@@ -1002,10 +1001,10 @@ class IndicatorTestController extends AbstractController
         try {
             // Utiliser la fonction PostgreSQL existante pour détecter les trous
             $missingChunks = $this->klineRepository->getMissingKlineChunks(
-                $symbol, 
-                $timeframe->value, 
-                $startDate, 
-                $endDate, 
+                $symbol,
+                $timeframe->value,
+                $startDate,
+                $endDate,
                 500 // max_per_request
             );
 
@@ -1019,16 +1018,16 @@ class IndicatorTestController extends AbstractController
                 try {
                     $chunkStart = \DateTimeImmutable::createFromFormat('U', (string)$chunk['from']);
                     $chunkEnd = \DateTimeImmutable::createFromFormat('U', (string)$chunk['to']);
-                    
+
                     if ($chunkStart && $chunkEnd) {
                         $fetchedKlines = $this->klineProvider->fetchKlinesInWindow(
-                            $symbol, 
-                            $timeframe, 
-                            $chunkStart, 
-                            $chunkEnd, 
+                            $symbol,
+                            $timeframe,
+                            $chunkStart,
+                            $chunkEnd,
                             $chunk['step'] * 500 // Limite basée sur le step
                         );
-                        
+
                         if (!empty($fetchedKlines)) {
                             $allNewKlines = array_merge($allNewKlines, $fetchedKlines);
                         }
@@ -1054,15 +1053,15 @@ class IndicatorTestController extends AbstractController
     {
         // Fallback vers les données simulées si on ne peut pas récupérer les vraies klines
         $basePrice = $this->getHistoricalPriceForSymbol($symbol, $targetDate);
-        
+
         // Utiliser l'heure UTC pour plus de précision dans la variation
         $hourVariation = (int) $targetDate->format('H'); // 0-23
         $dayVariation = (int) $targetDate->format('j'); // 1-31
         $monthVariation = (int) $targetDate->format('n'); // 1-12
-        
+
         // Combiner les variations pour plus de réalisme
         $combinedVariation = $dayVariation + ($hourVariation * 0.1) + ($monthVariation * 0.01);
-        
+
         return $this->contextBuilder
             ->symbol($symbol)
             ->timeframe($timeframe)
@@ -1089,11 +1088,11 @@ class IndicatorTestController extends AbstractController
         ];
 
         $basePrice = $basePrices[$symbol] ?? 100;
-        
+
         // Ajuster le prix basé sur la date (simulation d'évolution temporelle)
         $daysSinceEpoch = $date->getTimestamp() / 86400;
         $variation = sin($daysSinceEpoch / 365) * 0.2; // Variation saisonnière de ±20%
-        
+
         return $basePrice * (1 + $variation);
     }
 

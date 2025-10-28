@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace App\Entity;
 
 use App\Repository\KlineRepository;
+use Brick\Math\BigDecimal;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
-use Brick\Math\BigDecimal;
 
 #[ORM\Entity(repositoryClass: KlineRepository::class)]
 #[ORM\Table(name: 'klines')]
@@ -24,8 +24,8 @@ class Kline implements \JsonSerializable
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
 
-    #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Domain\Common\Enum\Timeframe::class)]
-    private \App\Domain\Common\Enum\Timeframe $timeframe;
+    #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Common\Enum\Timeframe::class)]
+    private \App\Common\Enum\Timeframe $timeframe;
 
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE)]
     private \DateTimeImmutable $openTime;
@@ -76,12 +76,12 @@ class Kline implements \JsonSerializable
         return $this;
     }
 
-    public function getTimeframe(): \App\Domain\Common\Enum\Timeframe
+    public function getTimeframe(): \App\Common\Enum\Timeframe
     {
         return $this->timeframe;
     }
 
-    public function setTimeframe(\App\Domain\Common\Enum\Timeframe $timeframe): static
+    public function setTimeframe(\App\Common\Enum\Timeframe $timeframe): static
     {
         $this->timeframe = $timeframe;
         return $this;
@@ -212,7 +212,7 @@ class Kline implements \JsonSerializable
         if ($totalRange->isZero()) {
             return 0.0;
         }
-        
+
         return $this->getBodySize()->dividedBy($totalRange, 12, \Brick\Math\RoundingMode::HALF_UP)->toFloat();
     }
 
@@ -220,14 +220,14 @@ class Kline implements \JsonSerializable
     {
         $openPrice = $this->getOpenPrice();
         $closePrice = $this->getClosePrice();
-        
+
         if ($openPrice->isZero()) {
             return 0.0;
         }
-        
+
         $change = $closePrice->minus($openPrice);
         $percentage = $change->dividedBy($openPrice, 12, \Brick\Math\RoundingMode::HALF_UP)->multipliedBy(100);
-        
+
         return $percentage->toFloat();
     }
 

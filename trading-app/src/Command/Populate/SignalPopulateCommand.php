@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Command\Populate;
 
-use App\Domain\Common\Dto\SignalDto;
-use App\Domain\Common\Enum\SignalSide;
-use App\Domain\Common\Enum\Timeframe;
-use App\Infrastructure\Persistence\SignalPersistenceService;
+use App\Common\Dto\SignalDto;
+use App\Common\Enum\SignalSide;
+use App\Common\Enum\Timeframe;
+use App\Signal\SignalPersistenceService;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -41,7 +41,7 @@ class SignalPopulateCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        
+
         $symbol = strtoupper($input->getArgument('symbol'));
         $timeframe = Timeframe::from($input->getArgument('timeframe'));
         $count = (int) $input->getOption('count');

@@ -4,14 +4,14 @@ declare(strict_types=1);
 
 namespace App\Service\Price;
 
-use App\Domain\Common\Enum\SignalSide;
-use App\Infrastructure\Http\BitmartClient;
+use App\Common\Enum\SignalSide;
+use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
 
 final class TradingPriceResolver
 {
     public function __construct(
         private readonly PriceProviderService $priceProvider,
-        private readonly BitmartClient $bitmartClient,
+        private readonly BitmartHttpClientPublic $bitmartClient,
     ) {
     }
 
@@ -29,16 +29,7 @@ final class TradingPriceResolver
         $allowedDiff = null;
         $forceRealtimeFallback = false;
 
-        $tickerData = $this->fetchTicker($symbol);
-        if ($tickerData !== null) {
-            $bestBid = $this->normalizePrice($tickerData['best_bid'] ?? $tickerData['bestBid'] ?? null);
-            $bestAsk = $this->normalizePrice($tickerData['best_ask'] ?? $tickerData['bestAsk'] ?? null);
-            if ($side === SignalSide::SHORT && $bestBid !== null) {
-                $orderbookPrice = $bestBid;
-            } elseif ($side === SignalSide::LONG && $bestAsk !== null) {
-                $orderbookPrice = $bestAsk;
-            }
-        }
+        $orderbookPrice = $this->priceProvider->getPrice($symbol);
 
         if ($normalizedSnapshot !== null && $providerPrice !== null) {
             $relativeDiff = abs($providerPrice - $normalizedSnapshot) / max($normalizedSnapshot, 1e-8);
@@ -134,19 +125,19 @@ final class TradingPriceResolver
         }
     }
 
-    private function fetchTicker(string $symbol): ?array
+    private function getLastPrice(string $symbol): ?float
     {
         try {
-            $ticker = $this->bitmartClient->getTicker($symbol);
-            if (!\is_array($ticker)) {
+            $marketTrade = $this->bitmartClient->getMarketTrade($symbol);
+            if (
+                !\is_array($marketTrade)
+                || !is_array($marketTrade['data'])
+                || !is_array($marketTrade['data'][0])
+                ) {
                 return null;
             }
 
-            if (isset($ticker['code']) && (int) $ticker['code'] !== 1000) {
-                return null;
-            }
-
-            return $ticker['data'] ?? $ticker;
+            return (float) ($marketTrade['data'][0]['price'] ?? 0);
         } catch (\Throwable) {
             return null;
         }

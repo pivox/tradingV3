@@ -3,6 +3,7 @@
 namespace App\Indicator\ConditionLoader\Cards\Validation;
 
 use App\Indicator\ConditionLoader\Cards\AbstractCard;
+use App\Indicator\ConditionLoader\ConditionRegistry;
 
 class TimeframeValidation extends AbstractCard
 {
@@ -16,16 +17,20 @@ class TimeframeValidation extends AbstractCard
     private ?Side $long = null;
     private ?Side $short = null;
 
+    public function __construct(
+        private readonly ConditionRegistry $conditionRegistry
+    ) {}
+
     public function fill(string|array $data): static
     {
         if (isset($data[Side::LONG])) {
-            $this->long = (new Side())
+            $this->long = (new Side($this->conditionRegistry))
                 ->withSide(Side::LONG)
                 ->fill($data[Side::LONG]);
         }
 
         if (isset($data[Side::SHORT])) {
-            $this->short = (new Side())
+            $this->short = (new Side($this->conditionRegistry))
                 ->withSide(Side::SHORT)
                 ->fill($data[Side::SHORT]);
         }

@@ -23,8 +23,8 @@ class IndicatorSnapshot
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
 
-    #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Domain\Common\Enum\Timeframe::class)]
-    private \App\Domain\Common\Enum\Timeframe $timeframe;
+    #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Common\Enum\Timeframe::class)]
+    private \App\Common\Enum\Timeframe $timeframe;
 
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE)]
     private \DateTimeImmutable $klineTime;
@@ -63,12 +63,12 @@ class IndicatorSnapshot
         return $this;
     }
 
-    public function getTimeframe(): \App\Domain\Common\Enum\Timeframe
+    public function getTimeframe(): \App\Common\Enum\Timeframe
     {
         return $this->timeframe;
     }
 
-    public function setTimeframe(\App\Domain\Common\Enum\Timeframe $timeframe): static
+    public function setTimeframe(\App\Common\Enum\Timeframe $timeframe): static
     {
         $this->timeframe = $timeframe;
         return $this;

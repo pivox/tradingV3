@@ -2,7 +2,7 @@
 
 namespace App\Indicator\Context;
 
-use App\Indicator\Condition\ConditionRegistry;
+use App\Indicator\Registry\ConditionRegistry;
 
 /**
  * Test simple pour vérifier que toutes les conditions fonctionnent

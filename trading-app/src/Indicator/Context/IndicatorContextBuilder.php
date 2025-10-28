@@ -2,12 +2,12 @@
 
 namespace App\Indicator\Context;
 
-use App\Indicator\Momentum\Rsi;
-use App\Indicator\Momentum\Macd;
-use App\Indicator\Trend\Ema;
-use App\Indicator\Trend\Adx;
-use App\Indicator\Volume\Vwap;
-use App\Indicator\AtrCalculator;
+use App\Indicator\Core\AtrCalculator;
+use App\Indicator\Core\Momentum\Macd;
+use App\Indicator\Core\Momentum\Rsi;
+use App\Indicator\Core\Trend\Adx;
+use App\Indicator\Core\Trend\Ema;
+use App\Indicator\Core\Volume\Vwap;
 
 /**
  * Construit un tableau de contexte unifié pour les conditions.
@@ -23,7 +23,7 @@ class IndicatorContextBuilder
     /** @var float[] */ private array $lows = [];
     /** @var float[] */ private array $volumes = [];
     /** @var array<int,array{high:float,low:float,close:float}> */ private array $ohlc = [];
-    
+
     // Paramètres configurables pour les conditions
     private ?float $entryPrice = null;
     private ?float $stopLoss = null;
@@ -58,7 +58,7 @@ class IndicatorContextBuilder
     public function volumes(array $volumes): self { $this->volumes = array_map('floatval',$volumes); return $this; }
     /** @param array<int,array{high:float,low:float,close:float}> $ohlc */
     public function ohlc(array $ohlc): self { $this->ohlc = $ohlc; return $this; }
-    
+
     // Méthodes pour configurer les paramètres des conditions
     public function entryPrice(?float $price): self { $this->entryPrice = $price; return $this; }
     public function stopLoss(?float $stop): self { $this->stopLoss = $stop; return $this; }
@@ -68,7 +68,7 @@ class IndicatorContextBuilder
     public function rsiLt70Threshold(?float $threshold): self { $this->rsiLt70Threshold = $threshold; return $this; }
     public function rsiCrossUpLevel(?float $level): self { $this->rsiCrossUpLevel = $level; return $this; }
     public function rsiCrossDownLevel(?float $level): self { $this->rsiCrossDownLevel = $level; return $this; }
-    
+
     /**
      * Configure les paramètres par défaut pour les conditions.
      * Utile pour initialiser rapidement avec des valeurs standard.

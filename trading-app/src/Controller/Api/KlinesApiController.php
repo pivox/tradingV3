@@ -2,7 +2,7 @@
 
 namespace App\Controller\Api;
 
-use App\Domain\Common\Enum\Timeframe;
+use App\Common\Enum\Timeframe;
 use App\Repository\KlineRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;

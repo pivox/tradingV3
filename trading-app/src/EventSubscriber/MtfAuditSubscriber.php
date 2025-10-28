@@ -38,7 +38,29 @@ class MtfAuditSubscriber implements EventSubscriberInterface
     public function onMtfAudit(MtfAuditEvent $event): void
     {
         try {
-            $audit = $event->getAudit();
+            // Créer l'entité MtfAudit à partir des données de l'événement
+            $audit = new MtfAudit();
+            $audit->setSymbol($event->getSymbol());
+            $audit->setStep($event->getStep());
+            $audit->setCause($event->getMessage());
+            $audit->setDetails($event->getData());
+            $audit->setSeverity($event->getSeverity());
+            
+            // Définir le run_id depuis les données si disponible
+            $data = $event->getData();
+            if (isset($data['run_id']) && $data['run_id'] !== null) {
+                try {
+                    $runId = \Ramsey\Uuid\Uuid::fromString($data['run_id']);
+                    $audit->setRunId($runId);
+                } catch (\Throwable $e) {
+                    // Si le run_id n'est pas un UUID valide, on l'ignore
+                    $this->logger->warning('[MTF Audit] Invalid run_id format', [
+                        'run_id' => $data['run_id'],
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+            
             // Si configuré, ignorer l'audit quand il provient du cache (details['from_cache'] === true)
             $details = $audit->getDetails();
             if ($this->skipFromCache && (bool)($details['from_cache'] ?? false) === true) {

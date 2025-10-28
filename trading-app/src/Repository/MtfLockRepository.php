@@ -27,29 +27,30 @@ class MtfLockRepository extends ServiceEntityRepository
         int $timeoutSeconds = 300,
         ?string $metadata = null
     ): bool {
+        return true;
         $em = $this->getEntityManager();
-        
+
         // Nettoyer les verrous expirés
         $this->cleanupExpiredLocks();
-        
+
         // Vérifier si le verrou existe déjà
         $existingLock = $this->findOneBy(['lockKey' => $lockKey]);
-        
+
         if ($existingLock) {
             // Si le verrou existe et n'est pas expiré, on ne peut pas l'acquérir
             if (!$existingLock->isExpired()) {
                 return false;
             }
-            
+
             // Si le verrou est expiré, on le supprime
             $em->remove($existingLock);
             $em->flush();
         }
-        
+
         // Créer le nouveau verrou
         $expiresAt = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->modify("+{$timeoutSeconds} seconds");
         $lock = new MtfLock($lockKey, $processId, $expiresAt, $metadata);
-        
+
         try {
             $em->persist($lock);
             $em->flush();
@@ -69,15 +70,15 @@ class MtfLockRepository extends ServiceEntityRepository
             'lockKey' => $lockKey,
             'processId' => $processId
         ]);
-        
+
         if (!$lock) {
             return false;
         }
-        
+
         $em = $this->getEntityManager();
         $em->remove($lock);
         $em->flush();
-        
+
         return true;
     }
 
@@ -87,17 +88,17 @@ class MtfLockRepository extends ServiceEntityRepository
     public function isLocked(string $lockKey): bool
     {
         $lock = $this->findOneBy(['lockKey' => $lockKey]);
-        
+
         if (!$lock) {
             return false;
         }
-        
+
         // Si le verrou est expiré, il n'est plus actif
         if ($lock->isExpired()) {
             $this->releaseLock($lockKey, $lock->getProcessId());
             return false;
         }
-        
+
         return true;
     }
 
@@ -107,11 +108,11 @@ class MtfLockRepository extends ServiceEntityRepository
     public function getLockInfo(string $lockKey): ?array
     {
         $lock = $this->findOneBy(['lockKey' => $lockKey]);
-        
+
         if (!$lock || $lock->isExpired()) {
             return null;
         }
-        
+
         return [
             'lock_key' => $lock->getLockKey(),
             'process_id' => $lock->getProcessId(),
@@ -128,13 +129,13 @@ class MtfLockRepository extends ServiceEntityRepository
     public function cleanupExpiredLocks(): int
     {
         $em = $this->getEntityManager();
-        
+
         $qb = $em->createQueryBuilder();
         $qb->delete(MtfLock::class, 'l')
            ->where('l.expiresAt IS NOT NULL')
            ->andWhere('l.expiresAt <= :now')
            ->setParameter('now', new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
-        
+
         return $qb->getQuery()->execute();
     }
 
@@ -144,15 +145,15 @@ class MtfLockRepository extends ServiceEntityRepository
     public function forceReleaseLock(string $lockKey): bool
     {
         $lock = $this->findOneBy(['lockKey' => $lockKey]);
-        
+
         if (!$lock) {
             return false;
         }
-        
+
         $em = $this->getEntityManager();
         $em->remove($lock);
         $em->flush();
-        
+
         return true;
     }
 
@@ -162,10 +163,10 @@ class MtfLockRepository extends ServiceEntityRepository
     public function getActiveLocks(): array
     {
         $this->cleanupExpiredLocks();
-        
+
         $locks = $this->findAll();
         $activeLocks = [];
-        
+
         foreach ($locks as $lock) {
             if (!$lock->isExpired()) {
                 $activeLocks[] = [
@@ -178,7 +179,7 @@ class MtfLockRepository extends ServiceEntityRepository
                 ];
             }
         }
-        
+
         return $activeLocks;
     }
 }

@@ -6,14 +6,14 @@ namespace App\Service\Price;
 
 use Psr\Log\LoggerInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
-use App\Infrastructure\Http\BitmartRestClient;
+use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
 
 final class PriceProviderService
 {
     public function __construct(
         private readonly HttpClientInterface $httpClient,
         private readonly LoggerInterface $logger,
-        private readonly BitmartRestClient $bitmartRestClient,
+        private readonly BitmartHttpClientPublic $bitmartRestClient,
     ) {
     }
 
@@ -24,24 +24,24 @@ final class PriceProviderService
     {
         try {
             $contractDetails = $this->bitmartRestClient->fetchContractDetails($symbol);
-            
+            dd($contractDetails);
             if (isset($contractDetails['last_price'])) {
                 $price = (float) $contractDetails['last_price'];
-                
+
                 $this->logger->info('[PriceProvider] Price retrieved from Bitmart Contract Details', [
                     'symbol' => $symbol,
                     'price' => $price,
                     'source' => 'bitmart_contract_details'
                 ]);
-                
+
                 return $price;
             }
-            
+
             $this->logger->warning('[PriceProvider] No last_price found in contract details', [
                 'symbol' => $symbol,
                 'contract_data' => $contractDetails
             ]);
-            
+
         } catch (\Throwable $e) {
             $this->logger->error('[PriceProvider] Failed to get price from Bitmart Contract Details', [
                 'symbol' => $symbol,

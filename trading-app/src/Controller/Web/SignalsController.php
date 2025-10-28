@@ -2,19 +2,19 @@
 
 namespace App\Controller\Web;
 
+use App\Common\Enum\Timeframe;
 use App\Entity\Signal;
-use App\Repository\SignalRepository;
 use App\Repository\ContractRepository;
-use App\Repository\KlineRepository;
 use App\Repository\IndicatorSnapshotRepository;
-use App\Domain\Common\Enum\Timeframe;
+use App\Repository\KlineRepository;
+use App\Repository\MtfAuditStatsRepository;
+use App\Repository\SignalRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\Routing\Annotation\Route;
-use App\Repository\MtfAuditStatsRepository;
 
 class SignalsController extends AbstractController
 {
@@ -38,9 +38,9 @@ class SignalsController extends AbstractController
         $signals = $this->getSignalsWithFilters($symbol, $timeframe, $side);
         // Calculs rapides uniquement; stats globales peuvent être coûteuses
         $stats = $this->getSignalsStats();
-        
+
         // Données pour le tableau des derniers signaux par contrat
-        // Préparer la liste des contrats actifs d'abord pour limiter les requêtes 
+        // Préparer la liste des contrats actifs d'abord pour limiter les requêtes
         $activeContracts = $this->contractRepository->allActiveSymbolNames();
         // Récupérer uniquement les derniers signaux pour les contrats actifs
         $lastSignalsByContract = $this->signalRepository->findLastSignalsGrouped();
@@ -302,11 +302,11 @@ class SignalsController extends AbstractController
         try {
             // 1. Récupérer les klines pour ce signal
             $klines = $this->klineRepository->findBySymbolAndTimeframe(
-                $symbol, 
-                $timeframe, 
+                $symbol,
+                $timeframe,
                 200 // Nombre de klines pour le calcul des indicateurs
             );
-            
+
             if (empty($klines)) {
                 $analysis['errors'][] = 'Aucune kline trouvée pour ce signal';
                 return $analysis;
@@ -339,9 +339,9 @@ class SignalsController extends AbstractController
             foreach ($parentTimeframes as $parentTf) {
                 try {
                     $parentTfEnum = match($parentTf) {
-                        '15m' => \App\Domain\Common\Enum\Timeframe::TF_15M,
-                        '1h' => \App\Domain\Common\Enum\Timeframe::TF_1H,
-                        '4h' => \App\Domain\Common\Enum\Timeframe::TF_4H,
+                        '15m' => \App\Common\Enum\Timeframe::TF_15M,
+                        '1h' => \App\Common\Enum\Timeframe::TF_1H,
+                        '4h' => \App\Common\Enum\Timeframe::TF_4H,
                         default => null
                     };
 

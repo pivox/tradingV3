@@ -3,6 +3,7 @@
 namespace App\Indicator\ConditionLoader\Cards\Validation;
 
 use App\Indicator\ConditionLoader\Cards\AbstractCard;
+use App\Indicator\ConditionLoader\ConditionRegistry;
 
 class ListSideElements extends AbstractCard
 {
@@ -11,6 +12,10 @@ class ListSideElements extends AbstractCard
 
     /** @var SideElementInterface[] */
     private array $sideElements = [];
+
+    public function __construct(
+        private readonly ConditionRegistry $conditionRegistry
+    ) {}
 
     /**
      * @throws \Exception
@@ -22,7 +27,7 @@ class ListSideElements extends AbstractCard
 
         foreach ($items as $element) {
             if (is_string($element)) {
-                $this->sideElements[] = (new SideElementSimple())->fill($element);
+                $this->sideElements[] = (new SideElementSimple($this->conditionRegistry))->fill($element);
                 continue;
             }
 
@@ -48,7 +53,7 @@ class ListSideElements extends AbstractCard
             }
 
             if (is_string($firstKey)) {
-                $this->sideElements[] = (new SideElementSimple())->fill($element);
+                $this->sideElements[] = (new SideElementSimple($this->conditionRegistry))->fill($element);
                 continue;
             }
 

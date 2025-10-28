@@ -200,6 +200,54 @@ class ContractRepository extends ServiceEntityRepository
     }
 
     /**
+     * Convertit un ContractDto en tableau pour upsertContract
+     */
+    private function contractDtoToArray($contractDto): array
+    {
+        if (!$contractDto instanceof \App\Provider\Bitmart\Dto\ContractDto) {
+            throw new \InvalidArgumentException('Expected ContractDto instance');
+        }
+
+        return [
+            'symbol' => $contractDto->symbol,
+            'name' => $contractDto->symbol, // Utilise le symbole comme nom par défaut
+            'product_type' => $contractDto->productType,
+            'open_timestamp' => $contractDto->openTimestamp->getTimestamp(),
+            'expire_timestamp' => $contractDto->expireTimestamp->getTimestamp(),
+            'settle_timestamp' => $contractDto->settleTimestamp->getTimestamp(),
+            'base_currency' => $contractDto->baseCurrency,
+            'quote_currency' => $contractDto->quoteCurrency,
+            'last_price' => $contractDto->lastPrice->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'volume_24h' => $contractDto->volume24h->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'turnover_24h' => $contractDto->turnover24h->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'index_price' => $contractDto->indexPrice->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'index_name' => $contractDto->indexName,
+            'contract_size' => $contractDto->contractSize->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'min_leverage' => $contractDto->minLeverage->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'max_leverage' => $contractDto->maxLeverage->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'price_precision' => $contractDto->pricePrecision->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'vol_precision' => $contractDto->volPrecision->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'max_volume' => $contractDto->maxVolume->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'min_volume' => $contractDto->minVolume->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'funding_rate' => $contractDto->fundingRate->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'expected_funding_rate' => $contractDto->expectedFundingRate->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'open_interest' => $contractDto->openInterest->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'open_interest_value' => $contractDto->openInterestValue->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'high_24h' => $contractDto->high24h->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'low_24h' => $contractDto->low24h->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'change_24h' => $contractDto->change24h->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'market_max_volume' => $contractDto->marketMaxVolume->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'funding_interval_hours' => $contractDto->fundingIntervalHours,
+            'status' => $contractDto->status,
+            'delist_time' => $contractDto->delistTime->getTimestamp(),
+            'min_size' => null, // Non disponible dans le DTO
+            'max_size' => null, // Non disponible dans le DTO
+            'tick_size' => null, // Non disponible dans le DTO
+            'multiplier' => null, // Non disponible dans le DTO
+        ];
+    }
+
+    /**
      * UPSERT plusieurs contrats en lot
      */
     public function upsertContracts(array $contractsData): int
@@ -210,11 +258,17 @@ class ContractRepository extends ServiceEntityRepository
         foreach (array_chunk($contractsData, $batchSize) as $batch) {
             foreach ($batch as $contractData) {
                 try {
+                    // Convertir ContractDto en tableau si nécessaire
+                    if ($contractData instanceof \App\Provider\Bitmart\Dto\ContractDto) {
+                        $contractData = $this->contractDtoToArray($contractData);
+                    }
+                    
                     $this->upsertContract($contractData);
                     $upsertedCount++;
                 } catch (\Exception $e) {
                     // Log l'erreur mais continue avec les autres contrats
-                    error_log("Error upserting contract {$contractData['symbol']}: " . $e->getMessage());
+                    $symbol = is_array($contractData) ? ($contractData['symbol'] ?? 'unknown') : 'unknown';
+                    error_log("Error upserting contract {$symbol}: " . $e->getMessage());
                 }
             }
 

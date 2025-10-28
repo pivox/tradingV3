@@ -2,17 +2,17 @@
 
 namespace App\Command;
 
+use App\Common\Enum\Timeframe;
 use App\Entity\IndicatorSnapshot;
-use App\Repository\IndicatorSnapshotRepository;
 use App\Indicator\Context\IndicatorContextBuilder;
-use App\Indicator\Condition\ConditionRegistry;
-use App\Indicator\Momentum\Rsi;
-use App\Indicator\Momentum\Macd;
-use App\Indicator\Trend\Ema;
-use App\Indicator\Trend\Adx;
-use App\Indicator\Volume\Vwap;
-use App\Indicator\AtrCalculator;
-use App\Domain\Common\Enum\Timeframe;
+use App\Indicator\Core\AtrCalculator;
+use App\Indicator\Core\Momentum\Macd;
+use App\Indicator\Core\Momentum\Rsi;
+use App\Indicator\Core\Trend\Adx;
+use App\Indicator\Core\Trend\Ema;
+use App\Indicator\Core\Volume\Vwap;
+use App\Indicator\Registry\ConditionRegistry;
+use App\Repository\IndicatorSnapshotRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -85,7 +85,7 @@ class IndicatorSnapshotCommand extends Command
 
         // Créer le contexte avec des données réalistes
         $context = $this->createRealisticContext($symbol, $timeframe);
-        
+
         // Évaluer les conditions
         $conditionRegistry = $this->createConditionRegistry();
         $conditionsResults = $conditionRegistry->evaluate($context);
@@ -118,7 +118,7 @@ class IndicatorSnapshotCommand extends Command
         $this->entityManager->flush();
 
         $io->success("Snapshot créé avec l'ID: " . $snapshot->getId());
-        
+
         if ($verbose) {
             $this->displaySnapshotDetails($io, $snapshot);
         }
@@ -132,7 +132,7 @@ class IndicatorSnapshotCommand extends Command
 
         // Récupérer les deux derniers snapshots
         $snapshots = $this->snapshotRepository->findRecentForIndicators($symbol, $timeframe, 2);
-        
+
         if (count($snapshots) < 2) {
             $io->error("Il faut au moins 2 snapshots pour faire une comparaison");
             return Command::FAILURE;
@@ -147,7 +147,7 @@ class IndicatorSnapshotCommand extends Command
 
         // Comparer les snapshots
         $comparison = $this->compareSnapshotValues($reference, $current, $tolerance);
-        
+
         // Afficher les résultats
         $this->displayComparisonResults($io, $comparison, $tolerance);
 
@@ -165,7 +165,7 @@ class IndicatorSnapshotCommand extends Command
         $io->title("Liste des snapshots d'indicateurs");
 
         $snapshots = $this->snapshotRepository->findRecentForIndicators($symbol, $timeframe, 10);
-        
+
         if (empty($snapshots)) {
             $io->warning("Aucun snapshot trouvé pour $symbol {$timeframe->value}");
             return Command::SUCCESS;
@@ -199,7 +199,7 @@ class IndicatorSnapshotCommand extends Command
     private function createRealisticContext(string $symbol, Timeframe $timeframe): array
     {
         $contextBuilder = $this->createContextBuilder();
-        
+
         return $contextBuilder
             ->symbol($symbol)
             ->timeframe($timeframe->value)
@@ -275,7 +275,7 @@ class IndicatorSnapshotCommand extends Command
     private function displaySnapshotDetails(SymfonyStyle $io, IndicatorSnapshot $snapshot): void
     {
         $values = $snapshot->getValues();
-        
+
         $io->writeln("Symbol: {$snapshot->getSymbol()}");
         $io->writeln("Timeframe: {$snapshot->getTimeframe()->value}");
         $io->writeln("Kline Time: {$snapshot->getKlineTime()->format('Y-m-d H:i:s')}");
@@ -296,7 +296,7 @@ class IndicatorSnapshotCommand extends Command
     {
         $referenceValues = $reference->getValues();
         $currentValues = $current->getValues();
-        
+
         $comparison = [
             'has_differences' => false,
             'differences' => [],
@@ -367,7 +367,7 @@ class IndicatorSnapshotCommand extends Command
         }
 
         $io->error("Différences détectées (tolérance: $tolerance)");
-        
+
         $table = $io->createTable();
         $table->setHeaders(['Clé', 'Référence', 'Actuel', 'Différence', 'Type']);
 
