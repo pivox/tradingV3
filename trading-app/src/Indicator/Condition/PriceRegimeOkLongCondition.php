@@ -1,6 +1,14 @@
 <?php
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1h', '4h'], side: 'long', name: 'price_regime_ok_long')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'price_regime_ok_long')]
+
 final class PriceRegimeOkLongCondition extends AbstractCondition
 {
     public function __construct(

@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1m','5m','15m','1h','4h'], side: 'short', name: 'rsi_gt_85')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'rsi_gt_85')]
+
 final class RsiGt85Condition extends AbstractCondition
 {
     public function getName(): string { return 'rsi_gt_85'; }

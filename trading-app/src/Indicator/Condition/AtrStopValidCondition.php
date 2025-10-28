@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1m','5m','15m','1h','4h'], side: null, name: 'atr_stop_valid')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'atr_stop_valid')]
+
 final class AtrStopValidCondition extends AbstractCondition
 {
     public function getName(): string { return 'atr_stop_valid'; }

@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1m','5m','15m','1h','4h'], side: null, name: 'near_vwap')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'near_vwap')]
+
 final class NearVwapCondition extends AbstractCondition
 {
     public function __construct(private float $defaultTolerance = 0.0015) {}
@@ -28,6 +36,5 @@ final class NearVwapCondition extends AbstractCondition
         ]));
     }
 }
-
 
 

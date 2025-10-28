@@ -41,12 +41,12 @@ class ListSideElements extends AbstractCard
                 SideElementConditional::CONDITION_ANY_OF,
                 SideElementConditional::CONDITION_ALL_OF
             ], true)) {
-                $this->sideElements[] = (new SideElementConditional())->fill($element);
+                $this->sideElements[] = (new SideElementConditional($this->conditionRegistry))->fill($element);
                 continue;
             }
 
             if (is_int($firstKey)) {
-                $this->sideElements[] = (new SideElementConditional())->fill([
+                $this->sideElements[] = (new SideElementConditional($this->conditionRegistry))->fill([
                     SideElementConditional::CONDITION_ALL_OF => $element
                 ]);
                 continue;

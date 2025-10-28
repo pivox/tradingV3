@@ -2,6 +2,13 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['15m', '1m', '4h', '5m'], side: 'long', name: 'close_above_ema_200')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'close_above_ema_200')]
 final class CloseAboveEma200Condition extends AbstractCondition
 {
     public function getName(): string { return 'close_above_ema_200'; }

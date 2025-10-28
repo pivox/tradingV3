@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1m','5m','15m','1h','4h'], side: 'long', name: 'ma9_cross_up_ma21')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'ma9_cross_up_ma21')]
+
 final class Ma9CrossUpMa21Condition extends AbstractCondition
 {
     public function getName(): string { return 'ma9_cross_up_ma21'; }
@@ -27,6 +35,4 @@ final class Ma9CrossUpMa21Condition extends AbstractCondition
         ]));
     }
 }
-
-
 

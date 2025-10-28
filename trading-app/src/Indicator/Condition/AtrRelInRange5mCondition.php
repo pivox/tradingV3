@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1m','5m','15m','1h','4h'], side: null, name: self::NAME)]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: self::NAME)]
+
 final class AtrRelInRange5mCondition extends AbstractCondition
 {
     private const NAME = 'atr_rel_in_range_5m';
@@ -37,4 +45,3 @@ final class AtrRelInRange5mCondition extends AbstractCondition
         ]));
     }
 }
-

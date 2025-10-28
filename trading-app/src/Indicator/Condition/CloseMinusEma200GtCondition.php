@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1h', '4h'], side: 'long', name: 'close_minus_ema_200_gt')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'close_minus_ema_200_gt')]
+
 final class CloseMinusEma200GtCondition extends AbstractCondition
 {
     public function __construct(private float $defaultThreshold = 0.0, private float $eps = 1.0e-12) {}
