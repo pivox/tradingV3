@@ -6,7 +6,7 @@ namespace App\Command\Indicator;
 
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\MainProviderInterface;
-use App\Indicator\Registry\ConditionRegistry;
+use App\Contract\Indicator\IndicatorMainProviderInterface;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -24,7 +24,7 @@ final class GetIndicatorsCommand extends Command
 {
     public function __construct(
         private readonly MainProviderInterface $mainProvider,
-        private readonly ConditionRegistry $conditionRegistry,
+        private readonly IndicatorMainProviderInterface $indicatorMain,
         private readonly IndicatorProviderInterface $indicatorProvider,
     ) {
         parent::__construct();
@@ -668,7 +668,7 @@ final class GetIndicatorsCommand extends Command
         $conditions = [];
 
         if ($input->getOption('all-conditions')) {
-            $conditions = $this->conditionRegistry->names();
+            $conditions = $this->indicatorMain->getEngine()->listConditionNames();
         } elseif ($input->getOption('conditions')) {
             $conditions = array_map('trim', explode(',', $input->getOption('conditions')));
         }
@@ -681,7 +681,7 @@ final class GetIndicatorsCommand extends Command
         $io->section('Évaluation des Conditions');
 
         try {
-            $results = $this->conditionRegistry->evaluate($context, $conditions);
+            $results = $this->indicatorMain->getEngine()->evaluateConditions($context, $conditions);
 
             if ($format === 'json') {
                 $io->writeln(json_encode($results, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));

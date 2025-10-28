@@ -4,14 +4,7 @@ namespace App\Command;
 
 use App\Common\Enum\Timeframe;
 use App\Entity\IndicatorSnapshot;
-use App\Indicator\Context\IndicatorContextBuilder;
-use App\Indicator\Core\AtrCalculator;
-use App\Indicator\Core\Momentum\Macd;
-use App\Indicator\Core\Momentum\Rsi;
-use App\Indicator\Core\Trend\Adx;
-use App\Indicator\Core\Trend\Ema;
-use App\Indicator\Core\Volume\Vwap;
-use App\Indicator\Registry\ConditionRegistry;
+use App\Contract\Indicator\IndicatorMainProviderInterface;
 use App\Repository\IndicatorSnapshotRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -30,7 +23,8 @@ class IndicatorSnapshotCommand extends Command
 {
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
-        private readonly IndicatorSnapshotRepository $snapshotRepository
+        private readonly IndicatorSnapshotRepository $snapshotRepository,
+        private readonly IndicatorMainProviderInterface $indicatorMain,
     ) {
         parent::__construct();
     }
@@ -83,44 +77,27 @@ class IndicatorSnapshotCommand extends Command
     {
         $io->title("Création d'un snapshot d'indicateurs");
 
-        // Créer le contexte avec des données réalistes
-        $context = $this->createRealisticContext($symbol, $timeframe);
+        // Calculer et persister via le provider (isolation des Core)
+        $provider = $this->indicatorMain->getIndicatorProvider();
+        $snapshotDto = $provider->getSnapshot($symbol, $timeframe->value);
+        $provider->saveIndicatorSnapshot($snapshotDto);
 
-        // Évaluer les conditions
-        $conditionRegistry = $this->createConditionRegistry();
-        $conditionsResults = $conditionRegistry->evaluate($context);
-
-        // Créer le snapshot
-        $snapshot = new IndicatorSnapshot();
-        $snapshot
-            ->setSymbol($symbol)
-            ->setTimeframe($timeframe)
-            ->setKlineTime(new \DateTimeImmutable($klineTime, new \DateTimeZone('UTC')))
-            ->setValues([
-                'ema20' => $context['ema'][20] ?? null,
-                'ema50' => $context['ema'][50] ?? null,
-                'ema200' => $context['ema'][200] ?? null,
-                'rsi' => $context['rsi'] ?? null,
-                'macd' => $context['macd']['macd'] ?? null,
-                'macd_signal' => $context['macd']['signal'] ?? null,
-                'macd_histogram' => $context['macd']['hist'] ?? null,
-                'vwap' => $context['vwap'] ?? null,
-                'atr' => $context['atr'] ?? null,
-                'adx' => $context['adx'][14] ?? null,
-                'close' => $context['close'] ?? null,
-                'conditions_results' => $conditionsResults,
-                'context_hash' => md5(serialize($context)),
-                'created_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s')
-            ]);
-
-        // Sauvegarder
-        $this->entityManager->persist($snapshot);
-        $this->entityManager->flush();
-
-        $io->success("Snapshot créé avec l'ID: " . $snapshot->getId());
+        $io->success(sprintf(
+            "Snapshot calculé et persisté pour %s %s (%s)",
+            $symbol,
+            $timeframe->value,
+            $snapshotDto->klineTime->format('Y-m-d H:i:s')
+        ));
 
         if ($verbose) {
-            $this->displaySnapshotDetails($io, $snapshot);
+            $persisted = $this->snapshotRepository->findOneBy([
+                'symbol' => $symbol,
+                'timeframe' => $timeframe,
+                'klineTime' => $snapshotDto->klineTime,
+            ]);
+            if ($persisted instanceof IndicatorSnapshot) {
+                $this->displaySnapshotDetails($io, $persisted);
+            }
         }
 
         return Command::SUCCESS;
@@ -196,81 +173,7 @@ class IndicatorSnapshotCommand extends Command
         return Command::SUCCESS;
     }
 
-    private function createRealisticContext(string $symbol, Timeframe $timeframe): array
-    {
-        $contextBuilder = $this->createContextBuilder();
-
-        return $contextBuilder
-            ->symbol($symbol)
-            ->timeframe($timeframe->value)
-            ->closes([
-                50000, 50100, 50200, 50300, 50400, 50500, 50600, 50700, 50800, 50900,
-                51000, 51100, 51200, 51300, 51400, 51500, 51600, 51700, 51800, 51900,
-                52000, 52100, 52200, 52300, 52400, 52500, 52600, 52700, 52800, 52900,
-                53000, 53100, 53200, 53300, 53400, 53500, 53600, 53700, 53800, 53900,
-                54000, 54100, 54200, 54300, 54400, 54500, 54600, 54700, 54800, 54900,
-                55000, 55100, 55200, 55300, 55400, 55500, 55600, 55700, 55800, 55900,
-                56000, 56100, 56200, 56300, 56400, 56500, 56600, 56700, 56800, 56900,
-                57000, 57100, 57200, 57300, 57400, 57500, 57600, 57700, 57800, 57900,
-                58000, 58100, 58200, 58300, 58400, 58500, 58600, 58700, 58800, 58900,
-                59000, 59100, 59200, 59300, 59400, 59500, 59600, 59700, 59800, 59900
-            ])
-            ->highs([
-                50100, 50200, 50300, 50400, 50500, 50600, 50700, 50800, 50900, 51000,
-                51100, 51200, 51300, 51400, 51500, 51600, 51700, 51800, 51900, 52000,
-                52100, 52200, 52300, 52400, 52500, 52600, 52700, 52800, 52900, 53000,
-                53100, 53200, 53300, 53400, 53500, 53600, 53700, 53800, 53900, 54000,
-                54100, 54200, 54300, 54400, 54500, 54600, 54700, 54800, 54900, 55000,
-                55100, 55200, 55300, 55400, 55500, 55600, 55700, 55800, 55900, 56000,
-                56100, 56200, 56300, 56400, 56500, 56600, 56700, 56800, 56900, 57000,
-                57100, 57200, 57300, 57400, 57500, 57600, 57700, 57800, 57900, 58000,
-                58100, 58200, 58300, 58400, 58500, 58600, 58700, 58800, 58900, 59000,
-                59100, 59200, 59300, 59400, 59500, 59600, 59700, 59800, 59900, 60000
-            ])
-            ->lows([
-                49900, 50000, 50100, 50200, 50300, 50400, 50500, 50600, 50700, 50800,
-                50900, 51000, 51100, 51200, 51300, 51400, 51500, 51600, 51700, 51800,
-                51900, 52000, 52100, 52200, 52300, 52400, 52500, 52600, 52700, 52800,
-                52900, 53000, 53100, 53200, 53300, 53400, 53500, 53600, 53700, 53800,
-                53900, 54000, 54100, 54200, 54300, 54400, 54500, 54600, 54700, 54800,
-                54900, 55000, 55100, 55200, 55300, 55400, 55500, 55600, 55700, 55800,
-                55900, 56000, 56100, 56200, 56300, 56400, 56500, 56600, 56700, 56800,
-                56900, 57000, 57100, 57200, 57300, 57400, 57500, 57600, 57700, 57800,
-                57900, 58000, 58100, 58200, 58300, 58400, 58500, 58600, 58700, 58800,
-                58900, 59000, 59100, 59200, 59300, 59400, 59500, 59600, 59700, 59800
-            ])
-            ->volumes([
-                1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900,
-                2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900,
-                3000, 3100, 3200, 3300, 3400, 3500, 3600, 3700, 3800, 3900,
-                4000, 4100, 4200, 4300, 4400, 4500, 4600, 4700, 4800, 4900,
-                5000, 5100, 5200, 5300, 5400, 5500, 5600, 5700, 5800, 5900,
-                6000, 6100, 6200, 6300, 6400, 6500, 6600, 6700, 6800, 6900,
-                7000, 7100, 7200, 7300, 7400, 7500, 7600, 7700, 7800, 7900,
-                8000, 8100, 8200, 8300, 8400, 8500, 8600, 8700, 8800, 8900,
-                9000, 9100, 9200, 9300, 9400, 9500, 9600, 9700, 9800, 9900,
-                10000, 10100, 10200, 10300, 10400, 10500, 10600, 10700, 10800, 10900
-            ])
-            ->withDefaults()
-            ->build();
-    }
-
-    private function createContextBuilder(): IndicatorContextBuilder
-    {
-        $rsi = new Rsi();
-        $macd = new Macd();
-        $ema = new Ema();
-        $adx = new Adx();
-        $vwap = new Vwap();
-        $atrCalc = new AtrCalculator();
-
-        return new IndicatorContextBuilder($rsi, $macd, $ema, $adx, $vwap, $atrCalc);
-    }
-
-    private function createConditionRegistry(): ConditionRegistry
-    {
-        return new ConditionRegistry();
-    }
+    // Helpers removed: Core remains encapsulated inside Indicator providers
 
     private function displaySnapshotDetails(SymfonyStyle $io, IndicatorSnapshot $snapshot): void
     {
@@ -412,4 +315,3 @@ class IndicatorSnapshotCommand extends Command
         file_put_contents($filename, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
     }
 }
-

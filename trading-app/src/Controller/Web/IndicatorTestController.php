@@ -3,9 +3,7 @@
 namespace App\Controller\Web;
 
 use App\Common\Enum\Timeframe;
-use App\Indicator\ConditionLoader\TimeframeEvaluator;
-use App\Indicator\Context\IndicatorContextBuilder;
-use App\Indicator\Registry\ConditionRegistry;
+use App\Contract\Indicator\IndicatorMainProviderInterface;
 use App\Kline\Port\KlineProviderPort;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
@@ -21,9 +19,7 @@ use Symfony\Component\Routing\Annotation\Route;
 #[Route('/indicators', name: 'indicators_')]
 class IndicatorTestController extends AbstractController
 {
-    private IndicatorContextBuilder $contextBuilder;
-    private ConditionRegistry $conditionRegistry;
-    private TimeframeEvaluator $timeframeEvaluator;
+    private IndicatorMainProviderInterface $indicatorMain;
     private TradingConfigService $tradingConfigService;
     private KlineDataService $klineDataService;
     private ContractRepository $contractRepository;
@@ -32,9 +28,7 @@ class IndicatorTestController extends AbstractController
     private SignalValidationService $signalValidationService;
 
     public function __construct(
-        IndicatorContextBuilder $contextBuilder,
-        ConditionRegistry $conditionRegistry,
-        TimeframeEvaluator $timeframeEvaluator,
+        IndicatorMainProviderInterface $indicatorMain,
         TradingConfigService $tradingConfigService,
         KlineDataService $klineDataService,
         ContractRepository $contractRepository,
@@ -42,9 +36,7 @@ class IndicatorTestController extends AbstractController
         KlineProviderPort $klineProvider,
         SignalValidationService $signalValidationService
     ) {
-        $this->contextBuilder = $contextBuilder;
-        $this->conditionRegistry = $conditionRegistry;
-        $this->timeframeEvaluator = $timeframeEvaluator;
+        $this->indicatorMain = $indicatorMain;
         $this->tradingConfigService = $tradingConfigService;
         $this->klineDataService = $klineDataService;
         $this->contractRepository = $contractRepository;
@@ -144,11 +136,12 @@ class IndicatorTestController extends AbstractController
                 $context = $this->createRealisticContext($symbol, $timeframe);
             }
 
+            $engine = $this->indicatorMain->getEngine();
             // Évaluer toutes les conditions élémentaires
-            $conditionResults = $this->conditionRegistry->evaluate($context);
+            $conditionResults = $engine->evaluateAllConditions($context);
 
             // Évaluer les règles spécifiques au timeframe via le moteur MTF
-            $timeframeEvaluation = $this->timeframeEvaluator->evaluate($timeframe, $context);
+            $timeframeEvaluation = $engine->evaluateYaml($timeframe, $context);
             $timeframeValidation = $this->formatTimeframeEvaluation($timeframeEvaluation);
 
             $timeframeRules = $this->tradingConfigService->getTimeframeValidationRules($timeframe);
@@ -189,7 +182,8 @@ class IndicatorTestController extends AbstractController
             $context = $this->createRealisticContext('BTCUSDT', '1h');
 
             // Évaluer la condition spécifique
-            $results = $this->conditionRegistry->evaluate($context, [$conditionName]);
+            $engine = $this->indicatorMain->getEngine();
+            $results = $engine->evaluateConditions($context, [$conditionName]);
 
             if (!isset($results[$conditionName])) {
                 return new JsonResponse([
@@ -222,7 +216,8 @@ class IndicatorTestController extends AbstractController
     public function availableConditions(): JsonResponse
     {
         try {
-            $conditionNames = $this->conditionRegistry->names();
+            $engine = $this->indicatorMain->getEngine();
+            $conditionNames = $engine->listConditionNames();
 
             return new JsonResponse([
                 'success' => true,
@@ -289,8 +284,9 @@ class IndicatorTestController extends AbstractController
             for ($i = 0; $i < $iterations; $i++) {
                 // Créer un contexte avec des données légèrement différentes
                     $context = $this->createRealisticContext($symbol, $timeframe, $i);
-                    $conditionsResults = $this->conditionRegistry->evaluate($context);
-                    $timeframeEvaluation = $this->timeframeEvaluator->evaluate($timeframe, $context);
+                    $engine = $this->indicatorMain->getEngine();
+                    $conditionsResults = $engine->evaluateAllConditions($context);
+                    $timeframeEvaluation = $engine->evaluateYaml($timeframe, $context);
                     $timeframeValidation = $this->formatTimeframeEvaluation($timeframeEvaluation);
                     $summary = $this->generateSummary($conditionsResults);
 
@@ -608,8 +604,9 @@ class IndicatorTestController extends AbstractController
                     $context = $this->createHistoricalContext($contract, $timeframe, $targetDate);
 
                     // Évaluer toutes les conditions
-                    $conditionsResults = $this->conditionRegistry->evaluate($context);
-                    $timeframeEvaluation = $this->timeframeEvaluator->evaluate($timeframe, $context);
+                    $engine = $this->indicatorMain->getEngine();
+                    $conditionsResults = $engine->evaluateAllConditions($context);
+                    $timeframeEvaluation = $engine->evaluateYaml($timeframe, $context);
                     $timeframeValidation = $this->formatTimeframeEvaluation($timeframeEvaluation);
 
                     // Générer un résumé
@@ -680,103 +677,41 @@ class IndicatorTestController extends AbstractController
     private function createRealisticContext(string $symbol, string $timeframe, int $variation = 0): array
     {
         $basePrice = 50000 + ($variation * 100);
-
-        return $this->contextBuilder
-            ->symbol($symbol)
-            ->timeframe($timeframe)
-            ->closes([
-                $basePrice, $basePrice + 100, $basePrice + 200, $basePrice + 300, $basePrice + 400,
-                $basePrice + 500, $basePrice + 600, $basePrice + 700, $basePrice + 800, $basePrice + 900,
-                $basePrice + 1000, $basePrice + 1100, $basePrice + 1200, $basePrice + 1300, $basePrice + 1400,
-                $basePrice + 1500, $basePrice + 1600, $basePrice + 1700, $basePrice + 1800, $basePrice + 1900,
-                $basePrice + 2000, $basePrice + 2100, $basePrice + 2200, $basePrice + 2300, $basePrice + 2400,
-                $basePrice + 2500, $basePrice + 2600, $basePrice + 2700, $basePrice + 2800, $basePrice + 2900,
-                $basePrice + 3000, $basePrice + 3100, $basePrice + 3200, $basePrice + 3300, $basePrice + 3400,
-                $basePrice + 3500, $basePrice + 3600, $basePrice + 3700, $basePrice + 3800, $basePrice + 3900,
-                $basePrice + 4000, $basePrice + 4100, $basePrice + 4200, $basePrice + 4300, $basePrice + 4400,
-                $basePrice + 4500, $basePrice + 4600, $basePrice + 4700, $basePrice + 4800, $basePrice + 4900,
-                $basePrice + 5000, $basePrice + 5100, $basePrice + 5200, $basePrice + 5300, $basePrice + 5400,
-                $basePrice + 5500, $basePrice + 5600, $basePrice + 5700, $basePrice + 5800, $basePrice + 5900,
-                $basePrice + 6000, $basePrice + 6100, $basePrice + 6200, $basePrice + 6300, $basePrice + 6400,
-                $basePrice + 6500, $basePrice + 6600, $basePrice + 6700, $basePrice + 6800, $basePrice + 6900,
-                $basePrice + 7000, $basePrice + 7100, $basePrice + 7200, $basePrice + 7300, $basePrice + 7400,
-                $basePrice + 7500, $basePrice + 7600, $basePrice + 7700, $basePrice + 7800, $basePrice + 7900,
-                $basePrice + 8000, $basePrice + 8100, $basePrice + 8200, $basePrice + 8300, $basePrice + 8400,
-                $basePrice + 8500, $basePrice + 8600, $basePrice + 8700, $basePrice + 8800, $basePrice + 8900,
-                $basePrice + 9000, $basePrice + 9100, $basePrice + 9200, $basePrice + 9300, $basePrice + 9400,
-                $basePrice + 9500, $basePrice + 9600, $basePrice + 9700, $basePrice + 9800, $basePrice + 9900
-            ])
-            ->highs([
-                $basePrice + 100, $basePrice + 200, $basePrice + 300, $basePrice + 400, $basePrice + 500,
-                $basePrice + 600, $basePrice + 700, $basePrice + 800, $basePrice + 900, $basePrice + 1000,
-                $basePrice + 1100, $basePrice + 1200, $basePrice + 1300, $basePrice + 1400, $basePrice + 1500,
-                $basePrice + 1600, $basePrice + 1700, $basePrice + 1800, $basePrice + 1900, $basePrice + 2000,
-                $basePrice + 2100, $basePrice + 2200, $basePrice + 2300, $basePrice + 2400, $basePrice + 2500,
-                $basePrice + 2600, $basePrice + 2700, $basePrice + 2800, $basePrice + 2900, $basePrice + 3000,
-                $basePrice + 3100, $basePrice + 3200, $basePrice + 3300, $basePrice + 3400, $basePrice + 3500,
-                $basePrice + 3600, $basePrice + 3700, $basePrice + 3800, $basePrice + 3900, $basePrice + 4000,
-                $basePrice + 4100, $basePrice + 4200, $basePrice + 4300, $basePrice + 4400, $basePrice + 4500,
-                $basePrice + 4600, $basePrice + 4700, $basePrice + 4800, $basePrice + 4900, $basePrice + 5000,
-                $basePrice + 5100, $basePrice + 5200, $basePrice + 5300, $basePrice + 5400, $basePrice + 5500,
-                $basePrice + 5600, $basePrice + 5700, $basePrice + 5800, $basePrice + 5900, $basePrice + 6000,
-                $basePrice + 6100, $basePrice + 6200, $basePrice + 6300, $basePrice + 6400, $basePrice + 6500,
-                $basePrice + 6600, $basePrice + 6700, $basePrice + 6800, $basePrice + 6900, $basePrice + 7000,
-                $basePrice + 7100, $basePrice + 7200, $basePrice + 7300, $basePrice + 7400, $basePrice + 7500,
-                $basePrice + 7600, $basePrice + 7700, $basePrice + 7800, $basePrice + 7900, $basePrice + 8000,
-                $basePrice + 8100, $basePrice + 8200, $basePrice + 8300, $basePrice + 8400, $basePrice + 8500,
-                $basePrice + 8600, $basePrice + 8700, $basePrice + 8800, $basePrice + 8900, $basePrice + 9000,
-                $basePrice + 9100, $basePrice + 9200, $basePrice + 9300, $basePrice + 9400, $basePrice + 9500,
-                $basePrice + 9600, $basePrice + 9700, $basePrice + 9800, $basePrice + 9900, $basePrice + 10000
-            ])
-            ->lows([
-                $basePrice - 100, $basePrice, $basePrice + 100, $basePrice + 200, $basePrice + 300,
-                $basePrice + 400, $basePrice + 500, $basePrice + 600, $basePrice + 700, $basePrice + 800,
-                $basePrice + 900, $basePrice + 1000, $basePrice + 1100, $basePrice + 1200, $basePrice + 1300,
-                $basePrice + 1400, $basePrice + 1500, $basePrice + 1600, $basePrice + 1700, $basePrice + 1800,
-                $basePrice + 1900, $basePrice + 2000, $basePrice + 2100, $basePrice + 2200, $basePrice + 2300,
-                $basePrice + 2400, $basePrice + 2500, $basePrice + 2600, $basePrice + 2700, $basePrice + 2800,
-                $basePrice + 2900, $basePrice + 3000, $basePrice + 3100, $basePrice + 3200, $basePrice + 3300,
-                $basePrice + 3400, $basePrice + 3500, $basePrice + 3600, $basePrice + 3700, $basePrice + 3800,
-                $basePrice + 3900, $basePrice + 4000, $basePrice + 4100, $basePrice + 4200, $basePrice + 4300,
-                $basePrice + 4400, $basePrice + 4500, $basePrice + 4600, $basePrice + 4700, $basePrice + 4800,
-                $basePrice + 4900, $basePrice + 5000, $basePrice + 5100, $basePrice + 5200, $basePrice + 5300,
-                $basePrice + 5400, $basePrice + 5500, $basePrice + 5600, $basePrice + 5700, $basePrice + 5800,
-                $basePrice + 5900, $basePrice + 6000, $basePrice + 6100, $basePrice + 6200, $basePrice + 6300,
-                $basePrice + 6400, $basePrice + 6500, $basePrice + 6600, $basePrice + 6700, $basePrice + 6800,
-                $basePrice + 6900, $basePrice + 7000, $basePrice + 7100, $basePrice + 7200, $basePrice + 7300,
-                $basePrice + 7400, $basePrice + 7500, $basePrice + 7600, $basePrice + 7700, $basePrice + 7800,
-                $basePrice + 7900, $basePrice + 8000, $basePrice + 8100, $basePrice + 8200, $basePrice + 8300,
-                $basePrice + 8400, $basePrice + 8500, $basePrice + 8600, $basePrice + 8700, $basePrice + 8800,
-                $basePrice + 8900, $basePrice + 9000, $basePrice + 9100, $basePrice + 9200, $basePrice + 9300,
-                $basePrice + 9400, $basePrice + 9500, $basePrice + 9600, $basePrice + 9700, $basePrice + 9800
-            ])
-            ->volumes([
-                1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900,
-                2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900,
-                3000, 3100, 3200, 3300, 3400, 3500, 3600, 3700, 3800, 3900,
-                4000, 4100, 4200, 4300, 4400, 4500, 4600, 4700, 4800, 4900,
-                5000, 5100, 5200, 5300, 5400, 5500, 5600, 5700, 5800, 5900,
-                6000, 6100, 6200, 6300, 6400, 6500, 6600, 6700, 6800, 6900,
-                7000, 7100, 7200, 7300, 7400, 7500, 7600, 7700, 7800, 7900,
-                8000, 8100, 8200, 8300, 8400, 8500, 8600, 8700, 8800, 8900,
-                9000, 9100, 9200, 9300, 9400, 9500, 9600, 9700, 9800, 9900,
-                10000, 10100, 10200, 10300, 10400, 10500, 10600, 10700, 10800, 10900
-            ])
-            ->withDefaults()
-            ->build();
+        $klines = [];
+        $n = 100;
+        for ($i = 0; $i < $n; $i++) {
+            $close = $basePrice + ($i+1) * 100;
+            $klines[] = [
+                'open' => $close - 50,
+                'high' => $close + 100,
+                'low'  => $close - 100,
+                'close'=> $close,
+                'volume'=> 1000 + ($i*100),
+                'open_time' => (new \DateTimeImmutable('-'.($n-$i).' minutes', new \DateTimeZone('UTC'))),
+            ];
+        }
+        return $this->indicatorMain->getEngine()->buildContext($symbol, $timeframe, $klines);
     }
 
     private function createContextFromCustomData(string $symbol, string $timeframe, array $customData): array
     {
-        return $this->contextBuilder
-            ->symbol($symbol)
-            ->timeframe($timeframe)
-            ->closes($customData['closes'] ?? [])
-            ->highs($customData['highs'] ?? [])
-            ->lows($customData['lows'] ?? [])
-            ->volumes($customData['volumes'] ?? [])
-            ->withDefaults()
-            ->build();
+        $closes = $customData['closes'] ?? [];
+        $highs  = $customData['highs'] ?? $closes;
+        $lows   = $customData['lows'] ?? $closes;
+        $vols   = $customData['volumes'] ?? array_fill(0, count($closes), 0.0);
+        $n = min(count($closes), count($highs), count($lows), count($vols));
+        $klines = [];
+        for ($i=0; $i<$n; $i++) {
+            $klines[] = [
+                'open' => $closes[$i],
+                'high' => $highs[$i],
+                'low' => $lows[$i],
+                'close' => $closes[$i],
+                'volume' => $vols[$i],
+                'open_time' => (new \DateTimeImmutable('-'.($n-$i).' minutes', new \DateTimeZone('UTC'))),
+            ];
+        }
+        return $this->indicatorMain->getEngine()->buildContext($symbol, $timeframe, $klines);
     }
 
     private function generateSummary(array $results): array
@@ -833,15 +768,8 @@ class IndicatorTestController extends AbstractController
         $klines = $this->klineDataService->parseKlinesFromJson($klinesJson, $symbol, $timeframeEnum);
         $ohlcvData = $this->klineDataService->extractOhlcvData($klines);
 
-        return $this->contextBuilder
-            ->symbol($symbol)
-            ->timeframe($timeframe)
-            ->closes($ohlcvData['closes'])
-            ->highs($ohlcvData['highs'])
-            ->lows($ohlcvData['lows'])
-            ->volumes($ohlcvData['volumes'])
-            ->withDefaults()
-            ->build();
+        $klines = $this->klineDataService->parseKlinesFromJson($klinesJson, $symbol, $timeframeEnum);
+        return $this->indicatorMain->getEngine()->buildContext($symbol, $timeframe, $klines);
     }
 
     private function formatTimeframeEvaluation(array $evaluation): array
@@ -933,15 +861,8 @@ class IndicatorTestController extends AbstractController
         $klineIds = array_map(fn($k) => $k->getId(), $klines);
         $klineTimestamps = array_map(fn($k) => $k->getOpenTime()->format('Y-m-d H:i:s'), $klines);
 
-        $context = $this->contextBuilder
-            ->symbol($symbol)
-            ->timeframe($timeframe)
-            ->closes($closes)
-            ->highs($highs)
-            ->lows($lows)
-            ->volumes($volumes)
-            ->withDefaults()
-            ->build();
+        $engine = $this->indicatorMain->getEngine();
+        $context = $engine->buildContext($symbol, $timeframe, $klines);
 
         // Ajouter les informations des klines utilisées
         $context['klines_used'] = [

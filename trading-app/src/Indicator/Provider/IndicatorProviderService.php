@@ -43,7 +43,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             private readonly CoreSma $smaService,
         ) {}
 
-        public function getSnapshot(string $symbol, string $tximeframe): IndicatorSnapshotDto
+        public function getSnapshot(string $symbol, string $timeframe): IndicatorSnapshotDto
         {
             $tf = Timeframe::from($timeframe);
             $klines = $this->klineProvider->getKlines($symbol, $tf, 200);

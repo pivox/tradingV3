@@ -8,6 +8,7 @@ use App\Indicator\Core\Momentum\Rsi;
 use App\Indicator\Core\Trend\Adx;
 use App\Indicator\Core\Trend\Ema;
 use App\Indicator\Core\Volume\Vwap;
+use Psr\Log\LoggerInterface;
 
 /**
  * Construit un tableau de contexte unifié pour les conditions.
@@ -42,6 +43,7 @@ class IndicatorContextBuilder
         private readonly Adx $adx,
         private readonly Vwap $vwap,
         private readonly AtrCalculator $atrCalc,
+        private readonly ?LoggerInterface $logger = null,
     ) {
         $this->traderAvailable = \extension_loaded('trader');
     }
@@ -87,6 +89,15 @@ class IndicatorContextBuilder
     /** Retourne le contexte prêt pour ConditionRegistry->evaluate(). */
     public function build(): array
     {
+        // Sanity check for invalid close series (all non-positive)
+        if (!empty($this->closes)) {
+            $maxClose = max($this->closes);
+            $minClose = min($this->closes);
+            if ($maxClose <= 0.0 && $minClose <= 0.0) {
+                throw new \RuntimeException('Invalid closes series: all values are non-positive');
+            }
+        }
+
         $close = !empty($this->closes) ? (float) end($this->closes) : null;
 
         $rsiSeries = $this->computeRsiSeries($this->closes);
@@ -118,6 +129,16 @@ class IndicatorContextBuilder
                     $emaPrevMap[$p] = $emaPrevious;
                 }
             }
+        }
+
+        // Warn if EMA9 ~ 0 while close > 0 (suspect data)
+        if ($this->logger && isset($emaMap[9]) && is_float($emaMap[9]) && abs($emaMap[9]) < 1.0e-12 && is_float($close) && $close > 0.0) {
+            $this->logger->warning('EMA9 is approximately zero with positive close; data may be invalid', [
+                'symbol' => $this->symbol,
+                'timeframe' => $this->timeframe,
+                'close' => $close,
+                'ema9' => $emaMap[9],
+            ]);
         }
 
         $vwapVal = null;
@@ -260,10 +281,32 @@ class IndicatorContextBuilder
             try {
                 $series = \trader_ema($closes, $period);
                 if ($series !== false) {
-                    $series = array_map('floatval', array_values($series));
-                    $current = $series ? (float) end($series) : null;
-                    $previous = (count($series) > 1) ? (float) $series[count($series) - 2] : null;
-                    return [$current, $previous];
+                    // Some implementations return nulls for warm-up slots. We need the last non-null numeric.
+                    $vals = array_values($series);
+                    $current = null; $previous = null;
+                    for ($i = count($vals) - 1; $i >= 0; $i--) {
+                        if (is_numeric($vals[$i])) {
+                            $current = (float)$vals[$i];
+                            for ($j = $i - 1; $j >= 0; $j--) {
+                                if (is_numeric($vals[$j])) { $previous = (float)$vals[$j]; break; }
+                            }
+                            break;
+                        }
+                    }
+                    if ($current !== null) {
+                        // Sanity: some drivers may yield 0.0 spuriously on very small-priced symbols.
+                        if ($current === 0.0) {
+                            // Fall back to pure-PHP EMA to avoid zero artefact
+                            $current = (float) $this->ema->calculate($closes, $period);
+                            if (count($closes) >= $period + 1) {
+                                $prevCloses = $closes;
+                                array_pop($prevCloses);
+                                $previous = (float) $this->ema->calculate($prevCloses, $period);
+                            }
+                        }
+                        return [$current, $previous];
+                    }
+                    // Fall through to pure-PHP below if no numeric value found
                 }
             } catch (\Throwable) {
                 // fallback below
@@ -271,6 +314,13 @@ class IndicatorContextBuilder
         }
 
         if (count($closes) < $period) {
+            return [null, null];
+        }
+
+        // If the series is essentially zero/non-informative, return nulls
+        $max = max($closes);
+        $min = min($closes);
+        if ($max <= 1.0e-18 && $min >= -1.0e-18) {
             return [null, null];
         }
 
