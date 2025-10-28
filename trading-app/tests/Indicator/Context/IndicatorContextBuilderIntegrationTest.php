@@ -3,13 +3,13 @@
 namespace App\Tests\Indicator\Context;
 
 use App\Indicator\Context\IndicatorContextBuilder;
-use App\Indicator\Condition\ConditionRegistry;
-use App\Indicator\Momentum\Rsi;
-use App\Indicator\Momentum\Macd;
-use App\Indicator\Trend\Ema;
-use App\Indicator\Trend\Adx;
-use App\Indicator\Volume\Vwap;
-use App\Indicator\AtrCalculator;
+use App\Indicator\Core\AtrCalculator;
+use App\Indicator\Core\Momentum\Macd;
+use App\Indicator\Core\Momentum\Rsi;
+use App\Indicator\Core\Trend\Adx;
+use App\Indicator\Core\Trend\Ema;
+use App\Indicator\Core\Volume\Vwap;
+use App\Indicator\Registry\ConditionRegistry;
 use PHPUnit\Framework\TestCase;
 
 class IndicatorContextBuilderIntegrationTest extends TestCase
@@ -214,7 +214,7 @@ class IndicatorContextBuilderIntegrationTest extends TestCase
             $this->assertArrayHasKey('value', $result, "Le résultat de '$conditionName' doit avoir une clé 'value'");
             $this->assertArrayHasKey('threshold', $result, "Le résultat de '$conditionName' doit avoir une clé 'threshold'");
             $this->assertArrayHasKey('meta', $result, "Le résultat de '$conditionName' doit avoir une clé 'meta'");
-            
+
             $this->assertIsBool($result['passed'], "Le champ 'passed' de '$conditionName' doit être un booléen");
             $this->assertIsArray($result['meta'], "Le champ 'meta' de '$conditionName' doit être un tableau");
         }

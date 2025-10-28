@@ -1,9 +1,31 @@
 <?php
 // src/Service/Indicator/Trend/Ichimoku.php
-namespace App\Indicator\Trend;
+namespace App\Indicator\Core\Trend;
 
-class Ichimoku
+use App\Indicator\Core\IndicatorInterface;
+
+ 
+class Ichimoku implements IndicatorInterface
 {
+    /**
+     * Description textuelle d'Ichimoku Kinko Hyo.
+     */
+    public function getDescription(bool $detailed = false): string
+    {
+        if (!$detailed) {
+            return 'Ichimoku: Tenkan, Kijun, Senkou A/B, Chikou pour lecture de tendance/supports.';
+        }
+        return implode("\n", [
+            'Ichimoku:',
+            '- Tenkan = (max(high, 9) + min(low, 9)) / 2.',
+            '- Kijun  = (max(high, 26) + min(low, 26)) / 2.',
+            '- Senkou A = (Tenkan + Kijun) / 2 (affiché projeté +26).',
+            '- Senkou B = (max(high, 52) + min(low, 52)) / 2 (affiché projeté +26).',
+            '- Chikou = close décalé -26 (affichage).',
+            '- Note: les décalages sont d’affichage; les valeurs retournées sont les niveaux bruts.',
+        ]);
+    }
+
     /**
      * Retour minimal pour usage direct (Tenkan/Kijun/SpanB).
      * Ignore la bougie non clôturée.
@@ -76,5 +98,32 @@ class Ichimoku
             'senkou_b'  => $senkouB,
             'chikou'    => $chikou,
         ];
+    }
+
+    // Generic interface wrappers
+    public function calculateValue(mixed ...$args): mixed
+    {
+        /** @var array $highs */
+        $highs  = $args[0] ?? [];
+        $lows   = $args[1] ?? [];
+        $tenkan = isset($args[2]) ? (int)$args[2] : 9;
+        $kijun  = isset($args[3]) ? (int)$args[3] : 26;
+        $spanB  = isset($args[4]) ? (int)$args[4] : 52;
+        $ignore = isset($args[5]) ? (bool)$args[5] : true;
+        return $this->calculate($highs, $lows, $tenkan, $kijun, $spanB, $ignore);
+    }
+
+    public function calculateSeries(mixed ...$args): array
+    {
+        /** @var array $highs */
+        $highs  = $args[0] ?? [];
+        $lows   = $args[1] ?? [];
+        $closes = $args[2] ?? [];
+        $tenkan = isset($args[3]) ? (int)$args[3] : 9;
+        $kijun  = isset($args[4]) ? (int)$args[4] : 26;
+        $spanB  = isset($args[5]) ? (int)$args[5] : 52;
+        $ahead  = isset($args[6]) ? (int)$args[6] : 26;
+        $ignore = isset($args[7]) ? (bool)$args[7] : true;
+        return $this->calculateFull($highs, $lows, $closes, $tenkan, $kijun, $spanB, $ahead, $ignore);
     }
 }

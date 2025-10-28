@@ -1,7 +1,9 @@
 <?php
 // src/Service/Indicator/Volatility/Bollinger.php
 
-namespace App\Indicator\Volatility;
+namespace App\Indicator\Core\Volatility;
+
+use App\Indicator\Core\IndicatorInterface;
 
 /**
  * Bandes de Bollinger (John Bollinger)
@@ -12,8 +14,27 @@ namespace App\Indicator\Volatility;
  *
  * Note: ici l'écart-type est calculé sur 'period' points (variance population sur la fenêtre).
  */
-final class Bollinger
+ 
+final class Bollinger implements IndicatorInterface
 {
+    /**
+     * Description textuelle des Bandes de Bollinger.
+     */
+    public function getDescription(bool $detailed = false): string
+    {
+        if (!$detailed) {
+            return "Bandes de Bollinger: enveloppes autour d'une SMA, écartées de σ écarts-types.";
+        }
+        return implode("\n", [
+            'Bollinger Bands:',
+            '- middle = SMA(period).',
+            '- upper  = middle + stdev * σ.',
+            '- lower  = middle - stdev * σ.',
+            '- σ = écart-type des prix sur la fenêtre (population).',
+            '- width = upper - lower.',
+        ]);
+    }
+
     /**
      * Dernier point (upper/lower/middle/width).
      * @param float[] $closes
@@ -40,6 +61,21 @@ final class Bollinger
      */
     public function calculateFull(array $closes, int $period = 20, float $stdev = 2.0): array
     {
+        // Prefer TRADER extension if available
+        if (function_exists('trader_bbands')) {
+            // trader_bbands(real, timePeriod, nbDevUp, nbDevDn, matype=SMA)
+            $res = \trader_bbands($closes, $period, $stdev, $stdev);
+            if (is_array($res) && isset($res[0], $res[1], $res[2])) {
+                $upper  = array_values(array_map('floatval', (array)$res[0]));
+                $middle = array_values(array_map('floatval', (array)$res[1]));
+                $lower  = array_values(array_map('floatval', (array)$res[2]));
+                $width  = [];
+                $m = min(count($upper), count($lower));
+                for ($i = 0; $i < $m; $i++) { $width[] = $upper[$i] - $lower[$i]; }
+                return compact('upper','lower','middle','width');
+            }
+        }
+
         $n = count($closes);
         if ($n < $period) {
             return ['upper'=>[],'lower'=>[],'middle'=>[],'width'=>[]];
@@ -100,5 +136,24 @@ final class Bollinger
         }
         $var /= $m; // population variance
         return sqrt($var);
+    }
+
+    // Generic interface wrappers
+    public function calculateValue(mixed ...$args): mixed
+    {
+        /** @var array $closes */
+        $closes = $args[0] ?? [];
+        $period = isset($args[1]) ? (int)$args[1] : 20;
+        $sigma  = isset($args[2]) ? (float)$args[2] : 2.0;
+        return $this->calculate($closes, $period, $sigma);
+    }
+
+    public function calculateSeries(mixed ...$args): array
+    {
+        /** @var array $closes */
+        $closes = $args[0] ?? [];
+        $period = isset($args[1]) ? (int)$args[1] : 20;
+        $sigma  = isset($args[2]) ? (float)$args[2] : 2.0;
+        return $this->calculateFull($closes, $period, $sigma);
     }
 }

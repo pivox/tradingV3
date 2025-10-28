@@ -17,19 +17,21 @@ Ce guide vous accompagne dans la migration vers le nouveau système de switch PH
 ### 1. Mise à jour de la configuration
 
 #### Avant (ancien système)
+
 ```php
 // Utilisation directe des services d'indicateurs
-$emaService = $this->container->get('App\Indicator\Trend\Ema');
-$rsiService = $this->container->get('App\Indicator\Momentum\Rsi');
+$emaService = $this->container->get('App\Indicator\Core\Trend\Ema');
+$rsiService = $this->container->get('App\Indicator\Core\Momentum\Rsi');
 
 $ema = $emaService->calculate($prices, 20);
 $rsi = $rsiService->calculate($prices, 14);
 ```
 
 #### Après (nouveau système)
+
 ```php
 // Utilisation du service hybride
-$indicatorService = $this->container->get('App\Service\Indicator\HybridIndicatorService');
+$indicatorService = $this->container->get('App\Indicator\Loader\HybridIndicatorService');
 
 $snapshot = $indicatorService->calculateIndicators($symbol, $timeframe, $klines);
 $ema20 = $snapshot->ema20;

@@ -124,7 +124,7 @@ $snapshot = $indicatorService->calculateIndicators($symbol, $timeframe, $klines)
 ### Injection de dépendance
 
 ```php
-use App\Service\Indicator\HybridIndicatorService;
+use App\Indicator\Loader\HybridIndicatorService;
 
 class TradingService
 {

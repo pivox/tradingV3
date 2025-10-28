@@ -1,12 +1,30 @@
 <?php
-namespace App\Indicator\Volatility;
+namespace App\Indicator\Core\Volatility;
+
+use App\Indicator\Core\IndicatorInterface;
 
 /**
  * Choppiness Index (CHOP)
  * CHOP = 100 * log10( sum(TR, n) / (max(high,n) - min(low,n)) ) / log10(n)
  */
-final class Choppiness
+ 
+final class Choppiness implements IndicatorInterface
 {
+    /**
+     * Description textuelle du Choppiness Index (CHOP).
+     */
+    public function getDescription(bool $detailed = false): string
+    {
+        if (!$detailed) {
+            return 'Choppiness Index (CHOP): quantifie le caractère trend/choppy en normalisant la somme des TR.';
+        }
+        return implode("\n", [
+            'CHOP:',
+            '- TR_t = max(high_t-low_t, |high_t-close_{t-1}|, |low_t-close_{t-1}|).',
+            '- CHOP = 100 * log10( sum(TR, n) / (max(high,n) - min(low,n)) ) / log10(n).',
+        ]);
+    }
+
     /**
      * @param float[] $highs
      * @param float[] $lows
@@ -28,7 +46,7 @@ final class Choppiness
             $tr[] = max($h - $l, abs($h - $c1), abs($l - $c1));
         }
 
-        $logN = log10(max(2, $period));
+        $logN = log10(max(2.0, (float)$period));
         $sumTR = 0.0;
         for ($i = 0; $i < $n; $i++) {
             $sumTR += $tr[$i];
@@ -55,5 +73,26 @@ final class Choppiness
     {
         $s = $this->calculateFull($highs, $lows, $closes, $period);
         return empty($s) ? 0.0 : (float) end($s);
+    }
+
+    // Generic interface wrappers
+    public function calculateValue(mixed ...$args): mixed
+    {
+        /** @var array $highs */
+        $highs = $args[0] ?? [];
+        $lows  = $args[1] ?? [];
+        $closes= $args[2] ?? [];
+        $period= isset($args[3]) ? (int)$args[3] : 14;
+        return $this->calculate($highs, $lows, $closes, $period);
+    }
+
+    public function calculateSeries(mixed ...$args): array
+    {
+        /** @var array $highs */
+        $highs = $args[0] ?? [];
+        $lows  = $args[1] ?? [];
+        $closes= $args[2] ?? [];
+        $period= isset($args[3]) ? (int)$args[3] : 14;
+        return $this->calculateFull($highs, $lows, $closes, $period);
     }
 }

@@ -2,15 +2,15 @@
 
 namespace App\Tests\Indicator\Condition;
 
-use App\Indicator\Context\IndicatorContextBuilder;
 use App\Indicator\Condition\ConditionInterface;
-use App\Indicator\Condition\ConditionRegistry;
-use App\Indicator\Momentum\Rsi;
-use App\Indicator\Momentum\Macd;
-use App\Indicator\Trend\Ema;
-use App\Indicator\Trend\Adx;
-use App\Indicator\Volume\Vwap;
-use App\Indicator\AtrCalculator;
+use App\Indicator\Context\IndicatorContextBuilder;
+use App\Indicator\Core\AtrCalculator;
+use App\Indicator\Core\Momentum\Macd;
+use App\Indicator\Core\Momentum\Rsi;
+use App\Indicator\Core\Trend\Adx;
+use App\Indicator\Core\Trend\Ema;
+use App\Indicator\Core\Volume\Vwap;
+use App\Indicator\Registry\ConditionRegistry;
 use PHPUnit\Framework\TestCase;
 
 class AllConditionsTest extends TestCase
@@ -77,7 +77,7 @@ class AllConditionsTest extends TestCase
             $this->assertArrayHasKey('value', $result, "Le résultat de '$conditionName' doit avoir une clé 'value'");
             $this->assertArrayHasKey('threshold', $result, "Le résultat de '$conditionName' doit avoir une clé 'threshold'");
             $this->assertArrayHasKey('meta', $result, "Le résultat de '$conditionName' doit avoir une clé 'meta'");
-            
+
             $this->assertIsBool($result['passed'], "Le champ 'passed' de '$conditionName' doit être un booléen");
             $this->assertIsArray($result['meta'], "Le champ 'meta' de '$conditionName' doit être un tableau");
         }
@@ -105,7 +105,7 @@ class AllConditionsTest extends TestCase
         foreach ($results as $conditionName => $result) {
             $this->assertIsArray($result, "Le résultat de la condition '$conditionName' doit être un tableau");
             $this->assertArrayHasKey('passed', $result, "Le résultat de '$conditionName' doit avoir une clé 'passed'");
-            
+
             // La plupart des conditions devraient échouer avec des données insuffisantes
             if (isset($result['meta']['missing_data']) && $result['meta']['missing_data']) {
                 $this->assertFalse($result['passed'], "La condition '$conditionName' devrait échouer avec des données manquantes");

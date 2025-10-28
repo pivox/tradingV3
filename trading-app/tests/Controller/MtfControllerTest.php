@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Controller;
 
 use App\Controller\MtfController;
-use App\Domain\Mtf\Service\MtfService;
+use App\MtfValidator\Service\MtfService;
 use App\Repository\MtfSwitchRepository;
 use App\Repository\MtfStateRepository;
 use App\Repository\KlineRepository;
@@ -61,7 +61,7 @@ class MtfControllerTest extends TestCase
         $this->mtfService
             ->expects($this->exactly(5))
             ->method('getTimeService')
-            ->willReturn($this->createMock(\App\Domain\Mtf\Service\MtfTimeService::class));
+            ->willReturn($this->createMock(\App\MtfValidator\Service\MtfTimeService::class));
 
         // Mock du repository d'état
         $this->mtfStateRepository
@@ -118,7 +118,7 @@ class MtfControllerTest extends TestCase
         $this->mtfService
             ->expects($this->exactly(2))
             ->method('getTimeService')
-            ->willReturn($this->createMock(\App\Domain\Mtf\Service\MtfTimeService::class));
+            ->willReturn($this->createMock(\App\MtfValidator\Service\MtfTimeService::class));
 
         // Mock du repository d'état
         $this->mtfStateRepository
@@ -202,7 +202,7 @@ class MtfControllerTest extends TestCase
         $this->mtfService
             ->expects($this->once())
             ->method('getTimeService')
-            ->willReturn($this->createMock(\App\Domain\Mtf\Service\MtfTimeService::class));
+            ->willReturn($this->createMock(\App\MtfValidator\Service\MtfTimeService::class));
 
         // Mock du repository d'état
         $this->mtfStateRepository

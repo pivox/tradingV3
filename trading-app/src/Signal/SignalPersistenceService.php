@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace App\Infrastructure\Persistence;
+namespace App\Signal;
 
-use App\Domain\Common\Dto\SignalDto;
+use App\Common\Dto\SignalDto;
 use App\Entity\Signal;
 use App\Repository\SignalRepository;
 use Psr\Log\LoggerInterface;
 
 /**
  * Service de persistance des signaux de trading
- * 
+ *
  * Ce service convertit les SignalDto en entités Signal et les persiste en base de données.
  * Il gère la logique d'upsert pour éviter les doublons et maintient la traçabilité des signaux.
  */
@@ -31,7 +31,7 @@ final class SignalPersistenceService
         try {
             $entity = $this->createSignalEntity($signalDto);
             $this->signalRepository->upsert($entity);
-            
+
             $this->logger->info('Signal persisted', [
                 'symbol' => $signalDto->symbol,
                 'timeframe' => $signalDto->timeframe->value,
@@ -78,8 +78,8 @@ final class SignalPersistenceService
      * Persiste un signal avec validation MTF
      */
     public function persistMtfSignal(
-        SignalDto $signalDto, 
-        array $mtfContext = [], 
+        SignalDto $signalDto,
+        array $mtfContext = [],
         array $validationResults = []
     ): void {
         // Enrichir les métadonnées avec le contexte MTF
@@ -127,7 +127,7 @@ final class SignalPersistenceService
     /**
      * Récupère les signaux récents pour un symbole et timeframe
      */
-    public function getRecentSignals(string $symbol, \App\Domain\Common\Enum\Timeframe $timeframe, int $limit = 100): array
+    public function getRecentSignals(string $symbol, \App\Common\Enum\Timeframe $timeframe, int $limit = 100): array
     {
         return $this->signalRepository->findRecentSignals($symbol, $timeframe, $limit);
     }
@@ -136,9 +136,9 @@ final class SignalPersistenceService
      * Récupère les signaux forts (score élevé)
      */
     public function getStrongSignals(
-        string $symbol, 
-        \App\Domain\Common\Enum\Timeframe $timeframe, 
-        float $minScore = 0.7
+        string                     $symbol,
+        \App\Common\Enum\Timeframe $timeframe,
+        float                      $minScore = 0.7
     ): array {
         return $this->signalRepository->findStrongSignals($symbol, $timeframe, $minScore);
     }
@@ -147,9 +147,9 @@ final class SignalPersistenceService
      * Récupère les signaux par côté (LONG/SHORT)
      */
     public function getSignalsBySide(
-        string $symbol, 
-        \App\Domain\Common\Enum\Timeframe $timeframe, 
-        string $side
+        string                     $symbol,
+        \App\Common\Enum\Timeframe $timeframe,
+        string                     $side
     ): array {
         return $this->signalRepository->findBySide($symbol, $timeframe, $side);
     }
@@ -160,14 +160,14 @@ final class SignalPersistenceService
     public function cleanupOldSignals(int $daysToKeep = 30): int
     {
         $cutoffDate = new \DateTimeImmutable("-$daysToKeep days", new \DateTimeZone('UTC'));
-        
+
         // Cette méthode devrait être implémentée dans le repository
         // Pour l'instant, on retourne 0
         $this->logger->info('Signal cleanup requested', [
             'cutoff_date' => $cutoffDate->format('Y-m-d H:i:s'),
             'days_to_keep' => $daysToKeep
         ]);
-        
+
         return 0;
     }
 }

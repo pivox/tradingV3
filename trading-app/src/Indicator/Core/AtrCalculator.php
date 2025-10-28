@@ -1,19 +1,48 @@
 <?php
 declare(strict_types=1);
 
-namespace App\Indicator;
+namespace App\Indicator\Core;
 
 /**
  * ATR calculator (Wilder or Simple) for OHLCV arrays.
  * Each candle must include: high, low, close (floats).
  */
-final class AtrCalculator
+
+ 
+final class AtrCalculator implements IndicatorInterface
 {
+    /**
+     * Description textuelle de l'ATR (Average True Range).
+     */
+    public function getDescription(bool $detailed = false): string
+    {
+        if (!$detailed) {
+            return "ATR: moyenne (Wilder ou simple) des True Ranges pour mesurer la volatilité.";
+        }
+        return implode("\n", [
+            'ATR:',
+            '- TR_t = max(high_t-low_t, |high_t-close_{t-1}|, |low_t-close_{t-1}|).',
+            '- Simple ATR = moyenne des TR sur la fenêtre.',
+            '- Wilder ATR: seed = SMA(TR, period), puis ATR_t = ((ATR_{t-1}*(period-1)) + TR_t)/period.',
+            '- Variantes: computeSeries pour la série complète; computeWithRules applique filtres (cap outliers, plancher tick).',
+        ]);
+    }
+
     /**
      * @param array<int, array{high: float, low: float, close: float}> $ohlc
      */
     public function compute(array $ohlc, int $period = 14, string $method = 'wilder'): float
     {
+        // Prefer TRADER extension if available and method agnostic
+        if (function_exists('trader_atr')) {
+            $high = array_column($ohlc, 'high');
+            $low  = array_column($ohlc, 'low');
+            $close= array_column($ohlc, 'close');
+            $arr = \trader_atr($high, $low, $close, $period);
+            if (is_array($arr) && !empty($arr)) {
+                return (float) end($arr);
+            }
+        }
         if ($period <= 0) {
             throw new \InvalidArgumentException('ATR period must be > 0');
         }
@@ -60,6 +89,16 @@ final class AtrCalculator
      */
     public function computeSeries(array $ohlc, int $period = 14, string $method = 'wilder'): array
     {
+        // Prefer TRADER extension if available (returns Wilder ATR)
+        if (function_exists('trader_atr')) {
+            $high = array_column($ohlc, 'high');
+            $low  = array_column($ohlc, 'low');
+            $close= array_column($ohlc, 'close');
+            $arr = \trader_atr($high, $low, $close, $period);
+            if (is_array($arr)) {
+                return array_values(array_map('floatval', $arr));
+            }
+        }
         if ($period <= 0) {
             return [];
         }
@@ -174,5 +213,24 @@ final class AtrCalculator
         return $side === 'long'
             ? max(0.0, $entry - $k * $atr)
             : max(0.0, $entry + $k * $atr);
+    }
+
+    // Generic interface wrappers
+    public function calculateValue(mixed ...$args): mixed
+    {
+        /** @var array<int, array{high: float, low: float, close: float}> $ohlc */
+        $ohlc   = $args[0] ?? [];
+        $period = isset($args[1]) ? (int)$args[1] : 14;
+        $method = isset($args[2]) ? (string)$args[2] : 'wilder';
+        return $this->compute($ohlc, $period, $method);
+    }
+
+    public function calculateSeries(mixed ...$args): array
+    {
+        /** @var array<int, array{high: float, low: float, close: float}> $ohlc */
+        $ohlc   = $args[0] ?? [];
+        $period = isset($args[1]) ? (int)$args[1] : 14;
+        $method = isset($args[2]) ? (string)$args[2] : 'wilder';
+        return $this->computeSeries($ohlc, $period, $method);
     }
 }

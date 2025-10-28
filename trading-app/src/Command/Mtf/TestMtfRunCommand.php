@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App\Command;
+namespace App\Command\Mtf;
 
-use App\Domain\Mtf\Service\MtfService;
-use App\Infrastructure\Http\BitmartClient;
-use App\Infrastructure\RateLimiter\TokenBucketRateLimiter;
+use App\MtfValidator\Service\MtfService;
+use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
+use App\RateLimiter\Service\TokenBucketRateLimiter;
 use App\Repository\MtfSwitchRepository;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -16,7 +16,6 @@ use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Component\HttpClient\HttpClient;
-use Symfony\Component\HttpFoundation\Request;
 
 #[AsCommand(
     name: 'app:test-mtf-run',
@@ -26,7 +25,7 @@ class TestMtfRunCommand extends Command
 {
     public function __construct(
         private readonly MtfService $mtfService,
-        private readonly BitmartClient $bitmartClient,
+        private readonly BitmartHttpClientPublic $bitmartClient,
         private readonly TokenBucketRateLimiter $rateLimiter,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly LoggerInterface $logger
@@ -102,7 +101,7 @@ Exemples:
         try {
             $client = HttpClient::create();
             $response = $client->request('GET', $baseUrl . '/api/mtf/status');
-            
+
             if ($response->getStatusCode() === 200) {
                 $io->text('✅ API accessible');
                 return true;
@@ -120,7 +119,7 @@ Exemples:
     {
         try {
             $client = HttpClient::create();
-            
+
             // Préparer les données de la requête
             $requestData = [
                 'symbols' => $symbols,
@@ -149,7 +148,7 @@ Exemples:
 
             if ($statusCode === 200) {
                 $io->text('✅ Requête réussie');
-                
+
                 // Afficher le résumé
                 if (isset($content['data']['summary'])) {
                     $summary = $content['data']['summary'];
@@ -175,16 +174,16 @@ Exemples:
                 if (isset($content['data']['results'])) {
                     $io->section('Résultats par symbole');
                     $results = $content['data']['results'];
-                    
+
                     foreach ($results as $symbol => $result) {
                         $status = $result['status'] ?? 'unknown';
                         $reason = $result['reason'] ?? 'N/A';
-                        
+
                         $io->text("{$symbol}: {$status}");
                         if ($status !== 'success' && $reason !== 'N/A') {
                             $io->text("  Raison: {$reason}");
                         }
-                        
+
                         if ($verbose && isset($result['steps'])) {
                             $io->text("  Étapes:");
                             foreach ($result['steps'] as $step => $stepResult) {
