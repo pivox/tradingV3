@@ -33,6 +33,10 @@ final class ConditionRegistry
         private readonly ContainerInterface $locator,
 
         private readonly ?LoggerInterface $logger = null,
+        /** @var array<string,ContainerInterface&ServiceProviderInterface> */
+        private readonly array $locatorsByTimeframe = [],
+        /** @var array<string,ContainerInterface&ServiceProviderInterface> */
+        private readonly array $locatorsByTimeframeSide = [],
     ) {
     }
 
@@ -51,6 +55,51 @@ final class ConditionRegistry
             $keys[] = (string) $key;
         }
         return $keys;
+    }
+
+    /** Noms disponibles pour un timeframe (et optionnellement side). */
+    public function namesForTimeframe(string $timeframe, ?string $side = null): array
+    {
+        $locator = $this->locatorFor($timeframe, $side);
+        if ($locator instanceof ServiceProviderInterface) {
+            return array_keys($locator->getProvidedServices());
+        }
+        return [];
+    }
+
+    /** Évalue toutes les conditions pour un timeframe (optionnellement side). */
+    public function evaluateForTimeframe(string $timeframe, array $context, ?string $side = null): array
+    {
+        $locator = $this->locatorFor($timeframe, $side);
+        if (!$locator) {
+            return [];
+        }
+        $out = [];
+        $names = [];
+        if ($locator instanceof ServiceProviderInterface) {
+            $names = array_keys($locator->getProvidedServices());
+        }
+        foreach ($names as $name) {
+            try {
+                /** @var ConditionInterface $cond */
+                $cond = $locator->get($name);
+                $out[$name] = $cond->evaluate($context)->toArray();
+            } catch (\Throwable $e) {
+                $out[$name] = $this->errorPayload((string)$name, $e);
+            }
+        }
+        return $out;
+    }
+
+    private function locatorFor(string $timeframe, ?string $side): ?ContainerInterface
+    {
+        if ($side) {
+            $key = $timeframe . ':' . strtolower($side);
+            if (isset($this->locatorsByTimeframeSide[$key])) {
+                return $this->locatorsByTimeframeSide[$key];
+            }
+        }
+        return $this->locatorsByTimeframe[$timeframe] ?? null;
     }
 
     public function has(string $name): bool

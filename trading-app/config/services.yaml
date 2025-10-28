@@ -214,9 +214,7 @@ services:
     # Contrôleur de test des indicateurs
     App\Controller\Web\IndicatorTestController:
         arguments:
-            $contextBuilder: '@App\Indicator\Context\IndicatorContextBuilder'
-            $conditionRegistry: '@App\Indicator\Registry\ConditionRegistry'
-            $timeframeEvaluator: '@App\Indicator\ConditionLoader\TimeframeEvaluator'
+            $indicatorMain: '@App\Contract\Indicator\IndicatorMainProviderInterface'
             $tradingConfigService: '@App\Service\TradingConfigService'
             $klineDataService: '@App\Service\KlineDataService'
         tags: ['controller.service_arguments']

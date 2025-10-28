@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Indicator\Compiler;
 
 use App\Indicator\Attribute\AsIndicatorCondition;
-use App\Contracts\Indicator\Conditions\ConditionInterface;
+use App\Indicator\Condition\ConditionInterface;
 use Symfony\Component\DependencyInjection\{Compiler\CompilerPassInterface, ContainerBuilder, Reference};
 use Symfony\Component\DependencyInjection\Compiler\ServiceLocatorTagPass;
 use Symfony\Component\DependencyInjection\Exception\InvalidArgumentException;
@@ -37,30 +37,45 @@ final class IndicatorCompilerPass implements CompilerPassInterface
                 ));
             }
 
-            // Chaque $tags[] correspond à 1 annotation/tag (Symfony agrège les attributs)
-            foreach ($tags as $tag) {
-                // Métadonnées injectées par autoconfigure (voir services.yaml plus bas)
-                $timeframes = $tag['timeframes'] ?? [];
-                $side      = $tag['side'] ?? null;
-                $name      = $tag['name'] ?? null;
-                $priority  = (int)($tag['priority'] ?? 0);
+            // Lis les métadonnées directement depuis l'attribut (fiable, sans config d'autoconfigure spécifique)
+            $refl = new \ReflectionClass($class);
+            $attrs = $refl->getAttributes(AsIndicatorCondition::class);
+            if (empty($attrs)) {
+                // Si pas d'attribut, on ignore ce service (il peut être taggé legacy)
+                continue;
+            }
+
+            foreach ($attrs as $attr) {
+                /** @var AsIndicatorCondition $meta */
+                $meta = $attr->newInstance();
+                $timeframes = $meta->timeframes ?? [];
+                $side      = $meta->side ?? null;
+                $name      = $meta->name ?? null;
+                $priority  = (int)($meta->priority ?? 0);
 
                 if (!$timeframes || !is_array($timeframes)) {
                     throw new InvalidArgumentException(sprintf(
-                        'Service "%s": attribute "timeframes" is required and must be array',
+                        'Service "%s": AsIndicatorCondition->timeframes is required and must be array',
                         $serviceId
                     ));
                 }
 
-                // On dérive un nom si non fourni (FQCN court)
                 if (!$name) {
-                    $short = ($pos = strrpos($class, '\\')) !== false ? substr($class, $pos + 1) : $class;
-                    $name = preg_replace('/Condition$/', '', $short) ?: $short;
+                    // derive from constant NAME or class short name
+                    if (defined($class.'::NAME')) {
+                        $name = constant($class.'::NAME');
+                    } else {
+                        $short = ($pos = strrpos($class, '\\')) !== false ? substr($class, $pos + 1) : $class;
+                        $name = preg_replace('/Condition$/', '', $short) ?: $short;
+                    }
                 }
 
-                // On retient (priority, Reference) pour trier après
                 foreach ($timeframes as $tf) {
-                    $byTf[$tf][$name][] = ['p' => $priority, 'ref' => new Reference($serviceId)];
+                    // Neutral conditions (no side) go to the neutral timeframe locator
+                    if (!$side) {
+                        $byTf[$tf][$name][] = ['p' => $priority, 'ref' => new Reference($serviceId)];
+                    }
+                    // Side-specific conditions only populate the timeframe+side locator
                     if ($side) {
                         $byTfSide["$tf:$side"][$name][] = ['p' => $priority, 'ref' => new Reference($serviceId)];
                     }
@@ -90,7 +105,8 @@ final class IndicatorCompilerPass implements CompilerPassInterface
 
         // Injecte dans le ConditionRegistry
         $registryDef = $container->findDefinition(\App\Indicator\Registry\ConditionRegistry::class);
-        $registryDef->setArgument(0, $locatorsByTf);
-        $registryDef->setArgument(1, $locatorsByTfSide);
+        // arguments 3 et 4 (après iterator, locator, logger)
+        $registryDef->setArgument(3, $locatorsByTf);
+        $registryDef->setArgument(4, $locatorsByTfSide);
     }
 }

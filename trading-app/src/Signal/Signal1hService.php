@@ -5,8 +5,7 @@ namespace App\Signal;
 use App\Entity\Contract;
 use App\Entity\Kline;
 use App\Config\TradingParameters;
-use App\Indicator\ConditionLoader\TimeframeEvaluator;
-use App\Indicator\Context\IndicatorContextBuilder;
+use App\Contract\Indicator\IndicatorMainProviderInterface;
 use App\Repository\MtfSwitchRepository;
 use Psr\Log\LoggerInterface;
 
@@ -15,11 +14,10 @@ final class Signal1hService extends AbstractSignal
     public function __construct(
         LoggerInterface $validationLogger,
         TradingParameters $configuration,
-        TimeframeEvaluator $timeframeEvaluator,
-        IndicatorContextBuilder $contextBuilder,
+        IndicatorMainProviderInterface $indicatorMain,
         private readonly LoggerInterface $signalsLogger,
         protected  MtfSwitchRepository $mtfSwitchRepository
-    ) { parent::__construct($validationLogger, $configuration, $timeframeEvaluator, $contextBuilder, mtfSwitchRepository: $mtfSwitchRepository); }
+    ) { parent::__construct($validationLogger, $configuration, $indicatorMain, mtfSwitchRepository: $mtfSwitchRepository); }
 
     public function supportsTimeframe(string $tf): bool { return $tf === '1h'; }
 
