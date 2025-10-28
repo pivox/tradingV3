@@ -112,7 +112,7 @@ class BitmartHttpClientPublic
        // $nowSec      = (int) floor($this->getSystemTimeMs() / 1000);
         $endTs = $endTs ?? $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->getTimestamp();
         $nowSec = $endTs;
-        [$defaultFrom, $computedLastClose, $stepSec] = $this->computeWindow($nowSec, $stepMinutes, $limit);
+        [$defaultFrom, $computedLastClose, $stepSec] = $this->computeWindow($nowSec, $stepMinutes, $limit +1);
         $payload = $this->requestJson('GET', self::PATH_KLINE, [
             'symbol'     => $symbol,
             'step'       => $stepMinutes,
@@ -137,6 +137,13 @@ class BitmartHttpClientPublic
             );
             throw new RuntimeException($detail);
         }
+        
+        $last = $payload['data'][count($payload['data']) - 1];
+        $lastOpenTime = (new \DateTimeImmutable('@' . $last['timestamp']))->setTimezone(new \DateTimeZone('Europe/Paris'));
+        if ($this->clock->now()->getTimestamp() - $lastOpenTime->getTimestamp() < ($stepMinutes * 60)) {
+            unset($payload['data'][count($payload['data']) - 1]);
+        }
+        
         return new ListKlinesDto($payload['data']);
 
     }
@@ -247,12 +254,12 @@ class BitmartHttpClientPublic
     private function requestJson(string $method, string $path, array $query = []): array
     {
         $this->throttleBitmartRequest($this->lockFactory);
+
         $response = $this->bitmartFuturesV2->request($method, $path, [
             'query' => $query,
             // timeouts de secours si le client n'est pas correctement scopé
             'timeout' => self::TIMEOUT,
         ]);
-
         return $this->parseBitmartResponse($response);
     }
 
