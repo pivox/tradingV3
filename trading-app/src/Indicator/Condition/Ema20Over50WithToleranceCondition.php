@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1m','5m','15m','1h','4h'], side: 'long', name: self::NAME)]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: self::NAME)]
+
 final class Ema20Over50WithToleranceCondition extends AbstractCondition
 {
     private const NAME = 'ema20_over_50_with_tolerance';
@@ -46,4 +54,3 @@ final class Ema20Over50WithToleranceCondition extends AbstractCondition
         ]));
     }
 }
-

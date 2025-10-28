@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['15m', '1m', '5m'], side: 'short', name: 'rsi_gt_softfloor')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'rsi_gt_softfloor')]
+
 final class RsiGtSoftfloorCondition extends AbstractCondition
 {
     private const NAME = 'rsi_gt_softfloor';
@@ -34,4 +42,3 @@ final class RsiGtSoftfloorCondition extends AbstractCondition
         ]));
     }
 }
-

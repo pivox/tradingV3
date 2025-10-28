@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1h', '4h'], side: 'long', name: 'ema200_slope_pos')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'ema200_slope_pos')]
+
 final class Ema200SlopePosCondition extends AbstractCondition
 {
     public function getName(): string { return 'ema200_slope_pos'; }
@@ -21,6 +29,5 @@ final class Ema200SlopePosCondition extends AbstractCondition
         ]));
     }
 }
-
 
 

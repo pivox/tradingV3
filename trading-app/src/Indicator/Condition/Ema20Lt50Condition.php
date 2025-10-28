@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['15m', '1m', '5m'], side: 'short', name: 'ema_20_lt_50')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'ema_20_lt_50')]
+
 final class Ema20Lt50Condition extends AbstractCondition
 {
     public function getName(): string { return 'ema_20_lt_50'; }

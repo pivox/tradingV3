@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1m','5m','15m','1h','4h'], side: 'long', name: 'rsi_cross_up')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'rsi_cross_up')]
+
 final class RsiCrossUpCondition extends AbstractCondition
 {
     public function getName(): string { return 'rsi_cross_up'; }

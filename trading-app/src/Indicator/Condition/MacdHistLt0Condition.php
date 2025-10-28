@@ -3,7 +3,13 @@ declare(strict_types=1);
 
 namespace App\Indicator\Condition;
 
-use App\Indicator\Condition\ConditionResult;
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1m','5m','15m','1h','4h'], side: 'short', name: 'macd_hist_lt_0')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'macd_hist_lt_0')]
 
 final class MacdHistLt0Condition extends AbstractCondition
 {

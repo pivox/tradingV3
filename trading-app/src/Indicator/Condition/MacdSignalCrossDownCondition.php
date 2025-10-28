@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1m','5m','15m','1h','4h'], side: 'short', name: 'macd_signal_cross_down')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'macd_signal_cross_down')]
+
 final class MacdSignalCrossDownCondition extends AbstractCondition
 {
     public function getName(): string { return 'macd_signal_cross_down'; }

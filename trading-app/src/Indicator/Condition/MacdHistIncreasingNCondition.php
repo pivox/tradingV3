@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1m','5m','15m','1h','4h'], side: 'long', name: 'macd_hist_increasing_n')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'macd_hist_increasing_n')]
+
 final class MacdHistIncreasingNCondition extends AbstractCondition
 {
     public function __construct(private int $defaultN = 2) {}
@@ -45,6 +53,4 @@ final class MacdHistIncreasingNCondition extends AbstractCondition
         ]));
     }
 }
-
-
 

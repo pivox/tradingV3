@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['1m','5m','15m','1h','4h'], side: 'long', name: 'macd_hist_gt_0')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'macd_hist_gt_0')]
+
 final class MacdHistGt0Condition extends AbstractCondition
 {
     public function getName(): string { return 'macd_hist_gt_0'; }

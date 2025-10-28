@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['5m'], side: 'long', name: 'rsi_lt_softcap')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'rsi_lt_softcap')]
+
 final class RsiLtSoftcapCondition extends AbstractCondition
 {
     private const NAME = 'rsi_lt_softcap';
@@ -34,4 +42,3 @@ final class RsiLtSoftcapCondition extends AbstractCondition
         ]));
     }
 }
-

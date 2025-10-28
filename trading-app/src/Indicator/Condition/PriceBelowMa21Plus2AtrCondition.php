@@ -2,6 +2,14 @@
 
 namespace App\Indicator\Condition;
 
+use App\Indicator\Attribute\AsIndicatorCondition;
+use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
+
+#[AsIndicatorCondition(timeframes: ['15m', '1m'], side: 'long', name: 'price_below_ma21_plus_2atr')]
+#[AutoconfigureTag('app.indicator.condition')]
+#[AsTaggedItem(index: 'price_below_ma21_plus_2atr')]
+
 final class PriceBelowMa21Plus2AtrCondition extends AbstractCondition
 {
     public function getName(): string { return 'price_below_ma21_plus_2atr'; }
@@ -27,6 +35,5 @@ final class PriceBelowMa21Plus2AtrCondition extends AbstractCondition
         ]));
     }
 }
-
 
 
