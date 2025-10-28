@@ -17,6 +17,22 @@ parameters:
     trading.file: '%kernel.project_dir%/config/trading.yml'
     bitmart_public_base_uri: '%env(string:BITMART_PUBLIC_API_URL)%'
     bitmart_private_base_uri: '%env(string:BITMART_PRIVATE_API_URL)%'
+    
+    # Configuration TradeEntry - Valeurs par défaut
+    trade_entry.defaults:
+        tick_size: 0.1
+        zone_ttl_sec: 240
+        k_low: 1.2
+        k_high: 0.4
+        k_stop_atr: 1.5
+        tp1_r: 2.0
+        tp1_size_pct: 60
+        lev_min: 2.0
+        lev_max: 20.0
+        k_dynamic: 10.0
+        rsi_cap: 70.0
+        require_pullback: true
+        min_volume_ratio: 1.5
 services:
     # default configuration for services in *this* file
     _defaults:
@@ -43,81 +59,19 @@ services:
     App\MtfValidator\Service\MtfTimeService:
         public: true
 
-    # Services de timeframe MTF
-    App\MtfValidator\Service\Timeframe\Timeframe4hService:
-        arguments:
-            $timeService: '@App\MtfValidator\Service\MtfTimeService'
-            $klineRepository: '@App\Repository\KlineRepository'
-            $mtfStateRepository: '@App\Repository\MtfStateRepository'
-            $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
-            $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
-            $signalValidationService: '@App\Signal\SignalValidationService'
-            $logger: '@monolog.logger.mtf'
-            $mtfConfig: '@App\Config\MtfConfigProviderInterface'
-            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
-            $entityManager: '@doctrine.orm.entity_manager'
-            $clock: '@Psr\Clock\ClockInterface'
-            $klineJsonIngestionService: '@App\Provider\Bitmart\Service\KlineJsonIngestionService'
+    # Services de timeframe MTF - Configuration supprimée pour utiliser l'auto-wiring
 
-    App\MtfValidator\Service\Timeframe\Timeframe1hService:
-        arguments:
-            $timeService: '@App\MtfValidator\Service\MtfTimeService'
-            $klineRepository: '@App\Repository\KlineRepository'
-            $mtfStateRepository: '@App\Repository\MtfStateRepository'
-            $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
-            $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
-            $signalValidationService: '@App\Signal\SignalValidationService'
-            $logger: '@monolog.logger.mtf'
-            $mtfConfig: '@App\Config\MtfConfigProviderInterface'
-            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
-            $entityManager: '@doctrine.orm.entity_manager'
-            $clock: '@Psr\Clock\ClockInterface'
-            $klineJsonIngestionService: '@App\Provider\Bitmart\Service\KlineJsonIngestionService'
-
-    App\MtfValidator\Service\Timeframe\Timeframe15mService:
-        arguments:
-            $timeService: '@App\MtfValidator\Service\MtfTimeService'
-            $klineRepository: '@App\Repository\KlineRepository'
-            $mtfStateRepository: '@App\Repository\MtfStateRepository'
-            $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
-            $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
-            $signalValidationService: '@App\Signal\SignalValidationService'
-            $logger: '@monolog.logger.mtf'
-            $mtfConfig: '@App\Config\MtfConfigProviderInterface'
-            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
-            $entityManager: '@doctrine.orm.entity_manager'
-            $clock: '@Psr\Clock\ClockInterface'
-            $klineJsonIngestionService: '@App\Provider\Bitmart\Service\KlineJsonIngestionService'
-
-    App\MtfValidator\Service\Timeframe\Timeframe5mService:
-        arguments:
-            $timeService: '@App\MtfValidator\Service\MtfTimeService'
-            $klineRepository: '@App\Repository\KlineRepository'
-            $mtfStateRepository: '@App\Repository\MtfStateRepository'
-            $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
-            $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
-            $signalValidationService: '@App\Signal\SignalValidationService'
-            $logger: '@monolog.logger.mtf'
-            $mtfConfig: '@App\Config\MtfConfigProviderInterface'
-            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
-            $entityManager: '@doctrine.orm.entity_manager'
-            $clock: '@Psr\Clock\ClockInterface'
-            $klineJsonIngestionService: '@App\Provider\Bitmart\Service\KlineJsonIngestionService'
-
-    App\MtfValidator\Service\Timeframe\Timeframe1mService:
-        arguments:
-            $timeService: '@App\MtfValidator\Service\MtfTimeService'
-            $klineRepository: '@App\Repository\KlineRepository'
-            $mtfStateRepository: '@App\Repository\MtfStateRepository'
-            $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
-            $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
-            $signalValidationService: '@App\Signal\SignalValidationService'
-            $logger: '@monolog.logger.mtf'
-            $mtfConfig: '@App\Config\MtfConfigProviderInterface'
-            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
-            $entityManager: '@doctrine.orm.entity_manager'
-            $clock: '@Psr\Clock\ClockInterface'
-            $klineJsonIngestionService: '@App\Provider\Bitmart\Service\KlineJsonIngestionService'
+    # Configuration Redis temporaire pour résoudre le problème LockManager
+    # Option 1: Redis réel (décommentez si Redis est disponible)
+    # Redis:
+    #     class: Redis
+    #     calls:
+    #         - [connect, ['127.0.0.1', 6379]]
+    
+    # Option 2: Mock Redis pour les tests (décommentez si Redis n'est pas disponible)
+    Redis:
+        class: App\Runtime\Concurrency\MockRedis
+        public: true
 
 
 #    App\MtfValidator\Service\MtfRunService:
@@ -221,24 +175,22 @@ services:
         arguments:
             $path: '%kernel.project_dir%/config/app/mtf_validations.yaml'
 
-    # Auto-tag des Conditions d'indicateurs et des services de signaux par timeframe
+    # Auto-tag des services de signaux par timeframe
     _instanceof:
-        App\Indicator\Condition\ConditionInterface:
-            tags: ['app.indicator.condition']
         App\Signal\SignalServiceInterface:
             tags: ['app.signal.timeframe']
 
-    # Registre des conditions: injecter toutes les conditions taggées
-    App\Indicator\Condition\ConditionRegistry:
-        arguments:
-            $conditions: !tagged_iterator 'app.indicator.condition'
-            $logger: '@logger'
+    # Registre des conditions: injection automatique via AutowireLocator/AutowireIterator
     App\Indicator\ConditionLoader\ConditionRegistry:
         arguments:
-            $indicatorConditions: !tagged_iterator 'app.indicator.condition'
             $logger: '@logger'
         calls:
             - [ load, ['@App\Config\MtfValidationConfig'] ]
+    
+    # Nouveau registre des conditions avec AutowireLocator/AutowireIterator
+    App\Indicator\Registry\ConditionRegistry:
+        arguments:
+            $logger: '@logger'
     App\Indicator\ConditionLoader\TimeframeEvaluator:
         arguments:
             $registry: '@App\Indicator\ConditionLoader\ConditionRegistry'
@@ -246,12 +198,12 @@ services:
     # Builder de contexte pour les indicateurs
     App\Indicator\Context\IndicatorContextBuilder:
         arguments:
-            $rsi: '@App\Indicator\Momentum\Rsi'
-            $macd: '@App\Indicator\Momentum\Macd'
-            $ema: '@App\Indicator\Trend\Ema'
-            $adx: '@App\Indicator\Trend\Adx'
-            $vwap: '@App\Indicator\Volume\Vwap'
-            $atrCalc: '@App\Indicator\AtrCalculator'
+            $rsi: '@App\Indicator\Core\Momentum\Rsi'
+            $macd: '@App\Indicator\Core\Momentum\Macd'
+            $ema: '@App\Indicator\Core\Trend\Ema'
+            $adx: '@App\Indicator\Core\Trend\Adx'
+            $vwap: '@App\Indicator\Core\Volume\Vwap'
+            $atrCalc: '@App\Indicator\Core\AtrCalculator'
 
     # Validation des signaux: injecter tous les services timeframe taggés
     App\Signal\SignalValidationService:
@@ -263,7 +215,7 @@ services:
     App\Controller\Web\IndicatorTestController:
         arguments:
             $contextBuilder: '@App\Indicator\Context\IndicatorContextBuilder'
-            $conditionRegistry: '@App\Indicator\Condition\ConditionRegistry'
+            $conditionRegistry: '@App\Indicator\Registry\ConditionRegistry'
             $timeframeEvaluator: '@App\Indicator\ConditionLoader\TimeframeEvaluator'
             $tradingConfigService: '@App\Service\TradingConfigService'
             $klineDataService: '@App\Service\KlineDataService'
@@ -326,3 +278,20 @@ services:
     # Formateur de logging personnalisé
     App\Logging\CustomLineFormatter:
         public: true
+
+    # === TradeEntry Services ===
+    # Les services TradeEntry sont auto-configurés via le namespace `App\` et `autoconfigure`.
+    # Plus besoin de l'attribut #[AsService]; ajouter des configs spécifiques si nécessaire.
+    
+    # Configuration TradeEntry avec paramètres par défaut
+    App\TradeEntry\PreOrder\PreOrderBuilder:
+        arguments:
+            $defaults: '%trade_entry.defaults%'
+    
+    # Logger spécifique pour TradeEntry
+    monolog.logger.trade_entry:
+        parent: monolog.logger
+        arguments:
+            - trade_entry
+        tags:
+            - { name: monolog.logger, channel: trade_entry }

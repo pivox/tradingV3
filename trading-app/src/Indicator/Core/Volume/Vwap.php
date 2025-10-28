@@ -1,10 +1,49 @@
 <?php
 declare(strict_types=1);
 
-namespace App\Indicator\Volume;
+namespace App\Indicator\Core\Volume;
 
-final class Vwap
+use App\Indicator\Core\IndicatorInterface;
+
+ 
+final class Vwap implements IndicatorInterface
 {
+    // Generic interface wrappers
+    public function calculateValue(mixed ...$args): mixed
+    {
+        /** @var array $highs */
+        $highs   = $args[0] ?? [];
+        $lows    = $args[1] ?? [];
+        $closes  = $args[2] ?? [];
+        $volumes = $args[3] ?? [];
+        return $this->calculate($highs, $lows, $closes, $volumes);
+    }
+
+    public function calculateSeries(mixed ...$args): array
+    {
+        /** @var array $highs */
+        $highs   = $args[0] ?? [];
+        $lows    = $args[1] ?? [];
+        $closes  = $args[2] ?? [];
+        $volumes = $args[3] ?? [];
+        return $this->calculateFull($highs, $lows, $closes, $volumes);
+    }
+    /**
+     * Description textuelle du VWAP (Volume-Weighted Average Price).
+     */
+    public function getDescription(bool $detailed = false): string
+    {
+        if (!$detailed) {
+            return 'VWAP: moyenne des prix pondérée par les volumes, typiquement sur la journée.';
+        }
+        return implode("\n", [
+            'VWAP:',
+            '- Prix typique: TP_t = (high_t + low_t + close_t)/3.',
+            '- VWAP_t = (Σ_{i≤t} TP_i * V_i) / (Σ_{i≤t} V_i).',
+            '- Version journalière: réinitialisation des cumuls à chaque changement de jour (timezone configurable).',
+        ]);
+    }
+
     public function calculateFull(array $highs, array $lows, array $closes, array $volumes): array
     {
         $n = min(count($highs), count($lows), count($closes), count($volumes));

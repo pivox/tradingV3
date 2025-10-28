@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Command\Bitmart;
 
-use App\Command\Bitmart\FetchContractsCommand;
+use App\Command\Provider\FetchContractsCommand;
 use App\Infrastructure\Http\BitmartRestClient;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Input\ArrayInput;
@@ -16,7 +16,7 @@ class FetchContractsCommandTest extends TestCase
     {
         // Mock du client BitMart
         $bitmartClient = $this->createMock(BitmartRestClient::class);
-        
+
         $mockContracts = [
             [
                 'symbol' => 'BTCUSDT',
@@ -28,21 +28,21 @@ class FetchContractsCommandTest extends TestCase
                 'status' => 'trading'
             ]
         ];
-        
+
         $bitmartClient->expects($this->once())
             ->method('fetchContracts')
             ->willReturn($mockContracts);
 
         // Création de la commande
         $command = new FetchContractsCommand($bitmartClient);
-        
+
         // Configuration de l'input
         $input = new ArrayInput([]);
         $output = new BufferedOutput();
-        
+
         // Exécution de la commande
         $result = $command->run($input, $output);
-        
+
         // Vérifications
         $this->assertEquals(0, $result);
         $this->assertStringContainsString('Récupéré 1 contrat(s)', $output->fetch());
@@ -53,7 +53,7 @@ class FetchContractsCommandTest extends TestCase
     {
         // Mock du client BitMart
         $bitmartClient = $this->createMock(BitmartRestClient::class);
-        
+
         $mockContract = [
             'symbol' => 'BTCUSDT',
             'name' => 'Bitcoin/USDT',
@@ -63,7 +63,7 @@ class FetchContractsCommandTest extends TestCase
             'tick_size' => '0.1',
             'status' => 'trading'
         ];
-        
+
         $bitmartClient->expects($this->once())
             ->method('fetchContractDetails')
             ->with('BTCUSDT')
@@ -71,14 +71,14 @@ class FetchContractsCommandTest extends TestCase
 
         // Création de la commande
         $command = new FetchContractsCommand($bitmartClient);
-        
+
         // Configuration de l'input avec symbole spécifique
         $input = new ArrayInput(['--symbol' => 'BTCUSDT']);
         $output = new BufferedOutput();
-        
+
         // Exécution de la commande
         $result = $command->run($input, $output);
-        
+
         // Vérifications
         $this->assertEquals(0, $result);
         $this->assertStringContainsString('Récupéré 1 contrat(s)', $output->fetch());

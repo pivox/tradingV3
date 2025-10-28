@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Service\Indicator;
+namespace App\Indicator\Loader;
 
 use App\Service\TradingConfigService;
 use Psr\Log\LoggerInterface;
@@ -26,7 +26,7 @@ class IndicatorCalculationModeService
     ) {
         $config = $this->configService->getConfig();
         $indicatorConfig = $config['indicator_calculation'] ?? [];
-        
+
         $this->currentMode = $indicatorConfig['mode'] ?? self::MODE_SQL;
         $this->fallbackEnabled = $indicatorConfig['fallback_to_php'] ?? true;
         $this->performanceThresholdMs = $indicatorConfig['performance_threshold_ms'] ?? 100;
@@ -119,7 +119,7 @@ class IndicatorCalculationModeService
     public function recordPerformance(string $indicatorName, string $symbol, string $timeframe, int $executionTimeMs, bool $success): void
     {
         $key = "$indicatorName:$symbol:$timeframe";
-        
+
         if (!isset($this->performanceMetrics[$key])) {
             $this->performanceMetrics[$key] = [
                 'count' => 0,
@@ -134,7 +134,7 @@ class IndicatorCalculationModeService
         $metrics['count']++;
         $metrics['total_time_ms'] += $executionTimeMs;
         $metrics['avg_time_ms'] = $metrics['total_time_ms'] / $metrics['count'];
-        
+
         if ($success) {
             $metrics['success_count']++;
         } else {

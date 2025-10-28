@@ -2,14 +2,14 @@
 
 namespace App\Tests\Domain\Indicator\Service;
 
-use App\Domain\Common\Dto\KlineDto;
-use App\Domain\Common\Dto\IndicatorSnapshotDto;
-use App\Domain\Common\Enum\Timeframe;
-use App\Domain\Indicator\Service\IndicatorEngine;
+use App\Common\Dto\IndicatorSnapshotDto;
+use App\Common\Dto\KlineDto;
+use App\Common\Enum\Timeframe;
 use App\Domain\Ports\Out\IndicatorProviderPort;
+use App\Indicator\Loader\IndicatorEngine;
 use Brick\Math\BigDecimal;
-use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\TestCase;
 
 class IndicatorEngineTest extends TestCase
 {
@@ -26,7 +26,7 @@ class IndicatorEngineTest extends TestCase
     {
         // Créer des klines de test
         $klines = $this->createTestKlines();
-        
+
         // Configurer les mocks pour les calculs d'indicateurs
         $this->setupIndicatorMocks();
 
@@ -53,7 +53,7 @@ class IndicatorEngineTest extends TestCase
     {
         // Créer seulement 5 klines (insuffisant pour la plupart des indicateurs)
         $klines = $this->createTestKlines(5);
-        
+
         // Configurer les mocks pour retourner des tableaux vides
         $this->indicatorProviderMock->method('calculateEMA')->willReturn([]);
         $this->indicatorProviderMock->method('calculateMACD')->willReturn([]);
@@ -67,7 +67,7 @@ class IndicatorEngineTest extends TestCase
         $this->assertInstanceOf(IndicatorSnapshotDto::class, $result);
         $this->assertEquals('ETHUSDT', $result->symbol);
         $this->assertEquals(Timeframe::H4, $result->timeframe);
-        
+
         // Vérifier que les valeurs sont null quand les données sont insuffisantes
         $this->assertNull($result->ema20);
         $this->assertNull($result->ema50);
@@ -83,7 +83,7 @@ class IndicatorEngineTest extends TestCase
     {
         // Créer des klines avec des données réalistes
         $klines = $this->createRealisticKlines();
-        
+
         // Configurer les mocks avec des valeurs réalistes
         $this->setupRealisticIndicatorMocks();
 
@@ -92,7 +92,7 @@ class IndicatorEngineTest extends TestCase
         $this->assertInstanceOf(IndicatorSnapshotDto::class, $result);
         $this->assertEquals('BTCUSDT', $result->symbol);
         $this->assertEquals(Timeframe::H1, $result->timeframe);
-        
+
         // Vérifier que les indicateurs sont calculés
         $this->assertNotNull($result->ema20);
         $this->assertNotNull($result->ema50);
@@ -102,7 +102,7 @@ class IndicatorEngineTest extends TestCase
         $this->assertNotNull($result->atr);
         $this->assertNotNull($result->rsi);
         $this->assertNotNull($result->vwap);
-        
+
         // Vérifier les types des valeurs
         $this->assertInstanceOf(BigDecimal::class, $result->ema20);
         $this->assertInstanceOf(BigDecimal::class, $result->ema50);
@@ -189,7 +189,7 @@ class IndicatorEngineTest extends TestCase
     {
         $klines = [];
         $baseTime = new \DateTimeImmutable('2024-01-01 00:00:00', new \DateTimeZone('UTC'));
-        
+
         // Données réalistes de prix BTC
         $prices = [
             50000, 50100, 50200, 50300, 50400, 50500, 50600, 50700, 50800, 50900,

@@ -450,8 +450,7 @@ try {
 ```php
 <?php
 
-use App\Service\Indicator\HybridIndicatorService;
-use App\Domain\Common\Enum\Timeframe;
+use App\Common\Enum\Timeframe;use App\Indicator\Loader\HybridIndicatorService;
 
 class TradingAnalyzer
 {
@@ -497,9 +496,7 @@ class TradingAnalyzer
 ```php
 <?php
 
-use App\Service\Indicator\HybridIndicatorService;
-use App\Domain\Common\Enum\Timeframe;
-use Psr\Log\LoggerInterface;
+use App\Common\Enum\Timeframe;use App\Indicator\Loader\HybridIndicatorService;use Psr\Log\LoggerInterface;
 
 class RobustTradingAnalyzer
 {

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Infrastructure\Cache;
+namespace App\Runtime\Cache;
 
-use App\Domain\Common\Dto\ValidationStateDto;
-use App\Domain\Ports\Out\ValidationCachePort;
+use App\Common\Dto\ValidationStateDto;
+use App\Runtime\Port\ValidationCachePort;
 use App\Repository\ValidationCacheRepository;
 use App\Service\TradingConfigService;
 use Psr\Clock\ClockInterface;
@@ -29,7 +29,7 @@ final class DbValidationCache implements ValidationCachePort
         try {
             // Récupérer la version actuelle de la configuration
             $version = $this->tradingConfigService->getVersion();
-            
+
             $cache = new \App\Entity\ValidationCache();
             $cache
                 ->setCacheKey($state->getCacheKeyWithVersion($version))
@@ -46,7 +46,7 @@ final class DbValidationCache implements ValidationCachePort
                 ->setExpiresAt($state->expiresAt);
 
             $this->validationRepository->upsert($cache);
-            
+
             $this->logger->info('Validation state cached', [
                 'cache_key' => $state->getCacheKeyWithVersion($version),
                 'symbol' => $state->symbol,
@@ -72,16 +72,16 @@ final class DbValidationCache implements ValidationCachePort
     public function getValidationState(string $cacheKey): ?ValidationStateDto
     {
         $cache = $this->validationRepository->findByCacheKey($cacheKey);
-        
+
         if (!$cache || $cache->isExpired()) {
             return null;
         }
 
         $payload = $cache->getPayload();
-        
+
         return new ValidationStateDto(
             symbol: $payload['symbol'] ?? '',
-            timeframe: \App\Domain\Common\Enum\Timeframe::from($payload['timeframe'] ?? '1m'),
+            timeframe: \App\Common\Enum\Timeframe::from($payload['timeframe'] ?? '1m'),
             status: $payload['status'] ?? 'INVALID',
             klineTime: new \DateTimeImmutable($payload['kline_time'] ?? 'now'),
             expiresAt: $cache->getExpiresAt(),
@@ -119,13 +119,13 @@ final class DbValidationCache implements ValidationCachePort
     public function getValidationStates(string $symbol): array
     {
         $caches = $this->validationRepository->findBySymbol($symbol);
-        
+
         return array_map(function ($cache) {
             $payload = $cache->getPayload();
-            
+
             return new ValidationStateDto(
                 symbol: $payload['symbol'] ?? '',
-                timeframe: \App\Domain\Common\Enum\Timeframe::from($payload['timeframe'] ?? '1m'),
+                timeframe: \App\Common\Enum\Timeframe::from($payload['timeframe'] ?? '1m'),
                 status: $payload['status'] ?? 'INVALID',
                 klineTime: new \DateTimeImmutable($payload['kline_time'] ?? 'now'),
                 expiresAt: $cache->getExpiresAt(),
@@ -138,15 +138,15 @@ final class DbValidationCache implements ValidationCachePort
      * Cache un état de validation MTF avec expiration automatique
      */
     public function cacheMtfValidation(
-        string $symbol,
-        \App\Domain\Common\Enum\Timeframe $timeframe,
-        \DateTimeImmutable $klineTime,
-        string $status,
-        array $details = [],
-        int $expirationMinutes = 5
+        string                     $symbol,
+        \App\Common\Enum\Timeframe $timeframe,
+        \DateTimeImmutable         $klineTime,
+        string                     $status,
+        array                      $details = [],
+        int                        $expirationMinutes = 5
     ): void {
         $expiresAt = $this->clock->now()->modify("+$expirationMinutes minutes");
-        
+
         $state = new ValidationStateDto(
             symbol: $symbol,
             timeframe: $timeframe,
@@ -166,9 +166,9 @@ final class DbValidationCache implements ValidationCachePort
      * Génère une clé de cache pour une validation MTF
      */
     public function generateMtfCacheKey(
-        string $symbol,
-        \App\Domain\Common\Enum\Timeframe $timeframe,
-        \DateTimeImmutable $klineTime
+        string                     $symbol,
+        \App\Common\Enum\Timeframe $timeframe,
+        \DateTimeImmutable         $klineTime
     ): string {
         return sprintf(
             'mtf_validation_%s_%s_%s',
@@ -176,6 +176,25 @@ final class DbValidationCache implements ValidationCachePort
             $timeframe->value,
             $klineTime->format('Y-m-d_H-i-s')
         );
+    }
+
+    public function get(string $key): ?string
+    {
+        $this->logger->debug('[DbValidationCache] Getting cache key', ['key' => $key]);
+        return null;
+    }
+
+    public function set(string $key, string $value, int $ttl = 3600): void
+    {
+        $this->logger->debug('[DbValidationCache] Setting cache key', [
+            'key' => $key,
+            'ttl' => $ttl,
+        ]);
+    }
+
+    public function delete(string $key): void
+    {
+        $this->logger->debug('[DbValidationCache] Deleting cache key', ['key' => $key]);
     }
 }
 

@@ -1,7 +1,9 @@
 <?php
 // src/Indicator/Momentum/Macd.php
 
-namespace App\Indicator\Momentum;
+namespace App\Indicator\Core\Momentum;
+
+use App\Indicator\Core\IndicatorInterface;
 
 /**
  * MACD (Gerald Appel) — MACD line = EMA(fast) - EMA(slow), signal = EMA(MACD, signalPeriod), hist = MACD - signal
@@ -9,8 +11,26 @@ namespace App\Indicator\Momentum;
  * - calculate() -> dernière triple (macd, signal, hist)
  * - calculateFull() -> séries alignées.
  */
-final class Macd
+ 
+final class Macd implements IndicatorInterface
 {
+    /**
+     * Description textuelle de l'indicateur MACD.
+     */
+    public function getDescription(bool $detailed = false): string
+    {
+        if (!$detailed) {
+            return "MACD (Appel): diff. EMA(fast) et EMA(slow), avec ligne de signal (EMA du MACD) et histogramme (MACD - signal).";
+        }
+        return implode("\n", [
+            'MACD (Gerald Appel):',
+            '- MACD = EMA_fast(closes) - EMA_slow(closes).',
+            '- Signal = EMA(MACD, signalPeriod).',
+            '- Histogramme = MACD - Signal.',
+            '- EMA seedée par SMA(period), puis EMA_t = α*x_t + (1-α)*EMA_{t-1}, α = 2/(period+1).',
+        ]);
+    }
+
     /**
      * Dernières valeurs MACD/signal/hist.
      * @param float[] $closes
@@ -53,6 +73,18 @@ final class Macd
      */
     public function calculateFull(array $closes, int $fast = 12, int $slow = 26, int $signal = 9): array
     {
+        // Prefer TRADER extension if available
+        if (function_exists('trader_macd')) {
+            $res = \trader_macd($closes, $fast, $slow, $signal);
+            if (is_array($res) && isset($res[0], $res[1], $res[2])) {
+                // trader_macd returns [macd, macdsignal, macdhist]
+                $macdArr   = array_values(array_map('floatval', (array)$res[0]));
+                $signalArr = array_values(array_map('floatval', (array)$res[1]));
+                $histArr   = array_values(array_map('floatval', (array)$res[2]));
+                return ['macd' => $macdArr, 'signal' => $signalArr, 'hist' => $histArr];
+            }
+        }
+
         $n = count($closes);
         if ($n < max($fast, $slow) + $signal) {
             return ['macd' => [], 'signal' => [], 'hist' => []];
@@ -116,5 +148,26 @@ final class Macd
         }
 
         return $ema;
+    }
+
+    // Generic interface wrappers
+    public function calculateValue(mixed ...$args): mixed
+    {
+        /** @var array $closes */
+        $closes = $args[0] ?? [];
+        $fast   = isset($args[1]) ? (int)$args[1] : 12;
+        $slow   = isset($args[2]) ? (int)$args[2] : 26;
+        $signal = isset($args[3]) ? (int)$args[3] : 9;
+        return $this->calculate($closes, $fast, $slow, $signal);
+    }
+
+    public function calculateSeries(mixed ...$args): array
+    {
+        /** @var array $closes */
+        $closes = $args[0] ?? [];
+        $fast   = isset($args[1]) ? (int)$args[1] : 12;
+        $slow   = isset($args[2]) ? (int)$args[2] : 26;
+        $signal = isset($args[3]) ? (int)$args[3] : 9;
+        return $this->calculateFull($closes, $fast, $slow, $signal);
     }
 }

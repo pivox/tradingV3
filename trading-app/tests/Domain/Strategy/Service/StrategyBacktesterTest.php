@@ -2,14 +2,11 @@
 
 namespace App\Tests\Domain\Strategy\Service;
 
-use App\Domain\Common\Dto\BacktestRequestDto;
-use App\Domain\Common\Dto\BacktestResultDto;
-use App\Domain\Common\Dto\KlineDto;
-use App\Domain\Common\Enum\SignalSide;
-use App\Domain\Common\Enum\Timeframe;
+use App\Common\Dto\BacktestRequestDto;
+use App\Common\Dto\BacktestResultDto;
+use App\Common\Enum\Timeframe;
 use App\Domain\Strategy\Service\StrategyBacktester;
 use App\Service\BacktestClockService;
-use Brick\Math\BigDecimal;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\Clock;
 
@@ -113,7 +110,7 @@ class StrategyBacktesterTest extends TestCase
         $this->assertGreaterThanOrEqual(0, $result->winningTrades);
         $this->assertGreaterThanOrEqual(0, $result->losingTrades);
         $this->assertEquals($result->totalTrades, $result->winningTrades + $result->losingTrades);
-        
+
         if ($result->totalTrades > 0) {
             $this->assertGreaterThanOrEqual(0, $result->winRate);
             $this->assertLessThanOrEqual(100, $result->winRate);
@@ -200,7 +197,7 @@ class StrategyBacktesterTest extends TestCase
         $result = $this->backtester->runBacktest($request);
 
         $this->assertIsArray($result->equityCurve);
-        
+
         if (!empty($result->equityCurve)) {
             // Vérifier que la courbe d'équité commence avec le capital initial
             $firstEquity = $result->equityCurve[0];
@@ -231,7 +228,7 @@ class StrategyBacktesterTest extends TestCase
         $result = $this->backtester->runBacktest($request);
 
         $this->assertIsArray($result->monthlyReturns);
-        
+
         // Vérifier que les retours mensuels sont cohérents
         $totalMonthlyReturn = 0;
         foreach ($result->monthlyReturns as $month => $return) {
@@ -263,7 +260,7 @@ class StrategyBacktesterTest extends TestCase
         $result = $this->backtester->runBacktest($request);
 
         $this->assertIsArray($result->trades);
-        
+
         foreach ($result->trades as $trade) {
             $this->assertIsArray($trade);
             $this->assertArrayHasKey('id', $trade);
@@ -274,7 +271,7 @@ class StrategyBacktesterTest extends TestCase
             $this->assertArrayHasKey('quantity', $trade);
             $this->assertArrayHasKey('pnl', $trade);
             $this->assertArrayHasKey('pnl_percentage', $trade);
-            
+
             $this->assertEquals('BTCUSDT', $trade['symbol']);
             $this->assertContains($trade['side'], ['BUY', 'SELL']);
             $this->assertIsFloat($trade['entry_price']);
@@ -301,7 +298,7 @@ class StrategyBacktesterTest extends TestCase
         $result = $this->backtester->runBacktest($request);
 
         $this->assertIsBool($result->isProfitable());
-        
+
         if ($result->totalReturn > 0) {
             $this->assertTrue($result->isProfitable());
         } else {

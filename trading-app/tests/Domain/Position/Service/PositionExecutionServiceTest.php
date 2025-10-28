@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace App\Tests\Domain\Position\Service;
 
-use App\Domain\Common\Enum\SignalSide;
-use App\Domain\Position\Dto\PositionConfigDto;
-use App\Domain\Position\Dto\PositionOpeningDto;
-use App\Domain\Position\Service\PositionExecutionService;
+use App\Common\Enum\SignalSide;
 use App\Domain\Ports\Out\TradingProviderPort;
 use App\Domain\Trading\Exposure\ActiveExposureGuard;
 use App\Domain\Trading\Order\OrderLifecycleService;
+use App\TradeEntry\LookAtit\Position\Dto\PositionConfigDto;
+use App\TradeEntry\LookAtit\Position\Dto\PositionOpeningDto;
+use App\TradeEntry\LookAtit\Position\Service\PositionExecutionService;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 

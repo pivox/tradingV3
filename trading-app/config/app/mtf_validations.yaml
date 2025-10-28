@@ -10,17 +10,20 @@ mtf_validation:
         ema20_over_50_with_tolerance:
             any_of:
                 - ema_20_gt_50
-                - ema_20_minus_ema_50_gt: -0.0008   # -0,08 % toléré
+                - ema_20_minus_ema_50_gt: -0.0012   # +50% de tolérance (Option 2)
+                - ema_20_slope_pos                  # Nouvelle condition : pente positive
 
         ema_above_200_with_tolerance:
             any_of:
                 - close_above_ema_200
-                - close_minus_ema_200_gt: -0.0030   # -0,30 % toléré
+                - close_minus_ema_200_gt: -0.0020   # +33% de tolérance (Option 2)
+                - ema200_slope_pos                   # Nouvelle condition : pente positive
 
         ema_below_200_with_tolerance:
             any_of:
                 - close_below_ema_200
-                - close_minus_ema_200_lt: -0.0015   # < -0,15 %
+                - close_minus_ema_200_lt: -0.0025   # < -0,25 % (augmenté pour équilibrer)
+                - ema200_slope_neg                   # Nouvelle condition : pente négative
 
         rsi_lt_softcap: { lt: 78 }
         rsi_gt_softfloor: { gt: 30 }
@@ -42,13 +45,13 @@ mtf_validation:
         # --- Anti-bruit MACD : hystérésis & slope au lieu de monotonie stricte ---
         macd_line_cross_up_with_hysteresis:
             require_prev_below: true
-            min_gap: 0.0003
-            cool_down_bars: 2
+            min_gap: 0.0015          # Augmenté de 0.0003 à 0.0015 (0.15%)
+            cool_down_bars: 4        # Augmenté de 2 à 4 barres
 
         macd_line_cross_down_with_hysteresis:
             require_prev_above: true
-            min_gap: 0.0003
-            cool_down_bars: 2
+            min_gap: 0.0015          # Augmenté de 0.0003 à 0.0015 (0.15%)
+            cool_down_bars: 4        # Augmenté de 2 à 4 barres
 
         macd_hist_slope_pos:
             derivative_gt: 0.0       # pente > 0
@@ -65,23 +68,58 @@ mtf_validation:
             op: '>'
             right: 0.0
             eps: 1.0e-12
+            
+        ema200_slope_neg:
+            slope_left: 'ema_200'
+            slope_lookback: 21       # moyenne de pente plus longue
+            op: '<'
+            right: 0.0
+            eps: 1.0e-12
 
         # --- ATR adaptatif (15m/5m) : plage élargie + buckets de volatilité ---
         atr_rel_in_range_15m:
             use_atr_tf: [ '1m', '5m' ]    # choisit la plus stable selon la vol
-            min: 0.0025                   # élargi
-            max: 0.025                    # élargi
+            min: 0.0015                   # élargi encore plus (0.15%)
+            max: 0.035                    # élargi encore plus (3.5%)
             adapt_with_vol_bucket: true   # élargir en high-vol, resserrer en low-vol
 
         atr_rel_in_range_5m:
             use_atr_tf: [ '1m' ]
-            min: 0.0020
-            max: 0.030
+            min: 0.0010                   # élargi encore plus (0.10%)
+            max: 0.040                    # élargi encore plus (4.0%)
             adapt_with_vol_bucket: true
 
         # --- Compat : règles existantes (toujours disponibles si référencées) ---
         macd_line_below_signal:
             lt_fields: [ 'macd', 'macd_signal' ]
+
+        # ===== DRAFT OPTIONS (À TESTER SI NÉCESSAIRE) =====
+        # Option 2 : Tolérance Modérée (ACTIVÉE)
+        ema20_over_50_with_tolerance_moderate:
+            any_of:
+                - ema_20_gt_50
+                - ema_20_minus_ema_50_gt: -0.0012   # +50% de tolérance
+                - ema_20_slope_pos
+        
+        ema_above_200_with_tolerance_moderate:
+            any_of:
+                - close_above_ema_200
+                - close_minus_ema_200_gt: -0.0020   # +33% de tolérance
+                - ema200_slope_pos
+        #
+        # Option 3 : Validation Multi-Conditions (Plus Robuste)
+        # structure_validation_robust:
+        #     any_of:
+        #         - all_of: [ema20_over_50_with_tolerance, ema_50_gt_200]
+        #         - all_of: [close_above_ema_200, ema_50_gt_200]
+        #         - all_of: [ema200_slope_pos, ema_50_gt_200]
+        # 
+        # close_above_ema_200_robust:
+        #     any_of:
+        #         - close_above_ema_200
+        #         - close_minus_ema_200_gt: -0.0015
+        #         - ema200_slope_pos
+        #         - ema_50_gt_200  # Confirmation structure
 
         macd_line_above_signal:
             gt_fields: [ 'macd', 'macd_signal' ]
@@ -97,17 +135,19 @@ mtf_validation:
 
         timeframe:
 
-            '4h':  # Contexte / structure
+            '4h':  # Contexte / structure (adouci pour plus de signaux)
                 long:
-                    all_of:
-                        - ema_50_gt_200
-                        - close_above_ema_200
-                        - price_regime_ok_long
+                    - any_of:     # structure : au moins 1 des 3 (plus flexible)
+                          - all_of: [ ema_50_gt_200, close_above_ema_200 ]
+                          - all_of: [ ema_above_200_with_tolerance ]  # ajouté pour adoucir
+                          - all_of: [ ema200_slope_pos ]              # ajouté pour adoucir
+                    - price_regime_ok_long
                 short:
-                    all_of:
-                        - ema_50_lt_200
-                        - close_below_ema_200
-                        - price_regime_ok_short
+                    - any_of:     # structure : au moins 1 des 3 (plus flexible)
+                          - all_of: [ ema_50_lt_200, close_below_ema_200 ]
+                          - all_of: [ ema_below_200_with_tolerance ]  # ajouté pour adoucir
+                          - all_of: [ ema200_slope_neg ]              # ajouté pour adoucir
+                    - price_regime_ok_short
 
             '1h':  # Biais + momentum (adouci)
                 long:
@@ -122,59 +162,91 @@ mtf_validation:
                     - price_regime_ok_long
 
                 short:
-                    - ema_below_200_with_tolerance
-                    - any_of:
+                    - any_of:     # structure : au moins 1 des 4 (équilibré avec LONG)
+                          - all_of: [ ema_below_200_with_tolerance ]
+                          - all_of: [ ema_50_lt_200 ]            # ajouté pour équilibrer
+                          - all_of: [ close_below_ema_200 ]       # ajouté pour équilibrer
+                          - all_of: [ ema200_slope_neg ]          # ajouté pour équilibrer
+                    - any_of:     # momentum : anti-bruit (équilibré avec LONG)
                           - all_of: [ macd_line_cross_down_with_hysteresis ]
                           - all_of: [ macd_hist_slope_neg ]
                           - all_of: [ macd_hist_decreasing_n ]   # fallback compat
                     - price_regime_ok_short
 
-            '15m':  # Exécution / timing (ATR élargi + anti-extension)
+            '15m':  # Exécution / timing (optimisé pour plus de signaux)
                 long:
-                    - any_of:
-                          - all_of: [ ema20_over_50_with_tolerance, macd_hist_gt_eps ]
-                          - all_of: [ ema20_over_50_with_tolerance, close_above_vwap_or_ma9 ]
-                          - all_of: [ macd_hist_gt_eps, close_above_vwap_or_ma9 ]
-                    - rsi_lt_70
-                    - price_below_ma21_plus_2atr
-                    - atr_rel_in_range_15m
+                    - any_of:     # structure : au moins 1 des 3 (plus flexible)
+                          - all_of: [ ema20_over_50_with_tolerance ]
+                          - all_of: [ close_above_ema_200 ]              # ajouté pour adoucir
+                          - all_of: [ ema_50_gt_200 ]                   # ajouté pour adoucir
+                    - any_of:     # momentum : au moins 1 des 3 (plus flexible)
+                          - all_of: [ macd_hist_gt_eps ]
+                          - all_of: [ macd_line_cross_up_with_hysteresis ]
+                          - all_of: [ macd_hist_slope_pos ]
+                    - any_of:     # timing : au moins 1 des 2 (plus flexible)
+                          - all_of: [ rsi_lt_70, price_below_ma21_plus_2atr ]
+                          - all_of: [ close_above_vwap_or_ma9, atr_rel_in_range_15m ]
                 short:
-                    - any_of:
-                          - all_of: [ ema_20_lt_50, macd_line_cross_down_with_hysteresis ]
+                    - any_of:     # structure : au moins 1 des 3 (plus flexible)
+                          - all_of: [ ema_20_lt_50 ]
+                          - all_of: [ close_below_ema_200 ]              # ajouté pour adoucir
+                          - all_of: [ ema_50_lt_200 ]                   # ajouté pour adoucir
+                    - any_of:     # momentum : au moins 1 des 3 (plus flexible)
+                          - all_of: [ macd_line_cross_down_with_hysteresis ]
                           - all_of: [ macd_hist_slope_neg ]
-                          - all_of: [ macd_hist_decreasing_n ]   # compat
-                    - rsi_gt_softfloor
-                    - atr_rel_in_range_15m
+                          - all_of: [ macd_hist_decreasing_n ]
+                    - any_of:     # timing : au moins 1 des 2 (plus flexible)
+                          - all_of: [ rsi_gt_softfloor, atr_rel_in_range_15m ]
+                          - all_of: [ close_below_ema_200, atr_rel_in_range_15m ]
 
-            '5m':   # Finesse d'entrée (pullback confirmé)
+            '5m':   # Finesse d'entrée (optimisé pour plus de signaux)
                 long:
-                    - any_of:
-                          - all_of: [ ema20_over_50_with_tolerance, macd_hist_gt_eps ]
-                          - all_of: [ ema20_over_50_with_tolerance, rsi_lt_softcap ]
-                          - all_of: [ macd_hist_gt_eps, rsi_lt_softcap ]
-                    - pullback_confirmed
-                    - atr_rel_in_range_5m
+                    - any_of:     # structure : au moins 1 des 3 (plus flexible)
+                          - all_of: [ ema20_over_50_with_tolerance ]
+                          - all_of: [ close_above_ema_200 ]              # ajouté pour adoucir
+                          - all_of: [ ema_50_gt_200 ]                   # ajouté pour adoucir
+                    - any_of:     # momentum : au moins 1 des 3 (plus flexible)
+                          - all_of: [ macd_hist_gt_eps ]
+                          - all_of: [ macd_line_cross_up_with_hysteresis ]
+                          - all_of: [ rsi_lt_softcap ]
+                    - any_of:     # timing : au moins 1 des 2 (plus flexible)
+                          - all_of: [ pullback_confirmed, atr_rel_in_range_5m ]
+                          - all_of: [ close_above_vwap_or_ma9, atr_rel_in_range_5m ]
                 short:
-                    - any_of:
-                          - all_of: [ ema_20_lt_50, macd_line_cross_down_with_hysteresis ]
+                    - any_of:     # structure : au moins 1 des 3 (plus flexible)
+                          - all_of: [ ema_20_lt_50 ]
+                          - all_of: [ close_below_ema_200 ]              # ajouté pour adoucir
+                          - all_of: [ ema_50_lt_200 ]                   # ajouté pour adoucir
+                    - any_of:     # momentum : au moins 1 des 3 (plus flexible)
+                          - all_of: [ macd_line_cross_down_with_hysteresis ]
                           - all_of: [ macd_hist_slope_neg ]
-                          - all_of: [ ema_20_lt_50, rsi_gt_softfloor ]
-                    - atr_rel_in_range_5m
+                          - all_of: [ rsi_gt_softfloor ]
+                    - any_of:     # timing : au moins 1 des 2 (plus flexible)
+                          - all_of: [ atr_rel_in_range_5m ]
+                          - all_of: [ close_below_ema_200, atr_rel_in_range_5m ]
 
-            '1m':   # Micro-timing (anti whipsaw + anti extension)
+            '1m':   # Micro-timing (optimisé pour plus de signaux)
                 long:
-                    - all_of:
-                          - ema_20_gt_50
-                          - any_of:
-                                - all_of: [ macd_hist_gt_eps ]
-                                - all_of: [ macd_line_cross_up_with_hysteresis ]
-                          - rsi_lt_80
-                          - close_above_vwap_or_ma9
-                          - price_below_ma21_plus_2atr
+                    - any_of:     # structure : au moins 1 des 3 (plus flexible)
+                          - all_of: [ ema_20_gt_50 ]
+                          - all_of: [ close_above_ema_200 ]              # ajouté pour adoucir
+                          - all_of: [ ema_50_gt_200 ]                   # ajouté pour adoucir
+                    - any_of:     # momentum : au moins 1 des 3 (plus flexible)
+                          - all_of: [ macd_hist_gt_eps ]
+                          - all_of: [ macd_line_cross_up_with_hysteresis ]
+                          - all_of: [ rsi_lt_80 ]
+                    - any_of:     # timing : au moins 1 des 2 (plus flexible)
+                          - all_of: [ close_above_vwap_or_ma9, price_below_ma21_plus_2atr ]
+                          - all_of: [ close_above_ema_200, rsi_lt_80 ]
                 short:
-                    - all_of:
-                          - ema_20_lt_50
-                          - any_of:
-                                - all_of: [ macd_line_cross_down_with_hysteresis ]
-                                - all_of: [ macd_hist_slope_neg ]
-                          - rsi_gt_softfloor
+                    - any_of:     # structure : au moins 1 des 3 (plus flexible)
+                          - all_of: [ ema_20_lt_50 ]
+                          - all_of: [ close_below_ema_200 ]              # ajouté pour adoucir
+                          - all_of: [ ema_50_lt_200 ]                   # ajouté pour adoucir
+                    - any_of:     # momentum : au moins 1 des 3 (plus flexible)
+                          - all_of: [ macd_line_cross_down_with_hysteresis ]
+                          - all_of: [ macd_hist_slope_neg ]
+                          - all_of: [ rsi_gt_softfloor ]
+                    - any_of:     # timing : au moins 1 des 2 (plus flexible)
+                          - all_of: [ close_below_ema_200 ]
+                          - all_of: [ rsi_gt_softfloor ]

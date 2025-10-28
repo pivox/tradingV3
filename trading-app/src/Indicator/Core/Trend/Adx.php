@@ -1,9 +1,31 @@
 <?php
 // src/Service/Indicator/Trend/Adx.php
-namespace App\Indicator\Trend;
+namespace App\Indicator\Core\Trend;
 
-class Adx
+use App\Indicator\Core\IndicatorInterface;
+
+ 
+class Adx implements IndicatorInterface
 {
+    /**
+     * Description textuelle de l'ADX (Average Directional Index).
+     */
+    public function getDescription(bool $detailed = false): string
+    {
+        if (!$detailed) {
+            return "ADX: mesure la force de tendance via +DI et -DI (lissage Wilder).";
+        }
+        return implode("\n", [
+            'ADX (Wilder):',
+            '- TR_t = max(high_t-low_t, |high_t-close_{t-1}|, |low_t-close_{t-1}|).',
+            '- +DM_t = max(high_t - high_{t-1}, 0) si supérieur à -DM; -DM_t = max(low_{t-1} - low_t, 0).',
+            '- ATR, +DM, -DM lissés (Wilder).',
+            '- +DI = 100 * (Smoothed(+DM) / ATR), -DI = 100 * (Smoothed(-DM) / ATR).',
+            '- DX = 100 * |+DI - -DI| / (+DI + -DI).',
+            '- ADX = lissage de DX (init = premier DX).',
+        ]);
+    }
+
     /**
      * Dernière valeur ADX( period ), lissage Wilder, init "first DX".
      * @param float[] $highs
@@ -23,6 +45,20 @@ class Adx
      */
     public function calculateFull(array $highs, array $lows, array $closes, int $period = 14): array
     {
+        // Prefer TRADER extension if available
+        if (function_exists('trader_adx')) {
+            $adxArr = \trader_adx($highs, $lows, $closes, $period);
+            $pdiArr = function_exists('trader_plus_di') ? \trader_plus_di($highs, $lows, $closes, $period) : null;
+            $mdiArr = function_exists('trader_minus_di') ? \trader_minus_di($highs, $lows, $closes, $period) : null;
+            if (is_array($adxArr)) {
+                return [
+                    'adx'      => array_values(array_map('floatval', $adxArr)),
+                    'plus_di'  => is_array($pdiArr) ? array_values(array_map('floatval', $pdiArr)) : [],
+                    'minus_di' => is_array($mdiArr) ? array_values(array_map('floatval', $mdiArr)) : [],
+                ];
+            }
+        }
+
         $n = count($closes);
         if ($n <= $period) {
             return ['adx' => [], 'plus_di' => [], 'minus_di' => []];
@@ -74,5 +110,26 @@ class Adx
         }
 
         return ['adx' => $adx, 'plus_di' => $plusDI, 'minus_di' => $minusDI];
+    }
+
+    // Generic interface wrappers
+    public function calculateValue(mixed ...$args): mixed
+    {
+        /** @var array $highs */
+        $highs = $args[0] ?? [];
+        $lows  = $args[1] ?? [];
+        $closes= $args[2] ?? [];
+        $period= isset($args[3]) ? (int)$args[3] : 14;
+        return $this->calculate($highs, $lows, $closes, $period);
+    }
+
+    public function calculateSeries(mixed ...$args): array
+    {
+        /** @var array $highs */
+        $highs = $args[0] ?? [];
+        $lows  = $args[1] ?? [];
+        $closes= $args[2] ?? [];
+        $period= isset($args[3]) ? (int)$args[3] : 14;
+        return $this->calculateFull($highs, $lows, $closes, $period);
     }
 }

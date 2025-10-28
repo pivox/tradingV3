@@ -1,14 +1,46 @@
 <?php
-namespace App\Indicator\Momentum;
+namespace App\Indicator\Core\Momentum;
 
-final class StochRsi
+use App\Indicator\Core\IndicatorInterface;
+
+ 
+final class StochRsi implements IndicatorInterface
 {
+    /**
+     * Description textuelle du Stochastic RSI.
+     */
+    public function getDescription(bool $detailed = false): string
+    {
+        if (!$detailed) {
+            return 'Stochastic RSI: oscillateur appliqué au RSI pour mesurer la position relative du RSI sur une fenêtre.';
+        }
+        return implode("\n", [
+            'Stochastic RSI:',
+            '- Étape 1: RSI (Wilder) sur rsiPeriod.',
+            '- Étape 2: StochRSI_t = ((RSI_t - min(RSI, n)) / (max(RSI, n) - min(RSI, n))) * 100, avec n=stochPeriod.',
+            '- %K = SMA(StochRSI, kSmoothing).',
+            '- %D = SMA(%K, dSmoothing).',
+        ]);
+    }
+
     /**
      * @param float[] $closes
      * @return array{stoch_rsi: float[], k: float[], d: float[]}
      */
     public function calculateFull(array $closes, int $rsiPeriod = 14, int $stochPeriod = 14, int $kSmoothing = 3, int $dSmoothing = 3): array
     {
+        // Prefer TRADER extension if available
+        // trader_stochrsi signature: (real, timePeriod, fastK_Period, fastD_Period, fastD_MAType=SMA)
+        if (function_exists('trader_stochrsi')) {
+            $res = \trader_stochrsi($closes, $rsiPeriod, $stochPeriod, $kSmoothing);
+            if (is_array($res) && isset($res[0], $res[1])) {
+                $fastK = array_values(array_map('floatval', (array)$res[0]));
+                $fastD = array_values(array_map('floatval', (array)$res[1]));
+                // Align output to our structure: use fastK as stoch_rsi proxy, K=fastK, D=fastD
+                return ['stoch_rsi' => $fastK, 'k' => $fastK, 'd' => $fastD];
+            }
+        }
+
         $n = count($closes);
         $stochRsi = [];
         if ($n === 0 || $rsiPeriod < 1 || $stochPeriod < 1) {
@@ -98,5 +130,28 @@ final class StochRsi
         }
 
         return $rsi;
+    }
+
+    // Generic interface wrappers
+    public function calculateValue(mixed ...$args): mixed
+    {
+        /** @var array $closes */
+        $closes      = $args[0] ?? [];
+        $rsiPeriod   = isset($args[1]) ? (int)$args[1] : 14;
+        $stochPeriod = isset($args[2]) ? (int)$args[2] : 14;
+        $kS          = isset($args[3]) ? (int)$args[3] : 3;
+        $dS          = isset($args[4]) ? (int)$args[4] : 3;
+        return $this->calculate($closes, $rsiPeriod, $stochPeriod, $kS, $dS);
+    }
+
+    public function calculateSeries(mixed ...$args): array
+    {
+        /** @var array $closes */
+        $closes      = $args[0] ?? [];
+        $rsiPeriod   = isset($args[1]) ? (int)$args[1] : 14;
+        $stochPeriod = isset($args[2]) ? (int)$args[2] : 14;
+        $kS          = isset($args[3]) ? (int)$args[3] : 3;
+        $dS          = isset($args[4]) ? (int)$args[4] : 3;
+        return $this->calculateFull($closes, $rsiPeriod, $stochPeriod, $kS, $dS);
     }
 }

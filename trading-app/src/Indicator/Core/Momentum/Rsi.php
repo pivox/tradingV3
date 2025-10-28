@@ -1,15 +1,37 @@
 <?php
 // src/Indicator/Momentum/Rsi.php
 
-namespace App\Indicator\Momentum;
+namespace App\Indicator\Core\Momentum;
+
+use App\Indicator\Core\IndicatorInterface;
 
 /**
  * RSI (Relative Strength Index) — J. Welles Wilder (1978)
  * - Calcule un RSI lissé (Wilder) avec initialisation par moyennes simples de gains/pertes.
  * - Retourne une valeur (calculate) ou une série (calculateFull).
  */
-final class Rsi
+ 
+final class Rsi implements IndicatorInterface
 {
+    /**
+     * Description textuelle de l'indicateur RSI.
+     * - $detailed=false: résumé court
+     * - $detailed=true: formule et étapes de calcul
+     */
+    public function getDescription(bool $detailed = false): string
+    {
+        if (!$detailed) {
+            return 'RSI (Relative Strength Index, Wilder 1978) mesurant la force relative des hausses/baisses sur une période donnée.';
+        }
+        return implode("\n", [
+            'RSI (Wilder):',
+            '- Initialisation: moyennes simples des gains/pertes sur la fenêtre (period).',
+            '- Lissage Wilder: avgGain_t = ((avgGain_{t-1}*(period-1)) + gain_t)/period, idem pour avgLoss.',
+            '- RS = avgGain/avgLoss (si avgLoss=0 => RS=+∞).',
+            '- RSI = 100 - 100/(1 + RS).',
+        ]);
+    }
+
     /**
      * Retourne la dernière valeur du RSI ou null si pas assez de données.
      * @param float[] $closes
@@ -36,6 +58,15 @@ final class Rsi
      */
     public function calculateFull(array $closes, int $period = 14): array
     {
+        // Prefer TRADER extension if available
+        if (function_exists('trader_rsi')) {
+            $res = \trader_rsi($closes, $period);
+            if (is_array($res)) {
+                // trader_rsi returns an array aligned from the first computable index
+                return ['rsi' => array_values(array_map('floatval', $res))];
+            }
+        }
+
         $n = count($closes);
         if ($n < $period + 1) {
             return ['rsi' => []];
@@ -62,5 +93,22 @@ final class Rsi
         }
         $rsi = array_values($rsi);
         return ['rsi' => $rsi];
+    }
+
+    // Generic interface wrappers
+    public function calculateValue(mixed ...$args): mixed
+    {
+        /** @var array $closes */
+        $closes = $args[0] ?? [];
+        $period = isset($args[1]) ? (int)$args[1] : 14;
+        return $this->calculate($closes, $period);
+    }
+
+    public function calculateSeries(mixed ...$args): array
+    {
+        /** @var array $closes */
+        $closes = $args[0] ?? [];
+        $period = isset($args[1]) ? (int)$args[1] : 14;
+        return $this->calculateFull($closes, $period);
     }
 }

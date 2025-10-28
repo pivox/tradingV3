@@ -2,19 +2,18 @@
 
 namespace App\Tests\Indicator\Snapshot;
 
+use App\Common\Enum\Timeframe;
 use App\Entity\IndicatorSnapshot;
-use App\Repository\IndicatorSnapshotRepository;
 use App\Indicator\Context\IndicatorContextBuilder;
-use App\Indicator\Condition\ConditionRegistry;
-use App\Indicator\Momentum\Rsi;
-use App\Indicator\Momentum\Macd;
-use App\Indicator\Trend\Ema;
-use App\Indicator\Trend\Adx;
-use App\Indicator\Volume\Vwap;
-use App\Indicator\AtrCalculator;
-use App\Domain\Common\Enum\Timeframe;
+use App\Indicator\Core\AtrCalculator;
+use App\Indicator\Core\Momentum\Macd;
+use App\Indicator\Core\Momentum\Rsi;
+use App\Indicator\Core\Trend\Adx;
+use App\Indicator\Core\Trend\Ema;
+use App\Indicator\Core\Volume\Vwap;
+use App\Indicator\Registry\ConditionRegistry;
+use App\Repository\IndicatorSnapshotRepository;
 use Doctrine\ORM\EntityManagerInterface;
-use PHPUnit\Framework\TestCase;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
 class IndicatorSnapshotRegressionTest extends KernelTestCase
@@ -28,7 +27,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
     {
         $kernel = self::bootKernel();
         $container = $kernel->getContainer();
-        
+
         $this->entityManager = $container->get('doctrine.orm.entity_manager');
         $this->snapshotRepository = $container->get(IndicatorSnapshotRepository::class);
 
@@ -55,7 +54,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
     {
         // Créer un contexte avec des données réalistes
         $context = $this->createRealisticContext();
-        
+
         // Créer un snapshot
         $snapshot = new IndicatorSnapshot();
         $snapshot
@@ -83,7 +82,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
 
         // Vérifier que le snapshot a été sauvegardé
         $this->assertNotNull($snapshot->getId());
-        
+
         // Récupérer le snapshot depuis la base
         $retrievedSnapshot = $this->snapshotRepository->find($snapshot->getId());
         $this->assertNotNull($retrievedSnapshot);
@@ -139,10 +138,10 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
         foreach ($conditionsResults as $conditionName => $expectedResult) {
             $this->assertArrayHasKey($conditionName, $retrievedConditions);
             $actualResult = $retrievedConditions[$conditionName];
-            
+
             $this->assertEquals($expectedResult['passed'], $actualResult['passed']);
             $this->assertEquals($expectedResult['name'], $actualResult['name']);
-            
+
             // Comparer les valeurs avec tolérance si elles sont numériques
             if (is_numeric($expectedResult['value']) && is_numeric($actualResult['value'])) {
                 $this->assertEqualsWithDelta($expectedResult['value'], $actualResult['value'], 0.001);
@@ -156,19 +155,19 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
     {
         $symbol = 'ADAUSDT';
         $timeframe = Timeframe::H1;
-        
+
         // Créer plusieurs snapshots pour le même symbole
         $snapshots = [];
         for ($i = 0; $i < 5; $i++) {
             $context = $this->createRealisticContext();
             $klineTime = new \DateTimeImmutable("2024-01-01 " . sprintf('%02d:00:00', 12 + $i), new \DateTimeZone('UTC'));
-            
+
             $snapshot = $this->createSnapshotFromContext($context, $symbol, $timeframe, $klineTime->format('Y-m-d H:i:s'));
             $snapshots[] = $snapshot;
-            
+
             $this->entityManager->persist($snapshot);
         }
-        
+
         $this->entityManager->flush();
 
         // Récupérer le dernier snapshot
@@ -179,7 +178,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
         // Récupérer tous les snapshots pour une période
         $startDate = new \DateTimeImmutable('2024-01-01 12:00:00', new \DateTimeZone('UTC'));
         $endDate = new \DateTimeImmutable('2024-01-01 16:00:00', new \DateTimeZone('UTC'));
-        
+
         $snapshotsInRange = $this->snapshotRepository->findBySymbolTimeframeAndDateRange($symbol, $timeframe, $startDate, $endDate);
         $this->assertCount(5, $snapshotsInRange);
     }
@@ -193,7 +192,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
         // Créer un snapshot initial
         $context = $this->createRealisticContext();
         $snapshot = $this->createSnapshotFromContext($context, $symbol, $timeframe, $klineTime->format('Y-m-d H:i:s'));
-        
+
         $this->entityManager->persist($snapshot);
         $this->entityManager->flush();
         $originalId = $snapshot->getId();
@@ -208,7 +207,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
 
         // Vérifier que c'est le même enregistrement
         $this->assertEquals($originalId, $snapshot->getId());
-        
+
         // Vérifier que les valeurs ont été mises à jour
         $retrievedSnapshot = $this->snapshotRepository->find($originalId);
         $this->assertEquals(75.5, $retrievedSnapshot->getValue('rsi'));
@@ -308,13 +307,13 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
             }
 
             $this->assertArrayHasKey($key, $currentValues, "La clé '$key' est manquante dans le snapshot actuel");
-            
+
             $currentValue = $currentValues[$key];
-            
+
             if (is_numeric($referenceValue) && is_numeric($currentValue)) {
                 $this->assertEqualsWithDelta(
-                    (float)$referenceValue, 
-                    (float)$currentValue, 
+                    (float)$referenceValue,
+                    (float)$currentValue,
                     $tolerance,
                     "La valeur de '$key' diffère de plus de $tolerance"
                 );

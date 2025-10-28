@@ -1,8 +1,27 @@
 <?php
-namespace App\Indicator\Volatility;
+namespace App\Indicator\Core\Volatility;
 
-final class Donchian
+use App\Indicator\Core\IndicatorInterface;
+
+ 
+final class Donchian implements IndicatorInterface
 {
+    /**
+     * Description textuelle du canal de Donchian.
+     */
+    public function getDescription(bool $detailed = false): string
+    {
+        if (!$detailed) {
+            return 'Canal de Donchian: plus haut et plus bas sur N périodes, avec milieu (upper+lower)/2.';
+        }
+        return implode("\n", [
+            'Donchian Channel:',
+            '- upper_t  = max(high sur N).',
+            '- lower_t  = min(low sur N).',
+            '- middle_t = (upper_t + lower_t) / 2.',
+        ]);
+    }
+
     /**
      * Donchian Channel sur N périodes.
      * upper = plus haut sur N, lower = plus bas sur N, middle = (upper+lower)/2
@@ -52,5 +71,24 @@ final class Donchian
             'lower'  => empty($full['lower'])  ? 0.0 : (float) end($full['lower']),
             'middle' => empty($full['middle']) ? 0.0 : (float) end($full['middle']),
         ];
+    }
+
+    // Generic interface wrappers
+    public function calculateValue(mixed ...$args): mixed
+    {
+        /** @var array $highs */
+        $highs = $args[0] ?? [];
+        $lows  = $args[1] ?? [];
+        $period= isset($args[2]) ? (int)$args[2] : 20;
+        return $this->calculate($highs, $lows, $period);
+    }
+
+    public function calculateSeries(mixed ...$args): array
+    {
+        /** @var array $highs */
+        $highs = $args[0] ?? [];
+        $lows  = $args[1] ?? [];
+        $period= isset($args[2]) ? (int)$args[2] : 20;
+        return $this->calculateFull($highs, $lows, $period);
     }
 }

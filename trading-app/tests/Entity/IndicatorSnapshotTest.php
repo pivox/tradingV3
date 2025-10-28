@@ -2,8 +2,8 @@
 
 namespace App\Tests\Entity;
 
+use App\Common\Enum\Timeframe;
 use App\Entity\IndicatorSnapshot;
-use App\Domain\Common\Enum\Timeframe;
 use PHPUnit\Framework\TestCase;
 
 class IndicatorSnapshotTest extends TestCase
@@ -89,10 +89,10 @@ class IndicatorSnapshotTest extends TestCase
     public function testTimestamps(): void
     {
         $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
-        
+
         $this->assertInstanceOf(\DateTimeImmutable::class, $this->snapshot->getInsertedAt());
         $this->assertInstanceOf(\DateTimeImmutable::class, $this->snapshot->getUpdatedAt());
-        
+
         // Les timestamps doivent être proches de maintenant
         $this->assertLessThan(5, abs($now->getTimestamp() - $this->snapshot->getInsertedAt()->getTimestamp()));
         $this->assertLessThan(5, abs($now->getTimestamp() - $this->snapshot->getUpdatedAt()->getTimestamp()));

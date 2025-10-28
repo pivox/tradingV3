@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace App\Command;
+namespace App\Command\Mtf;
 
-use App\Domain\Mtf\Service\MtfService;
-use App\Domain\Mtf\Service\MtfTimeService;
-use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Service\MtfService;
+use App\MtfValidator\Service\MtfTimeService;
 use App\Repository\MtfStateRepository;
+use App\Repository\MtfSwitchRepository;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -62,7 +62,7 @@ Exemples:
             $io->section('Test des kill switches');
             $globalSwitch = $this->mtfSwitchRepository->isGlobalSwitchOn();
             $symbolSwitch = $this->mtfSwitchRepository->isSymbolSwitchOn($symbol);
-            
+
             $io->table(
                 ['Switch', 'État'],
                 [
@@ -85,22 +85,22 @@ Exemples:
             $io->section('Test du service de temps');
             $now = $this->timeService->getCurrentAlignedUtc();
             $io->text("Heure UTC courante: {$now->format('Y-m-d H:i:s')}");
-            
-            $lastClosed4h = $this->timeService->getLastClosedKlineTime($now, \App\Domain\Common\Enum\Timeframe::TF_4H);
+
+            $lastClosed4h = $this->timeService->getLastClosedKlineTime($now, \App\Common\Enum\Timeframe::TF_4H);
             $io->text("Dernière bougie 4h fermée: {$lastClosed4h->format('Y-m-d H:i:s')}");
-            
-            $lastClosed1h = $this->timeService->getLastClosedKlineTime($now, \App\Domain\Common\Enum\Timeframe::TF_1H);
+
+            $lastClosed1h = $this->timeService->getLastClosedKlineTime($now, \App\Common\Enum\Timeframe::TF_1H);
             $io->text("Dernière bougie 1h fermée: {$lastClosed1h->format('Y-m-d H:i:s')}");
-            
-            $lastClosed15m = $this->timeService->getLastClosedKlineTime($now, \App\Domain\Common\Enum\Timeframe::TF_15M);
+
+            $lastClosed15m = $this->timeService->getLastClosedKlineTime($now, \App\Common\Enum\Timeframe::TF_15M);
             $io->text("Dernière bougie 15m fermée: {$lastClosed15m->format('Y-m-d H:i:s')}");
 
             // Test de la fenêtre de grâce
             $io->section('Test de la fenêtre de grâce');
-            $inGrace4h = $this->timeService->isInGraceWindow($now, \App\Domain\Common\Enum\Timeframe::TF_4H);
-            $inGrace1h = $this->timeService->isInGraceWindow($now, \App\Domain\Common\Enum\Timeframe::TF_1H);
-            $inGrace15m = $this->timeService->isInGraceWindow($now, \App\Domain\Common\Enum\Timeframe::TF_15M);
-            
+            $inGrace4h = $this->timeService->isInGraceWindow($now, \App\Common\Enum\Timeframe::TF_4H);
+            $inGrace1h = $this->timeService->isInGraceWindow($now, \App\Common\Enum\Timeframe::TF_1H);
+            $inGrace15m = $this->timeService->isInGraceWindow($now, \App\Common\Enum\Timeframe::TF_15M);
+
             $io->table(
                 ['Timeframe', 'Dans la fenêtre de grâce'],
                 [
@@ -113,7 +113,7 @@ Exemples:
             // Test de l'état MTF
             $io->section('Test de l\'état MTF');
             $state = $this->mtfStateRepository->getOrCreateForSymbol($symbol);
-            
+
             $io->table(
                 ['Propriété', 'Valeur'],
                 [
@@ -132,10 +132,10 @@ Exemples:
             if (!$dryRun) {
                 $io->section('Test d\'exécution du cycle MTF');
                 $io->text('Exécution du cycle MTF...');
-                
+
                 $runId = \Ramsey\Uuid\Uuid::uuid4();
                 $result = $this->mtfService->executeMtfCycle($runId);
-                
+
                 $io->success('Cycle MTF exécuté avec succès');
                 $io->text('Résultat: ' . json_encode($result, JSON_PRETTY_PRINT));
             } else {
