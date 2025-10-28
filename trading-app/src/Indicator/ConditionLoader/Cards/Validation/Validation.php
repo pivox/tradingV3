@@ -4,6 +4,7 @@ namespace App\Indicator\ConditionLoader\Cards\Validation;
 
 use App\Indicator\ConditionLoader\Cards\AbstractCard;
 use App\Indicator\ConditionLoader\Cards\Rule\Rules;
+use App\Indicator\ConditionLoader\ConditionRegistry;
 
 class Validation extends AbstractCard
 {
@@ -17,8 +18,10 @@ class Validation extends AbstractCard
     /** @var array<string,TimeframeValidation> */
     private array $timeframes = [];
 
-    public function __construct(?Rules $rules = null)
-    {
+    public function __construct(
+        ?Rules $rules = null,
+        private readonly ?ConditionRegistry $conditionRegistry = null
+    ) {
         $this->rules = $rules;
     }
 
@@ -44,7 +47,7 @@ class Validation extends AbstractCard
                 continue;
             }
             $timeframe = strtolower((string) $tf);
-            $this->timeframes[$timeframe] = (new TimeframeValidation())
+            $this->timeframes[$timeframe] = (new TimeframeValidation($this->conditionRegistry))
                 ->withTimeframe($timeframe)
                 ->fill($definition);
         }

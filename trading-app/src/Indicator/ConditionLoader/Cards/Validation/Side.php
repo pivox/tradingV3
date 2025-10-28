@@ -3,6 +3,7 @@
 namespace App\Indicator\ConditionLoader\Cards\Validation;
 
 use App\Indicator\ConditionLoader\Cards\AbstractCard;
+use App\Indicator\ConditionLoader\ConditionRegistry;
 
 class Side extends AbstractCard
 {
@@ -12,10 +13,14 @@ class Side extends AbstractCard
     private string $side = self::LONG; // 'long' | 'short'
     private ListSideElements $elements;
 
+    public function __construct(
+        private readonly ConditionRegistry $conditionRegistry
+    ) {}
+
     public function fill(string|array $data): static
     {
         $list = is_array($data) ? $data : [$data];
-        $this->elements = (new ListSideElements())->fill($list);
+        $this->elements = (new ListSideElements($this->conditionRegistry))->fill($list);
         return $this;
     }
 

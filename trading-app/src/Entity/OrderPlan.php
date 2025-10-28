@@ -26,8 +26,8 @@ class OrderPlan
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, options: ['default' => 'CURRENT_TIMESTAMP'])]
     private \DateTimeImmutable $planTime;
 
-    #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Domain\Common\Enum\SignalSide::class)]
-    private \App\Domain\Common\Enum\SignalSide $side;
+    #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Common\Enum\SignalSide::class)]
+    private \App\Common\Enum\SignalSide $side;
 
     #[ORM\Column(type: Types::JSON)]
     private array $riskJson = [];
@@ -73,12 +73,12 @@ class OrderPlan
         return $this;
     }
 
-    public function getSide(): \App\Domain\Common\Enum\SignalSide
+    public function getSide(): \App\Common\Enum\SignalSide
     {
         return $this->side;
     }
 
-    public function setSide(\App\Domain\Common\Enum\SignalSide $side): static
+    public function setSide(\App\Common\Enum\SignalSide $side): static
     {
         $this->side = $side;
         return $this;

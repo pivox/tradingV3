@@ -12,6 +12,10 @@ class SideElementSimple extends AbstractCard implements SideElementInterface
     private array $overrides = [];
     private ?Rule $rule = null;
 
+    public function __construct(
+        private readonly ConditionRegistry $conditionRegistry
+    ) {}
+
     /**
      * @throws \Exception
      */
@@ -29,7 +33,7 @@ class SideElementSimple extends AbstractCard implements SideElementInterface
 
         $this->name = $name;
 
-        $condition = ConditionRegistry::resolveCondition($name);
+        $condition = $this->conditionRegistry->get($name);
         if ($condition) {
             $this->condition = $condition;
         } else {

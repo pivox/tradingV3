@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Repository;
 
+use App\Common\Enum\Timeframe;
 use App\Entity\Signal;
-use App\Domain\Common\Enum\Timeframe;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -39,9 +39,9 @@ class SignalRepository extends ServiceEntityRepository
      * Récupère les signaux pour une période
      */
     public function findBySymbolTimeframeAndDateRange(
-        string $symbol, 
-        Timeframe $timeframe, 
-        \DateTimeImmutable $startDate, 
+        string $symbol,
+        Timeframe $timeframe,
+        \DateTimeImmutable $startDate,
         \DateTimeImmutable $endDate
     ): array {
         return $this->createQueryBuilder('s')
@@ -138,7 +138,7 @@ class SignalRepository extends ServiceEntityRepository
     public function findLastSignalsByContractAndTimeframe(): array
     {
         $qb = $this->createQueryBuilder('s');
-        
+
         // Sous-requête pour obtenir le dernier signal par symbole et timeframe
         $subQb = $this->createQueryBuilder('s2');
         $subQb->select('MAX(s2.klineTime)')
@@ -164,11 +164,11 @@ class SignalRepository extends ServiceEntityRepository
         foreach ($signals as $signal) {
             $symbol = $signal->getSymbol();
             $timeframe = $signal->getTimeframe()->value;
-            
+
             if (!isset($grouped[$symbol])) {
                 $grouped[$symbol] = [];
             }
-            
+
             $grouped[$symbol][$timeframe] = $signal;
         }
 

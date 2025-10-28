@@ -4,9 +4,8 @@ declare(strict_types=1);
 
 namespace App\Command\Populate;
 
-use App\Domain\Common\Dto\ValidationStateDto;
-use App\Domain\Common\Enum\Timeframe;
-use App\Infrastructure\Cache\DbValidationCache;
+use App\Common\Enum\Timeframe;
+use App\Runtime\Cache\DbValidationCache;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -41,7 +40,7 @@ class ValidationCachePopulateCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        
+
         $symbol = strtoupper($input->getArgument('symbol'));
         $timeframe = Timeframe::from($input->getArgument('timeframe'));
         $count = (int) $input->getOption('count');
@@ -66,7 +65,7 @@ class ValidationCachePopulateCommand extends Command
                 $klineTime = $this->calculateKlineTime($startDate, $timeframe, $i);
                 $status = $this->generateTestStatus($klineTime);
                 $details = $this->generateTestDetails($status, $klineTime);
-                
+
                 $this->validationCache->cacheMtfValidation(
                     $symbol,
                     $timeframe,
@@ -75,7 +74,7 @@ class ValidationCachePopulateCommand extends Command
                     $details,
                     $expirationMinutes
                 );
-                
+
                 $successCount++;
 
                 if ($verbose) {
@@ -114,7 +113,7 @@ class ValidationCachePopulateCommand extends Command
     {
         $timeFactor = $klineTime->getTimestamp() / 1800; // 30 minutes
         $statusValue = sin($timeFactor);
-        
+
         return match (true) {
             $statusValue > 0.5 => 'VALID',
             $statusValue < -0.5 => 'INVALID',

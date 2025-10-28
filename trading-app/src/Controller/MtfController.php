@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Domain\Mtf\Service\MtfService;
-use App\Domain\Mtf\Service\MtfRunService;
+use App\MtfValidator\Service\MtfService;
+use App\MtfValidator\Service\MtfRunService;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Repository\MtfAuditRepository;

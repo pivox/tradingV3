@@ -23,7 +23,6 @@ final class PriceRefreshService
     {
         try {
             $price = $this->priceProvider->getPrice($symbol);
-            
             if ($price === null) {
                 $this->logger->warning('[PriceRefresh] Unable to get price', [
                     'symbol' => $symbol
@@ -36,19 +35,19 @@ final class PriceRefreshService
             if ($contract) {
                 $contract->setLastPrice((string) $price);
                 $this->contractRepository->getEntityManager()->flush();
-                
+
                 $this->logger->info('[PriceRefresh] Price updated', [
                     'symbol' => $symbol,
                     'price' => $price
                 ]);
-                
+
                 return true;
             }
 
             $this->logger->warning('[PriceRefresh] Contract not found', [
                 'symbol' => $symbol
             ]);
-            
+
             return false;
 
         } catch (\Throwable $e) {
@@ -56,7 +55,7 @@ final class PriceRefreshService
                 'symbol' => $symbol,
                 'error' => $e->getMessage()
             ]);
-            
+
             return false;
         }
     }
@@ -67,11 +66,11 @@ final class PriceRefreshService
     public function refreshMultiplePrices(array $symbols): array
     {
         $results = [];
-        
+
         foreach ($symbols as $symbol) {
             $results[$symbol] = $this->refreshPrice($symbol);
         }
-        
+
         return $results;
     }
 }

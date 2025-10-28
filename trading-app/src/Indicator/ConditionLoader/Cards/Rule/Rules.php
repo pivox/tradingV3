@@ -3,11 +3,16 @@
 namespace App\Indicator\ConditionLoader\Cards\Rule;
 
 use App\Indicator\ConditionLoader\Cards\AbstractCard;
+use App\Indicator\ConditionLoader\ConditionRegistry;
 
 class Rules extends AbstractCard implements RuleElementInterface
 {
     /** @var array<string,Rule> */
     private array $rules = [];
+
+    public function __construct(
+        private readonly ConditionRegistry $conditionRegistry
+    ) {}
 
     public function fill(array|string $payload): static
     {
@@ -15,7 +20,7 @@ class Rules extends AbstractCard implements RuleElementInterface
         $this->rules = [];
 
         foreach ($data as $ruleName => $ruleSpec) {
-            $rule = (new Rule())->fill([$ruleName => $ruleSpec]);
+            $rule = (new Rule($this->conditionRegistry))->fill([$ruleName => $ruleSpec]);
             $this->rules[$ruleName] = $rule;
         }
         return $this;

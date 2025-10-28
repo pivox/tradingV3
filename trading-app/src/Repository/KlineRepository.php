@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Repository;
 
+use App\Common\Enum\Timeframe;
 use App\Entity\Kline;
-use App\Domain\Common\Enum\Timeframe;
 use App\Provider\Bitmart\Dto\KlineDto;
 use App\Provider\Bitmart\Dto\ListKlinesDto;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
@@ -285,6 +285,133 @@ class KlineRepository extends ServiceEntityRepository
         }
 
         return $qb->getQuery()->getResult();
+    }
+
+    public function countKlines(string $symbol, Timeframe $timeframe)
+    {
+        return $this->createQueryBuilder('k')
+            ->select('COUNT(k.id)')
+            ->where('k.symbol = :symbol')
+            ->andWhere('k.timeframe = :timeframe')
+            ->setParameter('symbol', $symbol)
+            ->setParameter('timeframe', $timeframe)
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
+    public function getKlinesStats()
+    {
+        return $this->createQueryBuilder('k')
+            ->select('k.symbol, k.timeframe, COUNT(k.id) as count, MAX(k.openTime) as earliest, MIN(k.openTime) as latest')
+            ->groupBy('k.symbol, k.timeframe')
+            ->orderBy('k.symbol, k.timeframe')
+            ->getQuery()
+            ->getResult();
+    }
+
+    /**
+     * UPSERT des klines - évite les doublons
+     *
+     * @param \App\Contract\Provider\Dto\KlineDto[] $klines
+     */
+    public function upsertKlines(array $klines): int
+    {
+        if (empty($klines)) {
+            return 0;
+        }
+
+        $this->logger->info('Starting klines upsert', [
+            'count' => count($klines),
+            'symbol' => $klines[0]->symbol ?? 'unknown',
+            'timeframe' => $klines[0]->timeframe->value ?? 'unknown'
+        ]);
+
+        $upsertedCount = 0;
+        $batchSize = 50; // Traiter par lots de 50
+
+        foreach (array_chunk($klines, $batchSize) as $batch) {
+            $upsertedCount += $this->upsertBatch($batch);
+        }
+
+        $this->logger->info('Klines upsert completed', [
+            'total_upserted' => $upsertedCount,
+            'total_input' => count($klines)
+        ]);
+
+        return $upsertedCount;
+    }
+
+    /**
+     * UPSERT d'un lot de klines
+     *
+     * @param KlineDto[] $batch
+     */
+    private function upsertBatch(array $batch): int
+    {
+        $upsertedCount = 0;
+
+        foreach ($batch as $klineDto) {
+            try {
+                // Chercher si la kline existe déjà
+                $existingKline = $this->findOneBy([
+                    'symbol' => $klineDto->symbol,
+                    'timeframe' => $klineDto->timeframe,
+                    'openTime' => $klineDto->openTime
+                ]);
+
+                if ($existingKline) {
+                    // Mettre à jour la kline existante
+                    $existingKline->setOpenPrice($klineDto->open->toScale(12));
+                    $existingKline->setHighPrice($klineDto->high->toScale(12));
+                    $existingKline->setLowPrice($klineDto->low->toScale(12));
+                    $existingKline->setClosePrice($klineDto->close->toScale(12));
+                    $existingKline->setVolume($klineDto->volume->toScale(12));
+                    $existingKline->setSource($klineDto->source);
+                    $existingKline->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
+
+                    $this->getEntityManager()->persist($existingKline);
+                } else {
+                    // Créer une nouvelle kline
+                    $kline = new Kline();
+                    $kline->setSymbol($klineDto->symbol);
+                    $kline->setTimeframe($klineDto->timeframe);
+                    $kline->setOpenTime($klineDto->openTime);
+                    $kline->setOpenPrice($klineDto->open->toScale(12));
+                    $kline->setHighPrice($klineDto->high->toScale(12));
+                    $kline->setLowPrice($klineDto->low->toScale(12));
+                    $kline->setClosePrice($klineDto->close->toScale(12));
+                    $kline->setVolume($klineDto->volume->toScale(12));
+                    $kline->setSource($klineDto->source);
+                    $kline->setInsertedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
+                    $kline->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
+
+                    $this->getEntityManager()->persist($kline);
+                }
+
+                $upsertedCount++;
+
+            } catch (\Exception $e) {
+                $this->logger->error('Error upserting kline', [
+                    'symbol' => $klineDto->symbol,
+                    'timeframe' => $klineDto->timeframe->value,
+                    'open_time' => $klineDto->openTime->format('Y-m-d H:i:s'),
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
+
+        // Flush le batch
+        try {
+            $this->getEntityManager()->flush();
+            $this->getEntityManager()->clear(); // Libérer la mémoire
+        } catch (\Exception $e) {
+            $this->logger->error('Error flushing klines batch', [
+                'error' => $e->getMessage()
+            ]);
+            throw $e;
+        }
+
+        return $upsertedCount;
     }
 }
 

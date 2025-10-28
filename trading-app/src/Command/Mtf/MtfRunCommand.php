@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Command\Mtf;
 
-use App\Domain\Mtf\Service\MtfRunService;
+use App\MtfValidator\Service\MtfRunService;
 use App\Entity\MtfSwitch;
-use App\Infrastructure\Http\BitmartRestClient;
+use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
 use App\Repository\ContractRepository;
 use App\Repository\MtfSwitchRepository;
 use Doctrine\ORM\EntityManagerInterface;
@@ -27,7 +27,7 @@ class MtfRunCommand extends Command
 {
     public function __construct(
         private readonly MtfRunService $mtfRunService,
-        private readonly BitmartRestClient $bitmartClient,
+        private readonly BitmartHttpClientPublic $bitmartClient,
         private readonly ContractRepository $contractRepository,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly EntityManagerInterface $entityManager,
@@ -133,6 +133,7 @@ class MtfRunCommand extends Command
             if (empty($symbols)) {
                 $symbols = $this->contractRepository->allActiveSymbolNames();
             }
+            $symbols = array_slice($symbols, 0, 10);
 
             if (empty($symbols)) {
                 $io->warning('Aucun symbole actif trouvé');
@@ -492,7 +493,7 @@ class MtfRunCommand extends Command
     private function displaySummaryByStatus(SymfonyStyle $io, array $details): void
     {
         $statusGroups = [];
-        
+
         foreach ($details as $symbol => $info) {
             $status = $info['status'] ?? 'UNKNOWN';
             if (!isset($statusGroups[$status])) {
@@ -516,7 +517,7 @@ class MtfRunCommand extends Command
     private function displaySummaryByReason(SymfonyStyle $io, array $details): void
     {
         $reasonGroups = [];
-        
+
         foreach ($details as $symbol => $info) {
             $reason = $info['reason'] ?? 'N/A';
             if (!isset($reasonGroups[$reason])) {
@@ -540,7 +541,7 @@ class MtfRunCommand extends Command
     private function displaySummaryByRejectedTimeframe(SymfonyStyle $io, array $details): void
     {
         $rejectedTfGroups = [];
-        
+
         foreach ($details as $symbol => $info) {
             $rejectedTf = $info['failed_timeframe'] ?? null;
             if ($rejectedTf) {
@@ -566,7 +567,7 @@ class MtfRunCommand extends Command
     private function displaySummaryByLastValidTimeframe(SymfonyStyle $io, array $details): void
     {
         $lastValidTfGroups = [];
-        
+
         foreach ($details as $symbol => $info) {
             $lastValidTf = $this->getLastValidTimeframe($info);
             if ($lastValidTf) {
@@ -584,7 +585,7 @@ class MtfRunCommand extends Command
             uksort($lastValidTfGroups, function($a, $b) use ($tfOrder) {
                 return ($tfOrder[$b] ?? 0) - ($tfOrder[$a] ?? 0);
             });
-            
+
             foreach ($lastValidTfGroups as $tf => $symbols) {
                 $io->writeln(sprintf('<comment>%s</comment>: %s', $tf, implode(', ', $symbols)));
             }
@@ -602,12 +603,12 @@ class MtfRunCommand extends Command
         }
 
         $timeframes = ['4h', '1h', '15m', '5m', '1m'];
-        
+
         foreach ($timeframes as $tf) {
             if (isset($info['steps'][$tf])) {
                 $step = $info['steps'][$tf];
                 $status = $step['status'] ?? '';
-                
+
                 // Si le statut est 'success' ou 'valid', c'est le dernier TF validé
                 if (in_array($status, ['success', 'valid', 'completed'])) {
                     return $tf;
@@ -646,7 +647,7 @@ class MtfRunCommand extends Command
     private function processInvalidSymbols(SymfonyStyle $io, array $details, string $duration): void
     {
         $invalidSymbols = [];
-        
+
         foreach ($details as $symbol => $info) {
             $status = $info['status'] ?? '';
             if ($status === 'INVALID') {
@@ -707,12 +708,12 @@ class MtfRunCommand extends Command
     private function parseDuration(string $duration): \DateTimeImmutable
     {
         $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
-        
+
         $matches = [];
         if (preg_match('/^(\d+)([hmdw])$/', $duration, $matches)) {
             $value = (int) $matches[1];
             $unit = $matches[2];
-            
+
             return match ($unit) {
                 'm' => $now->modify("+{$value} minutes"),
                 'h' => $now->modify("+{$value} hours"),
@@ -721,7 +722,7 @@ class MtfRunCommand extends Command
                 default => throw new \InvalidArgumentException("Unité de temps non supportée: $unit")
             };
         }
-        
+
         throw new \InvalidArgumentException("Format de durée invalide: $duration");
     }
 
@@ -732,7 +733,7 @@ class MtfRunCommand extends Command
     {
         $switchKey = "SYMBOL:{$symbol}";
         $existingSwitch = $this->mtfSwitchRepository->findOneBy(['switchKey' => $switchKey]);
-        
+
         if ($existingSwitch) {
             // Mettre à jour le switch existant
             $existingSwitch->setIsOn(false);
@@ -747,7 +748,7 @@ class MtfRunCommand extends Command
             $switch->setExpiresAt($expiresAt);
             $this->entityManager->persist($switch);
         }
-        
+
         $this->entityManager->flush();
     }
 }

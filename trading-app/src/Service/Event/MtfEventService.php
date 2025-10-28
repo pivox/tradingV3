@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Service\Event;
 
-use App\Event\MtfRunCompletedEvent;
-use App\Service\Indicator\SqlIndicatorService;
+use App\MtfValidator\Event\MtfRunCompletedEvent;
 use Psr\Log\LoggerInterface;
+use Ramsey\Uuid\Uuid;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 
 /**
@@ -16,7 +16,6 @@ class MtfEventService
 {
     public function __construct(
         private readonly EventDispatcherInterface $eventDispatcher,
-        private readonly SqlIndicatorService $sqlIndicatorService,
         private readonly LoggerInterface $logger,
     ) {
     }
@@ -32,7 +31,7 @@ class MtfEventService
                 'context' => $context,
             ]);
 
-            $this->sqlIndicatorService->refreshMaterializedViews();
+            // Les vues matérialisées ne sont plus utilisées
 
             $this->logger->info('[MTF Event Service] Materialized views refresh completed', [
                 'run_id' => $runId,
@@ -52,8 +51,12 @@ class MtfEventService
     public function dispatchMtfEvent(string $eventName, array $data = []): void
     {
         try {
+            $runId = isset($data['run_id']) && $data['run_id'] !== 'unknown'
+                ? Uuid::fromString($data['run_id'])
+                : Uuid::uuid4();
+
             $this->eventDispatcher->dispatch(new MtfRunCompletedEvent(
-                $data['run_id'] ?? 'unknown',
+                $runId,
                 $data['symbols'] ?? [],
                 $data['symbols_count'] ?? 0,
                 $data['execution_time'] ?? 0.0,

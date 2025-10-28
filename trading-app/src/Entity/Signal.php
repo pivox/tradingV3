@@ -24,14 +24,14 @@ class Signal
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
 
-    #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Domain\Common\Enum\Timeframe::class)]
-    private \App\Domain\Common\Enum\Timeframe $timeframe;
+    #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Common\Enum\Timeframe::class)]
+    private \App\Common\Enum\Timeframe $timeframe;
 
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE)]
     private \DateTimeImmutable $klineTime;
 
-    #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Domain\Common\Enum\SignalSide::class)]
-    private \App\Domain\Common\Enum\SignalSide $side;
+    #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Common\Enum\SignalSide::class)]
+    private \App\Common\Enum\SignalSide $side;
 
     #[ORM\Column(type: Types::FLOAT, nullable: true)]
     private ?float $score = null;
@@ -67,12 +67,12 @@ class Signal
         return $this;
     }
 
-    public function getTimeframe(): \App\Domain\Common\Enum\Timeframe
+    public function getTimeframe(): \App\Common\Enum\Timeframe
     {
         return $this->timeframe;
     }
 
-    public function setTimeframe(\App\Domain\Common\Enum\Timeframe $timeframe): static
+    public function setTimeframe(\App\Common\Enum\Timeframe $timeframe): static
     {
         $this->timeframe = $timeframe;
         return $this;
@@ -89,12 +89,12 @@ class Signal
         return $this;
     }
 
-    public function getSide(): \App\Domain\Common\Enum\SignalSide
+    public function getSide(): \App\Common\Enum\SignalSide
     {
         return $this->side;
     }
 
-    public function setSide(\App\Domain\Common\Enum\SignalSide $side): static
+    public function setSide(\App\Common\Enum\SignalSide $side): static
     {
         $this->side = $side;
         return $this;

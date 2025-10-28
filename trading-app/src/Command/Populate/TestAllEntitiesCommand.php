@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Command\Populate;
 
-use App\Domain\Common\Enum\Timeframe;
-use App\Infrastructure\Persistence\IndicatorProvider;
-use App\Infrastructure\Persistence\SignalPersistenceService;
-use App\Infrastructure\Cache\DbValidationCache;
+use App\Common\Enum\Timeframe;
+use App\Contract\Indicator\IndicatorProviderInterface;
+use App\Runtime\Cache\DbValidationCache;
+use App\Signal\SignalPersistenceService;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -23,7 +23,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 class TestAllEntitiesCommand extends Command
 {
     public function __construct(
-        private readonly IndicatorProvider $indicatorProvider,
+        private readonly IndicatorProviderInterface $indicatorProvider,
         private readonly SignalPersistenceService $signalPersistenceService,
         private readonly DbValidationCache $validationCache
     ) {
@@ -42,7 +42,7 @@ class TestAllEntitiesCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        
+
         $symbol = strtoupper($input->getArgument('symbol'));
         $timeframes = array_map('trim', explode(',', $input->getOption('timeframes')));
         $count = (int) $input->getOption('count');
@@ -107,7 +107,7 @@ class TestAllEntitiesCommand extends Command
                 $klineTime = new \DateTimeImmutable("2024-01-01 00:00:00", new \DateTimeZone('UTC'));
                 $klineTime = $klineTime->modify("+" . ($i * 60) . " minutes");
 
-                $snapshot = new \App\Domain\Common\Dto\IndicatorSnapshotDto(
+                $snapshot = new \App\Common\Dto\IndicatorSnapshotDto(
                     symbol: $symbol,
                     timeframe: $timeframe,
                     klineTime: $klineTime,
@@ -145,9 +145,9 @@ class TestAllEntitiesCommand extends Command
                 $klineTime = new \DateTimeImmutable("2024-01-01 00:00:00", new \DateTimeZone('UTC'));
                 $klineTime = $klineTime->modify("+" . ($i * 60) . " minutes");
 
-                $side = $i % 2 === 0 ? \App\Domain\Common\Enum\SignalSide::LONG : \App\Domain\Common\Enum\SignalSide::SHORT;
-                
-                $signal = new \App\Domain\Common\Dto\SignalDto(
+                $side = $i % 2 === 0 ? \App\Common\Enum\SignalSide::LONG : \App\Common\Enum\SignalSide::SHORT;
+
+                $signal = new \App\Common\Dto\SignalDto(
                     symbol: $symbol,
                     timeframe: $timeframe,
                     klineTime: $klineTime,
@@ -201,7 +201,7 @@ class TestAllEntitiesCommand extends Command
                 $klineTime = $klineTime->modify("+" . ($i * 60) . " minutes");
 
                 $status = $i % 3 === 0 ? 'VALID' : ($i % 3 === 1 ? 'INVALID' : 'PENDING');
-                
+
                 $this->validationCache->cacheMtfValidation(
                     $symbol,
                     $timeframe,

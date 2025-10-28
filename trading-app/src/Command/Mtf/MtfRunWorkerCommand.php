@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command\Mtf;
 
-use App\Domain\Mtf\Service\MtfRunService;
+use App\MtfValidator\Service\MtfRunService;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
