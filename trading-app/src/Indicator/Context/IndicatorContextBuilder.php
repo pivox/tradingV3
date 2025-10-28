@@ -297,11 +297,11 @@ class IndicatorContextBuilder
                         // Sanity: some drivers may yield 0.0 spuriously on very small-priced symbols.
                         if ($current === 0.0) {
                             // Fall back to pure-PHP EMA to avoid zero artefact
-                            $current = (float) $this->ema->calculate($closes, $period);
+                            $current = $this->computeEmaPure($closes, $period);
                             if (count($closes) >= $period + 1) {
                                 $prevCloses = $closes;
                                 array_pop($prevCloses);
-                                $previous = (float) $this->ema->calculate($prevCloses, $period);
+                                $previous = $this->computeEmaPure($prevCloses, $period);
                             }
                         }
                         return [$current, $previous];
@@ -324,15 +324,32 @@ class IndicatorContextBuilder
             return [null, null];
         }
 
-        $current = (float) $this->ema->calculate($closes, $period);
+        $current = $this->computeEmaPure($closes, $period);
         $previous = null;
         if (count($closes) >= $period + 1) {
             $prevCloses = $closes;
             array_pop($prevCloses);
-            $previous = (float) $this->ema->calculate($prevCloses, $period);
+            $previous = $this->computeEmaPure($prevCloses, $period);
         }
 
         return [$current, $previous];
+    }
+
+    /**
+     * Pure-PHP EMA (bypass TRADER) with simple recursive smoothing seeded by first price.
+     */
+    private function computeEmaPure(array $closes, int $period): float
+    {
+        $n = count($closes);
+        if ($n === 0) return 0.0;
+        if ($period <= 1) return (float) end($closes);
+        $k = 2 / ($period + 1);
+        $ema = (float) $closes[0];
+        for ($i = 1; $i < $n; $i++) {
+            $price = (float) $closes[$i];
+            $ema = $price * $k + $ema * (1 - $k);
+        }
+        return (float) $ema;
     }
 
     /**
