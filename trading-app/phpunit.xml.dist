@@ -1,14 +1,44 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<phpunit bootstrap="vendor/autoload.php"
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         backupGlobals="false"
          colors="true"
+         bootstrap="tests/bootstrap.php"
+         cacheDirectory=".phpunit.cache"
+         executionOrder="depends,defects"
+         requireCoverageMetadata="true"
+         beStrictAboutCoverageMetadata="true"
          beStrictAboutOutputDuringTests="true"
-         beStrictAboutResourceUsageDuringSmallTests="true"
-         failOnWarning="true"
-         failOnRisky="true">
+         failOnRisky="true"
+         failOnWarning="true">
+    <php>
+        <ini name="display_errors" value="1" />
+        <ini name="error_reporting" value="-1" />
+        <server name="APP_ENV" value="test" force="true" />
+        <server name="SHELL_VERBOSITY" value="-1" />
+        <server name="SYMFONY_PHPUNIT_REMOVE" value="" />
+        <server name="SYMFONY_PHPUNIT_VERSION" value="10.1" />
+    </php>
+
     <testsuites>
-        <testsuite name="Trading App Test Suite">
+        <testsuite name="project">
             <directory>tests</directory>
         </testsuite>
     </testsuites>
-</phpunit>
 
+    <coverage processUncoveredFiles="true">
+        <include>
+            <directory suffix=".php">src</directory>
+        </include>
+        <exclude>
+            <directory>src/DependencyInjection</directory>
+            <directory>src/Entity</directory>
+            <directory>src/Kernel.php</directory>
+            <file>src/MtfValidator/Service/MtfRunService.php</file>
+        </exclude>
+    </coverage>
+
+    <php>
+        <env name="APP_ENV" value="test" force="true" />
+    </php>
+</phpunit>
