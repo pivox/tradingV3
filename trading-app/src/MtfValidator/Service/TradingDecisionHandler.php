@@ -5,92 +5,90 @@ declare(strict_types=1);
 namespace App\MtfValidator\Service;
 
 use App\Common\Enum\SignalSide;
-use App\Contract\EntryTrade\TradeContextInterface;
-use App\Contract\EntryTrade\TradingDecisionInterface;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\Service\Price\TradingPriceResolver;
+use App\TradeEntry\Dto\TradeEntryRequest;
+use App\TradeEntry\Service\TradeEntryService;
+use App\TradeEntry\Types\Side;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
- * Gestionnaire des décisions de trading optimisé
+ * Gestionnaire des décisions de trading qui délègue à TradeEntryService.
  */
 final class TradingDecisionHandler
 {
     public function __construct(
-        private readonly TradingDecisionInterface $tradingDecisionService,
-        private readonly TradeContextInterface $tradeContext,
+        private readonly TradeEntryService $tradeEntryService,
         private readonly TradingPriceResolver $tradingPriceResolver,
         private readonly AuditLoggerInterface $auditLogger,
         private readonly LoggerInterface $logger,
-        private readonly LoggerInterface $positionsFlowLogger
+        private readonly LoggerInterface $positionsFlowLogger,
+        #[Autowire('%trade_entry.defaults%')]
+        private readonly array $tradeEntryDefaults = []
     ) {}
 
-    /**
-     * Gère la décision de trading pour un symbole
-     */
     public function handleTradingDecision(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto): SymbolResultDto
     {
         if ($symbolResult->isError() || $symbolResult->isSkipped()) {
             return $symbolResult;
         }
 
-        $status = strtoupper($symbolResult->status);
-        if ($status !== 'READY') {
+        if (strtoupper($symbolResult->status) !== 'READY') {
             return $symbolResult;
         }
 
-        // Vérifier le contexte de trading
-        $accountBalance = 0.0;
-        $riskPercentage = 0.0;
-        
-        try {
-            $accountBalance = max(0.0, $this->tradeContext->getAccountBalance());
-            $riskPercentage = max(0.0, $this->tradeContext->getRiskPercentage());
-        } catch (\Throwable $e) {
-            $this->logger->warning('[Trading Decision] Unable to resolve trading context', [
-                'symbol' => $symbolResult->symbol,
-                'error' => $e->getMessage()
-            ]);
-            
-            return $this->createSkippedResult($symbolResult, 'missing_trading_context');
-        }
-
-        if ($accountBalance <= 0.0 || $riskPercentage <= 0.0) {
-            return $this->createSkippedResult($symbolResult, 'missing_trading_context');
-        }
-
-        // Vérifier les conditions de trading
         if (!$this->canExecuteTrading($symbolResult)) {
             return $this->createSkippedResult($symbolResult, 'trading_conditions_not_met');
         }
 
-        // Résoudre le prix
         $priceResolution = $this->resolveTradingPrice($symbolResult);
         if ($priceResolution === null) {
             return $this->createSkippedResult($symbolResult, 'price_resolution_failed');
         }
 
-        // Exécuter la décision de trading
+        $tradeRequest = $this->buildTradeEntryRequest(
+            $symbolResult,
+            $priceResolution->price ?? $symbolResult->currentPrice,
+            $symbolResult->atr
+        );
+
+        if ($tradeRequest === null) {
+            return $this->createSkippedResult($symbolResult, 'unable_to_build_request');
+        }
+
         try {
-            $this->positionsFlowLogger->info('[PositionsFlow] Executing trading decision', [
+            $this->positionsFlowLogger->info('[PositionsFlow] Executing trade entry', [
                 'symbol' => $symbolResult->symbol,
-                'execution_tf' => $symbolResult->executionTf
+                'execution_tf' => $symbolResult->executionTf,
+                'side' => $symbolResult->signalSide,
             ]);
 
-            $decision = $this->tradingDecisionService->makeTradingDecision(
-                $symbolResult->symbol,
-                SignalSide::from($symbolResult->signalSide),
-                $priceResolution->price,
-                $symbolResult->atr,
-                $accountBalance,
-                $riskPercentage,
-                $this->isHighConviction($symbolResult),
-                $this->tradeContext->getTimeframeMultiplier($symbolResult->executionTf)
-            );
+            $execution = $this->tradeEntryService->buildAndExecute($tradeRequest);
 
-            $this->logTradingDecision($symbolResult->symbol, $decision);
+            $decision = [
+                'status' => $execution->status,
+                'client_order_id' => $execution->clientOrderId,
+                'exchange_order_id' => $execution->exchangeOrderId,
+                'raw' => $execution->raw,
+            ];
+
+            $this->logExecution($symbolResult->symbol, $decision);
+
+            $this->auditLogger->logAction(
+                'TRADE_ENTRY_EXECUTED',
+                'TRADE_ENTRY',
+                $symbolResult->symbol,
+                [
+                    'status' => $execution->status,
+                    'client_order_id' => $execution->clientOrderId,
+                    'exchange_order_id' => $execution->exchangeOrderId,
+                    'execution_tf' => $symbolResult->executionTf,
+                    'order_type' => $tradeRequest->orderType,
+                ]
+            );
 
             return new SymbolResultDto(
                 symbol: $symbolResult->symbol,
@@ -103,17 +101,26 @@ final class TradingDecisionHandler
                 currentPrice: $symbolResult->currentPrice,
                 atr: $symbolResult->atr
             );
-
         } catch (\Throwable $e) {
-            $this->logger->error('[Trading Decision] Failed to execute trading decision', [
+            $this->logger->error('[Trading Decision] Trade entry execution failed', [
                 'symbol' => $symbolResult->symbol,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ]);
 
-            $this->positionsFlowLogger->error('[PositionsFlow] Trading decision failed', [
+            $this->positionsFlowLogger->error('[PositionsFlow] Trade entry failed', [
                 'symbol' => $symbolResult->symbol,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ]);
+
+            $this->auditLogger->logAction(
+                'TRADE_ENTRY_FAILED',
+                'TRADE_ENTRY',
+                $symbolResult->symbol,
+                [
+                    'error' => $e->getMessage(),
+                    'execution_tf' => $symbolResult->executionTf,
+                ]
+            );
 
             return new SymbolResultDto(
                 symbol: $symbolResult->symbol,
@@ -122,7 +129,7 @@ final class TradingDecisionHandler
                 signalSide: $symbolResult->signalSide,
                 tradingDecision: [
                     'status' => 'error',
-                    'error' => $e->getMessage()
+                    'error' => $e->getMessage(),
                 ],
                 error: $symbolResult->error,
                 context: $symbolResult->context,
@@ -134,21 +141,25 @@ final class TradingDecisionHandler
 
     private function canExecuteTrading(SymbolResultDto $symbolResult): bool
     {
-        // Vérifier le timeframe d'exécution
-        if ($symbolResult->executionTf !== '1m') {
-            $this->logger->info('[Trading Decision] Skipping trading decision (execution_tf not 1m)', [
+        if ($symbolResult->executionTf === null) {
+            return false;
+        }
+
+        if (!in_array(strtolower($symbolResult->executionTf), ['1m', '5m', '15m'], true)) {
+            $this->logger->info('[Trading Decision] Skipping (unsupported execution TF)', [
                 'symbol' => $symbolResult->symbol,
-                'execution_tf' => $symbolResult->executionTf
+                'execution_tf' => $symbolResult->executionTf,
             ]);
             return false;
         }
 
-        // Vérifier les données requises
-        if ($symbolResult->currentPrice === null || $symbolResult->atr === null) {
-            $this->logger->debug('[Trading Decision] Missing price or ATR', [
+        if ($symbolResult->signalSide === null) {
+            return false;
+        }
+
+        if ($symbolResult->currentPrice === null && $symbolResult->atr === null) {
+            $this->logger->debug('[Trading Decision] Missing price and ATR', [
                 'symbol' => $symbolResult->symbol,
-                'has_price' => $symbolResult->currentPrice !== null,
-                'has_atr' => $symbolResult->atr !== null
             ]);
             return false;
         }
@@ -158,30 +169,91 @@ final class TradingDecisionHandler
 
     private function resolveTradingPrice(SymbolResultDto $symbolResult): ?object
     {
+        $side = strtoupper((string)$symbolResult->signalSide);
+        if (!in_array($side, ['LONG', 'SHORT'], true)) {
+            return null;
+        }
+
         try {
             return $this->tradingPriceResolver->resolve(
                 $symbolResult->symbol,
-                SignalSide::from($symbolResult->signalSide),
+                SignalSide::from(strtoupper($symbolResult->signalSide)),
                 $symbolResult->currentPrice,
                 $symbolResult->atr
             );
         } catch (\Throwable $e) {
             $this->logger->warning('[Trading Decision] Unable to resolve trading price', [
                 'symbol' => $symbolResult->symbol,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ]);
+
             return null;
         }
     }
 
-    private function isHighConviction(SymbolResultDto $symbolResult): bool
+    private function buildTradeEntryRequest(SymbolResultDto $symbolResult, ?float $price, ?float $atr): ?TradeEntryRequest
     {
-        $context = $symbolResult->context ?? [];
-        $aligned = ($context['context_fully_aligned'] ?? false) === true;
-        $contextDir = strtoupper($context['context_dir'] ?? 'NONE');
-        $signalSide = strtoupper($symbolResult->signalSide ?? 'NONE');
+        if ($price === null) {
+            return null;
+        }
 
-        return $aligned && $contextDir !== 'NONE' && $contextDir === $signalSide;
+        $side = strtoupper((string)$symbolResult->signalSide);
+        if (!in_array($side, ['LONG', 'SHORT'], true)) {
+            return null;
+        }
+
+        $executionTf = strtolower($symbolResult->executionTf ?? '1m');
+        $multipliers = $this->tradeEntryDefaults['timeframe_multipliers'] ?? [];
+        $tfMultiplier = (float)($multipliers[$executionTf] ?? 1.0);
+
+        $riskPctPercent = (float)($this->tradeEntryDefaults['risk_pct_percent'] ?? 2.0);
+        $riskPct = max(0.0, $riskPctPercent / 100.0) * $tfMultiplier;
+        if ($riskPct <= 0.0) {
+            return null;
+        }
+
+        $initialMargin = max(0.0, (float)($this->tradeEntryDefaults['initial_margin_usdt'] ?? 100.0) * $tfMultiplier);
+        if ($initialMargin <= 0.0) {
+            $fallbackCapital = (float)($this->tradeEntryDefaults['fallback_account_balance'] ?? 0.0);
+            $initialMargin = $fallbackCapital * $riskPct;
+        }
+
+        if ($initialMargin <= 0.0) {
+            return null;
+        }
+
+        $stopFrom = $this->tradeEntryDefaults['stop_from'] ?? 'risk';
+        $atrK = (float)($this->tradeEntryDefaults['atr_k'] ?? 1.5);
+        $atrValue = ($stopFrom === 'atr' && $atr !== null && $atr > 0.0) ? $atr : null;
+        if ($atrValue === null && $stopFrom === 'atr') {
+            $stopFrom = 'risk';
+        }
+
+        $orderType = $this->tradeEntryDefaults['order_type'] ?? 'limit';
+        $entryLimitHint = $orderType === 'limit' ? $price : null;
+
+        $marketMaxSpreadPct = (float)($this->tradeEntryDefaults['market_max_spread_pct'] ?? 0.001);
+        if ($marketMaxSpreadPct > 1.0) {
+            $marketMaxSpreadPct /= 100.0;
+        }
+
+        $sideEnum = $side === 'LONG' ? Side::Long : Side::Short;
+
+        return new TradeEntryRequest(
+            symbol: $symbolResult->symbol,
+            side: $sideEnum,
+            orderType: $orderType,
+            openType: $this->tradeEntryDefaults['open_type'] ?? 'isolated',
+            orderMode: (int)($this->tradeEntryDefaults['order_mode'] ?? 4),
+            initialMarginUsdt: $initialMargin,
+            riskPct: $riskPct,
+            rMultiple: (float)($this->tradeEntryDefaults['r_multiple'] ?? 2.0),
+            entryLimitHint: $entryLimitHint,
+            stopFrom: $stopFrom,
+            atrValue: $atrValue,
+            atrK: (float)$atrK,
+            marketMaxSpreadPct: $marketMaxSpreadPct
+        );
     }
 
     private function createSkippedResult(SymbolResultDto $symbolResult, string $reason): SymbolResultDto
@@ -193,7 +265,7 @@ final class TradingDecisionHandler
             signalSide: $symbolResult->signalSide,
             tradingDecision: [
                 'status' => 'skipped',
-                'reason' => $reason
+                'reason' => $reason,
             ],
             error: $symbolResult->error,
             context: $symbolResult->context,
@@ -202,27 +274,19 @@ final class TradingDecisionHandler
         );
     }
 
-    private function logTradingDecision(string $symbol, array $decision): void
+    private function logExecution(string $symbol, array $decision): void
     {
         try {
-            $this->positionsFlowLogger->info('[PositionsFlow] Trading decision executed', [
+            $this->positionsFlowLogger->info('[PositionsFlow] Trade entry submitted', [
                 'symbol' => $symbol,
                 'status' => $decision['status'] ?? null,
-                'reason' => $decision['reason'] ?? null
+                'client_order_id' => $decision['client_order_id'] ?? null,
+                'exchange_order_id' => $decision['exchange_order_id'] ?? null,
             ]);
-
-            // Log audit
-            $this->auditLogger->logTradingAction(
-                'TRADING_DECISION',
-                $symbol,
-                0.0, // quantity sera dans la décision
-                0.0, // price sera dans la décision
-                $decision['execution_result']['main_order']['order_id'] ?? null
-            );
         } catch (\Throwable $e) {
-            $this->logger->error('[Trading Decision] Failed to log trading decision', [
+            $this->logger->error('[Trading Decision] Failed to log trade entry', [
                 'symbol' => $symbol,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ]);
         }
     }
