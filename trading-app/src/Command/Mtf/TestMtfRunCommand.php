@@ -6,7 +6,6 @@ namespace App\Command\Mtf;
 
 use App\MtfValidator\Service\MtfService;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
-use App\RateLimiter\Service\TokenBucketRateLimiter;
 use App\Repository\MtfSwitchRepository;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -26,7 +25,6 @@ class TestMtfRunCommand extends Command
     public function __construct(
         private readonly MtfService $mtfService,
         private readonly BitmartHttpClientPublic $bitmartClient,
-        private readonly TokenBucketRateLimiter $rateLimiter,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly LoggerInterface $logger
     ) {

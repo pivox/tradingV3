@@ -21,8 +21,7 @@ use App\Repository\MtfAuditRepository;
 use App\Repository\MtfStateRepository;
 use App\Repository\MtfSwitchRepository;
 use App\Runtime\Cache\DbValidationCache;
-use App\Signal\SignalPersistenceService;
-use App\Signal\SignalValidationService;
+use App\Contract\Signal\SignalValidationServiceInterface;
 use App\MtfValidator\Service\Timeframe\Timeframe4hService;
 use App\MtfValidator\Service\Timeframe\Timeframe1hService;
 use App\MtfValidator\Service\Timeframe\Timeframe15mService;
@@ -43,7 +42,7 @@ final class MtfService
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly MtfAuditRepository $mtfAuditRepository,
         private readonly ContractRepository $contractRepository,
-        private readonly SignalValidationService $signalValidationService,
+        private readonly SignalValidationServiceInterface $signalValidationService,
         private readonly LoggerInterface $logger,
         private readonly LoggerInterface $positionsFlowLogger,
         private readonly MtfConfigProviderInterface $mtfConfig,
@@ -57,7 +56,6 @@ final class MtfService
         private readonly Timeframe15mService $timeframe15mService,
         private readonly Timeframe5mService $timeframe5mService,
         private readonly Timeframe1mService $timeframe1mService,
-        private readonly ?SignalPersistenceService $signalPersistenceService = null,
         private readonly ?DbValidationCache $validationCache = null,
         private readonly ?KlineJsonIngestionService $klineJsonIngestion = null,
     ) {
@@ -662,7 +660,7 @@ final class MtfService
     }
 
     /**
-     * Persiste les résultats MTF (signaux et cache de validation)
+     * Persiste les résultats MTF (cache de validation)
      */
     private function persistMtfResults(
         string $symbol,
@@ -673,36 +671,6 @@ final class MtfService
         array $collector
     ): void {
         try {
-            // Persister le signal si ce n'est pas NONE
-            if ($signalSide !== 'NONE' && $this->signalPersistenceService !== null) {
-                $signalDto = new \App\Common\Dto\SignalDto(
-                    symbol: $symbol,
-                    timeframe: $timeframe,
-                    klineTime: $klineTime,
-                    side: \App\Common\Enum\SignalSide::from($signalSide),
-                    score: $evaluation['score'] ?? null,
-                    trigger: $evaluation['trigger'] ?? null,
-                    meta: array_merge($evaluation['meta'] ?? [], [
-                        'mtf_context' => $collector,
-                        'evaluation' => $evaluation,
-                        'persisted_by' => 'mtf_service'
-                    ])
-                );
-
-                $this->signalPersistenceService->persistMtfSignal(
-                    $signalDto,
-                    $collector,
-                    $evaluation
-                );
-
-                $this->logger->info('MTF signal persisted', [
-                    'symbol' => $symbol,
-                    'timeframe' => $timeframe->value,
-                    'side' => $signalSide,
-                    'kline_time' => $klineTime->format('Y-m-d H:i:s')
-                ]);
-            }
-
             // Persister le cache de validation
             if ($this->validationCache !== null) {
                 $status = match ($signalSide) {
