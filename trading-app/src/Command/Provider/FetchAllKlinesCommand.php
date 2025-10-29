@@ -7,9 +7,7 @@ namespace App\Command\Provider;
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\MainProviderInterface;
 use App\Provider\Bitmart\Dto\ContractDto;
-use App\Repository\KlineRepository;
 use DateTimeZone;
-use Psr\Clock\ClockInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -28,8 +26,6 @@ final class FetchAllKlinesCommand extends Command
 
     public function __construct(
         private readonly MainProviderInterface $providerService,
-        private readonly KlineRepository $klineRepository,
-        private readonly ClockInterface $clock
     ) {
         parent::__construct();
     }
@@ -227,7 +223,7 @@ Exemples:
 
             // Persister en base (ou simuler)
             if (!$dryRun) {
-                $this->klineRepository->upsertKlines($klines);
+                $this->providerService->getKlineProvider()->saveKlines($klines, $symbol, $timeframe);
             }
 
             $totalKlines += count($klines);

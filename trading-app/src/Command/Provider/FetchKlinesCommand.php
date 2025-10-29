@@ -7,8 +7,6 @@ namespace App\Command\Provider;
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\MainProviderInterface;
 use App\Provider\Bitmart\Dto\ListKlinesDto;
-use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
-use App\Repository\KlineRepository;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -25,7 +23,6 @@ final class FetchKlinesCommand extends Command
 {
     public function __construct(
         private readonly MainProviderInterface $mainProvider,
-        private readonly KlineRepository $klineRepository,
     ) {
         parent::__construct();
     }
@@ -37,7 +34,6 @@ final class FetchKlinesCommand extends Command
             ->addOption('timeframe', 't', InputOption::VALUE_OPTIONAL, 'Timeframe (4h|1h|15m|5m|1m)', '1h')
             ->addOption('limit', 'l', InputOption::VALUE_OPTIONAL, 'Nombre de klines à récupérer', '100')
             ->addOption('output', 'o', InputOption::VALUE_OPTIONAL, 'Format de sortie (table|json|csv)', 'table')
-            ->addOption('save', null, InputOption::VALUE_NONE, 'Sauvegarder les klines en base de données')
             ->addOption('from', null, InputOption::VALUE_OPTIONAL, 'Date de début (Y-m-d H:i:s)')
             ->addOption('to', null, InputOption::VALUE_OPTIONAL, 'Date de fin (Y-m-d H:i:s)')
             ->setHelp('
@@ -47,7 +43,6 @@ Exemples:
   php bin/console bitmart:fetch-klines BTCUSDT
   php bin/console bitmart:fetch-klines BTCUSDT --timeframe=4h --limit=50
   php bin/console bitmart:fetch-klines BTCUSDT --output=json
-  php bin/console bitmart:fetch-klines BTCUSDT --save
   php bin/console bitmart:fetch-klines BTCUSDT --from="2024-01-01 00:00:00" --to="2024-01-02 00:00:00"
             ');
     }
@@ -60,7 +55,6 @@ Exemples:
         $timeframeStr = $input->getOption('timeframe');
         $limit = (int) $input->getOption('limit');
         $outputFormat = $input->getOption('output');
-        $save = $input->getOption('save');
         $from = $input->getOption('from');
         $to = $input->getOption('to');
 
@@ -112,18 +106,6 @@ Exemples:
                     break;
                 default:
                     $this->displayKlinesTable($io, $klines, $symbol, $timeframe);
-            }
-
-            // Sauvegarde optionnelle
-            if ($save) {
-                $io->info('Sauvegarde des klines en base de données...');
-                $this->klineRepository->saveKlines($klines, $symbol, $timeframe);
-                $kline = $this->klineRepository->findOneBy(['symbol' => $symbol, 'timeframe' => $timeframe]);
-                if ($kline) {
-                    $io->info('Sauvegarde des klines en base de données réussie');
-                } else  {
-                    $io->warning('Aucune kline sauvegardée');
-                }
             }
 
             // Statistiques

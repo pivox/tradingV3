@@ -3,7 +3,7 @@
 namespace App\Controller\Api;
 
 use App\Common\Enum\Timeframe;
-use App\Repository\KlineRepository;
+use App\Contract\Provider\KlineProviderInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -12,7 +12,7 @@ use Symfony\Component\Routing\Annotation\Route;
 class KlinesApiController extends AbstractController
 {
     public function __construct(
-        private readonly KlineRepository $klineRepository,
+        private readonly KlineProviderInterface $klineProvider,
     ) {
     }
 
@@ -34,24 +34,35 @@ class KlinesApiController extends AbstractController
             return new JsonResponse(['error' => "Invalid timeframe: $interval. Valid timeframes are: 1m, 5m, 15m, 1h, 4h"], 400);
         }
 
-        $klines = $this->klineRepository->findBySymbolAndTimeframe($symbol, $timeframe, $limit);
+        $klines = $this->klineProvider->getKlines($symbol, $timeframe, $limit);
 
-        $data = [];
-        foreach ($klines as $kline) {
-            $data[] = [
-                'openTime' => $kline->getOpenTime()->getTimestamp() * 1000, // Timestamp en millisecondes
-                'open' => $kline->getOpenPriceFloat(),
-                'high' => $kline->getHighPriceFloat(),
-                'low' => $kline->getLowPriceFloat(),
-                'close' => $kline->getClosePriceFloat(),
-                'volume' => $kline->getVolumeFloat() ?? 0.0,
-                'closeTime' => $kline->getOpenTime()->getTimestamp() * 1000, // Approximation
-                'quoteAssetVolume' => $kline->getVolumeFloat() ?? 0.0,
-                'numberOfTrades' => 0,
-                'takerBuyBaseAssetVolume' => $kline->getVolumeFloat() ?? 0.0,
-                'takerBuyQuoteAssetVolume' => $kline->getVolumeFloat() ?? 0.0,
-            ];
+        if (empty($klines)) {
+            return new JsonResponse([]);
         }
+
+        // Les klines renvoyées par le provider sont triées du plus ancien au plus récent.
+        // On applique un tri inverse pour conserver le comportement historique (dernier en premier).
+        usort($klines, static function ($a, $b): int {
+            return $b->openTime <=> $a->openTime;
+        });
+
+        $data = array_map(static function ($kline) {
+            $volume = $kline->volume?->toFloat() ?? 0.0;
+
+            return [
+                'openTime' => $kline->openTime->getTimestamp() * 1000,
+                'open' => $kline->open->toFloat(),
+                'high' => $kline->high->toFloat(),
+                'low' => $kline->low->toFloat(),
+                'close' => $kline->close->toFloat(),
+                'volume' => $volume,
+                'closeTime' => $kline->openTime->getTimestamp() * 1000, // Approximation conservée
+                'quoteAssetVolume' => $volume,
+                'numberOfTrades' => 0,
+                'takerBuyBaseAssetVolume' => $volume,
+                'takerBuyQuoteAssetVolume' => $volume,
+            ];
+        }, $klines);
 
         return new JsonResponse($data);
     }
