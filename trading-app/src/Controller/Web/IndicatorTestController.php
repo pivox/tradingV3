@@ -4,7 +4,7 @@ namespace App\Controller\Web;
 
 use App\Common\Enum\Timeframe;
 use App\Contract\Indicator\IndicatorMainProviderInterface;
-use App\Kline\Port\KlineProviderPort;
+use App\Contract\Provider\MainProviderInterface;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Service\KlineDataService;
@@ -24,7 +24,7 @@ class IndicatorTestController extends AbstractController
     private KlineDataService $klineDataService;
     private ContractRepository $contractRepository;
     private KlineRepository $klineRepository;
-    private KlineProviderPort $klineProvider;
+    private MainProviderInterface $provider;
     private SignalValidationServiceInterface $signalValidationService;
 
     public function __construct(
@@ -33,7 +33,7 @@ class IndicatorTestController extends AbstractController
         KlineDataService $klineDataService,
         ContractRepository $contractRepository,
         KlineRepository $klineRepository,
-        KlineProviderPort $klineProvider,
+        MainProviderInterface $provider,
         SignalValidationServiceInterface $signalValidationService
     ) {
         $this->indicatorMain = $indicatorMain;
@@ -41,7 +41,7 @@ class IndicatorTestController extends AbstractController
         $this->klineDataService = $klineDataService;
         $this->contractRepository = $contractRepository;
         $this->klineRepository = $klineRepository;
-        $this->klineProvider = $klineProvider;
+        $this->provider = $provider;
         $this->signalValidationService = $signalValidationService;
     }
 
@@ -943,7 +943,7 @@ class IndicatorTestController extends AbstractController
                     $chunkEnd = \DateTimeImmutable::createFromFormat('U', (string)$chunk['to']);
 
                     if ($chunkStart && $chunkEnd) {
-                        $fetchedKlines = $this->klineProvider->fetchKlinesInWindow(
+                        $fetchedKlines = $this->provider->getKlineProvider()->getKlinesInWindow(
                             $symbol,
                             $timeframe,
                             $chunkStart,
