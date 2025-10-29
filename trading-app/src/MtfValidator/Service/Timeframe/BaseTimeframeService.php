@@ -15,7 +15,7 @@ use App\Repository\KlineRepository;
 use App\Repository\MtfAuditRepository;
 use App\Repository\MtfSwitchRepository;
 use App\Repository\MtfStateRepository;
-use App\Signal\SignalValidationService;
+use App\Contract\Signal\SignalValidationServiceInterface;
 use App\MtfValidator\Service\MtfTimeService;
 use App\MtfValidator\Service\Dto\InternalTimeframeResultDto;
 use App\MtfValidator\Service\Dto\ProcessingContextDto;
@@ -23,7 +23,6 @@ use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;
-use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 
 abstract class BaseTimeframeService implements TimeframeProcessorInterface
 {
@@ -33,7 +32,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
         protected readonly MtfStateRepository $mtfStateRepository,
         protected readonly MtfSwitchRepository $mtfSwitchRepository,
         protected readonly MtfAuditRepository $mtfAuditRepository,
-        protected readonly SignalValidationService $signalValidationService,
+        protected readonly SignalValidationServiceInterface $signalValidationService,
         protected readonly LoggerInterface $logger,
         protected readonly MtfConfigProviderInterface $mtfConfig,
         protected readonly KlineProviderInterface $klineProvider,
@@ -173,12 +172,13 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
 
             // Validation des signaux
             $validationResult = $this->signalValidationService->validate($timeframe->value, $klines, $known, $contract);
-            
+
             // Extraire le signal du timeframe actuel
             $tfLower = strtolower($timeframe->value);
-            $signalSide = $validationResult['final']['signal'] ?? 'NONE';
-            $status = $validationResult['status'] ?? 'FAILED';
-            $signalData = $validationResult['signals'][$tfLower] ?? [];
+            $validationArray = $validationResult->toArray();
+            $signalSide = $validationResult->finalSignalValue();
+            $status = $validationResult->status;
+            $signalData = $validationArray['signals'][$tfLower] ?? [];
             
             // Extraire les informations de la dernière kline
             $lastKline = end($klines);
