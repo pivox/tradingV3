@@ -5,21 +5,24 @@ declare(strict_types=1);
 namespace App\Tests\MtfValidator\Service;
 
 use App\Common\Enum\SignalSide;
-use App\Contract\EntryTrade\TradeContextInterface;
-use App\Contract\EntryTrade\TradingDecisionInterface;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\MtfValidator\Service\TradingDecisionHandler;
+use App\Service\Price\TradingPriceResolution;
 use App\Service\Price\TradingPriceResolver;
+use App\TradeEntry\Dto\TradeEntryRequest;
+use App\TradeEntry\Dto\ExecutionResult;
+use App\TradeEntry\Service\TradeEntryService;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 
 class TradingDecisionHandlerTest extends TestCase
 {
     private TradingDecisionHandler $handler;
-    private TradingDecisionInterface $tradingDecisionService;
-    private TradeContextInterface $tradeContext;
+    /** @var TradeEntryService&MockObject */
+    private TradeEntryService $tradeEntryService;
     private TradingPriceResolver $tradingPriceResolver;
     private AuditLoggerInterface $auditLogger;
     private LoggerInterface $logger;
@@ -27,44 +30,39 @@ class TradingDecisionHandlerTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->tradingDecisionService = $this->createMock(TradingDecisionInterface::class);
-        $this->tradeContext = $this->createMock(TradeContextInterface::class);
+        $this->tradeEntryService = $this->createMock(TradeEntryService::class);
         $this->tradingPriceResolver = $this->createMock(TradingPriceResolver::class);
         $this->auditLogger = $this->createMock(AuditLoggerInterface::class);
         $this->logger = $this->createMock(LoggerInterface::class);
         $this->positionsFlowLogger = $this->createMock(LoggerInterface::class);
 
+        $defaults = [
+            'risk_pct_percent' => 2.0,
+            'initial_margin_usdt' => 100.0,
+            'order_type' => 'limit',
+            'open_type' => 'isolated',
+            'order_mode' => 4,
+            'r_multiple' => 2.0,
+            'stop_from' => 'atr',
+            'atr_k' => 1.5,
+            'market_max_spread_pct' => 0.001,
+            'timeframe_multipliers' => [
+                '1m' => 1.0,
+                '5m' => 0.75,
+            ],
+        ];
+
         $this->handler = new TradingDecisionHandler(
-            $this->tradingDecisionService,
-            $this->tradeContext,
-            $this->tradingPriceResolver,
-            $this->auditLogger,
-            $this->logger,
-            $this->positionsFlowLogger
+            tradeEntryService: $this->tradeEntryService,
+            tradingPriceResolver: $this->tradingPriceResolver,
+            auditLogger: $this->auditLogger,
+            logger: $this->logger,
+            positionsFlowLogger: $this->positionsFlowLogger,
+            tradeEntryDefaults: $defaults,
         );
     }
 
-    public function testHandleTradingDecisionWithError(): void
-    {
-        $symbolResult = new SymbolResultDto('BTCUSDT', 'ERROR');
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
-
-        $result = $this->handler->handleTradingDecision($symbolResult, $dto);
-
-        $this->assertSame($symbolResult, $result);
-    }
-
-    public function testHandleTradingDecisionWithSkipped(): void
-    {
-        $symbolResult = new SymbolResultDto('BTCUSDT', 'SKIPPED');
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
-
-        $result = $this->handler->handleTradingDecision($symbolResult, $dto);
-
-        $this->assertSame($symbolResult, $result);
-    }
-
-    public function testHandleTradingDecisionWithNonReadyStatus(): void
+    public function testHandleTradingDecisionReturnsSameResultWhenNotReady(): void
     {
         $symbolResult = new SymbolResultDto('BTCUSDT', 'PROCESSING');
         $dto = new MtfRunDto(symbols: ['BTCUSDT']);
@@ -74,291 +72,160 @@ class TradingDecisionHandlerTest extends TestCase
         $this->assertSame($symbolResult, $result);
     }
 
-    public function testHandleTradingDecisionWithMissingTradingContext(): void
-    {
-        $symbolResult = new SymbolResultDto('BTCUSDT', 'READY');
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
-
-        $this->tradeContext->expects($this->once())
-            ->method('getAccountBalance')
-            ->willThrowException(new \RuntimeException('Context error'));
-
-        $this->logger->expects($this->once())
-            ->method('warning')
-            ->with('[Trading Decision] Unable to resolve trading context', $this->isType('array'));
-
-        $result = $this->handler->handleTradingDecision($symbolResult, $dto);
-
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertEquals('READY', $result->status);
-        $this->assertIsArray($result->tradingDecision);
-        $this->assertEquals('skipped', $result->tradingDecision['status']);
-        $this->assertEquals('missing_trading_context', $result->tradingDecision['reason']);
-    }
-
-    public function testHandleTradingDecisionWithZeroBalance(): void
-    {
-        $symbolResult = new SymbolResultDto('BTCUSDT', 'READY');
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
-
-        $this->tradeContext->expects($this->once())
-            ->method('getAccountBalance')
-            ->willReturn(0.0);
-
-        $this->tradeContext->expects($this->once())
-            ->method('getRiskPercentage')
-            ->willReturn(0.0);
-
-        $result = $this->handler->handleTradingDecision($symbolResult, $dto);
-
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertEquals('READY', $result->status);
-        $this->assertIsArray($result->tradingDecision);
-        $this->assertEquals('skipped', $result->tradingDecision['status']);
-        $this->assertEquals('missing_trading_context', $result->tradingDecision['reason']);
-    }
-
-    public function testHandleTradingDecisionWithWrongTimeframe(): void
+    public function testHandleTradingDecisionSkipsWhenConditionsNotMet(): void
     {
         $symbolResult = new SymbolResultDto(
             'BTCUSDT',
             'READY',
-            '5m', // Wrong timeframe
-            'BUY',
+            '5m',
+            SignalSide::LONG->value,
             null,
             null,
             null,
             50000.0,
-            100.0
+            null
         );
         $dto = new MtfRunDto(symbols: ['BTCUSDT']);
 
-        $this->tradeContext->expects($this->once())
-            ->method('getAccountBalance')
-            ->willReturn(1000.0);
-
-        $this->tradeContext->expects($this->once())
-            ->method('getRiskPercentage')
-            ->willReturn(0.02);
-
-        $this->logger->expects($this->once())
-            ->method('info')
-            ->with('[Trading Decision] Skipping trading decision (execution_tf not 1m)', $this->isType('array'));
-
         $result = $this->handler->handleTradingDecision($symbolResult, $dto);
 
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertIsArray($result->tradingDecision);
+        $this->assertSame('READY', $result->status);
+        $this->assertNotNull($result->tradingDecision);
         $this->assertEquals('skipped', $result->tradingDecision['status']);
-        $this->assertEquals('execution_tf_not_1m', $result->tradingDecision['reason']);
     }
 
-    public function testHandleTradingDecisionWithMissingPriceOrAtr(): void
+    public function testHandleTradingDecisionWithSuccessfulExecution(): void
     {
         $symbolResult = new SymbolResultDto(
             'BTCUSDT',
             'READY',
             '1m',
-            'BUY',
+            SignalSide::LONG->value,
             null,
             null,
             null,
-            null, // Missing price
-            100.0
+            50250.0,
+            35.0
         );
         $dto = new MtfRunDto(symbols: ['BTCUSDT']);
 
-        $this->tradeContext->expects($this->once())
-            ->method('getAccountBalance')
-            ->willReturn(1000.0);
-
-        $this->tradeContext->expects($this->once())
-            ->method('getRiskPercentage')
-            ->willReturn(0.02);
-
-        $this->logger->expects($this->once())
-            ->method('debug')
-            ->with('[Trading Decision] Missing price or ATR', $this->isType('array'));
-
-        $result = $this->handler->handleTradingDecision($symbolResult, $dto);
-
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertIsArray($result->tradingDecision);
-        $this->assertEquals('skipped', $result->tradingDecision['status']);
-        $this->assertEquals('trading_conditions_not_met', $result->tradingDecision['reason']);
-    }
-
-    public function testHandleTradingDecisionWithPriceResolutionFailure(): void
-    {
-        $symbolResult = new SymbolResultDto(
-            'BTCUSDT',
-            'READY',
-            '1m',
-            'BUY',
-            null,
-            null,
-            null,
-            50000.0,
-            100.0
+        $priceObj = new TradingPriceResolution(
+            price: 50250.0,
+            source: 'test',
+            snapshotPrice: 50250.0,
+            providerPrice: 50255.0,
+            fallbackPrice: null,
+            bestBid: null,
+            bestAsk: null,
+            relativeDiff: null,
+            allowedDiff: null,
+            fallbackEngaged: false
         );
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
 
-        $this->tradeContext->expects($this->once())
-            ->method('getAccountBalance')
-            ->willReturn(1000.0);
-
-        $this->tradeContext->expects($this->once())
-            ->method('getRiskPercentage')
-            ->willReturn(0.02);
-
-        $this->tradingPriceResolver->expects($this->once())
+        $this->tradingPriceResolver
+            ->expects($this->once())
             ->method('resolve')
-            ->willReturn(null);
-
-        $this->logger->expects($this->once())
-            ->method('warning')
-            ->with('[Trading Decision] Unable to resolve trading price', $this->isType('array'));
-
-        $result = $this->handler->handleTradingDecision($symbolResult, $dto);
-
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertIsArray($result->tradingDecision);
-        $this->assertEquals('skipped', $result->tradingDecision['status']);
-        $this->assertEquals('price_resolution_failed', $result->tradingDecision['reason']);
-    }
-
-    public function testHandleTradingDecisionSuccess(): void
-    {
-        $symbolResult = new SymbolResultDto(
-            'BTCUSDT',
-            'READY',
-            '1m',
-            'BUY',
-            null,
-            null,
-            ['context_fully_aligned' => true, 'context_dir' => 'BUY'],
-            50000.0,
-            100.0
-        );
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
-
-        $this->tradeContext->expects($this->once())
-            ->method('getAccountBalance')
-            ->willReturn(1000.0);
-
-        $this->tradeContext->expects($this->once())
-            ->method('getRiskPercentage')
-            ->willReturn(0.02);
-
-        $priceResolution = (object) [
-            'price' => 50000.0,
-            'source' => 'bitmart_last_price'
-        ];
-
-        $this->tradingPriceResolver->expects($this->once())
-            ->method('resolve')
-            ->willReturn($priceResolution);
-
-        $this->tradeContext->expects($this->once())
-            ->method('getTimeframeMultiplier')
-            ->with('1m')
-            ->willReturn(1.0);
-
-        $tradingDecision = [
-            'status' => 'success',
-            'execution_result' => [
-                'main_order' => ['order_id' => 'order123']
-            ]
-        ];
-
-        $this->tradingDecisionService->expects($this->once())
-            ->method('makeTradingDecision')
             ->with(
                 'BTCUSDT',
-                SignalSide::BUY,
-                50000.0,
-                100.0,
-                1000.0,
-                0.02,
-                true, // High conviction
-                1.0
+                SignalSide::LONG,
+                50250.0,
+                35.0
             )
-            ->willReturn($tradingDecision);
+            ->willReturn($priceObj);
 
-        $this->positionsFlowLogger->expects($this->exactly(2))
-            ->method('info');
+        $execution = new ExecutionResult(
+            clientOrderId: 'cid123',
+            exchangeOrderId: 'ex123',
+            status: 'submitted',
+            raw: ['foo' => 'bar']
+        );
 
-        $this->auditLogger->expects($this->once())
-            ->method('logTradingAction')
-            ->with('TRADING_DECISION', 'BTCUSDT', 0.0, 0.0, 'order123');
+        $this->tradeEntryService
+            ->expects($this->once())
+            ->method('buildAndExecute')
+            ->with($this->callback(function (TradeEntryRequest $request): bool {
+                $this->assertEquals('BTCUSDT', $request->symbol);
+                $this->assertEquals('limit', $request->orderType);
+                $this->assertEquals('isolated', $request->openType);
+                $this->assertEquals(4, $request->orderMode);
+                $this->assertEquals(100.0, $request->initialMarginUsdt);
+                $this->assertEqualsWithDelta(0.02, $request->riskPct, 1e-6);
+                $this->assertEquals(50250.0, $request->entryLimitHint);
+
+                return true;
+            }))
+            ->willReturn($execution);
+
+        $this->auditLogger
+            ->expects($this->once())
+            ->method('logAction')
+            ->with(
+                'TRADE_ENTRY_EXECUTED',
+                'TRADE_ENTRY',
+                'BTCUSDT',
+                $this->arrayHasKey('status')
+            );
 
         $result = $this->handler->handleTradingDecision($symbolResult, $dto);
 
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
         $this->assertEquals('READY', $result->status);
-        $this->assertEquals($tradingDecision, $result->tradingDecision);
+        $this->assertEquals('submitted', $result->tradingDecision['status']);
+        $this->assertEquals('cid123', $result->tradingDecision['client_order_id']);
+        $this->assertEquals('ex123', $result->tradingDecision['exchange_order_id']);
     }
 
-    public function testHandleTradingDecisionWithTradingServiceError(): void
+    public function testHandleTradingDecisionHandlesException(): void
     {
         $symbolResult = new SymbolResultDto(
             'BTCUSDT',
             'READY',
             '1m',
-            'BUY',
+            SignalSide::SHORT->value,
             null,
             null,
             null,
-            50000.0,
-            100.0
+            20000.0,
+            20.0
         );
         $dto = new MtfRunDto(symbols: ['BTCUSDT']);
 
-        $this->tradeContext->expects($this->once())
-            ->method('getAccountBalance')
-            ->willReturn(1000.0);
+        $priceObj = new TradingPriceResolution(
+            price: 20000.0,
+            source: 'test',
+            snapshotPrice: 20000.0,
+            providerPrice: 20001.0,
+            fallbackPrice: null,
+            bestBid: null,
+            bestAsk: null,
+            relativeDiff: null,
+            allowedDiff: null,
+            fallbackEngaged: false
+        );
 
-        $this->tradeContext->expects($this->once())
-            ->method('getRiskPercentage')
-            ->willReturn(0.02);
-
-        $priceResolution = (object) ['price' => 50000.0];
-
-        $this->tradingPriceResolver->expects($this->once())
+        $this->tradingPriceResolver
+            ->expects($this->once())
             ->method('resolve')
-            ->willReturn($priceResolution);
+            ->willReturn($priceObj);
 
-        $this->tradeContext->expects($this->once())
-            ->method('getTimeframeMultiplier')
-            ->willReturn(1.0);
+        $this->tradeEntryService
+            ->expects($this->once())
+            ->method('buildAndExecute')
+            ->willThrowException(new \RuntimeException('exchange failure'));
 
-        $this->tradingDecisionService->expects($this->once())
-            ->method('makeTradingDecision')
-            ->willThrowException(new \RuntimeException('Trading service error'));
-
-        $this->logger->expects($this->once())
-            ->method('error')
-            ->with('[Trading Decision] Failed to execute trading decision', $this->isType('array'));
-
-        $this->positionsFlowLogger->expects($this->once())
-            ->method('error');
+        $this->auditLogger
+            ->expects($this->once())
+            ->method('logAction')
+            ->with(
+                'TRADE_ENTRY_FAILED',
+                'TRADE_ENTRY',
+                'BTCUSDT',
+                $this->arrayHasKey('error')
+            );
 
         $result = $this->handler->handleTradingDecision($symbolResult, $dto);
 
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
         $this->assertEquals('READY', $result->status);
-        $this->assertIsArray($result->tradingDecision);
         $this->assertEquals('error', $result->tradingDecision['status']);
-        $this->assertEquals('Trading service error', $result->tradingDecision['error']);
-    }
-
-    public function testHandleTradingDecisionWithDryRun(): void
-    {
-        $symbolResult = new SymbolResultDto('BTCUSDT', 'READY');
-        $dto = new MtfRunDto(symbols: ['BTCUSDT'], dryRun: true);
-
-        $result = $this->handler->handleTradingDecision($symbolResult, $dto);
-
-        $this->assertSame($symbolResult, $result);
+        $this->assertEquals('exchange failure', $result->tradingDecision['error']);
     }
 }
