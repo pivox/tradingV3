@@ -6,14 +6,12 @@ namespace App\MtfValidator\Service;
 
 use App\Common\Enum\Timeframe;
 use App\Config\MtfConfigProviderInterface;
-use App\Entity\Contract;
+use App\Contract\MtfValidator\Dto\ValidationContextDto;
+use App\Contract\MtfValidator\TimeframeProcessorInterface;
 use App\Entity\MtfAudit;
 use App\Event\MtfAuditEvent;
-use App\Contract\Provider\ProviderInterface;
 use App\Contract\Provider\KlineProviderInterface;
-use App\Provider\Bitmart\Dto\KlineDto;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
-use App\Provider\Bitmart\Service\BitmartKlineProvider;
 use App\Provider\Bitmart\Service\KlineJsonIngestionService;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
@@ -212,7 +210,15 @@ final class MtfService
                 default => throw new \InvalidArgumentException("Invalid timeframe: $currentTf")
             };
 
-            $result = $timeframeService->processTimeframe($symbol, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
+            $result = $this->runTimeframeProcessor(
+                $timeframeService,
+                $symbol,
+                $runId,
+                $now,
+                $validationStates,
+                $forceTimeframeCheck,
+                $forceRun
+            );
             if (($result['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, strtoupper($currentTf) . '_VALIDATION_FAILED', $result['reason'] ?? "$currentTf validation failed");
                 return $result + ['failed_timeframe' => $currentTf];
@@ -247,7 +253,15 @@ final class MtfService
 
         $result4h = null;
         if ($include4h) {
-            $result4h = $this->timeframe4hService->processTimeframe($symbol, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
+            $result4h = $this->runTimeframeProcessor(
+                $this->timeframe4hService,
+                $symbol,
+                $runId,
+                $now,
+                $validationStates,
+                $forceTimeframeCheck,
+                $forceRun
+            );
             if (($result4h['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '4H_VALIDATION_FAILED', $result4h['reason'] ?? '4H validation failed', [
                     'timeframe' => '4h',
@@ -268,7 +282,15 @@ final class MtfService
 
         $result1h = null;
         if ($include1h) {
-            $result1h = $this->timeframe1hService->processTimeframe($symbol, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
+            $result1h = $this->runTimeframeProcessor(
+                $this->timeframe1hService,
+                $symbol,
+                $runId,
+                $now,
+                $validationStates,
+                $forceTimeframeCheck,
+                $forceRun
+            );
             if (($result1h['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '1H_VALIDATION_FAILED', $result1h['reason'] ?? '1H validation failed', [
                     'timeframe' => '1h',
@@ -304,7 +326,15 @@ final class MtfService
         // Étape 15m (seulement si incluse)
         $result15m = null;
         if ($include15m) {
-            $result15m = $this->timeframe15mService->processTimeframe($symbol, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
+            $result15m = $this->runTimeframeProcessor(
+                $this->timeframe15mService,
+                $symbol,
+                $runId,
+                $now,
+                $validationStates,
+                $forceTimeframeCheck,
+                $forceRun
+            );
             if (($result15m['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '15M_VALIDATION_FAILED', $result15m['reason'] ?? '15M validation failed', [
                     'timeframe' => '15m',
@@ -340,7 +370,15 @@ final class MtfService
         // Étape 5m (seulement si incluse)
         $result5m = null;
         if ($include5m) {
-            $result5m = $this->timeframe5mService->processTimeframe($symbol, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
+            $result5m = $this->runTimeframeProcessor(
+                $this->timeframe5mService,
+                $symbol,
+                $runId,
+                $now,
+                $validationStates,
+                $forceTimeframeCheck,
+                $forceRun
+            );
             if (($result5m['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '5M_VALIDATION_FAILED', $result5m['reason'] ?? '5M validation failed', [
                     'timeframe' => '5m',
@@ -376,7 +414,15 @@ final class MtfService
         // Étape 1m (seulement si incluse)
         $result1m = null;
         if ($include1m) {
-            $result1m = $this->timeframe1mService->processTimeframe($symbol, $runId, $now, $validationStates, $forceTimeframeCheck, $forceRun);
+            $result1m = $this->runTimeframeProcessor(
+                $this->timeframe1mService,
+                $symbol,
+                $runId,
+                $now,
+                $validationStates,
+                $forceTimeframeCheck,
+                $forceRun
+            );
             if (($result1m['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '1M_VALIDATION_FAILED', $result1m['reason'] ?? '1M validation failed', [
                     'timeframe' => '1m',
@@ -479,6 +525,42 @@ final class MtfService
             'indicator_context' => $selectedContext,
             'execution_tf' => $currentTf,
         ];
+    }
+
+    /**
+     * Appelle un processeur de timeframe en respectant le nouveau contrat
+     *
+     * @param array<int, array<string, mixed>> $collector
+     * @return array<string, mixed>
+     */
+    private function runTimeframeProcessor(
+        TimeframeProcessorInterface $processor,
+        string $symbol,
+        UuidInterface $runId,
+        \DateTimeImmutable $now,
+        array &$collector,
+        bool $forceTimeframeCheck,
+        bool $forceRun
+    ): array {
+        $context = ValidationContextDto::create(
+            runId: $runId->toString(),
+            now: $now,
+            collector: $collector,
+            forceTimeframeCheck: $forceTimeframeCheck,
+            forceRun: $forceRun
+        );
+
+        $resultDto = $processor->processTimeframe($symbol, $context);
+        $result = $resultDto->toArray();
+
+        $collector[] = [
+            'tf' => $resultDto->timeframe,
+            'status' => $resultDto->status,
+            'signal_side' => $resultDto->signalSide ?? 'NONE',
+            'kline_time' => $resultDto->klineTime,
+        ];
+
+        return $result;
     }
 
     /**
