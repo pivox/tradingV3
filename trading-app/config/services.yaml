@@ -175,11 +175,6 @@ services:
         arguments:
             $path: '%kernel.project_dir%/config/app/mtf_validations.yaml'
 
-    # Auto-tag des services de signaux par timeframe
-    _instanceof:
-        App\Signal\SignalServiceInterface:
-            tags: ['app.signal.timeframe']
-
     # Registre des conditions: injection automatique via AutowireLocator/AutowireIterator
     App\Indicator\ConditionLoader\ConditionRegistry:
         arguments:
@@ -204,12 +199,6 @@ services:
             $adx: '@App\Indicator\Core\Trend\Adx'
             $vwap: '@App\Indicator\Core\Volume\Vwap'
             $atrCalc: '@App\Indicator\Core\AtrCalculator'
-
-    # Validation des signaux: injecter tous les services timeframe taggés
-    App\Signal\SignalValidationService:
-        arguments:
-            $timeframeServices: !tagged_iterator 'app.signal.timeframe'
-            $validationLogger: '@logger'
 
     # Contrôleur de test des indicateurs
     App\Controller\Web\IndicatorTestController:

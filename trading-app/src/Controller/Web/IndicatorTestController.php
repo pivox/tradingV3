@@ -9,7 +9,7 @@ use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Service\KlineDataService;
 use App\Service\TradingConfigService;
-use App\Signal\SignalValidationService;
+use App\Contract\Signal\SignalValidationServiceInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -25,7 +25,7 @@ class IndicatorTestController extends AbstractController
     private ContractRepository $contractRepository;
     private KlineRepository $klineRepository;
     private KlineProviderPort $klineProvider;
-    private SignalValidationService $signalValidationService;
+    private SignalValidationServiceInterface $signalValidationService;
 
     public function __construct(
         IndicatorMainProviderInterface $indicatorMain,
@@ -34,7 +34,7 @@ class IndicatorTestController extends AbstractController
         ContractRepository $contractRepository,
         KlineRepository $klineRepository,
         KlineProviderPort $klineProvider,
-        SignalValidationService $signalValidationService
+        SignalValidationServiceInterface $signalValidationService
     ) {
         $this->indicatorMain = $indicatorMain;
         $this->tradingConfigService = $tradingConfigService;
@@ -418,7 +418,8 @@ class IndicatorTestController extends AbstractController
                     usort($klines, fn($a, $b) => $a->getOpenTime() <=> $b->getOpenTime());
 
                     // Utiliser SignalValidationService pour la validation
-                    $validationResult = $this->signalValidationService->validate($timeframe, $klines, $knownSignals, $contractEntity);
+                    $validationResultDto = $this->signalValidationService->validate($timeframe, $klines, $knownSignals, $contractEntity);
+                    $validationResult = $validationResultDto->toArray();
 
                     // Extraire les informations des klines utilisées
                     $klinesInfo = [
@@ -432,11 +433,12 @@ class IndicatorTestController extends AbstractController
                     ];
 
                     // Mettre à jour les signaux connus pour le contexte MTF
-                    $knownSignals[$timeframe] = $validationResult['signals'][$timeframe] ?? [];
+                    $lowerTf = strtolower($timeframe);
+                    $knownSignals[$timeframe] = $validationResult['signals'][$lowerTf] ?? [];
 
                     $results[$timeframe] = [
-                        'status' => $validationResult['status'],
-                        'signal' => $validationResult['final']['signal'],
+                        'status' => $validationResultDto->status,
+                        'signal' => $validationResultDto->finalSignalValue(),
                         'validation_result' => $validationResult,
                         'klines_used' => $klinesInfo,
                         'context_summary' => [
@@ -449,9 +451,9 @@ class IndicatorTestController extends AbstractController
                     ];
 
                     // Mettre à jour le statut global basé sur le statut MTF
-                    if ($validationResult['status'] === 'FAILED' && $overallStatus === 'valid') {
+                    if ($validationResultDto->status === 'FAILED' && $overallStatus === 'valid') {
                         $overallStatus = 'partial';
-                    } elseif ($validationResult['status'] === 'VALIDATED') {
+                    } elseif ($validationResultDto->status === 'VALIDATED') {
                         $overallStatus = 'valid';
                     }
 
