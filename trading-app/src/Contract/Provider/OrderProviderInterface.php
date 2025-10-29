@@ -54,4 +54,6 @@ interface OrderProviderInterface
 
     public function getOrderBookTop(string $symbol): SymbolBidAskDto;
 
+    public function submitLeverage(string $symbol, int $leverage, string $openType = 'isolated'): bool;
+
 }
