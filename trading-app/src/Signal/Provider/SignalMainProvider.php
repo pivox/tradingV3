@@ -19,7 +19,7 @@ final readonly class SignalMainProvider implements SignalMainProviderInterface
     /**
      * @var list<SignalServiceInterface>
      */
-    private array $timeframeServices;
+    private readonly array $timeframeServices;
 
     /**
      * @param iterable<SignalServiceInterface> $timeframeServices
@@ -29,12 +29,13 @@ final readonly class SignalMainProvider implements SignalMainProviderInterface
         iterable $timeframeServices,
         private SignalValidationServiceInterface $validationService,
     ) {
-        $this->timeframeServices = [];
+        $services = [];
         foreach ($timeframeServices as $service) {
             if ($service instanceof SignalServiceInterface) {
-                $this->timeframeServices[] = $service;
+                $services[] = $service;
             }
         }
+        $this->timeframeServices = $services;
     }
 
     public function getTimeframeServices(): iterable
