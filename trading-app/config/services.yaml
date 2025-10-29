@@ -287,9 +287,9 @@ services:
     # Plus besoin de l'attribut #[AsService]; ajouter des configs spécifiques si nécessaire.
     
     # Configuration TradeEntry avec paramètres par défaut
-    App\TradeEntry\PreOrder\PreOrderBuilder:
-        arguments:
-            $defaults: '%trade_entry.defaults%'
+    # App\TradeEntry\PreOrder\PreOrderBuilder:
+    #     arguments:
+    #         $defaults: '%trade_entry.defaults%'
     
     # Logger spécifique pour TradeEntry
     monolog.logger.trade_entry:
