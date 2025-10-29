@@ -2,12 +2,12 @@
 
 namespace App\Signal;
 
-use App\Entity\Contract;
 use App\Config\TradingParameters;
-use App\Entity\Kline;
+use App\Contract\Indicator\IndicatorMainProviderInterface;
+use App\Contract\Signal\SignalServiceInterface;
+use App\Entity\Contract;
 use App\Repository\MtfSwitchRepository;
 use Psr\Log\LoggerInterface;
-use App\Contract\Indicator\IndicatorMainProviderInterface;
 
 abstract class AbstractSignal implements SignalServiceInterface
 {

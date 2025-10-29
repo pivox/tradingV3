@@ -1,17 +1,31 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Signal;
 
-use App\Entity\Kline;
-use App\Entity\Contract;
-use Psr\Log\LoggerInterface;
+use App\Common\Enum\SignalSide;
+use App\Common\Enum\Timeframe;
 use App\Config\MtfConfigProviderInterface;
+use App\Contract\Signal\Dto\SignalEvaluationDto;
+use App\Contract\Signal\Dto\SignalValidationContextDto;
+use App\Contract\Signal\Dto\SignalValidationResultDto;
+use App\Contract\Signal\SignalServiceInterface;
+use App\Contract\Signal\SignalValidationServiceInterface;
+use App\Entity\Contract;
+use App\Entity\Kline;
+use DateTimeImmutable;
+use DateTimeZone;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\AsAlias;
+use Symfony\Component\DependencyInjection\Attribute\TaggedIterator;
 
 /**
  * Validation unique d'un timeframe + encapsulation du statut MTF attendu par le contrôleur.
  * Remplace l'ancien SignalService + SignalValidationService (namespace Signals\Timeframe).
  */
-final class SignalValidationService
+#[AsAlias(id: SignalValidationServiceInterface::class)]
+final class SignalValidationService implements SignalValidationServiceInterface
 {
     private const VALIDATION_KEY = 'validation';
 
@@ -19,9 +33,11 @@ final class SignalValidationService
     private array $services = [];
 
     public function __construct(
+        #[TaggedIterator('app.signal.timeframe')]
         iterable $timeframeServices,
         private readonly LoggerInterface $validationLogger,
         private readonly MtfConfigProviderInterface $tradingParameters,
+        private readonly SignalPersistenceService $signalPersistenceService,
     ) {
         foreach ($timeframeServices as $svc) {
             if ($svc instanceof SignalServiceInterface) {
@@ -44,8 +60,9 @@ final class SignalValidationService
             }
         }
 
-        $nonNoneSignals = array_filter($contextSignals, fn($v) => $v !== 'NONE');
-        $contextAligned = false; $contextDir = 'NONE';
+        $nonNoneSignals = array_filter($contextSignals, static fn($v) => $v !== 'NONE');
+        $contextAligned = false;
+        $contextDir = 'NONE';
         if ($nonNoneSignals !== []) {
             $uniqNonNone = array_unique($nonNoneSignals);
             if (count($uniqNonNone) === 1) {
@@ -67,95 +84,174 @@ final class SignalValidationService
     }
 
     /**
-     * @param string $tf
      * @param Kline[] $klines
      * @param array<string,array{signal?:string}> $knownSignals
-     * @return array{signals:array,final:array{signal:string},status:string}
      */
-    public function validate(string $tf, array $klines, array $knownSignals = [], ?Contract $contract = null): array
+    public function validate(string $tf, array $klines, array $knownSignals = [], ?Contract $contract = null): SignalValidationResultDto
     {
         $tfLower = strtolower($tf);
-        $svc = $this->findService($tfLower);
-        if (!$svc) {
-            return [
-                'signals' => [$tfLower => ['signal' => 'NONE', 'reason' => 'unsupported_tf']],
-                'final'   => ['signal' => 'NONE'],
-                'status'  => 'FAILED',
-                'context' => [ 'context_aligned' => false, 'context_dir' => 'NONE', 'context_signals' => [] ],
-            ];
-        }
-        $cfg = $this->tradingParameters->getConfig();
-        $contextTfs = array_map('strtolower', (array)($cfg[self::VALIDATION_KEY]['context'] ?? ($cfg['mtf']['context'] ?? [])));
-        $execTfs    = array_map('strtolower', (array)($cfg[self::VALIDATION_KEY]['execution'] ?? ($cfg['mtf']['execution'] ?? [])));
-        $evaluation = $svc->evaluate($contract ?? new Contract(), $klines, []);
-        $curr = strtoupper((string)($evaluation['signal'] ?? 'NONE'));
+        $timeframeEnum = $this->resolveTimeframe($tfLower);
+        $service = $this->findService($tfLower);
 
-        $summary = $this->buildContextSummary($knownSignals, $tfLower, $curr);
+        if (!$service) {
+            $evaluation = new SignalEvaluationDto(
+                timeframe: $timeframeEnum,
+                signal: SignalSide::NONE,
+                payload: ['reason' => 'unsupported_tf']
+            );
+            $context = new SignalValidationContextDto([], false, 'NONE', [], false, false);
+            return new SignalValidationResultDto($evaluation, $context, 'FAILED', SignalSide::NONE);
+        }
+
+        $contractEntity = $contract ?? new Contract();
+        $evaluationPayload = $service->evaluate($contractEntity, $klines, []);
+        $currentSignalValue = strtoupper((string)($evaluationPayload['signal'] ?? 'NONE'));
+        $currentSignal = SignalSide::from($currentSignalValue);
+
+        $config = $this->tradingParameters->getConfig();
+        $contextTfs = array_map('strtolower', (array)($config[self::VALIDATION_KEY]['context'] ?? ($config['mtf']['context'] ?? [])));
+        $executionTfs = array_map('strtolower', (array)($config[self::VALIDATION_KEY]['execution'] ?? ($config['mtf']['execution'] ?? [])));
+
+        $summary = $this->buildContextSummary($knownSignals, $tfLower, $currentSignalValue);
         $contextSignals = $summary['context_signals'];
-        $contextAligned = $summary['context_aligned'];
-        $contextDir = $summary['context_dir'];
-        $fullyPopulated = $summary['context_fully_populated'];
-        $fullyAligned = $summary['context_fully_aligned'];
 
         $isContextTf = in_array($tfLower, $contextTfs, true);
-        $isExecTf    = in_array($tfLower, $execTfs, true);
+        $isExecutionTf = in_array($tfLower, $executionTfs, true);
 
         $status = 'FAILED';
         if ($isContextTf) {
             $idx = array_search($tfLower, $contextTfs, true);
             if ($idx === 0) {
-                $status = in_array($curr, ['LONG','SHORT'], true) ? 'PENDING' : 'FAILED';
+                $status = $currentSignal->isNone() ? 'FAILED' : 'PENDING';
             } else {
                 $partial = array_slice($contextTfs, 0, $idx + 1);
                 $partialSignals = array_intersect_key($contextSignals, array_flip($partial));
                 $uniquePart = array_unique($partialSignals);
-                $nonNonePart = array_filter($uniquePart, fn($v) => $v !== 'NONE');
+                $nonNonePart = array_filter($uniquePart, static fn($v) => $v !== 'NONE');
                 $alignedPartial = (count($nonNonePart) === 1 && count($uniquePart) === 1);
-                $status = ($alignedPartial && $curr !== 'NONE') ? 'PENDING' : 'FAILED';
+                $status = ($alignedPartial && !$currentSignal->isNone()) ? 'PENDING' : 'FAILED';
             }
-        } elseif ($isExecTf) {
-            // Exige alignement complet (tous context TF présents) pour valider.
-            if ($fullyAligned && $curr === $contextDir && $curr !== 'NONE') {
-                $status = 'VALIDATED';
-            }
+        } elseif ($isExecutionTf && $summary['context_fully_aligned'] && $currentSignalValue === $summary['context_dir'] && !$currentSignal->isNone()) {
+            $status = 'VALIDATED';
         }
 
-        $out = [
-            'signals' => [$tfLower => $evaluation + [
-                'context_aligned' => $contextAligned,
-                'context_dir'     => $contextDir,
-                'context_signals' => $contextSignals,
-                'context_fully_populated' => $fullyPopulated,
-                'context_fully_aligned' => $fullyAligned,
-            ]],
-            'final'   => ['signal' => $curr],
-            'status'  => $status,
-            'context' => [
-                'aligned' => $contextAligned,
-                'dir' => $contextDir,
-                'signals' => $contextSignals,
-                'fully_populated' => $fullyPopulated,
-                'fully_aligned' => $fullyAligned,
-            ],
-        ];
+        $evaluationDto = new SignalEvaluationDto(
+            timeframe: $timeframeEnum,
+            signal: $currentSignal,
+            payload: array_diff_key($evaluationPayload, ['signal' => true, 'timeframe' => true])
+        );
+
+        $contextDto = new SignalValidationContextDto(
+            signals: $contextSignals,
+            aligned: $summary['context_aligned'],
+            direction: $summary['context_dir'],
+            timeframes: $summary['context_tfs'],
+            fullyPopulated: $summary['context_fully_populated'],
+            fullyAligned: $summary['context_fully_aligned'],
+        );
+
+        $result = new SignalValidationResultDto(
+            evaluation: $evaluationDto,
+            context: $contextDto,
+            status: $status,
+            finalSignal: $currentSignal,
+        );
+
+        $this->persistValidationResult($result, $contractEntity, $klines, $knownSignals);
+
         $this->validationLogger->info('validation.mtf_status', [
             'tf' => $tfLower,
             'status' => $status,
-            'curr' => $curr,
-            'context_aligned' => $contextAligned,
-            'context_dir' => $contextDir,
+            'curr' => $currentSignalValue,
+            'context_aligned' => $summary['context_aligned'],
+            'context_dir' => $summary['context_dir'],
             'context_signals' => $contextSignals,
-            'fully_populated' => $fullyPopulated,
-            'fully_aligned' => $fullyAligned,
+            'fully_populated' => $summary['context_fully_populated'],
+            'fully_aligned' => $summary['context_fully_aligned'],
         ]);
-        return $out;
+
+        return $result;
     }
 
     private function findService(string $tf): ?SignalServiceInterface
     {
         foreach ($this->services as $svc) {
-            if ($svc->supportsTimeframe($tf)) { return $svc; }
+            if ($svc->supportsTimeframe($tf)) {
+                return $svc;
+            }
         }
+
         return null;
+    }
+
+    private function resolveTimeframe(string $tf): Timeframe
+    {
+        return Timeframe::from($tf);
+    }
+
+    /**
+     * @param Kline[] $klines
+     */
+    private function persistValidationResult(
+        SignalValidationResultDto $result,
+        Contract $contract,
+        array $klines,
+        array $knownSignals
+    ): void {
+        $symbol = $this->resolveSymbol($contract, $klines);
+        if ($symbol === null) {
+            return;
+        }
+
+        $klineTime = $this->resolveKlineTime($klines);
+        $meta = [
+            'known_signals' => $knownSignals,
+            'persisted_by' => 'signal_validation_service',
+        ];
+
+        $signalDto = $result->toSignalDto($symbol, $klineTime, $meta);
+
+        $this->signalPersistenceService->persistMtfSignal(
+            $signalDto,
+            $result->context->signals,
+            $result->toArray()
+        );
+    }
+
+    /**
+     * @param Kline[] $klines
+     */
+    private function resolveSymbol(Contract $contract, array $klines): ?string
+    {
+        $symbol = null;
+        try {
+            $symbol = $contract->getSymbol();
+        } catch (\Error) {
+            $symbol = null;
+        }
+
+        if (!empty($symbol)) {
+            return $symbol;
+        }
+
+        $lastKline = end($klines);
+        if ($lastKline instanceof Kline) {
+            return $lastKline->getSymbol();
+        }
+
+        return null;
+    }
+
+    /**
+     * @param Kline[] $klines
+     */
+    private function resolveKlineTime(array $klines): DateTimeImmutable
+    {
+        $lastKline = end($klines);
+        if ($lastKline instanceof Kline) {
+            return $lastKline->getOpenTime();
+        }
+
+        return new DateTimeImmutable('now', new DateTimeZone('UTC'));
     }
 }

@@ -67,7 +67,6 @@ final class TraceableHttpClient implements HttpClientInterface, ResetInterface, 
                 $onProgress($dlNow, $dlSize, $info);
             }
         };
-
         return new TraceableResponse($this->client, $this->client->request($method, $url, $options), $content, $this->stopwatch?->start("$method $url", 'http_client'));
     }
 

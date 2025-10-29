@@ -10,7 +10,9 @@ use App\Config\TradingParameters;
 use App\Contract\Indicator\IndicatorMainProviderInterface;
 use App\Repository\MtfSwitchRepository;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
+#[AutoconfigureTag('app.signal.timeframe')]
 final class Signal5mService extends AbstractSignal
 {
     public function __construct(
