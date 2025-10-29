@@ -28,7 +28,7 @@ final class BitmartAccountProvider implements AccountProviderInterface
     public function getAccountInfo(): ?AccountDto
     {
         try {
-            $response = $this->bitmartClient->request('GET', '/contract/private/account');
+            $response = $this->bitmartClient->getAccount();
             
             if (isset($response['data'])) {
                 return AccountDto::fromArray($response['data']);
@@ -59,12 +59,7 @@ final class BitmartAccountProvider implements AccountProviderInterface
     public function getOpenPositions(?string $symbol = null): array
     {
         try {
-            $query = [];
-            if ($symbol !== null) {
-                $query['symbol'] = $symbol;
-            }
-
-            $response = $this->bitmartClient->request('GET', '/contract/private/position', $query);
+            $response = $this->bitmartClient->getPositions($symbol);
             
             if (isset($response['data']['positions'])) {
                 return array_map(fn($position) => PositionDto::fromArray($position), $response['data']['positions']);
@@ -97,10 +92,7 @@ final class BitmartAccountProvider implements AccountProviderInterface
     public function getTradeHistory(string $symbol, int $limit = 100): array
     {
         try {
-            $response = $this->bitmartClient->request('GET', '/contract/private/order-history', [
-                'symbol' => $symbol,
-                'limit' => $limit
-            ]);
+            $response = $this->bitmartClient->getOrderHistory($symbol, $limit);
 
             if (isset($response['data']['trades'])) {
                 return $response['data']['trades'];
@@ -119,9 +111,7 @@ final class BitmartAccountProvider implements AccountProviderInterface
     public function getTradingFees(string $symbol): array
     {
         try {
-            $response = $this->bitmartClient->request('GET', '/contract/private/fee-rate', [
-                'symbol' => $symbol
-            ]);
+            $response = $this->bitmartClient->getFeeRate($symbol);
 
             if (isset($response['data'])) {
                 return $response['data'];
@@ -140,7 +130,7 @@ final class BitmartAccountProvider implements AccountProviderInterface
     public function healthCheck(): bool
     {
         try {
-            $this->bitmartClient->request('GET', '/contract/private/account');
+            $this->bitmartClient->getAccount();
             return true;
         } catch (\Exception $e) {
             return false;
