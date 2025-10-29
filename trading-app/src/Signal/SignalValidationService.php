@@ -14,6 +14,7 @@ use App\Contract\Signal\SignalServiceInterface;
 use App\Contract\Signal\SignalValidationServiceInterface;
 use App\Entity\Contract;
 use App\Entity\Kline;
+use App\Repository\ContractRepository;
 use DateTimeImmutable;
 use DateTimeZone;
 use Psr\Log\LoggerInterface;
@@ -38,6 +39,7 @@ final class SignalValidationService implements SignalValidationServiceInterface
         private readonly LoggerInterface $validationLogger,
         private readonly MtfConfigProviderInterface $tradingParameters,
         private readonly SignalPersistenceService $signalPersistenceService,
+        private readonly ContractRepository $contractRepository,
     ) {
         foreach ($timeframeServices as $svc) {
             if ($svc instanceof SignalServiceInterface) {
@@ -90,20 +92,27 @@ final class SignalValidationService implements SignalValidationServiceInterface
     public function validate(string $tf, array $klines, array $knownSignals = [], ?Contract $contract = null): SignalValidationResultDto
     {
         $tfLower = strtolower($tf);
-        $timeframeEnum = $this->resolveTimeframe($tfLower);
         $service = $this->findService($tfLower);
+        $timeframeEnum = Timeframe::tryFrom($tfLower);
 
-        if (!$service) {
-            $evaluation = new SignalEvaluationDto(
-                timeframe: $timeframeEnum,
-                signal: SignalSide::NONE,
-                payload: ['reason' => 'unsupported_tf']
-            );
-            $context = new SignalValidationContextDto([], false, 'NONE', [], false, false);
-            return new SignalValidationResultDto($evaluation, $context, 'FAILED', SignalSide::NONE);
+        if ($timeframeEnum === null) {
+            return $this->buildUnsupportedResult($tfLower, 'unknown_timeframe');
         }
 
-        $contractEntity = $contract ?? new Contract();
+        if (!$service) {
+            return $this->buildUnsupportedResult($tfLower, 'missing_service');
+        }
+
+        $contractEntity = $this->prepareContract($contract, $klines);
+        if ($contractEntity === null) {
+            $this->validationLogger->warning('validation.missing_symbol', [
+                'tf' => $tfLower,
+                'known_signals' => array_keys($knownSignals),
+            ]);
+
+            return $this->buildMissingSymbolResult($timeframeEnum);
+        }
+
         $evaluationPayload = $service->evaluate($contractEntity, $klines, []);
         $currentSignalValue = strtoupper((string)($evaluationPayload['signal'] ?? 'NONE'));
         $currentSignal = SignalSide::from($currentSignalValue);
@@ -184,9 +193,111 @@ final class SignalValidationService implements SignalValidationServiceInterface
         return null;
     }
 
-    private function resolveTimeframe(string $tf): Timeframe
+    /**
+     * @param Kline[] $klines
+     */
+    private function prepareContract(?Contract $contract, array $klines): ?Contract
     {
-        return Timeframe::from($tf);
+        if ($contract instanceof Contract) {
+            $this->hydrateContractSymbol($contract, $klines);
+
+            return $contract;
+        }
+
+        $symbol = $this->extractSymbolFromKlines($klines);
+        if ($symbol === null) {
+            return null;
+        }
+
+        $existingContract = $this->contractRepository->findBySymbol($symbol);
+        if ($existingContract instanceof Contract) {
+            return $existingContract;
+        }
+
+        $newContract = new Contract();
+        $newContract->setSymbol($symbol);
+
+        return $newContract;
+    }
+
+    /**
+     * @param Kline[] $klines
+     */
+    private function hydrateContractSymbol(Contract $contract, array $klines): void
+    {
+        $symbol = null;
+
+        try {
+            $symbol = $contract->getSymbol();
+        } catch (\Error) {
+            $symbol = null;
+        }
+
+        if (!empty($symbol)) {
+            return;
+        }
+
+        $klineSymbol = $this->extractSymbolFromKlines($klines);
+        if ($klineSymbol !== null) {
+            $contract->setSymbol($klineSymbol);
+        }
+    }
+
+    /**
+     * @param Kline[] $klines
+     */
+    private function extractSymbolFromKlines(array $klines): ?string
+    {
+        $lastKline = end($klines);
+        if ($lastKline instanceof Kline) {
+            return $lastKline->getSymbol();
+        }
+
+        return null;
+    }
+
+    private function buildUnsupportedResult(string $tf, string $reason): SignalValidationResultDto
+    {
+        $this->validationLogger->warning('validation.unsupported_timeframe', [
+            'tf' => $tf,
+            'reason' => $reason,
+        ]);
+
+        $timeframeEnum = Timeframe::tryFrom($tf);
+        if ($timeframeEnum === null) {
+            $cases = Timeframe::cases();
+            $timeframeEnum = reset($cases);
+            if (!$timeframeEnum instanceof Timeframe) {
+                throw new \RuntimeException('No timeframe cases configured');
+            }
+        }
+
+        $evaluation = new SignalEvaluationDto(
+            timeframe: $timeframeEnum,
+            signal: SignalSide::NONE,
+            payload: [
+                'reason' => 'unsupported_tf',
+                'requested_timeframe' => $tf,
+                'details' => $reason,
+            ]
+        );
+
+        $context = new SignalValidationContextDto([], false, 'NONE', [], false, false);
+
+        return new SignalValidationResultDto($evaluation, $context, 'FAILED', SignalSide::NONE);
+    }
+
+    private function buildMissingSymbolResult(Timeframe $timeframe): SignalValidationResultDto
+    {
+        $evaluation = new SignalEvaluationDto(
+            timeframe: $timeframe,
+            signal: SignalSide::NONE,
+            payload: ['reason' => 'missing_symbol']
+        );
+
+        $context = new SignalValidationContextDto([], false, 'NONE', [], false, false);
+
+        return new SignalValidationResultDto($evaluation, $context, 'FAILED', SignalSide::NONE);
     }
 
     /**
@@ -234,12 +345,7 @@ final class SignalValidationService implements SignalValidationServiceInterface
             return $symbol;
         }
 
-        $lastKline = end($klines);
-        if ($lastKline instanceof Kline) {
-            return $lastKline->getSymbol();
-        }
-
-        return null;
+        return $this->extractSymbolFromKlines($klines);
     }
 
     /**
