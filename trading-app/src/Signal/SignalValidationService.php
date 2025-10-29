@@ -92,17 +92,15 @@ final class SignalValidationService implements SignalValidationServiceInterface
     public function validate(string $tf, array $klines, array $knownSignals = [], ?Contract $contract = null): SignalValidationResultDto
     {
         $tfLower = strtolower($tf);
-        $timeframeEnum = $this->resolveTimeframe($tfLower);
         $service = $this->findService($tfLower);
+        $timeframeEnum = Timeframe::tryFrom($tfLower);
+
+        if ($timeframeEnum === null) {
+            return $this->buildUnsupportedResult($tfLower, 'unknown_timeframe');
+        }
 
         if (!$service) {
-            $evaluation = new SignalEvaluationDto(
-                timeframe: $timeframeEnum,
-                signal: SignalSide::NONE,
-                payload: ['reason' => 'unsupported_tf']
-            );
-            $context = new SignalValidationContextDto([], false, 'NONE', [], false, false);
-            return new SignalValidationResultDto($evaluation, $context, 'FAILED', SignalSide::NONE);
+            return $this->buildUnsupportedResult($tfLower, 'missing_service');
         }
 
         $contractEntity = $this->prepareContract($contract, $klines);
@@ -112,14 +110,7 @@ final class SignalValidationService implements SignalValidationServiceInterface
                 'known_signals' => array_keys($knownSignals),
             ]);
 
-            $evaluation = new SignalEvaluationDto(
-                timeframe: $timeframeEnum,
-                signal: SignalSide::NONE,
-                payload: ['reason' => 'missing_symbol']
-            );
-            $context = new SignalValidationContextDto([], false, 'NONE', [], false, false);
-
-            return new SignalValidationResultDto($evaluation, $context, 'FAILED', SignalSide::NONE);
+            return $this->buildMissingSymbolResult($timeframeEnum);
         }
 
         $evaluationPayload = $service->evaluate($contractEntity, $klines, []);
@@ -202,11 +193,6 @@ final class SignalValidationService implements SignalValidationServiceInterface
         return null;
     }
 
-    private function resolveTimeframe(string $tf): Timeframe
-    {
-        return Timeframe::from($tf);
-    }
-
     /**
      * @param Kline[] $klines
      */
@@ -268,6 +254,50 @@ final class SignalValidationService implements SignalValidationServiceInterface
         }
 
         return null;
+    }
+
+    private function buildUnsupportedResult(string $tf, string $reason): SignalValidationResultDto
+    {
+        $this->validationLogger->warning('validation.unsupported_timeframe', [
+            'tf' => $tf,
+            'reason' => $reason,
+        ]);
+
+        $timeframeEnum = Timeframe::tryFrom($tf);
+        if ($timeframeEnum === null) {
+            $cases = Timeframe::cases();
+            $timeframeEnum = reset($cases);
+            if (!$timeframeEnum instanceof Timeframe) {
+                throw new \RuntimeException('No timeframe cases configured');
+            }
+        }
+
+        $evaluation = new SignalEvaluationDto(
+            timeframe: $timeframeEnum,
+            signal: SignalSide::NONE,
+            payload: [
+                'reason' => 'unsupported_tf',
+                'requested_timeframe' => $tf,
+                'details' => $reason,
+            ]
+        );
+
+        $context = new SignalValidationContextDto([], false, 'NONE', [], false, false);
+
+        return new SignalValidationResultDto($evaluation, $context, 'FAILED', SignalSide::NONE);
+    }
+
+    private function buildMissingSymbolResult(Timeframe $timeframe): SignalValidationResultDto
+    {
+        $evaluation = new SignalEvaluationDto(
+            timeframe: $timeframe,
+            signal: SignalSide::NONE,
+            payload: ['reason' => 'missing_symbol']
+        );
+
+        $context = new SignalValidationContextDto([], false, 'NONE', [], false, false);
+
+        return new SignalValidationResultDto($evaluation, $context, 'FAILED', SignalSide::NONE);
     }
 
     /**
