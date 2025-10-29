@@ -8,12 +8,17 @@ use App\TradeEntry\Types\Side;
 final class OrderPlanModel
 {
     public function __construct(
-        public string $symbol,
-        public Side $side,
-        public float $entryPrice,
-        public float $quantity,
-        public float $slPrice,
-        public float $tp1Price,
-        public int $tp1SizePct
+        public readonly string $symbol,
+        public readonly Side $side,
+        public readonly string $orderType,
+        public readonly string $openType,
+        public readonly int $orderMode,
+        public readonly float $entry,
+        public readonly float $stop,
+        public readonly float $takeProfit,
+        public readonly int $size,
+        public readonly int $leverage,
+        public readonly int $pricePrecision,
+        public readonly float $contractSize
     ) {}
 }
