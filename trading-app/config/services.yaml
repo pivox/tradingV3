@@ -25,6 +25,7 @@ parameters:
         k_low: 1.2
         k_high: 0.4
         k_stop_atr: 1.5
+        atr_k: 1.5
         tp1_r: 2.0
         tp1_size_pct: 60
         lev_min: 2.0
@@ -33,6 +34,21 @@ parameters:
         rsi_cap: 70.0
         require_pullback: true
         min_volume_ratio: 1.5
+        initial_margin_usdt: 100.0
+        risk_pct_percent: 2.0
+        r_multiple: 2.0
+        order_type: 'limit'
+        open_type: 'isolated'
+        order_mode: 4
+        stop_from: 'atr'
+        market_max_spread_pct: 0.001
+        timeframe_multipliers:
+            '1m': 1.0
+            '5m': 0.75
+            '15m': 0.5
+            '1h': 0.35
+            '4h': 0.25
+        fallback_account_balance: 0.0
 services:
     # default configuration for services in *this* file
     _defaults:

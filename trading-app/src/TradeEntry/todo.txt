@@ -1,4 +1,5 @@
 Trade Entry Box et de ses sous-boxes, sans vendor, sans couche infra, prête à coller dans ton projet Symfony (ou pur PHP).
+TODO (2025-xx): Intégrer TradeEntryService au pipeline MTF (TradingDecisionHandler) et valider les flows end-to-end.
 Elle suit exactement le flux : PreOrder → EntryZone → RiskSizer → OrderPlan → Execution.
 (Aucune source externe nécessaire ici — architecture interne.)
 

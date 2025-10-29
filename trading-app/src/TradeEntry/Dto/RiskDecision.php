@@ -6,9 +6,12 @@ namespace App\TradeEntry\Dto;
 final class RiskDecision
 {
     public function __construct(
-        public float $stopPct,
-        public float $riskUsdt,
-        public float $leverage,
-        public float $quantity   // qty de l'ordre principal
+        public readonly float $entry,
+        public readonly float $stop,
+        public readonly float $takeProfit,
+        public readonly int $sizeContracts,
+        public readonly int $leverage,
+        public readonly float $riskUsdt,
+        public readonly float $notionalUsdt,
     ) {}
 }

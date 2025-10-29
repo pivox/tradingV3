@@ -3,16 +3,14 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\OrderPlan;
 
-use App\TradeEntry\Dto\EntryZone;
-use App\TradeEntry\Dto\RiskDecision;
-use App\TradeEntry\Dto\TradeEntryRequest;
- 
+use App\TradeEntry\Dto\{TradeEntryRequest, PreflightReport};
+
 final class OrderPlanBox
 {
-    public function __construct(private OrderPlanBuilder $builder) {}
+    public function __construct(private readonly OrderPlanBuilder $builder) {}
 
-    public function build(TradeEntryRequest $req, EntryZone $zone, RiskDecision $risk): OrderPlanModel
+    public function create(TradeEntryRequest $req, PreflightReport $pre): OrderPlanModel
     {
-        return $this->builder->build($req, $zone, $risk);
+        return $this->builder->build($req, $pre);
     }
 }

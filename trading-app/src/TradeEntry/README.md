@@ -1,191 +1,75 @@
-# TradeEntry - Architecture d'Entrée en Position
+# TradeEntry Module
 
-## Vue d'ensemble
+Module d'orchestration de l'entrée en position. Sequence:
 
-Le système TradeEntry implémente une architecture complète pour l'entrée en position trading, suivant le flux : **PreOrder → EntryZone → RiskSizer → OrderPlan → Execution**.
+1. `Workflow\BuildPreOrder` → vérifications marché & récupération specs via `Policy\PreTradeChecks`.
+2. `Workflow\BuildOrderPlan` → construit un `OrderPlanModel` (pricing, sizing, SL/TP, levier) puis applique zones/guards.
+3. `Workflow\ExecuteOrderPlan` → soumission levier + ordre via `Execution\ExecutionBox`.
 
-## Architecture
+## Arborescence
 
 ```
-TradeEntryBox (Orchestrateur principal)
-├── PreOrderBuilder (Mapping des données d'entrée)
-├── EntryZoneBox (Calcul et filtrage de la zone d'entrée)
-│   ├── EntryZoneCalculator
-│   └── EntryZoneFilters
-├── RiskSizerBox (Gestion du risque et levier)
-│   └── LeverageCalculator
-├── OrderPlanBox (Plan d'ordre)
-│   └── OrderPlanBuilder
-└── ExecutionBox (Exécution via MainProvider)
+TradeEntry/
+├── Adapter/MainProviderAdapter.php
+├── Dto/
+│   ├── ExecutionResult.php
+│   ├── EntryZone.php
+│   ├── OrderPlanModel.php
+│   ├── PreflightReport.php
+│   ├── RiskDecision.php
+│   └── TradeEntryRequest.php
+├── EntryZone/
+│   ├── EntryZoneCalculator.php
+│   └── EntryZoneFilters.php
+├── Execution/
+│   ├── ExecutionBox.php
+│   ├── ExecutionLogger.php
+│   └── TpSlAttacher.php
+├── OrderPlan/
+│   ├── OrderPlanBox.php
+│   └── OrderPlanBuilder.php
+├── Policy/
+│   ├── IdempotencyPolicy.php
+│   ├── LiquidationGuard.php
+│   ├── MakerOnlyPolicy.php
+│   └── PreTradeChecks.php
+├── Pricing/TickQuantizer.php
+├── RiskSizer/
+│   ├── PositionSizer.php
+│   ├── StopLossCalculator.php
+│   └── TakeProfitCalculator.php
+├── Service/
+│   ├── Leverage/DefaultLeverageService.php
+│   ├── TradeEntryAlertService.php
+│   ├── TradeEntryBacktestService.php
+│   ├── TradeEntryMetricsService.php
+│   └── TradeEntryService.php
+├── Types/Side.php
+└── Workflow/
+    ├── AttachTpSl.php
+    ├── BuildOrderPlan.php
+    ├── BuildPreOrder.php
+    └── ExecuteOrderPlan.php
 ```
 
-## Utilisation
+## Contrat
 
-### Via le Contrôleur (Recommandé)
+- `App\Contract\Provider\MainProviderInterface` alimente l'adapter.
+- `App\Contract\EntryTrade\LeverageServiceInterface` (implémentation par défaut sous `Service\Leverage`).
 
-```bash
-# Test avec données d'exemple
-GET /api/trade-entry/test
+## Usage
 
-# Exécution réelle
-POST /api/trade-entry/execute
-Content-Type: application/json
-
-{
-    "symbol": "BTCUSDT",
-    "side": "long",
-    "entry_price_base": 67250.0,
-    "atr_value": 35.0,
-    "pivot_price": 67220.0,
-    "risk_pct": 2.0,
-    "budget_usdt": 100.0,
-    "equity_usdt": 1000.0,
-    "rsi": 54.0,
-    "volume_ratio": 1.8,
-    "pullback_confirmed": true
-}
-```
-
-### Via l'Injection de Dépendance
+Injecter `Service\TradeEntryService` et appeler `buildAndExecute()` avec un `Dto\TradeEntryRequest`.
 
 ```php
-use App\TradeEntry\TradeEntryBox;
-use App\TradeEntry\Types\Side;
+$result = $tradeEntryService->buildAndExecute(new TradeEntryRequest(
+    symbol: 'BTCUSDT',
+    side: Side::Long,
+));
 
-class MyService
-{
-    public function __construct(
-        private TradeEntryBox $tradeEntryBox
-    ) {}
-
-    public function executeTrade(): void
-    {
-        $input = [
-            'symbol' => 'BTCUSDT',
-            'side' => Side::LONG,
-            'entry_price_base' => 67250.0,
-            'atr_value' => 35.0,
-            'pivot_price' => 67220.0,
-            'risk_pct' => 2.0,
-            'budget_usdt' => 100.0,
-            'equity_usdt' => 1000.0,
-        ];
-
-        $result = $this->tradeEntryBox->handle($input);
-        
-        if ($result->status === 'order_opened') {
-            echo "Ordre placé: " . $result->data['order_id'];
-        } else {
-            echo "Annulé: " . $result->data['reason'];
-        }
-    }
+if ($result->status !== 'submitted') {
+    // gérer l'erreur
 }
 ```
 
-## Configuration
-
-Les valeurs par défaut sont configurées dans `config/services.yaml` :
-
-```yaml
-parameters:
-    trade_entry.defaults:
-        tick_size: 0.1
-        zone_ttl_sec: 240
-        k_low: 1.2
-        k_high: 0.4
-        k_stop_atr: 1.5
-        tp1_r: 2.0
-        tp1_size_pct: 60
-        lev_min: 2.0
-        lev_max: 20.0
-        k_dynamic: 10.0
-        rsi_cap: 70.0
-        require_pullback: true
-        min_volume_ratio: 1.5
-```
-
-## Paramètres d'Entrée
-
-### Obligatoires
-- `symbol`: Symbole du contrat (ex: "BTCUSDT")
-- `side`: Direction ("long" ou "short")
-- `entry_price_base`: Prix de référence d'entrée
-- `atr_value`: Valeur ATR calculée
-- `pivot_price`: Prix pivot (VWAP, MA21, etc.)
-- `risk_pct`: Pourcentage de risque (% du capital)
-- `budget_usdt`: Budget alloué en USDT
-- `equity_usdt`: Capital total
-
-### Optionnels
-- `rsi`: Valeur RSI pour filtrage
-- `volume_ratio`: Ratio de volume
-- `pullback_confirmed`: Confirmation de pullback
-- `tick_size`: Taille de tick pour quantification
-- `zone_ttl_sec`: Durée de vie de la zone (défaut: 240s)
-- `k_low`, `k_high`: Coefficients de zone
-- `k_stop_atr`: Distance SL en ATR
-- `tp1_r`: Ratio R pour TP1
-- `tp1_size_pct`: Pourcentage à TP1
-- `lev_min`, `lev_max`: Bornes de levier
-- `k_dynamic`: Coefficient dynamique
-- `rsi_cap`: Seuil RSI maximum
-- `require_pullback`: Exiger pullback
-- `min_volume_ratio`: Ratio volume minimum
-
-## Résultats
-
-### Succès
-```json
-{
-    "status": "order_opened",
-    "data": {
-        "order_id": "123456789",
-        "symbol": "BTCUSDT",
-        "side": "long",
-        "price": 67250.0,
-        "quantity": 0.001,
-        "sl_price": 67000.0,
-        "tp1_price": 67500.0,
-        "tp1_size_pct": 60,
-        "status": "new"
-    }
-}
-```
-
-### Échec
-```json
-{
-    "status": "cancelled",
-    "data": {
-        "reason": "entry_zone_invalid_or_filters_failed"
-    }
-}
-```
-
-## Logging
-
-Le système utilise le logger `trade_entry` pour tracer l'exécution :
-
-```yaml
-# Dans services.yaml
-monolog.logger.trade_entry:
-    parent: monolog.logger
-    arguments:
-        - trade_entry
-    tags:
-        - { name: monolog.logger, channel: trade_entry }
-```
-
-## Tests
-
-```bash
-# Lancer les tests unitaires
-./bin/phpunit tests/TradeEntry/TradeEntryBoxTest.php
-
-# Test d'intégration via API
-curl -X GET http://localhost/api/trade-entry/test
-```
-
-## Intégration Exchange
-
-L'ExecutionBox utilise le MainProvider pour placer les ordres réels via l'interface OrderProviderInterface. L'intégration est transparente et utilise les mêmes interfaces que le reste du système.
+Les presets SL/TP sont envoyés lors de la création de l'ordre; les ordres MARKET réutilisent un prix estimé (best bid/ask) pour calibrer SL/TP mais soumettent un `mode` compatible.

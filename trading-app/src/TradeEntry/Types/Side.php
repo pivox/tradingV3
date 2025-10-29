@@ -5,6 +5,6 @@ namespace App\TradeEntry\Types;
 
 enum Side: string
 {
-    case LONG = 'long';
-    case SHORT = 'short';
+    case Long = 'long';
+    case Short = 'short';
 }

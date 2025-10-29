@@ -6,19 +6,13 @@ namespace App\TradeEntry\Dto;
 final class EntryZone
 {
     public function __construct(
-        public float $low,
-        public float $high,
-        public \DateTimeImmutable $expiresAt
+        public readonly float $min,
+        public readonly float $max,
+        public readonly string $rationale = ''
     ) {}
 
-    public function isValid(): bool
+    public function contains(float $price): bool
     {
-        return $this->low <= $this->high && (new \DateTimeImmutable()) < $this->expiresAt;
-    }
-
-    public function clampToTick(float $tick): self
-    {
-        $round = static fn(float $p) => floor($p / $tick) * $tick;
-        return new self($round($this->low), $round($this->high), $this->expiresAt);
+        return $price >= $this->min && $price <= $this->max;
     }
 }
