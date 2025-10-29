@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Example;
 
-use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
+use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Contract\MtfValidator\TimeframeProcessorInterface;
-use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
  * Exemple d'utilisation des nouveaux contrats MtfValidator
@@ -15,10 +15,10 @@ use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
 final class MtfValidatorUsageExample
 {
     public function __construct(
-        #[\Symfony\Component\DependencyInjection\Attribute\Autoconfigure(service: 'app.mtf.validator')]
+        #[Autowire(service: 'app.mtf.validator')]
         private readonly MtfValidatorInterface $mtfValidator,
 
-        #[\Symfony\Component\DependencyInjection\Attribute\Autoconfigure(service: 'app.mtf.timeframe.processor')]
+        #[Autowire(service: 'app.mtf.timeframe.processor')]
         private readonly TimeframeProcessorInterface $timeframeProcessor
     ) {}
 
@@ -67,7 +67,7 @@ final class MtfValidatorUsageExample
         }
 
         // Obtenir le timeframe géré
-        $timeframe = $this->timeframeProcessor->getTimeframe();
+        $timeframe = $this->timeframeProcessor->getTimeframeValue();
         echo "Timeframe géré: " . $timeframe . "\n";
     }
 
