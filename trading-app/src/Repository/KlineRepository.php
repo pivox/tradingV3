@@ -88,19 +88,29 @@ class KlineRepository extends ServiceEntityRepository
 
 
     /**
-     * Récupère les klines pour un symbole et timeframe
+     * Retourne les dernières klines pour un symbole/timeframe (ordre décroissant).
+     *
+     * @return Kline[]
      */
-    public function findBySymbolAndTimeframe(string $symbol, Timeframe $timeframe, int $limit = 1000): array
+    public function getKlines(string $symbol, Timeframe $timeframe, int $limit = 1000): array
     {
-        $x = $this->createQueryBuilder('k')
+        return $this->createQueryBuilder('k')
             ->where('k.symbol = :symbol')
             ->andWhere('k.timeframe = :timeframe')
             ->setParameter('symbol', $symbol)
             ->setParameter('timeframe', $timeframe)
             ->orderBy('k.openTime', 'DESC')
-            ->setMaxResults($limit);
+            ->setMaxResults($limit)
+            ->getQuery()
+            ->getResult();
+    }
 
-        return $x->getQuery()->getResult();
+    /**
+     * Récupère les klines pour un symbole et timeframe
+     */
+    public function findBySymbolAndTimeframe(string $symbol, Timeframe $timeframe, int $limit = 1000): array
+    {
+        return $this->getKlines($symbol, $timeframe, $limit);
     }
 
     /**
@@ -414,4 +424,3 @@ class KlineRepository extends ServiceEntityRepository
         return $upsertedCount;
     }
 }
-

@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace App\Provider\Bitmart;
 
 use App\Common\Enum\Timeframe;
-use App\Contract\Provider\Dto\KlineDto;
+use App\Contract\Provider\Dto\KlineDto as ContractKlineDto;
 use App\Contract\Provider\KlineProviderInterface;
+use App\Entity\Kline;
+use App\Provider\Bitmart\Dto\KlineDto as BitmartRawKlineDto;
+use App\Provider\Bitmart\Dto\ListKlinesDto;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
 use App\Repository\KlineRepository;
+use Brick\Math\BigDecimal;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 use Symfony\Contracts\HttpClient\Exception\ServerExceptionInterface;
@@ -29,6 +33,12 @@ final class BitmartKlineProvider implements KlineProviderInterface
 
     public function getKlines(string $symbol, Timeframe $timeframe, int $limit = 499): array
     {
+        $dbKlines = $this->klineRepository->getKlines($symbol, $timeframe, $limit);
+
+        if ($this->isDatasetFresh($dbKlines, $timeframe, $limit)) {
+            return $this->mapEntitiesToDtos($dbKlines);
+        }
+
         try {
             $step = $this->convertTimeframeToStep($timeframe);
             $klinesData = $this->bitmartClient->getFuturesKlines(
@@ -37,21 +47,12 @@ final class BitmartKlineProvider implements KlineProviderInterface
                 limit: $limit
             );
 
-            $klines = [];
-            foreach ($klinesData->toArray() as $klineData) {
-                $klines[] = new KlineDto(
-                    $symbol,
-                    $timeframe,
-                    new \DateTimeImmutable('@' . $klineData->timestamp),
-                    \Brick\Math\BigDecimal::of($klineData->open),
-                    \Brick\Math\BigDecimal::of($klineData->high),
-                    \Brick\Math\BigDecimal::of($klineData->low),
-                    \Brick\Math\BigDecimal::of($klineData->close),
-                    \Brick\Math\BigDecimal::of($klineData->volume)
-                );
-            }
+            $klines = $this->mapFetchedKlines($klinesData, $symbol, $timeframe);
 
-            return $klines;
+            if (!empty($klines)) {
+                $this->klineRepository->upsertKlines($klines);
+                return $klines;
+            }
         } catch (ServerExceptionInterface $e) {
             $this->logger->error("Erreur serveur lors de la récupération des klines", [
                 'symbol' => $symbol,
@@ -76,9 +77,9 @@ final class BitmartKlineProvider implements KlineProviderInterface
                 'timeframe' => $timeframe->value,
                 'error' => $e->getMessage()
             ]);
-            return [];
         }
-        return [];
+
+        return $this->mapEntitiesToDtos($dbKlines);
     }
 
     public function getKlinesInWindow(
@@ -106,7 +107,7 @@ final class BitmartKlineProvider implements KlineProviderInterface
         }
     }
 
-    public function getLastKline(string $symbol, Timeframe $timeframe): ?KlineDto
+    public function getLastKline(string $symbol, Timeframe $timeframe): ?ContractKlineDto
     {
         try {
             $kline = $this->klineRepository->findLastBySymbolAndTimeframe($symbol, $timeframe);
@@ -114,16 +115,7 @@ final class BitmartKlineProvider implements KlineProviderInterface
                 return null;
             }
 
-            return new KlineDto(
-                $kline->getSymbol(),
-                $timeframe,
-                $kline->getOpenTime(),
-                \Brick\Math\BigDecimal::of($kline->getOpenPriceFloat()),
-                \Brick\Math\BigDecimal::of($kline->getHighPriceFloat()),
-                \Brick\Math\BigDecimal::of($kline->getLowPriceFloat()),
-                \Brick\Math\BigDecimal::of($kline->getClosePriceFloat()),
-                \Brick\Math\BigDecimal::of($kline->getVolumeFloat())
-            );
+            return $this->mapEntityToDto($kline);
         } catch (\Exception $e) {
             $this->logger->error("Erreur lors de la récupération de la dernière kline", [
                 'symbol' => $symbol,
@@ -134,10 +126,10 @@ final class BitmartKlineProvider implements KlineProviderInterface
         }
     }
 
-    public function saveKline(KlineDto $kline): void
+    public function saveKline(ContractKlineDto $kline): void
     {
         try {
-            $this->klineRepository->saveKline($kline);
+            $this->klineRepository->upsertKlines([$kline]);
         } catch (\Exception $e) {
             $this->logger->error("Erreur lors de la sauvegarde d'une kline", [
                 'symbol' => $kline->symbol,
@@ -158,6 +150,125 @@ final class BitmartKlineProvider implements KlineProviderInterface
                 'error' => $e->getMessage()
             ]);
         }
+    }
+
+    /**
+     * Transforme les données Bitmart en DTO contract.
+     *
+     * @return ContractKlineDto[]
+     */
+    private function mapFetchedKlines(ListKlinesDto $klinesData, string $symbol, Timeframe $timeframe): array
+    {
+        $klines = [];
+
+        foreach ($klinesData->toArray() as $klineData) {
+            if ($klineData instanceof ContractKlineDto) {
+                $klines[] = $klineData;
+                continue;
+            }
+
+            if (!$klineData instanceof BitmartRawKlineDto) {
+                continue;
+            }
+
+            $klines[] = new ContractKlineDto(
+                $symbol,
+                $timeframe,
+                $klineData->openTime,
+                $klineData->open,
+                $klineData->high,
+                $klineData->low,
+                $klineData->close,
+                $klineData->volume,
+                $klineData->source
+            );
+        }
+
+        return $klines;
+    }
+
+    /**
+     * @param Kline[] $klines
+     * @return ContractKlineDto[]
+     */
+    private function mapEntitiesToDtos(array $klines): array
+    {
+        if (empty($klines)) {
+            return [];
+        }
+
+        $ordered = array_reverse($klines);
+
+        return array_map(fn(Kline $kline): ContractKlineDto => $this->mapEntityToDto($kline), $ordered);
+    }
+
+    private function mapEntityToDto(Kline $kline): ContractKlineDto
+    {
+        return new ContractKlineDto(
+            $kline->getSymbol(),
+            $kline->getTimeframe(),
+            $kline->getOpenTime(),
+            $kline->getOpenPrice(),
+            $kline->getHighPrice(),
+            $kline->getLowPrice(),
+            $kline->getClosePrice(),
+            $kline->getVolume() ?? BigDecimal::of('0'),
+            $kline->getSource()
+        );
+    }
+
+    private function isDatasetFresh(array $klines, Timeframe $timeframe, int $limit): bool
+    {
+        if (empty($klines) || count($klines) < $limit) {
+            return false;
+        }
+
+        if (!$this->hasContinuousSeries($klines, $timeframe)) {
+            return false;
+        }
+
+        $expected = $this->expectedLastOpenTime($timeframe);
+        $latest = $klines[0]->getOpenTime();
+
+        return $latest->getTimestamp() === $expected->getTimestamp();
+    }
+
+    /**
+     * @param Kline[] $klines
+     */
+    private function hasContinuousSeries(array $klines, Timeframe $timeframe): bool
+    {
+        if (count($klines) <= 1) {
+            return true;
+        }
+
+        $stepSeconds = $this->convertTimeframeToStep($timeframe) * 60;
+
+        for ($i = 0, $max = count($klines) - 1; $i < $max; $i++) {
+            $currentTs = $klines[$i]->getOpenTime()->getTimestamp();
+            $nextTs = $klines[$i + 1]->getOpenTime()->getTimestamp();
+
+            if (($currentTs - $nextTs) !== $stepSeconds) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function expectedLastOpenTime(Timeframe $timeframe): \DateTimeImmutable
+    {
+        $utcNow = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $stepSeconds = $this->convertTimeframeToStep($timeframe) * 60;
+
+        $adjusted = $utcNow->getTimestamp() - $stepSeconds;
+        if ($adjusted < 0) {
+            $adjusted = 0;
+        }
+
+        $aligned = intdiv($adjusted, $stepSeconds) * $stepSeconds;
+
+        return (new \DateTimeImmutable('@' . $aligned))->setTimezone(new \DateTimeZone('UTC'));
     }
 
     public function hasGaps(string $symbol, Timeframe $timeframe): bool
