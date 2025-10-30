@@ -30,11 +30,11 @@ final class EntryZoneCalculator
         #[Autowire(service: 'monolog.logger.positions_flow')] private readonly ?LoggerInterface $flowLogger = null,
     ) {}
 
-    public function compute(string $symbol, ?Side $side = null, ?int $pricePrecision = null): EntryZone
+    public function compute(string $symbol, ?Side $side = null, ?int $pricePrecision = null, ?string $decisionKey = null): EntryZone
     {
         // Fallback si aucun provider n'est injecté
         if ($this->indicators === null) {
-            $this->flowLogger?->debug('entry_zone.open_no_indicators', ['symbol' => $symbol]);
+            $this->flowLogger?->debug('entry_zone.open_no_indicators', ['symbol' => $symbol, 'decision_key' => $decisionKey]);
             return new EntryZone(min: PHP_FLOAT_MIN, max: PHP_FLOAT_MAX, rationale: 'open zone (no indicators)');
         }
 
@@ -92,7 +92,7 @@ final class EntryZoneCalculator
         }
 
         if (!\is_finite($pivot) || $pivot === null || $pivot <= 0.0) {
-            $this->flowLogger?->debug('entry_zone.open_no_pivot', ['symbol' => $symbol, 'tf' => $tf]);
+            $this->flowLogger?->debug('entry_zone.open_no_pivot', ['symbol' => $symbol, 'tf' => $tf, 'decision_key' => $decisionKey]);
             // Impossible de calculer une zone sans pivot raisonnable
             return new EntryZone(min: PHP_FLOAT_MIN, max: PHP_FLOAT_MAX, rationale: 'open zone (no pivot)');
         }
@@ -108,7 +108,7 @@ final class EntryZoneCalculator
         $half = min($half, $maxHalf);
 
         if (!\is_finite($half) || $half <= 0.0) {
-            $this->flowLogger?->debug('entry_zone.open_invalid_width', ['symbol' => $symbol, 'pivot' => $pivot, 'half' => $half]);
+            $this->flowLogger?->debug('entry_zone.open_invalid_width', ['symbol' => $symbol, 'pivot' => $pivot, 'half' => $half, 'decision_key' => $decisionKey]);
             // Sécurité: si la largeur est invalide, ne pas bloquer
             return new EntryZone(min: PHP_FLOAT_MIN, max: PHP_FLOAT_MAX, rationale: 'open zone (invalid width)');
         }
@@ -149,6 +149,7 @@ final class EntryZoneCalculator
 
         $this->flowLogger?->debug('entry_zone.computed', [
             'symbol' => $symbol,
+            'decision_key' => $decisionKey,
             'tf' => $tf,
             'pivot' => $pivot,
             'pivot_src' => $pivotSrc,

@@ -17,7 +17,7 @@ class CustomLineFormatter extends LineFormatter
     public function __construct()
     {
         parent::__construct(
-            "[%datetime%][%channel%.%level_name%]: %message% %context%\n",
+            "[%datetime%][%channel%.%level_name%][%extra.decision_key%][%context.symbol%][%context.side%]: %message% %context%\n",
             self::DATE_FORMAT,
             true,
             true

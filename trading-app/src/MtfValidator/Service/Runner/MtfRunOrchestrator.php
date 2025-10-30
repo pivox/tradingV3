@@ -8,10 +8,12 @@ use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\Contract\Runtime\FeatureSwitchInterface;
 use App\Contract\Runtime\LockManagerInterface;
+use App\Config\MtfValidationConfig;
 use App\MtfValidator\Service\Dto\MtfRunResultDto;
 use App\MtfValidator\Service\Dto\RunSummaryDto;
 use App\MtfValidator\Service\SymbolProcessor;
 use App\MtfValidator\Service\TradingDecisionHandler;
+use App\MtfValidator\Service\Dto\SymbolResultDto;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;
@@ -29,7 +31,8 @@ final class MtfRunOrchestrator
         private readonly AuditLoggerInterface $auditLogger,
         private readonly FeatureSwitchInterface $featureSwitch,
         private readonly LoggerInterface $logger,
-        private readonly ClockInterface $clock
+        private readonly ClockInterface $clock,
+        private readonly MtfValidationConfig $mtfConfig
     ) {}
 
     /**
@@ -86,12 +89,14 @@ final class MtfRunOrchestrator
                     $this->clock->now()
                 );
 
-                // Gérer la décision de trading si nécessaire
-                if ($symbolResult->isSuccess() && !$mtfRunDto->dryRun) {
-                    $symbolResult = $this->tradingDecisionHandler->handleTradingDecision(
-                        $symbolResult,
+                // Gérer la décision de trading uniquement pour READY ou SUCCESS
+                $effective = $symbolResult;
+                if ($effective->isSuccess() || strtoupper($effective->status) === 'READY') {
+                    $effective = $this->tradingDecisionHandler->handleTradingDecision(
+                        $effective,
                         $mtfRunDto
                     );
+                    $symbolResult = $effective; // reflect decision changes
                 }
 
                 $results[$symbol] = $symbolResult->toArray();
@@ -127,6 +132,8 @@ final class MtfRunOrchestrator
             $this->lockManager->releaseLock($lockKey);
         }
     }
+
+    // Note: temporary force-ready testing path removed to restore normal gating
 
     private function checkGlobalSwitches(MtfRunDto $mtfRunDto, string $runIdString): bool
     {

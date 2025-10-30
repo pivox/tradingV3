@@ -6,6 +6,7 @@ namespace App\MtfValidator\Service;
 
 use App\Common\Enum\Timeframe;
 use App\Config\MtfConfigProviderInterface;
+use App\Config\MtfValidationConfig;
 use App\Contract\MtfValidator\Dto\ValidationContextDto;
 use App\Contract\MtfValidator\TimeframeProcessorInterface;
 use App\Entity\MtfAudit;
@@ -47,6 +48,7 @@ final class MtfService
         private readonly LoggerInterface $logger,
         private readonly LoggerInterface $positionsFlowLogger,
         private readonly MtfConfigProviderInterface $mtfConfig,
+        private readonly MtfValidationConfig $mtfValidationConfig,
         private readonly BitmartHttpClientPublic $bitmartClient,
         private readonly KlineProviderInterface $klineProvider,
         private readonly EntityManagerInterface $entityManager,
@@ -367,8 +369,8 @@ final class MtfService
             ];
         }
 
-        // Logique MTF selon start_from_timeframe
-        $cfg = $this->mtfConfig->getConfig();
+        // Logique MTF selon start_from_timeframe (depuis mtf_validations.yaml)
+        $cfg = $this->mtfValidationConfig->getConfig();
         $startFrom = strtolower((string)($cfg['validation']['start_from_timeframe'] ?? '4h'));
         // Inclure uniquement les TF à partir de start_from_timeframe vers le bas (aucun TF supérieur)
         $include4h  = in_array($startFrom, ['4h'], true);

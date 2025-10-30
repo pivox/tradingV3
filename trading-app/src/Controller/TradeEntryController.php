@@ -17,8 +17,8 @@ final class TradeEntryController extends AbstractController
 {
     public function __construct(
         private readonly TradeEntryService $service,
-        #[Autowire('%trade_entry.defaults%')]
-        private readonly array $tradeEntryDefaults = [],
+        #[Autowire(service: 'App\\Config\\MtfValidationConfig')]
+        private readonly \App\Config\MtfValidationConfig $mtfConfig,
     ) {}
 
     #[Route('/execute', name: 'execute', methods: ['POST'])]
@@ -49,13 +49,14 @@ final class TradeEntryController extends AbstractController
                 return new JsonResponse(['error' => 'Invalid side value'], 400);
             }
 
-            $riskPctDefault = (float)($this->tradeEntryDefaults['risk_pct_percent'] ?? 2.0);
+            $defaults = $this->mtfConfig->getDefaults();
+            $riskPctDefault = (float)($defaults['risk_pct_percent'] ?? 2.0);
             $riskPct = isset($data['risk_pct']) ? (float)$data['risk_pct'] : $riskPctDefault;
             if ($riskPct > 1.0) {
                 $riskPct /= 100;
             }
 
-            $marketSpreadDefault = (float)($this->tradeEntryDefaults['market_max_spread_pct'] ?? 0.001);
+            $marketSpreadDefault = (float)($defaults['market_max_spread_pct'] ?? 0.001);
             $marketSpread = isset($data['market_max_spread_pct']) ? (float)$data['market_max_spread_pct'] : $marketSpreadDefault;
             if ($marketSpread > 1.0) {
                 $marketSpread /= 100;
@@ -64,16 +65,16 @@ final class TradeEntryController extends AbstractController
             $requestDto = new TradeEntryRequest(
                 symbol: (string)$data['symbol'],
                 side: $side,
-                orderType: $data['order_type'] ?? ($this->tradeEntryDefaults['order_type'] ?? 'limit'),
-                openType: $data['open_type'] ?? ($this->tradeEntryDefaults['open_type'] ?? 'isolated'),
-                orderMode: (int)($data['order_mode'] ?? ($this->tradeEntryDefaults['order_mode'] ?? 4)),
-                initialMarginUsdt: (float)($data['initial_margin_usdt'] ?? ($this->tradeEntryDefaults['initial_margin_usdt'] ?? 100.0)),
+                orderType: $data['order_type'] ?? ($defaults['order_type'] ?? 'limit'),
+                openType: $data['open_type'] ?? ($defaults['open_type'] ?? 'isolated'),
+                orderMode: (int)($data['order_mode'] ?? ($defaults['order_mode'] ?? 4)),
+                initialMarginUsdt: (float)($data['initial_margin_usdt'] ?? ($defaults['initial_margin_usdt'] ?? 100.0)),
                 riskPct: $riskPct,
-                rMultiple: isset($data['r_multiple']) ? (float)$data['r_multiple'] : (float)($this->tradeEntryDefaults['r_multiple'] ?? 2.0),
+                rMultiple: isset($data['r_multiple']) ? (float)$data['r_multiple'] : (float)($defaults['r_multiple'] ?? 2.0),
                 entryLimitHint: isset($data['entry_limit_hint']) ? (float)$data['entry_limit_hint'] : null,
-                stopFrom: $data['stop_from'] ?? ($this->tradeEntryDefaults['stop_from'] ?? 'risk'),
+                stopFrom: $data['stop_from'] ?? ($defaults['stop_from'] ?? 'risk'),
                 atrValue: isset($data['atr_value']) ? (float)$data['atr_value'] : null,
-                atrK: isset($data['atr_k']) ? (float)$data['atr_k'] : (float)($this->tradeEntryDefaults['atr_k'] ?? 1.5),
+                atrK: isset($data['atr_k']) ? (float)$data['atr_k'] : (float)($defaults['atr_k'] ?? 1.5),
                 marketMaxSpreadPct: $marketSpread,
             );
 

@@ -9,8 +9,7 @@ use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\MtfValidator\Service\TradingDecisionHandler;
-use App\Service\Price\TradingPriceResolution;
-use App\Service\Price\TradingPriceResolver;
+use App\Config\{TradingDecisionConfig, MtfValidationConfig};
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Service\TradeEntryService;
@@ -23,7 +22,6 @@ class TradingDecisionHandlerTest extends TestCase
     private TradingDecisionHandler $handler;
     /** @var TradeEntryService&MockObject */
     private TradeEntryService $tradeEntryService;
-    private TradingPriceResolver $tradingPriceResolver;
     private AuditLoggerInterface $auditLogger;
     private LoggerInterface $logger;
     private LoggerInterface $positionsFlowLogger;
@@ -31,7 +29,6 @@ class TradingDecisionHandlerTest extends TestCase
     protected function setUp(): void
     {
         $this->tradeEntryService = $this->createMock(TradeEntryService::class);
-        $this->tradingPriceResolver = $this->createMock(TradingPriceResolver::class);
         $this->auditLogger = $this->createMock(AuditLoggerInterface::class);
         $this->logger = $this->createMock(LoggerInterface::class);
         $this->positionsFlowLogger = $this->createMock(LoggerInterface::class);
@@ -54,7 +51,8 @@ class TradingDecisionHandlerTest extends TestCase
 
         $this->handler = new TradingDecisionHandler(
             tradeEntryService: $this->tradeEntryService,
-            tradingPriceResolver: $this->tradingPriceResolver,
+            decisionConfig: new TradingDecisionConfig(),
+            mtfConfig: new MtfValidationConfig(),
             auditLogger: $this->auditLogger,
             logger: $this->logger,
             positionsFlowLogger: $this->positionsFlowLogger,
@@ -109,29 +107,7 @@ class TradingDecisionHandlerTest extends TestCase
         );
         $dto = new MtfRunDto(symbols: ['BTCUSDT']);
 
-        $priceObj = new TradingPriceResolution(
-            price: 50250.0,
-            source: 'test',
-            snapshotPrice: 50250.0,
-            providerPrice: 50255.0,
-            fallbackPrice: null,
-            bestBid: null,
-            bestAsk: null,
-            relativeDiff: null,
-            allowedDiff: null,
-            fallbackEngaged: false
-        );
-
-        $this->tradingPriceResolver
-            ->expects($this->once())
-            ->method('resolve')
-            ->with(
-                'BTCUSDT',
-                SignalSide::LONG,
-                50250.0,
-                35.0
-            )
-            ->willReturn($priceObj);
+        // plus de résolution de prix côté MTF — le preflight/builder gère best bid/ask
 
         $execution = new ExecutionResult(
             clientOrderId: 'cid123',
@@ -189,23 +165,7 @@ class TradingDecisionHandlerTest extends TestCase
         );
         $dto = new MtfRunDto(symbols: ['BTCUSDT']);
 
-        $priceObj = new TradingPriceResolution(
-            price: 20000.0,
-            source: 'test',
-            snapshotPrice: 20000.0,
-            providerPrice: 20001.0,
-            fallbackPrice: null,
-            bestBid: null,
-            bestAsk: null,
-            relativeDiff: null,
-            allowedDiff: null,
-            fallbackEngaged: false
-        );
-
-        $this->tradingPriceResolver
-            ->expects($this->once())
-            ->method('resolve')
-            ->willReturn($priceObj);
+        // pas d'appel au resolver, attentes retirées
 
         $this->tradeEntryService
             ->expects($this->once())

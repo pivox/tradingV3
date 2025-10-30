@@ -40,11 +40,29 @@ final class BitmartContractProvider implements ContractProviderInterface
     public function getContractDetails(string $symbol): ?ContractDto
     {
         try {
-            $contractDetails = $this->bitmartClient->fetchContractDetails($symbol);
-            if (empty($contractDetails)) {
-                return null;
+            // Préférence: API typée qui retourne une liste, puis extraction
+            try {
+                $list = $this->bitmartClient->getContractDetails($symbol); // ListContractDto
+                $items = \method_exists($list, 'toArray') ? $list->toArray() : [];
+                if (\is_array($items) && !empty($items)) {
+                    $first = $items[0];
+                    if (\is_array($first)) {
+                        return ContractDto::fromArray($first);
+                    }
+                }
+            } catch (\Throwable $e) {
+                // continue vers fallback
             }
-            return ContractDto::fromArray($contractDetails);
+
+            // Fallback: méthode utilitaire (peut retourner array ou ContractDto selon versions)
+            $details = $this->bitmartClient->fetchContractDetails($symbol);
+            if ($details instanceof ContractDto) {
+                return $details;
+            }
+            if (\is_array($details) && !empty($details)) {
+                return ContractDto::fromArray($details);
+            }
+            return null;
         } catch (\Exception $e) {
             $this->logger->error("Erreur lors de la récupération des détails du contrat", [
                 'symbol' => $symbol,

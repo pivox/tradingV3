@@ -22,7 +22,7 @@ final class OrderPlanBuilder
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
-    public function build(TradeEntryRequest $req, PreflightReport $pre): OrderPlanModel
+    public function build(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null): OrderPlanModel
     {
         $precision = $pre->pricePrecision;
         $contractSize = $pre->contractSize;
@@ -58,6 +58,28 @@ final class OrderPlanBuilder
             $entry = $req->side === Side::Long ? $pre->bestAsk : $pre->bestBid;
         }
 
+        // Extra guard: if entry looks implausible (e.g., 1.0), fallback to best bid/ask
+        // Rationale: prevent downstream zone checks from failing due to bad pricing hints or precision issues.
+        $mid = 0.5 * ($pre->bestBid + $pre->bestAsk);
+        if (!\is_finite($entry) || $entry <= $tick || $entry < 0.2 * $mid || $entry > 5.0 * $mid) {
+            $fallback = $req->side === Side::Long ? max($pre->bestBid, $pre->bestAsk - $tick) : min($pre->bestAsk, $pre->bestBid + $tick);
+            $fixed = $req->side === Side::Long
+                ? TickQuantizer::quantize($fallback, $precision)
+                : TickQuantizer::quantizeUp($fallback, $precision);
+            $this->flowLogger->warning('order_plan.entry_price_fallback', [
+                'symbol' => $req->symbol,
+                'side' => $req->side->value,
+                'entry_before' => $entry,
+                'best_bid' => $pre->bestBid,
+                'best_ask' => $pre->bestAsk,
+                'mid' => $mid,
+                'tick' => $tick,
+                'entry_after' => $fixed,
+                'decision_key' => $decisionKey,
+            ]);
+            $entry = $fixed;
+        }
+
         $this->flowLogger->debug('order_plan.entry_price_selected', [
             'symbol' => $req->symbol,
             'side' => $req->side->value,
@@ -67,6 +89,7 @@ final class OrderPlanBuilder
             'tick' => $tick,
             'entry_limit_hint' => $req->entryLimitHint,
             'entry' => $entry,
+            'decision_key' => $decisionKey,
         ]);
 
         if ($entry <= 0.0) {
@@ -94,8 +117,18 @@ final class OrderPlanBuilder
             'contract_size' => $contractSize,
             'min_volume' => $minVolume,
             'size' => $size,
+            'decision_key' => $decisionKey,
         ]);
 
+        // Assurer un écart minimal d'un tick entre entry et stop après quantification
+        $minTick = TickQuantizer::tick($precision);
+        if ($stop <= 0.0 || abs($stop - $entry) < $minTick) {
+            if ($req->side === Side::Long) {
+                $stop = TickQuantizer::quantize(max($entry - $minTick, $minTick), $precision);
+            } else {
+                $stop = TickQuantizer::quantizeUp($entry + $minTick, $precision);
+            }
+        }
         if ($stop <= 0.0 || $stop === $entry) {
             throw new \RuntimeException('Stop loss invalide');
         }
@@ -113,6 +146,7 @@ final class OrderPlanBuilder
             'stop' => $stop,
             'tp' => $takeProfit,
             'r_multiple' => $req->rMultiple,
+            'decision_key' => $decisionKey,
         ]);
 
         $leverage = $this->leverageService->computeLeverage(
@@ -150,10 +184,11 @@ final class OrderPlanBuilder
             'open_type' => $model->openType,
             'order_mode' => $model->orderMode,
             'entry' => $model->entry,
-            'stop' => $model->sl,
-            'take_profit' => $model->tp1,
-            'size' => $model->quantity,
+            'stop' => $model->stop,
+            'take_profit' => $model->takeProfit,
+            'size' => $model->size,
             'leverage' => $model->leverage,
+            'decision_key' => $decisionKey,
         ]);
 
         return $model;

@@ -23,17 +23,19 @@ final class BuildOrderPlan
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
-    public function __invoke(TradeEntryRequest $req, PreflightReport $pre): OrderPlanModel
+    public function __invoke(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null): OrderPlanModel
     {
         $this->flowLogger->info('build_order_plan.start', [
             'symbol' => $req->symbol,
             'side' => $req->side->value,
             'spread_pct' => $pre->spreadPct,
             'mode_note' => $pre->modeNote,
+            'decision_key' => $decisionKey,
         ]);
-        $plan = $this->box->create($req, $pre);
 
-        $zone = $this->zones->compute($req->symbol, $req->side, $pre->pricePrecision);
+        $plan = $this->box->create($req, $pre, $decisionKey);
+
+        $zone = $this->zones->compute($req->symbol, $req->side, $pre->pricePrecision, $decisionKey);
         $candidate = $plan->entry;
         if ($candidate <= 0.0) {
             $candidate = $req->side === Side::Long ? $pre->bestAsk : $pre->bestBid;
@@ -42,6 +44,7 @@ final class BuildOrderPlan
         $this->flowLogger->debug('build_order_plan.entry_zone', [
             'symbol' => $req->symbol,
             'side' => $req->side->value,
+            'decision_key' => $decisionKey,
             'candidate' => $candidate,
             'zone_min' => $zone->min,
             'zone_max' => $zone->max,
@@ -51,6 +54,7 @@ final class BuildOrderPlan
         if (!$zone->contains($candidate)) {
             $this->flowLogger->error('build_order_plan.entry_out_of_zone', [
                 'symbol' => $req->symbol,
+                'decision_key' => $decisionKey,
                 'candidate' => $candidate,
                 'zone_min' => $zone->min,
                 'zone_max' => $zone->max,
@@ -68,6 +72,7 @@ final class BuildOrderPlan
             $this->flowLogger->error('build_order_plan.filters_rejected', [
                 'symbol' => $req->symbol,
                 'side' => $req->side->value,
+                'decision_key' => $decisionKey,
             ]);
             throw new \RuntimeException('EntryZoneFilters ont rejeté la requête');
         }
@@ -75,8 +80,9 @@ final class BuildOrderPlan
         $this->liquidation->assertSafe($plan);
         $this->flowLogger->debug('build_order_plan.liquidation_guard_ok', [
             'symbol' => $req->symbol,
+            'decision_key' => $decisionKey,
             'entry' => $plan->entry,
-            'sl' => $plan->sl,
+            'stop' => $plan->stop,
             'lev' => $plan->leverage,
         ]);
 
@@ -84,10 +90,11 @@ final class BuildOrderPlan
             'symbol' => $plan->symbol,
             'side' => $plan->side->value,
             'entry' => $plan->entry,
-            'quantity' => $plan->quantity,
+            'size' => $plan->size,
             'leverage' => $plan->leverage,
-            'sl' => $plan->sl,
-            'tp1' => $plan->tp1,
+            'stop' => $plan->stop,
+            'take_profit' => $plan->takeProfit,
+            'decision_key' => $decisionKey,
         ]);
 
         return $plan;

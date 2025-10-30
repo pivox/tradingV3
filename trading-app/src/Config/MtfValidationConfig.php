@@ -29,4 +29,15 @@ class MtfValidationConfig
     {
         return $this->config['validation'] ?? [];
     }
+
+    public function getDefaults(): array
+    {
+        return $this->config['defaults'] ?? [];
+    }
+
+    public function getDefault(string $key, mixed $default = null): mixed
+    {
+        $defaults = $this->getDefaults();
+        return $defaults[$key] ?? $default;
+    }
 }

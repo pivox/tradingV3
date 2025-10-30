@@ -2,6 +2,7 @@
 
 namespace App\Provider\Bitmart\Http;
 
+use App\Provider\Bitmart\Dto\ContractDto;
 use App\Provider\Bitmart\Dto\ListContractDto;
 use App\Provider\Bitmart\Dto\ListKlinesDto;
 use App\Util\GranularityHelper;
@@ -439,7 +440,7 @@ class BitmartHttpClientPublic
     {
         $contractDetails = $this->getContractDetails($symbol);
         $contracts = $contractDetails->toArray();
-        return $contracts[0] ?? [];
+        return $contracts[0] instanceof ContractDto  ? $contracts[0]->toArray() : $contracts[0];
     }
 
     /**
