@@ -107,3 +107,9 @@ if ($result->status !== 'submitted') {
 ```
 
 Les presets SL/TP sont envoyés lors de la création de l'ordre; les ordres MARKET réutilisent un prix estimé (best bid/ask) pour calibrer SL/TP mais soumettent un `mode` compatible.
+
+## Configuration
+
+- Paramètres MTF et décision: `config/app/mtf_validations.yaml`.
+  - `mtf_validation.defaults` contient désormais les paramètres par défaut de Trade Entry (risk_pct_percent, initial_margin_usdt, r_multiple, order_type, open_type, order_mode, stop_from, market_max_spread_pct, timeframe_multipliers, etc.).
+- Paramètres EntryZone (pivot/ATR): `config/trading.yml` via `Service\\TradingConfigService`.

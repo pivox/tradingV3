@@ -75,6 +75,43 @@ final readonly class ContractDto
         $this->delistTime = self::toUtcDateTime($items['delist_time']);
     }
 
+    public function toArray(): array
+    {
+        return [
+            'symbol' => $this->symbol,
+            'product_type' => $this->productType,
+            'open_timestamp' => $this->openTimestamp->getTimestamp(),
+            'expire_timestamp' => $this->expireTimestamp->getTimestamp(),
+            'settle_timestamp' => $this->settleTimestamp->getTimestamp(),
+            'base_currency' => $this->baseCurrency,
+            'quote_currency' => $this->quoteCurrency,
+            'last_price' => (string)$this->lastPrice,
+            'volume_24h' => (string)$this->volume24h,
+            'turnover_24h' => (string)$this->turnover24h,
+            'index_price' => (string)$this->indexPrice,
+            'index_name' => $this->indexName,
+            'contract_size' => (string)$this->contractSize,
+            'min_leverage' => (string)$this->minLeverage,
+            'max_leverage' => (string)$this->maxLeverage,
+            'price_precision' => (string)$this->pricePrecision,
+            'vol_precision' => (string)$this->volPrecision,
+            'max_volume' => (string)$this->maxVolume,
+            'min_volume' => (string)$this->minVolume,
+            'funding_rate' => (string)$this->fundingRate,
+            'expected_funding_rate' => (string)$this->expectedFundingRate,
+            'open_interest' => (string)$this->openInterest,
+            'open_interest_value' => (string)$this->openInterestValue,
+            'high_24h' => (string)$this->high24h,
+            'low_24h' => (string)$this->low24h,
+            'change_24h' => (string)$this->change24h,
+            'funding_time' => $this->fundingTime->getTimestamp(),
+            'market_max_volume' => (string)$this->marketMaxVolume,
+            'funding_interval_hours' => $this->fundingIntervalHours,
+            'status' => $this->status,
+            'delist_time' => $this->delistTime->getTimestamp(),
+        ];
+    }
+
     private static function toUtcDateTime(string|int $tsOrStr): \DateTimeImmutable
     {
         if (is_numeric($tsOrStr) && (int)$tsOrStr > 0) {

@@ -24,8 +24,7 @@ final class PriceProviderService
     {
         try {
             $contractDetails = $this->bitmartRestClient->fetchContractDetails($symbol);
-            dd($contractDetails);
-            if (isset($contractDetails['last_price'])) {
+            if (\is_array($contractDetails) && isset($contractDetails['last_price'])) {
                 $price = (float) $contractDetails['last_price'];
 
                 $this->logger->info('[PriceProvider] Price retrieved from Bitmart Contract Details', [

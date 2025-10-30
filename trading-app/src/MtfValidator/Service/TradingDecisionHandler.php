@@ -4,11 +4,10 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Service;
 
-use App\Common\Enum\SignalSide;
+use App\Config\{TradingDecisionConfig, MtfValidationConfig};
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
-use App\Service\Price\TradingPriceResolver;
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Service\TradeEntryService;
 use App\TradeEntry\Types\Side;
@@ -22,12 +21,11 @@ final class TradingDecisionHandler
 {
     public function __construct(
         private readonly TradeEntryService $tradeEntryService,
-        private readonly TradingPriceResolver $tradingPriceResolver,
         private readonly AuditLoggerInterface $auditLogger,
-        private readonly LoggerInterface $logger,
-        private readonly LoggerInterface $positionsFlowLogger,
-        #[Autowire('%trade_entry.defaults%')]
-        private readonly array $tradeEntryDefaults = []
+        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $logger,
+        #[Autowire(service: 'monolog.logger.positions_flow')] private readonly LoggerInterface $positionsFlowLogger,
+        private readonly TradingDecisionConfig $decisionConfig,
+        private readonly MtfValidationConfig $mtfConfig,
     ) {}
 
     public function handleTradingDecision(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto): SymbolResultDto
@@ -44,14 +42,9 @@ final class TradingDecisionHandler
             return $this->createSkippedResult($symbolResult, 'trading_conditions_not_met');
         }
 
-        $priceResolution = $this->resolveTradingPrice($symbolResult);
-        if ($priceResolution === null) {
-            return $this->createSkippedResult($symbolResult, 'price_resolution_failed');
-        }
-
         $tradeRequest = $this->buildTradeEntryRequest(
             $symbolResult,
-            $priceResolution->price ?? $symbolResult->currentPrice,
+            $symbolResult->currentPrice,
             $symbolResult->atr
         );
 
@@ -60,13 +53,20 @@ final class TradingDecisionHandler
         }
 
         try {
+            // Correlate logs across MTF + TradeEntry
+            try { $decisionKey = sprintf('mtf:%s:%s', $symbolResult->symbol, bin2hex(random_bytes(6))); }
+            catch (\Throwable) { $decisionKey = uniqid('mtf:' . $symbolResult->symbol . ':', true); }
+
             $this->positionsFlowLogger->info('[PositionsFlow] Executing trade entry', [
                 'symbol' => $symbolResult->symbol,
                 'execution_tf' => $symbolResult->executionTf,
                 'side' => $symbolResult->signalSide,
+                'decision_key' => $decisionKey,
             ]);
 
-            $execution = $this->tradeEntryService->buildAndExecute($tradeRequest);
+            $execution = $mtfRunDto->dryRun
+                ? $this->tradeEntryService->buildAndSimulate($tradeRequest, $decisionKey)
+                : $this->tradeEntryService->buildAndExecute($tradeRequest, $decisionKey);
 
             $decision = [
                 'status' => $execution->status,
@@ -78,7 +78,7 @@ final class TradingDecisionHandler
             $this->logExecution($symbolResult->symbol, $decision);
 
             $this->auditLogger->logAction(
-                'TRADE_ENTRY_EXECUTED',
+                $mtfRunDto->dryRun ? 'TRADE_ENTRY_SIMULATED' : 'TRADE_ENTRY_EXECUTED',
                 'TRADE_ENTRY',
                 $symbolResult->symbol,
                 [
@@ -145,7 +145,8 @@ final class TradingDecisionHandler
             return false;
         }
 
-        if (!in_array(strtolower($symbolResult->executionTf), ['1m', '5m', '15m'], true)) {
+        $allowedTfs = (array)($this->decisionConfig->get('allowed_execution_timeframes', $this->mtfConfig->getDefault('allowed_execution_timeframes', ['1m','5m','15m'])));
+        if (!in_array(strtolower($symbolResult->executionTf), array_map('strtolower', $allowedTfs), true)) {
             $this->logger->info('[Trading Decision] Skipping (unsupported execution TF)', [
                 'symbol' => $symbolResult->symbol,
                 'execution_tf' => $symbolResult->executionTf,
@@ -157,7 +158,8 @@ final class TradingDecisionHandler
             return false;
         }
 
-        if ($symbolResult->currentPrice === null && $symbolResult->atr === null) {
+        $requirePriceOrAtr = (bool)($this->decisionConfig->get('require_price_or_atr', $this->mtfConfig->getDefault('require_price_or_atr', true)));
+        if ($requirePriceOrAtr && $symbolResult->currentPrice === null && $symbolResult->atr === null) {
             $this->logger->debug('[Trading Decision] Missing price and ATR', [
                 'symbol' => $symbolResult->symbol,
             ]);
@@ -193,28 +195,25 @@ final class TradingDecisionHandler
 
     private function buildTradeEntryRequest(SymbolResultDto $symbolResult, ?float $price, ?float $atr): ?TradeEntryRequest
     {
-        if ($price === null) {
-            return null;
-        }
-
         $side = strtoupper((string)$symbolResult->signalSide);
         if (!in_array($side, ['LONG', 'SHORT'], true)) {
             return null;
         }
 
         $executionTf = strtolower($symbolResult->executionTf ?? '1m');
-        $multipliers = $this->tradeEntryDefaults['timeframe_multipliers'] ?? [];
+        $defaults = $this->mtfConfig->getDefaults();
+        $multipliers = $defaults['timeframe_multipliers'] ?? [];
         $tfMultiplier = (float)($multipliers[$executionTf] ?? 1.0);
 
-        $riskPctPercent = (float)($this->tradeEntryDefaults['risk_pct_percent'] ?? 2.0);
+        $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 2.0);
         $riskPct = max(0.0, $riskPctPercent / 100.0) * $tfMultiplier;
         if ($riskPct <= 0.0) {
             return null;
         }
 
-        $initialMargin = max(0.0, (float)($this->tradeEntryDefaults['initial_margin_usdt'] ?? 100.0) * $tfMultiplier);
+        $initialMargin = max(0.0, (float)($defaults['initial_margin_usdt'] ?? 100.0) * $tfMultiplier);
         if ($initialMargin <= 0.0) {
-            $fallbackCapital = (float)($this->tradeEntryDefaults['fallback_account_balance'] ?? 0.0);
+            $fallbackCapital = (float)($defaults['fallback_account_balance'] ?? 0.0);
             $initialMargin = $fallbackCapital * $riskPct;
         }
 
@@ -222,17 +221,18 @@ final class TradingDecisionHandler
             return null;
         }
 
-        $stopFrom = $this->tradeEntryDefaults['stop_from'] ?? 'risk';
-        $atrK = (float)($this->tradeEntryDefaults['atr_k'] ?? 1.5);
+        $stopFrom = $defaults['stop_from'] ?? 'risk';
+        $atrK = (float)($defaults['atr_k'] ?? 1.5);
         $atrValue = ($stopFrom === 'atr' && $atr !== null && $atr > 0.0) ? $atr : null;
         if ($atrValue === null && $stopFrom === 'atr') {
             $stopFrom = 'risk';
         }
 
-        $orderType = $this->tradeEntryDefaults['order_type'] ?? 'limit';
-        $entryLimitHint = $orderType === 'limit' ? $price : null;
+        $orderType = $defaults['order_type'] ?? 'limit';
+        // entryLimitHint est optionnel; si null, OrderPlanBuilder utilisera best bid/ask
+        $entryLimitHint = ($orderType === 'limit' && $price !== null) ? $price : null;
 
-        $marketMaxSpreadPct = (float)($this->tradeEntryDefaults['market_max_spread_pct'] ?? 0.001);
+        $marketMaxSpreadPct = (float)($defaults['market_max_spread_pct'] ?? 0.001);
         if ($marketMaxSpreadPct > 1.0) {
             $marketMaxSpreadPct /= 100.0;
         }
@@ -243,11 +243,11 @@ final class TradingDecisionHandler
             symbol: $symbolResult->symbol,
             side: $sideEnum,
             orderType: $orderType,
-            openType: $this->tradeEntryDefaults['open_type'] ?? 'isolated',
-            orderMode: (int)($this->tradeEntryDefaults['order_mode'] ?? 4),
+            openType: $defaults['open_type'] ?? 'isolated',
+            orderMode: (int)($defaults['order_mode'] ?? 4),
             initialMarginUsdt: $initialMargin,
             riskPct: $riskPct,
-            rMultiple: (float)($this->tradeEntryDefaults['r_multiple'] ?? 2.0),
+            rMultiple: (float)($defaults['r_multiple'] ?? 2.0),
             entryLimitHint: $entryLimitHint,
             stopFrom: $stopFrom,
             atrValue: $atrValue,

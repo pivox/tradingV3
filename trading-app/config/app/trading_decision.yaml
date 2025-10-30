@@ -1,0 +1,13 @@
+mtf_decision:
+  # Timeframes autorisés pour l'exécution (pilotent TradingDecisionHandler::canExecuteTrading)
+  allowed_execution_timeframes: ['1m','5m','15m']
+
+  # Exiger au moins un prix courant ou un ATR pour tenter une exécution
+  require_price_or_atr: true
+
+  # Paramètres optionnels pour la résolution de prix (laisser gérés par le resolver si non utilisés)
+  price_resolution:
+    atr_ratio_factor: 0.75
+    min_allowed_diff: 0.0005
+    max_allowed_diff: 0.01
+

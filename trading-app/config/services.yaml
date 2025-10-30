@@ -9,6 +9,7 @@
 
 imports:
     - { resource: 'services_logging.yaml' }
+    - { resource: 'services_trade_entry.yaml' }
 
 parameters:
     app.mtf_log_level: 'info'
@@ -18,37 +19,9 @@ parameters:
     bitmart_public_base_uri: '%env(string:BITMART_PUBLIC_API_URL)%'
     bitmart_private_base_uri: '%env(string:BITMART_PRIVATE_API_URL)%'
     
-    # Configuration TradeEntry - Valeurs par défaut
-    trade_entry.defaults:
-        tick_size: 0.1
-        zone_ttl_sec: 240
-        k_low: 1.2
-        k_high: 0.4
-        k_stop_atr: 1.5
-        atr_k: 1.5
-        tp1_r: 2.0
-        tp1_size_pct: 60
-        lev_min: 2.0
-        lev_max: 20.0
-        k_dynamic: 10.0
-        rsi_cap: 70.0
-        require_pullback: true
-        min_volume_ratio: 1.5
-        initial_margin_usdt: 100.0
-        risk_pct_percent: 2.0
-        r_multiple: 2.0
-        order_type: 'limit'
-        open_type: 'isolated'
-        order_mode: 4
-        stop_from: 'atr'
-        market_max_spread_pct: 0.001
-        timeframe_multipliers:
-            '1m': 1.0
-            '5m': 0.75
-            '15m': 0.5
-            '1h': 0.35
-            '4h': 0.25
-        fallback_account_balance: 0.0
+    # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
+
+    # Configuration MTF/Decision: déplacée dans config/app/mtf_validations.yaml (mtf_validation.defaults)
 services:
     # default configuration for services in *this* file
     _defaults:

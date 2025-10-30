@@ -20,17 +20,18 @@ final class ExecutionBox
         private readonly ExecutionLogger $logger,
     ) {}
 
-    public function execute(OrderPlanModel $plan): ExecutionResult
+    public function execute(OrderPlanModel $plan, ?string $decisionKey = null): ExecutionResult
     {
         $this->makerOnly->enforce($plan);
         $this->logger->debug('execution.start', [
             'symbol' => $plan->symbol,
             'side' => $plan->side->value,
             'entry' => $plan->entry,
-            'quantity' => $plan->quantity,
+            'size' => $plan->size,
             'leverage' => $plan->leverage,
             'order_type' => $plan->orderType,
             'mode' => $plan->orderMode,
+            'decision_key' => $decisionKey,
         ]);
 
         $clientOrderId = $this->idempotency->newClientOrderId();
@@ -39,11 +40,13 @@ final class ExecutionBox
             'symbol' => $plan->symbol,
             'leverage' => $plan->leverage,
             'open_type' => $plan->openType,
+            'decision_key' => $decisionKey,
         ]);
         $leverageResult = $this->providers->getOrderProvider()->submitLeverage($plan->symbol, $plan->leverage, $plan->openType);
         $this->logger->debug('execution.leverage_response', [
             'symbol' => $plan->symbol,
             'result' => $leverageResult,
+            'decision_key' => $decisionKey,
         ]);
 
         $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
@@ -56,7 +59,8 @@ final class ExecutionBox
             4 => OrderSide::SELL,  // open_short
         };
         
-        $this->logger->debug('execution.order_submit', $payload);
+        $payloadWithCorrelation = $payload + ['decision_key' => $decisionKey];
+        $this->logger->debug('execution.order_submit', $payloadWithCorrelation);
         $orderResult = $this->providers->getOrderProvider()->placeOrder(
             symbol: $payload['symbol'],
             side: $side,
@@ -77,6 +81,7 @@ final class ExecutionBox
         $this->logger->debug('execution.order_response', [
             'symbol' => $plan->symbol,
             'result' => $orderResult,
+            'decision_key' => $decisionKey,
         ]);
 
         $this->logger->info('trade_entry.order_submitted', [
@@ -93,6 +98,7 @@ final class ExecutionBox
                 'symbol' => $plan->symbol,
                 'code' => $statusCode,
                 'result' => $orderResult,
+                'decision_key' => $decisionKey,
             ]);
         }
 
