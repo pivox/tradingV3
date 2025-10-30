@@ -12,31 +12,25 @@ use Brick\Math\BigDecimal;
 final class AccountDto extends BaseDto
 {
     public function __construct(
-        public readonly string $accountId,
-        public readonly BigDecimal $totalBalance,
-        public readonly BigDecimal $availableBalance,
-        public readonly BigDecimal $usedBalance,
-        public readonly BigDecimal $unrealizedPnl,
-        public readonly BigDecimal $realizedPnl,
         public readonly string $currency,
-        public readonly \DateTimeImmutable $lastUpdated,
+        public readonly BigDecimal $availableBalance,
+        public readonly BigDecimal $frozenBalance,
+        public readonly BigDecimal $unrealized,
+        public readonly BigDecimal $equity,
+        public readonly BigDecimal $positionDeposit,
         public readonly array $metadata = []
     ) {}
 
     public static function fromArray(array $data): self
     {
         return new self(
-            accountId: $data['account_id'],
-            totalBalance: BigDecimal::of($data['total_balance']),
-            availableBalance: BigDecimal::of($data['available_balance']),
-            usedBalance: BigDecimal::of($data['used_balance']),
-            unrealizedPnl: BigDecimal::of($data['unrealized_pnl'] ?? 0),
-            realizedPnl: BigDecimal::of($data['realized_pnl'] ?? 0),
-            currency: $data['currency'],
-            lastUpdated: new \DateTimeImmutable($data['last_updated']),
+            currency: (string)($data['currency'] ?? ''),
+            availableBalance: BigDecimal::of((string)($data['available_balance'] ?? '0')),
+            frozenBalance: BigDecimal::of((string)($data['frozen_balance'] ?? '0')),
+            unrealized: BigDecimal::of((string)($data['unrealized'] ?? '0')),
+            equity: BigDecimal::of((string)($data['equity'] ?? '0')),
+            positionDeposit: BigDecimal::of((string)($data['position_deposit'] ?? '0')),
             metadata: $data['metadata'] ?? []
         );
     }
 }
-
-
