@@ -10,6 +10,7 @@ use App\Contract\Indicator\Dto\ListIndicatorDto;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\Provider\KlineProviderInterface;
 use App\Entity\IndicatorSnapshot;
+use Brick\Math\RoundingMode;
 use App\Indicator\Condition\ConditionInterface;
 use App\Indicator\Context\EvaluationContext;
 use App\Indicator\Core\AtrCalculator as CoreAtr;
@@ -114,19 +115,21 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 ->setKlineTime($snapshotDto->klineTime)
                 ->setSource($snapshotDto->source);
 
-            $snapshot->setEma20($snapshotDto->ema20?->toFixed(12));
-            $snapshot->setEma50($snapshotDto->ema50?->toFixed(12));
-            $snapshot->setMacd($snapshotDto->macd?->toFixed(12));
-            $snapshot->setMacdSignal($snapshotDto->macdSignal?->toFixed(12));
-            $snapshot->setMacdHistogram($snapshotDto->macdHistogram?->toFixed(12));
-            $snapshot->setAtr($snapshotDto->atr?->toFixed(12));
+            $scale = 12;
+            $round = RoundingMode::HALF_UP;
+            $snapshot->setEma20($snapshotDto->ema20?->toScale($scale, $round)->__toString());
+            $snapshot->setEma50($snapshotDto->ema50?->toScale($scale, $round)->__toString());
+            $snapshot->setMacd($snapshotDto->macd?->toScale($scale, $round)->__toString());
+            $snapshot->setMacdSignal($snapshotDto->macdSignal?->toScale($scale, $round)->__toString());
+            $snapshot->setMacdHistogram($snapshotDto->macdHistogram?->toScale($scale, $round)->__toString());
+            $snapshot->setAtr($snapshotDto->atr?->toScale($scale, $round)->__toString());
             $snapshot->setRsi($snapshotDto->rsi);
-            $snapshot->setVwap($snapshotDto->vwap?->toFixed(12));
-            $snapshot->setBbUpper($snapshotDto->bbUpper?->toFixed(12));
-            $snapshot->setBbMiddle($snapshotDto->bbMiddle?->toFixed(12));
-            $snapshot->setBbLower($snapshotDto->bbLower?->toFixed(12));
-            $snapshot->setMa9($snapshotDto->ma9?->toFixed(12));
-            $snapshot->setMa21($snapshotDto->ma21?->toFixed(12));
+            $snapshot->setVwap($snapshotDto->vwap?->toScale($scale, $round)->__toString());
+            $snapshot->setBbUpper($snapshotDto->bbUpper?->toScale($scale, $round)->__toString());
+            $snapshot->setBbMiddle($snapshotDto->bbMiddle?->toScale($scale, $round)->__toString());
+            $snapshot->setBbLower($snapshotDto->bbLower?->toScale($scale, $round)->__toString());
+            $snapshot->setMa9($snapshotDto->ma9?->toScale($scale, $round)->__toString());
+            $snapshot->setMa21($snapshotDto->ma21?->toScale($scale, $round)->__toString());
             $snapshot->setValue('meta', $snapshotDto->meta);
             $snapshot->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
 
@@ -249,5 +252,44 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             }
 
             return $results;
+        }
+
+        public function getAtr(?string $key = null, ?string $symbol = null, ?string $tf = null): ?float
+        {
+            $period = 14; // défaut (trading.yml)
+            $method = 'wilder';
+
+            if ($key === null) {
+                if ($symbol === null || $tf === null) {
+                    return null;
+                }
+                $key = sprintf('%s_%s_%d', strtoupper($symbol), strtolower($tf), $period);
+            }
+
+            if ($symbol === null || $tf === null) {
+                // Si key seul fourni, on ne gère pas de cache ici → pas d'ATR sans contexte
+                return null;
+            }
+
+            try {
+                $tfEnum = Timeframe::from((string)$tf);
+                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 200);
+                if (empty($klines)) {
+                    return null;
+                }
+
+                $ohlc = [];
+                foreach ($klines as $k) {
+                    $ohlc[] = [
+                        'high' => (float)$k->high->toFloat(),
+                        'low' => (float)$k->low->toFloat(),
+                        'close' => (float)$k->close->toFloat(),
+                    ];
+                }
+
+                return (float)$this->atrService->computeWithRules($ohlc, $period, $method, strtolower((string)$tf));
+            } catch (\Throwable $e) {
+                return null;
+            }
         }
     }
