@@ -25,13 +25,18 @@ final class BitmartAccountProvider implements AccountProviderInterface
         private readonly LoggerInterface $logger
     ) {}
 
-    public function getAccountInfo(): ?AccountDto
+    public function getAccountInfo(string $basicCurrency = 'USDT'): ?AccountDto
     {
         try {
             $response = $this->bitmartClient->getAccount();
-            
+
             if (isset($response['data'])) {
-                return AccountDto::fromArray($response['data']);
+                foreach ($response['data'] as $balance) {
+                    if ($balance['currency'] === $basicCurrency) {
+                        return AccountDto::fromArray($balance);
+                    }
+                }
+                return null;
             }
 
             return null;
@@ -43,11 +48,11 @@ final class BitmartAccountProvider implements AccountProviderInterface
         }
     }
 
-    public function getAccountBalance(): float
+    public function getAccountBalance(string $basicCurrency = 'USDT'): float
     {
         try {
             $accountInfo = $this->getAccountInfo();
-            return $accountInfo ? (float) $accountInfo->totalBalance->toScale(8) : 0.0;
+            return $accountInfo ? $accountInfo->availableBalance->toScale(8, 3)->toFloat() : 0.0;
         } catch (\Exception $e) {
             $this->logger->error("Erreur lors de la récupération du solde du compte", [
                 'error' => $e->getMessage()
@@ -60,7 +65,7 @@ final class BitmartAccountProvider implements AccountProviderInterface
     {
         try {
             $response = $this->bitmartClient->getPositions($symbol);
-            
+
             if (isset($response['data']['positions'])) {
                 return array_map(fn($position) => PositionDto::fromArray($position), $response['data']['positions']);
             }

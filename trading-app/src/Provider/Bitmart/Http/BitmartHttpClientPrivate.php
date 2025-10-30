@@ -16,7 +16,7 @@ final class BitmartHttpClientPrivate
     private const TIMEOUT = 10.0;
 
     // Chemins d'API BitMart privés
-    private const PATH_ACCOUNT = '/contract/private/account';
+    private const PATH_ACCOUNT = '/contract/private/assets-detail';
     private const PATH_POSITION = '/contract/private/position';
     private const PATH_ORDER_PENDING = '/contract/private/order-pending';
     private const PATH_ORDER_DETAIL = '/contract/private/order-detail';
