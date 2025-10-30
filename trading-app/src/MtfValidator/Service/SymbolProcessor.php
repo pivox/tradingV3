@@ -70,6 +70,7 @@ final class SymbolProcessor
                 symbol: $symbol,
                 status: $symbolResult['status'] ?? 'UNKNOWN',
                 executionTf: $symbolResult['execution_tf'] ?? null,
+                failedTimeframe: $symbolResult['failed_timeframe'] ?? null,
                 signalSide: $symbolResult['signal_side'] ?? null,
                 tradingDecision: $symbolResult['trading_decision'] ?? null,
                 error: $symbolResult['error'] ?? null,

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command\Mtf;
 
+use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\MtfValidator\Service\MtfRunService;
 use App\Entity\MtfSwitch;
 use App\Contract\Provider\MainProviderInterface;
@@ -50,6 +51,7 @@ class MtfRunCommand extends Command
             ->addOption('force-timeframe-check', null, InputOption::VALUE_NONE, 'Force l\'analyse du timeframe même si la dernière kline est récente')
             ->addOption('auto-switch-invalid', null, InputOption::VALUE_NONE, 'Ajoute automatiquement les symboles INVALID à mtf_switch après l\'exécution')
             ->addOption('switch-duration', null, InputOption::VALUE_OPTIONAL, 'Durée de désactivation pour les symboles INVALID (ex: 4h, 1d, 1w)', '1d')
+            ->addOption('limit', null, InputOption::VALUE_OPTIONAL, 'Nombre maximum de symboles à traiter quand --symbols est absent (0 = illimité)', '0')
             ->addOption('workers', null, InputOption::VALUE_OPTIONAL, 'Nombre de workers parallèles (1 = mode séquentiel)', '1');
     }
 
@@ -69,6 +71,8 @@ class MtfRunCommand extends Command
         $autoSwitchInvalid = (bool) $input->getOption('auto-switch-invalid');
         $switchDuration = (string) $input->getOption('switch-duration');
         $workers = max(1, (int) $input->getOption('workers'));
+        $limitOpt = (int) $input->getOption('limit');
+        $limit = $limitOpt < 0 ? 0 : $limitOpt; // 0 = pas de limite
 
         $io->title('MTF Run');
         $io->text([
@@ -80,6 +84,7 @@ class MtfRunCommand extends Command
             sprintf('- force-timeframe-check: %s', $forceTimeframeCheck ? 'oui' : 'non'),
             sprintf('- auto-switch-invalid: %s', $autoSwitchInvalid ? 'oui' : 'non'),
             sprintf('- switch-duration: %s', $autoSwitchInvalid ? $switchDuration : 'N/A'),
+            sprintf('- limit: %s', $symbols ? 'N/A (symbols fourni)' : ($limit === 0 ? 'illimité' : (string)$limit)),
             sprintf('- workers: %d', $workers),
         ]);
 
@@ -91,7 +96,7 @@ class MtfRunCommand extends Command
             if ($shouldSyncContracts) {
                 $io->section('Synchronisation des contrats (provider)');
                 try {
-                    $contractProvider = $this->mainProvider->contractProvider();
+                    $contractProvider = $this->mainProvider->getContractProvider();
                     $contractPayload = $contractProvider->getContracts();
 
                     if ($contractPayload instanceof \Traversable) {
@@ -146,8 +151,11 @@ class MtfRunCommand extends Command
 
             if (empty($symbols)) {
                 $symbols = $this->contractRepository->allActiveSymbolNames();
+                if ($limit > 0) {
+                    $symbols = array_slice($symbols, 0, $limit);
+                }
             }
-            $symbols = array_slice($symbols, 0, 10);
+
 
             if (empty($symbols)) {
                 $io->warning('Aucun symbole actif trouvé');
@@ -164,7 +172,6 @@ class MtfRunCommand extends Command
             ];
 
             $io->section($workers > 1 ? sprintf('Exécution MTF en parallèle (%d workers)', $workers) : 'Exécution MTF en cours...');
-
             $result = $workers > 1
                 ? $this->runInParallel($io, $symbols, $workers, $executionOptions)
                 : $this->runSequential($io, $symbols, $executionOptions);
@@ -191,6 +198,10 @@ class MtfRunCommand extends Command
             return Command::SUCCESS;
         } catch (\Throwable $e) {
             $io->error(sprintf('Erreur après %s: %s', $this->formatDuration(microtime(true) - $commandStart), $e->getMessage()));
+            // Afficher la trace si le niveau de verbosité est élevé ou si APP_DEBUG est activé
+            if ($output->getVerbosity() >= OutputInterface::VERBOSITY_VERBOSE || (getenv('APP_DEBUG') === '1')) {
+                $io->writeln($e->getTraceAsString());
+            }
             return Command::FAILURE;
         }
     }
@@ -202,49 +213,57 @@ class MtfRunCommand extends Command
      */
     private function runSequential(SymfonyStyle $io, array $symbols, array $options): array
     {
-        $generator = $this->mtfRunService->run(
-            $symbols,
-            $options['dry_run'],
-            $options['force_run'],
-            $options['current_tf'],
-            $options['force_timeframe_check']
+        $mtfRunRequestDto = new MtfRunRequestDto(
+            symbols: $symbols,
+            dryRun: $options['dry_run'],
+            forceRun: $options['force_run'],
+            currentTf: $options['current_tf'],
+            forceTimeframeCheck: $options['force_timeframe_check']
         );
+        $response = $this->mtfRunService->run($mtfRunRequestDto);
 
+        // Construire les détails à partir de la réponse
         $details = [];
-        $summary = [];
-
-        foreach ($generator as $yieldedData) {
-            $symbol = $yieldedData['symbol'];
-            $result = $yieldedData['result'];
-            $progress = $yieldedData['progress'];
-
-            if ($symbol === 'FINAL') {
-                $summary = $result;
+        foreach ($response->results as $entry) {
+            if (!isset($entry['symbol'], $entry['result'])) {
                 continue;
             }
 
-            $io->writeln(sprintf('[%s%%] %s - %s', $progress['percentage'], $symbol, $progress['status']));
+            $symbol = (string) $entry['symbol'];
+            // Ne pas afficher les lignes de progression pour les entrées FINAL
+            if ($symbol === 'FINAL') {
+                continue;
+            }
+
+            $result = (array) $entry['result'];
+            $progress = (array) ($entry['progress'] ?? []);
+            if (isset($progress['percentage'], $progress['status'])) {
+                $io->writeln(sprintf('[%s%%] %s - %s', (string) $progress['percentage'], $symbol, (string) $progress['status']));
+            }
             $details[$symbol] = $result;
         }
 
-        try {
-            $finalResult = $generator->getReturn();
-            if (is_array($finalResult)) {
-                if (isset($finalResult['summary']) && is_array($finalResult['summary'])) {
-                    $summary = $finalResult['summary'];
-                }
-                if (isset($finalResult['results']) && is_array($finalResult['results'])) {
-                    $details = $finalResult['results'];
-                }
-            }
-        } catch (\Throwable $e) {
-            $io->writeln('Note: Impossible de récupérer le résultat final du generator');
-        }
+        // Construire le résumé attendu par l'affichage
+        $summary = [
+            'run_id' => $response->runId,
+            'execution_time_seconds' => $response->executionTimeSeconds,
+            'symbols_requested' => $response->symbolsRequested,
+            'symbols_processed' => $response->symbolsProcessed,
+            'symbols_successful' => $response->symbolsSuccessful,
+            'symbols_failed' => $response->symbolsFailed,
+            'symbols_skipped' => $response->symbolsSkipped,
+            'success_rate' => $response->successRate,
+            'dry_run' => $options['dry_run'],
+            'force_run' => $options['force_run'],
+            'current_tf' => $options['current_tf'],
+            'timestamp' => $response->timestamp->format('Y-m-d H:i:s'),
+            'status' => $response->status === 'success' ? 'completed' : ($response->status === 'partial_success' ? 'completed_with_errors' : 'error'),
+        ];
 
         return [
             'summary' => $summary,
             'details' => $details,
-            'errors' => [],
+            'errors' => $response->errors,
         ];
     }
 
@@ -272,7 +291,9 @@ class MtfRunCommand extends Command
                 $symbol = $queue->dequeue();
                 $process = new Process(
                     $this->buildWorkerCommand($symbol, $options),
-                    $this->projectDir
+                    $this->projectDir,
+                    // Forcer l'affichage des traces pour diagnostiquer les erreurs des workers
+                    ['APP_DEBUG' => '1']
                 );
                 $process->start();
                 $active[] = ['symbol' => $symbol, 'process' => $process];
@@ -314,6 +335,11 @@ class MtfRunCommand extends Command
                     }
 
                     foreach ($workerResults as $resultSymbol => $info) {
+                        // Ignorer l'entrée synthétique "FINAL" renvoyée par le worker
+                        if ($resultSymbol === 'FINAL') {
+                            continue;
+                        }
+
                         $results[$resultSymbol] = $info;
                         $completed++;
                         $percentage = $total > 0 ? round(($completed / $total) * 100, 2) : 100.0;
@@ -321,11 +347,10 @@ class MtfRunCommand extends Command
                         $io->writeln(sprintf('[%s%%] %s - %s', $percentage, $resultSymbol, $status));
                     }
                 } else {
-                    $errors[] = sprintf(
-                        'Worker %s: %s',
-                        $symbol,
-                        ($errorOutput = trim($process->getErrorOutput())) !== '' ? $errorOutput : 'échec inconnu'
-                    );
+                    $stderr = trim($process->getErrorOutput());
+                    $stdout = trim($process->getOutput());
+                    $message = $stderr !== '' ? $stderr : ($stdout !== '' ? $stdout : 'échec inconnu');
+                    $errors[] = sprintf('Worker %s: %s', $symbol, $message);
                 }
             }
 
@@ -423,6 +448,21 @@ class MtfRunCommand extends Command
                     $io->writeln(sprintf('  TF: %s', (string) $info['timeframe']));
                 }
 
+                // Afficher le dernier TF atteint (arrêt)
+                $lastTf = null;
+                if (isset($info['failed_timeframe']) && is_string($info['failed_timeframe'])) {
+                    $lastTf = (string)$info['failed_timeframe'];
+                } elseif (isset($info['execution_tf']) && is_string($info['execution_tf'])) {
+                    $lastTf = (string)$info['execution_tf'];
+                } elseif (isset($info['steps']) && is_array($info['steps'])) {
+                    foreach (['1m','5m','15m','1h','4h'] as $tfOrderDesc) {
+                        if (isset($info['steps'][$tfOrderDesc])) { $lastTf = $tfOrderDesc; break; }
+                    }
+                }
+                if ($lastTf !== null) {
+                    $io->writeln(sprintf('  Last TF: %s', $lastTf));
+                }
+
                 if (array_key_exists('should_descend', $info)) {
                     $io->writeln(sprintf('  Should descend: %s', $info['should_descend'] ? 'oui' : 'non'));
                 }
@@ -468,6 +508,7 @@ class MtfRunCommand extends Command
             $this->displaySummaryByReason($io, $details);
             $this->displaySummaryByRejectedTimeframe($io, $details);
             $this->displaySummaryByLastValidTimeframe($io, $details);
+            $this->displaySummaryByLastTimeframe($io, $details);
         }
     }
 
@@ -483,6 +524,7 @@ class MtfRunCommand extends Command
             '--symbols=' . $symbol,
             '--dry-run=' . ($options['dry_run'] ? '1' : '0'),
             '--switch-duration=' . $options['switch_duration'],
+            '-vvv',
         ];
 
         if ($options['force_run']) {
@@ -605,6 +647,68 @@ class MtfRunCommand extends Command
             }
             $io->newLine();
         }
+    }
+
+    /**
+     * Affiche un résumé groupé par dernier TF atteint (READY: 1m; INVALID: TF d'arrêt si disponible; sinon N/A)
+     */
+    private function displaySummaryByLastTimeframe(SymfonyStyle $io, array $details): void
+    {
+        $groups = [];
+
+        foreach ($details as $symbol => $info) {
+            $lastTf = $this->determineLastTimeframe($info);
+            $key = $lastTf ?? 'N/A';
+            if (!isset($groups[$key])) {
+                $groups[$key] = [];
+            }
+            $groups[$key][] = $symbol;
+        }
+
+        if (!empty($groups)) {
+            $io->section('Résumé par TF');
+            $tfOrder = ['4h' => 5, '1h' => 4, '15m' => 3, '5m' => 2, '1m' => 1, 'N/A' => 0];
+            uksort($groups, function($a, $b) use ($tfOrder) {
+                return ($tfOrder[$b] ?? 0) - ($tfOrder[$a] ?? 0);
+            });
+
+            foreach ($groups as $tf => $symbols) {
+                $io->writeln(sprintf('<comment>%s</comment>: %s', $tf, implode(', ', $symbols)));
+            }
+            $io->newLine();
+        }
+    }
+
+    private function determineLastTimeframe(array $info): ?string
+    {
+        // Priorité: failed_timeframe si présent (indique l'arrêt)
+        if (isset($info['failed_timeframe']) && is_string($info['failed_timeframe'])) {
+            return (string) $info['failed_timeframe'];
+        }
+        // Sinon, essayer d'inférer via les steps connues, du plus bas au plus haut atteint
+        if (isset($info['steps']) && is_array($info['steps'])) {
+            foreach (['1m','5m','15m','1h','4h'] as $tfAsc) {
+                if (isset($info['steps'][$tfAsc])) {
+                    $step = $info['steps'][$tfAsc];
+                    $status = strtolower((string)($step['status'] ?? ''));
+                    if (in_array($status, ['success','valid','completed','ready'])) {
+                        // continuer à chercher plus bas (plus proche de 1m)
+                        continue;
+                    }
+                }
+            }
+            // Si steps existe, prendre le plus bas présent comme dernier atteint
+            foreach (['1m','5m','15m','1h','4h'] as $tfAsc) {
+                if (isset($info['steps'][$tfAsc])) {
+                    return $tfAsc;
+                }
+            }
+        }
+        // READY sans steps détaillés: par convention, 1m
+        if (isset($info['status']) && strtoupper((string)$info['status']) === 'READY') {
+            return '1m';
+        }
+        return null;
     }
 
     /**

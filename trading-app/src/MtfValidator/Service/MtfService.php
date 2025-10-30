@@ -18,7 +18,10 @@ use App\Repository\KlineRepository;
 use App\Repository\MtfAuditRepository;
 use App\Repository\MtfStateRepository;
 use App\Repository\MtfSwitchRepository;
+use App\Entity\ValidationCache as ValidationCacheEntity;
 use App\Runtime\Cache\DbValidationCache;
+use App\Entity\IndicatorSnapshot;
+use App\Repository\IndicatorSnapshotRepository;
 use App\Contract\Signal\SignalValidationServiceInterface;
 use App\MtfValidator\Service\Timeframe\Timeframe4hService;
 use App\MtfValidator\Service\Timeframe\Timeframe1hService;
@@ -57,6 +60,129 @@ final class MtfService
         private readonly ?DbValidationCache $validationCache = null,
         private readonly ?KlineJsonIngestionService $klineJsonIngestion = null,
     ) {
+    }
+
+    private function buildTfCacheKey(string $symbol, string $tf): string
+    {
+        return sprintf('mtf_tf_state_%s_%s', strtoupper($symbol), strtolower($tf));
+    }
+
+    private function computeTfExpiresAt(string $tf): \DateTimeImmutable
+    {
+        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+        $minute = (int)$now->format('i');
+        $hour = (int)$now->format('H');
+        $second = 0;
+        switch ($tf) {
+            case '4h':
+                $baseHour = $hour - ($hour % 4);
+                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+                    ->setTime($baseHour, 0, 0)
+                    ->modify('+4 hours');
+                return $next->modify('-1 second');
+            case '1h':
+                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+                    ->setTime($hour, 0, 0)
+                    ->modify('+1 hour');
+                return $next->modify('-1 second');
+            case '15m':
+                $baseMin = $minute - ($minute % 15);
+                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+                    ->setTime($hour, $baseMin, 0)
+                    ->modify('+15 minutes');
+                return $next->modify('-1 second');
+            case '5m':
+                $baseMin = $minute - ($minute % 5);
+                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+                    ->setTime($hour, $baseMin, 0)
+                    ->modify('+5 minutes');
+                return $next->modify('-1 second');
+            case '1m':
+            default:
+                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+                    ->setTime($hour, $minute, $second)
+                    ->modify('+1 minute');
+                return $next->modify('-1 second');
+        }
+    }
+
+    private function getCachedTfResult(string $symbol, string $tf): ?array
+    {
+        try {
+            $repo = $this->entityManager->getRepository(ValidationCacheEntity::class);
+            $cacheKey = $this->buildTfCacheKey($symbol, $tf);
+            /** @var ValidationCacheEntity|null $rec */
+            $rec = $repo->findOneBy(['cacheKey' => $cacheKey]);
+            if ($rec === null || $rec->isExpired()) {
+                return null;
+            }
+            $payload = $rec->getPayload();
+            return [
+                'status' => $payload['status'] ?? 'INVALID',
+                'signal_side' => $payload['signal_side'] ?? 'NONE',
+                'kline_time' => isset($payload['kline_time']) ? new \DateTimeImmutable($payload['kline_time'], new \DateTimeZone('UTC')) : null,
+                'from_cache' => true,
+            ];
+        } catch (\Throwable $e) {
+            $this->logger->debug('[MTF] Cache read failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    private function putCachedTfResult(string $symbol, string $tf, array $result): void
+    {
+        try {
+            $repo = $this->entityManager->getRepository(ValidationCacheEntity::class);
+            $cacheKey = $this->buildTfCacheKey($symbol, $tf);
+            $rec = $repo->findOneBy(['cacheKey' => $cacheKey]) ?? new ValidationCacheEntity();
+            $klineTime = $result['kline_time'] ?? null;
+            $klineIso = $klineTime instanceof \DateTimeImmutable ? $klineTime->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s') : null;
+            $rec->setCacheKey($cacheKey)
+                ->setPayload([
+                    'status' => $result['status'] ?? 'INVALID',
+                    'signal_side' => $result['signal_side'] ?? 'NONE',
+                    'kline_time' => $klineIso,
+                ])
+                ->setExpiresAt($this->computeTfExpiresAt($tf));
+            $this->entityManager->persist($rec);
+            $this->entityManager->flush();
+        } catch (\Throwable $e) {
+            $this->logger->debug('[MTF] Cache write failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
+        }
+    }
+
+    private function persistIndicatorSnapshot(string $symbol, string $tf, array $result): void
+    {
+        try {
+            $repo = $this->entityManager->getRepository(IndicatorSnapshot::class);
+            if (!$repo instanceof IndicatorSnapshotRepository) {
+                return;
+            }
+            $klineTime = $result['kline_time'] ?? null;
+            if (!$klineTime instanceof \DateTimeImmutable) {
+                return;
+            }
+
+            $values = [];
+            // Extraire contexte indicateurs si disponible
+            $context = $result['indicator_context'] ?? [];
+            if (is_array($context)) {
+                $values = array_merge($values, $context);
+            }
+            // Champs directs utiles
+            if (isset($result['atr'])) { $values['atr'] = (string)$result['atr']; }
+
+            $snapshot = (new IndicatorSnapshot())
+                ->setSymbol(strtoupper($symbol))
+                ->setTimeframe(\App\Common\Enum\Timeframe::from($tf))
+                ->setKlineTime($klineTime->setTimezone(new \DateTimeZone('UTC')))
+                ->setValues($values)
+                ->setSource('PHP');
+
+            $repo->upsert($snapshot);
+        } catch (\Throwable $e) {
+            $this->logger->debug('[MTF] Indicator snapshot persist failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
+        }
     }
 
     public function getTimeService(): MtfTimeService
@@ -253,7 +379,13 @@ final class MtfService
 
         $result4h = null;
         if ($include4h) {
-            $result4h = $this->runTimeframeProcessor(
+            $this->logger->debug('[MTF] Start TF 4h', ['symbol' => $symbol]);
+            $cached = $this->getCachedTfResult($symbol, '4h');
+            if ($cached && ($cached['status'] ?? '') === 'VALID') {
+                $this->logger->debug('[MTF] Cache HIT 4h', ['symbol' => $symbol]);
+                $result4h = $cached;
+            } else {
+                $result4h = $this->runTimeframeProcessor(
                 $this->timeframe4hService,
                 $symbol,
                 $runId,
@@ -262,6 +394,8 @@ final class MtfService
                 $forceTimeframeCheck,
                 $forceRun
             );
+                $this->putCachedTfResult($symbol, '4h', $result4h);
+            }
             if (($result4h['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '4H_VALIDATION_FAILED', $result4h['reason'] ?? '4H validation failed', [
                     'timeframe' => '4h',
@@ -278,11 +412,19 @@ final class MtfService
                 return $result4h + ['failed_timeframe' => '4h'];
             }
             $this->timeframe4hService->updateState($symbol, $result4h);
+            if (($result4h['status'] ?? null) === 'VALID') {
+                $this->persistIndicatorSnapshot($symbol, '4h', $result4h);
+            }
         }
 
         $result1h = null;
         if ($include1h) {
-            $result1h = $this->runTimeframeProcessor(
+            $cached = $this->getCachedTfResult($symbol, '1h');
+            if ($cached && ($cached['status'] ?? '') === 'VALID') {
+                $this->logger->debug('[MTF] Cache HIT 1h', ['symbol' => $symbol]);
+                $result1h = $cached;
+            } else {
+                $result1h = $this->runTimeframeProcessor(
                 $this->timeframe1hService,
                 $symbol,
                 $runId,
@@ -291,7 +433,10 @@ final class MtfService
                 $forceTimeframeCheck,
                 $forceRun
             );
+                $this->putCachedTfResult($symbol, '1h', $result1h);
+            }
             if (($result1h['status'] ?? null) !== 'VALID') {
+                $this->logger->info('[MTF] 1h not VALID, stop cascade', ['symbol' => $symbol, 'reason' => $result1h['reason'] ?? null]);
                 $this->auditStep($runId, $symbol, '1H_VALIDATION_FAILED', $result1h['reason'] ?? '1H validation failed', [
                     'timeframe' => '1h',
                     'kline_time' => $result1h['kline_time'] ?? null,
@@ -308,8 +453,10 @@ final class MtfService
             }
             if ($include4h) {
                 // Règle: 1h doit matcher 4h si 4h inclus
+                $this->logger->debug('[MTF] Check alignment 1h vs 4h', ['symbol' => $symbol, 'h4' => $result4h['signal_side'] ?? 'NONE', 'h1' => $result1h['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe1hService->checkAlignment($result1h, $result4h, '4H');
                 if ($alignmentResult['status'] === 'INVALID') {
+                    $this->logger->info('[MTF] Alignment failed 1h vs 4h, stop cascade', ['symbol' => $symbol]);
                     $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '1h side != 4h side', [
                         '4h' => $result4h['signal_side'] ?? 'NONE',
                         '1h' => $result1h['signal_side'] ?? 'NONE',
@@ -321,12 +468,21 @@ final class MtfService
                 }
             }
             $this->timeframe1hService->updateState($symbol, $result1h);
+            if (($result1h['status'] ?? null) === 'VALID') {
+                $this->persistIndicatorSnapshot($symbol, '1h', $result1h);
+            }
         }
 
         // Étape 15m (seulement si incluse)
         $result15m = null;
         if ($include15m) {
-            $result15m = $this->runTimeframeProcessor(
+            $this->logger->debug('[MTF] Start TF 15m', ['symbol' => $symbol]);
+            $cached = $this->getCachedTfResult($symbol, '15m');
+            if ($cached && ($cached['status'] ?? '') === 'VALID') {
+                $this->logger->debug('[MTF] Cache HIT 15m', ['symbol' => $symbol]);
+                $result15m = $cached;
+            } else {
+                $result15m = $this->runTimeframeProcessor(
                 $this->timeframe15mService,
                 $symbol,
                 $runId,
@@ -335,6 +491,8 @@ final class MtfService
                 $forceTimeframeCheck,
                 $forceRun
             );
+                $this->putCachedTfResult($symbol, '15m', $result15m);
+            }
             if (($result15m['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '15M_VALIDATION_FAILED', $result15m['reason'] ?? '15M validation failed', [
                     'timeframe' => '15m',
@@ -352,8 +510,10 @@ final class MtfService
             }
             // Règle: 15m doit matcher 1h si 1h est inclus
             if ($include1h && is_array($result1h)) {
+                $this->logger->debug('[MTF] Check alignment 15m vs 1h', ['symbol' => $symbol, 'm15' => $result15m['signal_side'] ?? 'NONE', 'h1' => $result1h['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe15mService->checkAlignment($result15m, $result1h, '1H');
                 if ($alignmentResult['status'] === 'INVALID') {
+                    $this->logger->info('[MTF] Alignment failed 15m vs 1h, stop cascade', ['symbol' => $symbol]);
                     $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '15m side != 1h side', [
                         '1h' => $result1h['signal_side'] ?? 'NONE',
                         '15m' => $result15m['signal_side'] ?? 'NONE',
@@ -365,12 +525,21 @@ final class MtfService
                 }
             }
             $this->timeframe15mService->updateState($symbol, $result15m);
+            if (($result15m['status'] ?? null) === 'VALID') {
+                $this->persistIndicatorSnapshot($symbol, '15m', $result15m);
+            }
         }
 
         // Étape 5m (seulement si incluse)
         $result5m = null;
         if ($include5m) {
-            $result5m = $this->runTimeframeProcessor(
+            $this->logger->debug('[MTF] Start TF 5m', ['symbol' => $symbol]);
+            $cached = $this->getCachedTfResult($symbol, '5m');
+            if ($cached && ($cached['status'] ?? '') === 'VALID') {
+                $this->logger->debug('[MTF] Cache HIT 5m', ['symbol' => $symbol]);
+                $result5m = $cached;
+            } else {
+                $result5m = $this->runTimeframeProcessor(
                 $this->timeframe5mService,
                 $symbol,
                 $runId,
@@ -379,6 +548,15 @@ final class MtfService
                 $forceTimeframeCheck,
                 $forceRun
             );
+                $this->putCachedTfResult($symbol, '5m', $result5m);
+            }
+            // Calculer ATR 5m (toujours)
+            try {
+                $result5m['atr'] = $this->computeAtrValue($symbol, '5m');
+            } catch (\Throwable $e) {
+                // ignore ATR errors
+            }
+
             if (($result5m['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '5M_VALIDATION_FAILED', $result5m['reason'] ?? '5M validation failed', [
                     'timeframe' => '5m',
@@ -396,8 +574,10 @@ final class MtfService
             }
             // Règle: 5m doit matcher 15m si 15m est inclus
             if ($include15m && is_array($result15m)) {
+                $this->logger->debug('[MTF] Check alignment 5m vs 15m', ['symbol' => $symbol, 'm5' => $result5m['signal_side'] ?? 'NONE', 'm15' => $result15m['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe5mService->checkAlignment($result5m, $result15m, '15M');
                 if ($alignmentResult['status'] === 'INVALID') {
+                    $this->logger->info('[MTF] Alignment failed 5m vs 15m, stop cascade', ['symbol' => $symbol]);
                     $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '5m side != 15m side', [
                         '15m' => $result15m['signal_side'] ?? 'NONE',
                         '5m' => $result5m['signal_side'] ?? 'NONE',
@@ -409,12 +589,21 @@ final class MtfService
                 }
             }
             $this->timeframe5mService->updateState($symbol, $result5m);
+            if (($result5m['status'] ?? null) === 'VALID') {
+                $this->persistIndicatorSnapshot($symbol, '5m', $result5m);
+            }
         }
 
         // Étape 1m (seulement si incluse)
         $result1m = null;
         if ($include1m) {
-            $result1m = $this->runTimeframeProcessor(
+            $this->logger->debug('[MTF] Start TF 1m', ['symbol' => $symbol]);
+            $cached = $this->getCachedTfResult($symbol, '1m');
+            if ($cached && ($cached['status'] ?? '') === 'VALID') {
+                $this->logger->debug('[MTF] Cache HIT 1m', ['symbol' => $symbol]);
+                $result1m = $cached;
+            } else {
+                $result1m = $this->runTimeframeProcessor(
                 $this->timeframe1mService,
                 $symbol,
                 $runId,
@@ -423,6 +612,15 @@ final class MtfService
                 $forceTimeframeCheck,
                 $forceRun
             );
+                $this->putCachedTfResult($symbol, '1m', $result1m);
+            }
+            // Calculer ATR 1m (toujours)
+            try {
+                $result1m['atr'] = $this->computeAtrValue($symbol, '1m');
+            } catch (\Throwable $e) {
+                // ignore ATR errors
+            }
+
             if (($result1m['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '1M_VALIDATION_FAILED', $result1m['reason'] ?? '1M validation failed', [
                     'timeframe' => '1m',
@@ -449,8 +647,10 @@ final class MtfService
             ]);
             // Règle: 1m doit matcher 5m si 5m est inclus
             if ($include5m && is_array($result5m)) {
+                $this->logger->debug('[MTF] Check alignment 1m vs 5m', ['symbol' => $symbol, 'm1' => $result1m['signal_side'] ?? 'NONE', 'm5' => $result5m['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe1mService->checkAlignment($result1m, $result5m, '5M');
                 if ($alignmentResult['status'] === 'INVALID') {
+                    $this->logger->info('[MTF] Alignment failed 1m vs 5m, stop cascade', ['symbol' => $symbol]);
                     $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '1m side != 5m side', [
                         '5m' => $result5m['signal_side'] ?? 'NONE',
                         '1m' => $result1m['signal_side'] ?? 'NONE',
@@ -462,10 +662,54 @@ final class MtfService
                 }
             }
             $this->timeframe1mService->updateState($symbol, $result1m);
+            if (($result1m['status'] ?? null) === 'VALID') {
+                $this->persistIndicatorSnapshot($symbol, '1m', $result1m);
+            }
         }
 
         // Sauvegarder l'état
         $this->mtfStateRepository->getEntityManager()->flush();
+
+        // Vérification stricte de la chaîne complète: tous les TF inclus doivent être VALID
+        // et leurs sides doivent être identiques (LONG ou SHORT), sinon statut INVALID
+        $chainTfs = [];
+        if ($include4h)  { $chainTfs['4h']  = is_array($result4h)  ? $result4h  : []; }
+        if ($include1h)  { $chainTfs['1h']  = is_array($result1h)  ? $result1h  : []; }
+        if ($include15m) { $chainTfs['15m'] = is_array($result15m) ? $result15m : []; }
+        if ($include5m)  { $chainTfs['5m']  = is_array($result5m)  ? $result5m  : []; }
+        if ($include1m)  { $chainTfs['1m']  = is_array($result1m)  ? $result1m  : []; }
+
+        $firstSide = null;
+        foreach ($chainTfs as $tfKey => $tfResult) {
+            $status = strtoupper((string)($tfResult['status'] ?? ''));
+            if ($status !== 'VALID') {
+                $this->logger->info('[MTF] Chain invalid: timeframe not VALID', ['symbol' => $symbol, 'tf' => $tfKey, 'status' => $status]);
+                return [
+                    'status' => 'INVALID',
+                    'failed_timeframe' => $tfKey,
+                    'reason' => 'CHAIN_NOT_VALIDATED',
+                ];
+            }
+            $side = strtoupper((string)($tfResult['signal_side'] ?? 'NONE'));
+            if (!in_array($side, ['LONG','SHORT'], true)) {
+                $this->logger->info('[MTF] Chain invalid: side NONE', ['symbol' => $symbol, 'tf' => $tfKey]);
+                return [
+                    'status' => 'INVALID',
+                    'failed_timeframe' => $tfKey,
+                    'reason' => 'CHAIN_SIDE_NONE',
+                ];
+            }
+            if ($firstSide === null) {
+                $firstSide = $side;
+            } elseif ($side !== $firstSide) {
+                $this->logger->info('[MTF] Chain invalid: side mismatch', ['symbol' => $symbol, 'tf' => $tfKey, 'expected' => $firstSide, 'actual' => $side]);
+                return [
+                    'status' => 'INVALID',
+                    'failed_timeframe' => $tfKey,
+                    'reason' => 'CHAIN_SIDE_MISMATCH',
+                ];
+            }
+        }
 
         // Construire knownSignals pour contexte
         $knownSignals = [];
@@ -503,16 +747,8 @@ final class MtfService
         $this->logger->info('[MTF] Context summary', [ 'symbol' => $symbol, 'current_tf' => $currentTf ] + $contextSummary);
         $this->auditStep($runId, $symbol, 'MTF_CONTEXT', null, ['current_tf' => $currentTf, 'timeframe' => $currentTf, 'passed' => $currentSignal !== 'NONE', 'severity' => 0] + $contextSummary);
 
-        // Déterminer le côté cohérent minimal (respecte start_from_timeframe)
-        $states = [];
-        if ($include4h)  { $states[] = ['tf'=>'4h','side'=> (is_array($result4h) ? ($result4h['signal_side'] ?? 'NONE') : 'NONE')]; }
-        if ($include1h)  { $states[] = ['tf'=>'1h','side'=> (is_array($result1h) ? ($result1h['signal_side'] ?? 'NONE') : 'NONE')]; }
-        if ($include15m) { $states[] = ['tf'=>'15m','side'=> (is_array($result15m) ? ($result15m['signal_side'] ?? 'NONE') : 'NONE')]; }
-        $consistentSide = $this->getConsistentSideSimple($states);
-        if ($consistentSide === 'NONE') {
-            $this->auditStep($runId, $symbol, 'NO_CONSISTENT_SIDE', 'No consistent signal side across 4h/1h/15m', [ 'passed' => false, 'severity' => 1 ]);
-            return ['status' => 'NO_CONSISTENT_SIDE', 'failed_timeframe' => 'multi-tf'];
-        }
+        // À ce stade, la chaîne complète est VALID et les sides sont identiques
+        $consistentSide = $firstSide ?? 'NONE';
 
         // Pour rester focalisé sur la demande, on n’applique pas de filtres supplémentaires ici.
         return [
@@ -525,6 +761,28 @@ final class MtfService
             'indicator_context' => $selectedContext,
             'execution_tf' => $currentTf,
         ];
+    }
+
+    private function computeAtrValue(string $symbol, string $tf): ?float
+    {
+        // Paramètres par défaut (trading.yml): period=14, method=wilder
+        $period = 14;
+        $method = 'wilder';
+        $tfEnum = Timeframe::from($tf);
+        $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
+        if (empty($klines)) {
+            return null;
+        }
+        $ohlc = [];
+        foreach ($klines as $k) {
+            $ohlc[] = [
+                'high' => (float)$k->high->toFloat(),
+                'low' => (float)$k->low->toFloat(),
+                'close' => (float)$k->close->toFloat(),
+            ];
+        }
+        $calc = new \App\Indicator\Core\AtrCalculator();
+        return $calc->computeWithRules($ohlc, $period, $method, strtolower($tf));
     }
 
     /**
