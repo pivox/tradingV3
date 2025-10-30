@@ -17,6 +17,8 @@ final class TradeEntryService
 
     public function buildAndExecute(TradeEntryRequest $request): ExecutionResult
     {
+        //  codex resume 019a35d8-735d-7f60-b462-3ebc671b69fd
+
         $preflight = ($this->preflight)($request);
         $plan = ($this->planner)($request, $preflight);
         $result = ($this->executor)($plan);

@@ -4,10 +4,13 @@ declare(strict_types=1);
 namespace App\TradeEntry\Execution;
 
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class ExecutionLogger
 {
-    public function __construct(private readonly LoggerInterface $logger) {}
+    public function __construct(
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $logger
+    ) {}
 
     public function info(string $message, array $context = []): void
     {
@@ -22,5 +25,10 @@ final class ExecutionLogger
     public function error(string $message, array $context = []): void
     {
         $this->logger->error($message, $context);
+    }
+
+    public function debug(string $message, array $context = []): void
+    {
+        $this->logger->debug($message, $context);
     }
 }

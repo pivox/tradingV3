@@ -52,6 +52,40 @@ TradeEntry/
     └── ExecuteOrderPlan.php
 ```
 
+## Entry Zone
+
+- EntryZoneCalculator calcule une zone d'entrée centrée sur un pivot (VWAP ou SMA21) et bornée par l'ATR.
+- Signature: `compute(string $symbol, ?Types\Side $side = null, ?int $pricePrecision = null): Dto\EntryZone`.
+- Sélection du pivot via config:
+  - `post_validation.entry_zone.vwap_anchor: true` → priorité VWAP puis SMA21
+  - sinon → priorité SMA21 puis VWAP
+- Largeur (demi‑écart) = `clamp(k_atr × ATR, pivot × w_min, pivot × w_max)`
+  - `post_validation.entry_zone.k_atr` (ex: 0.35)
+  - `post_validation.entry_zone.w_min` (ex: 0.0005 = 0.05%)
+  - `post_validation.entry_zone.w_max` (ex: 0.0100 = 1.00%)
+- Asymétrie optionnelle selon le side (`post_validation.entry_zone.asym_bias`):
+  - Long → zone élargie sous le pivot, réduite au‑dessus
+  - Short → zone réduite sous le pivot, élargie au‑dessus
+- Quantification des bornes si `post_validation.entry_zone.quantize_to_exchange_step: true` et `pricePrecision` fourni:
+  - min = arrondi vers le bas au tick, max = arrondi vers le haut au tick
+- Rationale: inclut la source du pivot, le timeframe, le pourcentage bas/haut, et les paramètres.
+
+Dépendances et overrides
+- Utilise `Contract\Indicator\IndicatorProviderInterface` pour `getAtr()` et `getListPivot()`.
+- Lit `config/trading.yml` via `Service\TradingConfigService`:
+  - `post_validation.execution_timeframe.default` pour le timeframe d'évaluation
+  - `post_validation.entry_zone.*` pour les paramètres
+- Pour les tests, le constructeur accepte des overrides facultatifs: timeframe, `k_atr`, `w_min`, `w_max`, `asym_bias`.
+
+Exemple d'usage dans le workflow
+```php
+// BuildOrderPlan::__invoke
+$zone = $this->zones->compute($req->symbol, $req->side, $pre->pricePrecision);
+if (!$zone->contains($candidate)) {
+    throw new \RuntimeException('Prix d\'entrée hors zone calculée');
+}
+```
+
 ## Contrat
 
 - `App\Contract\Provider\MainProviderInterface` alimente l'adapter.

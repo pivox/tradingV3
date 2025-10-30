@@ -56,6 +56,90 @@ monolog:
       channels: ['positions_flow']
       formatter: App\Logging\CustomLineFormatter
 
+    # =====================
+    # --- Duplicates by level for full tracing ---
+    # =====================
+
+    # Positions channel — split per level
+    positions_debug_only:
+      type: filter
+      handler: positions_debug_only_rotating
+      accepted_levels: ['debug']
+      channels: ['positions']
+    positions_debug_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/positions-debug.log'
+      max_files: 30
+      level: debug
+      channels: ['positions']
+      formatter: App\Logging\CustomLineFormatter
+
+    positions_info_only:
+      type: filter
+      handler: positions_info_only_rotating
+      accepted_levels: ['info']
+      channels: ['positions']
+    positions_info_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/positions-info.log'
+      max_files: 30
+      level: info
+      channels: ['positions']
+      formatter: App\Logging\CustomLineFormatter
+
+    positions_error_only:
+      type: filter
+      handler: positions_error_only_rotating
+      accepted_levels: ['error']
+      channels: ['positions']
+    positions_error_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/positions-error.log'
+      max_files: 30
+      level: error
+      channels: ['positions']
+      formatter: App\Logging\CustomLineFormatter
+
+    # Positions Flow channel — split per level
+    positions_flow_debug_only:
+      type: filter
+      handler: positions_flow_debug_only_rotating
+      accepted_levels: ['debug']
+      channels: ['positions_flow']
+    positions_flow_debug_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/positions-flow-debug.log'
+      max_files: 30
+      level: debug
+      channels: ['positions_flow']
+      formatter: App\Logging\CustomLineFormatter
+
+    positions_flow_info_only:
+      type: filter
+      handler: positions_flow_info_only_rotating
+      accepted_levels: ['info']
+      channels: ['positions_flow']
+    positions_flow_info_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/positions-flow-info.log'
+      max_files: 30
+      level: info
+      channels: ['positions_flow']
+      formatter: App\Logging\CustomLineFormatter
+
+    positions_flow_error_only:
+      type: filter
+      handler: positions_flow_error_only_rotating
+      accepted_levels: ['error']
+      channels: ['positions_flow']
+    positions_flow_error_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/positions-flow-error.log'
+      max_files: 30
+      level: error
+      channels: ['positions_flow']
+      formatter: App\Logging\CustomLineFormatter
+
     # Canal Indicators - Calculs d'indicateurs techniques
     indicators_rotating:
       type: rotating_file
