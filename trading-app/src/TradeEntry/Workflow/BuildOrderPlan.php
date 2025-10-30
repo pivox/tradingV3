@@ -3,7 +3,8 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Workflow;
 
-use App\TradeEntry\Dto\{TradeEntryRequest, OrderPlanModel, PreflightReport};
+use App\TradeEntry\OrderPlan\OrderPlanModel;
+use App\TradeEntry\Dto\{TradeEntryRequest, PreflightReport};
 use App\TradeEntry\EntryZone\{EntryZoneCalculator, EntryZoneFilters};
 use App\TradeEntry\OrderPlan\OrderPlanBox;
 use App\TradeEntry\Policy\LiquidationGuard;

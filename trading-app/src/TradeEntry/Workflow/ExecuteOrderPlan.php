@@ -3,8 +3,9 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Workflow;
 
-use App\TradeEntry\Dto\{OrderPlanModel, ExecutionResult};
+use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\ExecutionBox;
+use App\TradeEntry\OrderPlan\OrderPlanModel;
 
 final class ExecuteOrderPlan
 {

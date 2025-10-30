@@ -3,7 +3,8 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Policy;
 
-use App\TradeEntry\Dto\OrderPlanModel;
+
+use App\TradeEntry\OrderPlan\OrderPlanModel;
 
 final class LiquidationGuard
 {
