@@ -71,6 +71,7 @@ final class BitmartKlineProvider implements KlineProviderInterface
                 'timeframe' => $timeframe->value,
                 'error' => $e->getMessage()
             ]);
+            throw $e;
         } catch (\Exception $e) {
             $this->logger->error("Erreur lors de la récupération des klines", [
                 'symbol' => $symbol,
@@ -259,16 +260,17 @@ final class BitmartKlineProvider implements KlineProviderInterface
     private function expectedLastOpenTime(Timeframe $timeframe): \DateTimeImmutable
     {
         $utcNow = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
-        $stepSeconds = $this->convertTimeframeToStep($timeframe) * 60;
 
-        $adjusted = $utcNow->getTimestamp() - $stepSeconds;
-        if ($adjusted < 0) {
-            $adjusted = 0;
-        }
+        $interval = match ($timeframe->value) {
+            '4h' => new \DateInterval('PT4H'),
+            '1h' => new \DateInterval('PT1H'),
+            '15m' => new \DateInterval('PT15M'),
+            '5m' => new \DateInterval('PT5M'),
+            '1m' => new \DateInterval('PT1M'),
+            default => throw new \InvalidArgumentException('Timeframe non supporté: ' . $timeframe->value),
+        };
 
-        $aligned = intdiv($adjusted, $stepSeconds) * $stepSeconds;
-
-        return (new \DateTimeImmutable('@' . $aligned))->setTimezone(new \DateTimeZone('UTC'));
+        return $utcNow->sub($interval);
     }
 
     public function hasGaps(string $symbol, Timeframe $timeframe): bool

@@ -112,7 +112,7 @@ class BitmartHttpClientPublic
        // $nowSec      = (int) floor($this->getSystemTimeMs() / 1000);
         $endTs = $endTs ?? $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->getTimestamp();
         $nowSec = $endTs;
-        [$defaultFrom, $computedLastClose, $stepSec] = $this->computeWindow($nowSec, $stepMinutes, $limit +1);
+        [$defaultFrom, $computedLastClose, $stepSec] = $this->computeWindow($stepMinutes, $limit +1, $nowSec);
         $payload = $this->requestJson('GET', self::PATH_KLINE, [
             'symbol'     => $symbol,
             'step'       => $stepMinutes,
@@ -137,14 +137,48 @@ class BitmartHttpClientPublic
             );
             throw new RuntimeException($detail);
         }
-        
-        $last = $payload['data'][count($payload['data']) - 1];
-        $lastOpenTime = (new \DateTimeImmutable('@' . $last['timestamp']))->setTimezone(new \DateTimeZone('Europe/Paris'));
-        if ($this->clock->now()->getTimestamp() - $lastOpenTime->getTimestamp() < ($stepMinutes * 60)) {
-            unset($payload['data'][count($payload['data']) - 1]);
+
+        // Normaliser l'accès au timestamp du dernier élément, quel que soit le type (array indexé/associatif ou DTO)
+        $lastIndex = \count($payload['data']) - 1;
+        $last = $payload['data'][$lastIndex] ?? null;
+
+        $extractTs = static function(mixed $item): ?int {
+            // KlineDto provider
+            if ($item instanceof \App\Provider\Bitmart\Dto\KlineDto) {
+                return (int) $item->timestamp;
+            }
+            // Contrat générique KlineDto (provider contract)
+            if ($item instanceof \App\Contract\Provider\Dto\KlineDto) {
+                return (int) ($item->openTime->getTimestamp() ?? 0);
+            }
+            // Tableau associatif
+            if (\is_array($item)) {
+                if (isset($item['timestamp'])) {
+                    return (int) $item['timestamp'];
+                }
+                if (isset($item['open_time'])) {
+                    return (int) $item['open_time'];
+                }
+                // Tableau indexé numériquement (timestamp souvent à l'index 0)
+                if (isset($item[0]) && \is_numeric($item[0])) {
+                    return (int) $item[0];
+                }
+            }
+            return null;
+        };
+
+        $lastTs = $extractTs($last);
+        if ($lastTs !== null) {
+            $lastOpenTime = (new \DateTimeImmutable('@' . $lastTs))->setTimezone(new \DateTimeZone('UTC'));
+            // Comparaison en secondes vs fenêtre en secondes (stepMinutes * 60)
+            if ($this->clock->now()->getTimestamp() - $lastOpenTime->getTimestamp() < ($stepMinutes * 60)) {
+                // Si la dernière bougie n'est pas encore clôturée, on la retire
+                unset($payload['data'][$lastIndex]);
+            }
         }
-        
-        return new ListKlinesDto($payload['data']);
+
+        // Normaliser la structure retournée en ListKlinesDto pour éviter les accès mixtes plus loin
+        return new ListKlinesDto(\array_values($payload['data']));
 
     }
 
@@ -289,7 +323,7 @@ class BitmartHttpClientPublic
     /**
      * Calque computeWindow() pour déterminer la dernière clôture terminée.
      */
-    private function computeWindow(int $nowTs = null, int $stepMinutes, int $limit): array
+    private function computeWindow(int $stepMinutes, int $limit, ?int $nowTs = null): array
     {
        // Génère toutes les heures/minutes sous forme "HH:MM"
         $times = function (array $hours, array $minutes): array {
@@ -336,7 +370,8 @@ class BitmartHttpClientPublic
         $start = $dateWindow->modify("- $minToSubtract minutes");
         $startTs = $start->getTimestamp();
         if ($dateWindow->getTimestamp() === $startTs) {
-            $startTs -= $dateWindow->modify("- $stepMinutes minutes");
+            // Utiliser une opération DateTime explicite pour retrancher exactement stepMinutes minutes
+            $startTs = $dateWindow->modify("- {$stepMinutes} minutes")->getTimestamp();
         }
 
 
