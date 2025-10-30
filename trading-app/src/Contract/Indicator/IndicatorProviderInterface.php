@@ -26,4 +26,10 @@ interface IndicatorProviderInterface
      * et retourne les résultats individuels (nom => ConditionResult)
      */
     public function evaluateConditions(string $symbol, string $timeframe): array;
+
+    /**
+     * Retourne un ATR mis en cache par clé "symbol_tf_period".
+     * Si $key est null, il est construit à partir de $symbol/$tf et de la période par défaut.
+     */
+    public function getAtr(?string $key = null, ?string $symbol = null, ?string $tf = null): ?float;
 }

@@ -20,7 +20,7 @@ interface AccountProviderInterface
     /**
      * Récupère le solde du compte
      */
-    public function getAccountBalance(): float;
+    public function getAccountBalance(string $basicCurrency = 'USDT'): float;
 
     /**
      * Récupère les positions ouvertes
