@@ -29,6 +29,9 @@ use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 #[AsAlias(id: IndicatorProviderInterface::class)]
 final class IndicatorProviderService implements IndicatorProviderInterface
     {
+        private array $atrList = [];
+        private array $listPivot = [];
+
         public function __construct(
             private readonly KlineProviderInterface $klineProvider,
             private readonly ConditionRegistry $conditionRegistry,
@@ -259,15 +262,13 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             $period = 14; // défaut (trading.yml)
             $method = 'wilder';
 
-            if ($key === null) {
-                if ($symbol === null || $tf === null) {
-                    return null;
-                }
-                $key = sprintf('%s_%s_%d', strtoupper($symbol), strtolower($tf), $period);
+            $cacheKey = sprintf('%s|%s|%s', $key ?? '*', $symbol ?? '*', $tf ?? '*');
+            if (array_key_exists($cacheKey, $this->atrList)) {
+                $cached = $this->atrList[$cacheKey];
+                return is_numeric($cached) ? (float)$cached : null;
             }
 
             if ($symbol === null || $tf === null) {
-                // Si key seul fourni, on ne gère pas de cache ici → pas d'ATR sans contexte
                 return null;
             }
 
@@ -287,9 +288,48 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                     ];
                 }
 
-                return (float)$this->atrService->computeWithRules($ohlc, $period, $method, strtolower((string)$tf));
+                $atr = $this->atrService->computeWithRules($ohlc, $period, $method, strtolower((string)$tf));
+                if (is_numeric($atr)) {
+                    $this->atrList[$cacheKey] = (float)$atr;
+                    return (float)$atr;
+                }
+                return null;
             } catch (\Throwable $e) {
                 return null;
             }
+        }
+
+        public function getListPivot(?string $key = null, ?string $symbol = null, ?string $tf = null): ?ListIndicatorDto
+        {
+            $cacheKey = sprintf('%s|%s|%s', $key ?? '*', $symbol ?? '*', $tf ?? '*');
+            if (array_key_exists($cacheKey, $this->listPivot)) {
+                $cached = $this->listPivot[$cacheKey];
+                return $cached instanceof ListIndicatorDto ? $cached : null;
+            }
+
+            if ($symbol === null || $tf === null) {
+                return null;
+            }
+
+            try {
+                $tfEnum = Timeframe::from((string)$tf);
+                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 200);
+                if (empty($klines)) {
+                    return null;
+                }
+
+                $dto = $this->getListFromKlines($klines);
+                $this->listPivot[$cacheKey] = $dto;
+
+                return $dto;
+            } catch (\Throwable $e) {
+                return null;
+            }
+        }
+
+        public function clearCaches(): void
+        {
+            $this->atrList = [];
+            $this->listPivot = [];
         }
     }
