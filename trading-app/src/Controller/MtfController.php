@@ -577,6 +577,9 @@ class MtfController extends AbstractController
 
             $status = empty($result['errors']) ? 'success' : 'partial_success';
 
+            // Calculer un résumé par TF à partir des résultats (failed_timeframe > execution_tf > N/A)
+            $summaryByTf = $this->buildSummaryByTimeframe($result['results'] ?? []);
+
             return $this->json([
                 'status' => $status,
                 'message' => 'MTF run completed',
@@ -585,6 +588,7 @@ class MtfController extends AbstractController
                     'results' => $result['results'] ?? [],
                     'errors' => $result['errors'] ?? [],
                     'workers' => $workers,
+                    'summary_by_tf' => $summaryByTf,
                 ],
             ]);
         } catch (\Throwable $e) {
@@ -597,6 +601,31 @@ class MtfController extends AbstractController
                 'message' => $e->getMessage(),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /**
+     * Construit un résumé groupé par dernier timeframe atteint
+     * @param array<string, array<string, mixed>> $results
+     * @return array<string, string[]>
+     */
+    private function buildSummaryByTimeframe(array $results): array
+    {
+        $groups = [];
+        foreach ($results as $symbol => $info) {
+            if (!is_array($info)) { continue; }
+            $lastTf = $info['failed_timeframe'] ?? ($info['execution_tf'] ?? null);
+            $key = is_string($lastTf) && $lastTf !== '' ? $lastTf : 'N/A';
+            if (!isset($groups[$key])) { $groups[$key] = []; }
+            $groups[$key][] = (string)$symbol;
+        }
+
+        // Optionnel: trier les TF de 4h -> 1m, puis N/A
+        $order = ['4h' => 5, '1h' => 4, '15m' => 3, '5m' => 2, '1m' => 1, 'N/A' => 0];
+        uksort($groups, function($a, $b) use ($order) {
+            return ($order[$b] ?? 0) - ($order[$a] ?? 0);
+        });
+
+        return $groups;
     }
 
     /**

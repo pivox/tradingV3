@@ -60,8 +60,8 @@ final class MtfRunOrchestrator
         }
 
         try {
-            // Charger les symboles actifs
-            $symbols = $this->loadActiveSymbols($mtfRunDto, $runIdString);
+            // Utiliser la liste de symboles fournie par le DTO
+            $symbols = $mtfRunDto->symbols;
             if (empty($symbols)) {
                 yield from $this->yieldEmptyResult($mtfRunDto, $runId, $startTime);
                 return;
@@ -134,12 +134,19 @@ final class MtfRunOrchestrator
             return true;
         }
 
+        // Par défaut: table vide ⇒ ON. On définit l'état par défaut à ON avant vérification.
+        $this->featureSwitch->setDefaultState('mtf_global_switch', true);
+
         if (!$this->featureSwitch->isEnabled('mtf_global_switch')) {
             $this->logger->debug('[MTF Orchestrator] Global switch OFF', [
                 'run_id' => $runIdString
             ]);
             return false;
         }
+
+        $this->logger->debug('[MTF Orchestrator] Global switch ON', [
+            'run_id' => $runIdString
+        ]);
 
         return true;
     }
@@ -158,15 +165,7 @@ final class MtfRunOrchestrator
         return $this->lockManager->acquireLockWithRetry($lockKey, $lockTimeout, 3, 100);
     }
 
-    private function loadActiveSymbols(MtfRunDto $mtfRunDto, string $runIdString): array
-    {
-        if (!empty($mtfRunDto->symbols)) {
-            return $mtfRunDto->symbols;
-        }
-
-        // TODO: Implémenter le chargement des symboles actifs
-        return ['BTCUSDT', 'ETHUSDT', 'ADAUSDT'];
-    }
+    
 
     private function createRunSummary(
         UuidInterface $runId,

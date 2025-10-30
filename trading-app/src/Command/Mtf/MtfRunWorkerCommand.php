@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command\Mtf;
 
+use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\MtfValidator\Service\MtfRunService;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -53,14 +54,30 @@ final class MtfRunWorkerCommand extends Command
 
         try {
             // En mode worker, activer le verrou par symbole pour éviter le blocage global
-            $generator = $this->mtfRunService->run($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck, true);
-            $yielded = iterator_to_array($generator);
-            $final = $generator->getReturn();
+            $request = new MtfRunRequestDto(
+                symbols: $symbols,
+                dryRun: $dryRun,
+                forceRun: $forceRun,
+                currentTf: $currentTf,
+                forceTimeframeCheck: $forceTimeframeCheck,
+                lockPerSymbol: true
+            );
+            $response = $this->mtfRunService->run($request);
+
+            // Convertir les résultats en map symbol => result
+            $resultsMap = [];
+            foreach ($response->results as $entry) {
+                if (isset($entry['symbol'], $entry['result'])) {
+                    $resultsMap[(string)$entry['symbol']] = (array)$entry['result'];
+                }
+            }
 
             $payload = [
                 'symbols' => $symbols,
-                'yielded' => $yielded,
-                'final' => $final,
+                'final' => [
+                    'results' => $resultsMap,
+                    'summary' => $response->toArray(),
+                ],
                 'options' => [
                     'dry_run' => $dryRun,
                     'force_run' => $forceRun,

@@ -22,7 +22,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Process\Process;
 
-#[AsCommand(name: 'mtf:run', description: 'Exécute un cycle MTF pour une liste de symboles (dry-run par défaut) avec un output détaillé')]
+#[AsCommand(name: 'mtf:runss', description: 'Exécute un cycle MTF pour une liste de symboles (dry-run par défaut) avec un output détaillé')]
 class MtfRunCommand extends Command
 {
     public function __construct(
@@ -195,9 +195,9 @@ class MtfRunCommand extends Command
             forceTimeframeCheck: $options['force_timeframe_check'],
             lockPerSymbol: true
         );
-        
+
         $response = $this->mtfRunService->run($request);
-        
+
         // Convertir la réponse en format compatible avec l'ancien code
         $generator = $this->convertResponseToGenerator($response);
 
