@@ -8,6 +8,8 @@ use App\TradeEntry\Dto\{TradeEntryRequest, PreflightReport};
 use App\TradeEntry\Pricing\TickQuantizer;
 use App\TradeEntry\RiskSizer\{PositionSizer, StopLossCalculator, TakeProfitCalculator};
 use App\TradeEntry\Types\Side;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class OrderPlanBuilder
 {
@@ -16,6 +18,8 @@ final class OrderPlanBuilder
         private readonly StopLossCalculator $slc,
         private readonly TakeProfitCalculator $tpc,
         private readonly LeverageServiceInterface $leverageService,
+        #[Autowire(service: 'monolog.logger.positions_flow')] private readonly LoggerInterface $flowLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
     public function build(TradeEntryRequest $req, PreflightReport $pre): OrderPlanModel
@@ -54,6 +58,17 @@ final class OrderPlanBuilder
             $entry = $req->side === Side::Long ? $pre->bestAsk : $pre->bestBid;
         }
 
+        $this->flowLogger->debug('order_plan.entry_price_selected', [
+            'symbol' => $req->symbol,
+            'side' => $req->side->value,
+            'order_type' => $req->orderType,
+            'best_bid' => $pre->bestBid,
+            'best_ask' => $pre->bestAsk,
+            'tick' => $tick,
+            'entry_limit_hint' => $req->entryLimitHint,
+            'entry' => $entry,
+        ]);
+
         if ($entry <= 0.0) {
             throw new \RuntimeException('Prix d\'entrée invalide');
         }
@@ -72,11 +87,33 @@ final class OrderPlanBuilder
             ? $this->slc->conservative($req->side, $stopAtr, $stopRisk)
             : $stopRisk;
 
+        $this->flowLogger->debug('order_plan.sizing', [
+            'symbol' => $req->symbol,
+            'risk_usdt' => $riskUsdt,
+            'sizing_distance' => $sizingDistance,
+            'contract_size' => $contractSize,
+            'min_volume' => $minVolume,
+            'size' => $size,
+        ]);
+
         if ($stop <= 0.0 || $stop === $entry) {
             throw new \RuntimeException('Stop loss invalide');
         }
 
         $takeProfit = $this->tpc->fromRMultiple($entry, $stop, $req->side, $req->rMultiple, $precision);
+
+        $this->flowLogger->debug('order_plan.stop_and_tp', [
+            'symbol' => $req->symbol,
+            'entry' => $entry,
+            'stop_from' => $req->stopFrom,
+            'atr_value' => $req->atrValue,
+            'atr_k' => $req->atrK,
+            'stop_atr' => $stopAtr,
+            'stop_risk' => $stopRisk,
+            'stop' => $stop,
+            'tp' => $takeProfit,
+            'r_multiple' => $req->rMultiple,
+        ]);
 
         $leverage = $this->leverageService->computeLeverage(
             $req->symbol,
@@ -91,7 +128,7 @@ final class OrderPlanBuilder
 
         $orderMode = $req->orderType === 'market' ? 1 : $req->orderMode;
 
-        return new OrderPlanModel(
+        $model = new OrderPlanModel(
             symbol: $req->symbol,
             side: $req->side,
             orderType: $req->orderType,
@@ -105,5 +142,20 @@ final class OrderPlanBuilder
             pricePrecision: $precision,
             contractSize: $contractSize,
         );
+
+        $this->positionsLogger->info('order_plan.model_ready', [
+            'symbol' => $model->symbol,
+            'side' => $model->side->value,
+            'order_type' => $model->orderType,
+            'open_type' => $model->openType,
+            'order_mode' => $model->orderMode,
+            'entry' => $model->entry,
+            'stop' => $model->sl,
+            'take_profit' => $model->tp1,
+            'size' => $model->quantity,
+            'leverage' => $model->leverage,
+        ]);
+
+        return $model;
     }
 }

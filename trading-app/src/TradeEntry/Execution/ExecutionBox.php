@@ -23,10 +23,28 @@ final class ExecutionBox
     public function execute(OrderPlanModel $plan): ExecutionResult
     {
         $this->makerOnly->enforce($plan);
+        $this->logger->debug('execution.start', [
+            'symbol' => $plan->symbol,
+            'side' => $plan->side->value,
+            'entry' => $plan->entry,
+            'quantity' => $plan->quantity,
+            'leverage' => $plan->leverage,
+            'order_type' => $plan->orderType,
+            'mode' => $plan->orderMode,
+        ]);
 
         $clientOrderId = $this->idempotency->newClientOrderId();
 
+        $this->logger->debug('execution.leverage_submit', [
+            'symbol' => $plan->symbol,
+            'leverage' => $plan->leverage,
+            'open_type' => $plan->openType,
+        ]);
         $leverageResult = $this->providers->getOrderProvider()->submitLeverage($plan->symbol, $plan->leverage, $plan->openType);
+        $this->logger->debug('execution.leverage_response', [
+            'symbol' => $plan->symbol,
+            'result' => $leverageResult,
+        ]);
 
         $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
         
@@ -38,6 +56,7 @@ final class ExecutionBox
             4 => OrderSide::SELL,  // open_short
         };
         
+        $this->logger->debug('execution.order_submit', $payload);
         $orderResult = $this->providers->getOrderProvider()->placeOrder(
             symbol: $payload['symbol'],
             side: $side,
@@ -55,6 +74,10 @@ final class ExecutionBox
                 'preset_stop_loss_price_type' => $payload['preset_stop_loss_price_type'],
             ]
         );
+        $this->logger->debug('execution.order_response', [
+            'symbol' => $plan->symbol,
+            'result' => $orderResult,
+        ]);
 
         $this->logger->info('trade_entry.order_submitted', [
             'payload' => $payload,
@@ -64,6 +87,14 @@ final class ExecutionBox
 
         $orderId = $orderResult['data']['order_id'] ?? null;
         $statusCode = (int)($orderResult['code'] ?? 0);
+
+        if ($statusCode !== 1000) {
+            $this->logger->error('execution.order_error', [
+                'symbol' => $plan->symbol,
+                'code' => $statusCode,
+                'result' => $orderResult,
+            ]);
+        }
 
         return new ExecutionResult(
             clientOrderId: $clientOrderId,
