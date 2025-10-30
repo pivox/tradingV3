@@ -32,4 +32,8 @@ interface IndicatorProviderInterface
      * Si $key est null, il est construit à partir de $symbol/$tf et de la période par défaut.
      */
     public function getAtr(?string $key = null, ?string $symbol = null, ?string $tf = null): ?float;
+
+    public function getListPivot(?string $key = null, ?string $symbol = null, ?string $tf = null): ?ListIndicatorDto;
+
+    public function clearCaches(): void;
 }
