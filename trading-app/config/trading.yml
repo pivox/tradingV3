@@ -242,15 +242,17 @@ logging:
 post_validation:
     entry_zone:
         vwap_anchor: true
-        k_atr: 0.35                    # largeur relative à ATR
-        w_min: 0.0005                  # largeur minimale (0.05%)
-        w_max: 0.0100                  # largeur maximale (1.00%)
-        spread_bps_max: 2.0            # spread max en bps
-        depth_min_usd: 20000           # profondeur minimale en USD
-        mark_index_gap_bps_max: 15.0   # écart Mark/Index max en bps
+        # Réf. ATR (Average True Range): https://www.investopedia.com/terms/a/atr.asp
+        # Réf. VWAP (Volume-Weighted Average Price): https://www.investopedia.com/terms/v/vwap.asp
+        k_atr: 0.70                    # largeur relative à ATR (élargie de 0.35 → 0.50)
+        w_min: 0.0008                  # largeur minimale (0.08% au lieu de 0.05%)
+        w_max: 0.0150                  # largeur maximale (1.50% au lieu de 1.00%)
+        spread_bps_max: 2.0            # spread max en bps => n'est pas encore implémenté
+        depth_min_usd: 20000           # profondeur minimale en USD => n'est pas encore implémenté
+        mark_index_gap_bps_max: 15.0   # écart Mark/Index max en bps => n'est pas encore implémenté
         quantize_to_exchange_step: true # quantification aux pas exchange
 
-    execution_timeframe:
+    execution_timeframe: # n'esst pas encore implémenté
         default: "5m"                  # timeframe par défaut
         upshift_to_1m:
             atr_pct_hi: 0.12           # ATR >= 0.12% pour upshift
@@ -261,7 +263,7 @@ post_validation:
             atr_pct_lo: 0.07           # ATR < 0.07% pour downshift
             spread_bps_max: 4.0        # spread max pour downshift
 
-    sizing:
+    sizing: # n'est pas encore implémenté
         risk_pct: 0.005                # 0.5% du capital risqué
         sl_mult_atr: 1.5               # SL = 1.5x ATR
         tp_r_multiple: 2.0             # TP = 2R
@@ -269,9 +271,9 @@ post_validation:
         budget_usdt: 20               # budget fixe en USDT
 
     leverage:
-        use_submit_leverage: true      # utiliser submit-leverage
-        respect_bracket: true          # respecter les brackets exchange
-        cap_pct_of_exchange: 0.60      # 60% du levier max exchange
+        use_submit_leverage: true      # utiliser submit-leverage => n'est pas encore implémenté
+        respect_bracket: true          # respecter les brackets exchange => n'est pas encore implémenté
+        cap_pct_of_exchange: 0.60      # 60% du levier max exchange => n'est pas encore implémenté
         timeframe_multipliers:
             '1m': 0.5                  # réduction pour 1m
             '5m': 0.75                 # réduction pour 5m
@@ -282,7 +284,7 @@ post_validation:
             enabled: true
             cap_pct_of_exchange: 0.60  # boost conviction limité à 60%
 
-    order_plan:
+    order_plan: # n'est pas encore implémenté
         prefer_maker: true             # préférer les ordres maker
         maker:
             mode: "GTC"                # Good Till Cancelled
@@ -298,12 +300,12 @@ post_validation:
             plan_category: 2           # Position TP/SL
 
     guards:
-        stale_ticker_sec: 2            # données obsolètes après 2s
-        max_slip_bps: 5                # slippage max en bps
-        min_liquidity_usd: 10000       # liquidité minimale en USD
-        funding_cutoff_min: 5          # cutoff funding 5min avant
-        max_funding_rate: 0.01         # funding rate max (1%)
-        mark_index_gap_bps_max: 15.0   # écart Mark/Index max
+        stale_ticker_sec: 2            # données obsolètes après 2s => n'est pas encore implémenté
+        max_slip_bps: 5                # slippage max en bps => n'est pas encore implémenté
+        min_liquidity_usd: 10000       # liquidité minimale en USD => n'est pas encore implémenté
+        funding_cutoff_min: 5          # cutoff funding 5min avant => n'est pas encore implémenté
+        max_funding_rate: 0.01         # funding rate max (1%) => n'est pas encore implémenté
+        mark_index_gap_bps_max: 15.0   # écart Mark/Index max => n'est pas encore implémenté
 
     idempotency:
         decision_key_tpl: "{symbol}:{timeframe}:{candle_close_ts}"

@@ -271,3 +271,11 @@ services:
             - trade_entry
         tags:
             - { name: monolog.logger, channel: trade_entry }
+
+    # Logger spécifique pour Bitmart (HTTP public/privé)
+    monolog.logger.bitmart:
+        parent: monolog.logger
+        arguments:
+            - bitmart
+        tags:
+            - { name: monolog.logger, channel: bitmart }
