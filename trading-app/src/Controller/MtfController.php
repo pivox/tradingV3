@@ -736,7 +736,9 @@ class MtfController extends AbstractController
                 $symbol = $queue->dequeue();
                 $process = new Process(
                     $this->buildWorkerCommand($symbol, $options),
-                    $this->projectDir
+                    $this->projectDir,
+                    // activer les traces détaillées côté worker
+                    ['APP_DEBUG' => '1']
                 );
                 $process->start();
                 $active[] = ['symbol' => $symbol, 'process' => $process];
@@ -779,8 +781,10 @@ class MtfController extends AbstractController
                         }
                     }
                 } else {
-                    $errorOutput = trim($process->getErrorOutput());
-                    $errors[] = sprintf('Worker %s: %s', $symbol, $errorOutput !== '' ? $errorOutput : 'unknown error');
+                    $stderr = trim($process->getErrorOutput());
+                    $stdout = trim($process->getOutput());
+                    $msg = $stderr !== '' ? $stderr : ($stdout !== '' ? $stdout : 'unknown error');
+                    $errors[] = sprintf('Worker %s: %s', $symbol, $msg);
                 }
             }
 
@@ -826,8 +830,9 @@ class MtfController extends AbstractController
      */
     private function buildWorkerCommand(string $symbol, array $options): array
     {
+        $php = $this->detectPhpCliBinary();
         $command = [
-            'php',
+            $php,
             'bin/console',
             'mtf:run-worker',
             '--symbols=' . $symbol,
@@ -845,5 +850,23 @@ class MtfController extends AbstractController
         }
 
         return $command;
+    }
+
+    private function detectPhpCliBinary(): string
+    {
+        $candidates = [];
+        $env = getenv('PHP_CLI_BIN');
+        if (is_string($env) && $env !== '') { $candidates[] = $env; }
+        $candidates[] = '/usr/local/bin/php';
+        $candidates[] = '/usr/bin/php';
+        $candidates[] = 'php';
+        foreach ($candidates as $bin) {
+            // If absolute path, ensure it exists; otherwise rely on PATH
+            if ($bin[0] === '/' && !is_file($this->projectDir . '/bin/console')) {
+                // nothing
+            }
+            return $bin;
+        }
+        return 'php';
     }
 }
