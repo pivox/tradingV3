@@ -164,7 +164,7 @@ mtf_validation:
             decreasing: { field: 'macd_hist', n: 2 }
 
     validation:
-        start_from_timeframe: '1h'
+        start_from_timeframe: '4h'
 
         timeframe:
 
