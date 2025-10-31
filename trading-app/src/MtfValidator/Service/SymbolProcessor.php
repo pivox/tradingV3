@@ -45,7 +45,8 @@ final class SymbolProcessor
                 $now,
                 $mtfRunDto->currentTf,
                 $mtfRunDto->forceTimeframeCheck,
-                $mtfRunDto->forceRun
+                $mtfRunDto->forceRun,
+                $mtfRunDto->skipContextValidation
             );
 
             // Consommer le generator et récupérer le résultat

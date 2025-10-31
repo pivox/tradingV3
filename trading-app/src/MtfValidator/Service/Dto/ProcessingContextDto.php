@@ -16,6 +16,7 @@ final class ProcessingContextDto
         public readonly array $collector = [],
         public readonly bool $forceTimeframeCheck = false,
         public readonly bool $forceRun = false,
+        public readonly bool $skipContextValidation = false,
         public readonly ?string $userId = null,
         public readonly ?string $ipAddress = null,
         public readonly ?array $metadata = null
@@ -32,6 +33,7 @@ final class ProcessingContextDto
             collector: $context->collector,
             forceTimeframeCheck: $context->forceTimeframeCheck,
             forceRun: $context->forceRun,
+            skipContextValidation: $context->skipContextValidation ?? false,
             userId: $context->userId,
             ipAddress: $context->ipAddress
         );
@@ -45,6 +47,7 @@ final class ProcessingContextDto
             collector: $this->collector,
             forceTimeframeCheck: $this->forceTimeframeCheck,
             forceRun: $this->forceRun,
+            skipContextValidation: $this->skipContextValidation,
             userId: $this->userId,
             ipAddress: $this->ipAddress
         );
@@ -59,6 +62,7 @@ final class ProcessingContextDto
             'collector' => $this->collector,
             'force_timeframe_check' => $this->forceTimeframeCheck,
             'force_run' => $this->forceRun,
+            'skip_context' => $this->skipContextValidation,
             'user_id' => $this->userId,
             'ip_address' => $this->ipAddress,
             'metadata' => $this->metadata

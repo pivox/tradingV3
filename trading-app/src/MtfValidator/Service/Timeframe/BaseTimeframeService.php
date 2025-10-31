@@ -130,7 +130,6 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
 
             // Validation des signaux
             $validationResult = $this->signalValidationService->validate($timeframe->value, $klines, $known, $contract);
-
             // Extraire le signal du timeframe actuel
             $tfLower = strtolower($timeframe->value);
             $validationArray = $validationResult->toArray();
@@ -145,6 +144,35 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
             $atr = $signalData['atr'] ?? null;
 
             if ($status === 'FAILED') {
+                // Option de test: bypass de l'alignement de contexte pour TF d'exécution
+                if ($context->skipContextValidation ?? false) {
+                    try {
+                        $cfg = $this->mtfConfig->getConfig();
+                        $executionTfs = array_map('strtolower', (array)($cfg['validation']['execution'] ?? ($cfg['mtf']['execution'] ?? [])));
+                    } catch (\Throwable) {
+                        $executionTfs = [];
+                    }
+                    if (in_array($tfLower, $executionTfs, true) && strtoupper((string)$signalSide) !== 'NONE') {
+                        // Considérer comme succès pour tests (VALID)
+                        $this->auditStep($runId, $symbol, "{$timeframe->value}_VALIDATION_BYPASS", 'Bypass context alignment (skip-context)', [
+                            'timeframe' => $timeframe->value,
+                            'signal_side' => $signalSide,
+                            'kline_time' => $klineTime,
+                            'passed' => true,
+                            'severity' => 0,
+                        ]);
+                        return new InternalTimeframeResultDto(
+                            timeframe: $timeframe->value,
+                            status: 'VALID',
+                            signalSide: $signalSide,
+                            klineTime: $klineTime,
+                            currentPrice: $currentPrice,
+                            atr: $atr,
+                            indicatorContext: $signalData['indicator_context'] ?? null,
+                            reason: 'skip_context'
+                        );
+                    }
+                }
                 // Extraire les listes de conditions depuis le payload du service de signal
                 $failedLong  = (array)($signalData['failed_conditions_long']  ?? []);
                 $failedShort = (array)($signalData['failed_conditions_short'] ?? []);

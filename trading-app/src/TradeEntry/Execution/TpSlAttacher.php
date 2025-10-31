@@ -18,14 +18,15 @@ final class TpSlAttacher
             'open_type' => $plan->openType,
             'size' => $plan->size,
             'client_order_id' => $clientOrderId,
-            'preset_take_profit_price' => (string)$plan->takeProfit,
-            'preset_take_profit_price_type' => 1,
-            'preset_stop_loss_price' => (string)$plan->stop,
-            'preset_stop_loss_price_type' => 1,
         ];
 
         if ($plan->orderType === 'limit') {
+            // Pour LIMIT: fournir le prix et les TP/SL préconfigurés
             $payload['price'] = (string)$plan->entry;
+            $payload['preset_take_profit_price'] = (string)$plan->takeProfit;
+            $payload['preset_take_profit_price_type'] = 1;
+            $payload['preset_stop_loss_price'] = (string)$plan->stop;
+            $payload['preset_stop_loss_price_type'] = 1;
         }
 
         return $payload;

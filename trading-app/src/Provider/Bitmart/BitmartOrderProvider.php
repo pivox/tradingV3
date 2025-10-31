@@ -75,7 +75,45 @@ final class BitmartOrderProvider implements OrderProviderInterface
             $response = $this->bitmartClient->submitOrder($payload);
 
             if (isset($response['data']['order_id'])) {
-                return $this->getOrder($response['data']['order_id']);
+                // Bitmart may return order_id as int; cast to string for DTO expectations
+                $orderId = (string) $response['data']['order_id'];
+
+                // Short retry loop for eventual consistency on order-detail
+                $orderDto = null;
+                for ($i = 0; $i < 3; $i++) {
+                    $orderDto = $this->getOrder($orderId);
+                    if ($orderDto !== null) {
+                        break;
+                    }
+                    usleep(250_000); // 250ms
+                }
+
+                if ($orderDto !== null) {
+                    return $orderDto;
+                }
+
+                // Fallback: return a minimal submitted OrderDto so caller treats it as submitted
+                $now = (new \DateTimeImmutable('now'))->format('Y-m-d H:i:s');
+                return OrderDto::fromArray([
+                    'order_id' => $orderId,
+                    'symbol' => $symbol,
+                    'side' => $side->value,
+                    'type' => $type->value,
+                    'status' => 'pending',
+                    'quantity' => (string) $quantity,
+                    'price' => $price !== null ? (string) $price : null,
+                    'stop_price' => $stopPrice !== null ? (string) $stopPrice : null,
+                    'filled_quantity' => '0',
+                    'remaining_quantity' => (string) $quantity,
+                    'average_price' => null,
+                    'created_at' => $now,
+                    'updated_at' => null,
+                    'filled_at' => null,
+                    'metadata' => [
+                        'provider' => 'bitmart',
+                        'submit_only' => true,
+                    ],
+                ]);
             }
 
             return null;

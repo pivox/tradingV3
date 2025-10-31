@@ -49,6 +49,7 @@ class MtfRunCommand extends Command
             ->addOption('tf', null, InputOption::VALUE_OPTIONAL, 'Limiter l\'exécution à un unique timeframe (4h|1h|15m|5m|1m)')
             ->addOption('sync-contracts', null, InputOption::VALUE_NONE, 'Forcer la synchronisation (fetch + upsert) des contrats au démarrage (activé par défaut)')
             ->addOption('force-timeframe-check', null, InputOption::VALUE_NONE, 'Force l\'analyse du timeframe même si la dernière kline est récente')
+            ->addOption('skip-context', null, InputOption::VALUE_NONE, 'Ignorer l\'alignement de contexte pour les TF d\'exécution (bypass de validation contextuelle)')
             ->addOption('auto-switch-invalid', null, InputOption::VALUE_NONE, 'Ajoute automatiquement les symboles INVALID à mtf_switch après l\'exécution')
             ->addOption('switch-duration', null, InputOption::VALUE_OPTIONAL, 'Durée de désactivation pour les symboles INVALID (ex: 4h, 1d, 1w)', '1d')
             ->addOption('limit', null, InputOption::VALUE_OPTIONAL, 'Nombre maximum de symboles à traiter quand --symbols est absent (0 = illimité)', '0')
@@ -68,6 +69,7 @@ class MtfRunCommand extends Command
         $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
         $syncContractsOpt = (bool) $input->getOption('sync-contracts');
         $forceTimeframeCheck = (bool) $input->getOption('force-timeframe-check');
+        $skipContext = (bool) $input->getOption('skip-context');
         $autoSwitchInvalid = (bool) $input->getOption('auto-switch-invalid');
         $switchDuration = (string) $input->getOption('switch-duration');
         $workers = max(1, (int) $input->getOption('workers'));
@@ -144,6 +146,7 @@ class MtfRunCommand extends Command
                 'force_run' => $forceRun,
                 'current_tf' => $currentTf,
                 'force_timeframe_check' => $forceTimeframeCheck,
+                'skip_context' => $skipContext,
                 'auto_switch_invalid' => $autoSwitchInvalid,
                 'switch_duration' => $switchDuration,
             ];
@@ -195,7 +198,8 @@ class MtfRunCommand extends Command
             dryRun: $options['dry_run'],
             forceRun: $options['force_run'],
             currentTf: $options['current_tf'],
-            forceTimeframeCheck: $options['force_timeframe_check']
+            forceTimeframeCheck: $options['force_timeframe_check'],
+            skipContextValidation: (bool)($options['skip_context'] ?? false)
         );
         $response = $this->mtfRunService->run($mtfRunRequestDto);
 
@@ -515,6 +519,9 @@ class MtfRunCommand extends Command
         }
         if ($options['auto_switch_invalid']) {
             $command[] = '--auto-switch-invalid';
+        }
+        if (!empty($options['skip_context'])) {
+            $command[] = '--skip-context';
         }
 
         return $command;

@@ -15,6 +15,7 @@ final class ValidationContextDto
         public readonly array $collector = [],
         public readonly bool $forceTimeframeCheck = false,
         public readonly bool $forceRun = false,
+        public readonly bool $skipContextValidation = false,
         public readonly ?string $userId = null,
         public readonly ?string $ipAddress = null
     ) {}
@@ -25,6 +26,7 @@ final class ValidationContextDto
         array $collector = [],
         bool $forceTimeframeCheck = false,
         bool $forceRun = false,
+        bool $skipContextValidation = false,
         ?string $userId = null,
         ?string $ipAddress = null
     ): self {
@@ -34,6 +36,7 @@ final class ValidationContextDto
             collector: $collector,
             forceTimeframeCheck: $forceTimeframeCheck,
             forceRun: $forceRun,
+            skipContextValidation: $skipContextValidation,
             userId: $userId,
             ipAddress: $ipAddress
         );
@@ -47,6 +50,7 @@ final class ValidationContextDto
             'collector' => $this->collector,
             'force_timeframe_check' => $this->forceTimeframeCheck,
             'force_run' => $this->forceRun,
+            'skip_context' => $this->skipContextValidation,
             'user_id' => $this->userId,
             'ip_address' => $this->ipAddress
         ];

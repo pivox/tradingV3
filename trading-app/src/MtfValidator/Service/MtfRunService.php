@@ -46,6 +46,7 @@ class MtfRunService implements MtfValidatorInterface
                 forceRun: $request->forceRun,
                 currentTf: $request->currentTf,
                 forceTimeframeCheck: $request->forceTimeframeCheck,
+                skipContextValidation: $request->skipContextValidation,
                 lockPerSymbol: $request->lockPerSymbol
             );
             
