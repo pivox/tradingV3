@@ -5,7 +5,7 @@ namespace App\TradeEntry\Workflow;
 
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Dto\{TradeEntryRequest, PreflightReport};
-use App\TradeEntry\EntryZone\{EntryZoneCalculator, EntryZoneFilters};
+use App\TradeEntry\EntryZone\{EntryZoneCalculator, EntryZoneFilters, EntryZone};
 use App\TradeEntry\OrderPlan\OrderPlanBox;
 use App\TradeEntry\Policy\LiquidationGuard;
 use App\TradeEntry\Types\Side;
@@ -33,13 +33,10 @@ final class BuildOrderPlan
             'decision_key' => $decisionKey,
         ]);
 
-        $plan = $this->box->create($req, $pre, $decisionKey);
-
+        // Compute entry zone first, then create the plan with zone so builder can clamp entry if needed
         $zone = $this->zones->compute($req->symbol, $req->side, $pre->pricePrecision, $decisionKey);
-        $candidate = $plan->entry;
-        if ($candidate <= 0.0) {
-            $candidate = $req->side === Side::Long ? $pre->bestAsk : $pre->bestBid;
-        }
+        $plan = $this->box->create($req, $pre, $decisionKey, $zone);
+        $candidate = $plan->entry > 0.0 ? $plan->entry : ($req->side === Side::Long ? $pre->bestAsk : $pre->bestBid);
 
         $this->flowLogger->debug('build_order_plan.entry_zone', [
             'symbol' => $req->symbol,
@@ -51,8 +48,9 @@ final class BuildOrderPlan
             'rationale' => $zone->rationale,
         ]);
 
+        // After clamping inside builder, entry should be within zone. If not, log and fail fast.
         if (!$zone->contains($candidate)) {
-            $this->flowLogger->error('build_order_plan.entry_out_of_zone', [
+            $this->flowLogger->error('build_order_plan.entry_out_of_zone_after_clamp', [
                 'symbol' => $req->symbol,
                 'decision_key' => $decisionKey,
                 'candidate' => $candidate,
