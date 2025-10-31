@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Contract\Provider\MainProviderInterface;
 use App\MtfValidator\Service\MtfService;
 use App\MtfValidator\Service\MtfRunService;
 use App\Repository\ContractRepository;
@@ -39,6 +40,7 @@ class MtfController extends AbstractController
         private readonly MtfRunService $mtfRunService,
         private readonly ClockInterface $clock,
         private readonly ContractRepository $contractRepository,
+        private readonly MainProviderInterface $mainProvider,
         #[Autowire('%kernel.project_dir%')]
         private readonly string $projectDir,
     ) {
@@ -535,6 +537,65 @@ class MtfController extends AbstractController
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    #[Route('/sync-contracts', name: 'sync_contracts', methods: ['POST', 'GET'])]
+    public function syncContracts(Request $request): JsonResponse
+    {
+        try {
+            // Parse JSON request body for POST or query parameters for GET
+            $data = [];
+            if ($request->getMethod() === 'POST') {
+                $data = json_decode($request->getContent(), true) ?? [];
+            } else {
+                // For GET requests, get parameters from query string
+                $data = $request->query->all();
+            }
+
+            // Parse symbols parameter (can be array or comma-separated string)
+            $symbolsInput = $data['symbols'] ?? null;
+            $symbols = null;
+
+            if ($symbolsInput !== null) {
+                if (is_string($symbolsInput)) {
+                    $symbols = array_filter(array_map('trim', explode(',', $symbolsInput)));
+                } elseif (is_array($symbolsInput)) {
+                    $symbols = array_filter(array_map('trim', $symbolsInput));
+                }
+            }
+
+            $this->logger->info('[MTF Controller] Contract synchronization started', [
+                'symbols' => $symbols,
+                'timestamp' => $this->clock->now()->format('Y-m-d H:i:s'),
+            ]);
+
+            // Call the provider sync method
+            $provider = $this->mainProvider->getContractProvider();
+            $result = $provider->syncContracts($symbols);
+
+            $status = empty($result['errors']) ? 'success' : 'partial_success';
+
+            return $this->json([
+                'status' => $status,
+                'message' => 'Contract synchronization completed',
+                'data' => [
+                    'upserted' => $result['upserted'],
+                    'total_fetched' => $result['total_fetched'],
+                    'symbols_requested' => $symbols ?? 'all',
+                    'timestamp' => $this->clock->now()->format('Y-m-d H:i:s'),
+                ],
+                'errors' => $result['errors'],
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->error('[MTF Controller] Failed to synchronize contracts', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return $this->json([
+                'status' => 'error',
+                'message' => $e->getMessage(),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
