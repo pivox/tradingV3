@@ -12,6 +12,33 @@ FILES ?=
 
 DC := $(COMPOSE) $(FILES)
 
+# Trading App service name
+TA_SVC ?= trading-app-php
+
+.PHONY: build-trading-app-dev build-trading-app-prod \
+        rebuild-trading-app-dev rebuild-trading-app-prod \
+        up-trading-app restart-trading-app
+
+# Build image with dev tooling (xdebug, dev composer deps)
+build-trading-app-dev: ## Build trading-app image for dev (APP_ENV=dev)
+	$(DC) build --build-arg APP_ENV=dev $(TA_SVC)
+
+# Build image optimized for production (no xdebug, no dev deps)
+build-trading-app-prod: ## Build trading-app image for prod (APP_ENV=prod)
+	$(DC) build --build-arg APP_ENV=prod $(TA_SVC)
+
+# Rebuild + restart only the PHP service (dev)
+rebuild-trading-app-dev: build-trading-app-dev ## Rebuild + restart trading-app for dev
+	$(DC) up -d --no-deps $(TA_SVC)
+
+# Rebuild + restart only the PHP service (prod)
+rebuild-trading-app-prod: build-trading-app-prod ## Rebuild + restart trading-app for prod
+	$(DC) up -d --no-deps $(TA_SVC)
+
+# Restart PHP service without rebuilding
+restart-trading-app: ## Restart trading-app PHP service
+	$(DC) restart $(TA_SVC)
+
 .PHONY: help-api-limiter build-api-limiter up-api-limiter rebuild-api-limiter \
         clean-rebuild-api-limiter watch-api-limiter status-api-limiter logs-api-limiter verify-api-limiter
 
