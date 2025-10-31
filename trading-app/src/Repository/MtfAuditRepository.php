@@ -156,11 +156,14 @@ class MtfAuditRepository extends ServiceEntityRepository
         $sql = <<<SQL
 WITH base AS (
   SELECT
-    timeframe,
+    COALESCE(NULLIF(timeframe, ''), details->> 'timeframe') AS timeframe,
     step,
     symbol,
     created_at,
-    candle_close_ts,
+    COALESCE(
+      candle_close_ts,
+      NULLIF(details->> 'kline_time', '')::timestamp AT TIME ZONE 'UTC'
+    ) AS candle_ts,
     jsonb_array_elements_text(COALESCE(details->'conditions_failed','[]'::jsonb)) AS condition_name
   FROM mtf_audit
   WHERE step LIKE '%VALIDATION_FAILED%'
@@ -171,7 +174,7 @@ SELECT
   timeframe,
   COUNT(*)                AS fail_count,
   COUNT(DISTINCT symbol)  AS nb_symbols,
-  MAX(candle_close_ts)    AS last_candle_ts,
+  MAX(candle_ts)          AS last_candle_ts,
   MAX(created_at)         AS last_row_ts
 FROM base
 GROUP BY condition_name, timeframe
@@ -200,13 +203,15 @@ SQL;
 
         $sql = <<<SQL
 WITH long_side AS (
-  SELECT 'long'::text AS side, timeframe,
+  SELECT 'long'::text AS side,
+         COALESCE(NULLIF(timeframe, ''), details->> 'timeframe') AS timeframe,
          jsonb_array_elements_text(COALESCE(details->'failed_conditions_long','[]'::jsonb)) AS condition_name
   FROM mtf_audit
   WHERE step LIKE '%VALIDATION_FAILED%' {$where}
 ),
 short_side AS (
-  SELECT 'short'::text AS side, timeframe,
+  SELECT 'short'::text AS side,
+         COALESCE(NULLIF(timeframe, ''), details->> 'timeframe') AS timeframe,
          jsonb_array_elements_text(COALESCE(details->'failed_conditions_short','[]'::jsonb)) AS condition_name
   FROM mtf_audit
   WHERE step LIKE '%VALIDATION_FAILED%' {$where}
@@ -240,26 +245,38 @@ SQL;
         $sql = <<<SQL
 WITH base AS (
   SELECT
-    timeframe,
-    jsonb_array_elements_text(COALESCE(details->'conditions_failed','[]'::jsonb)) AS condition_name
+    COALESCE(NULLIF(timeframe, ''), details->> 'timeframe') AS timeframe,
+    -- Use conditions_failed when present and non-empty; otherwise fallback to union of long/short
+    jsonb_array_elements_text(
+      CASE
+        WHEN jsonb_exists(details, 'conditions_failed')
+             AND jsonb_typeof(details->'conditions_failed') = 'array'
+             AND jsonb_array_length(details->'conditions_failed') > 0
+        THEN details->'conditions_failed'
+        ELSE COALESCE(details->'failed_conditions_long','[]'::jsonb) || COALESCE(details->'failed_conditions_short','[]'::jsonb)
+      END
+    ) AS condition_name
   FROM mtf_audit
   WHERE step LIKE '%VALIDATION_FAILED%' {$where}
 ),
-tot AS (
-  SELECT timeframe, COUNT(*) AS total_fails
+agg AS (
+  SELECT timeframe, condition_name, COUNT(*) AS fail_count
   FROM base
-  GROUP BY timeframe
+  GROUP BY timeframe, condition_name
 )
 SELECT
-  b.timeframe,
-  b.condition_name,
-  COUNT(*)                                   AS fail_count,
-  t.total_fails,
-  ROUND(100.0 * COUNT(*) / t.total_fails, 2) AS fail_pct
-FROM base b
-JOIN tot  t USING (timeframe)
-GROUP BY b.timeframe, b.condition_name, t.total_fails
-ORDER BY b.timeframe, fail_count DESC
+  timeframe,
+  condition_name,
+  fail_count,
+  SUM(fail_count) OVER (PARTITION BY timeframe) AS total_fails,
+  ROUND(
+    CASE WHEN SUM(fail_count) OVER (PARTITION BY timeframe) > 0
+         THEN 100.0 * fail_count / (SUM(fail_count) OVER (PARTITION BY timeframe))
+         ELSE 0 END,
+    2
+  ) AS fail_pct
+FROM agg
+ORDER BY timeframe, fail_count DESC
 SQL;
 
         return $this->conn->executeQuery($sql, $params, $types)->fetchAllAssociative();
@@ -279,13 +296,15 @@ SQL;
 
         $sql = <<<SQL
 WITH long_side AS (
-  SELECT 'long'::text AS side, timeframe,
+  SELECT 'long'::text AS side,
+         COALESCE(NULLIF(timeframe, ''), details->> 'timeframe') AS timeframe,
          jsonb_array_elements_text(COALESCE(details->'failed_conditions_long','[]'::jsonb)) AS condition_name
   FROM mtf_audit
   WHERE step LIKE '%VALIDATION_FAILED%' {$where}
 ),
 short_side AS (
-  SELECT 'short'::text AS side, timeframe,
+  SELECT 'short'::text AS side,
+         COALESCE(NULLIF(timeframe, ''), details->> 'timeframe') AS timeframe,
          jsonb_array_elements_text(COALESCE(details->'failed_conditions_short','[]'::jsonb)) AS condition_name
   FROM mtf_audit
   WHERE step LIKE '%VALIDATION_FAILED%' {$where}
