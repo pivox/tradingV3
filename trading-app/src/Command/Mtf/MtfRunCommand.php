@@ -97,43 +97,20 @@ class MtfRunCommand extends Command
                 $io->section('Synchronisation des contrats (provider)');
                 try {
                     $contractProvider = $this->mainProvider->getContractProvider();
-                    $contractPayload = $contractProvider->getContracts();
+                    $result = $contractProvider->syncContracts($symbols);
 
-                    if ($contractPayload instanceof \Traversable) {
-                        $contractPayload = iterator_to_array($contractPayload);
-                    }
-
-                    if (!is_array($contractPayload)) {
-                        $contractPayload = [];
-                    }
-
-                    $indexedContracts = [];
-                    foreach ($contractPayload as $contract) {
-                        $symbol = $this->extractContractSymbol($contract);
-                        if ($symbol === null) {
-                            continue;
-                        }
-                        $indexedContracts[strtoupper($symbol)] = $contract;
-                    }
-
-                    $fetchedContracts = [];
-                    if (!empty($symbols)) {
-                        foreach ($symbols as $s) {
-                            $key = strtoupper($s);
-                            if (!isset($indexedContracts[$key])) {
-                                throw new \RuntimeException(sprintf('Contract not found for symbol %s', $s));
-                            }
-                            $fetchedContracts[] = $this->prepareContractPayload($indexedContracts[$key]);
-                        }
-                    } else {
-                        foreach ($indexedContracts as $contract) {
-                            $fetchedContracts[] = $this->prepareContractPayload($contract);
+                    if (!empty($result['errors'])) {
+                        foreach ($result['errors'] as $error) {
+                            $io->warning($error);
                         }
                     }
 
-                    if (!empty($fetchedContracts)) {
-                        $upserted = $this->contractRepository->upsertContracts($fetchedContracts);
-                        $io->success(sprintf('%d contrat(s) synchronisé(s) (upsert)', $upserted));
+                    if ($result['upserted'] > 0) {
+                        $io->success(sprintf(
+                            '%d contrat(s) synchronisé(s) (upsert) sur %d récupéré(s)',
+                            $result['upserted'],
+                            $result['total_fetched']
+                        ));
                     } else {
                         $io->warning('Aucun contrat récupéré depuis le provider principal');
                     }
@@ -868,86 +845,5 @@ class MtfRunCommand extends Command
         }
 
         $this->entityManager->flush();
-    }
-
-    private function extractContractSymbol(mixed $contract): ?string
-    {
-        if (is_array($contract)) {
-            return isset($contract['symbol']) ? (string) $contract['symbol'] : null;
-        }
-
-        if ($contract instanceof BitmartContractDto) {
-            return $contract->symbol;
-        }
-
-        if ($contract instanceof ProviderContractDto) {
-            return $contract->symbol;
-        }
-
-        return null;
-    }
-
-    private function prepareContractPayload(mixed $contract): array|BitmartContractDto
-    {
-        if ($contract instanceof BitmartContractDto) {
-            return $contract;
-        }
-
-        if ($contract instanceof ProviderContractDto) {
-            return $this->convertProviderContractDto($contract);
-        }
-
-        if (is_array($contract)) {
-            return $contract;
-        }
-
-        throw new \InvalidArgumentException('Unsupported contract payload type.');
-    }
-
-    private function convertProviderContractDto(ProviderContractDto $contract): array
-    {
-        return [
-            'symbol' => $contract->symbol,
-            'product_type' => $contract->productType,
-            'open_timestamp' => $this->dateToTimestamp($contract->openTimestamp),
-            'expire_timestamp' => $this->dateToTimestamp($contract->expireTimestamp),
-            'settle_timestamp' => $this->dateToTimestamp($contract->settleTimestamp),
-            'base_currency' => $contract->baseCurrency,
-            'quote_currency' => $contract->quoteCurrency,
-            'last_price' => $this->bigDecimalToFloat($contract->lastPrice),
-            'volume_24h' => $this->bigDecimalToFloat($contract->volume24h),
-            'turnover_24h' => $this->bigDecimalToFloat($contract->turnover24h),
-            'index_price' => $this->bigDecimalToFloat($contract->indexPrice),
-            'index_name' => $contract->indexName,
-            'contract_size' => $this->bigDecimalToFloat($contract->contractSize),
-            'min_leverage' => $this->bigDecimalToFloat($contract->minLeverage),
-            'max_leverage' => $this->bigDecimalToFloat($contract->maxLeverage),
-            'price_precision' => $this->bigDecimalToFloat($contract->pricePrecision),
-            'vol_precision' => $this->bigDecimalToFloat($contract->volPrecision),
-            'max_volume' => $this->bigDecimalToFloat($contract->maxVolume),
-            'min_volume' => $this->bigDecimalToFloat($contract->minVolume),
-            'funding_rate' => $this->bigDecimalToFloat($contract->fundingRate),
-            'expected_funding_rate' => $this->bigDecimalToFloat($contract->expectedFundingRate),
-            'open_interest' => $this->bigDecimalToFloat($contract->openInterest),
-            'open_interest_value' => $this->bigDecimalToFloat($contract->openInterestValue),
-            'high_24h' => $this->bigDecimalToFloat($contract->high24h),
-            'low_24h' => $this->bigDecimalToFloat($contract->low24h),
-            'change_24h' => $this->bigDecimalToFloat($contract->change24h),
-            'funding_time' => $this->dateToTimestamp($contract->fundingTime),
-            'market_max_volume' => $this->bigDecimalToFloat($contract->marketMaxVolume),
-            'funding_interval_hours' => $contract->fundingIntervalHours,
-            'status' => $contract->status,
-            'delist_time' => $this->dateToTimestamp($contract->delistTime),
-        ];
-    }
-
-    private function bigDecimalToFloat(?BigDecimal $value): ?float
-    {
-        return $value?->toFloat();
-    }
-
-    private function dateToTimestamp(?\DateTimeImmutable $date): ?int
-    {
-        return $date?->getTimestamp();
     }
 }

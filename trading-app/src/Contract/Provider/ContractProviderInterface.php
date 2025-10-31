@@ -45,4 +45,12 @@ interface ContractProviderInterface
      * Récupère les brackets de levier
      */
     public function getLeverageBrackets(string $symbol): array;
+
+    /**
+     * Synchronise les contrats (fetch + upsert en base)
+     * 
+     * @param array<string>|null $symbols Liste des symboles à synchroniser (null = tous)
+     * @return array{upserted: int, total_fetched: int, errors: array<string>}
+     */
+    public function syncContracts(?array $symbols = null): array;
 }

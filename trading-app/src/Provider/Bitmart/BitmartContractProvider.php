@@ -6,7 +6,9 @@ namespace App\Provider\Bitmart;
 
 use App\Contract\Provider\Dto\ContractDto;
 use App\Contract\Provider\ContractProviderInterface;
+use App\Provider\Bitmart\Dto\ContractDto as BitmartContractDto;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
+use App\Repository\ContractRepository;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -21,7 +23,8 @@ final class BitmartContractProvider implements ContractProviderInterface
 {
     public function __construct(
         private readonly BitmartHttpClientPublic $bitmartClient,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $logger,
+        private readonly ContractRepository $contractRepository
     ) {}
 
     public function getContracts(): array
@@ -149,5 +152,108 @@ final class BitmartContractProvider implements ContractProviderInterface
     public function getProviderName(): string
     {
         return 'Bitmart';
+    }
+
+    public function syncContracts(?array $symbols = null): array
+    {
+        $errors = [];
+        $totalFetched = 0;
+        $upserted = 0;
+
+        try {
+            // 1. Récupérer tous les contrats depuis l'API
+            $contractPayload = $this->getContracts();
+
+            if ($contractPayload instanceof \Traversable) {
+                $contractPayload = iterator_to_array($contractPayload);
+            }
+
+            if (!is_array($contractPayload)) {
+                $contractPayload = [];
+            }
+
+            // 2. Indexer les contrats par symbole
+            $indexedContracts = [];
+            foreach ($contractPayload as $contract) {
+                $symbol = $this->extractContractSymbol($contract);
+                if ($symbol === null) {
+                    continue;
+                }
+                $indexedContracts[strtoupper($symbol)] = $contract;
+            }
+
+            $totalFetched = count($indexedContracts);
+
+            // 3. Filtrer par symboles si demandé
+            $fetchedContracts = [];
+            if (!empty($symbols)) {
+                foreach ($symbols as $s) {
+                    $key = strtoupper($s);
+                    if (!isset($indexedContracts[$key])) {
+                        $errors[] = sprintf('Contract not found for symbol %s', $s);
+                        continue;
+                    }
+                    $fetchedContracts[] = $this->prepareContractPayload($indexedContracts[$key]);
+                }
+            } else {
+                foreach ($indexedContracts as $contract) {
+                    $fetchedContracts[] = $this->prepareContractPayload($contract);
+                }
+            }
+
+            // 4. Upsert en base
+            if (!empty($fetchedContracts)) {
+                $upserted = $this->contractRepository->upsertContracts($fetchedContracts);
+                $this->logger->info('[BitmartContractProvider] Contracts synchronized', [
+                    'upserted' => $upserted,
+                    'total_fetched' => $totalFetched,
+                    'symbols_requested' => $symbols,
+                ]);
+            } else {
+                $this->logger->warning('[BitmartContractProvider] No contracts fetched from provider');
+            }
+        } catch (\Throwable $e) {
+            $errors[] = sprintf('Synchronization failed: %s', $e->getMessage());
+            $this->logger->error('[BitmartContractProvider] Contract synchronization failed', [
+                'error' => $e->getMessage(),
+                'symbols' => $symbols,
+            ]);
+        }
+
+        return [
+            'upserted' => $upserted,
+            'total_fetched' => $totalFetched,
+            'errors' => $errors,
+        ];
+    }
+
+    private function extractContractSymbol(mixed $contract): ?string
+    {
+        if (is_array($contract)) {
+            return isset($contract['symbol']) ? (string) $contract['symbol'] : null;
+        }
+
+        if ($contract instanceof BitmartContractDto) {
+            return $contract->symbol ?? null;
+        }
+
+        if ($contract instanceof ContractDto) {
+            return $contract->symbol ?? null;
+        }
+
+        return null;
+    }
+
+    private function prepareContractPayload(mixed $contract): array|BitmartContractDto
+    {
+        if ($contract instanceof BitmartContractDto) {
+            return $contract;
+        }
+
+        if (is_array($contract)) {
+            return $contract;
+        }
+
+        throw new \InvalidArgumentException('Unsupported contract payload type.');
     }
 }
