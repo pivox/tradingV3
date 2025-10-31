@@ -41,6 +41,10 @@ class CronSymfonyMtfWorkersWorkflow:
                     args=[job.url, payload],
                     start_to_close_timeout=timeout,
                 )
-                workflow.logger.info("[CronMtfWorkers] response %s", result)
+                # Log concise summary only (full response in result["full_response"])
+                workflow.logger.info(
+                    "[CronMtfWorkers] ✅ Result:\n%s", 
+                    result.get("summary", "No summary available")
+                )
             except Exception as exc:  # noqa: BLE001
                 workflow.logger.error("[CronMtfWorkers] error for %s: %s", job.url, exc)
