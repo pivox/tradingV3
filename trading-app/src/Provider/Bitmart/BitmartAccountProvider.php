@@ -113,6 +113,34 @@ final class BitmartAccountProvider implements AccountProviderInterface
         }
     }
 
+    /**
+     * Récupère l'historique des trades pour tous les symboles avec positions
+     * @return array<string, array> Tableau associatif [symbol => trades]
+     */
+    public function getAllTradeHistory(int $limit = 100): array
+    {
+        try {
+            // Récupérer toutes les positions pour obtenir les symboles actifs
+            $positions = $this->getOpenPositions();
+            $allTrades = [];
+
+            foreach ($positions as $position) {
+                $symbol = $position->symbol;
+                $trades = $this->getTradeHistory($symbol, $limit);
+                if (!empty($trades)) {
+                    $allTrades[$symbol] = $trades;
+                }
+            }
+
+            return $allTrades;
+        } catch (\Exception $e) {
+            $this->logger->error("Erreur lors de la récupération de l'historique complet des trades", [
+                'error' => $e->getMessage()
+            ]);
+            return [];
+        }
+    }
+
     public function getTradingFees(string $symbol): array
     {
         try {
