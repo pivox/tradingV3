@@ -246,4 +246,262 @@ HELP);
         fclose($fh);
         return (string)$csv;
     }
+
+    /**
+     * Traitement spécifique du rapport calibration avec calcul du fail_pct_moyen.
+     */
+    private function handleCalibrationReport(
+        array $rows,
+        string $format,
+        ?string $output,
+        SymfonyStyle $io
+    ): int {
+        if (empty($rows)) {
+            $io->warning('Aucune donnée disponible pour le rapport de calibration.');
+            return Command::SUCCESS;
+        }
+
+        // Calcul du fail_pct_moyen : (∑ fail_count) / (∑ total_fails) × 100
+        $sumFailCount = 0;
+        $sumTotalFails = 0;
+        $timeframeData = [];
+
+        foreach ($rows as $row) {
+            $tf = $row['timeframe'] ?? 'unknown';
+            $failCount = (int)($row['fail_count'] ?? 0);
+            $totalFails = (int)($row['total_fails'] ?? 0);
+
+            $sumFailCount += $failCount;
+            $sumTotalFails += $totalFails;
+
+            if (!isset($timeframeData[$tf])) {
+                $timeframeData[$tf] = [
+                    'fail_count_sum' => 0,
+                    'total_fails' => $totalFails,
+                    'conditions' => []
+                ];
+            }
+
+            $timeframeData[$tf]['fail_count_sum'] += $failCount;
+            $timeframeData[$tf]['conditions'][] = [
+                'condition' => $row['condition_name'] ?? 'unknown',
+                'fail_count' => $failCount,
+                'fail_pct' => (float)($row['fail_pct'] ?? 0.0),
+            ];
+        }
+
+        // Calcul du fail_pct_moyen global
+        $failPctMoyen = $sumTotalFails > 0 ? round(($sumFailCount / $sumTotalFails) * 100, 2) : 0.0;
+
+        // Interprétation
+        $interpretation = $this->interpretCalibration($failPctMoyen, $sumTotalFails);
+
+        // Construction du résultat enrichi
+        $result = [
+            'fail_pct_moyen' => $failPctMoyen,
+            'sum_fail_count' => $sumFailCount,
+            'sum_total_fails' => $sumTotalFails,
+            'interpretation' => $interpretation,
+            'by_timeframe' => [],
+        ];
+
+        foreach ($timeframeData as $tf => $data) {
+            $tfFailPct = $data['total_fails'] > 0
+                ? round(($data['fail_count_sum'] / $data['total_fails']) * 100, 2)
+                : 0.0;
+
+            $result['by_timeframe'][] = [
+                'timeframe' => $tf,
+                'fail_count_sum' => $data['fail_count_sum'],
+                'total_fails' => $data['total_fails'],
+                'fail_pct' => $tfFailPct,
+                'top_conditions' => array_slice($data['conditions'], 0, 5), // Top 5 conditions
+            ];
+        }
+
+        // Sortie selon format
+        if ($format === 'json') {
+            $payload = json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if ($output) {
+                file_put_contents($output, $payload . PHP_EOL);
+                $io->success("Rapport calibration JSON écrit dans: $output");
+            } else {
+                $io->writeln($payload);
+            }
+            return Command::SUCCESS;
+        }
+
+        if ($format === 'csv') {
+            // Pour CSV, on aplatit les données par timeframe
+            $csvRows = [];
+            foreach ($result['by_timeframe'] as $tfData) {
+                $csvRows[] = [
+                    'timeframe' => $tfData['timeframe'],
+                    'fail_count_sum' => $tfData['fail_count_sum'],
+                    'total_fails' => $tfData['total_fails'],
+                    'fail_pct' => $tfData['fail_pct'] . '%',
+                ];
+            }
+            $csv = $this->toCsv($csvRows);
+            if ($output) {
+                file_put_contents($output, $csv);
+                $io->success("Rapport calibration CSV écrit dans: $output");
+            } else {
+                $io->writeln($csv);
+            }
+            return Command::SUCCESS;
+        }
+
+        // Format table (par défaut)
+        $this->displayCalibrationTable($result, $io);
+        return Command::SUCCESS;
+    }
+
+    /**
+     * Interprète le fail_pct_moyen selon les seuils définis.
+     */
+    private function interpretCalibration(float $failPctMoyen, int $totalFails): array
+    {
+        // Détection du blocage stable (0% sur plusieurs heures)
+        if ($failPctMoyen === 0.0 && $totalFails === 0) {
+            return [
+                'status' => 'BLOCKED',
+                'diagnostic' => 'Données ou process figés',
+                'action' => '❌ Blocage pipeline',
+                'color' => 'red',
+            ];
+        }
+
+        if ($failPctMoyen >= 0.0 && $failPctMoyen <= 5.0) {
+            return [
+                'status' => 'EXCELLENT',
+                'diagnostic' => 'Bon équilibre',
+                'action' => '✅ Stable',
+                'color' => 'green',
+            ];
+        }
+
+        if ($failPctMoyen > 5.0 && $failPctMoyen <= 9.0) {
+            return [
+                'status' => 'GOOD',
+                'diagnostic' => 'Marché neutre / cohérent',
+                'action' => '⚙️ OK',
+                'color' => 'green',
+            ];
+        }
+
+        if ($failPctMoyen > 9.0 && $failPctMoyen <= 15.0) {
+            return [
+                'status' => 'WARNING',
+                'diagnostic' => 'Règles trop strictes',
+                'action' => '🔹 Assouplir les tolérances EMA / MACD',
+                'color' => 'yellow',
+            ];
+        }
+
+        if ($failPctMoyen > 15.0 && $failPctMoyen <= 20.0) {
+            return [
+                'status' => 'CRITICAL',
+                'diagnostic' => 'Mauvaise calibration',
+                'action' => '🔸 Règles mal conçues ou non pertinentes',
+                'color' => 'red',
+            ];
+        }
+
+        // > 20%
+        return [
+            'status' => 'CRITICAL',
+            'diagnostic' => 'Très mauvais calibrage',
+            'action' => '🔸 Règles mal conçues ou non pertinentes',
+            'color' => 'red',
+        ];
+    }
+
+    /**
+     * Affiche le rapport de calibration en format table.
+     */
+    private function displayCalibrationTable(array $result, SymfonyStyle $io): void
+    {
+        $failPctMoyen = $result['fail_pct_moyen'];
+        $interp = $result['interpretation'];
+
+        $io->title('Rapport de Calibration MTF');
+
+        // Résumé global
+        $io->section('📊 Résumé Global');
+        $statusColor = match ($interp['color']) {
+            'green' => '<fg=green>%s</>',
+            'yellow' => '<fg=yellow>%s</>',
+            'red' => '<fg=red>%s</>',
+            default => '%s',
+        };
+
+        $io->table(
+            ['Métrique', 'Valeur'],
+            [
+                ['fail_pct_moyen', sprintf('%.2f%%', $failPctMoyen)],
+                ['∑ fail_count', $result['sum_fail_count']],
+                ['∑ total_fails', $result['sum_total_fails']],
+                ['Statut', sprintf($statusColor, $interp['status'])],
+                ['Diagnostic', $interp['diagnostic']],
+                ['Action recommandée', $interp['action']],
+            ]
+        );
+
+        // Interprétation détaillée
+        $io->section('📖 Grille d\'Interprétation');
+        $io->table(
+            ['fail_pct moyen', 'Diagnostic', 'Action'],
+            [
+                ['0 – 5%', 'Bon équilibre', '✅ Stable'],
+                ['6 – 9%', 'Marché neutre / cohérent', '⚙️ OK'],
+                ['10 – 15%', 'Règles trop strictes', '🔹 Assouplir les tolérances EMA / MACD'],
+                ['> 20%', 'Très mauvais calibrage', '🔸 Règles mal conçues ou non pertinentes'],
+                ['= 0% stable plusieurs heures', 'Données ou process figés', '❌ Blocage pipeline'],
+            ]
+        );
+
+        // Détail par timeframe
+        $io->section('⏱️ Détail par Timeframe');
+        $tfRows = [];
+        foreach ($result['by_timeframe'] as $tfData) {
+            $tfRows[] = [
+                $tfData['timeframe'],
+                $tfData['fail_count_sum'],
+                $tfData['total_fails'],
+                sprintf('%.2f%%', $tfData['fail_pct']),
+            ];
+        }
+        $io->table(['Timeframe', '∑ fail_count', '∑ total_fails', 'fail_pct'], $tfRows);
+
+        // Top conditions par timeframe
+        $io->section('🔝 Top Conditions par Timeframe (max 5)');
+        foreach ($result['by_timeframe'] as $tfData) {
+            $io->writeln(sprintf('<comment>Timeframe: %s</comment>', $tfData['timeframe']));
+            $condRows = [];
+            foreach ($tfData['top_conditions'] as $cond) {
+                $condRows[] = [
+                    $cond['condition'],
+                    $cond['fail_count'],
+                    sprintf('%.2f%%', $cond['fail_pct']),
+                ];
+            }
+            if (!empty($condRows)) {
+                $io->table(['Condition', 'Fail Count', 'Fail %'], $condRows);
+            } else {
+                $io->writeln('  <info>Aucune condition</info>');
+            }
+        }
+
+        // Message final selon le statut
+        if ($interp['status'] === 'BLOCKED') {
+            $io->error('⚠️ BLOCAGE DÉTECTÉ : Aucune validation en échec. Vérifiez le pipeline MTF !');
+        } elseif ($interp['status'] === 'CRITICAL') {
+            $io->error(sprintf('⚠️ CALIBRATION CRITIQUE : %s', $interp['diagnostic']));
+        } elseif ($interp['status'] === 'WARNING') {
+            $io->warning(sprintf('⚠️ ATTENTION : %s', $interp['diagnostic']));
+        } else {
+            $io->success(sprintf('✅ SYSTÈME SAIN : %s', $interp['diagnostic']));
+        }
+    }
 }
