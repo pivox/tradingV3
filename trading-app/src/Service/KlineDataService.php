@@ -17,17 +17,18 @@ class KlineDataService
 
         // Format attendu: array d'objets avec open_time, open, high, low, close, volume
         foreach ($jsonData as $klineData) {
-            $klines[] = new KlineDto(
-                symbol: $symbol,
-                timeframe: $timeframe,
-                openTime: new \DateTimeImmutable($klineData['open_time'], new \DateTimeZone('UTC')),
-                open: BigDecimal::of($klineData['open']),
-                high: BigDecimal::of($klineData['high']),
-                low: BigDecimal::of($klineData['low']),
-                close: BigDecimal::of($klineData['close']),
-                volume: BigDecimal::of($klineData['volume']),
-                source: 'JSON_UPLOAD'
-            );
+
+            $klines[] = new KlineDto([
+                'symbol' => $symbol,
+                'timeframe' => $timeframe->value,
+                'openTime' => new \DateTimeImmutable($klineData['open_time'], new \DateTimeZone('UTC')),
+                'open' => BigDecimal::of($klineData['open']),
+                'high' => BigDecimal::of($klineData['high']),
+                'low' => BigDecimal::of($klineData['low']),
+                'close' => BigDecimal::of($klineData['close']),
+                'volume' => BigDecimal::of($klineData['volume']),
+                'source' => 'JSON_UPLOAD'
+            ]);
         }
 
         return $klines;
