@@ -25,4 +25,80 @@ appelle l'activité `mtf_api_call` qui poste la charge utile sur Symfony.
 | `MTF_WORKERS_COUNT`      | `5`                                          |
 
 Les scripts présents dans `scripts/new` permettent de créer/suspendre/supprimer
-la schedule Temporal associée.
+les schedules Temporal associées.
+
+## Schedule MTF Workers
+
+Exécution périodique du workflow MTF (toutes les minutes par défaut).
+
+**Variables d'environnement :**
+
+| Variable                    | Valeur par défaut                            | Description |
+|-----------------------------|----------------------------------------------|-------------|
+| `MTF_WORKERS_SCHEDULE_ID`   | `cron-symfony-mtf-workers-1m`                | ID du schedule Temporal |
+| `MTF_WORKERS_WORKFLOW_ID`   | `cron-symfony-mtf-workers-runner`            | ID du workflow |
+| `MTF_WORKERS_CRON`          | `*/1 * * * *`                                | Expression cron (chaque minute) |
+| `MTF_WORKERS_URL`           | `http://trading-app-nginx:80/api/mtf/run`    | URL de l'endpoint MTF |
+| `MTF_WORKERS_COUNT`         | `5`                                          | Nombre de workers parallèles |
+| `MTF_WORKERS_DRY_RUN`       | `true`                                       | Mode dry-run par défaut |
+
+**Commandes :**
+
+```bash
+# Créer le schedule (avec preview)
+python scripts/new/manage_mtf_workers_schedule.py create --dry-run
+
+# Créer le schedule
+python scripts/new/manage_mtf_workers_schedule.py create
+
+# Voir le statut
+python scripts/new/manage_mtf_workers_schedule.py status
+
+# Mettre en pause
+python scripts/new/manage_mtf_workers_schedule.py pause
+
+# Reprendre
+python scripts/new/manage_mtf_workers_schedule.py resume
+
+# Supprimer
+python scripts/new/manage_mtf_workers_schedule.py delete
+```
+
+## Schedule Contract Sync
+
+Exécution quotidienne de la synchronisation des contrats (tous les jours à 09:00 UTC par défaut).
+
+**Variables d'environnement :**
+
+| Variable                    | Valeur par défaut                                   | Description |
+|-----------------------------|-----------------------------------------------------|-------------|
+| `CONTRACT_SYNC_SCHEDULE_ID` | `cron-contract-sync-daily-9am`                      | ID du schedule Temporal |
+| `CONTRACT_SYNC_WORKFLOW_ID` | `contract-sync-runner`                              | ID du workflow |
+| `CONTRACT_SYNC_CRON`        | `0 9 * * *`                                         | Expression cron (09:00 UTC) |
+| `CONTRACT_SYNC_URL`         | `http://trading-app-nginx:80/api/mtf/sync-contracts` | URL de l'endpoint de synchro |
+
+**Commandes :**
+
+```bash
+# Créer le schedule (avec preview)
+python scripts/new/manage_contract_sync_schedule.py create --dry-run
+
+# Créer le schedule
+python scripts/new/manage_contract_sync_schedule.py create
+
+# Voir le statut
+python scripts/new/manage_contract_sync_schedule.py status
+
+# Mettre en pause
+python scripts/new/manage_contract_sync_schedule.py pause
+
+# Reprendre
+python scripts/new/manage_contract_sync_schedule.py resume
+
+# Supprimer
+python scripts/new/manage_contract_sync_schedule.py delete
+```
+
+**Timeout personnalisé :**
+
+Le workflow de synchronisation des contrats utilise un timeout de 10 minutes par défaut (au lieu de 15 minutes pour MTF). Ce timeout est configurable via le champ `timeout_minutes` dans le job.

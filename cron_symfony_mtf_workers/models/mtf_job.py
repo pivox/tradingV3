@@ -40,6 +40,7 @@ class MtfJob:
     force_timeframe_check: bool = False
     current_tf: Optional[str] = None
     symbols: Optional[List[str]] = field(default_factory=list)
+    timeout_minutes: int = 15
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MtfJob":
@@ -51,6 +52,7 @@ class MtfJob:
         current_tf_raw = data.get("current_tf")
         current_tf = str(current_tf_raw) if current_tf_raw else None
         symbols = _normalize_symbols(data.get("symbols")) or []
+        timeout_minutes = int(data.get("timeout_minutes", 15))
 
         return cls(
             url=url,
@@ -60,6 +62,7 @@ class MtfJob:
             force_timeframe_check=force_timeframe_check,
             current_tf=current_tf,
             symbols=symbols,
+            timeout_minutes=max(1, timeout_minutes),
         )
 
     def payload(self) -> Dict[str, Any]:

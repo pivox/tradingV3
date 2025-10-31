@@ -28,16 +28,18 @@ class CronSymfonyMtfWorkersWorkflow:
         for job in normalized:
             payload = job.payload()
             payload.setdefault("workers", job.workers)
+            timeout = timedelta(minutes=job.timeout_minutes)
             workflow.logger.info(
-                "[CronMtfWorkers] calling %s with payload=%s",
+                "[CronMtfWorkers] calling %s with payload=%s (timeout=%d min)",
                 job.url,
                 payload,
+                job.timeout_minutes,
             )
             try:
                 result = await workflow.execute_activity(
                     "mtf_api_call",
                     args=[job.url, payload],
-                    start_to_close_timeout=timedelta(minutes=15),
+                    start_to_close_timeout=timeout,
                 )
                 workflow.logger.info("[CronMtfWorkers] response %s", result)
             except Exception as exc:  # noqa: BLE001
