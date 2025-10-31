@@ -316,8 +316,7 @@ services:
       LOG_LEVEL_PIPELINE_EXEC: info
       LOG_LEVEL_GLOBAL_SEVERITY: error
       ASYNC_LOGGING_ENABLED: '1'
-      APP_ENV: dev
-      APP_DEBUG: 1
+      # Symfony env now sourced from project .env (APP_ENV, APP_DEBUG)
       MAILER_DSN: 'smtp://localhost'
       MTF_LOG_LEVEL: debug
       MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
