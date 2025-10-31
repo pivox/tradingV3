@@ -51,7 +51,8 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 'symbol' => $symbol,
                 'side' => $bitmartSide,
                 'type' => $type->value,
-                'size' => (string) $quantity,
+                // Bitmart expects size as Int (number of contracts)
+                'size' => (int) round($quantity),
             ];
 
             if ($price !== null) {
