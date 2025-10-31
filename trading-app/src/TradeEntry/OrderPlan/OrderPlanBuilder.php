@@ -181,6 +181,23 @@ final class OrderPlanBuilder
             $pre->maxLeverage
         );
 
+        // Pre-model budget check for observability
+        $notionalDbg = $entry * $contractSize * $size;
+        $initialMarginDbg = $notionalDbg / max(1, (float)$leverage);
+        $this->flowLogger->debug('order_plan.budget_check', [
+            'symbol' => $req->symbol,
+            'risk_usdt' => $riskUsdt,
+            'entry' => $entry,
+            'size' => $size,
+            'contract_size' => $contractSize,
+            'notional_usdt' => $notionalDbg,
+            'initial_margin_budget' => $req->initialMarginUsdt,
+            'initial_margin_usdt' => $initialMarginDbg,
+            'available_usdt' => $pre->availableUsdt,
+            'leverage' => $leverage,
+            'decision_key' => $decisionKey,
+        ]);
+
         $orderMode = $req->orderType === 'market' ? 1 : $req->orderMode;
 
         $model = new OrderPlanModel(
@@ -198,6 +215,9 @@ final class OrderPlanBuilder
             contractSize: $contractSize,
         );
 
+        $notional = $model->entry * $model->contractSize * $model->size;
+        $initialMargin = $notional / max(1, (float)$model->leverage);
+
         $this->positionsLogger->info('order_plan.model_ready', [
             'symbol' => $model->symbol,
             'side' => $model->side->value,
@@ -209,6 +229,9 @@ final class OrderPlanBuilder
             'take_profit' => $model->takeProfit,
             'size' => $model->size,
             'leverage' => $model->leverage,
+            'contract_size' => $model->contractSize,
+            'notional_usdt' => $notional,
+            'initial_margin_usdt' => $initialMargin,
             'decision_key' => $decisionKey,
         ]);
 
