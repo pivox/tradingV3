@@ -39,11 +39,19 @@ final class BitmartOrderProvider implements OrderProviderInterface
         array $options = []
     ): ?OrderDto {
         try {
+            // Bitmart Futures V2 expects:
+            //  - side: numeric (1=open_long, 4=open_short) for entry orders
+            //  - size: stringified contract size quantity
+            //  - client_order_id, mode, open_type, price (for limit), preset TP/SL, ...
+            // Map generic inputs to Bitmart API schema
+            $bitmartSide = $options['side']
+                ?? ($side === OrderSide::BUY ? 1 : 4); // default to entry orders mapping
+
             $payload = [
                 'symbol' => $symbol,
-                'side' => $side->value,
+                'side' => $bitmartSide,
                 'type' => $type->value,
-                'quantity' => (string) $quantity,
+                'size' => (string) $quantity,
             ];
 
             if ($price !== null) {
@@ -54,8 +62,14 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 $payload['stop_price'] = (string) $stopPrice;
             }
 
-            // Ajouter les options supplémentaires
-            $payload = array_merge($payload, $options);
+            // Ajouter les options supplémentaires (mode, open_type, client_order_id, TP/SL, ...)
+            // Note: do not let options override core-mapped keys with incompatible shapes
+            foreach ($options as $k => $v) {
+                if (in_array($k, ['symbol', 'type'], true)) {
+                    continue;
+                }
+                $payload[$k] = $v;
+            }
 
             $response = $this->bitmartClient->submitOrder($payload);
 

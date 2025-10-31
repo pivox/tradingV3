@@ -107,11 +107,16 @@ final class BitmartHttpClientPrivate
             ]);
             return $parsed;
         } catch (\Throwable $e) {
-            $this->bitmartLogger->error('[Bitmart] Request failed', [
+            // Include JSON payload for submit-order failures to aid diagnostics
+            $context = [
                 'method' => $method,
                 'path' => $path,
                 'error' => $e->getMessage(),
-            ]);
+            ];
+            if ($path === self::PATH_SUBMIT_ORDER && $json !== null) {
+                $context['json'] = $json;
+            }
+            $this->bitmartLogger->error('[Bitmart] Request failed', $context);
             throw $e;
         }
     }
