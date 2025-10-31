@@ -47,7 +47,9 @@ final class BitmartKlineProvider implements KlineProviderInterface
                 limit: $limit
             );
 
-            $klines = $this->mapFetchedKlines($klinesData, $symbol, $timeframe);
+            // Assurer un ordre chronologique ascendant (openTime croissant) avant mapping
+            $klinesDataAsc = $klinesData->sortByOpenTimeAsc();
+            $klines = $this->mapFetchedKlines($klinesDataAsc, $symbol, $timeframe);
 
             if (!empty($klines)) {
                 $this->klineRepository->upsertKlines($klines);
@@ -95,7 +97,11 @@ final class BitmartKlineProvider implements KlineProviderInterface
             $startTs = $start->getTimestamp();
             $endTs = $end->getTimestamp();
 
-            return $this->bitmartClient->getFuturesKlines($symbol, $step, $startTs, $endTs, $limit)->toArray();
+            // Normaliser l'ordre ASC par openTime pour les consommateurs d'API
+            return $this->bitmartClient
+                ->getFuturesKlines($symbol, $step, $startTs, $endTs, $limit)
+                ->sortByOpenTimeAsc()
+                ->toArray();
         } catch (\Exception $e) {
             $this->logger->error("Erreur lors de la récupération des klines dans la fenêtre", [
                 'symbol' => $symbol,
