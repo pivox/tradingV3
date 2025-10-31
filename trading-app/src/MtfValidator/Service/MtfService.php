@@ -64,6 +64,48 @@ final class MtfService
     ) {
     }
 
+    /**
+     * Parse various kline_time representations into a UTC DateTimeImmutable.
+     * Accepts DateTimeInterface, numeric timestamps (s/ms), or common date strings.
+     */
+    private function parseKlineTime(mixed $raw): ?\DateTimeImmutable
+    {
+        try {
+            if ($raw instanceof \DateTimeImmutable) {
+                return $raw->setTimezone(new \DateTimeZone('UTC'));
+            }
+            if ($raw instanceof \DateTimeInterface) {
+                return (new \DateTimeImmutable($raw->format('Y-m-d H:i:s'), $raw->getTimezone()))
+                    ->setTimezone(new \DateTimeZone('UTC'));
+            }
+            // Numeric timestamp (seconds or milliseconds)
+            if (is_int($raw) || is_float($raw) || (is_string($raw) && ctype_digit($raw))) {
+                $num = (int) $raw;
+                if ($num > 2000000000) { // likely milliseconds
+                    $num = intdiv($num, 1000);
+                }
+                $dt = (new \DateTimeImmutable('@' . $num))->setTimezone(new \DateTimeZone('UTC'));
+                return $dt;
+            }
+            if (is_string($raw) && $raw !== '') {
+                // Try native parser first
+                try {
+                    return (new \DateTimeImmutable($raw, new \DateTimeZone('UTC')))
+                        ->setTimezone(new \DateTimeZone('UTC'));
+                } catch (\Throwable) {
+                    // Try explicit common format
+                    $dt = \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $raw, new \DateTimeZone('UTC'));
+                    if ($dt instanceof \DateTimeImmutable) {
+                        return $dt->setTimezone(new \DateTimeZone('UTC'));
+                    }
+                }
+            }
+        } catch (\Throwable) {
+            // fallthrough
+        }
+        return null;
+    }
+
     private function buildTfCacheKey(string $symbol, string $tf): string
     {
         return sprintf('mtf_tf_state_%s_%s', strtoupper($symbol), strtolower($tf));
@@ -137,8 +179,11 @@ final class MtfService
             $repo = $this->entityManager->getRepository(ValidationCacheEntity::class);
             $cacheKey = $this->buildTfCacheKey($symbol, $tf);
             $rec = $repo->findOneBy(['cacheKey' => $cacheKey]) ?? new ValidationCacheEntity();
-            $klineTime = $result['kline_time'] ?? null;
-            $klineIso = $klineTime instanceof \DateTimeImmutable ? $klineTime->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s') : null;
+            $klineIso = null;
+            $parsed = $this->parseKlineTime($result['kline_time'] ?? null);
+            if ($parsed instanceof \DateTimeImmutable) {
+                $klineIso = $parsed->format('Y-m-d H:i:s');
+            }
             $rec->setCacheKey($cacheKey)
                 ->setPayload([
                     'status' => $result['status'] ?? 'INVALID',
@@ -160,19 +205,85 @@ final class MtfService
             if (!$repo instanceof IndicatorSnapshotRepository) {
                 return;
             }
-            $klineTime = $result['kline_time'] ?? null;
+            $klineTime = $this->parseKlineTime($result['kline_time'] ?? null);
             if (!$klineTime instanceof \DateTimeImmutable) {
+                // No valid kline time, skip persistence to avoid corrupt records
                 return;
             }
 
             $values = [];
-            // Extraire contexte indicateurs si disponible
+            // Extraire et aplatir un sous-ensemble du contexte indicateur pour éviter les collisions de clés typées
             $context = $result['indicator_context'] ?? [];
             if (is_array($context)) {
-                $values = array_merge($values, $context);
+                // RSI
+                if (isset($context['rsi']) && is_numeric($context['rsi'])) {
+                    $values['rsi'] = (float)$context['rsi'];
+                }
+                // ATR (du contexte)
+                if (isset($context['atr']) && is_numeric($context['atr'])) {
+                    $values['atr'] = (string)$context['atr'];
+                }
+                // VWAP
+                if (isset($context['vwap']) && is_numeric($context['vwap'])) {
+                    $values['vwap'] = (string)$context['vwap'];
+                }
+                // MACD (aplatir vers macd, macd_signal, macd_histogram)
+                if (isset($context['macd'])) {
+                    $macd = $context['macd'];
+                    if (is_array($macd)) {
+                        if (isset($macd['macd']) && is_numeric($macd['macd'])) {
+                            $values['macd'] = (string)$macd['macd'];
+                        }
+                        if (isset($macd['signal']) && is_numeric($macd['signal'])) {
+                            $values['macd_signal'] = (string)$macd['signal'];
+                        }
+                        if (isset($macd['hist']) && is_numeric($macd['hist'])) {
+                            $values['macd_histogram'] = (string)$macd['hist'];
+                        }
+                    } elseif (is_numeric($macd)) {
+                        $values['macd'] = (string)$macd;
+                    }
+                }
+                // EMA (map 20,50,200)
+                if (isset($context['ema']) && is_array($context['ema'])) {
+                    foreach ([20, 50, 200] as $period) {
+                        if (isset($context['ema'][(string)$period]) && is_numeric($context['ema'][(string)$period])) {
+                            $values['ema' . $period] = (string)$context['ema'][(string)$period];
+                        } elseif (isset($context['ema'][$period]) && is_numeric($context['ema'][$period])) {
+                            $values['ema' . $period] = (string)$context['ema'][$period];
+                        }
+                    }
+                }
+                // Bollinger
+                if (isset($context['bollinger']) && is_array($context['bollinger'])) {
+                    $boll = $context['bollinger'];
+                    if (isset($boll['upper']) && is_numeric($boll['upper'])) { $values['bb_upper'] = (string)$boll['upper']; }
+                    if (isset($boll['middle']) && is_numeric($boll['middle'])) { $values['bb_middle'] = (string)$boll['middle']; }
+                    if (isset($boll['lower']) && is_numeric($boll['lower'])) { $values['bb_lower'] = (string)$boll['lower']; }
+                }
+                // ADX (valeur unique ou période 14)
+                if (isset($context['adx'])) {
+                    $adx = $context['adx'];
+                    if (is_array($adx)) {
+                        $val = $adx['14'] ?? null;
+                        if (is_numeric($val)) { $values['adx'] = (string)$val; }
+                    } elseif (is_numeric($adx)) {
+                        $values['adx'] = (string)$adx;
+                    }
+                }
+                // MA (si le contexte expose ma9/ma21 directement)
+                foreach (['ma9', 'ma21'] as $maKey) {
+                    if (isset($context[$maKey]) && is_numeric($context[$maKey])) {
+                        $values[$maKey] = (string)$context[$maKey];
+                    }
+                }
+                // Close
+                if (isset($context['close']) && is_numeric($context['close'])) {
+                    $values['close'] = (string)$context['close'];
+                }
             }
-            // Champs directs utiles
-            if (isset($result['atr'])) { $values['atr'] = (string)$result['atr']; }
+            // Priorité aux champs directs utiles (ex: ATR calculé en dehors du contexte)
+            if (isset($result['atr']) && is_numeric($result['atr'])) { $values['atr'] = (string)$result['atr']; }
 
             $snapshot = (new IndicatorSnapshot())
                 ->setSymbol(strtoupper($symbol))
@@ -181,7 +292,24 @@ final class MtfService
                 ->setValues($values)
                 ->setSource('PHP');
 
+            // Déterminer insert vs update pour le log
+            $existing = $repo->findOneBy([
+                'symbol' => $snapshot->getSymbol(),
+                'timeframe' => $snapshot->getTimeframe(),
+                'klineTime' => $snapshot->getKlineTime(),
+            ]);
+
             $repo->upsert($snapshot);
+
+            // Info log for observability
+            $this->logger->info('[MTF] Indicator snapshot persisted', [
+                'symbol' => strtoupper($symbol),
+                'timeframe' => $tf,
+                'kline_time' => $klineTime->format('Y-m-d H:i:s'),
+                'values_count' => count($values),
+                'source' => 'PHP',
+                'action' => $existing ? 'update' : 'insert',
+            ]);
         } catch (\Throwable $e) {
             $this->logger->debug('[MTF] Indicator snapshot persist failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
         }
@@ -347,6 +475,12 @@ final class MtfService
                 $forceTimeframeCheck,
                 $forceRun
             );
+            // Toujours persister un snapshot pour trace, quel que soit le statut
+            try {
+                $this->persistIndicatorSnapshot($symbol, $currentTf, $result);
+            } catch (\Throwable) {
+                // best-effort
+            }
             if (($result['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, strtoupper($currentTf) . '_VALIDATION_FAILED', $result['reason'] ?? "$currentTf validation failed");
                 return $result + ['failed_timeframe' => $currentTf];
@@ -398,6 +532,8 @@ final class MtfService
             );
                 $this->putCachedTfResult($symbol, '4h', $result4h);
             }
+            // Persister systématiquement un snapshot 4h (même en INVALID)
+            $this->persistIndicatorSnapshot($symbol, '4h', $result4h);
             if (($result4h['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '4H_VALIDATION_FAILED', $result4h['reason'] ?? '4H validation failed', [
                     'timeframe' => '4h',
@@ -414,9 +550,6 @@ final class MtfService
                 return $result4h + ['failed_timeframe' => '4h'];
             }
             $this->timeframe4hService->updateState($symbol, $result4h);
-            if (($result4h['status'] ?? null) === 'VALID') {
-                $this->persistIndicatorSnapshot($symbol, '4h', $result4h);
-            }
         }
 
         $result1h = null;
@@ -437,6 +570,8 @@ final class MtfService
             );
                 $this->putCachedTfResult($symbol, '1h', $result1h);
             }
+            // Persister systématiquement un snapshot 1h
+            $this->persistIndicatorSnapshot($symbol, '1h', $result1h);
             if (($result1h['status'] ?? null) !== 'VALID') {
                 $this->logger->info('[MTF] 1h not VALID, stop cascade', ['symbol' => $symbol, 'reason' => $result1h['reason'] ?? null]);
                 $this->auditStep($runId, $symbol, '1H_VALIDATION_FAILED', $result1h['reason'] ?? '1H validation failed', [
@@ -470,9 +605,6 @@ final class MtfService
                 }
             }
             $this->timeframe1hService->updateState($symbol, $result1h);
-            if (($result1h['status'] ?? null) === 'VALID') {
-                $this->persistIndicatorSnapshot($symbol, '1h', $result1h);
-            }
         }
 
         // Étape 15m (seulement si incluse)
@@ -495,6 +627,8 @@ final class MtfService
             );
                 $this->putCachedTfResult($symbol, '15m', $result15m);
             }
+            // Persister systématiquement un snapshot 15m
+            $this->persistIndicatorSnapshot($symbol, '15m', $result15m);
             if (($result15m['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '15M_VALIDATION_FAILED', $result15m['reason'] ?? '15M validation failed', [
                     'timeframe' => '15m',
@@ -527,9 +661,6 @@ final class MtfService
                 }
             }
             $this->timeframe15mService->updateState($symbol, $result15m);
-            if (($result15m['status'] ?? null) === 'VALID') {
-                $this->persistIndicatorSnapshot($symbol, '15m', $result15m);
-            }
         }
 
         // Étape 5m (seulement si incluse)
@@ -559,6 +690,8 @@ final class MtfService
                 // ignore ATR errors
             }
 
+            // Persister systématiquement un snapshot 5m (après calcul ATR)
+            $this->persistIndicatorSnapshot($symbol, '5m', $result5m);
             if (($result5m['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '5M_VALIDATION_FAILED', $result5m['reason'] ?? '5M validation failed', [
                     'timeframe' => '5m',
@@ -591,9 +724,6 @@ final class MtfService
                 }
             }
             $this->timeframe5mService->updateState($symbol, $result5m);
-            if (($result5m['status'] ?? null) === 'VALID') {
-                $this->persistIndicatorSnapshot($symbol, '5m', $result5m);
-            }
         }
 
         // Étape 1m (seulement si incluse)
@@ -623,6 +753,8 @@ final class MtfService
                 // ignore ATR errors
             }
 
+            // Persister systématiquement un snapshot 1m (après calcul ATR)
+            $this->persistIndicatorSnapshot($symbol, '1m', $result1m);
             if (($result1m['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, '1M_VALIDATION_FAILED', $result1m['reason'] ?? '1M validation failed', [
                     'timeframe' => '1m',
@@ -664,9 +796,6 @@ final class MtfService
                 }
             }
             $this->timeframe1mService->updateState($symbol, $result1m);
-            if (($result1m['status'] ?? null) === 'VALID') {
-                $this->persistIndicatorSnapshot($symbol, '1m', $result1m);
-            }
         }
 
         // Sauvegarder l'état
