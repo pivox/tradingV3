@@ -60,6 +60,19 @@ final class ExecutionBox
         };
         
         $payloadWithCorrelation = $payload + ['decision_key' => $decisionKey];
+        // Extra visibility before submit
+        $this->logger->debug('execution.presubmit_check', [
+            'symbol' => $plan->symbol,
+            'side_enum' => $side->value,
+            'side_numeric' => $payload['side'],
+            'type' => $payload['type'],
+            'size' => (int)$payload['size'],
+            'price' => $payload['price'] ?? null,
+            'mode' => $payload['mode'],
+            'open_type' => $payload['open_type'],
+            'client_order_id' => $payload['client_order_id'],
+            'decision_key' => $decisionKey,
+        ]);
         $this->logger->debug('execution.order_submit', $payloadWithCorrelation);
         $orderResult = $this->providers->getOrderProvider()->placeOrder(
             symbol: $payload['symbol'],
@@ -69,6 +82,7 @@ final class ExecutionBox
             price: isset($payload['price']) ? (float) $payload['price'] : null,
             stopPrice: null,
             options: [
+                'side' => $payload['side'], // Bitmart numeric side for entry (1=open_long, 4=open_short)
                 'mode' => $payload['mode'],
                 'open_type' => $payload['open_type'],
                 'client_order_id' => $payload['client_order_id'],
@@ -80,24 +94,24 @@ final class ExecutionBox
         );
         $this->logger->debug('execution.order_response', [
             'symbol' => $plan->symbol,
-            'result' => $orderResult,
+            'result' => $orderResult ? $orderResult->toArray() : null,
             'decision_key' => $decisionKey,
         ]);
 
         $this->logger->info('trade_entry.order_submitted', [
             'payload' => $payload,
             'leverage' => $leverageResult,
-            'order' => $orderResult,
+            'order' => $orderResult ? $orderResult->toArray() : null,
         ]);
 
-        $orderId = $orderResult['data']['order_id'] ?? null;
-        $statusCode = (int)($orderResult['code'] ?? 0);
+        $orderId = $orderResult?->orderId;
+        $isOk = $orderResult !== null;
 
-        if ($statusCode !== 1000) {
+        if (!$isOk) {
             $this->logger->error('execution.order_error', [
                 'symbol' => $plan->symbol,
-                'code' => $statusCode,
-                'result' => $orderResult,
+                'code' => 0,
+                'result' => null,
                 'decision_key' => $decisionKey,
             ]);
         }
@@ -105,8 +119,8 @@ final class ExecutionBox
         return new ExecutionResult(
             clientOrderId: $clientOrderId,
             exchangeOrderId: $orderId,
-            status: $statusCode === 1000 ? 'submitted' : 'error',
-            raw: ['leverage' => $leverageResult, 'order' => $orderResult],
+            status: $isOk ? 'submitted' : 'error',
+            raw: ['leverage' => $leverageResult, 'order' => $orderResult ? $orderResult->toArray() : null],
         );
     }
 }
