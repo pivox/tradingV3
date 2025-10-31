@@ -7,7 +7,7 @@ mtf_decision:
 
   # Paramètres optionnels pour la résolution de prix (laisser gérés par le resolver si non utilisés)
   price_resolution:
-    atr_ratio_factor: 0.75
-    min_allowed_diff: 0.0005
-    max_allowed_diff: 0.01
+    atr_ratio_factor: 0.75 # => n'est pas encore implémenté
+    min_allowed_diff: 0.0005 # => n'est pas encore implémenté
+    max_allowed_diff: 0.01 # => n'est pas encore implémenté
 
