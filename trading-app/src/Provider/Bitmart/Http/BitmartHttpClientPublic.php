@@ -7,6 +7,7 @@ use App\Provider\Bitmart\Dto\ListContractDto;
 use App\Provider\Bitmart\Dto\ListKlinesDto;
 use App\Util\GranularityHelper;
 use Psr\Clock\ClockInterface;
+use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Lock\LockFactory;
@@ -50,12 +51,18 @@ class BitmartHttpClientPublic
         #[Autowire('%kernel.project_dir%')] private readonly string $projectDir,
 
         private readonly ClockInterface $clock,
+        #[Autowire(service: 'monolog.logger.bitmart')] private readonly LoggerInterface $bitmartLogger,
     ) {
         $stateDir = $this->projectDir . '/var/bitmart';
         if (!is_dir($stateDir)) {
             mkdir($stateDir, 0775, true);
         }
         $this->throttleStatePath = $stateDir . '/throttle.timestamp';
+        // Nouveau: répertoire des buckets de throttling
+        $this->throttleDirPath = $stateDir . '/throttle';
+        if (!is_dir($this->throttleDirPath)) {
+            @mkdir($this->throttleDirPath, 0775, true);
+        }
     }
 
     /**
@@ -67,23 +74,60 @@ class BitmartHttpClientPublic
         $attempt = 0;
         do {
             try {
-                $this->throttleBitmartRequest($this->lockFactory);
+                // Throttle par bucket (PUBLIC_SYSTEM_TIME)
+                [$bucketKey, $limit, $windowSec] = $this->rateSpecForPublic(self::PATH_SYSTEM_TIME);
+                $this->bitmartLogger->info('[Bitmart] Request', [
+                    'method' => 'GET',
+                    'path' => self::PATH_SYSTEM_TIME,
+                    'bucket' => $bucketKey,
+                    'limit' => $limit,
+                    'window' => $windowSec,
+                ]);
+                $this->throttleBucket($this->lockFactory, $bucketKey, $limit, $windowSec);
                 $resp = $this->bitmartSystem->request('GET', self::PATH_SYSTEM_TIME, [
                     'timeout' => self::TIMEOUT,
                 ]);
+                // Mettre à jour les infos de rate depuis headers
+                $this->updateBucketFromHeaders($bucketKey, $resp->getHeaders(false));
                 $response = $resp->toArray(false);
                 if (($response['code'] ?? null) !== 1000 || !isset($response['data']['server_time'])) {
                     throw new RuntimeException('BitMart: /system/time invalide');
                 }
+                $this->bitmartLogger->info('[Bitmart] Response', [
+                    'method' => 'GET',
+                    'path' => self::PATH_SYSTEM_TIME,
+                    'status' => $resp->getStatusCode(),
+                    'code' => $response['code'] ?? null,
+                ]);
                 return (float) $response['data']['server_time'];
             } catch (TransportExceptionInterface|ServerExceptionInterface|TimeoutExceptionInterface $e) {
+                $this->bitmartLogger->error('[Bitmart] Transport error', [
+                    'method' => 'GET',
+                    'path' => self::PATH_SYSTEM_TIME,
+                    'error' => $e->getMessage(),
+                ]);
                 if ($attempt >= self::RETRY_COUNT) {
                     throw $e;
                 }
                 usleep(self::RETRY_DELAY_MS * 1000);
             } catch (ClientExceptionInterface $e) {
+                $this->bitmartLogger->error('[Bitmart] Client error', [
+                    'method' => 'GET',
+                    'path' => self::PATH_SYSTEM_TIME,
+                    'error' => $e->getMessage(),
+                ]);
             } catch (DecodingExceptionInterface $e) {
+                $this->bitmartLogger->error('[Bitmart] Decoding error', [
+                    'method' => 'GET',
+                    'path' => self::PATH_SYSTEM_TIME,
+                    'error' => $e->getMessage(),
+                ]);
             } catch (RedirectionExceptionInterface $e) {
+                $this->bitmartLogger->error('[Bitmart] Redirection error', [
+                    'method' => 'GET',
+                    'path' => self::PATH_SYSTEM_TIME,
+                    'error' => $e->getMessage(),
+                ]);
             }
             $attempt++;
         } while ($attempt <= self::RETRY_COUNT);
@@ -179,7 +223,16 @@ class BitmartHttpClientPublic
         }
 
         // Normaliser la structure retournée en ListKlinesDto pour éviter les accès mixtes plus loin
-        return new ListKlinesDto(\array_values($payload['data']));
+        $list = new ListKlinesDto(\array_values($payload['data']));
+        try {
+            $count = count($list->toArray());
+            $this->bitmartLogger->info('[Bitmart] Klines fetched', [
+                'symbol' => $symbol,
+                'step_min' => $stepMinutes,
+                'count' => $count,
+            ]);
+        } catch (\Throwable) {}
+        return $list;
 
     }
 
@@ -202,10 +255,18 @@ class BitmartHttpClientPublic
             throw new RuntimeException('BitMart: carnet invalide');
         }
 
-        return [
+        $out = [
             'bids' => $data['bids'],
             'asks' => $data['asks'],
         ];
+        try {
+            $this->bitmartLogger->info('[Bitmart] OrderBook fetched', [
+                'symbol' => $symbol,
+                'bids' => is_array($out['bids']) ? count($out['bids']) : 0,
+                'asks' => is_array($out['asks']) ? count($out['asks']) : 0,
+            ]);
+        } catch (\Throwable) {}
+        return $out;
     }
 
     /**
@@ -218,7 +279,14 @@ class BitmartHttpClientPublic
             'symbol' => $symbol,
             'limit'  => $limit,
         ]);
-        return $payload['data'] ?? [];
+        $data = $payload['data'] ?? [];
+        try {
+            $this->bitmartLogger->info('[Bitmart] Recent trades fetched', [
+                'symbol' => $symbol,
+                'count' => is_array($data) ? count($data) : 0,
+            ]);
+        } catch (\Throwable) {}
+        return $data;
     }
 
     /**
@@ -243,6 +311,13 @@ class BitmartHttpClientPublic
 
         $payload = $this->requestJson('GET', self::PATH_MARKPRICE_KLINE, $query);
         $data = $payload['data'] ?? [];
+        try {
+            $this->bitmartLogger->info('[Bitmart] MarkPrice Klines fetched', [
+                'symbol' => $symbol,
+                'step_min' => $step,
+                'count' => is_array($data) ? count($data) : 0,
+            ]);
+        } catch (\Throwable) {}
         return \is_array($data) ? $data : [];
     }
 
@@ -258,10 +333,24 @@ class BitmartHttpClientPublic
 
         $data = $payload['data'] ?? [];
         if (isset($data['brackets']) && \is_array($data['brackets'])) {
-            return $data['brackets'];
+            $br = $data['brackets'];
+            try {
+                $this->bitmartLogger->info('[Bitmart] Leverage brackets fetched', [
+                    'symbol' => $symbol,
+                    'count' => is_array($br) ? count($br) : 0,
+                ]);
+            } catch (\Throwable) {}
+            return $br;
         }
 
-        return \is_array($data) ? $data : [];
+        $out = \is_array($data) ? $data : [];
+        try {
+            $this->bitmartLogger->info('[Bitmart] Leverage brackets fetched', [
+                'symbol' => $symbol,
+                'count' => is_array($out) ? count($out) : 0,
+            ]);
+        } catch (\Throwable) {}
+        return $out;
     }
 
     public function getContractDetails(?string $symbol = null): ListContractDto
@@ -277,7 +366,14 @@ class BitmartHttpClientPublic
             throw new RuntimeException('BitMart: /contract/public/details invalide');
         }
 
-        return new ListContractDto($payload['data']['symbols'] ?? []);
+        $symbols = $payload['data']['symbols'] ?? [];
+        try {
+            $this->bitmartLogger->info('[Bitmart] Contracts fetched', [
+                'symbol_filter' => $symbol,
+                'count' => is_array($symbols) ? count($symbols) : 0,
+            ]);
+        } catch (\Throwable) {}
+        return new ListContractDto($symbols ?? []);
     }
 
     /**
@@ -288,14 +384,82 @@ class BitmartHttpClientPublic
      */
     private function requestJson(string $method, string $path, array $query = []): array
     {
-        $this->throttleBitmartRequest($this->lockFactory);
-
-        $response = $this->bitmartFuturesV2->request($method, $path, [
+        // Throttle par bucket en fonction de l'endpoint
+        [$bucketKey, $limit, $windowSec] = $this->rateSpecForPublic($path);
+        $this->bitmartLogger->info('[Bitmart] Request', [
+            'method' => $method,
+            'path' => $path,
+            'bucket' => $bucketKey,
+            'limit' => $limit,
+            'window' => $windowSec,
             'query' => $query,
-            // timeouts de secours si le client n'est pas correctement scopé
-            'timeout' => self::TIMEOUT,
         ]);
-        return $this->parseBitmartResponse($response);
+        $this->throttleBucket($this->lockFactory, $bucketKey, $limit, $windowSec);
+
+        try {
+            $response = $this->bitmartFuturesV2->request($method, $path, [
+                'query' => $query,
+                // timeouts de secours si le client n'est pas correctement scopé
+                'timeout' => self::TIMEOUT,
+            ]);
+            // Mise à jour des infos de rate à partir des headers
+            $this->updateBucketFromHeaders($bucketKey, $response->getHeaders(false));
+            $status = $response->getStatusCode();
+            $parsed = $this->parseBitmartResponse($response);
+            $this->bitmartLogger->info('[Bitmart] Response', [
+                'method' => $method,
+                'path' => $path,
+                'status' => $status,
+                'code' => $parsed['code'] ?? null,
+            ]);
+            return $parsed;
+        } catch (\Throwable $e) {
+            $this->bitmartLogger->error('[Bitmart] Request failed', [
+                'method' => $method,
+                'path' => $path,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Retourne la spec de rate pour un endpoint public donné.
+     * @return array{string,int,float} [bucketKey, limit, windowSec]
+     */
+    private function rateSpecForPublic(string $path): array
+    {
+        // Defaults Public: 12/2s (IP)
+        $limit = 12;
+        $window = 2.0;
+        $bucket = 'PUBLIC_DEFAULT';
+
+        switch ($path) {
+            case self::PATH_CONTRACT_DETAILS:
+                $bucket = 'PUBLIC_DETAILS';
+                break;
+            case self::PATH_DEPTH:
+            case self::PATH_CONTRACT_DEPTH:
+                $bucket = 'PUBLIC_DEPTH';
+                break;
+            case self::PATH_KLINE:
+                $bucket = 'PUBLIC_KLINE';
+                break;
+            case self::PATH_MARKPRICE_KLINE:
+                $bucket = 'PUBLIC_MARKPRICE_KLINE';
+                break;
+            case self::PATH_LEVERAGE_BRACKET:
+                $bucket = 'PUBLIC_LEVERAGE_BRACKET';
+                break;
+            case self::PATH_MARKET_TRADE:
+                $bucket = 'PUBLIC_MARKET_TRADE';
+                break;
+            case self::PATH_SYSTEM_TIME:
+                $bucket = 'PUBLIC_SYSTEM_TIME';
+                break;
+        }
+
+        return [$bucket, $limit, $window];
     }
 
     /**
