@@ -1,6 +1,5 @@
 FROM php:8.3-fpm
 ARG APP_ENV=dev
-ENV APP_ENV=${APP_ENV}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git curl zip unzip \
@@ -21,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && pecl install trader && docker-php-ext-enable trader \
   \
 
-  # ---- Xdebug en dev ----
+  # ---- Xdebug en dev (conditionnel build-arg) ----
   && if [ "$APP_ENV" != "prod" ]; then pecl install xdebug-3.3.2 && docker-php-ext-enable xdebug; fi \
   \
   # ---- (optionnel) Sanity check au build : échoue si Redis n'est pas chargé ----
@@ -48,7 +47,12 @@ RUN if php -m | grep -qi xdebug; then \
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 WORKDIR /var/www/html
 COPY composer.json composer.lock ./
-RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interaction
+# Installer dépendances Composer selon APP_ENV (build-arg)
+RUN if [ "$APP_ENV" = "prod" ]; then \
+      composer install --no-dev --optimize-autoloader --no-scripts --no-interaction; \
+    else \
+      composer install --optimize-autoloader --no-scripts --no-interaction; \
+    fi
 COPY . .
 RUN chown -R www-data:www-data /var/www/html \
  && chmod -R 755 /var/www/html \
