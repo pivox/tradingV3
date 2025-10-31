@@ -25,3 +25,28 @@ ws_assignments:
   path: /ws/assignments
   controller: App\Controller\Web\WebSocketDispatcherController::getAssignments
   methods: [GET]
+
+# Explicit web controllers to ensure route discovery
+mtf_web_audit:
+  resource: '../src/Controller/Web/MtfAuditController.php'
+  type: attribute
+
+mtf_web_stats:
+  resource: '../src/Controller/Web/MtfStatsController.php'
+  type: attribute
+
+mtf_web_order_plans:
+  resource: '../src/Controller/Web/MtfOrderPlanController.php'
+  type: attribute
+
+mtf_web_states:
+  resource: '../src/Controller/Web/MtfStateController.php'
+  type: attribute
+
+mtf_web_switches:
+  resource: '../src/Controller/Web/MtfSwitchWebController.php'
+  type: attribute
+
+mtf_web_locks:
+  resource: '../src/Controller/Web/MtfLockWebController.php'
+  type: attribute
