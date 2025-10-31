@@ -33,8 +33,7 @@ class ValidationCachePopulateCommand extends Command
             ->addArgument('timeframe', InputArgument::REQUIRED, 'Timeframe (ex: 1h, 4h, 15m)')
             ->addOption('count', 'c', InputOption::VALUE_OPTIONAL, 'Nombre d\'entrées à créer', 10)
             ->addOption('start-date', 's', InputOption::VALUE_OPTIONAL, 'Date de début (Y-m-d H:i:s)', '2024-01-01 00:00:00')
-            ->addOption('expiration-minutes', 'e', InputOption::VALUE_OPTIONAL, 'Minutes avant expiration', 5)
-            ->addOption('verbose', 'v', InputOption::VALUE_NONE, 'Affichage détaillé');
+            ->addOption('expiration-minutes', 'e', InputOption::VALUE_OPTIONAL, 'Minutes avant expiration', 5);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -46,7 +45,7 @@ class ValidationCachePopulateCommand extends Command
         $count = (int) $input->getOption('count');
         $startDate = new \DateTimeImmutable($input->getOption('start-date'), new \DateTimeZone('UTC'));
         $expirationMinutes = (int) $input->getOption('expiration-minutes');
-        $verbose = $input->getOption('verbose');
+        $verbose = $io->isVerbose();
 
         $io->title("Peuplement du cache de validation");
         $io->info([

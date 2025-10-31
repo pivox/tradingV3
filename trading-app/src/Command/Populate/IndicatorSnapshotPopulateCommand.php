@@ -34,8 +34,7 @@ class IndicatorSnapshotPopulateCommand extends Command
             ->addArgument('symbol', InputArgument::REQUIRED, 'Symbole à peupler (ex: BTCUSDT)')
             ->addArgument('timeframe', InputArgument::REQUIRED, 'Timeframe (ex: 1h, 4h, 15m)')
             ->addOption('count', 'c', InputOption::VALUE_OPTIONAL, 'Nombre de snapshots à créer', 10)
-            ->addOption('start-date', 's', InputOption::VALUE_OPTIONAL, 'Date de début (Y-m-d H:i:s)', '2024-01-01 00:00:00')
-            ->addOption('verbose', 'v', InputOption::VALUE_NONE, 'Affichage détaillé');
+            ->addOption('start-date', 's', InputOption::VALUE_OPTIONAL, 'Date de début (Y-m-d H:i:s)', '2024-01-01 00:00:00');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -46,7 +45,7 @@ class IndicatorSnapshotPopulateCommand extends Command
         $timeframe = Timeframe::from($input->getArgument('timeframe'));
         $count = (int) $input->getOption('count');
         $startDate = new \DateTimeImmutable($input->getOption('start-date'), new \DateTimeZone('UTC'));
-        $verbose = $input->getOption('verbose');
+        $verbose = $io->isVerbose();
 
         $io->title("Peuplement des snapshots d'indicateurs");
         $io->info([
