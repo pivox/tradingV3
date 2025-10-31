@@ -145,14 +145,29 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
             $atr = $signalData['atr'] ?? null;
 
             if ($status === 'FAILED') {
+                // Extraire les listes de conditions depuis le payload du service de signal
+                $failedLong  = (array)($signalData['failed_conditions_long']  ?? []);
+                $failedShort = (array)($signalData['failed_conditions_short'] ?? []);
+                $condsLong   = (array)($signalData['conditions_long']        ?? []);
+                $condsShort  = (array)($signalData['conditions_short']       ?? []);
+
                 $this->auditStep($runId, $symbol, "{$timeframe->value}_VALIDATION_FAILED", "{$timeframe->value} validation failed", [
                     'timeframe' => $timeframe->value,
+                    'kline_time' => $klineTime,
                     'signal_side' => $signalSide,
                     'current_price' => $currentPrice,
                     'atr' => $atr,
                     'passed' => false,
                     'severity' => 2,
+                    // Clés nécessaires aux rapports de stats
+                    'failed_conditions_long' => $failedLong,
+                    'failed_conditions_short' => $failedShort,
+                    'conditions_long' => $condsLong,
+                    'conditions_short' => $condsShort,
+                    // Agrégat pratique utilisé par certains rapports
+                    'conditions_failed' => array_values(array_merge($failedLong, $failedShort)),
                 ]);
+
                 return new InternalTimeframeResultDto(
                     timeframe: $timeframe->value,
                     status: 'INVALID',
@@ -160,6 +175,11 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
                     klineTime: $klineTime,
                     currentPrice: $currentPrice,
                     atr: $atr,
+                    indicatorContext: $signalData['indicator_context'] ?? null,
+                    conditionsLong: $condsLong,
+                    conditionsShort: $condsShort,
+                    failedConditionsLong: $failedLong,
+                    failedConditionsShort: $failedShort,
                     reason: "{$timeframe->value} validation failed"
                 );
             }
@@ -288,6 +308,32 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
         // Définir la sévérité si elle est présente dans le contexte
         if (isset($context['severity'])) {
             $audit->setSeverity($context['severity']);
+        }
+
+        // Renseigner timeframe si fourni dans le contexte
+        try {
+            if (isset($context['timeframe']) && is_string($context['timeframe']) && $context['timeframe'] !== '') {
+                $tfVal = strtolower($context['timeframe']);
+                $tfEnum = \App\Common\Enum\Timeframe::tryFrom($tfVal);
+                if ($tfEnum !== null) {
+                    $audit->setTimeframe($tfEnum);
+                }
+            }
+        } catch (\Throwable) {
+            // best effort
+        }
+
+        // Renseigner candle_close_ts si kline_time présent
+        try {
+            if (isset($context['kline_time']) && $context['kline_time']) {
+                if ($context['kline_time'] instanceof \DateTimeImmutable) {
+                    $audit->setCandleCloseTs($context['kline_time']);
+                } elseif (is_string($context['kline_time']) && $context['kline_time'] !== '') {
+                    $audit->setCandleCloseTs(new \DateTimeImmutable($context['kline_time'], new \DateTimeZone('UTC')));
+                }
+            }
+        } catch (\Throwable) {
+            // best effort
         }
 
         // Persister l'entité via l'EntityManager
