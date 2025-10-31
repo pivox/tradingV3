@@ -24,7 +24,7 @@ class MtfAudit
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
 
-    #[ORM\Column(type: Types::GUID)]
+    #[ORM\Column(type: 'uuid')]
     private UuidInterface $runId;
 
     #[ORM\Column(type: Types::STRING, length: 100)]

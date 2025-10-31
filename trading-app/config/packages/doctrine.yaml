@@ -6,9 +6,11 @@ doctrine:
         url: '%env(resolve:DATABASE_URL)%'
         types:
             postgres_timestamp: App\Repository\Doctrine\Type\PostgresTimestampType
+            uuid: Ramsey\Uuid\Doctrine\UuidType
         mapping_types:
             timeframe: string
             signal_side: string
+            guid: uuid
 
     orm:
         auto_generate_proxy_classes: true
