@@ -37,8 +37,7 @@ class IndicatorSnapshotCommand extends Command
             ->addOption('timeframe', 't', InputOption::VALUE_REQUIRED, 'Timeframe', '1h')
             ->addOption('kline-time', 'k', InputOption::VALUE_REQUIRED, 'Heure de la kline (Y-m-d H:i:s)')
             ->addOption('tolerance', null, InputOption::VALUE_REQUIRED, 'Tolérance pour la comparaison', '0.001')
-            ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Fichier de sortie pour les résultats')
-            ->addOption('verbose', 'v', InputOption::VALUE_NONE, 'Mode verbeux');
+            ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Fichier de sortie pour les résultats');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -50,7 +49,7 @@ class IndicatorSnapshotCommand extends Command
         $klineTime = $input->getOption('kline-time') ?: (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
         $tolerance = (float) $input->getOption('tolerance');
         $outputFile = $input->getOption('output');
-        $verbose = $input->getOption('verbose');
+        $verbose = $io->isVerbose();
 
         try {
             switch ($action) {
