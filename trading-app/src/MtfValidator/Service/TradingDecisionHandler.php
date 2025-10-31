@@ -7,6 +7,7 @@ namespace App\MtfValidator\Service;
 use App\Config\{TradingDecisionConfig, MtfValidationConfig};
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
+use App\Repository\MtfSwitchRepository;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Service\TradeEntryService;
@@ -26,6 +27,7 @@ final class TradingDecisionHandler
         #[Autowire(service: 'monolog.logger.positions_flow')] private readonly LoggerInterface $positionsFlowLogger,
         private readonly TradingDecisionConfig $decisionConfig,
         private readonly MtfValidationConfig $mtfConfig,
+        private readonly MtfSwitchRepository $mtfSwitchRepository,
     ) {}
 
     public function handleTradingDecision(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto): SymbolResultDto
@@ -74,6 +76,22 @@ final class TradingDecisionHandler
                 'exchange_order_id' => $execution->exchangeOrderId,
                 'raw' => $execution->raw,
             ];
+
+            // Disable symbol after a real order submission to avoid immediate re-entries via MTF
+            // Note: dry-run does not toggle switches.
+            if (!$mtfRunDto->dryRun && ($execution->status === 'submitted')) {
+                try {
+                    $this->mtfSwitchRepository->turnOffSymbolFor4Hours($symbolResult->symbol);
+                    $this->logger->info('[Trading Decision] Symbol switched OFF for 4 hours after order', [
+                        'symbol' => $symbolResult->symbol,
+                    ]);
+                } catch (\Throwable $e) {
+                    $this->logger->error('[Trading Decision] Failed to switch OFF symbol', [
+                        'symbol' => $symbolResult->symbol,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
 
             $this->logExecution($symbolResult->symbol, $decision);
 
