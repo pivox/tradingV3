@@ -16,12 +16,15 @@ use Symfony\Component\Console\Output\OutputInterface;
 Statistiques des conditions bloquantes depuis la table mtf_audit.
 
 Cette commande agrège les conditions ayant échoué (JSONB: details.conditions_failed,
-details.failed_conditions_long, details.failed_conditions_short) et propose 4 rapports :
+details.failed_conditions_long, details.failed_conditions_short) et propose 7 rapports :
 
-  • all-sides : top des conditions bloquantes (tous sides confondus)
-  • by-side   : top ventilé par side (long/short)
-  • weights   : poids (%) de chaque condition dans les échecs d’un timeframe
-  • rollup    : agrégation multi-niveaux (condition → timeframe → side) avec sous-totaux
+  • all-sides     : top des conditions bloquantes (tous sides confondus)
+  • by-side       : top ventilé par side (long/short)
+  • weights       : poids (%) de chaque condition dans les échecs d'un timeframe
+  • rollup        : agrégation multi-niveaux (condition → timeframe → side) avec sous-totaux
+  • by-timeframe  : agrégation des échecs par timeframe (détecter où ça bloque)
+  • success       : liste des dernières validations réussies
+  • calibration   : calcule le fail_pct moyen et évalue la qualité du système
 
 Filtres disponibles : symboles (IN), timeframes (IN), dates (since OU bien from/to), limite de lignes.
 Sorties : table (par défaut), json, csv (avec option --output pour écrire un fichier).
@@ -43,7 +46,7 @@ class StatsMtfAuditCommand extends Command
     {
         $this
             // Quel rapport ?
-            ->addOption('report', null, InputOption::VALUE_REQUIRED, 'Type de rapport: all-sides|by-side|weights|rollup', 'all-sides')
+            ->addOption('report', null, InputOption::VALUE_REQUIRED, 'Type de rapport: all-sides|by-side|weights|rollup|by-timeframe|success|calibration', 'all-sides')
             // Filtres
             ->addOption('symbols', null, InputOption::VALUE_OPTIONAL, 'Liste de symboles séparés par des virgules (ex: BTCUSDT,ETHUSDT)')
             ->addOption('timeframes', 't', InputOption::VALUE_OPTIONAL, 'Liste de TF séparés par des virgules (ex: 1m,5m,15m,1h,4h)')
@@ -56,9 +59,9 @@ class StatsMtfAuditCommand extends Command
             ->addOption('output', 'o', InputOption::VALUE_OPTIONAL, 'Chemin fichier de sortie (pour csv/json). Laisse vide pour STDOUT.')
         ;
 
-        // Help détaillé avec tes 4 exemples exacts
+        // Help détaillé avec exemples
         $this->setHelp(<<<'HELP'
-Exemples d’utilisation :
+Exemples d'utilisation :
 
 # 1) Top global (tous sides), dernière semaine, TF 1h/4h, 100 lignes, table
 bin/console stats:mtf-audit --report=all-sides -t 1h,4h --since="now -7 days" -l 100
@@ -73,6 +76,15 @@ bin/console stats:mtf-audit --report=weights -t 1h --since="2025-10-15 00:00:00+
 
 # 4) Rollup (condition→TF→side), sans filtres, table
 bin/console stats:mtf-audit --report=rollup
+
+# 5) Par timeframe → détecter où ça bloque
+bin/console stats:mtf-audit --report=by-timeframe
+
+# 6) Liste les dernières validations réussies
+bin/console stats:mtf-audit --report=success
+
+# 7) Calcule le fail_pct moyen et évalue la calibration du système
+bin/console stats:mtf-audit --report=calibration
 
 Notes :
 - Utilisez soit --since, soit le couple --from/--to (pas les deux).
@@ -129,11 +141,25 @@ HELP);
                 'rollup'    => $this->repo->rollupByConditionTimeframeSide(
                     $symbols, $timeframes, $since, $from, $to
                 ),
+                'by-timeframe' => $this->repo->blockingByTimeframe(
+                    $symbols, $timeframes, $since, $from, $to, $limit
+                ),
+                'success'   => $this->repo->recentSuccessfulValidations(
+                    $symbols, $timeframes, $since, $from, $to, $limit
+                ),
+                'calibration' => $this->repo->calibrationReport(
+                    $symbols, $timeframes, $since, $from, $to
+                ),
                 default     => throw new \InvalidArgumentException("report invalide: $report"),
             };
         } catch (\Throwable $e) {
             $io->error('Erreur SQL: '.$e->getMessage());
             return Command::FAILURE;
+        }
+
+        // Traitement spécial pour le rapport calibration
+        if ($report === 'calibration') {
+            return $this->handleCalibrationReport($rows, $format, $output, $io);
         }
 
         // Sortie

@@ -324,6 +324,263 @@ SQL;
     }
 
     /**
+     * Rapport des conditions bloquantes agrégées par timeframe.
+     * Utile pour identifier quel timeframe est le plus problématique.
+     */
+    public function blockingByTimeframe(
+        ?array $symbols = null,
+        ?array $timeframes = null,
+        ?\DateTimeInterface $since = null,
+        ?\DateTimeInterface $from = null,
+        ?\DateTimeInterface $to = null,
+        int $limit = 100
+    ): array {
+        [$where, $params, $types] = $this->buildFilters($symbols, $timeframes, $since, $from, $to);
+
+        $sql = <<<SQL
+WITH base AS (
+  SELECT
+    COALESCE(NULLIF(timeframe, ''), details->>'timeframe') AS timeframe,
+    symbol,
+    step,
+    created_at,
+    COALESCE(
+      candle_close_ts,
+      NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC'
+    ) AS candle_ts
+  FROM mtf_audit
+  WHERE step LIKE '%VALIDATION_FAILED%'
+  {$where}
+)
+SELECT
+  timeframe,
+  COUNT(*)                AS total_failures,
+  COUNT(DISTINCT symbol)  AS nb_symbols,
+  MAX(candle_ts)          AS last_failure_candle,
+  MAX(created_at)         AS last_failure_ts,
+  MIN(created_at)         AS first_failure_ts
+FROM base
+GROUP BY timeframe
+ORDER BY total_failures DESC, timeframe
+LIMIT :limit
+SQL;
+
+        $params['limit'] = $limit;
+        $types['limit']  = ParameterType::INTEGER;
+
+        return $this->conn->executeQuery($sql, $params, $types)->fetchAllAssociative();
+    }
+
+    /**
+     * Liste les dernières validations réussies.
+     * Récupère les audits marqués comme SUCCESS ou VALIDATED.
+     */
+    public function recentSuccessfulValidations(
+        ?array $symbols = null,
+        ?array $timeframes = null,
+        ?\DateTimeInterface $since = null,
+        ?\DateTimeInterface $from = null,
+        ?\DateTimeInterface $to = null,
+        int $limit = 100
+    ): array {
+        $clauses = [];
+        $params  = [];
+        $types   = [];
+
+        // Filtre sur les steps de succès
+        $clauses[] = "AND (step LIKE '%SUCCESS%' OR step LIKE '%VALIDATED%' OR step = 'COMPLETED')";
+
+        if (!empty($symbols)) {
+            $clauses[]    = 'AND symbol IN (:symbols)';
+            $params['symbols'] = $symbols;
+            $types['symbols']  = ArrayParameterType::STRING;
+        }
+
+        if (!empty($timeframes)) {
+            $clauses[]       = 'AND timeframe IN (:timeframes)';
+            $params['timeframes'] = $timeframes;
+            $types['timeframes']  = ArrayParameterType::STRING;
+        }
+
+        if ($from && $to) {
+            $clauses[]       = 'AND created_at BETWEEN :from AND :to';
+            $params['from']  = $from->format('Y-m-d H:i:sP');
+            $params['to']    = $to->format('Y-m-d H:i:sP');
+            $types['from']   = ParameterType::STRING;
+            $types['to']     = ParameterType::STRING;
+        } elseif ($since) {
+            $clauses[]       = 'AND created_at > :since';
+            $params['since'] = $since->format('Y-m-d H:i:sP');
+            $types['since']  = ParameterType::STRING;
+        }
+
+        $where = '';
+        if ($clauses) {
+            $where = "\n  " . implode("\n  ", $clauses) . "\n";
+        }
+
+        $sql = <<<SQL
+SELECT
+  symbol,
+  COALESCE(NULLIF(timeframe, ''), details->>'timeframe') AS timeframe,
+  step,
+  COALESCE(details->>'side', 'n/a') AS side,
+  created_at,
+  COALESCE(
+    candle_close_ts,
+    NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC'
+  ) AS candle_ts,
+  run_id
+FROM mtf_audit
+WHERE 1=1
+  {$where}
+ORDER BY created_at DESC
+LIMIT :limit
+SQL;
+
+        $params['limit'] = $limit;
+        $types['limit']  = ParameterType::INTEGER;
+
+        return $this->conn->executeQuery($sql, $params, $types)->fetchAllAssociative();
+    }
+
+    /**
+     * Métriques de santé MTF sur une période donnée.
+     * Retourne succès/échecs par timeframe, symboles problématiques, etc.
+     */
+    public function healthMetrics(
+        ?\DateTimeInterface $since = null,
+        ?array $symbols = null,
+        ?array $timeframes = null
+    ): array {
+        $clauses = [];
+        $params  = [];
+        $types   = [];
+
+        if ($since) {
+            $clauses[]       = 'AND created_at > :since';
+            $params['since'] = $since->format('Y-m-d H:i:sP');
+            $types['since']  = ParameterType::STRING;
+        }
+
+        if (!empty($symbols)) {
+            $clauses[]    = 'AND symbol IN (:symbols)';
+            $params['symbols'] = $symbols;
+            $types['symbols']  = ArrayParameterType::STRING;
+        }
+
+        if (!empty($timeframes)) {
+            $clauses[]       = 'AND timeframe IN (:timeframes)';
+            $params['timeframes'] = $timeframes;
+            $types['timeframes']  = ArrayParameterType::STRING;
+        }
+
+        $where = '';
+        if ($clauses) {
+            $where = "\n  " . implode("\n  ", $clauses) . "\n";
+        }
+
+        $sql = <<<SQL
+WITH stats AS (
+  SELECT
+    COALESCE(NULLIF(timeframe, ''), details->>'timeframe') AS timeframe,
+    CASE
+      WHEN step LIKE '%VALIDATION_FAILED%' THEN 'failed'
+      WHEN step LIKE '%SUCCESS%' OR step LIKE '%VALIDATED%' THEN 'success'
+      ELSE 'other'
+    END AS status,
+    symbol
+  FROM mtf_audit
+  WHERE 1=1
+  {$where}
+)
+SELECT
+  timeframe,
+  COUNT(*) FILTER (WHERE status = 'success') AS success_count,
+  COUNT(*) FILTER (WHERE status = 'failed')  AS failed_count,
+  COUNT(DISTINCT symbol) AS symbols_count,
+  ROUND(
+    CASE WHEN COUNT(*) > 0
+         THEN 100.0 * COUNT(*) FILTER (WHERE status = 'success') / COUNT(*)
+         ELSE 0 END,
+    2
+  ) AS success_rate_pct
+FROM stats
+WHERE status IN ('success', 'failed')
+GROUP BY timeframe
+ORDER BY timeframe NULLS LAST
+SQL;
+
+        return $this->conn->executeQuery($sql, $params, $types)->fetchAllAssociative();
+    }
+
+    /**
+     * Rapport de calibration : calcule le fail_pct moyen pour évaluer la qualité du système.
+     * 
+     * Formule : fail_pct_moyen = (∑ fail_count) / (∑ total_fails) × 100
+     * 
+     * Interprétation :
+     *  - 0-5%   : Bon équilibre
+     *  - 6-9%   : Marché neutre/cohérent
+     *  - 10-15% : Règles trop strictes
+     *  - >20%   : Mauvaise calibration
+     *  - =0%    : Blocage total
+     */
+    public function calibrationReport(
+        ?array $symbols = null,
+        ?array $timeframes = null,
+        ?\DateTimeInterface $since = null,
+        ?\DateTimeInterface $from = null,
+        ?\DateTimeInterface $to = null
+    ): array {
+        [$where, $params, $types] = $this->buildFilters($symbols, $timeframes, $since, $from, $to);
+
+        $sql = <<<SQL
+WITH base AS (
+  SELECT
+    COALESCE(NULLIF(timeframe, ''), details->>'timeframe') AS timeframe,
+    jsonb_array_elements_text(
+      CASE
+        WHEN jsonb_exists(details, 'conditions_failed')
+             AND jsonb_typeof(details->'conditions_failed') = 'array'
+             AND jsonb_array_length(details->'conditions_failed') > 0
+        THEN details->'conditions_failed'
+        ELSE COALESCE(details->'failed_conditions_long','[]'::jsonb) || COALESCE(details->'failed_conditions_short','[]'::jsonb)
+      END
+    ) AS condition_name
+  FROM mtf_audit
+  WHERE step LIKE '%VALIDATION_FAILED%' {$where}
+),
+agg AS (
+  SELECT timeframe, condition_name, COUNT(*) AS fail_count
+  FROM base
+  GROUP BY timeframe, condition_name
+),
+totals AS (
+  SELECT timeframe, SUM(fail_count) AS total_fails
+  FROM agg
+  GROUP BY timeframe
+)
+SELECT
+  a.timeframe,
+  a.condition_name,
+  a.fail_count,
+  t.total_fails,
+  ROUND(
+    CASE WHEN t.total_fails > 0
+         THEN 100.0 * a.fail_count / t.total_fails
+         ELSE 0 END,
+    2
+  ) AS fail_pct
+FROM agg a
+JOIN totals t ON a.timeframe = t.timeframe
+ORDER BY a.timeframe, a.fail_count DESC
+SQL;
+
+        return $this->conn->executeQuery($sql, $params, $types)->fetchAllAssociative();
+    }
+
+    /**
      * Construit WHERE + paramètres pour (symbols, timeframes, since, between).
      * Règle de priorité dates : BETWEEN (:from,:to) si fourni, sinon > :since.
      */
