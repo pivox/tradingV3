@@ -34,25 +34,12 @@
                         <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
                     </div>
                     <div class="col-md-2">
-                        <label for="filterFromTf" class="form-label">Timeframe Source</label>
-                        <select class="form-select" id="filterFromTf">
+                        <label for="filterType" class="form-label">Type</label>
+                        <select class="form-select" id="filterType">
                             <option value="">Tous</option>
-                            <option value="1m">1 minute</option>
-                            <option value="5m">5 minutes</option>
-                            <option value="15m">15 minutes</option>
-                            <option value="1h">1 heure</option>
-                            <option value="4h">4 heures</option>
-                        </select>
-                    </div>
-                    <div class="col-md-2">
-                        <label for="filterToTf" class="form-label">Timeframe Cible</label>
-                        <select class="form-select" id="filterToTf">
-                            <option value="">Tous</option>
-                            <option value="1m">1 minute</option>
-                            <option value="5m">5 minutes</option>
-                            <option value="15m">15 minutes</option>
-                            <option value="1h">1 heure</option>
-                            <option value="4h">4 heures</option>
+                            <option value="GLOBAL">Global</option>
+                            <option value="SYMBOL">Symbole</option>
+                            <option value="SYMBOL_TF">Symbole+TF</option>
                         </select>
                     </div>
                     <div class="col-md-2">
@@ -80,7 +67,7 @@
         <div class="card">
             <div class="card-header">
                 <h6 class="mb-0">
-                    <i class="bi bi-table"></i> Liste des Switches MTF ({{ switches|length }})
+                    <i class="bi bi-table"></i> Liste des Switches MTF
                 </h6>
             </div>
             <div class="card-body">
@@ -89,78 +76,17 @@
                         <thead class="table-dark">
                             <tr>
                                 <th>ID</th>
+                                <th>Clé</th>
+                                <th>ON ?</th>
                                 <th>Symbole</th>
-                                <th>Timeframe Source</th>
-                                <th>Timeframe Cible</th>
-                                <th>Données</th>
-                                <th>Créé le</th>
+                                <th>Timeframe</th>
+                                <th>Expire le</th>
+                                <th>Mis à jour</th>
+                                <th>Description</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            {% for switch in switches %}
-                            <tr>
-                                <td>
-                                    <code>{{ switch.id }}</code>
-                                </td>
-                                <td>
-                                    <strong>{{ switch.symbol }}</strong>
-                                </td>
-                                <td>
-                                    {% if switch.fromTimeframe == '1m' %}
-                                        <span class="badge bg-primary">1m</span>
-                                    {% elseif switch.fromTimeframe == '5m' %}
-                                        <span class="badge bg-info">5m</span>
-                                    {% elseif switch.fromTimeframe == '15m' %}
-                                        <span class="badge bg-warning">15m</span>
-                                    {% elseif switch.fromTimeframe == '1h' %}
-                                        <span class="badge bg-success">1h</span>
-                                    {% elseif switch.fromTimeframe == '4h' %}
-                                        <span class="badge bg-danger">4h</span>
-                                    {% else %}
-                                        <span class="badge bg-secondary">{{ switch.fromTimeframe }}</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if switch.toTimeframe == '1m' %}
-                                        <span class="badge bg-primary">1m</span>
-                                    {% elseif switch.toTimeframe == '5m' %}
-                                        <span class="badge bg-info">5m</span>
-                                    {% elseif switch.toTimeframe == '15m' %}
-                                        <span class="badge bg-warning">15m</span>
-                                    {% elseif switch.toTimeframe == '1h' %}
-                                        <span class="badge bg-success">1h</span>
-                                    {% elseif switch.toTimeframe == '4h' %}
-                                        <span class="badge bg-danger">4h</span>
-                                    {% else %}
-                                        <span class="badge bg-secondary">{{ switch.toTimeframe }}</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if switch.data and switch.data|length > 0 %}
-                                        <button class="btn btn-sm btn-outline-info" onclick="viewData({{ switch.id }})">
-                                            <i class="bi bi-eye"></i> Voir
-                                        </button>
-                                    {% else %}
-                                        <span class="text-muted">-</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {{ switch.createdAt|date('d/m/Y H:i:s') }}
-                                </td>
-                                <td>
-                                    <div class="btn-group btn-group-sm" role="group">
-                                        <button class="btn btn-outline-primary" onclick="viewChart('{{ switch.symbol }}')" title="Voir graphique">
-                                            <i class="bi bi-graph-up"></i>
-                                        </button>
-                                        <button class="btn btn-outline-info" onclick="viewData({{ switch.id }})" title="Voir données">
-                                            <i class="bi bi-eye"></i>
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
+                        <tbody></tbody>
                     </table>
                 </div>
             </div>
@@ -187,43 +113,45 @@
 {% block javascripts %}
 <script>
 $(document).ready(function() {
-    // Initialisation de DataTables
-    $('#switchesTable').DataTable({
+    const table = $('#switchesTable').DataTable({
+        processing: true,
+        serverSide: true,
         pageLength: 25,
-        order: [[5, 'desc']], // Trier par date de création
-        columnDefs: [
-            { orderable: false, targets: [4, 6] } // Données et Actions columns
-        ]
+        order: [[6, 'desc']],
+        ajax: {
+            url: '{{ path('mtf_switches_data') }}',
+            data: function(d){
+                d.symbol = $('#filterSymbol').val();
+                d.type = $('#filterType').val();
+            }
+        },
+        columns: [
+            { data: 'id', render: d => `<code>${d}</code>` },
+            { data: 'switch_key' },
+            { data: 'is_on', render: v => v ? '<span class="badge bg-success">ON</span>' : '<span class="badge bg-danger">OFF</span>' },
+            { data: 'symbol', defaultContent: '-' },
+            { data: 'timeframe', defaultContent: '-' },
+            { data: 'expires_at', defaultContent: '-' },
+            { data: 'updated_at', defaultContent: '-' },
+            { data: 'description', defaultContent: '-' },
+            { data: null, orderable:false, searchable:false, render: function(row){
+                const sym = row.symbol || '';
+                const graphUrl = sym ? ('{{ path('graph_index') }}' + '?symbol=' + encodeURIComponent(sym)) : '#';
+                const disabled = sym ? '' : 'disabled';
+                return `<div class="btn-group btn-group-sm" role="group">
+                    <a class="btn btn-outline-primary ${disabled}" href="${graphUrl}" title="Voir graphique"><i class="bi bi-graph-up"></i></a>
+                </div>`;
+            } }
+        ],
+        columnDefs: [ { orderable: false, targets: [8] } ]
     });
 
-    // Filtres
-    $('#filterSymbol, #filterFromTf, #filterToTf, #filterDateFrom, #filterDateTo').on('change keyup', function() {
-        applyFilters();
+    $('#filterSymbol, #filterType, #filterDateFrom, #filterDateTo').on('change keyup', function(){
+        table.ajax.reload();
     });
 });
 
-function applyFilters() {
-    const table = $('#switchesTable').DataTable();
-    const symbol = $('#filterSymbol').val();
-    const fromTf = $('#filterFromTf').val();
-    const toTf = $('#filterToTf').val();
-
-    // Réinitialiser les filtres
-    table.search('').columns().search('').draw();
-
-    // Appliquer les filtres
-    if (symbol) {
-        table.column(1).search(symbol, false, false);
-    }
-    if (fromTf) {
-        table.column(2).search(fromTf, false, false);
-    }
-    if (toTf) {
-        table.column(3).search(toTf, false, false);
-    }
-
-    table.draw();
-}
+function applyFilters() { $('#switchesTable').DataTable().ajax.reload(); }
 
 function clearFilters() {
     $('#filterSymbol, #filterFromTf, #filterToTf, #filterDateFrom, #filterDateTo').val('');

@@ -36,24 +36,14 @@
             <div class="card-body">
                 <div class="row">
                     <div class="col-md-3">
-                        <label for="filterSymbol" class="form-label">Symbole</label>
-                        <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
-                    </div>
-                    <div class="col-md-3">
-                        <label for="filterLockType" class="form-label">Type de verrou</label>
-                        <select class="form-select" id="filterLockType">
-                            <option value="">Tous</option>
-                            <option value="read">Lecture</option>
-                            <option value="write">Écriture</option>
-                            <option value="exclusive">Exclusif</option>
-                        </select>
+                        <label for="filterLockKey" class="form-label">Lock Key</label>
+                        <input type="text" class="form-control" id="filterLockKey" placeholder="Ex: mtf_execution">
                     </div>
                     <div class="col-md-3">
                         <label for="filterStatus" class="form-label">Statut</label>
                         <select class="form-select" id="filterStatus">
                             <option value="">Tous</option>
                             <option value="active">Actif</option>
-                            <option value="released">Libéré</option>
                             <option value="expired">Expiré</option>
                         </select>
                     </div>
@@ -68,57 +58,7 @@
     </div>
 </div>
 
-<!-- Statistiques -->
-<div class="row mb-4">
-    <div class="col-md-2">
-        <div class="card bg-primary text-white">
-            <div class="card-body text-center">
-                <h5>{{ locks|length }}</h5>
-                <small>Total Verrous</small>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-2">
-        <div class="card bg-danger text-white">
-            <div class="card-body text-center">
-                <h5 id="activeCount">{{ locks|filter(l => l.status == 'active' or l.status == 'locked')|length }}</h5>
-                <small>Actifs</small>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-2">
-        <div class="card bg-success text-white">
-            <div class="card-body text-center">
-                <h5 id="releasedCount">{{ locks|filter(l => l.status == 'released' or l.status == 'unlocked')|length }}</h5>
-                <small>Libérés</small>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-2">
-        <div class="card bg-warning text-white">
-            <div class="card-body text-center">
-                <h5 id="expiredCount">{{ locks|filter(l => l.expiresAt and l.expiresAt|date('U') < date()|date('U'))|length }}</h5>
-                <small>Expirés</small>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-2">
-        <div class="card bg-info text-white">
-            <div class="card-body text-center">
-                <h5>{{ locks|filter(l => l.lockType == 'read')|length }}</h5>
-                <small>Lecture</small>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-2">
-        <div class="card bg-secondary text-white">
-            <div class="card-body text-center">
-                <h5>{{ locks|filter(l => l.lockType == 'write')|length }}</h5>
-                <small>Écriture</small>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- Statistiques (optionnel) -->
 
 <!-- Table des verrous -->
 <div class="row">
@@ -126,7 +66,7 @@
         <div class="card">
             <div class="card-header">
                 <h6 class="mb-0">
-                    <i class="bi bi-table"></i> Liste des Verrous MTF ({{ locks|length }})
+                    <i class="bi bi-table"></i> Liste des Verrous MTF
                 </h6>
             </div>
             <div class="card-body">
@@ -134,73 +74,16 @@
                     <table id="locksTable" class="table table-striped table-hover">
                         <thead class="table-dark">
                             <tr>
-                                <th>ID</th>
-                                <th>Symbole</th>
-                                <th>Type</th>
+                                <th>Lock Key</th>
+                                <th>Process ID</th>
                                 <th>Statut</th>
-                                <th>Durée</th>
-                                <th>Créé le</th>
+                                <th>Durée (s)</th>
+                                <th>Acquis le</th>
                                 <th>Expire le</th>
+                                <th>Méta</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            {% for lock in locks %}
-                            {% set expired = lock.expiresAt and lock.expiresAt|date('U') < date()|date('U') %}
-                            {% set duration = lock.expiresAt and lock.createdAt ? (lock.expiresAt|date('U') - lock.createdAt|date('U')) : 0 %}
-                            <tr class="{{ expired ? 'table-danger' : '' }}">
-                                <td>
-                                    <code>{{ lock.id }}</code>
-                                </td>
-                                <td>
-                                    <strong>{{ lock.symbol }}</strong>
-                                </td>
-                                <td>
-                                    {% if lock.lockType == 'read' %}
-                                        <span class="badge bg-info">Lecture</span>
-                                    {% elseif lock.lockType == 'write' %}
-                                        <span class="badge bg-warning">Écriture</span>
-                                    {% elseif lock.lockType == 'exclusive' %}
-                                        <span class="badge bg-danger">Exclusif</span>
-                                    {% else %}
-                                        <span class="badge bg-secondary">{{ lock.lockType }}</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if lock.status == 'active' or lock.status == 'locked' %}
-                                        <span class="badge bg-danger">Actif</span>
-                                    {% elseif lock.status == 'released' or lock.status == 'unlocked' %}
-                                        <span class="badge bg-success">Libéré</span>
-                                    {% elseif lock.status == 'expired' %}
-                                        <span class="badge bg-warning">Expiré</span>
-                                    {% else %}
-                                        <span class="badge bg-secondary">{{ lock.status }}</span>
-                                    {% endif %}
-                                    {% if expired %}
-                                        <span class="badge bg-warning">Expiré</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if duration > 0 %}
-                                        <span class="{{ expired ? 'text-danger' : '' }}">{{ duration }}s</span>
-                                    {% else %}
-                                        <span class="text-muted">-</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {{ lock.createdAt|date('d/m/Y H:i:s') }}
-                                </td>
-                                <td>
-                                    {% if lock.expiresAt %}
-                                        <span class="{{ expired ? 'text-danger' : '' }}">
-                                            {{ lock.expiresAt|date('d/m/Y H:i:s') }}
-                                        </span>
-                                    {% else %}
-                                        <span class="text-muted">-</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
+                        <tbody></tbody>
                     </table>
                 </div>
             </div>
@@ -214,68 +97,55 @@
 let autoRefreshInterval;
 
 $(document).ready(function() {
-    // Initialisation de DataTables
-    $('#locksTable').DataTable({
+    const table = $('#locksTable').DataTable({
+        processing: true,
+        serverSide: true,
         pageLength: 25,
-        order: [[5, 'desc']], // Trier par date de création
+        order: [[4, 'desc']],
+        ajax: {
+            url: '{{ path('mtf_locks_data') }}',
+            data: function(d){
+                d.lock_key = $('#filterLockKey').val();
+                d.status = $('#filterStatus').val();
+            }
+        },
+        columns: [
+            { data: 'lock_key', render: d => `<code>${d}</code>` },
+            { data: 'process_id' },
+            { data: 'status', render: function(s){
+                if (s === 'active') return '<span class="badge bg-danger">Actif</span>';
+                if (s === 'expired') return '<span class="badge bg-warning">Expiré</span>';
+                return `<span class=\"badge bg-secondary\">${s}</span>`;
+            } },
+            { data: 'duration' },
+            { data: 'acquired_at' },
+            { data: 'expires_at', defaultContent: '-' },
+            { data: 'metadata', defaultContent: '-' },
+        ]
     });
 
-    // Filtres
-    $('#filterSymbol, #filterLockType, #filterStatus').on('change keyup', function() {
-        applyFilters();
-    });
+    $('#filterLockKey, #filterStatus').on('change keyup', function(){ table.ajax.reload(); });
 
     // Auto-refresh
-    $('#autoRefresh').on('change', function() {
-        if (this.checked) {
-            startAutoRefresh();
-        } else {
-            stopAutoRefresh();
-        }
-    });
-
-    // Démarrer l'auto-refresh par défaut
+    $('#autoRefresh').on('change', function() { this.checked ? startAutoRefresh() : stopAutoRefresh(); });
     startAutoRefresh();
 });
 
-function applyFilters() {
-    const table = $('#locksTable').DataTable();
-    const symbol = $('#filterSymbol').val();
-    const lockType = $('#filterLockType').val();
-    const status = $('#filterStatus').val();
-
-    // Réinitialiser les filtres
-    table.search('').columns().search('').draw();
-
-    // Appliquer les filtres
-    if (symbol) {
-        table.column(1).search(symbol, false, false);
-    }
-    if (lockType) {
-        table.column(2).search(lockType, false, false);
-    }
-    if (status) {
-        table.column(3).search(status, false, false);
-    }
-
-    table.draw();
-}
+function applyFilters() { $('#locksTable').DataTable().ajax.reload(); }
 
 function clearFilters() {
-    $('#filterSymbol, #filterLockType, #filterStatus').val('');
-    $('#locksTable').DataTable().search('').columns().search('').draw();
+    $('#filterLockKey, #filterStatus').val('');
+    $('#locksTable').DataTable().ajax.reload();
 }
 
-function refreshTable() {
-    location.reload();
-}
+function refreshTable() { $('#locksTable').DataTable().ajax.reload(); }
 
 function startAutoRefresh() {
     if (autoRefreshInterval) {
         clearInterval(autoRefreshInterval);
     }
     autoRefreshInterval = setInterval(function() {
-        location.reload();
+        $('#locksTable').DataTable().ajax.reload(null, false);
     }, 10000); // 10 secondes
 }
 

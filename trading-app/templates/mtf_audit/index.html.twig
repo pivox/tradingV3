@@ -33,16 +33,11 @@
                         <label for="filterSymbol" class="form-label">Symbole</label>
                         <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
                     </div>
-                    <div class="col-md-2">
-                        <label for="filterAction" class="form-label">Action</label>
-                        <select class="form-select" id="filterAction">
-                            <option value="">Toutes</option>
-                            <option value="create">Création</option>
-                            <option value="update">Mise à jour</option>
-                            <option value="delete">Suppression</option>
-                            <option value="switch">Switch</option>
-                        </select>
+                    <div class="col-md-3">
+                        <label for="filterStep" class="form-label">Étape (contient)</label>
+                        <input type="text" class="form-control" id="filterStep" placeholder="Ex: validation, alignment, ...">
                     </div>
+                    <input type="hidden" id="filterRunId" value="{{ runId ?? '' }}">
                     <div class="col-md-2">
                         <label for="filterDateFrom" class="form-label">Date Début</label>
                         <input type="date" class="form-control" id="filterDateFrom">
@@ -78,59 +73,15 @@
                             <tr>
                                 <th>ID</th>
                                 <th>Symbole</th>
-                                <th>Action</th>
+                                <th>Étape</th>
+                                <th>TF</th>
+                                <th>Cause</th>
                                 <th>Détails</th>
                                 <th>Créé le</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            {% for audit in audits %}
-                            <tr>
-                                <td>
-                                    <code>{{ audit.id }}</code>
-                                </td>
-                                <td>
-                                    <strong>{{ audit.symbol }}</strong>
-                                </td>
-                                <td>
-                                    {% if audit.action|lower == 'create' %}
-                                        <span class="badge bg-success">Création</span>
-                                    {% elseif audit.action|lower == 'update' %}
-                                        <span class="badge bg-info">Mise à jour</span>
-                                    {% elseif audit.action|lower == 'delete' %}
-                                        <span class="badge bg-danger">Suppression</span>
-                                    {% elseif audit.action|lower == 'switch' %}
-                                        <span class="badge bg-warning">Switch</span>
-                                    {% else %}
-                                        <span class="badge bg-secondary">{{ audit.action }}</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if audit.details and audit.details|length > 0 %}
-                                        <button class="btn btn-sm btn-outline-info" onclick="viewDetails({{ audit.id }})">
-                                            <i class="bi bi-eye"></i> Voir
-                                        </button>
-                                    {% else %}
-                                        <span class="text-muted">-</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {{ audit.createdAt|date('d/m/Y H:i:s') }}
-                                </td>
-                                <td>
-                                    <div class="btn-group btn-group-sm" role="group">
-                                        <button class="btn btn-outline-primary" onclick="viewChart('{{ audit.symbol }}')" title="Voir graphique">
-                                            <i class="bi bi-graph-up"></i>
-                                        </button>
-                                        <button class="btn btn-outline-info" onclick="viewDetails({{ audit.id }})" title="Voir détails">
-                                            <i class="bi bi-eye"></i>
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
+                        <tbody></tbody>
                     </table>
                 </div>
             </div>
@@ -159,37 +110,55 @@
 $(document).ready(function() {
     // Initialisation de DataTables
     $('#auditsTable').DataTable({
+        processing: true,
+        serverSide: true,
         pageLength: 25,
-        order: [[4, 'desc']], // Trier par date de création
+        order: [[6, 'desc']],
+        ajax: {
+            url: '{{ path('mtf_audit_data') }}',
+            data: function(d) {
+                d.symbol = $('#filterSymbol').val();
+                d.step = $('#filterStep').val();
+                d.date_from = $('#filterDateFrom').val();
+                d.date_to = $('#filterDateTo').val();
+                const rid = $('#filterRunId').val();
+                if (rid) d.run_id = rid;
+            }
+        },
+        columns: [
+            { data: 'id', render: function(data){ return `<code>${data}</code>`; } },
+            { data: 'symbol', render: function(data){ return `<strong>${data}</strong>`; } },
+            { data: 'step', render: function(data){ return `<span class="badge bg-secondary">${data||''}</span>`; } },
+            { data: 'timeframe', render: function(data){ return data ? `<span class="badge bg-primary">${data}</span>` : '<span class="text-muted">-</span>'; } },
+            { data: 'cause', defaultContent: '-', render: function(data){ return data || '-'; } },
+            { data: 'has_details', orderable: false, searchable: false, render: function(val, type, row){
+                if (val) {
+                    return `<button class="btn btn-sm btn-outline-info" onclick="viewDetails(${row.id})"><i class=\"bi bi-eye\"></i> Voir</button>`;
+                }
+                return '<span class="text-muted">-</span>';
+            } },
+            { data: 'created_at' },
+            { data: null, orderable: false, searchable: false, render: function(row){
+                const graphUrl = '{{ path('graph_index') }}' + '?symbol=' + encodeURIComponent(row.symbol);
+                return `
+                    <div class="btn-group btn-group-sm" role="group">
+                        <a class="btn btn-outline-primary" href="${graphUrl}" title="Voir graphique"><i class="bi bi-graph-up"></i></a>
+                        <button class="btn btn-outline-info" onclick="viewDetails(${row.id})" title="Voir détails"><i class="bi bi-eye"></i></button>
+                    </div>`;
+            }},
+        ],
         columnDefs: [
-            { orderable: false, targets: [3, 5] } // Détails et Actions columns
+            { orderable: false, targets: [5, 7] }
         ]
     });
 
     // Filtres
-    $('#filterSymbol, #filterAction, #filterDateFrom, #filterDateTo').on('change keyup', function() {
-        applyFilters();
+    $('#filterSymbol, #filterStep, #filterDateFrom, #filterDateTo').on('change keyup', function() {
+        $('#auditsTable').DataTable().ajax.reload();
     });
 });
 
-function applyFilters() {
-    const table = $('#auditsTable').DataTable();
-    const symbol = $('#filterSymbol').val();
-    const action = $('#filterAction').val();
-
-    // Réinitialiser les filtres
-    table.search('').columns().search('').draw();
-
-    // Appliquer les filtres
-    if (symbol) {
-        table.column(1).search(symbol, false, false);
-    }
-    if (action) {
-        table.column(2).search(action, false, false);
-    }
-
-    table.draw();
-}
+function applyFilters() { $('#auditsTable').DataTable().ajax.reload(); }
 
 function clearFilters() {
     $('#filterSymbol, #filterAction, #filterDateFrom, #filterDateTo').val('');
@@ -205,12 +174,21 @@ function viewChart(symbol) {
     window.location.href = '{{ path('graph_index') }}?symbol=' + symbol;
 }
 
-function viewDetails(id) {
-    // Récupérer les détails de l'audit (à implémenter côté serveur)
+async function viewDetails(id) {
     const detailsContent = document.getElementById('detailsContent');
-    detailsContent.textContent = 'Détails de l\'audit ' + id + '\n\n' + 
-        'Cette fonctionnalité sera implémentée pour afficher les détails de l\'audit.';
-    
+    detailsContent.textContent = 'Chargement...';
+
+    try {
+        const resp = await fetch(`{{ path('mtf_audit_details', {id: 0}) | replace({'0':'__ID__'}) }}`.replace('__ID__', id));
+        if (!resp.ok) {
+            throw new Error('Erreur de chargement');
+        }
+        const data = await resp.json();
+        detailsContent.textContent = JSON.stringify(data, null, 2);
+    } catch (e) {
+        detailsContent.textContent = 'Impossible de charger les détails.';
+    }
+
     const modal = new bootstrap.Modal(document.getElementById('detailsModal'));
     modal.show();
 }

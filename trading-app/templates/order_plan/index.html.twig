@@ -75,7 +75,7 @@
     <div class="col-md-2">
         <div class="card bg-primary text-white">
             <div class="card-body text-center">
-                <h5>{{ orderPlans|length }}</h5>
+                <h5>{{ kpis.total ?? 0 }}</h5>
                 <small>Total Plans</small>
             </div>
         </div>
@@ -83,7 +83,7 @@
     <div class="col-md-2">
         <div class="card bg-info text-white">
             <div class="card-body text-center">
-                <h5>{{ orderPlans|filter(p => p.status == 'PLANNED')|length }}</h5>
+                <h5>{{ kpis.planned ?? 0 }}</h5>
                 <small>Planifiés</small>
             </div>
         </div>
@@ -91,7 +91,7 @@
     <div class="col-md-2">
         <div class="card bg-success text-white">
             <div class="card-body text-center">
-                <h5>{{ orderPlans|filter(p => p.status == 'EXECUTED')|length }}</h5>
+                <h5>{{ kpis.executed ?? 0 }}</h5>
                 <small>Exécutés</small>
             </div>
         </div>
@@ -99,7 +99,7 @@
     <div class="col-md-2">
         <div class="card bg-danger text-white">
             <div class="card-body text-center">
-                <h5>{{ orderPlans|filter(p => p.status == 'CANCELLED')|length }}</h5>
+                <h5>{{ kpis.cancelled ?? 0 }}</h5>
                 <small>Annulés</small>
             </div>
         </div>
@@ -107,7 +107,7 @@
     <div class="col-md-2">
         <div class="card bg-warning text-white">
             <div class="card-body text-center">
-                <h5>{{ orderPlans|filter(p => p.status == 'FAILED')|length }}</h5>
+                <h5>{{ kpis.failed ?? 0 }}</h5>
                 <small>Échoués</small>
             </div>
         </div>
@@ -115,7 +115,7 @@
     <div class="col-md-2">
         <div class="card bg-secondary text-white">
             <div class="card-body text-center">
-                <h5>{{ orderPlans|filter(p => p.side.value == 'LONG')|length }}</h5>
+                <h5>{{ kpis.long ?? 0 }}</h5>
                 <small>Long</small>
             </div>
         </div>
@@ -128,7 +128,7 @@
         <div class="card">
             <div class="card-header">
                 <h6 class="mb-0">
-                    <i class="bi bi-table"></i> Liste des Plans de Commandes ({{ orderPlans|length }})
+                    <i class="bi bi-table"></i> Liste des Plans de Commandes
                 </h6>
             </div>
             <div class="card-body">
@@ -147,78 +147,7 @@
                                 <th>Actions</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            {% for plan in orderPlans %}
-                            <tr>
-                                <td>
-                                    <code>{{ plan.id }}</code>
-                                </td>
-                                <td>
-                                    <strong>{{ plan.symbol }}</strong>
-                                </td>
-                                <td>
-                                    {{ plan.planTime|date('d/m/Y H:i:s') }}
-                                </td>
-                                <td>
-                                    {% if plan.side.value == 'LONG' %}
-                                        <span class="badge bg-success">LONG</span>
-                                    {% else %}
-                                        <span class="badge bg-danger">SHORT</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if plan.status == 'PLANNED' %}
-                                        <span class="badge bg-info">Planifié</span>
-                                    {% elseif plan.status == 'EXECUTED' %}
-                                        <span class="badge bg-success">Exécuté</span>
-                                    {% elseif plan.status == 'CANCELLED' %}
-                                        <span class="badge bg-danger">Annulé</span>
-                                    {% elseif plan.status == 'FAILED' %}
-                                        <span class="badge bg-warning">Échoué</span>
-                                    {% else %}
-                                        <span class="badge bg-secondary">{{ plan.status }}</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if plan.riskJson and plan.riskJson|length > 0 %}
-                                        <button class="btn btn-sm btn-outline-info" onclick="viewJson('risk', {{ plan.id }})">
-                                            <i class="bi bi-eye"></i> Voir
-                                        </button>
-                                    {% else %}
-                                        <span class="text-muted">-</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if plan.contextJson and plan.contextJson|length > 0 %}
-                                        <button class="btn btn-sm btn-outline-info" onclick="viewJson('context', {{ plan.id }})">
-                                            <i class="bi bi-eye"></i> Voir
-                                        </button>
-                                    {% else %}
-                                        <span class="text-muted">-</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if plan.execJson and plan.execJson|length > 0 %}
-                                        <button class="btn btn-sm btn-outline-info" onclick="viewJson('exec', {{ plan.id }})">
-                                            <i class="bi bi-eye"></i> Voir
-                                        </button>
-                                    {% else %}
-                                        <span class="text-muted">-</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    <div class="btn-group btn-group-sm" role="group">
-                                        <button class="btn btn-outline-primary" onclick="viewChart('{{ plan.symbol }}')" title="Voir graphique">
-                                            <i class="bi bi-graph-up"></i>
-                                        </button>
-                                        <button class="btn btn-outline-info" onclick="viewDetails({{ plan.id }})" title="Voir détails">
-                                            <i class="bi bi-eye"></i>
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
+                        <tbody></tbody>
                     </table>
                 </div>
             </div>
@@ -245,45 +174,50 @@
 {% block javascripts %}
 <script>
 $(document).ready(function() {
-    // Initialisation de DataTables
-    $('#orderPlansTable').DataTable({
+    const table = $('#orderPlansTable').DataTable({
+        processing: true,
+        serverSide: true,
         pageLength: 25,
-        order: [[2, 'desc']], // Trier par date de plan
-        columnDefs: [
-            { orderable: false, targets: [5, 6, 7, 8] } // JSON et Actions columns
-        ]
+        order: [[2, 'desc']],
+        ajax: {
+            url: '{{ path('mtf_order_plans_data') }}',
+            data: function(d){
+                d.symbol = $('#filterSymbol').val();
+                d.side = $('#filterSide').val();
+                d.status = $('#filterStatus').val();
+                d.date_from = $('#filterDateFrom').val();
+                d.date_to = $('#filterDateTo').val();
+            }
+        },
+        columns: [
+            { data: 'id', render: d => `<code>${d}</code>` },
+            { data: 'symbol', render: d => `<strong>${d}</strong>` },
+            { data: 'plan_time' },
+            { data: 'side', render: d => d === 'LONG' ? '<span class="badge bg-success">LONG</span>' : '<span class="badge bg-danger">SHORT</span>' },
+            { data: 'status', render: function(d){
+                if (d === 'PLANNED') return '<span class="badge bg-info">Planifié</span>';
+                if (d === 'EXECUTED') return '<span class="badge bg-success">Exécuté</span>';
+                if (d === 'CANCELLED') return '<span class="badge bg-danger">Annulé</span>';
+                if (d === 'FAILED') return '<span class="badge bg-warning">Échoué</span>';
+                return `<span class="badge bg-secondary">${d}</span>`;
+            } },
+            { data: 'has_risk', orderable:false, searchable:false, render: (v,_,row)=> v ? `<button class="btn btn-sm btn-outline-info" onclick="viewJson('risk', ${row.id})"><i class='bi bi-eye'></i> Voir</button>` : '<span class="text-muted">-</span>' },
+            { data: 'has_context', orderable:false, searchable:false, render: (v,_,row)=> v ? `<button class="btn btn-sm btn-outline-info" onclick="viewJson('context', ${row.id})"><i class='bi bi-eye'></i> Voir</button>` : '<span class="text-muted">-</span>' },
+            { data: 'has_exec', orderable:false, searchable:false, render: (v,_,row)=> v ? `<button class="btn btn-sm btn-outline-info" onclick="viewJson('exec', ${row.id})"><i class='bi bi-eye'></i> Voir</button>` : '<span class="text-muted">-</span>' },
+            { data: null, orderable:false, searchable:false, render: function(row){
+                const graphUrl = '{{ path('graph_index') }}' + '?symbol=' + encodeURIComponent(row.symbol);
+                return `<div class=\"btn-group btn-group-sm\" role=\"group\">\n                    <a class=\"btn btn-outline-primary\" href=\"${graphUrl}\" title=\"Voir graphique\"><i class=\"bi bi-graph-up\"></i></a>\n                    <button class=\"btn btn-outline-info\" onclick=\"viewDetails(${row.id})\" title=\"Voir détails\"><i class=\"bi bi-eye\"></i></button>\n                </div>`;
+            } }
+        ],
+        columnDefs: [ { orderable: false, targets: [5,6,7,8] } ]
     });
 
-    // Filtres
-    $('#filterSymbol, #filterSide, #filterStatus, #filterDateFrom, #filterDateTo').on('change keyup', function() {
-        applyFilters();
+    $('#filterSymbol, #filterSide, #filterStatus, #filterDateFrom, #filterDateTo').on('change keyup', function(){
+        table.ajax.reload();
     });
 });
 
-function applyFilters() {
-    const table = $('#orderPlansTable').DataTable();
-    const symbol = $('#filterSymbol').val();
-    const side = $('#filterSide').val();
-    const status = $('#filterStatus').val();
-    const dateFrom = $('#filterDateFrom').val();
-    const dateTo = $('#filterDateTo').val();
-
-    // Réinitialiser les filtres
-    table.search('').columns().search('').draw();
-
-    // Appliquer les filtres
-    if (symbol) {
-        table.column(1).search(symbol, false, false);
-    }
-    if (side) {
-        table.column(3).search(side, false, false);
-    }
-    if (status) {
-        table.column(4).search(status, false, false);
-    }
-
-    table.draw();
-}
+function applyFilters() { $('#orderPlansTable').DataTable().ajax.reload(); }
 
 function clearFilters() {
     $('#filterSymbol, #filterSide, #filterStatus, #filterDateFrom, #filterDateTo').val('');
@@ -304,15 +238,19 @@ function viewDetails(id) {
     alert('Vue détaillée pour le plan ' + id);
 }
 
-function viewJson(type, id) {
-    // Récupérer les données JSON du plan (à implémenter côté serveur)
+async function viewJson(type, id) {
     const modalTitle = document.getElementById('jsonModalTitle');
     const jsonContent = document.getElementById('jsonContent');
-    
     modalTitle.textContent = type.charAt(0).toUpperCase() + type.slice(1) + ' JSON - Plan ' + id;
-    jsonContent.textContent = 'Données ' + type + ' pour le plan ' + id + '\n\n' + 
-        'Cette fonctionnalité sera implémentée pour afficher les données JSON du plan.';
-    
+    jsonContent.textContent = 'Chargement...';
+    try {
+        const url = '{{ path('mtf_order_plan_json', {id: 0, type: 'risk'}) }}'.replace('/0/ris', `/${id}/${type}`).replace('risk', type);
+        const resp = await fetch(url);
+        const payload = await resp.json();
+        jsonContent.textContent = JSON.stringify(payload, null, 2);
+    } catch (e) {
+        jsonContent.textContent = 'Impossible de charger les données.';
+    }
     const modal = new bootstrap.Modal(document.getElementById('jsonModal'));
     modal.show();
 }
