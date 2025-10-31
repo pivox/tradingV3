@@ -5,12 +5,13 @@ Ce document décrit les nouvelles options de diagnostic ajoutées aux commandes 
 ## Table des matières
 1. [stats:mtf-audit - Nouveaux rapports](#statsmt-audit---nouveaux-rapports)
 2. [mtf:health-check - Nouvelle commande](#mtfhealth-check---nouvelle-commande)
+3. [stats:mtf-audit --report=calibration - Rapport de calibration](#rapport-calibration---évaluation-de-la-qualité)
 
 ---
 
 ## stats:mtf-audit - Nouveaux rapports
 
-La commande `stats:mtf-audit` dispose maintenant de **6 types de rapports** (au lieu de 4) :
+La commande `stats:mtf-audit` dispose maintenant de **7 types de rapports** (au lieu de 4) :
 
 ### Rapport 5 : `by-timeframe`
 **Objectif** : Détecter quel timeframe est le plus problématique en agrégeant les échecs.
@@ -56,6 +57,185 @@ docker-compose exec trading-app-php bin/console stats:mtf-audit --report=success
 - `created_at` : Date de la validation
 - `candle_ts` : Timestamp de la bougie concernée
 - `run_id` : ID du run MTF
+
+---
+
+## Rapport Calibration - Évaluation de la qualité
+
+### Objectif
+Le rapport `calibration` calcule le **fail_pct_moyen** du système pour évaluer la qualité de la calibration des règles MTF.
+
+**Formule** : `fail_pct_moyen = (∑ fail_count) / (∑ total_fails) × 100`
+
+Cette métrique indique le degré de concentration des échecs sur certaines conditions.
+
+### Utilisation
+
+```bash
+# Rapport de calibration global
+docker-compose exec trading-app-php bin/console stats:mtf-audit --report=calibration
+
+# Calibration pour un timeframe spécifique
+docker-compose exec trading-app-php bin/console stats:mtf-audit --report=calibration -t 1h
+
+# Export JSON
+docker-compose exec trading-app-php bin/console stats:mtf-audit --report=calibration \
+  --format=json --output=/tmp/calibration.json
+
+# Analyse sur période spécifique
+docker-compose exec trading-app-php bin/console stats:mtf-audit --report=calibration \
+  --since="now -7 days"
+```
+
+### Grille d'interprétation
+
+| fail_pct_moyen | Statut | Diagnostic | Action recommandée |
+|----------------|--------|------------|-------------------|
+| **0 – 5%** | ✅ EXCELLENT | Bon équilibre | Stable |
+| **6 – 9%** | ✅ GOOD | Marché neutre / cohérent | OK |
+| **10 – 15%** | ⚠️ WARNING | Règles trop strictes | Assouplir les tolérances EMA / MACD |
+| **> 20%** | ❌ CRITICAL | Très mauvais calibrage | Règles mal conçues ou non pertinentes |
+| **= 0% stable plusieurs heures** | 🚫 BLOCKED | Données ou process figés | Blocage pipeline |
+
+### Informations fournies
+
+#### 1. Résumé Global
+- **fail_pct_moyen** : Pourcentage moyen de concentration des échecs
+- **∑ fail_count** : Somme de tous les fail_count de toutes les conditions
+- **∑ total_fails** : Somme des échecs totaux par timeframe
+- **Statut** : Évaluation automatique (EXCELLENT/GOOD/WARNING/CRITICAL/BLOCKED)
+- **Diagnostic** : Explication du statut
+- **Action recommandée** : Conseil d'action
+
+#### 2. Grille d'interprétation
+Tableau de référence avec tous les seuils et leurs significations.
+
+#### 3. Détail par Timeframe
+Pour chaque timeframe :
+- Somme des fail_count
+- Total des échecs
+- Pourcentage fail_pct
+
+#### 4. Top Conditions par Timeframe
+Les 5 conditions les plus bloquantes par timeframe avec :
+- Nom de la condition
+- Nombre d'échecs
+- Pourcentage dans les échecs du timeframe
+
+### Exemples de résultats
+
+#### Exemple 1 : Système sain (6.88%)
+```
+📊 Résumé Global
+fail_pct_moyen: 6.88%
+Statut: GOOD
+Diagnostic: Marché neutre / cohérent
+Action: ⚙️ OK
+
+✅ SYSTÈME SAIN : Marché neutre / cohérent
+```
+**Interprétation** : Les échecs sont bien répartis entre les conditions. Le système fonctionne normalement.
+
+#### Exemple 2 : Règles trop strictes (12.5%)
+```
+📊 Résumé Global
+fail_pct_moyen: 12.5%
+Statut: WARNING
+Diagnostic: Règles trop strictes
+Action: 🔹 Assouplir les tolérances EMA / MACD
+
+⚠️ ATTENTION : Règles trop strictes
+```
+**Interprétation** : Les échecs sont trop concentrés. Envisagez d'assouplir les tolérances.
+
+#### Exemple 3 : Calibration critique (25%)
+```
+📊 Résumé Global
+fail_pct_moyen: 25.0%
+Statut: CRITICAL
+Diagnostic: Très mauvais calibrage
+Action: 🔸 Règles mal conçues ou non pertinentes
+
+❌ CALIBRATION CRITIQUE : Très mauvais calibrage
+```
+**Interprétation** : Les règles bloquent massivement. Révision complète nécessaire.
+
+### Format de sortie JSON
+
+```json
+{
+    "fail_pct_moyen": 6.88,
+    "sum_fail_count": 311520,
+    "sum_total_fails": 4530300,
+    "interpretation": {
+        "status": "GOOD",
+        "diagnostic": "Marché neutre / cohérent",
+        "action": "⚙️ OK",
+        "color": "green"
+    },
+    "by_timeframe": [
+        {
+            "timeframe": "1h",
+            "fail_count_sum": 283020,
+            "total_fails": 283020,
+            "fail_pct": 100,
+            "top_conditions": [
+                {
+                    "condition": "macd_line_cross_up_with_hysteresis",
+                    "fail_count": 30404,
+                    "fail_pct": 10.74
+                }
+            ]
+        }
+    ]
+}
+```
+
+### Cas d'usage
+
+#### 1. Audit quotidien
+```bash
+# Vérifier la calibration des dernières 24h
+docker-compose exec trading-app-php bin/console stats:mtf-audit \
+  --report=calibration --since="now -24 hours"
+```
+
+#### 2. Comparaison avant/après ajustement
+```bash
+# Avant ajustement
+docker-compose exec trading-app-php bin/console stats:mtf-audit \
+  --report=calibration --from="2025-10-29 00:00:00+00" --to="2025-10-30 00:00:00+00"
+
+# Après ajustement
+docker-compose exec trading-app-php bin/console stats:mtf-audit \
+  --report=calibration --from="2025-10-30 00:00:00+00" --to="2025-10-31 00:00:00+00"
+```
+
+#### 3. Analyse par timeframe
+```bash
+# Comparer la calibration de chaque timeframe
+docker-compose exec trading-app-php bin/console stats:mtf-audit --report=calibration -t 1m
+docker-compose exec trading-app-php bin/console stats:mtf-audit --report=calibration -t 5m
+docker-compose exec trading-app-php bin/console stats:mtf-audit --report=calibration -t 15m
+docker-compose exec trading-app-php bin/console stats:mtf-audit --report=calibration -t 1h
+docker-compose exec trading-app-php bin/console stats:mtf-audit --report=calibration -t 4h
+```
+
+#### 4. Monitoring automatisé
+```bash
+# Script cron quotidien
+#!/bin/bash
+RESULT=$(docker-compose exec -T trading-app-php bin/console stats:mtf-audit \
+  --report=calibration --format=json)
+
+FAIL_PCT=$(echo "$RESULT" | jq -r '.fail_pct_moyen')
+STATUS=$(echo "$RESULT" | jq -r '.interpretation.status')
+
+if [ "$STATUS" = "CRITICAL" ] || [ "$STATUS" = "BLOCKED" ]; then
+    # Envoyer alerte (Slack, email, etc.)
+    echo "ALERTE MTF: Calibration $STATUS (fail_pct=$FAIL_PCT%)"
+fi
+```
 
 ---
 
