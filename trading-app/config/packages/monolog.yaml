@@ -15,7 +15,7 @@ monolog:
     mtf_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/mtf.log'
-      max_files: 14
+      max_files: 5
       level: '%env(MTF_LOG_LEVEL)%'
       channels: ['mtf']
       formatter: App\Logging\CustomLineFormatter
@@ -24,7 +24,7 @@ monolog:
     validation_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/validation.log'
-      max_files: 14
+      max_files: 5
       level: 'info'
       channels: ['validation']
       formatter: App\Logging\CustomLineFormatter
@@ -33,7 +33,7 @@ monolog:
     signals_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/signals.log'
-      max_files: 14
+      max_files: 5
       level: '%env(LOG_LEVEL_SIGNALS)%'
       channels: ['signals']
       formatter: App\Logging\CustomLineFormatter
@@ -42,7 +42,7 @@ monolog:
     positions_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/positions.log'
-      max_files: 14
+      max_files: 30
       level: '%env(LOG_LEVEL_POSITIONS)%'
       channels: ['positions']
       formatter: App\Logging\CustomLineFormatter
@@ -51,7 +51,7 @@ monolog:
     positions_flow_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/positions-flow.log'
-      max_files: 14
+      max_files: 30
       level: 'info'
       channels: ['positions_flow']
       formatter: App\Logging\CustomLineFormatter
@@ -144,7 +144,7 @@ monolog:
     indicators_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/indicators.log'
-      max_files: 14
+      max_files: 5
       level: '%env(LOG_LEVEL_INDICATORS)%'
       channels: ['indicators']
       formatter: App\Logging\CustomLineFormatter
@@ -153,7 +153,7 @@ monolog:
     bitmart_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/bitmart.log'
-      max_files: 14
+      max_files: 5
       level: 'info'
       channels: ['bitmart']
       formatter: App\Logging\CustomLineFormatter
@@ -162,7 +162,7 @@ monolog:
     highconviction_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/highconviction.log'
-      max_files: 30
+      max_files: 5
       level: '%env(LOG_LEVEL_HIGHCONVICTION)%'
       channels: ['highconviction']
       formatter: App\Logging\CustomLineFormatter
@@ -171,7 +171,7 @@ monolog:
     pipeline_exec_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/pipeline-exec.log'
-      max_files: 30
+      max_files: 5
       level: '%env(LOG_LEVEL_PIPELINE_EXEC)%'
       channels: ['pipeline_exec']
       formatter: App\Logging\CustomLineFormatter
@@ -192,7 +192,7 @@ monolog:
     global_severity_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/global-severity.log'
-      max_files: 30
+      max_files: 5
       level: error
       channels: ['global-severity']
       formatter: App\Logging\CustomLineFormatter
@@ -201,7 +201,7 @@ monolog:
     above_error_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/above-error.log'
-      max_files: 30
+      max_files: 5
       level: critical
       channels: ['!event', '!doctrine', '!console']
       formatter: App\Logging\CustomLineFormatter
@@ -219,8 +219,9 @@ monolog:
 
     # Handler principal (fallback)
     main:
-      type: stream
+      type: rotating_file
       path: '%kernel.logs_dir%/%kernel.environment%.log'
+      max_files: 5
       level: '%env(LOG_LEVEL_MAIN)%'
       channels: ['!event', '!deprecation']
       formatter: App\Logging\CustomLineFormatter
