@@ -49,7 +49,7 @@ mtf_validation:
         ema_above_200_with_tolerance:
             any_of:
                 - close_above_ema_200
-                - close_minus_ema_200_gt: -0.0020   # +33% de tolérance (Option 2)
+                - close_minus_ema_200_gt: -0.0030
                 - ema200_slope_pos                   # Nouvelle condition : pente positive
 
         ema_below_200_with_tolerance:
@@ -78,8 +78,8 @@ mtf_validation:
         # --- Anti-bruit MACD : hystérésis & slope au lieu de monotonie stricte ---
         macd_line_cross_up_with_hysteresis:
             require_prev_below: true
-            min_gap: 0.0015          # Augmenté de 0.0003 à 0.0015 (0.15%)
-            cool_down_bars: 4        # Augmenté de 2 à 4 barres
+            min_gap: 0.0008
+            cool_down_bars: 2
 
         macd_line_cross_down_with_hysteresis:
             require_prev_above: true
@@ -97,7 +97,7 @@ mtf_validation:
         # --- Slope EMA200 adoucie (plus stable) ---
         ema200_slope_pos:
             slope_left: 'ema_200'
-            slope_lookback: 21       # moyenne de pente plus longue
+            slope_lookback: 13
             op: '>'
             right: 0.0
             eps: 1.0e-12
@@ -210,7 +210,7 @@ mtf_validation:
                 long:
                     - any_of:
                           - all_of: [ macd_hist_gt_eps ]
-                          - all_of: [ close_above_vwap_or_ma9 ]
+                          - all_of: [ atr_rel_in_range_15m, close_above_vwap_or_ma9 ]
                           - all_of: [ ema20_over_50_with_tolerance ]
                 short:
                     - any_of:
@@ -221,7 +221,7 @@ mtf_validation:
                 long:
                     - any_of:
                           - all_of: [ macd_hist_gt_eps ]
-                          - all_of: [ close_above_vwap_or_ma9 ]
+                          - all_of: [ atr_rel_in_range_15m, close_above_vwap_or_ma9 ]
                           - all_of: [ ema20_over_50_with_tolerance ]
                 short:
                     - any_of:
@@ -232,7 +232,7 @@ mtf_validation:
                 long:
                     - any_of:
                           - all_of: [ macd_hist_gt_eps ]
-                          - all_of: [ close_above_vwap_or_ma9 ]
+                          - all_of: [ atr_rel_in_range_15m, close_above_vwap_or_ma9 ]
                           - all_of: [ ema20_over_50_with_tolerance ]
                 short:
                     - any_of:
