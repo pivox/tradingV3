@@ -10,6 +10,7 @@ class MtfRunDto
         public bool $forceRun = false,
         public ?string $currentTf = null,
         public bool $forceTimeframeCheck = false,
+        public bool $skipContextValidation = false,
         public bool $lockPerSymbol = false,
     )
     {
@@ -23,6 +24,7 @@ class MtfRunDto
             'force_run' => $this->forceRun,
             'current_tf' => $this->currentTf,
             'force_timeframe_check' => $this->forceTimeframeCheck,
+            'skip_context' => $this->skipContextValidation,
             'lock_per_symbol' => $this->lockPerSymbol,
         ];
     }

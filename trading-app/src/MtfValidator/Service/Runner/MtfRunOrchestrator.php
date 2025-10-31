@@ -73,7 +73,7 @@ final class MtfRunOrchestrator
             // Traiter les symboles
             $results = [];
             $totalSymbols = count($symbols);
-            
+
             foreach ($symbols as $index => $symbol) {
                 $this->logger->debug('[MTF Orchestrator] Processing symbol', [
                     'run_id' => $runIdString,
@@ -117,7 +117,7 @@ final class MtfRunOrchestrator
 
             // Créer le résumé
             $summary = $this->createRunSummary($runId, $results, $startTime, $mtfRunDto);
-            
+
             // Logger l'audit
             $this->auditLogger->logAction(
                 'MTF_RUN_COMPLETED',
@@ -172,7 +172,7 @@ final class MtfRunOrchestrator
         return $this->lockManager->acquireLockWithRetry($lockKey, $lockTimeout, 3, 100);
     }
 
-    
+
 
     private function createRunSummary(
         UuidInterface $runId,

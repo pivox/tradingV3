@@ -28,6 +28,7 @@ final class MtfRunWorkerCommand extends Command
             ->addOption('force-run', null, InputOption::VALUE_NONE, 'Force l\'exécution même si les switchs sont OFF')
             ->addOption('tf', null, InputOption::VALUE_OPTIONAL, 'Limite à un timeframe (4h|1h|15m|5m|1m)')
             ->addOption('force-timeframe-check', null, InputOption::VALUE_NONE, 'Force l\'analyse du timeframe même si la dernière kline est récente')
+            ->addOption('skip-context', null, InputOption::VALUE_NONE, 'Ignorer l\'alignement de contexte pour les TF d\'exécution')
             ->addOption('auto-switch-invalid', null, InputOption::VALUE_NONE, 'Active la gestion auto des symboles INVALID (transmis au service)')
             ->addOption('switch-duration', null, InputOption::VALUE_OPTIONAL, 'Durée de désactivation pour les INVALID', '1d');
     }
@@ -50,6 +51,7 @@ final class MtfRunWorkerCommand extends Command
         $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
         $forceTimeframeCheck = (bool) $input->getOption('force-timeframe-check');
         $autoSwitchInvalid = (bool) $input->getOption('auto-switch-invalid');
+        $skipContext = (bool) $input->getOption('skip-context');
         $switchDuration = (string) $input->getOption('switch-duration');
 
         try {
@@ -60,6 +62,7 @@ final class MtfRunWorkerCommand extends Command
                 forceRun: $forceRun,
                 currentTf: $currentTf,
                 forceTimeframeCheck: $forceTimeframeCheck,
+                skipContextValidation: $skipContext,
                 lockPerSymbol: true
             );
             $response = $this->mtfRunService->run($request);

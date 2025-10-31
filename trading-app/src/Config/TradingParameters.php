@@ -124,7 +124,6 @@ class TradingParameters implements MtfConfigProviderInterface
         try {
             $parsed = Yaml::parseFile($path);
         } catch (\Throwable $exception) {
-            dd($exception->getMessage());
             return [];
         }
 

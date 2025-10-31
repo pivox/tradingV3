@@ -150,6 +150,19 @@ final class MtfService
         }
     }
 
+    /**
+     * Decide whether a cached timeframe result can be reused as-is.
+     */
+    private function shouldReuseCachedResult(?array $cached): bool
+    {
+        if (!is_array($cached)) {
+            return false;
+        }
+
+        $status = strtoupper((string)($cached['status'] ?? ''));
+        return in_array($status, ['VALID', 'GRACE_WINDOW'], true);
+    }
+
     private function getCachedTfResult(string $symbol, string $tf): ?array
     {
         try {
@@ -441,7 +454,7 @@ final class MtfService
     /**
      * Traite un symbole spécifique selon la logique MTF
      */
-    private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false): array
+private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false, bool $skipContextValidation = false): array
     {
         $this->logger->debug('[MTF] Processing symbol', ['symbol' => $symbol]);
 
@@ -473,7 +486,8 @@ final class MtfService
                 $now,
                 $validationStates,
                 $forceTimeframeCheck,
-                $forceRun
+                $forceRun,
+                $skipContextValidation
             );
             // Toujours persister un snapshot pour trace, quel que soit le statut
             try {
@@ -482,7 +496,9 @@ final class MtfService
                 // best-effort
             }
             if (($result['status'] ?? null) !== 'VALID') {
-                $this->auditStep($runId, $symbol, strtoupper($currentTf) . '_VALIDATION_FAILED', $result['reason'] ?? "$currentTf validation failed");
+                $this->auditStep($runId, $symbol, strtoupper($currentTf) . '_VALIDATION_FAILED', $result['reason'] ?? "$currentTf validation failed", [
+                    'from_cache' => (bool)($result['from_cache'] ?? false),
+                ]);
                 return $result + ['failed_timeframe' => $currentTf];
             }
 
@@ -517,8 +533,11 @@ final class MtfService
         if ($include4h) {
             $this->logger->debug('[MTF] Start TF 4h', ['symbol' => $symbol]);
             $cached = $this->getCachedTfResult($symbol, '4h');
-            if ($cached && ($cached['status'] ?? '') === 'VALID') {
-                $this->logger->debug('[MTF] Cache HIT 4h', ['symbol' => $symbol]);
+            if ($this->shouldReuseCachedResult($cached)) {
+                $this->logger->debug('[MTF] Cache HIT 4h', [
+                    'symbol' => $symbol,
+                    'status' => $cached['status'] ?? null,
+                ]);
                 $result4h = $cached;
             } else {
                 $result4h = $this->runTimeframeProcessor(
@@ -528,7 +547,8 @@ final class MtfService
                 $now,
                 $validationStates,
                 $forceTimeframeCheck,
-                $forceRun
+                $forceRun,
+                $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '4h', $result4h);
             }
@@ -546,6 +566,7 @@ final class MtfService
                     'atr' => $result4h['atr'] ?? null,
                     'passed' => false,
                     'severity' => 2,
+                    'from_cache' => (bool)($result4h['from_cache'] ?? false),
                 ]);
                 return $result4h + ['failed_timeframe' => '4h'];
             }
@@ -555,8 +576,11 @@ final class MtfService
         $result1h = null;
         if ($include1h) {
             $cached = $this->getCachedTfResult($symbol, '1h');
-            if ($cached && ($cached['status'] ?? '') === 'VALID') {
-                $this->logger->debug('[MTF] Cache HIT 1h', ['symbol' => $symbol]);
+            if ($this->shouldReuseCachedResult($cached)) {
+                $this->logger->debug('[MTF] Cache HIT 1h', [
+                    'symbol' => $symbol,
+                    'status' => $cached['status'] ?? null,
+                ]);
                 $result1h = $cached;
             } else {
                 $result1h = $this->runTimeframeProcessor(
@@ -566,7 +590,8 @@ final class MtfService
                 $now,
                 $validationStates,
                 $forceTimeframeCheck,
-                $forceRun
+                $forceRun,
+                $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '1h', $result1h);
             }
@@ -585,6 +610,7 @@ final class MtfService
                     'atr' => $result1h['atr'] ?? null,
                     'passed' => false,
                     'severity' => 2,
+                    'from_cache' => (bool)($result1h['from_cache'] ?? false),
                 ]);
                 return $result1h + ['failed_timeframe' => '1h'];
             }
@@ -600,6 +626,7 @@ final class MtfService
                         'timeframe' => '1h',
                         'passed' => false,
                         'severity' => 1,
+                        'from_cache' => (bool)($result1h['from_cache'] ?? false) && (bool)($result4h['from_cache'] ?? false),
                     ]);
                     return $alignmentResult;
                 }
@@ -612,8 +639,11 @@ final class MtfService
         if ($include15m) {
             $this->logger->debug('[MTF] Start TF 15m', ['symbol' => $symbol]);
             $cached = $this->getCachedTfResult($symbol, '15m');
-            if ($cached && ($cached['status'] ?? '') === 'VALID') {
-                $this->logger->debug('[MTF] Cache HIT 15m', ['symbol' => $symbol]);
+            if ($this->shouldReuseCachedResult($cached)) {
+                $this->logger->debug('[MTF] Cache HIT 15m', [
+                    'symbol' => $symbol,
+                    'status' => $cached['status'] ?? null,
+                ]);
                 $result15m = $cached;
             } else {
                 $result15m = $this->runTimeframeProcessor(
@@ -623,7 +653,8 @@ final class MtfService
                 $now,
                 $validationStates,
                 $forceTimeframeCheck,
-                $forceRun
+                $forceRun,
+                $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '15m', $result15m);
             }
@@ -641,6 +672,7 @@ final class MtfService
                     'atr' => $result15m['atr'] ?? null,
                     'passed' => false,
                     'severity' => 2,
+                    'from_cache' => (bool)($result15m['from_cache'] ?? false),
                 ]);
                 return $result15m + ['failed_timeframe' => '15m'];
             }
@@ -656,6 +688,7 @@ final class MtfService
                         'timeframe' => '15m',
                         'passed' => false,
                         'severity' => 1,
+                        'from_cache' => (bool)($result15m['from_cache'] ?? false) && (bool)($result1h['from_cache'] ?? false),
                     ]);
                     return $alignmentResult;
                 }
@@ -668,8 +701,11 @@ final class MtfService
         if ($include5m) {
             $this->logger->debug('[MTF] Start TF 5m', ['symbol' => $symbol]);
             $cached = $this->getCachedTfResult($symbol, '5m');
-            if ($cached && ($cached['status'] ?? '') === 'VALID') {
-                $this->logger->debug('[MTF] Cache HIT 5m', ['symbol' => $symbol]);
+            if ($this->shouldReuseCachedResult($cached)) {
+                $this->logger->debug('[MTF] Cache HIT 5m', [
+                    'symbol' => $symbol,
+                    'status' => $cached['status'] ?? null,
+                ]);
                 $result5m = $cached;
             } else {
                 $result5m = $this->runTimeframeProcessor(
@@ -679,7 +715,8 @@ final class MtfService
                 $now,
                 $validationStates,
                 $forceTimeframeCheck,
-                $forceRun
+                $forceRun,
+                $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '5m', $result5m);
             }
@@ -704,6 +741,7 @@ final class MtfService
                     'atr' => $result5m['atr'] ?? null,
                     'passed' => false,
                     'severity' => 2,
+                    'from_cache' => (bool)($result5m['from_cache'] ?? false),
                 ]);
                 return $result5m + ['failed_timeframe' => '5m'];
             }
@@ -719,6 +757,7 @@ final class MtfService
                         'timeframe' => '5m',
                         'passed' => false,
                         'severity' => 1,
+                        'from_cache' => (bool)($result5m['from_cache'] ?? false) && (bool)($result15m['from_cache'] ?? false),
                     ]);
                     return $alignmentResult;
                 }
@@ -731,8 +770,11 @@ final class MtfService
         if ($include1m) {
             $this->logger->debug('[MTF] Start TF 1m', ['symbol' => $symbol]);
             $cached = $this->getCachedTfResult($symbol, '1m');
-            if ($cached && ($cached['status'] ?? '') === 'VALID') {
-                $this->logger->debug('[MTF] Cache HIT 1m', ['symbol' => $symbol]);
+            if ($this->shouldReuseCachedResult($cached)) {
+                $this->logger->debug('[MTF] Cache HIT 1m', [
+                    'symbol' => $symbol,
+                    'status' => $cached['status'] ?? null,
+                ]);
                 $result1m = $cached;
             } else {
                 $result1m = $this->runTimeframeProcessor(
@@ -742,7 +784,8 @@ final class MtfService
                 $now,
                 $validationStates,
                 $forceTimeframeCheck,
-                $forceRun
+                $forceRun,
+                $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '1m', $result1m);
             }
@@ -767,6 +810,7 @@ final class MtfService
                     'atr' => $result1m['atr'] ?? null,
                     'passed' => false,
                     'severity' => 2,
+                    'from_cache' => (bool)($result1m['from_cache'] ?? false),
                 ]);
                 return $result1m + ['failed_timeframe' => '1m'];
             }
@@ -791,6 +835,7 @@ final class MtfService
                         'timeframe' => '1m',
                         'passed' => false,
                         'severity' => 1,
+                        'from_cache' => (bool)($result1m['from_cache'] ?? false) && (bool)($result5m['from_cache'] ?? false),
                     ]);
                     return $alignmentResult;
                 }
@@ -876,7 +921,22 @@ final class MtfService
 
         $contextSummary = $this->signalValidationService->buildContextSummary($knownSignals, $currentTf, $currentSignal);
         $this->logger->info('[MTF] Context summary', [ 'symbol' => $symbol, 'current_tf' => $currentTf ] + $contextSummary);
-        $this->auditStep($runId, $symbol, 'MTF_CONTEXT', null, ['current_tf' => $currentTf, 'timeframe' => $currentTf, 'passed' => $currentSignal !== 'NONE', 'severity' => 0] + $contextSummary);
+
+        $chainFromCache = $chainTfs !== [] && array_reduce(
+            $chainTfs,
+            static fn(bool $carry, array $tfResult): bool => $carry && (($tfResult['from_cache'] ?? false) === true),
+            true
+        );
+
+        $auditData = [
+            'current_tf' => $currentTf,
+            'timeframe' => $currentTf,
+            'passed' => $currentSignal !== 'NONE',
+            'severity' => 0,
+            'from_cache' => $chainFromCache,
+        ] + $contextSummary;
+
+        $this->auditStep($runId, $symbol, 'MTF_CONTEXT', null, $auditData);
 
         // À ce stade, la chaîne complète est VALID et les sides sont identiques
         $consistentSide = $firstSide ?? 'NONE';
@@ -929,14 +989,16 @@ final class MtfService
         \DateTimeImmutable $now,
         array &$collector,
         bool $forceTimeframeCheck,
-        bool $forceRun
+        bool $forceRun,
+        bool $skipContextValidation = false
     ): array {
         $context = ValidationContextDto::create(
             runId: $runId->toString(),
             now: $now,
             collector: $collector,
             forceTimeframeCheck: $forceTimeframeCheck,
-            forceRun: $forceRun
+            forceRun: $forceRun,
+            skipContextValidation: $skipContextValidation
         );
 
         $resultDto = $processor->processTimeframe($symbol, $context);
@@ -1197,9 +1259,9 @@ final class MtfService
      * Expose le traitement d'un symbole pour délégation externe.
      * @return \Generator<int, array{symbol: string, result: array, progress: array}, array>
      */
-    public function runForSymbol(\Ramsey\Uuid\UuidInterface $runId, string $symbol, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false): \Generator
+    public function runForSymbol(\Ramsey\Uuid\UuidInterface $runId, string $symbol, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false, bool $skipContextValidation = false): \Generator
     {
-        $result = $this->processSymbol($symbol, $runId, $now, $currentTf, $forceTimeframeCheck, $forceRun);
+        $result = $this->processSymbol($symbol, $runId, $now, $currentTf, $forceTimeframeCheck, $forceRun, $skipContextValidation);
 
         // Yield progress information for single symbol
         $progress = [
