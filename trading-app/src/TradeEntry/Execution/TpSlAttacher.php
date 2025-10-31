@@ -16,7 +16,6 @@ final class TpSlAttacher
             'type' => $plan->orderType,
             'mode' => $plan->orderMode,
             'open_type' => $plan->openType,
-            'leverage' => (string)$plan->leverage,
             'size' => $plan->size,
             'client_order_id' => $clientOrderId,
             'preset_take_profit_price' => (string)$plan->takeProfit,
