@@ -6,6 +6,7 @@ namespace App\TradeEntry\OrderPlan;
 use App\Contract\EntryTrade\LeverageServiceInterface;
 use App\TradeEntry\Dto\{TradeEntryRequest, PreflightReport};
 use App\TradeEntry\Pricing\TickQuantizer;
+use App\TradeEntry\Dto\EntryZone;
 use App\TradeEntry\RiskSizer\{PositionSizer, StopLossCalculator, TakeProfitCalculator};
 use App\TradeEntry\Types\Side;
 use Psr\Log\LoggerInterface;
@@ -22,7 +23,7 @@ final class OrderPlanBuilder
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
-    public function build(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null): OrderPlanModel
+    public function build(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null, ?EntryZone $zone = null): OrderPlanModel
     {
         $precision = $pre->pricePrecision;
         $contractSize = $pre->contractSize;
@@ -56,6 +57,26 @@ final class OrderPlanBuilder
             $entry = TickQuantizer::quantize($entry, $precision);
         } else {
             $entry = $req->side === Side::Long ? $pre->bestAsk : $pre->bestBid;
+        }
+
+        // If a zone is provided, clamp entry to zone to avoid out-of-zone errors later.
+        if ($zone instanceof EntryZone) {
+            $clamped = max($zone->min, min($entry, $zone->max));
+            if ($clamped !== $entry) {
+                $adj = $req->side === Side::Long
+                    ? TickQuantizer::quantize($clamped, $precision)
+                    : TickQuantizer::quantizeUp($clamped, $precision);
+                $this->flowLogger->info('order_plan.entry_clamped_to_zone', [
+                    'symbol' => $req->symbol,
+                    'side' => $req->side->value,
+                    'entry_before' => $entry,
+                    'entry_after' => $adj,
+                    'zone_min' => $zone->min,
+                    'zone_max' => $zone->max,
+                    'decision_key' => $decisionKey,
+                ]);
+                $entry = $adj;
+            }
         }
 
         // Extra guard: if entry looks implausible (e.g., 1.0), fallback to best bid/ask
