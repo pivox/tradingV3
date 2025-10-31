@@ -4,6 +4,7 @@ namespace App\Provider\Bitmart\Http;
 
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Lock\LockFactory;
+use Psr\Log\LoggerInterface;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
@@ -36,12 +37,19 @@ final class BitmartHttpClientPrivate
 
         private readonly LockFactory     $lockFactory,
         #[Autowire('%kernel.project_dir%')] private readonly string $projectDir,
+        #[Autowire(service: 'monolog.logger.bitmart')] private readonly LoggerInterface $bitmartLogger,
     ) {
         $stateDir = $this->projectDir . '/var/bitmart';
         if (!is_dir($stateDir)) {
             mkdir($stateDir, 0775, true);
         }
-        $this->throttleStatePath = $stateDir . '/throttle.timestamp';    }
+        $this->throttleStatePath = $stateDir . '/throttle.timestamp';
+        // Nouveau: répertoire des buckets de throttling
+        $this->throttleDirPath = $stateDir . '/throttle';
+        if (!is_dir($this->throttleDirPath)) {
+            @mkdir($this->throttleDirPath, 0775, true);
+        }
+    }
 
     /**
      * Envoie une requête privée signée vers BitMart Futures V2.
@@ -51,7 +59,18 @@ final class BitmartHttpClientPrivate
      */
     public function request(string $method, string $path, array $query = [], ?array $json = null): array
     {
-        $this->throttleBitmartRequest($this->lockFactory);
+        // Throttle bucketisé par endpoint privé
+        [$bucketKey, $limit, $windowSec] = $this->rateSpecForPrivate($method, $path);
+        $this->bitmartLogger->info('[Bitmart] Request', [
+            'method' => $method,
+            'path' => $path,
+            'bucket' => $bucketKey,
+            'limit' => $limit,
+            'window' => $windowSec,
+            'query' => $query,
+            'json' => $json !== null ? true : false,
+        ]);
+        $this->throttleBucket($this->lockFactory, $bucketKey, $limit, $windowSec);
         $timestamp = (string) (int) (microtime(true) * 1000);
 
         // Pour POST, utiliser le JSON directement comme payload
@@ -74,8 +93,84 @@ final class BitmartHttpClientPrivate
             $options['json'] = $json;
         }
 
-        $response = $this->bitmartFuturesV2->request($method, $path, $options);
-        return $this->parseBitmartResponse($response);
+        try {
+            $response = $this->bitmartFuturesV2->request($method, $path, $options);
+            // Mettre à jour les infos de rate à partir des headers
+            $this->updateBucketFromHeaders($bucketKey, $response->getHeaders(false));
+            $status = $response->getStatusCode();
+            $parsed = $this->parseBitmartResponse($response);
+            $this->bitmartLogger->info('[Bitmart] Response', [
+                'method' => $method,
+                'path' => $path,
+                'status' => $status,
+                'code' => $parsed['code'] ?? null,
+            ]);
+            return $parsed;
+        } catch (\Throwable $e) {
+            $this->bitmartLogger->error('[Bitmart] Request failed', [
+                'method' => $method,
+                'path' => $path,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Retourne la spec de rate pour un endpoint privé donné.
+     * @return array{string,int,float} [bucketKey, limit, windowSec]
+     */
+    private function rateSpecForPrivate(string $method, string $path): array
+    {
+        // Defaults Private: 12/2s (conservateur si non mappé)
+        $limit = 12;
+        $window = 2.0;
+        $bucket = 'PRIVATE_DEFAULT';
+
+        switch ($path) {
+            case self::PATH_ACCOUNT:
+                $bucket = 'PRIVATE_ASSETS_DETAIL';
+                $limit = 12; $window = 2.0;
+                break;
+            case self::PATH_POSITION:
+                $bucket = 'PRIVATE_POSITION';
+                $limit = 6; $window = 2.0;
+                break;
+            case self::PATH_ORDER_PENDING:
+                $bucket = 'PRIVATE_GET_OPEN_ORDERS';
+                $limit = 50; $window = 2.0;
+                break;
+            case self::PATH_ORDER_DETAIL:
+                $bucket = 'PRIVATE_ORDER_DETAIL';
+                $limit = 50; $window = 2.0;
+                break;
+            case self::PATH_ORDER_HISTORY:
+                $bucket = 'PRIVATE_ORDER_HISTORY';
+                $limit = 6; $window = 2.0;
+                break;
+            case self::PATH_SUBMIT_ORDER:
+                $bucket = 'PRIVATE_SUBMIT_ORDER';
+                $limit = 24; $window = 2.0;
+                break;
+            case self::PATH_CANCEL_ORDER:
+                $bucket = 'PRIVATE_CANCEL_ORDER';
+                $limit = 40; $window = 2.0;
+                break;
+            case self::PATH_CANCEL_ALL_ORDERS:
+                $bucket = 'PRIVATE_CANCEL_ALL_ORDERS';
+                $limit = 2; $window = 2.0;
+                break;
+            case self::PATH_FEE_RATE:
+                $bucket = 'PRIVATE_TRADE_FEE_RATE';
+                $limit = 2; $window = 2.0;
+                break;
+            case self::PATH_SUBMIT_LEVERAGE:
+                $bucket = 'PRIVATE_SUBMIT_LEVERAGE';
+                $limit = 24; $window = 2.0;
+                break;
+        }
+
+        return [$bucket, $limit, $window];
     }
 
     /**
