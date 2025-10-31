@@ -10,6 +10,7 @@
 /python-api/__pycache__/
 /python-api/.venv/
 /python-api/env/
+**/__pycache__/
 
 # Temporal
 /temporal/__pycache__/
