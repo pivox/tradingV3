@@ -58,6 +58,6 @@ class ListKlinesDto extends DtoList
     {
         $arr = $this->toArray();
         usort($arr, fn(KlineDto $a, KlineDto $b) => $a->openTime <=> $b->openTime);
-        return new static($arr, $this->timeframe);
+        return new static($arr);
     }
 }
