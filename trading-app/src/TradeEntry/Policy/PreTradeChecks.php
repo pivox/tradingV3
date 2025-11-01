@@ -5,6 +5,7 @@ namespace App\TradeEntry\Policy;
 
 use App\Contract\Provider\MainProviderInterface;
 use App\TradeEntry\Dto\{PreflightReport, TradeEntryRequest};
+use App\TradeEntry\Pricing\TickQuantizer;
 use Brick\Math\BigDecimal;
 use Brick\Math\Exception\MathException;
 use Brick\Math\RoundingMode;
@@ -47,6 +48,17 @@ final readonly class PreTradeChecks
         $maxLeverage    = $this->toIntFloor($specs->maxLeverage);   // be safe: do not exceed max
         $minLeverage    = $this->toIntCeil($specs->minLeverage);    // be safe: respect minimum
 
+        $tickSize = TickQuantizer::tick($pricePrecision);
+        $lastPrice = $specs->lastPrice->toFloat();
+        if (!is_finite($lastPrice) || $lastPrice <= 0.0) {
+            $lastPrice = null;
+        } else {
+            $lastPrice = TickQuantizer::quantize($lastPrice, $pricePrecision);
+        }
+        if ($lastPrice === null) {
+            $lastPrice = $mid;
+        }
+
         return new PreflightReport(
             symbol: $symbol,
             bestBid: $bestBid,
@@ -59,6 +71,8 @@ final readonly class PreTradeChecks
             availableUsdt: $available,
             spreadPct: $spreadPct,
             modeNote: $req->orderType === 'market' ? 'market-entry' : 'limit-entry',
+            lastPrice: $lastPrice,
+            tickSize: $tickSize,
         );
     }
 
