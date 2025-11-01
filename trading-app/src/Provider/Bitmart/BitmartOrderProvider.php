@@ -141,6 +141,9 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 return isset($response['data']['result']) && $response['data']['result'] === 'success';
             } catch (\Throwable $e) {
                 $lastError = $e;
+            }
+
+            if ($i < self::RETRY_ATTEMPTS - 1) {
                 usleep(self::RETRY_SLEEP_US);
             }
         }
@@ -162,10 +165,14 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 if (isset($response['data'])) {
                     return OrderDto::fromArray($response['data']);
                 }
+                $lastError = new \RuntimeException('Invalid order detail response structure.');
             } catch (\Throwable $e) {
                 $lastError = $e;
             }
-            usleep(self::RETRY_SLEEP_US);
+
+            if ($i < self::RETRY_ATTEMPTS - 1) {
+                usleep(self::RETRY_SLEEP_US);
+            }
         }
         if ($lastError) {
             $this->logger->error("Erreur lors de la récupération de l'ordre", [
@@ -185,9 +192,12 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 if (isset($response['data']['orders'])) {
                     return array_map(fn($order) => OrderDto::fromArray($order), $response['data']['orders']);
                 }
-                return [];
+                $lastError = new \RuntimeException('Invalid open orders response structure.');
             } catch (\Throwable $e) {
                 $lastError = $e;
+            }
+
+            if ($i < self::RETRY_ATTEMPTS - 1) {
                 usleep(self::RETRY_SLEEP_US);
             }
         }
@@ -209,9 +219,12 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 if (isset($response['data']['orders'])) {
                     return array_map(fn($order) => OrderDto::fromArray($order), $response['data']['orders']);
                 }
-                return [];
+                $lastError = new \RuntimeException('Invalid order history response structure.');
             } catch (\Throwable $e) {
                 $lastError = $e;
+            }
+
+            if ($i < self::RETRY_ATTEMPTS - 1) {
                 usleep(self::RETRY_SLEEP_US);
             }
         }
