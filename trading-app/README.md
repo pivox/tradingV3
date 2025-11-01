@@ -98,6 +98,15 @@ L'application suit une architecture hexagonale avec :
 - [ ] Interface web
 - [ ] Tests unitaires
 
+## ⚙️ Exécution des ordres
+
+- Entrée maker par défaut : les plans LIMIT sont envoyés en `mode=4` (post-only) pour tenter une exécution maker.
+- Fallback automatique : si Bitmart rejette la soumission maker, la même intention est renvoyée immédiatement en ordre `market` (taker) avec le même `client_order_id`.
+- Timeout de 2 minutes : chaque ordre accepté programme une annulation différée via Messenger (`CancelOrderMessage`), afin d'éviter les LIMIT qui stagnent.
+- TP/SL préconfigurés : les prix `preset_*` (stop loss / take profit) sont envoyés autant pour le maker initial que pour le fallback taker, garantissant la couverture dès le fill.
+- Transport Messenger : un container `trading-app-messenger` lance `php bin/console messenger:consume order_timeout` en continu (s'appuie sur le service `redis` embarqué). Si vous faites tourner l'app sans Docker, exécutez la même commande manuellement.
+- Logs utiles : `execution.order_attempt_failed`, `execution.timeout_scheduled`, `trade_entry.timeout.cancel_attempt` documentent les étapes maker → taker et l'annulation différée.
+
 ## 🔧 Développement
 
 ### Structure des fichiers
