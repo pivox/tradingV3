@@ -39,25 +39,53 @@ final class OrderPlanBuilder
             throw new \RuntimeException('Risk USDT nul, ajuster riskPct ou margin');
         }
 
-        $tick = TickQuantizer::tick($precision);
+        $tick = $pre->tickSize ?? TickQuantizer::tick($precision);
 
-        $entry = $req->side === Side::Long ? $pre->bestBid : $pre->bestAsk;
+        $baseline = $pre->lastPrice ?? ($req->side === Side::Long ? $pre->bestBid : $pre->bestAsk);
+        if (!\is_finite($baseline) || $baseline <= 0.0) {
+            $baseline = $req->side === Side::Long ? $pre->bestBid : $pre->bestAsk;
+        }
+        if ($req->side === Side::Long) {
+            $baseline = min($baseline, $pre->bestAsk);
+            $baseline = max($baseline, $tick);
+            $baseline = TickQuantizer::quantize($baseline, $precision);
+        } else {
+            $baseline = max($baseline, $pre->bestBid);
+            $baseline = max($baseline, $tick);
+            $baseline = TickQuantizer::quantizeUp($baseline, $precision);
+        }
+
+        $entry = $baseline;
         if ($req->orderType === 'limit') {
             if ($req->side === Side::Long) {
                 $entry = min($entry, $pre->bestAsk - $tick);
                 if ($req->entryLimitHint !== null) {
                     $entry = min($entry, $req->entryLimitHint);
                 }
+                $entry = max($entry, $tick);
+                $entry = TickQuantizer::quantize($entry, $precision);
             } else {
                 $entry = max($entry, $pre->bestBid + $tick);
                 if ($req->entryLimitHint !== null) {
                     $entry = max($entry, $req->entryLimitHint);
                 }
+                $entry = max($entry, $tick);
+                $entry = TickQuantizer::quantizeUp($entry, $precision);
             }
-            $entry = TickQuantizer::quantize($entry, $precision);
         } else {
             $entry = $req->side === Side::Long ? $pre->bestAsk : $pre->bestBid;
         }
+
+        $this->flowLogger->debug('order_plan.entry_price_baseline', [
+            'symbol' => $req->symbol,
+            'side' => $req->side->value,
+            'baseline' => $baseline,
+            'best_bid' => $pre->bestBid,
+            'best_ask' => $pre->bestAsk,
+            'last_price' => $pre->lastPrice,
+            'tick' => $tick,
+            'decision_key' => $decisionKey,
+        ]);
 
         // If a zone is provided, clamp entry to zone to avoid out-of-zone errors later.
         if ($zone instanceof EntryZone) {

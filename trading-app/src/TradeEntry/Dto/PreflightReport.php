@@ -17,5 +17,7 @@ final class PreflightReport
         public readonly float $availableUsdt,
         public readonly float $spreadPct = 0.0,
         public readonly ?string $modeNote = null,
+        public readonly ?float $lastPrice = null,
+        public readonly ?float $tickSize = null,
     ) {}
 }

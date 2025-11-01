@@ -1,0 +1,19 @@
+framework:
+    messenger:
+        transports:
+            order_timeout:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    auto_setup: true
+            failed_order_timeout:
+                dsn: 'doctrine://default?table_name=messenger_messages_failed'
+                options:
+                    auto_setup: true
+                retry_strategy:
+                    max_retries: 3
+                    delay: 5000 # 5 seconds
+                    multiplier: 2.0
+                    max_delay: 60000
+        failure_transport: failed_order_timeout
+        routing:
+            App\TradeEntry\Message\CancelOrderMessage: order_timeout
