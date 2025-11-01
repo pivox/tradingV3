@@ -33,6 +33,8 @@ final class BuildPreOrder
                 'best_bid' => $pre->bestBid,
                 'best_ask' => $pre->bestAsk,
                 'price_precision' => $pre->pricePrecision,
+                'last_price' => $pre->lastPrice,
+                'tick_size' => $pre->tickSize,
                 'contract_size' => $pre->contractSize,
                 'min_volume' => $pre->minVolume,
                 'max_leverage' => $pre->maxLeverage,

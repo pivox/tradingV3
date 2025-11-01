@@ -23,6 +23,9 @@ use Psr\Log\LoggerInterface;
 )]
 final class BitmartOrderProvider implements OrderProviderInterface
 {
+    private const RETRY_ATTEMPTS = 3;
+    private const RETRY_SLEEP_US = 250_000; // 250ms
+
     public function __construct(
         private readonly BitmartHttpClientPrivate $bitmartClient,
         private readonly BitmartHttpClientPublic $bitmartClientPublic,
@@ -131,74 +134,107 @@ final class BitmartOrderProvider implements OrderProviderInterface
 
     public function cancelOrder(string $orderId): bool
     {
-        try {
-            $response = $this->bitmartClient->cancelOrder($orderId);
+        $lastError = null;
+        for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
+            try {
+                $response = $this->bitmartClient->cancelOrder($orderId);
+                return isset($response['data']['result']) && $response['data']['result'] === 'success';
+            } catch (\Throwable $e) {
+                $lastError = $e;
+            }
 
-            return isset($response['data']['result']) && $response['data']['result'] === 'success';
-        } catch (\Exception $e) {
+            if ($i < self::RETRY_ATTEMPTS - 1) {
+                usleep(self::RETRY_SLEEP_US);
+            }
+        }
+        if ($lastError) {
             $this->logger->error("Erreur lors de l'annulation de l'ordre", [
                 'order_id' => $orderId,
-                'error' => $e->getMessage()
+                'error' => $lastError->getMessage()
             ]);
-            return false;
         }
+        return false;
     }
 
     public function getOrder(string $orderId): ?OrderDto
     {
-        try {
-            $response = $this->bitmartClient->getOrderDetail($orderId);
-
-            if (isset($response['data'])) {
-                return OrderDto::fromArray($response['data']);
+        $lastError = null;
+        for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
+            try {
+                $response = $this->bitmartClient->getOrderDetail($orderId);
+                if (isset($response['data'])) {
+                    return OrderDto::fromArray($response['data']);
+                }
+                $lastError = new \RuntimeException('Invalid order detail response structure.');
+            } catch (\Throwable $e) {
+                $lastError = $e;
             }
 
-            return null;
-        } catch (\Exception $e) {
+            if ($i < self::RETRY_ATTEMPTS - 1) {
+                usleep(self::RETRY_SLEEP_US);
+            }
+        }
+        if ($lastError) {
             $this->logger->error("Erreur lors de la récupération de l'ordre", [
                 'order_id' => $orderId,
-                'error' => $e->getMessage()
+                'error' => $lastError->getMessage()
             ]);
-            return null;
         }
+        return null;
     }
 
     public function getOpenOrders(?string $symbol = null): array
     {
-        try {
-            $response = $this->bitmartClient->getOpenOrders($symbol);
-
-            if (isset($response['data']['orders'])) {
-                return array_map(fn($order) => OrderDto::fromArray($order), $response['data']['orders']);
+        $lastError = null;
+        for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
+            try {
+                $response = $this->bitmartClient->getOpenOrders($symbol);
+                if (isset($response['data']['orders'])) {
+                    return array_map(fn($order) => OrderDto::fromArray($order), $response['data']['orders']);
+                }
+                $lastError = new \RuntimeException('Invalid open orders response structure.');
+            } catch (\Throwable $e) {
+                $lastError = $e;
             }
 
-            return [];
-        } catch (\Exception $e) {
+            if ($i < self::RETRY_ATTEMPTS - 1) {
+                usleep(self::RETRY_SLEEP_US);
+            }
+        }
+        if ($lastError) {
             $this->logger->error("Erreur lors de la récupération des ordres ouverts", [
                 'symbol' => $symbol,
-                'error' => $e->getMessage()
+                'error' => $lastError->getMessage()
             ]);
-            return [];
         }
+        return [];
     }
 
     public function getOrderHistory(string $symbol, int $limit = 100): array
     {
-        try {
-            $response = $this->bitmartClient->getOrderHistory($symbol, $limit);
-
-            if (isset($response['data']['orders'])) {
-                return array_map(fn($order) => OrderDto::fromArray($order), $response['data']['orders']);
+        $lastError = null;
+        for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
+            try {
+                $response = $this->bitmartClient->getOrderHistory($symbol, $limit);
+                if (isset($response['data']['orders'])) {
+                    return array_map(fn($order) => OrderDto::fromArray($order), $response['data']['orders']);
+                }
+                $lastError = new \RuntimeException('Invalid order history response structure.');
+            } catch (\Throwable $e) {
+                $lastError = $e;
             }
 
-            return [];
-        } catch (\Exception $e) {
+            if ($i < self::RETRY_ATTEMPTS - 1) {
+                usleep(self::RETRY_SLEEP_US);
+            }
+        }
+        if ($lastError) {
             $this->logger->error("Erreur lors de la récupération de l'historique des ordres", [
                 'symbol' => $symbol,
-                'error' => $e->getMessage()
+                'error' => $lastError->getMessage()
             ]);
-            return [];
         }
+        return [];
     }
 
     public function cancelAllOrders(string $symbol): bool

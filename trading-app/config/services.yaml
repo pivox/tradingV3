@@ -18,6 +18,7 @@ parameters:
     trading.file: '%kernel.project_dir%/config/trading.yml'
     bitmart_public_base_uri: '%env(string:BITMART_PUBLIC_API_URL)%'
     bitmart_private_base_uri: '%env(string:BITMART_PRIVATE_API_URL)%'
+    trade_entry.order_timeout_seconds: 120
     
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
 
