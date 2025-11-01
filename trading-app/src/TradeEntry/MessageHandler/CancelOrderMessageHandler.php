@@ -9,7 +9,9 @@ use App\Contract\Provider\MainProviderInterface;
 use App\TradeEntry\Message\CancelOrderMessage;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\Messenger\Attribute\AsMessageHandler;
 
+#[AsMessageHandler]
 final class CancelOrderMessageHandler
 {
     public function __construct(
