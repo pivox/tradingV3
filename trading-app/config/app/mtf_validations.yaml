@@ -17,7 +17,7 @@ mtf_validation:
         rsi_cap: 70.0
         require_pullback: true
         min_volume_ratio: 1.5
-        initial_margin_usdt: 40.0
+        initial_margin_usdt: 50.0
         risk_pct_percent: 2.0
         r_multiple: 2.0
         order_type: 'limit'

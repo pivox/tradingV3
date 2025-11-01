@@ -244,16 +244,16 @@ post_validation:
         vwap_anchor: true
         # Réf. ATR (Average True Range): https://www.investopedia.com/terms/a/atr.asp
         # Réf. VWAP (Volume-Weighted Average Price): https://www.investopedia.com/terms/v/vwap.asp
-        k_atr: 0.70                    # largeur relative à ATR (élargie de 0.35 → 0.50)
-        w_min: 0.0008                  # largeur minimale (0.08% au lieu de 0.05%)
-        w_max: 0.0150                  # largeur maximale (1.50% au lieu de 1.00%)
+        k_atr: 0.30                    # largeur relative à ATR (retour zone modérée)
+        w_min: 0.0005                  # largeur minimale (0.05%)
+        w_max: 0.0100                  # largeur maximale (1.00%)
         spread_bps_max: 2.0            # spread max en bps => n'est pas encore implémenté
         depth_min_usd: 20000           # profondeur minimale en USD => n'est pas encore implémenté
         mark_index_gap_bps_max: 15.0   # écart Mark/Index max en bps => n'est pas encore implémenté
         quantize_to_exchange_step: true # quantification aux pas exchange
 
-    execution_timeframe: # n'esst pas encore implémenté
-        default: "5m"                  # timeframe par défaut
+    execution_timeframe: # n'est pas encore implémenté
+        default: "5m"                  # timeframe par défaut (zone plus stable)
         upshift_to_1m:
             atr_pct_hi: 0.12           # ATR >= 0.12% pour upshift
             spread_bps_max: 2.0        # spread max pour upshift
