@@ -183,13 +183,32 @@ Le worker utilise une architecture modulaire :
 - Retry automatique des souscriptions
 - Logs détaillés pour le debugging
 
+## Détails d'implémentation (soumissions REST)
+
+- Soumission d'ordre (submit-order): l'API Bitmart peut retourner `200` (code `1000`) alors que l'endpoint `order-detail` renvoie encore `404` pendant quelques centaines de millisecondes (consistance éventuelle côté exchange).
+- Comportement côté trading-app: après un `200` de `submit-order`, le provider tente jusqu'à 3 lectures de `order-detail` (250 ms d'intervalle). Si l'ordre n'est toujours pas disponible, il renvoie un OrderDto minimal avec:
+  - `status=pending`,
+  - `order_id` issu de la réponse `submit-order`,
+  - champs connus (symbol, side, type, quantity, price si LIMIT),
+  - `metadata.submit_only=true`.
+- Conséquence: la phase de synchronisation doit enrichir ensuite l'ordre (via WS ou polling) pour récupérer `state`, `deal_size`, `deal_avg_price`, etc.
+- Timeout automatique: trading-app programme une annulation après 2 minutes si Bitmart n'a pas rempli l'ordre (annule les ordres restés `pending`). Le worker doit donc considérer qu'un ordre peut être annulé automatiquement au-delà de ce délai.
+
+### Recommandations worker
+
+- Écouter le canal WS `futures/order` pour recevoir rapidement l'état (`state`) et les fills (`deal_size`, `deal_avg_price`).
+- En l'absence d'event WS dans un court délai (ex. 1–2 s), effectuer un polling `order-detail` avec backoff (ex. 0.25s, 0.5s, 1s, 2s). Arrêter après N tentatives ou au premier `code=1000`.
+- À la réception de données enrichies, publier un signal d'ordre vers `trading-app` (endpoint `/api/ws-worker/orders`) pour consolider:
+  - `kind`, `status`, `order_id`, `client_order_id`,
+  - `price`, `size`, `deal_size`, `deal_avg_price`,
+  - contexte (plan, position) si disponible.
+- Si le worker détecte qu'un ordre est toujours `pending` après 2 minutes (ou reçoit `trade_entry.timeout.cancel_attempt` dans les logs), il peut ignorer les notifications de fill ultérieurs (l'ordre aura été annulé côté REST).
+
 ## Limitations
 
 - Maximum 500 connexions par IP
 - Connexions inactives fermées après 5 secondes
 - Longueur totale des canaux limitée à 4096 bytes
-
-
 
 
 

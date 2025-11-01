@@ -1,0 +1,9 @@
+framework:
+    messenger:
+        transports:
+            order_timeout:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    auto_setup: true
+        routing:
+            App\TradeEntry\Message\CancelOrderMessage: order_timeout

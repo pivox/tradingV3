@@ -293,6 +293,19 @@ services:
   ##################################
   # TRADING-APP (nouvelle application)
   ##################################
+  redis:
+    image: redis:7-alpine
+    container_name: trading_app_redis
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - trading-app-redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - trading-app-net
+      - shared-net
+    restart: unless-stopped
+
   trading-app-php:
     build:
       context: ./trading-app
@@ -335,6 +348,40 @@ services:
         composer install --no-dev --optimize-autoloader --no-interaction; \
       fi; php-fpm"
 
+  trading-app-messenger:
+    build:
+      context: ./trading-app
+      dockerfile: Dockerfile.mtf
+    container_name: trading_app_messenger
+    working_dir: /var/www/html
+    volumes:
+      - ./trading-app:/var/www/html
+      - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
+    environment:
+      <<: *global-env
+      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
+      LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
+      APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
+      MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
+      WS_WORKER_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
+      BITMART_PUBLIC_API_URL: ${BITMART_PUBLIC_API_URL}
+    depends_on:
+      trading-app-php:
+        condition: service_started
+      trading-app-db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - trading-app-net
+      - shared-net
+    command: >-
+      sh -c "if [ ! -f vendor/autoload.php ]; then \
+        echo '[trading-app-messenger] vendor missing -> composer install'; \
+        composer install --no-dev --optimize-autoloader --no-interaction; \
+      fi; php bin/console messenger:consume order_timeout --time-limit=0 --sleep=1 --failure-limit=5"
+    restart: unless-stopped
+
   trading-app-nginx:
     image: nginx:latest
     container_name: trading_app_nginx
@@ -374,6 +421,7 @@ services:
 volumes:
 #  mysql-data:
   trading-app-postgres-data:
+  trading-app-redis-data:
 
 networks:
   frontend-net:
