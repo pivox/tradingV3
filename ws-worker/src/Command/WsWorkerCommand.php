@@ -4,16 +4,18 @@ namespace App\Command;
 use App\Infra\HttpControlServer;
 use App\Worker\MainWorker;
 use React\EventLoop\Loop;
-use App\Logging\HttpMessengerLogger;
 use App\Order\OrderSignalDispatcher;
 use App\Order\OrderSignalFactory;
+use App\Balance\BalanceSignalDispatcher;
+use App\Balance\BalanceSignalFactory;
+use Psr\Log\NullLogger;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\HttpClient\HttpClient;
 
-#[AsCommand(name: 'ws:run', description: 'Lance le worker WS BitMart (ordres, positions, klines)')]
+#[AsCommand(name: 'ws:run', description: 'Lance le worker WS BitMart (ordres, positions, balance, klines)')]
 final class WsWorkerCommand extends Command
 {
     public function __construct() 
@@ -40,13 +42,13 @@ final class WsWorkerCommand extends Command
         $apiMemo = $_ENV['BITMART_API_MEMO'] ?? null;
 
         if (!$apiKey || !$apiSecret || !$apiMemo) {
-            $out->writeln('<comment>Attention: Clés API BitMart non configurées. Les canaux privés (ordres, positions) ne fonctionneront pas.</comment>');
+            $out->writeln('<comment>Attention: Clés API BitMart non configurées. Les canaux privés (ordres, positions, balance) ne fonctionneront pas.</comment>');
             $out->writeln('<comment>Variables requises: BITMART_API_KEY, BITMART_API_SECRET, BITMART_API_MEMO</comment>');
         }
 
-        // Créer le logger distant (PSR-3) → trading-app (Messenger/Redis)
-        $logEndpoint = $_ENV['TRADING_LOG_ENDPOINT'] ?? 'http://localhost:8082/internal/log';
-        $logger = new HttpMessengerLogger($logEndpoint, app: 'ws-worker', channel: 'ws');
+        // Créer le logger (PSR-3)
+        // Pour un logger plus avancé, vous pouvez implémenter HttpMessengerLogger
+        $logger = new NullLogger();
 
         // Configuration du signal trading-app
         $tradingAppBaseUri = rtrim((string)($_ENV['TRADING_APP_BASE_URI'] ?? ''), '/');
@@ -73,6 +75,27 @@ final class WsWorkerCommand extends Command
             );
         }
 
+        // Configuration du signal balance trading-app
+        $tradingAppBalancePath = $_ENV['TRADING_APP_BALANCE_SIGNAL_PATH'] ?? '/api/ws-worker/balance';
+        $balanceFailureLogPath = $_ENV['TRADING_APP_BALANCE_FAILURE_LOG'] ?? dirname(__DIR__, 2) . '/var/balance-signal-failures.log';
+
+        $balanceSignalDispatcher = null;
+        if ($tradingAppBaseUri === '' || $tradingAppSecret === null || $tradingAppSecret === '') {
+            $out->writeln('<comment>Attention: TRADING_APP_BASE_URI ou TRADING_APP_SHARED_SECRET non configuré. Synchronisation du balance désactivée.</comment>');
+        } else {
+            $balanceEndpoint = rtrim($tradingAppBaseUri, '/') . '/' . ltrim($tradingAppBalancePath, '/');
+            $balanceSignalDispatcher = new BalanceSignalDispatcher(
+                HttpClient::create(),
+                $balanceEndpoint,
+                $tradingAppSecret,
+                $tradingAppTimeout,
+                $tradingAppMaxRetries,
+                backoffDelays: [0.0, 5.0, 15.0, 45.0, 120.0],
+                logger: $logger,
+                failureLogPath: $balanceFailureLogPath
+            );
+        }
+
         // Créer le worker principal
         $mainWorker = new MainWorker(
             $publicWsUri,
@@ -86,7 +109,9 @@ final class WsWorkerCommand extends Command
             $reconnectDelayS,
             $logger,
             $orderSignalDispatcher,
-            new OrderSignalFactory()
+            new OrderSignalFactory(),
+            $balanceSignalDispatcher,
+            new BalanceSignalFactory()
         );
 
         // Créer le serveur HTTP de contrôle

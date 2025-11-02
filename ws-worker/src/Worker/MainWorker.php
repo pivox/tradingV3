@@ -5,6 +5,8 @@ use App\Infra\BitmartWsClient;
 use App\Infra\AuthHandler;
 use App\Order\OrderSignalDispatcher;
 use App\Order\OrderSignalFactory;
+use App\Balance\BalanceSignalDispatcher;
+use App\Balance\BalanceSignalFactory;
 use React\EventLoop\Loop;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -18,8 +20,11 @@ final class MainWorker
     private ?KlineWorker $klineWorker = null;
     private ?OrderWorker $orderWorker = null;
     private ?PositionWorker $positionWorker = null;
+    private ?BalanceWorker $balanceWorker = null;
     private ?OrderSignalDispatcher $orderSignalDispatcher = null;
     private ?OrderSignalFactory $orderSignalFactory = null;
+    private ?BalanceSignalDispatcher $balanceSignalDispatcher = null;
+    private ?BalanceSignalFactory $balanceSignalFactory = null;
 
     public function __construct(
         private string $publicWsUri,
@@ -34,10 +39,14 @@ final class MainWorker
         private ?LoggerInterface $logger = null,
         ?OrderSignalDispatcher $orderSignalDispatcher = null,
         ?OrderSignalFactory $orderSignalFactory = null,
+        ?BalanceSignalDispatcher $balanceSignalDispatcher = null,
+        ?BalanceSignalFactory $balanceSignalFactory = null,
     ) {
         $this->logger = $this->logger ?? new NullLogger();
         $this->orderSignalDispatcher = $orderSignalDispatcher;
         $this->orderSignalFactory = $orderSignalFactory ?? new OrderSignalFactory();
+        $this->balanceSignalDispatcher = $balanceSignalDispatcher;
+        $this->balanceSignalFactory = $balanceSignalFactory ?? new BalanceSignalFactory();
     }
 
     public function run(): void
@@ -99,6 +108,16 @@ final class MainWorker
             $this->logger
         );
 
+        $this->balanceWorker = new BalanceWorker(
+            $this->privateWsClient,
+            $this->authHandler,
+            $this->subscribeBatch,
+            $this->subscribeDelayMs,
+            $this->logger,
+            $this->balanceSignalDispatcher,
+            $this->balanceSignalFactory
+        );
+
         $this->logger?->info('Workers initialized', ['channel' => 'ws-main']);
     }
 
@@ -112,6 +131,7 @@ final class MainWorker
         $this->klineWorker->run();
         $this->orderWorker->run();
         $this->positionWorker->run();
+        $this->balanceWorker->run();
 
         // Authentification pour les canaux privés
         $this->privateWsClient->onOpen(function() {
@@ -218,6 +238,28 @@ final class MainWorker
         $this->logger?->info('Unsubscribed from positions', ['channel' => 'ws-main']);
     }
 
+    public function subscribeToBalance(): void
+    {
+        if (!$this->balanceWorker) {
+            $this->logger?->error('BalanceWorker not initialized', ['channel' => 'ws-main']);
+            return;
+        }
+
+        $this->balanceWorker->subscribeToBalance();
+        $this->logger?->info('Subscribed to balance', ['channel' => 'ws-main']);
+    }
+
+    public function unsubscribeFromBalance(): void
+    {
+        if (!$this->balanceWorker) {
+            $this->logger?->error('BalanceWorker not initialized', ['channel' => 'ws-main']);
+            return;
+        }
+
+        $this->balanceWorker->unsubscribeFromBalance();
+        $this->logger?->info('Unsubscribed from balance', ['channel' => 'ws-main']);
+    }
+
     // Méthodes pour obtenir l'état des workers
     public function getStatus(): array
     {
@@ -229,7 +271,9 @@ final class MainWorker
             'kline_channels' => $this->klineWorker?->getSubscribedChannels() ?? [],
             'order_subscribed' => $this->orderWorker?->isSubscribedToOrders() ?? false,
             'position_subscribed' => $this->positionWorker?->isSubscribedToPositions() ?? false,
-            'positions' => $this->positionWorker?->getLastPositions() ?? []
+            'positions' => $this->positionWorker?->getLastPositions() ?? [],
+            'balance_subscribed' => $this->balanceWorker?->isSubscribedToBalance() ?? false,
+            'balance' => $this->balanceWorker?->getLastBalance() ?? null
         ];
     }
 
