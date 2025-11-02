@@ -36,4 +36,11 @@ interface IndicatorProviderInterface
     public function getListPivot(?string $key = null, ?string $symbol = null, ?string $tf = null): ?ListIndicatorDto;
 
     public function clearCaches(): void;
+
+    /**
+     * Retourne la liste des indicateurs disponibles avec leurs paramètres exposés.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function listAvailableIndicators(): array;
 }

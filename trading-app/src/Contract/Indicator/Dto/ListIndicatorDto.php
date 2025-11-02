@@ -7,7 +7,7 @@ final class ListIndicatorDto
 {
     /**
      * @param array<string,mixed> $indicators
-     * @param array<string,string> $descriptions
+     * @param array<string,mixed> $descriptions
      */
     public function __construct(
         public array $indicators,
