@@ -5,9 +5,15 @@ namespace App\TradeEntry\Execution;
 
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Types\Side;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class TpSlAttacher
 {
+    public function __construct(
+        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
+    ) {}
+
     public function presetInSubmitPayload(OrderPlanModel $plan, string $clientOrderId): array
     {
         $payload = [
@@ -28,6 +34,14 @@ final class TpSlAttacher
             $payload['preset_stop_loss_price'] = (string)$plan->stop;
             $payload['preset_stop_loss_price_type'] = 1;
         }
+
+        $this->journeyLogger->debug('order_journey.tp_sl_attacher.payload_ready', [
+            'symbol' => $plan->symbol,
+            'client_order_id' => $clientOrderId,
+            'order_type' => $plan->orderType,
+            'has_tp_sl' => $plan->orderType === 'limit',
+            'reason' => 'attach_tp_sl_to_payload',
+        ]);
 
         return $payload;
     }

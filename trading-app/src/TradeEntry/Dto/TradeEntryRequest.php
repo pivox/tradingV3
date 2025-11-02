@@ -20,6 +20,15 @@ final class TradeEntryRequest
         public readonly string $stopFrom = 'risk',
         public readonly ?float $atrValue = null,
         public readonly float $atrK = 1.5,
-        public readonly ?float $marketMaxSpreadPct = 0.001
+        public readonly ?float $marketMaxSpreadPct = 0.001,
+        public readonly ?int $insideTicks = null,
+        public readonly ?float $maxDeviationPct = null,
+        public readonly ?float $implausiblePct = null,
+        public readonly ?float $zoneMaxDeviationPct = null,
+        public readonly string $tpPolicy = 'pivot_conservative',
+        public readonly ?float $tpBufferPct = null,
+        public readonly ?int $tpBufferTicks = null,
+        public readonly float $tpMinKeepRatio = 0.95,
+        public readonly ?float $tpMaxExtraR = null,
     ) {}
 }

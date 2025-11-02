@@ -28,6 +28,7 @@ final class EntryZoneCalculator
         private readonly ?float $wMaxOverride = null,
         private readonly ?float $asymBiasOverride = null,
         #[Autowire(service: 'monolog.logger.positions_flow')] private readonly ?LoggerInterface $flowLogger = null,
+        #[Autowire(service: 'monolog.logger.order_journey')] private readonly ?LoggerInterface $journeyLogger = null,
     ) {}
 
     public function compute(string $symbol, ?Side $side = null, ?int $pricePrecision = null, ?string $decisionKey = null): EntryZone
@@ -35,6 +36,11 @@ final class EntryZoneCalculator
         // Fallback si aucun provider n'est injecté
         if ($this->indicators === null) {
             $this->flowLogger?->debug('entry_zone.open_no_indicators', ['symbol' => $symbol, 'decision_key' => $decisionKey]);
+            $this->journeyLogger?->info('order_journey.entry_zone.open', [
+                'symbol' => $symbol,
+                'decision_key' => $decisionKey,
+                'reason' => 'no_indicator_provider',
+            ]);
             return new EntryZone(min: PHP_FLOAT_MIN, max: PHP_FLOAT_MAX, rationale: 'open zone (no indicators)');
         }
 
@@ -93,6 +99,11 @@ final class EntryZoneCalculator
 
         if (!\is_finite($pivot) || $pivot === null || $pivot <= 0.0) {
             $this->flowLogger?->debug('entry_zone.open_no_pivot', ['symbol' => $symbol, 'tf' => $tf, 'decision_key' => $decisionKey]);
+            $this->journeyLogger?->info('order_journey.entry_zone.open', [
+                'symbol' => $symbol,
+                'decision_key' => $decisionKey,
+                'reason' => 'pivot_not_available',
+            ]);
             // Impossible de calculer une zone sans pivot raisonnable
             return new EntryZone(min: PHP_FLOAT_MIN, max: PHP_FLOAT_MAX, rationale: 'open zone (no pivot)');
         }
@@ -109,6 +120,11 @@ final class EntryZoneCalculator
 
         if (!\is_finite($half) || $half <= 0.0) {
             $this->flowLogger?->debug('entry_zone.open_invalid_width', ['symbol' => $symbol, 'pivot' => $pivot, 'half' => $half, 'decision_key' => $decisionKey]);
+            $this->journeyLogger?->info('order_journey.entry_zone.open', [
+                'symbol' => $symbol,
+                'decision_key' => $decisionKey,
+                'reason' => 'invalid_zone_width',
+            ]);
             // Sécurité: si la largeur est invalide, ne pas bloquer
             return new EntryZone(min: PHP_FLOAT_MIN, max: PHP_FLOAT_MAX, rationale: 'open zone (invalid width)');
         }
@@ -158,6 +174,16 @@ final class EntryZoneCalculator
             'bias' => $bias,
             'min' => $low,
             'max' => $high,
+        ]);
+        $this->journeyLogger?->debug('order_journey.entry_zone.computed', [
+            'symbol' => $symbol,
+            'decision_key' => $decisionKey,
+            'tf' => $tf,
+            'pivot' => $pivot,
+            'pivot_src' => $pivotSrc,
+            'min' => $low,
+            'max' => $high,
+            'reason' => 'entry_zone_calculated',
         ]);
 
         return new EntryZone(min: $low, max: $high, rationale: $rationale);

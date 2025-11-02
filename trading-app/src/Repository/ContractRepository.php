@@ -262,7 +262,7 @@ class ContractRepository extends ServiceEntityRepository
                     if ($contractData instanceof \App\Provider\Bitmart\Dto\ContractDto) {
                         $contractData = $this->contractDtoToArray($contractData);
                     }
-                    
+
                     $this->upsertContract($contractData);
                     $upsertedCount++;
                 } catch (\Exception $e) {
@@ -326,14 +326,14 @@ class ContractRepository extends ServiceEntityRepository
         $maxAgeHours       = (int)    $this->config->getFilter('max_age_hours', 880);
         $openUnit          = (string) $this->config->getFilter('open_unit', 's');   // ✅ seconds
 
-        $topN   = (int) $this->config->getLimit('top_n', 100);
-        $midN   = (int) $this->config->getLimit('mid_n', 50);
+        $topN   = (int) $this->config->getLimit('top_n', 140);
+        $midN   = (int) $this->config->getLimit('mid_n', 40);
         $orderTop = strtoupper($this->config->getOrder('top', 'DESC'));
         $orderMid = strtoupper($this->config->getOrder('mid', 'ASC'));
         $validOrder = ['ASC', 'DESC'];
         if (!in_array($orderTop, $validOrder, true)) $orderTop = 'DESC';
         if (!in_array($orderMid, $validOrder, true)) $orderMid = 'ASC';
-        
+
 
         // --- Horloge & unités ---
         $now    = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
@@ -347,8 +347,8 @@ class ContractRepository extends ServiceEntityRepository
         // ✅ ta colonne open_timestamp est en secondes
         $openTsMin = $openTsMinSec; // pas de *1000
         $openTsMinSet = !is_null($openTsMin);
-        
-        
+
+
 
         // --- Expression turnover (caster si stocké en texte) ---
         $turnoverExpr = 'turnover_24h'; // si TEXT: "CAST(turnover_24h AS DECIMAL(38,10))"

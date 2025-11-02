@@ -19,5 +19,11 @@ final class PreflightReport
         public readonly ?string $modeNote = null,
         public readonly ?float $lastPrice = null,
         public readonly ?float $tickSize = null,
+        public readonly ?float $markPrice = null,
+        public readonly ?int $volPrecision = null,
+        public readonly ?float $maxVolume = null,
+        public readonly ?float $marketMaxVolume = null,
+        /** @var array<string,float>|null */
+        public readonly ?array $pivotLevels = null,
     ) {}
 }

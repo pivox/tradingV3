@@ -18,13 +18,22 @@ mtf_validation:
         require_pullback: true
         min_volume_ratio: 1.5
         initial_margin_usdt: 50.0
-        risk_pct_percent: 2.0
+        risk_pct_percent: 5.0
         r_multiple: 2.0
         order_type: 'limit'
         open_type: 'isolated'
         order_mode: 4
         stop_from: 'atr'
         market_max_spread_pct: 0.001
+        inside_ticks: 1
+        max_deviation_pct: 0.005
+        implausible_pct: 0.02
+        zone_max_deviation_pct: 0.007
+        tp_policy: 'pivot_conservative'
+        tp_buffer_pct: 0.001
+        tp_buffer_ticks: 0
+        tp_min_keep_ratio: 0.95
+        tp_max_extra_r: 0.5
         timeframe_multipliers:
             '1m': 1.0
             '5m': 0.75
