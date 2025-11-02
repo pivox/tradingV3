@@ -25,8 +25,10 @@ final class BitmartHttpClientPrivate
     private const PATH_SUBMIT_ORDER = '/contract/private/submit-order';
     private const PATH_CANCEL_ORDER = '/contract/private/cancel-order';
     private const PATH_CANCEL_ALL_ORDERS = '/contract/private/cancel-all-orders';
+    private const PATH_CANCEL_ALL_AFTER = '/contract/private/cancel-all-after';
     private const PATH_FEE_RATE = '/contract/private/fee-rate';
     private const PATH_SUBMIT_LEVERAGE = '/contract/private/submit-leverage';
+    private const DEFAULT_CANCEL_AFTER_SECONDS = 120;
 
     public function __construct(
         #[Autowire(service: 'http_client.bitmart_futures_v2_private')]
@@ -56,8 +58,9 @@ final class BitmartHttpClientPrivate
      * $path doit commencer par '/'.
      * @param array<string,mixed> $query
      * @param array<string,mixed>|null $json
+     * @param float|null $timeout
      */
-    public function request(string $method, string $path, array $query = [], ?array $json = null): array
+    public function request(string $method, string $path, array $query = [], ?array $json = null, ?float $timeout = null): array
     {
         // Throttle bucketisé par endpoint privé
         [$bucketKey, $limit, $windowSec] = $this->rateSpecForPrivate($method, $path);
@@ -86,7 +89,7 @@ final class BitmartHttpClientPrivate
                 'Content-Type' => 'application/json',
             ],
             'query' => $query,
-            'timeout' => self::TIMEOUT,
+            'timeout' => $timeout ?? self::TIMEOUT,
         ];
 
         if ($json !== null) {
@@ -165,6 +168,10 @@ final class BitmartHttpClientPrivate
                 $bucket = 'PRIVATE_CANCEL_ALL_ORDERS';
                 $limit = 2; $window = 2.0;
                 break;
+            case self::PATH_CANCEL_ALL_AFTER:
+                $bucket = 'PRIVATE_CANCEL_ALL_AFTER';
+                $limit = 2; $window = 2.0;
+                break;
             case self::PATH_FEE_RATE:
                 $bucket = 'PRIVATE_TRADE_FEE_RATE';
                 $limit = 2; $window = 2.0;
@@ -183,11 +190,12 @@ final class BitmartHttpClientPrivate
      *
      * @param array<string,string|int> $query
      * @param array<string,mixed>|null $json
+     * @param float|null $timeout
      * @return array<mixed>
      */
-    private function requestJsonPrivate(string $method, string $path, array $query = [], ?array $json = null): array
+    private function requestJsonPrivate(string $method, string $path, array $query = [], ?array $json = null, ?float $timeout = null): array
     {
-        return $this->request($method, $path, $query, $json);
+        return $this->request($method, $path, $query, $json, $timeout);
     }
 
     /**
@@ -288,7 +296,29 @@ final class BitmartHttpClientPrivate
      */
     public function submitOrder(array $orderData): array
     {
-        return $this->requestJsonPrivate('POST', self::PATH_SUBMIT_ORDER, [], $orderData);
+        if (array_key_exists('cancel_after_timeout', $orderData)) {
+            unset($orderData['cancel_after_timeout']);
+        }
+
+        $result = $this->requestJsonPrivate('POST', self::PATH_SUBMIT_ORDER, [], $orderData);
+
+        $symbol = $orderData['symbol'] ?? null;
+        if ($symbol === null) {
+            $this->bitmartLogger->warning('[Bitmart] submitOrder missing symbol for cancel-all-after scheduling');
+            return $result;
+        }
+
+        try {
+            $this->cancelAllAfter($symbol, self::DEFAULT_CANCEL_AFTER_SECONDS);
+        } catch (\Throwable $e) {
+            $this->bitmartLogger->warning('[Bitmart] Timed cancel scheduling failed', [
+                'symbol' => $symbol,
+                'timeout' => self::DEFAULT_CANCEL_AFTER_SECONDS,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $result;
     }
 
     /**
@@ -306,7 +336,27 @@ final class BitmartHttpClientPrivate
      */
     public function cancelAllOrders(string $symbol): array
     {
-        return $this->requestJsonPrivate('POST', self::PATH_CANCEL_ALL_ORDERS, [], ['symbol' => $symbol]);
+        // Cancel-all can take longer on Bitmart, allow up to 2 minutes.
+        return $this->requestJsonPrivate('POST', self::PATH_CANCEL_ALL_ORDERS, [], ['symbol' => $symbol], 120.0);
+    }
+
+    /**
+     * POST /contract/private/cancel-all-after
+     * Programme l'annulation des ordres ouverts après un délai.
+     */
+    public function cancelAllAfter(string $symbol, int $timeoutSeconds): array
+    {
+        $duration = $timeoutSeconds;
+        if ($duration < 0) {
+            $duration = 0;
+        } elseif ($duration > 0 && $duration < 5) {
+            $duration = 5;
+        }
+
+        return $this->requestJsonPrivate('POST', self::PATH_CANCEL_ALL_AFTER, [], [
+            'timeout' => $duration,
+            'symbol' => $symbol,
+        ]);
     }
 
     /**
