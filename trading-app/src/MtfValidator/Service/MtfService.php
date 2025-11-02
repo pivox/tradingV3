@@ -163,14 +163,20 @@ final class MtfService
         return in_array($status, ['VALID', 'GRACE_WINDOW'], true);
     }
 
-    private function getCachedTfResult(string $symbol, string $tf): ?array
+    private function getCachedTfResult(string $symbol, string $tf, ?bool &$hadRecord = null): ?array
     {
+        $hadRecord = null;
         try {
             $repo = $this->entityManager->getRepository(ValidationCacheEntity::class);
             $cacheKey = $this->buildTfCacheKey($symbol, $tf);
             /** @var ValidationCacheEntity|null $rec */
             $rec = $repo->findOneBy(['cacheKey' => $cacheKey]);
-            if ($rec === null || $rec->isExpired()) {
+            if ($rec === null) {
+                $hadRecord = false;
+                return null;
+            }
+            $hadRecord = true;
+            if ($rec->isExpired()) {
                 return null;
             }
             $payload = $rec->getPayload();
@@ -529,10 +535,18 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $include5m  = in_array($startFrom, ['4h','1h','15m','5m'], true);
         $include1m  = in_array($startFrom, ['4h','1h','15m','5m','1m'], true);
 
+        $cacheWarmup = false;
+        $cacheWarmupTfs = [];
+
         $result4h = null;
         if ($include4h) {
             $this->logger->debug('[MTF] Start TF 4h', ['symbol' => $symbol]);
-            $cached = $this->getCachedTfResult($symbol, '4h');
+            $hadCache4h = null;
+            $cached = $this->getCachedTfResult($symbol, '4h', $hadCache4h);
+            if ($hadCache4h === false) {
+                $cacheWarmup = true;
+                $cacheWarmupTfs[] = '4h';
+            }
             if ($this->shouldReuseCachedResult($cached)) {
                 $this->logger->debug('[MTF] Cache HIT 4h', [
                     'symbol' => $symbol,
@@ -575,7 +589,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         $result1h = null;
         if ($include1h) {
-            $cached = $this->getCachedTfResult($symbol, '1h');
+            $hadCache1h = null;
+            $cached = $this->getCachedTfResult($symbol, '1h', $hadCache1h);
+            if ($hadCache1h === false) {
+                $cacheWarmup = true;
+                $cacheWarmupTfs[] = '1h';
+            }
             if ($this->shouldReuseCachedResult($cached)) {
                 $this->logger->debug('[MTF] Cache HIT 1h', [
                     'symbol' => $symbol,
@@ -638,7 +657,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $result15m = null;
         if ($include15m) {
             $this->logger->debug('[MTF] Start TF 15m', ['symbol' => $symbol]);
-            $cached = $this->getCachedTfResult($symbol, '15m');
+            $hadCache15m = null;
+            $cached = $this->getCachedTfResult($symbol, '15m', $hadCache15m);
+            if ($hadCache15m === false) {
+                $cacheWarmup = true;
+                $cacheWarmupTfs[] = '15m';
+            }
             if ($this->shouldReuseCachedResult($cached)) {
                 $this->logger->debug('[MTF] Cache HIT 15m', [
                     'symbol' => $symbol,
@@ -700,7 +724,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $result5m = null;
         if ($include5m) {
             $this->logger->debug('[MTF] Start TF 5m', ['symbol' => $symbol]);
-            $cached = $this->getCachedTfResult($symbol, '5m');
+            $hadCache5m = null;
+            $cached = $this->getCachedTfResult($symbol, '5m', $hadCache5m);
+            if ($hadCache5m === false) {
+                $cacheWarmup = true;
+                $cacheWarmupTfs[] = '5m';
+            }
             if ($this->shouldReuseCachedResult($cached)) {
                 $this->logger->debug('[MTF] Cache HIT 5m', [
                     'symbol' => $symbol,
@@ -769,7 +798,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $result1m = null;
         if ($include1m) {
             $this->logger->debug('[MTF] Start TF 1m', ['symbol' => $symbol]);
-            $cached = $this->getCachedTfResult($symbol, '1m');
+            $hadCache1m = null;
+            $cached = $this->getCachedTfResult($symbol, '1m', $hadCache1m);
+            if ($hadCache1m === false) {
+                $cacheWarmup = true;
+                $cacheWarmupTfs[] = '1m';
+            }
             if ($this->shouldReuseCachedResult($cached)) {
                 $this->logger->debug('[MTF] Cache HIT 1m', [
                     'symbol' => $symbol,
@@ -940,6 +974,34 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         // À ce stade, la chaîne complète est VALID et les sides sont identiques
         $consistentSide = $firstSide ?? 'NONE';
+
+        if ($cacheWarmup && !$forceRun) {
+            $warmupTfs = array_values(array_unique($cacheWarmupTfs));
+            $this->logger->info('[MTF] Cache warm-up detected, skipping trading decision', [
+                'symbol' => $symbol,
+                'timeframes' => $warmupTfs,
+            ]);
+            $this->auditStep($runId, $symbol, 'CACHE_WARMUP', 'Cache warm-up detected, trading decision deferred', [
+                'timeframes' => $warmupTfs,
+                'consistent_side' => $consistentSide,
+                'force_run' => $forceRun,
+            ]);
+            $contextSummaryWarm = $contextSummary;
+            $contextSummaryWarm['cache_warmup'] = $warmupTfs;
+
+            return [
+                'status' => 'GRACE_WINDOW',
+                'signal_side' => $consistentSide,
+                'context' => $contextSummaryWarm,
+                'kline_time' => $selectedKlineTime,
+                'current_price' => $selectedPrice,
+                'atr' => $selectedAtr,
+                'indicator_context' => $selectedContext,
+                'execution_tf' => $currentTf,
+                'failed_timeframe' => 'cache_warmup',
+                'reason' => 'CACHE_WARMUP',
+            ];
+        }
 
         // Pour rester focalisé sur la demande, on n’applique pas de filtres supplémentaires ici.
         return [
