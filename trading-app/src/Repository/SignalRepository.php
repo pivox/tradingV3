@@ -174,6 +174,116 @@ class SignalRepository extends ServiceEntityRepository
 
         return $grouped;
     }
+
+    /**
+     * Nettoie les anciens signaux en ne gardant que les N derniers jours.
+     *
+     * @param string|null $symbol      Filtrer par symbole (null = tous les symboles)
+     * @param int         $daysToKeep  Nombre de jours à conserver
+     * @param bool        $dryRun      Si true, ne supprime pas mais retourne les stats
+     * 
+     * @return array Statistiques détaillées
+     *               [
+     *                 'total' => 2000,
+     *                 'to_delete' => 1800,
+     *                 'to_keep' => 200,
+     *                 'cutoff_date' => '2025-10-30 12:00:00',
+     *                 'by_timeframe' => ['1m' => 500, '5m' => 300, ...],
+     *                 'symbols_affected' => ['BTCUSDT' => 500, 'ETHUSDT' => 300],
+     *                 'dry_run' => true
+     *               ]
+     */
+    public function cleanupOldSignals(?string $symbol, int $daysToKeep, bool $dryRun): array
+    {
+        $cutoffDate = new \DateTimeImmutable("-{$daysToKeep} days", new \DateTimeZone('UTC'));
+        
+        $qb = $this->createQueryBuilder('s');
+        
+        // Filtre par date
+        $qb->where('s.insertedAt < :cutoff')
+           ->setParameter('cutoff', $cutoffDate);
+
+        // Filtre optionnel par symbole
+        if ($symbol) {
+            $qb->andWhere('s.symbol = :symbol')
+               ->setParameter('symbol', $symbol);
+        }
+
+        try {
+            // Statistiques globales
+            $countQb = clone $qb;
+            $toDelete = (int)$countQb->select('COUNT(s.id)')
+                ->getQuery()
+                ->getSingleScalarResult();
+
+            $totalQb = $this->createQueryBuilder('s2');
+            if ($symbol) {
+                $totalQb->where('s2.symbol = :symbol')
+                    ->setParameter('symbol', $symbol);
+            }
+            $total = (int)$totalQb->select('COUNT(s2.id)')
+                ->getQuery()
+                ->getSingleScalarResult();
+
+            // Statistiques par timeframe
+            $tfQb = clone $qb;
+            $byTimeframe = $tfQb
+                ->select('s.timeframe', 'COUNT(s.id) as count')
+                ->groupBy('s.timeframe')
+                ->getQuery()
+                ->getResult();
+
+            $byTfArray = [];
+            foreach ($byTimeframe as $row) {
+                $byTfArray[$row['timeframe']->value] = (int)$row['count'];
+            }
+
+            // Statistiques par symbole
+            $symbolQb = clone $qb;
+            $bySymbol = $symbolQb
+                ->select('s.symbol', 'COUNT(s.id) as count')
+                ->groupBy('s.symbol')
+                ->orderBy('count', 'DESC')
+                ->getQuery()
+                ->getResult();
+
+            $symbolsAffected = [];
+            foreach ($bySymbol as $row) {
+                $symbolsAffected[$row['symbol']] = (int)$row['count'];
+            }
+
+            $stats = [
+                'total' => $total,
+                'to_delete' => $toDelete,
+                'to_keep' => $total - $toDelete,
+                'cutoff_date' => $cutoffDate->format('Y-m-d H:i:s'),
+                'by_timeframe' => $byTfArray,
+                'symbols_affected' => $symbolsAffected,
+                'dry_run' => $dryRun,
+            ];
+
+            // Si dry-run ou rien à supprimer, on s'arrête ici
+            if ($dryRun || $toDelete === 0) {
+                return $stats;
+            }
+
+            // Exécution réelle de la suppression
+            $deletedCount = $qb->delete()
+                ->getQuery()
+                ->execute();
+
+            $stats['deleted_count'] = $deletedCount;
+
+            return $stats;
+
+        } catch (\Throwable $e) {
+            throw new \RuntimeException(
+                sprintf('Erreur lors du nettoyage des signaux: %s', $e->getMessage()),
+                0,
+                $e
+            );
+        }
+    }
 }
 
 
