@@ -11,7 +11,8 @@ use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Messenger\Attribute\AsMessageHandler;
 
-#[AsMessageHandler(handles: CancelOrderMessage::class)]
+
+#[AsMessageHandler(fromTransport: 'order_timeout')]
 final class CancelOrderMessageHandler
 {
     public function __construct(
