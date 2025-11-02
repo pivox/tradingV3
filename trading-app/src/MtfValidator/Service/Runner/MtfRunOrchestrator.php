@@ -17,6 +17,7 @@ use App\MtfValidator\Service\Dto\SymbolResultDto;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
  * Orchestrateur principal pour l'exécution des cycles MTF
@@ -32,7 +33,8 @@ final class MtfRunOrchestrator
         private readonly FeatureSwitchInterface $featureSwitch,
         private readonly LoggerInterface $logger,
         private readonly ClockInterface $clock,
-        private readonly MtfValidationConfig $mtfConfig
+        private readonly MtfValidationConfig $mtfConfig,
+        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
     /**
@@ -48,9 +50,19 @@ final class MtfRunOrchestrator
             'symbols_count' => count($mtfRunDto->symbols),
             'dry_run' => $mtfRunDto->dryRun
         ]);
+        $this->orderJourneyLogger->info('order_journey.orchestrator.run_start', [
+            'run_id' => $runIdString,
+            'symbols_count' => count($mtfRunDto->symbols),
+            'dry_run' => $mtfRunDto->dryRun,
+            'reason' => 'mtf_cycle_begin',
+        ]);
 
         // Vérifier les commutateurs globaux
         if (!$this->checkGlobalSwitches($mtfRunDto, $runIdString)) {
+            $this->orderJourneyLogger->info('order_journey.orchestrator.run_blocked', [
+                'run_id' => $runIdString,
+                'reason' => 'global_switch_off',
+            ]);
             yield from $this->yieldBlockedResult($mtfRunDto, $runId, $startTime, 'global_switch_off');
             return;
         }
@@ -58,6 +70,11 @@ final class MtfRunOrchestrator
         // Acquérir le verrou
         $lockKey = $this->determineLockKey($mtfRunDto);
         if (!$this->acquireExecutionLock($lockKey, $runIdString)) {
+            $this->orderJourneyLogger->warning('order_journey.orchestrator.run_blocked', [
+                'run_id' => $runIdString,
+                'lock_key' => $lockKey,
+                'reason' => 'lock_acquisition_failed',
+            ]);
             yield from $this->yieldBlockedResult($mtfRunDto, $runId, $startTime, 'lock_acquisition_failed');
             return;
         }
@@ -81,6 +98,13 @@ final class MtfRunOrchestrator
                     'position' => $index + 1,
                     'total' => $totalSymbols
                 ]);
+                $this->orderJourneyLogger->info('order_journey.orchestrator.symbol_start', [
+                    'run_id' => $runIdString,
+                    'symbol' => $symbol,
+                    'position' => $index + 1,
+                    'total' => $totalSymbols,
+                    'reason' => 'symbol_cycle_begin',
+                ]);
 
                 $symbolResult = $this->symbolProcessor->processSymbol(
                     $symbol,
@@ -89,14 +113,35 @@ final class MtfRunOrchestrator
                     $this->clock->now()
                 );
 
+                $this->orderJourneyLogger->info('order_journey.orchestrator.symbol_mtf_result', [
+                    'run_id' => $runIdString,
+                    'symbol' => $symbol,
+                    'status' => $symbolResult->status,
+                    'execution_tf' => $symbolResult->executionTf,
+                    'signal_side' => $symbolResult->signalSide,
+                    'reason' => 'mtf_processing_completed',
+                ]);
+
                 // Gérer la décision de trading uniquement pour READY ou SUCCESS
                 $effective = $symbolResult;
                 if ($effective->isSuccess() || strtoupper($effective->status) === 'READY') {
+                    $this->orderJourneyLogger->info('order_journey.orchestrator.symbol_decision_start', [
+                        'run_id' => $runIdString,
+                        'symbol' => $symbol,
+                        'status' => $effective->status,
+                        'reason' => 'invoke_trading_decision',
+                    ]);
                     $effective = $this->tradingDecisionHandler->handleTradingDecision(
                         $effective,
                         $mtfRunDto
                     );
                     $symbolResult = $effective; // reflect decision changes
+                    $this->orderJourneyLogger->info('order_journey.orchestrator.symbol_decision_done', [
+                        'run_id' => $runIdString,
+                        'symbol' => $symbol,
+                        'status' => $effective->status,
+                        'reason' => 'trading_decision_completed',
+                    ]);
                 }
 
                 $results[$symbol] = $symbolResult->toArray();
@@ -126,10 +171,21 @@ final class MtfRunOrchestrator
                 $summary->toArray()
             );
 
+            $this->orderJourneyLogger->info('order_journey.orchestrator.run_completed', [
+                'run_id' => $runIdString,
+                'symbols_processed' => count($results),
+                'duration_seconds' => round(microtime(true) - $startTime, 3),
+                'reason' => 'mtf_cycle_completed',
+            ]);
+
             yield from $this->yieldFinalResult($summary, $results, $startTime, $runId);
 
         } finally {
             $this->lockManager->releaseLock($lockKey);
+            $this->orderJourneyLogger->debug('order_journey.orchestrator.lock_released', [
+                'run_id' => $runIdString,
+                'lock_key' => $lockKey,
+            ]);
         }
     }
 
@@ -148,11 +204,17 @@ final class MtfRunOrchestrator
             $this->logger->debug('[MTF Orchestrator] Global switch OFF', [
                 'run_id' => $runIdString
             ]);
+            $this->orderJourneyLogger->debug('order_journey.orchestrator.global_switch_off', [
+                'run_id' => $runIdString,
+            ]);
             return false;
         }
 
         $this->logger->debug('[MTF Orchestrator] Global switch ON', [
             'run_id' => $runIdString
+        ]);
+        $this->orderJourneyLogger->debug('order_journey.orchestrator.global_switch_on', [
+            'run_id' => $runIdString,
         ]);
 
         return true;

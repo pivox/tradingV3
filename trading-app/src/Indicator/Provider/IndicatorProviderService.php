@@ -184,6 +184,8 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
             $stochRsi = $this->stochRsiService->calculate($closes, 14, 14, 3, 3);
 
+            $pivotLevels = $this->computeClassicPivotLevels($highs, $lows, $closes);
+
             $indicators = [
                 'rsi' => $rsi,
                 'ema' => [20 => $ema20, 50 => $ema50, 200 => $ema200],
@@ -195,6 +197,10 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 'adx' => $adx,
                 'stoch_rsi' => $stochRsi,
             ];
+
+            if ($pivotLevels !== null) {
+                $indicators['pivot_levels'] = $pivotLevels;
+            }
 
             $descriptions = [
                 'rsi' => $this->rsiService->getDescription(false),
@@ -210,6 +216,49 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
             // Return combined DTO (indicators + descriptions)
             return new ListIndicatorDto(indicators: $indicators, descriptions: $descriptions);
+        }
+
+        /**
+         * @param float[] $highs
+         * @param float[] $lows
+         * @param float[] $closes
+         * @return array<string,float>|null
+         */
+        private function computeClassicPivotLevels(array $highs, array $lows, array $closes): ?array
+        {
+            $count = min(count($highs), count($lows), count($closes));
+            if ($count === 0) {
+                return null;
+            }
+
+            $idx = $count - 1;
+            $high = $highs[$idx];
+            $low = $lows[$idx];
+            $close = $closes[$idx];
+
+            if (!is_finite($high) || !is_finite($low) || !is_finite($close)) {
+                return null;
+            }
+
+            $pp = ($high + $low + $close) / 3.0;
+            $range = $high - $low;
+
+            $r1 = 2 * $pp - $low;
+            $s1 = 2 * $pp - $high;
+            $r2 = $pp + $range;
+            $s2 = $pp - $range;
+            $r3 = $high + 2 * ($pp - $low);
+            $s3 = $low - 2 * ($high - $pp);
+
+            return [
+                'pp' => $pp,
+                'r1' => $r1,
+                'r2' => $r2,
+                'r3' => $r3,
+                's1' => $s1,
+                's2' => $s2,
+                's3' => $s3,
+            ];
         }
 
         public function evaluateConditions(string $symbol, string $timeframe): array

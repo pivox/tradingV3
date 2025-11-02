@@ -21,6 +21,7 @@ final class BuildOrderPlan
         private readonly LiquidationGuard $liquidation,
         #[Autowire(service: 'monolog.logger.positions_flow')] private readonly LoggerInterface $flowLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
+        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
     ) {}
 
     public function __invoke(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null): OrderPlanModel
@@ -31,6 +32,12 @@ final class BuildOrderPlan
             'spread_pct' => $pre->spreadPct,
             'mode_note' => $pre->modeNote,
             'decision_key' => $decisionKey,
+        ]);
+        $this->journeyLogger->info('order_journey.plan.start', [
+            'symbol' => $req->symbol,
+            'decision_key' => $decisionKey,
+            'side' => $req->side->value,
+            'reason' => 'build_order_plan',
         ]);
 
         // Compute entry zone first, then create the plan with zone so builder can clamp entry if needed
@@ -47,6 +54,14 @@ final class BuildOrderPlan
             'zone_max' => $zone->max,
             'rationale' => $zone->rationale,
         ]);
+        $this->journeyLogger->debug('order_journey.plan.zone', [
+            'symbol' => $req->symbol,
+            'decision_key' => $decisionKey,
+            'zone_min' => $zone->min,
+            'zone_max' => $zone->max,
+            'entry_candidate' => $candidate,
+            'reason' => 'zone_evaluated',
+        ]);
 
         // After clamping inside builder, entry should be within zone. If not, log and fail fast.
         if (!$zone->contains($candidate)) {
@@ -57,6 +72,14 @@ final class BuildOrderPlan
                 'zone_min' => $zone->min,
                 'zone_max' => $zone->max,
             ]);
+            $this->journeyLogger->error('order_journey.plan.entry_out_of_zone', [
+                'symbol' => $req->symbol,
+                'decision_key' => $decisionKey,
+                'entry_candidate' => $candidate,
+                'zone_min' => $zone->min,
+                'zone_max' => $zone->max,
+                'reason' => 'entry_not_within_zone',
+            ]);
             throw new \RuntimeException('Prix d\'entrée hors zone calculée');
         }
 
@@ -65,12 +88,18 @@ final class BuildOrderPlan
             'preflight' => $pre,
             'plan' => $plan,
             'zone' => $zone,
+            'decision_key' => $decisionKey,
         ];
         if (!$this->filters->passAll($context)) {
             $this->flowLogger->error('build_order_plan.filters_rejected', [
                 'symbol' => $req->symbol,
                 'side' => $req->side->value,
                 'decision_key' => $decisionKey,
+            ]);
+            $this->journeyLogger->info('order_journey.plan.filters_blocked', [
+                'symbol' => $req->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => 'entry_zone_filters_rejection',
             ]);
             throw new \RuntimeException('EntryZoneFilters ont rejeté la requête');
         }
@@ -83,6 +112,14 @@ final class BuildOrderPlan
             'stop' => $plan->stop,
             'lev' => $plan->leverage,
         ]);
+        $this->journeyLogger->debug('order_journey.plan.liquidation_ok', [
+            'symbol' => $req->symbol,
+            'decision_key' => $decisionKey,
+            'entry' => $plan->entry,
+            'stop' => $plan->stop,
+            'leverage' => $plan->leverage,
+            'reason' => 'liquidation_guard_passed',
+        ]);
 
         $this->positionsLogger->info('build_order_plan.ready', [
             'symbol' => $plan->symbol,
@@ -93,6 +130,16 @@ final class BuildOrderPlan
             'stop' => $plan->stop,
             'take_profit' => $plan->takeProfit,
             'decision_key' => $decisionKey,
+        ]);
+        $this->journeyLogger->info('order_journey.plan.ready', [
+            'symbol' => $plan->symbol,
+            'decision_key' => $decisionKey,
+            'entry' => $plan->entry,
+            'stop' => $plan->stop,
+            'take_profit' => $plan->takeProfit,
+            'size' => $plan->size,
+            'leverage' => $plan->leverage,
+            'reason' => 'plan_ready_for_execution',
         ]);
 
         return $plan;
