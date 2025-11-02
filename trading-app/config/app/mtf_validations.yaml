@@ -22,7 +22,7 @@ mtf_validation:
         r_multiple: 2.0
         order_type: 'limit'
         open_type: 'isolated'
-        order_mode: 4
+        order_mode: 1
         stop_from: 'atr'
         market_max_spread_pct: 0.001
         inside_ticks: 1

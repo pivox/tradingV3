@@ -67,7 +67,7 @@ final class TradeEntryController extends AbstractController
                 side: $side,
                 orderType: $data['order_type'] ?? ($defaults['order_type'] ?? 'limit'),
                 openType: $data['open_type'] ?? ($defaults['open_type'] ?? 'isolated'),
-                orderMode: (int)($data['order_mode'] ?? ($defaults['order_mode'] ?? 4)),
+                orderMode: (int)($data['order_mode'] ?? ($defaults['order_mode'] ?? 1)),
                 initialMarginUsdt: (float)($data['initial_margin_usdt'] ?? ($defaults['initial_margin_usdt'] ?? 100.0)),
                 riskPct: $riskPct,
                 rMultiple: isset($data['r_multiple']) ? (float)$data['r_multiple'] : (float)($defaults['r_multiple'] ?? 2.0),
