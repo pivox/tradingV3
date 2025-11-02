@@ -384,7 +384,7 @@ services:
       sh -c "if [ ! -f vendor/autoload.php ]; then \
         echo '[trading-app-messenger] vendor missing -> composer install'; \
         composer install --no-dev --optimize-autoloader --no-interaction; \
-      fi; php bin/console messenger:consume order_timeout --sleep=1 --failure-limit=5"
+      fi; php bin/console messenger:consume order_timeout --sleep=1 --failure-limit=5 --time-limit=3600"
     restart: unless-stopped
 
   trading-app-nginx:
