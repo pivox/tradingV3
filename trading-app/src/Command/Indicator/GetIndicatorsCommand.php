@@ -557,15 +557,26 @@ final class GetIndicatorsCommand extends Command
 
         $tableData = [];
 
-        $descRsi   = $descriptions['rsi'] ?? '';
-        $descEma   = $descriptions['ema'] ?? '';
-        $descMacd  = $descriptions['macd'] ?? '';
-        $descBoll  = $descriptions['bollinger'] ?? '';
-        $descAtr   = $descriptions['atr'] ?? '';
-        $descVwap  = $descriptions['vwap'] ?? '';
-        $descAdx   = $descriptions['adx'] ?? '';
-        $descStoch = $descriptions['stoch_rsi'] ?? '';
-        $descSma   = $descriptions['sma'] ?? 'SMA: moyenne mobile simple (moyenne arithmétique).';
+        $extractDesc = static function (array $catalog, string $key, string $fallback = ''): string {
+            $value = $catalog[$key] ?? null;
+            if (is_array($value)) {
+                return (string)($value['description'] ?? $fallback);
+            }
+            if ($value === null) {
+                return $fallback;
+            }
+            return (string)$value;
+        };
+
+        $descRsi   = $extractDesc($descriptions, 'rsi');
+        $descEma   = $extractDesc($descriptions, 'ema');
+        $descMacd  = $extractDesc($descriptions, 'macd');
+        $descBoll  = $extractDesc($descriptions, 'bollinger');
+        $descAtr   = $extractDesc($descriptions, 'atr');
+        $descVwap  = $extractDesc($descriptions, 'vwap');
+        $descAdx   = $extractDesc($descriptions, 'adx');
+        $descStoch = $extractDesc($descriptions, 'stoch_rsi');
+        $descSma   = $extractDesc($descriptions, 'sma', 'SMA: moyenne mobile simple (moyenne arithmétique).');
 
         // RSI
         $tableData[] = ['RSI (14)', $indicators['rsi'] ? number_format($indicators['rsi'], 2) : 'N/A', $descRsi];
