@@ -45,11 +45,7 @@ final class OrderPlanBuilder
             throw new \RuntimeException('Budget indisponible pour construire le plan');
         }
 
-        $riskPct = max(0.0, (float)$req->riskPct);
-        if ($riskPct > 1.0) {
-            $riskPct *= 0.01;
-        }
-        $riskPct = min($riskPct, 1.0);
+        $riskPct = $this->normalizePercent($req->riskPct);
         $riskUsdt = $availableBudget * $riskPct;
         if ($riskUsdt <= 0.0) {
             $this->journeyLogger->error('order_journey.plan_builder.invalid_risk', [
