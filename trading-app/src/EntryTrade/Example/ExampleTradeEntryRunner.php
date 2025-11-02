@@ -40,7 +40,7 @@ final class ExampleTradeEntryRunner
             side: $side,
             orderType: 'limit',
             openType: $defaults['open_type'] ?? 'isolated',
-            orderMode: (int)($defaults['order_mode'] ?? 4),
+            orderMode: (int)($defaults['order_mode'] ?? 1),
             initialMarginUsdt: (float)($defaults['initial_margin_usdt'] ?? 100.0),
             riskPct: $riskPct,
             rMultiple: (float)($defaults['r_multiple'] ?? 2.0),
