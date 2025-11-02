@@ -258,7 +258,12 @@ final class OrderPlanBuilder
 
         $sizeContracts = (int)max($minVolume, floor($size));
         if ($sizeContracts <= 0) {
-            throw new \RuntimeException('Taille calculée invalide');
+            throw new \RuntimeException(sprintf(
+                'Taille calculée invalide: sizeContracts=%d, minVolume=%s, symbol=%s',
+                $sizeContracts,
+                $minVolume,
+                $req->symbol
+            ));
         }
 
         $minTick = TickQuantizer::tick($precision);
