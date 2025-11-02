@@ -24,10 +24,9 @@ final class BalanceWorker
         private int $subscribeDelayMs = 200,
         ?LoggerInterface $logger = null,
         private ?BalanceSignalDispatcher $balanceSignalDispatcher = null,
-        private ?BalanceSignalFactory $balanceSignalFactory = null,
+        private BalanceSignalFactory $balanceSignalFactory = new BalanceSignalFactory(),
     ) {
         $this->logger = $logger ?? new NullLogger();
-        $this->balanceSignalFactory = $this->balanceSignalFactory ?? new BalanceSignalFactory();
     }
 
     public function subscribeToBalance(): void
@@ -190,7 +189,7 @@ final class BalanceWorker
             ];
 
             // Dispatcher le signal vers trading-app si configuré
-            if ($this->balanceSignalDispatcher !== null && $this->balanceSignalFactory !== null) {
+            if ($this->balanceSignalDispatcher !== null) {
                 $signal = $this->balanceSignalFactory->createFromBitmartEvent($assetData);
                 if ($signal !== null) {
                     $this->balanceSignalDispatcher->dispatch($signal);
