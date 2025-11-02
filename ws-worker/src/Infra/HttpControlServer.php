@@ -81,6 +81,17 @@ final class HttpControlServer
             return new \React\Http\Message\Response(200, ['Content-Type' => 'application/json'], json_encode(['ok' => true, 'message' => 'Unsubscribed from positions']));
         }
 
+        // Endpoints pour le balance
+        if ($method === 'POST' && $path === '/balance/subscribe') {
+            $this->mainWorker->subscribeToBalance();
+            return new \React\Http\Message\Response(200, ['Content-Type' => 'application/json'], json_encode(['ok' => true, 'message' => 'Subscribed to balance']));
+        }
+
+        if ($method === 'POST' && $path === '/balance/unsubscribe') {
+            $this->mainWorker->unsubscribeFromBalance();
+            return new \React\Http\Message\Response(200, ['Content-Type' => 'application/json'], json_encode(['ok' => true, 'message' => 'Unsubscribed from balance']));
+        }
+
         // Endpoint pour arrêter le worker
         if ($method === 'POST' && $path === '/stop') {
             $this->mainWorker->stop();
@@ -145,6 +156,8 @@ final class HttpControlServer
                 'POST /orders/unsubscribe' => 'Unsubscribe from orders',
                 'POST /positions/subscribe' => 'Subscribe to positions',
                 'POST /positions/unsubscribe' => 'Unsubscribe from positions',
+                'POST /balance/subscribe' => 'Subscribe to USDT balance',
+                'POST /balance/unsubscribe' => 'Unsubscribe from USDT balance',
                 'POST /stop' => 'Stop the worker'
             ],
             'supported_timeframes' => ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '1d', '1w'],
@@ -152,6 +165,7 @@ final class HttpControlServer
                 'curl -X POST http://localhost:8089/klines/subscribe -H "Content-Type: application/json" -d \'{"symbol": "BTCUSDT", "tfs": ["1m", "5m"]}\'',
                 'curl -X POST http://localhost:8089/orders/subscribe',
                 'curl -X POST http://localhost:8089/positions/subscribe',
+                'curl -X POST http://localhost:8089/balance/subscribe',
                 'curl http://localhost:8089/status'
             ]
         ];
