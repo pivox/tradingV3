@@ -121,7 +121,7 @@ final class TradingDecisionHandler
             // Note: dry-run does not toggle switches.
             if (!$mtfRunDto->dryRun && ($execution->status === 'submitted')) {
                 try {
-                    $this->mtfSwitchRepository->turnOffSymbolFor4Hours($symbolResult->symbol);
+                    $this->mtfSwitchRepository->turnOffSymbolFor15Minutes($symbolResult->symbol);
                     $this->logger->info('[Trading Decision] Symbol switched OFF for 4 hours after order', [
                         'symbol' => $symbolResult->symbol,
                     ]);
