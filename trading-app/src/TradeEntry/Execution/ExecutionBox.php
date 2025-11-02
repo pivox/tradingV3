@@ -200,6 +200,16 @@ final class ExecutionBox
             if ($currentResult !== null) {
                 $orderResult = $currentResult;
                 $selectedAttempt = $attempt;
+                $this->logger->info('positions.order_submit.success', [
+                    'result' => 'success',
+                    'symbol' => $plan->symbol,
+                    'decision_key' => $decisionKey,
+                    'client_order_id' => $clientOrderId,
+                    'attempt' => $attempt['label'],
+                    'attempt_index' => $index + 1,
+                    'attempt_total' => $attemptCount,
+                    'order_id' => $currentResult->orderId,
+                ]);
                 $this->orderLogger->info('order.submit.success', [
                     'symbol' => $plan->symbol,
                     'decision_key' => $decisionKey,
@@ -223,6 +233,17 @@ final class ExecutionBox
                 'order_type' => $attempt['order_type']->value,
                 'mode' => $attempt['options']['mode'] ?? null,
                 'decision_key' => $decisionKey,
+            ]);
+            $this->logger->warning('positions.order_submit.fail', [
+                'result' => 'fail',
+                'symbol' => $plan->symbol,
+                'decision_key' => $decisionKey,
+                'client_order_id' => $clientOrderId,
+                'attempt' => $attempt['label'],
+                'attempt_index' => $index + 1,
+                'attempt_total' => $attemptCount,
+                'order_type' => $attempt['order_type']->value,
+                'mode' => $attempt['options']['mode'] ?? null,
             ]);
             $this->orderLogger->warning('order.submit.attempt_failed', [
                 'symbol' => $plan->symbol,
@@ -317,6 +338,15 @@ final class ExecutionBox
                 'code' => 0,
                 'result' => null,
                 'decision_key' => $decisionKey,
+            ]);
+            $this->logger->error('positions.order_submit.error', [
+                'result' => 'error',
+                'symbol' => $plan->symbol,
+                'decision_key' => $decisionKey,
+                'client_order_id' => $clientOrderId,
+                'attempt' => $selectedAttempt['label'] ?? null,
+                'order_id' => $orderResult?->orderId,
+                'reason' => 'all_attempts_failed',
             ]);
             $this->orderLogger->error('order.submit.error', [
                 'symbol' => $plan->symbol,
