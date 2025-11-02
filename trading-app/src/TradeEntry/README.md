@@ -32,7 +32,10 @@ TradeEntry/
 │   ├── IdempotencyPolicy.php
 │   ├── LiquidationGuard.php
 │   ├── MakerOnlyPolicy.php
-│   └── PreTradeChecks.php
+│   ├── ConfigurableOrderModePolicy.php
+│   ├── OrderModePolicyInterface.php
+│   ├── PreTradeChecks.php
+│   └── TakerOnlyPolicy.php
 ├── Pricing/TickQuantizer.php
 ├── RiskSizer/
 │   ├── PositionSizer.php

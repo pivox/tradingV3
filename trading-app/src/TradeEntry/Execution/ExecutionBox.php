@@ -8,7 +8,7 @@ use App\Common\Enum\OrderType;
 use App\Contract\Provider\MainProviderInterface;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Dto\{ExecutionResult};
-use App\TradeEntry\Policy\{IdempotencyPolicy, MakerOnlyPolicy};
+use App\TradeEntry\Policy\{IdempotencyPolicy, OrderModePolicyInterface};
 use App\TradeEntry\Message\CancelOrderMessage;
 use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Messenger\Stamp\DelayStamp;
@@ -20,7 +20,7 @@ final class ExecutionBox
     public function __construct(
         private readonly MainProviderInterface $providers,
         private readonly TpSlAttacher $tpSl,
-        private readonly MakerOnlyPolicy $makerOnly,
+        private readonly OrderModePolicyInterface $orderModePolicy,
         private readonly IdempotencyPolicy $idempotency,
         private readonly ExecutionLogger $logger,
         private readonly MessageBusInterface $messageBus,
@@ -32,7 +32,7 @@ final class ExecutionBox
 
     public function execute(OrderPlanModel $plan, ?string $decisionKey = null): ExecutionResult
     {
-        $this->makerOnly->enforce($plan);
+        $this->orderModePolicy->enforce($plan);
         $this->logger->debug('execution.start', [
             'symbol' => $plan->symbol,
             'side' => $plan->side->value,
