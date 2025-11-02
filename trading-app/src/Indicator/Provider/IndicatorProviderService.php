@@ -30,6 +30,7 @@ use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 final class IndicatorProviderService implements IndicatorProviderInterface
     {
         private array $atrList = [];
+        /** @var array<string,array{dto: ListIndicatorDto,last_kline_time: \DateTimeInterface}> */
         private array $listPivot = [];
 
         public function __construct(
@@ -42,10 +43,74 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             private readonly CoreAdx $adxService,
             private readonly CoreBollinger $bollService,
             private readonly CoreVwap $vwapService,
-            private readonly CoreAtr $atrService,
-            private readonly CoreStochRsi $stochRsiService,
-            private readonly CoreSma $smaService,
+        private readonly CoreAtr $atrService,
+        private readonly CoreStochRsi $stochRsiService,
+        private readonly CoreSma $smaService,
         ) {}
+
+        /**
+         * @return array<string,array<string,mixed>>
+         */
+        private function indicatorCatalog(): array
+        {
+            return [
+                'rsi' => [
+                    'description' => $this->rsiService->getDescription(false),
+                    'periods' => [14],
+                    'outputs' => ['rsi'],
+                ],
+                'ema' => [
+                    'description' => $this->emaService->getDescription(false),
+                    'periods' => [20, 50, 200],
+                    'outputs' => [
+                        ['key' => 'ema', 'period' => 20],
+                        ['key' => 'ema', 'period' => 50],
+                        ['key' => 'ema', 'period' => 200],
+                    ],
+                ],
+                'sma' => [
+                    'description' => $this->smaService->getDescription(false),
+                    'periods' => [9, 21],
+                    'outputs' => [
+                        ['key' => 'sma', 'period' => 9],
+                        ['key' => 'sma', 'period' => 21],
+                    ],
+                ],
+                'macd' => [
+                    'description' => $this->macdService->getDescription(false),
+                    'parameters' => ['fast' => 12, 'slow' => 26, 'signal' => 9],
+                    'outputs' => ['macd', 'signal', 'hist'],
+                ],
+                'bollinger' => [
+                    'description' => $this->bollService->getDescription(false),
+                    'parameters' => ['period' => 20, 'deviation' => 2.0],
+                    'outputs' => ['upper', 'middle', 'lower'],
+                ],
+                'atr' => [
+                    'description' => $this->atrService->getDescription(false),
+                    'parameters' => ['period' => 14, 'method' => 'wilder'],
+                    'outputs' => ['atr'],
+                ],
+                'vwap' => [
+                    'description' => $this->vwapService->getDescription(false),
+                    'outputs' => ['vwap'],
+                ],
+                'adx' => [
+                    'description' => $this->adxService->getDescription(false),
+                    'parameters' => ['period' => 14],
+                    'outputs' => ['adx'],
+                ],
+                'stoch_rsi' => [
+                    'description' => $this->stochRsiService->getDescription(false),
+                    'parameters' => ['rsi_period' => 14, 'stoch_period' => 14, 'k' => 3, 'd' => 3],
+                    'outputs' => ['k', 'd'],
+                ],
+                'pivot_levels' => [
+                    'description' => 'Points pivots classiques (PP, R1-3, S1-3) calculés sur la dernière bougie.',
+                    'outputs' => ['pp', 'r1', 'r2', 'r3', 's1', 's2', 's3'],
+                ],
+            ];
+        }
 
         public function getSnapshot(string $symbol, string $timeframe): IndicatorSnapshotDto
         {
@@ -202,17 +267,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 $indicators['pivot_levels'] = $pivotLevels;
             }
 
-            $descriptions = [
-                'rsi' => $this->rsiService->getDescription(false),
-                'ema' => $this->emaService->getDescription(false),
-                'sma' => $this->smaService->getDescription(false),
-                'macd' => $this->macdService->getDescription(false),
-                'bollinger' => $this->bollService->getDescription(false),
-                'atr' => $this->atrService->getDescription(false),
-                'vwap' => $this->vwapService->getDescription(false),
-                'adx' => $this->adxService->getDescription(false),
-                'stoch_rsi' => $this->stochRsiService->getDescription(false),
-            ];
+            $descriptions = $this->indicatorCatalog();
 
             // Return combined DTO (indicators + descriptions)
             return new ListIndicatorDto(indicators: $indicators, descriptions: $descriptions);
@@ -351,24 +406,38 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         public function getListPivot(?string $key = null, ?string $symbol = null, ?string $tf = null): ?ListIndicatorDto
         {
             $cacheKey = sprintf('%s|%s|%s', $key ?? '*', $symbol ?? '*', $tf ?? '*');
-            if (array_key_exists($cacheKey, $this->listPivot)) {
-                $cached = $this->listPivot[$cacheKey];
-                return $cached instanceof ListIndicatorDto ? $cached : null;
-            }
-
             if ($symbol === null || $tf === null) {
                 return null;
             }
 
             try {
                 $tfEnum = Timeframe::from((string)$tf);
+            } catch (\ValueError) {
+                return null;
+            }
+
+            if (isset($this->listPivot[$cacheKey])) {
+                $cached = $this->listPivot[$cacheKey];
+                if ($this->isPivotCacheFresh($cached, $tfEnum)) {
+                    return $cached['dto'];
+                }
+            }
+
+            try {
                 $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 200);
                 if (empty($klines)) {
                     return null;
                 }
 
                 $dto = $this->getListFromKlines($klines);
-                $this->listPivot[$cacheKey] = $dto;
+                $lastKline = end($klines);
+                $lastTime = $this->extractKlineOpenTime($lastKline)
+                    ?? new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+
+                $this->listPivot[$cacheKey] = [
+                    'dto' => $dto,
+                    'last_kline_time' => $lastTime,
+                ];
 
                 return $dto;
             } catch (\Throwable $e) {
@@ -376,9 +445,73 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             }
         }
 
+        public function listAvailableIndicators(): array
+        {
+            return $this->indicatorCatalog();
+        }
+
         public function clearCaches(): void
         {
             $this->atrList = [];
             $this->listPivot = [];
+        }
+
+        /**
+         * @param mixed $cacheEntry
+         */
+        private function isPivotCacheFresh(mixed $cacheEntry, Timeframe $timeframe): bool
+        {
+            if (!is_array($cacheEntry)) {
+                return false;
+            }
+            if (!isset($cacheEntry['dto'], $cacheEntry['last_kline_time'])) {
+                return false;
+            }
+            if (!$cacheEntry['dto'] instanceof ListIndicatorDto) {
+                return false;
+            }
+            $lastTime = $cacheEntry['last_kline_time'];
+            if (!$lastTime instanceof \DateTimeInterface) {
+                return false;
+            }
+
+            $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+            $maxAge = $now->getTimestamp() - $timeframe->getStepInSeconds();
+
+            return $lastTime->getTimestamp() >= $maxAge;
+        }
+
+        /**
+         * @param mixed $kline
+         */
+        private function extractKlineOpenTime(mixed $kline): ?\DateTimeImmutable
+        {
+            if (is_object($kline)) {
+                if (property_exists($kline, 'openTime') && $kline->openTime instanceof \DateTimeInterface) {
+                    return \DateTimeImmutable::createFromInterface($kline->openTime);
+                }
+                if (method_exists($kline, 'getOpenTime')) {
+                    $candidate = $kline->getOpenTime();
+                    if ($candidate instanceof \DateTimeInterface) {
+                        return \DateTimeImmutable::createFromInterface($candidate);
+                    }
+                }
+            }
+
+            if (is_array($kline)) {
+                $candidate = $kline['openTime'] ?? $kline['open_time'] ?? null;
+                if ($candidate instanceof \DateTimeInterface) {
+                    return \DateTimeImmutable::createFromInterface($candidate);
+                }
+                if (is_numeric($candidate)) {
+                    $timestamp = (int) $candidate;
+                    if ($timestamp > 9999999999) {
+                        $timestamp = (int) round($timestamp / 1000);
+                    }
+                    return (new \DateTimeImmutable('@' . $timestamp))->setTimezone(new \DateTimeZone('UTC'));
+                }
+            }
+
+            return null;
         }
     }
