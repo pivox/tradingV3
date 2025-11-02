@@ -101,9 +101,12 @@ L'application suit une architecture hexagonale avec :
 ## ⚙️ Exécution des ordres
 
 - Entrée maker par défaut : les plans LIMIT sont envoyés en `mode=4` (post-only) pour tenter une exécution maker.
+- Positionnement rapproché : l'entrée LIMIT se cale 1 tick à l'intérieur du carnet (recalibrée si l'écart au mark dépasse ~0.5%).
 - Fallback automatique : si Bitmart rejette la soumission maker, la même intention est renvoyée immédiatement en ordre `market` (taker) avec le même `client_order_id`.
 - Timeout de 2 minutes : chaque ordre accepté programme une annulation différée via Messenger (`CancelOrderMessage`), afin d'éviter les LIMIT qui stagnent.
 - TP/SL préconfigurés : les prix `preset_*` (stop loss / take profit) sont envoyés autant pour le maker initial que pour le fallback taker, garantissant la couverture dès le fill.
+- TP hybride : le take-profit final combine le k·R théorique (ex. 2R) et les pivots intraday (PP/R1/S1...).
+- Traçage fin : `var/log/order-journey*.log` rejoue l’intégralité du pipeline (signal READY → plan → exécution). Voir `docs/ORDER_FLOW_README.md` pour le détail des étapes et paramètres (buffers, politiques TP).
 - Transport Messenger : un container `trading-app-messenger` lance `php bin/console messenger:consume order_timeout` en continu (s'appuie sur le service `redis` embarqué). Si vous faites tourner l'app sans Docker, exécutez la même commande manuellement.
 - Logs utiles : `execution.order_attempt_failed`, `execution.timeout_scheduled`, `trade_entry.timeout.cancel_attempt` documentent les étapes maker → taker et l'annulation différée.
 
@@ -153,6 +156,8 @@ docker-compose logs -f trading-app-php
 docker-compose logs -f trading-app-db
 ```
 
+- Traçage complet placement d'ordre : `var/log/order-journey*.log` (toutes les étapes depuis le signal MTF jusqu'à l'ID d'ordre Bitmart).
+
 ## 🔒 Sécurité
 
 - Clés API stockées dans les variables d'environnement
@@ -165,3 +170,4 @@ docker-compose logs -f trading-app-db
 - [Documentation BitMart Futures V2](https://developer-pro.bitmart.com/en/futuresv2/)
 - [Architecture hexagonale Symfony](https://symfony.com/doc/current/best_practices/hexagonal_architecture.html)
 - [Doctrine ORM](https://www.doctrine-project.org/projects/orm.html)
+- Documentation interne : `docs/ORDER_FLOW_README.md` (parcours order_journey et règles TP/pivots), `docs/WS_WORKER_BALANCE_INTEGRATION.md`.
