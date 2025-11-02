@@ -626,4 +626,102 @@ SQL;
 
         return [$where, $params, $types];
     }
+
+    /**
+     * Nettoie les anciens audits MTF en ne gardant que les N derniers jours.
+     *
+     * @param string|null $symbol      Filtrer par symbole (null = tous les symboles)
+     * @param int         $daysToKeep  Nombre de jours à conserver
+     * @param bool        $dryRun      Si true, ne supprime pas mais retourne les stats
+     * 
+     * @return array Statistiques détaillées
+     *               [
+     *                 'total' => 5000,
+     *                 'to_delete' => 4500,
+     *                 'to_keep' => 500,
+     *                 'cutoff_date' => '2025-10-30 12:00:00',
+     *                 'symbols_affected' => ['BTCUSDT' => 1000, 'ETHUSDT' => 500],
+     *                 'dry_run' => true
+     *               ]
+     */
+    public function cleanupOldAudits(?string $symbol, int $daysToKeep, bool $dryRun): array
+    {
+        $cutoffDate = new \DateTimeImmutable("-{$daysToKeep} days", new \DateTimeZone('UTC'));
+        
+        $symbolFilter = $symbol ? 'AND symbol = :symbol' : '';
+        $params = ['cutoff' => $cutoffDate->format('Y-m-d H:i:sP')];
+        $types = ['cutoff' => ParameterType::STRING];
+
+        if ($symbol) {
+            $params['symbol'] = $symbol;
+            $types['symbol'] = ParameterType::STRING;
+        }
+
+        try {
+            // Calcul des statistiques
+            $statsSql = <<<SQL
+SELECT 
+  COUNT(*) as total,
+  COUNT(*) FILTER (WHERE created_at < :cutoff) as to_delete,
+  COUNT(*) FILTER (WHERE created_at >= :cutoff) as to_keep
+FROM mtf_audit
+WHERE 1=1
+  {$symbolFilter}
+SQL;
+
+            $statsRow = $this->conn->fetchAssociative($statsSql, $params, $types);
+
+            // Statistiques par symbole
+            $symbolStatsSql = <<<SQL
+SELECT 
+  symbol,
+  COUNT(*) as count
+FROM mtf_audit
+WHERE created_at < :cutoff
+  {$symbolFilter}
+GROUP BY symbol
+ORDER BY count DESC
+SQL;
+
+            $symbolStats = $this->conn->fetchAllAssociative($symbolStatsSql, $params, $types);
+            $symbolsAffected = [];
+            foreach ($symbolStats as $row) {
+                $symbolsAffected[$row['symbol']] = (int)$row['count'];
+            }
+
+            $stats = [
+                'total' => (int)$statsRow['total'],
+                'to_delete' => (int)$statsRow['to_delete'],
+                'to_keep' => (int)$statsRow['to_keep'],
+                'cutoff_date' => $cutoffDate->format('Y-m-d H:i:s'),
+                'symbols_affected' => $symbolsAffected,
+                'dry_run' => $dryRun,
+            ];
+
+            // Si dry-run, on s'arrête ici
+            if ($dryRun || $stats['to_delete'] === 0) {
+                return $stats;
+            }
+
+            // Exécution réelle de la suppression
+            $deleteSql = <<<SQL
+DELETE FROM mtf_audit
+WHERE created_at < :cutoff
+  {$symbolFilter}
+SQL;
+
+            $deletedCount = $this->conn->executeStatement($deleteSql, $params, $types);
+
+            $this->getEntityManager()->getConnection()->getConfiguration()->getSQLLogger()?->stopQuery();
+
+            return $stats;
+
+        } catch (\Throwable $e) {
+            throw new \RuntimeException(
+                sprintf('Erreur lors du nettoyage des audits MTF: %s', $e->getMessage()),
+                0,
+                $e
+            );
+        }
+    }
 }
