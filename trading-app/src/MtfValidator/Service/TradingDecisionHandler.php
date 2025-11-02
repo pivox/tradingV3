@@ -357,7 +357,7 @@ final class TradingDecisionHandler
             side: $sideEnum,
             orderType: $orderType,
             openType: $defaults['open_type'] ?? 'isolated',
-            orderMode: (int)($defaults['order_mode'] ?? 4),
+            orderMode: (int)($defaults['order_mode'] ?? 1),
             initialMarginUsdt: $initialMargin,
             riskPct: $riskPct,
             rMultiple: (float)($defaults['r_multiple'] ?? 2.0),
