@@ -107,10 +107,14 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
 
             // Fenêtre de grâce (sauf si force-run est activé)
             if (!$forceRun && $this->timeService->isInGraceWindow($now, $timeframe)) {
-                $this->auditStep($runId, $symbol, "{$timeframe->value}_GRACE_WINDOW", "In grace window for {$timeframe->value}", ['timeframe' => $timeframe->value, 'force_run' => $forceRun]);
+                $this->logger->debug("[MTF] Grace window active - skip {$timeframe->value}", [
+                    'symbol' => $symbol,
+                    'timeframe' => $timeframe->value,
+                ]);
                 return new InternalTimeframeResultDto(
                     timeframe: $timeframe->value,
                     status: 'GRACE_WINDOW',
+                    signalSide: 'NONE',
                     reason: "In grace window for {$timeframe->value}"
                 );
             }
