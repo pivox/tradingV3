@@ -1,5 +1,5 @@
 monolog:
-  channels: ['mtf', 'validation', 'signals', 'positions', 'positions_flow', 'bitmart', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
+  channels: ['mtf', 'validation', 'signals', 'positions', 'positions_flow', 'orders', 'bitmart', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
   handlers:
     # =====================
     # --- Handler Temporal (Asynchrone) ---
@@ -54,6 +54,15 @@ monolog:
       max_files: 30
       level: 'info'
       channels: ['positions_flow']
+      formatter: App\Logging\CustomLineFormatter
+
+    # Canal Orders - Placement et suivi des ordres
+    orders_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/orders.log'
+      max_files: 30
+      level: 'info'
+      channels: ['orders']
       formatter: App\Logging\CustomLineFormatter
 
     # =====================
@@ -138,6 +147,46 @@ monolog:
       max_files: 30
       level: error
       channels: ['positions_flow']
+      formatter: App\Logging\CustomLineFormatter
+
+    # Orders channel — split per level
+    orders_debug_only:
+      type: filter
+      handler: orders_debug_only_rotating
+      accepted_levels: ['debug']
+      channels: ['orders']
+    orders_debug_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/orders-debug.log'
+      max_files: 30
+      level: debug
+      channels: ['orders']
+      formatter: App\Logging\CustomLineFormatter
+
+    orders_info_only:
+      type: filter
+      handler: orders_info_only_rotating
+      accepted_levels: ['info']
+      channels: ['orders']
+    orders_info_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/orders-info.log'
+      max_files: 30
+      level: info
+      channels: ['orders']
+      formatter: App\Logging\CustomLineFormatter
+
+    orders_error_only:
+      type: filter
+      handler: orders_error_only_rotating
+      accepted_levels: ['error']
+      channels: ['orders']
+    orders_error_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/orders-error.log'
+      max_files: 30
+      level: error
+      channels: ['orders']
       formatter: App\Logging\CustomLineFormatter
 
     # Canal Indicators - Calculs d'indicateurs techniques

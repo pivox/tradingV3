@@ -1,0 +1,77 @@
+# Configuration du syst?me de placement d'ordres
+# Utilis? par OrderPlacementService, EntryZoneMonitor et StopLossTakeProfitMonitor
+
+orders:
+  # Configuration de l'entry zone monitoring
+  entry_zone:
+    # Tol?rance en pourcentage autour de l'entry zone
+    # Exemple: 0.1 = ?0.1%
+    tolerance_percent: 0.1
+    
+    # Timeout par d?faut en secondes pour un ordre en attente
+    # Si le prix n'entre pas dans la zone dans ce d?lai, l'ordre est annul?
+    timeout_seconds: 300  # 5 minutes
+    
+    # Placer imm?diatement si le prix est d?j? dans la zone
+    # true = placer imm?diatement, false = attendre le prix cible
+    immediate_if_in_zone: true
+  
+  # Configuration du Stop-Loss
+  stop_loss:
+    # Intervalle de v?rification en millisecondes
+    # Plus petit = r?action plus rapide, mais plus de charge CPU
+    check_interval_ms: 100
+    
+    # Tol?rance de slippage en pourcentage
+    # Exemple: 0.05 = 0.05% de slippage acceptable
+    slippage_tolerance_percent: 0.05
+  
+  # Configuration du Take-Profit
+  take_profit:
+    # Intervalle de v?rification en millisecondes
+    # Moins urgent que SL, peut ?tre plus espac?
+    check_interval_ms: 500
+    
+    # Tol?rance de slippage en pourcentage
+    slippage_tolerance_percent: 0.05
+    
+    # Permettre la cl?ture partielle de position
+    # Si true, peut fermer en plusieurs fois selon liquidit?
+    partial_close: true
+  
+  # Configuration des types d'ordres par d?faut
+  order_type:
+    # Type d'ordre par d?faut: 'limit' ou 'market'
+    default: limit
+    
+    # Activer le mode post-only pour les limit orders
+    # ?vite les taker fees en garantissant maker execution
+    post_only: true
+  
+  # Configuration du callback vers trading-app
+  callback:
+    # URL de base de trading-app
+    # Sera compl?t? par /api/orders/callback
+    base_url: "${TRADING_APP_BASE_URL:-http://trading-app:8080}"
+    
+    # Timeout pour les callbacks en secondes
+    timeout_seconds: 5
+    
+    # Nombre de tentatives en cas d'?chec
+    retry_attempts: 3
+    
+    # D?lai entre les tentatives (en secondes)
+    retry_delay_seconds: 2
+
+# Configuration de l'API Bitmart
+bitmart:
+  # URL de base de l'API REST Bitmart
+  api_base_url: "${BITMART_API_BASE_URL:-https://api-cloud-v2.bitmart.com}"
+  
+  # Cl?s API (? d?finir dans .env)
+  # BITMART_API_KEY
+  # BITMART_API_SECRET
+  # BITMART_API_MEMO
+  
+  # Timeout par d?faut pour les requ?tes API en secondes
+  timeout_seconds: 5

@@ -81,6 +81,21 @@ final class HttpControlServer
             return new \React\Http\Message\Response(200, ['Content-Type' => 'application/json'], json_encode(['ok' => true, 'message' => 'Unsubscribed from positions']));
         }
 
+        // Endpoint pour placer un ordre
+        if ($method === 'POST' && $path === '/api/place-order') {
+            return $this->handlePlaceOrder($data);
+        }
+
+        // Endpoint pour monitorer une position (SL/TP)
+        if ($method === 'POST' && $path === '/api/monitor-position') {
+            return $this->handleMonitorPosition($data);
+        }
+
+        // Endpoint pour obtenir le statut des ordres
+        if ($method === 'GET' && $path === '/api/orders/status') {
+            return $this->handleOrdersStatus();
+        }
+
         // Endpoint pour arrêter le worker
         if ($method === 'POST' && $path === '/stop') {
             $this->mainWorker->stop();
@@ -133,6 +148,66 @@ final class HttpControlServer
         ]));
     }
 
+    private function handlePlaceOrder(array $data): \React\Http\Message\Response
+    {
+        $required = ['id', 'symbol', 'side', 'entry_zone_min', 'entry_zone_max', 'quantity'];
+        foreach ($required as $field) {
+            if (!isset($data[$field])) {
+                return new \React\Http\Message\Response(400, ['Content-Type' => 'application/json'], json_encode([
+                    'ok' => false,
+                    'error' => "Missing required field: {$field}"
+                ]));
+            }
+        }
+
+        try {
+            $this->mainWorker->addOrderToQueue($data);
+            return new \React\Http\Message\Response(200, ['Content-Type' => 'application/json'], json_encode([
+                'ok' => true,
+                'message' => 'Order added to queue',
+                'order_id' => $data['id']
+            ]));
+        } catch (\Throwable $e) {
+            return new \React\Http\Message\Response(500, ['Content-Type' => 'application/json'], json_encode([
+                'ok' => false,
+                'error' => $e->getMessage()
+            ]));
+        }
+    }
+
+    private function handleMonitorPosition(array $data): \React\Http\Message\Response
+    {
+        $required = ['id', 'symbol', 'order_id'];
+        foreach ($required as $field) {
+            if (!isset($data[$field])) {
+                return new \React\Http\Message\Response(400, ['Content-Type' => 'application/json'], json_encode([
+                    'ok' => false,
+                    'error' => "Missing required field: {$field}"
+                ]));
+            }
+        }
+
+        try {
+            $this->mainWorker->addMonitoredPosition($data);
+            return new \React\Http\Message\Response(200, ['Content-Type' => 'application/json'], json_encode([
+                'ok' => true,
+                'message' => 'Position added for monitoring',
+                'position_id' => $data['id']
+            ]));
+        } catch (\Throwable $e) {
+            return new \React\Http\Message\Response(500, ['Content-Type' => 'application/json'], json_encode([
+                'ok' => false,
+                'error' => $e->getMessage()
+            ]));
+        }
+    }
+
+    private function handleOrdersStatus(): \React\Http\Message\Response
+    {
+        $status = $this->mainWorker->getOrdersStatus();
+        return new \React\Http\Message\Response(200, ['Content-Type' => 'application/json'], json_encode($status));
+    }
+
     private function getHelpResponse(): \React\Http\Message\Response
     {
         $help = [
@@ -145,6 +220,9 @@ final class HttpControlServer
                 'POST /orders/unsubscribe' => 'Unsubscribe from orders',
                 'POST /positions/subscribe' => 'Subscribe to positions',
                 'POST /positions/unsubscribe' => 'Unsubscribe from positions',
+                'POST /api/place-order' => 'Place an order with entry zone monitoring',
+                'POST /api/monitor-position' => 'Monitor a position for SL/TP',
+                'GET /api/orders/status' => 'Get orders and positions status',
                 'POST /stop' => 'Stop the worker'
             ],
             'supported_timeframes' => ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '1d', '1w'],
@@ -152,6 +230,7 @@ final class HttpControlServer
                 'curl -X POST http://localhost:8089/klines/subscribe -H "Content-Type: application/json" -d \'{"symbol": "BTCUSDT", "tfs": ["1m", "5m"]}\'',
                 'curl -X POST http://localhost:8089/orders/subscribe',
                 'curl -X POST http://localhost:8089/positions/subscribe',
+                'curl -X POST http://localhost:8089/api/place-order -H "Content-Type: application/json" -d \'{"id": "order-123", "symbol": "BTCUSDT", "side": "long", "entry_zone_min": 65000, "entry_zone_max": 65500, "quantity": 0.01}\'',
                 'curl http://localhost:8089/status'
             ]
         ];

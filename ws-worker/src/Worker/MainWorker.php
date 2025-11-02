@@ -5,9 +5,14 @@ use App\Infra\BitmartWsClient;
 use App\Infra\AuthHandler;
 use App\Order\OrderSignalDispatcher;
 use App\Order\OrderSignalFactory;
+use App\Trading\OrderQueue;
+use App\Trading\OrderPlacementService;
+use App\Trading\EntryZoneMonitor;
+use App\Trading\StopLossTakeProfitMonitor;
 use React\EventLoop\Loop;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 final class MainWorker
 {
@@ -20,6 +25,10 @@ final class MainWorker
     private ?PositionWorker $positionWorker = null;
     private ?OrderSignalDispatcher $orderSignalDispatcher = null;
     private ?OrderSignalFactory $orderSignalFactory = null;
+    private ?OrderQueue $orderQueue = null;
+    private ?OrderPlacementService $orderPlacement = null;
+    private ?EntryZoneMonitor $entryZoneMonitor = null;
+    private ?StopLossTakeProfitMonitor $sltpMonitor = null;
 
     public function __construct(
         private string $publicWsUri,
@@ -34,6 +43,8 @@ final class MainWorker
         private ?LoggerInterface $logger = null,
         ?OrderSignalDispatcher $orderSignalDispatcher = null,
         ?OrderSignalFactory $orderSignalFactory = null,
+        private ?HttpClientInterface $httpClient = null,
+        private string $bitmartApiBaseUrl = 'https://api-cloud-v2.bitmart.com',
     ) {
         $this->logger = $this->logger ?? new NullLogger();
         $this->orderSignalDispatcher = $orderSignalDispatcher;
@@ -99,6 +110,39 @@ final class MainWorker
             $this->logger
         );
 
+        // Services de trading
+        if ($this->httpClient !== null && $this->apiKey !== null && $this->apiSecret !== null && $this->apiMemo !== null) {
+            $this->orderQueue = new OrderQueue($this->logger);
+            
+            $this->orderPlacement = new OrderPlacementService(
+                $this->httpClient,
+                $this->apiKey,
+                $this->apiSecret,
+                $this->apiMemo,
+                $this->bitmartApiBaseUrl,
+                $this->logger
+            );
+
+            $this->entryZoneMonitor = new EntryZoneMonitor(
+                $this->orderQueue,
+                $this->orderPlacement,
+                $this->httpClient,
+                tolerancePercent: 0.1,
+                immediateIfInZone: true,
+                logger: $this->logger
+            );
+
+            $this->sltpMonitor = new StopLossTakeProfitMonitor(
+                $this->orderQueue,
+                $this->orderPlacement,
+                $this->httpClient,
+                slippageTolerancePercent: 0.05,
+                logger: $this->logger
+            );
+
+            $this->logger?->info('Trading monitors initialized', ['channel' => 'ws-main']);
+        }
+
         $this->logger?->info('Workers initialized', ['channel' => 'ws-main']);
     }
 
@@ -112,6 +156,25 @@ final class MainWorker
         $this->klineWorker->run();
         $this->orderWorker->run();
         $this->positionWorker->run();
+
+        // Démarrer les monitors de trading
+        if ($this->entryZoneMonitor !== null) {
+            $this->entryZoneMonitor->start();
+            
+            // Connecter le klineWorker pour mettre à jour les prix
+            $this->publicWsClient->onMessage(function(string $rawMessage) {
+                $this->handleKlinePriceUpdate($rawMessage);
+            });
+        }
+
+        if ($this->sltpMonitor !== null) {
+            $this->sltpMonitor->start();
+            
+            // Connecter le positionWorker pour mettre à jour les positions
+            $this->privateWsClient->onMessage(function(string $rawMessage) {
+                $this->handlePositionUpdate($rawMessage);
+            });
+        }
 
         // Authentification pour les canaux privés
         $this->privateWsClient->onOpen(function() {
@@ -218,6 +281,102 @@ final class MainWorker
         $this->logger?->info('Unsubscribed from positions', ['channel' => 'ws-main']);
     }
 
+    // Méthodes pour la gestion des ordres
+    public function addOrderToQueue(array $orderData): void
+    {
+        if ($this->orderQueue === null) {
+            throw new \RuntimeException('OrderQueue not initialized (missing httpClient or API credentials)');
+        }
+
+        $this->orderQueue->addOrder($orderData);
+        $this->logger?->info('Order added to queue', ['channel' => 'ws-main', 'order_id' => $orderData['id'] ?? 'unknown']);
+    }
+
+    public function addMonitoredPosition(array $positionData): void
+    {
+        if ($this->orderQueue === null) {
+            throw new \RuntimeException('OrderQueue not initialized (missing httpClient or API credentials)');
+        }
+
+        $this->orderQueue->addMonitoredPosition($positionData);
+        $this->logger?->info('Position added for monitoring', ['channel' => 'ws-main', 'position_id' => $positionData['id'] ?? 'unknown']);
+    }
+
+    public function getOrdersStatus(): array
+    {
+        if ($this->orderQueue === null) {
+            return [
+                'pending_orders' => 0,
+                'monitored_positions' => 0,
+                'orders' => [],
+                'positions' => []
+            ];
+        }
+
+        return [
+            'pending_orders' => $this->orderQueue->count(),
+            'monitored_positions' => $this->orderQueue->countMonitoredPositions(),
+            'orders' => $this->orderQueue->getPendingOrders(),
+            'positions' => $this->orderQueue->getMonitoredPositions()
+        ];
+    }
+
+    /**
+     * Gère les mises à jour de prix depuis les klines
+     */
+    private function handleKlinePriceUpdate(string $rawMessage): void
+    {
+        if ($this->entryZoneMonitor === null || $this->sltpMonitor === null) {
+            return;
+        }
+
+        $data = json_decode($rawMessage, true);
+        if (!is_array($data)) {
+            return;
+        }
+
+        // Format kline: {"group": "futures/klineBin1m:BTCUSDT", "data": {"c": "50000.0", ...}}
+        if (isset($data['group']) && str_starts_with($data['group'], 'futures/klineBin') && isset($data['data']['c'])) {
+            // Extraire le symbole du group
+            if (preg_match('/futures\/klineBin[^:]+:([A-Z]+)/', $data['group'], $matches)) {
+                $symbol = $matches[1];
+                $price = (float) $data['data']['c'];
+                
+                $this->entryZoneMonitor->updatePrice($symbol, $price);
+                $this->sltpMonitor->updatePrice($symbol, $price);
+            }
+        }
+    }
+
+    /**
+     * Gère les mises à jour de positions
+     */
+    private function handlePositionUpdate(string $rawMessage): void
+    {
+        if ($this->sltpMonitor === null) {
+            return;
+        }
+
+        $data = json_decode($rawMessage, true);
+        if (!is_array($data)) {
+            return;
+        }
+
+        // Format position: {"group": "futures/position", "data": [{"symbol": "BTCUSDT", "hold_volume": "0.1", ...}]}
+        if (isset($data['group']) && $data['group'] === 'futures/position' && isset($data['data'])) {
+            foreach ($data['data'] as $position) {
+                if (isset($position['symbol']) && isset($position['hold_volume'])) {
+                    $symbol = $position['symbol'];
+                    $quantity = (float) ($position['hold_volume'] ?? 0);
+                    $positionType = $position['position_type'] ?? 1; // 1 = long, 2 = short
+                    $side = $positionType === 1 ? 'long' : 'short';
+
+                    $this->sltpMonitor->updatePosition($symbol, $side, $quantity);
+                }
+            }
+        }
+    }
+
     // Méthodes pour obtenir l'état des workers
     public function getStatus(): array
     {
@@ -229,7 +388,9 @@ final class MainWorker
             'kline_channels' => $this->klineWorker?->getSubscribedChannels() ?? [],
             'order_subscribed' => $this->orderWorker?->isSubscribedToOrders() ?? false,
             'position_subscribed' => $this->positionWorker?->isSubscribedToPositions() ?? false,
-            'positions' => $this->positionWorker?->getLastPositions() ?? []
+            'positions' => $this->positionWorker?->getLastPositions() ?? [],
+            'pending_orders' => $this->orderQueue?->count() ?? 0,
+            'monitored_positions' => $this->orderQueue?->countMonitoredPositions() ?? 0,
         ];
     }
 
@@ -241,6 +402,14 @@ final class MainWorker
 
         $this->isRunning = false;
         $this->logger?->info('Stopping workers...', ['channel' => 'ws-main']);
+
+        // Arrêter les monitors
+        if ($this->entryZoneMonitor !== null) {
+            $this->entryZoneMonitor->stop();
+        }
+        if ($this->sltpMonitor !== null) {
+            $this->sltpMonitor->stop();
+        }
 
         // Fermer les connexions WebSocket
         if ($this->publicWsClient && $this->publicWsClient->isConnected()) {
