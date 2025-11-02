@@ -70,7 +70,7 @@ final class MtfTimeService
         //  - 1m       => 0 minute (pas de fenêtre de grâce)
         if (\func_num_args() < 3) {
             $graceMinutes = match ($timeframe) {
-                Timeframe::TF_4H, Timeframe::TF_1H => 2,
+                Timeframe::TF_4H, Timeframe::TF_1H => 4,
                 Timeframe::TF_15M => 2,
                 Timeframe::TF_5M => 0,
                 Timeframe::TF_1M => 0,
