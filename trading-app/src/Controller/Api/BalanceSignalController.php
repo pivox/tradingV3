@@ -77,8 +77,14 @@ final class BalanceSignalController
     private function validateSignature(Request $request, string $body): bool
     {
         if ($this->sharedSecret === '') {
-            $this->logger->warning('[BalanceSignal] WS_WORKER_SHARED_SECRET not configured, using fallback mode');
-            return true; // fallback debug mode
+            $env = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? 'prod';
+            if (in_array($env, ['dev', 'test'], true)) {
+                $this->logger->warning('[BalanceSignal] WS_WORKER_SHARED_SECRET not configured, using fallback mode in ' . $env . ' environment');
+                return true; // fallback debug mode in dev/test only
+            } else {
+                $this->logger->error('[BalanceSignal] WS_WORKER_SHARED_SECRET not configured in production environment, rejecting request');
+                return false; // do not allow fallback in production
+            }
         }
 
         $timestamp = $request->headers->get('X-WS-Worker-Timestamp');
