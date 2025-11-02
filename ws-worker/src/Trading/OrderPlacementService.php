@@ -173,11 +173,37 @@ final class OrderPlacementService
 
             // Mapper side vers Bitmart format
             // 1 = open_long, 2 = close_short, 3 = close_long, 4 = open_short
-            $bitmartSide = match(strtolower($side)) {
-                'long', 'buy' => 1,
-                'short', 'sell' => 4,
-                default => throw new \InvalidArgumentException("Invalid side: {$side}")
-            };
+            $bitmartSide = null;
+            $sideCandidates = [];
+
+            if (isset($options['side'])) {
+                $sideCandidates[] = $options['side'];
+            }
+
+            $sideCandidates[] = $side;
+
+            foreach ($sideCandidates as $candidate) {
+                if (is_numeric($candidate)) {
+                    $bitmartSide = (int) $candidate;
+                } else {
+                    $normalizedSide = strtolower((string) $candidate);
+                    $bitmartSide = match($normalizedSide) {
+                        'long', 'buy', 'open_long', 'buy_open_long' => 1,
+                        'short', 'sell', 'open_short', 'sell_open_short' => 4,
+                        'close_long', 'sell_close_long' => 3,
+                        'close_short', 'buy_close_short' => 2,
+                        default => null,
+                    };
+                }
+
+                if ($bitmartSide !== null) {
+                    break;
+                }
+            }
+
+            if (!in_array($bitmartSide, [1, 2, 3, 4], true)) {
+                throw new \InvalidArgumentException("Invalid side: {$side}");
+            }
 
             // Construire le payload
             $payload = [
@@ -230,6 +256,7 @@ final class OrderPlacementService
             $this->logger->info('[OrderPlacement] Submitting order', [
                 'symbol' => $symbol,
                 'side' => $side,
+                'bitmart_side' => $bitmartSide,
                 'type' => $type,
                 'price' => $price,
                 'quantity' => $quantity,
@@ -268,6 +295,7 @@ final class OrderPlacementService
                 'order_id' => $orderId,
                 'symbol' => $symbol,
                 'side' => $side,
+                'bitmart_side' => $bitmartSide,
                 'type' => $type,
                 'price' => $price,
                 'quantity' => $quantity,
