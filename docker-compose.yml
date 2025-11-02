@@ -261,34 +261,38 @@ services:
 #      - backend-net
 #      - shared-net
 
-#  ws-worker:
-#    build: ./ws-worker
-#    image: ws-worker:latest
-#    working_dir: /var/www/html
-#    volumes:
-#      - ./ws-worker:/var/www/html
-#    command: ["php", "bin/console", "ws:run"]
-#    environment:
-#      <<: *global-env
-#      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
-#      CTRL_ADDR: 0.0.0.0:8088
-#      BITMART_API_SECRET: ${BITMART_SECRET_KEY}
-#      BITMART_PUBLIC_WS_URI: wss://openapi-ws-v2.bitmart.com/api?protocol=1.1
-#      BITMART_PRIVATE_WS_URI: wss://openapi-ws-v2.bitmart.com/user?protocol=1.1
-#      TRADING_APP_BASE_URI: ${TRADING_APP_BASE_URI:-http://trading-app-nginx}
-#      TRADING_APP_ORDER_SIGNAL_PATH: ${TRADING_APP_ORDER_SIGNAL_PATH:-/api/ws-worker/orders}
-#      TRADING_APP_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
-#      TRADING_APP_REQUEST_TIMEOUT: ${TRADING_APP_REQUEST_TIMEOUT:-2.0}
-#      TRADING_APP_SIGNAL_MAX_RETRIES: ${TRADING_APP_SIGNAL_MAX_RETRIES:-5}
-#      TRADING_APP_SIGNAL_FAILURE_LOG: ${TRADING_APP_SIGNAL_FAILURE_LOG:-/var/log/trading/order-signal-failures.log}
-#    depends_on:
-#      - trading-app-db
-#    networks:
-#      - shared-net
-#      - trading-app-net
+  ws-worker:
+    build: ./ws-worker
+    image: ws-worker:latest
+    working_dir: /var/www/html
+    volumes:
+      - ./ws-worker:/var/www/html
+    command: ["php", "bin/console", "ws:run"]
+    ports:
+      - "8089:8088"
+    environment:
+      <<: *global-env
+      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
+      CTRL_ADDR: 0.0.0.0:8088
+      BITMART_API_SECRET: ${BITMART_SECRET_KEY}
+      BITMART_PUBLIC_WS_URI: wss://openapi-ws-v2.bitmart.com/api?protocol=1.1
+      BITMART_PRIVATE_WS_URI: wss://openapi-ws-v2.bitmart.com/user?protocol=1.1
+      TRADING_APP_BASE_URI: ${TRADING_APP_BASE_URI:-http://trading-app-nginx}
+      TRADING_APP_ORDER_SIGNAL_PATH: ${TRADING_APP_ORDER_SIGNAL_PATH:-/api/ws-worker/orders}
+      TRADING_APP_BALANCE_SIGNAL_PATH: ${TRADING_APP_BALANCE_SIGNAL_PATH:-/api/ws-worker/balance}
+      TRADING_APP_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
+      TRADING_APP_REQUEST_TIMEOUT: ${TRADING_APP_REQUEST_TIMEOUT:-2.0}
+      TRADING_APP_SIGNAL_MAX_RETRIES: ${TRADING_APP_SIGNAL_MAX_RETRIES:-5}
+      TRADING_APP_SIGNAL_FAILURE_LOG: ${TRADING_APP_SIGNAL_FAILURE_LOG:-/var/log/trading/order-signal-failures.log}
+      TRADING_APP_BALANCE_FAILURE_LOG: ${TRADING_APP_BALANCE_FAILURE_LOG:-/var/log/trading/balance-signal-failures.log}
+    depends_on:
+      - trading-app-db
+    networks:
+      - shared-net
+      - trading-app-net
 #    deploy:
 #      replicas: 5   # ← démarre pour ~100 contrats (5 sockets ~500 canaux)
-#    restart: always
+    restart: always
 
   ##################################
   # TRADING-APP (nouvelle application)
@@ -365,6 +369,7 @@ services:
       MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
       WS_WORKER_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
       BITMART_PUBLIC_API_URL: ${BITMART_PUBLIC_API_URL}
+      ORDER_TIMEOUT_SWITCH_DURATION: ${ORDER_TIMEOUT_SWITCH_DURATION:-15m}
     depends_on:
       trading-app-php:
         condition: service_started
@@ -379,7 +384,7 @@ services:
       sh -c "if [ ! -f vendor/autoload.php ]; then \
         echo '[trading-app-messenger] vendor missing -> composer install'; \
         composer install --no-dev --optimize-autoloader --no-interaction; \
-      fi; php bin/console messenger:consume order_timeout --time-limit=0 --sleep=1 --failure-limit=5"
+      fi; php bin/console messenger:consume order_timeout --sleep=1 --failure-limit=5 --time-limit=3600"
     restart: unless-stopped
 
   trading-app-nginx:
