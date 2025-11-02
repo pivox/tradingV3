@@ -423,4 +423,152 @@ class KlineRepository extends ServiceEntityRepository
 
         return $upsertedCount;
     }
+
+    /**
+     * Nettoie les anciennes klines en gardant seulement les N plus récentes par (symbol, timeframe).
+     *
+     * @param string|null $symbol       Filtrer par symbole (null = tous les symboles)
+     * @param int         $keepLimit    Nombre de klines à conserver par (symbol, timeframe)
+     * @param bool        $dryRun       Si true, ne supprime pas mais retourne les stats
+     * 
+     * @return array Statistiques détaillées par timeframe
+     *               [
+     *                 'timeframes' => [
+     *                   '1m' => ['total' => 1500, 'to_keep' => 500, 'to_delete' => 1000, 'symbols' => ['BTCUSDT', 'ETHUSDT']],
+     *                   '5m' => [...]
+     *                 ],
+     *                 'total_to_delete' => 1500,
+     *                 'dry_run' => true
+     *               ]
+     */
+    public function cleanupOldKlines(?string $symbol, int $keepLimit, bool $dryRun): array
+    {
+        $conn = $this->getConnection();
+        $stats = [
+            'timeframes' => [],
+            'total_to_delete' => 0,
+            'dry_run' => $dryRun,
+        ];
+
+        try {
+            // Liste tous les timeframes disponibles
+            $timeframes = array_map(fn($tf) => $tf->value, Timeframe::cases());
+
+            foreach ($timeframes as $tf) {
+                $tfStats = $this->cleanupForTimeframe($symbol, $tf, $keepLimit, $dryRun, $conn);
+                
+                if ($tfStats['total'] > 0) {
+                    $stats['timeframes'][$tf] = $tfStats;
+                    $stats['total_to_delete'] += $tfStats['to_delete'];
+                }
+            }
+
+            $this->logger->info('[Cleanup] Klines cleanup completed', [
+                'dry_run' => $dryRun,
+                'symbol' => $symbol ?? 'ALL',
+                'keep_limit' => $keepLimit,
+                'total_to_delete' => $stats['total_to_delete'],
+            ]);
+
+        } catch (\Throwable $e) {
+            $this->logger->error('[Cleanup] Erreur lors du nettoyage des klines', [
+                'error' => $e->getMessage(),
+                'symbol' => $symbol,
+            ]);
+            throw $e;
+        }
+
+        return $stats;
+    }
+
+    /**
+     * Nettoie les klines pour un timeframe spécifique
+     */
+    private function cleanupForTimeframe(?string $symbol, string $timeframe, int $keepLimit, bool $dryRun, Connection $conn): array
+    {
+        $symbolFilter = $symbol ? 'AND symbol = :symbol' : '';
+        $params = ['timeframe' => $timeframe, 'keep_limit' => $keepLimit];
+        $types = ['timeframe' => \Doctrine\DBAL\ParameterType::STRING, 'keep_limit' => \Doctrine\DBAL\ParameterType::INTEGER];
+
+        if ($symbol) {
+            $params['symbol'] = $symbol;
+            $types['symbol'] = \Doctrine\DBAL\ParameterType::STRING;
+        }
+
+        // Calcul des statistiques par symbole
+        $statsSql = <<<SQL
+WITH ranked AS (
+  SELECT 
+    id,
+    symbol,
+    timeframe,
+    open_time,
+    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY open_time DESC) AS rn
+  FROM klines
+  WHERE timeframe = :timeframe
+    {$symbolFilter}
+)
+SELECT 
+  symbol,
+  COUNT(*) as total,
+  COUNT(*) FILTER (WHERE rn <= :keep_limit) as to_keep,
+  COUNT(*) FILTER (WHERE rn > :keep_limit) as to_delete
+FROM ranked
+GROUP BY symbol
+SQL;
+
+        $symbolStats = $conn->fetchAllAssociative($statsSql, $params, $types);
+
+        $tfStats = [
+            'total' => 0,
+            'to_keep' => 0,
+            'to_delete' => 0,
+            'symbols' => [],
+        ];
+
+        foreach ($symbolStats as $row) {
+            $tfStats['total'] += (int)$row['total'];
+            $tfStats['to_keep'] += (int)$row['to_keep'];
+            $tfStats['to_delete'] += (int)$row['to_delete'];
+            
+            if ((int)$row['to_delete'] > 0) {
+                $tfStats['symbols'][] = [
+                    'symbol' => $row['symbol'],
+                    'total' => (int)$row['total'],
+                    'to_delete' => (int)$row['to_delete'],
+                ];
+            }
+        }
+
+        // Si dry-run, on s'arrête ici
+        if ($dryRun || $tfStats['to_delete'] === 0) {
+            return $tfStats;
+        }
+
+        // Exécution réelle de la suppression
+        $deleteSql = <<<SQL
+DELETE FROM klines
+WHERE id IN (
+  SELECT id FROM (
+    SELECT 
+      id,
+      ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY open_time DESC) AS rn
+    FROM klines
+    WHERE timeframe = :timeframe
+      {$symbolFilter}
+  ) ranked
+  WHERE rn > :keep_limit
+)
+SQL;
+
+        $deletedCount = $conn->executeStatement($deleteSql, $params, $types);
+        
+        $this->logger->info('[Cleanup] Klines deleted for timeframe', [
+            'timeframe' => $timeframe,
+            'symbol' => $symbol ?? 'ALL',
+            'deleted_count' => $deletedCount,
+        ]);
+
+        return $tfStats;
+    }
 }
