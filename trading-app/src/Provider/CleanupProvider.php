@@ -119,9 +119,16 @@ final readonly class CleanupProvider
                 ]);
             }
 
-            // Commit de la transaction si tout s'est bien passé
+            // Commit ou rollback selon les erreurs
             if (!$dryRun && $this->connection->isTransactionActive()) {
-                $this->connection->commit();
+                if (!empty($report['errors'])) {
+                    $this->connection->rollBack();
+                    $this->logger->warning('[CleanupProvider] Transaction rolled back due to errors', [
+                        'error_count' => count($report['errors']),
+                    ]);
+                } else {
+                    $this->connection->commit();
+                }
             }
 
             // Calcul du résumé
