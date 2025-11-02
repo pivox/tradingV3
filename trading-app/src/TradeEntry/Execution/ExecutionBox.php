@@ -13,6 +13,7 @@ use App\TradeEntry\Message\CancelOrderMessage;
 use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Messenger\Stamp\DelayStamp;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Psr\Log\LoggerInterface;
 
 final class ExecutionBox
 {
@@ -25,6 +26,7 @@ final class ExecutionBox
         private readonly MessageBusInterface $messageBus,
         #[Autowire('%trade_entry.order_timeout_seconds%')]
         private readonly int $orderTimeoutSeconds,
+        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
     ) {}
 
     public function execute(OrderPlanModel $plan, ?string $decisionKey = null): ExecutionResult
@@ -79,6 +81,14 @@ final class ExecutionBox
             'client_order_id' => $payload['client_order_id'],
             'decision_key' => $decisionKey,
         ]);
+        $this->journeyLogger->info('order_journey.execution.presubmit', [
+            'symbol' => $plan->symbol,
+            'decision_key' => $decisionKey,
+            'client_order_id' => $clientOrderId,
+            'side_numeric' => $payload['side'],
+            'order_type' => $payload['type'],
+            'reason' => 'payload_prepared_for_submission',
+        ]);
 
         $attempts = [];
         $attempts[] = [
@@ -119,6 +129,17 @@ final class ExecutionBox
             ];
             $this->logger->debug('execution.order_submit', $attemptPayload);
 
+            $this->journeyLogger->info('order_journey.execution.attempt', [
+                'symbol' => $plan->symbol,
+                'decision_key' => $decisionKey,
+                'attempt' => $attempt['label'],
+                'attempt_index' => $index + 1,
+                'attempt_total' => $attemptCount,
+                'mode' => $attempt['options']['mode'] ?? null,
+                'order_type' => $attempt['order_type']->value,
+                'reason' => 'submit_exchange_order',
+            ]);
+
             $currentResult = $this->providers->getOrderProvider()->placeOrder(
                 symbol: $attempt['payload']['symbol'],
                 side: $side,
@@ -139,6 +160,13 @@ final class ExecutionBox
             if ($currentResult !== null) {
                 $orderResult = $currentResult;
                 $selectedAttempt = $attempt;
+                $this->journeyLogger->info('order_journey.execution.order_ack', [
+                    'symbol' => $plan->symbol,
+                    'decision_key' => $decisionKey,
+                    'attempt' => $attempt['label'],
+                    'order_id' => $currentResult->orderId,
+                    'reason' => 'exchange_returned_order_id',
+                ]);
                 break;
             }
 
@@ -149,6 +177,13 @@ final class ExecutionBox
                 'mode' => $attempt['options']['mode'] ?? null,
                 'decision_key' => $decisionKey,
             ]);
+            $this->journeyLogger->warning('order_journey.execution.attempt_failed', [
+                'symbol' => $plan->symbol,
+                'decision_key' => $decisionKey,
+                'attempt' => $attempt['label'],
+                'mode' => $attempt['options']['mode'] ?? null,
+                'reason' => 'exchange_returned_null',
+            ]);
         }
 
         $this->logger->info('trade_entry.order_submitted', [
@@ -156,6 +191,13 @@ final class ExecutionBox
             'leverage' => $leverageResult,
             'order' => $orderResult ? $orderResult->toArray() : null,
             'attempt' => $selectedAttempt['label'] ?? null,
+        ]);
+        $this->journeyLogger->info('order_journey.execution.summary', [
+            'symbol' => $plan->symbol,
+            'decision_key' => $decisionKey,
+            'attempt' => $selectedAttempt['label'] ?? null,
+            'order_id' => $orderResult?->orderId,
+            'reason' => 'execution_attempts_concluded',
         ]);
 
         $orderId = $orderResult?->orderId;
@@ -180,12 +222,26 @@ final class ExecutionBox
                     'delay_ms' => $delayMs,
                     'decision_key' => $decisionKey,
                 ]);
+                $this->journeyLogger->debug('order_journey.execution.timeout_programmed', [
+                    'symbol' => $plan->symbol,
+                    'decision_key' => $decisionKey,
+                    'order_id' => $orderId,
+                    'delay_ms' => $delayMs,
+                    'reason' => 'auto_cancel_timeout_scheduled',
+                ]);
             } catch (\Throwable $dispatchError) {
                 $this->logger->error('execution.timeout_schedule_failed', [
                     'symbol' => $plan->symbol,
                     'exchange_order_id' => $orderId,
                     'client_order_id' => $clientOrderId,
                     'decision_key' => $decisionKey,
+                    'error' => $dispatchError->getMessage(),
+                ]);
+                $this->journeyLogger->error('order_journey.execution.timeout_schedule_failed', [
+                    'symbol' => $plan->symbol,
+                    'decision_key' => $decisionKey,
+                    'order_id' => $orderId,
+                    'reason' => 'failed_to_schedule_timeout',
                     'error' => $dispatchError->getMessage(),
                 ]);
             }
@@ -197,6 +253,11 @@ final class ExecutionBox
                 'code' => 0,
                 'result' => null,
                 'decision_key' => $decisionKey,
+            ]);
+            $this->journeyLogger->error('order_journey.execution.failed', [
+                'symbol' => $plan->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => 'all_attempts_failed',
             ]);
         }
 

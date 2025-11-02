@@ -10,6 +10,7 @@ use App\MtfValidator\Service\MtfService;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
  * Processeur de symboles optimisé pour les performances
@@ -19,7 +20,8 @@ final class SymbolProcessor
     public function __construct(
         private readonly MtfService $mtfService,
         private readonly LoggerInterface $logger,
-        private readonly ClockInterface $clock
+        private readonly ClockInterface $clock,
+        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
     /**
@@ -36,6 +38,13 @@ final class SymbolProcessor
             'run_id' => $runId->toString(),
             'force_run' => $mtfRunDto->forceRun,
             'force_timeframe_check' => $mtfRunDto->forceTimeframeCheck
+        ]);
+        $decisionKey = sprintf('symbol:%s:%s', strtoupper($symbol), $runId->toString());
+        $this->orderJourneyLogger->info('order_journey.symbol_processor.start', [
+            'symbol' => $symbol,
+            'run_id' => $runId->toString(),
+            'decision_key' => $decisionKey,
+            'reason' => 'mtf_symbol_processing_begin',
         ]);
 
         try {
@@ -60,12 +69,28 @@ final class SymbolProcessor
             $symbolResult = $finalResult ?? $result;
 
             if ($symbolResult === null) {
+                $this->orderJourneyLogger->error('order_journey.symbol_processor.no_result', [
+                    'symbol' => $symbol,
+                    'run_id' => $runId->toString(),
+                    'decision_key' => $decisionKey,
+                    'reason' => 'mtf_service_returned_null',
+                ]);
                 return new SymbolResultDto(
                     symbol: $symbol,
                     status: 'ERROR',
                     error: ['message' => 'No result from MTF service']
                 );
             }
+
+            $this->orderJourneyLogger->info('order_journey.symbol_processor.completed', [
+                'symbol' => $symbol,
+                'run_id' => $runId->toString(),
+                'decision_key' => $decisionKey,
+                'status' => $symbolResult['status'] ?? 'UNKNOWN',
+                'execution_tf' => $symbolResult['execution_tf'] ?? null,
+                'signal_side' => $symbolResult['signal_side'] ?? null,
+                'reason' => 'mtf_symbol_processing_end',
+            ]);
 
             return new SymbolResultDto(
                 symbol: $symbol,
@@ -85,6 +110,13 @@ final class SymbolProcessor
                 'symbol' => $symbol,
                 'run_id' => $runId->toString(),
                 'error' => $e->getMessage()
+            ]);
+            $this->orderJourneyLogger->error('order_journey.symbol_processor.failed', [
+                'symbol' => $symbol,
+                'run_id' => $runId->toString(),
+                'decision_key' => $decisionKey,
+                'reason' => 'exception_during_symbol_processing',
+                'error' => $e->getMessage(),
             ]);
 
             return new SymbolResultDto(
