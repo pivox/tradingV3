@@ -1,5 +1,5 @@
 monolog:
-  channels: ['mtf', 'validation', 'signals', 'positions', 'positions_flow', 'order_journey', 'bitmart', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
+  channels: ['mtf', 'validation', 'signals', 'positions', 'positions_flow', 'order', 'order_journey', 'bitmart', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
   handlers:
     # =====================
     # --- Handler Temporal (Asynchrone) ---
@@ -54,6 +54,15 @@ monolog:
       max_files: 30
       level: 'info'
       channels: ['positions_flow']
+      formatter: App\Logging\CustomLineFormatter
+
+    # Canal Order - Traçage dédié du placement d'ordre
+    order_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/order.log'
+      max_files: 30
+      level: info
+      channels: ['order']
       formatter: App\Logging\CustomLineFormatter
 
     # Canal Order Journey - Traçage détaillé de bout en bout du placement d'ordre
@@ -147,6 +156,46 @@ monolog:
       max_files: 30
       level: error
       channels: ['positions_flow']
+      formatter: App\Logging\CustomLineFormatter
+
+    # Order channel — split per level
+    order_debug_only:
+      type: filter
+      handler: order_debug_only_rotating
+      accepted_levels: ['debug']
+      channels: ['order']
+    order_debug_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/order-debug.log'
+      max_files: 30
+      level: debug
+      channels: ['order']
+      formatter: App\Logging\CustomLineFormatter
+
+    order_info_only:
+      type: filter
+      handler: order_info_only_rotating
+      accepted_levels: ['info']
+      channels: ['order']
+    order_info_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/order-info.log'
+      max_files: 30
+      level: info
+      channels: ['order']
+      formatter: App\Logging\CustomLineFormatter
+
+    order_error_only:
+      type: filter
+      handler: order_error_only_rotating
+      accepted_levels: ['error']
+      channels: ['order']
+    order_error_only_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/order-error.log'
+      max_files: 30
+      level: error
+      channels: ['order']
       formatter: App\Logging\CustomLineFormatter
 
     # Order Journey channel — split per level
