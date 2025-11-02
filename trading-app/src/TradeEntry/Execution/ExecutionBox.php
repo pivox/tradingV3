@@ -9,9 +9,6 @@ use App\Contract\Provider\MainProviderInterface;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Dto\{ExecutionResult};
 use App\TradeEntry\Policy\{IdempotencyPolicy, OrderModePolicyInterface};
-use App\TradeEntry\Message\CancelOrderMessage;
-use Symfony\Component\Messenger\MessageBusInterface;
-use Symfony\Component\Messenger\Stamp\DelayStamp;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Psr\Log\LoggerInterface;
 
@@ -23,9 +20,6 @@ final class ExecutionBox
         private readonly OrderModePolicyInterface $orderModePolicy,
         private readonly IdempotencyPolicy $idempotency,
         private readonly ExecutionLogger $logger,
-        private readonly MessageBusInterface $messageBus,
-        #[Autowire('%trade_entry.order_timeout_seconds%')]
-        private readonly int $orderTimeoutSeconds,
         #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
         #[Autowire(service: 'monolog.logger.order')] private readonly LoggerInterface $orderLogger,
     ) {}
@@ -75,7 +69,7 @@ final class ExecutionBox
         ]);
 
         $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
-        
+
         // Mapper side BitMart (1,2,3,4) vers OrderSide enum
         $side = match($payload['side']) {
             1 => OrderSide::BUY,   // open_long
@@ -83,7 +77,7 @@ final class ExecutionBox
             3 => OrderSide::BUY,   // close_short
             4 => OrderSide::SELL,  // open_short
         };
-        
+
         // Extra visibility before submit
         $this->logger->debug('execution.presubmit_check', [
             'symbol' => $plan->symbol,
@@ -96,16 +90,23 @@ final class ExecutionBox
             'open_type' => $payload['open_type'],
             'client_order_id' => $payload['client_order_id'],
             'decision_key' => $decisionKey,
+            'enforced_type' => OrderType::LIMIT->value,
+            'enforced_mode' => 1,
         ]);
+
+        $orderPayload = $payload;
+        $orderPayload['type'] = OrderType::LIMIT->value;
+        $orderPayload['mode'] = 1;
+
         $this->orderLogger->debug('order.submit.payload_prepared', [
             'symbol' => $plan->symbol,
             'decision_key' => $decisionKey,
             'client_order_id' => $clientOrderId,
             'side_numeric' => $payload['side'],
-            'order_type' => $payload['type'],
+            'order_type' => $orderPayload['type'],
             'size' => (int) $payload['size'],
-            'price' => $payload['price'] ?? null,
-            'mode' => $payload['mode'] ?? null,
+            'price' => $orderPayload['price'] ?? null,
+            'mode' => $orderPayload['mode'] ?? null,
             'open_type' => $payload['open_type'],
         ]);
         $this->journeyLogger->info('order_journey.execution.presubmit', [
@@ -113,125 +114,98 @@ final class ExecutionBox
             'decision_key' => $decisionKey,
             'client_order_id' => $clientOrderId,
             'side_numeric' => $payload['side'],
-            'order_type' => $payload['type'],
+            'order_type' => $orderPayload['type'],
             'reason' => 'payload_prepared_for_submission',
         ]);
 
-        $attempts = [];
-        $attempts[] = [
-            'label' => 'maker-limit',
-            'payload' => $payload,
-            'order_type' => OrderType::from($payload['type']),
-            'price' => isset($payload['price']) ? (float) $payload['price'] : null,
-            'options' => $this->extractOrderOptions($payload),
-            'schedule_timeout' => $plan->orderType === 'limit',
+        $attemptLabel = 'limit-mode-1';
+        $attemptIndex = 1;
+        $attemptTotal = 1;
+        $enforcedOrderType = OrderType::LIMIT;
+        $orderOptions = $this->extractOrderOptions($orderPayload);
+        $orderResult = null;
+
+        $attemptPayload = $orderPayload + [
+            'decision_key' => $decisionKey,
+            'attempt' => $attemptLabel,
+            'attempt_index' => $attemptIndex,
+            'attempt_total' => $attemptTotal,
         ];
 
-        if ($plan->orderType === 'limit' && $plan->orderMode === 4) {
-            $fallbackPayload = $payload;
-            $fallbackPayload['type'] = OrderType::MARKET->value;
-            $fallbackPayload['mode'] = 1; // Bitmart GTC (taker) pour fallback
-            unset($fallbackPayload['price']);
+        $this->logger->debug('execution.order_submit', $attemptPayload);
+        $this->orderLogger->info('order.submit.attempt', [
+            'symbol' => $plan->symbol,
+            'decision_key' => $decisionKey,
+            'client_order_id' => $clientOrderId,
+            'attempt' => $attemptLabel,
+            'attempt_index' => $attemptIndex,
+            'attempt_total' => $attemptTotal,
+            'side_numeric' => $orderPayload['side'],
+            'order_type' => $enforcedOrderType->value,
+            'mode' => $orderOptions['mode'] ?? null,
+            'size' => (float) $orderPayload['size'],
+            'price' => isset($orderPayload['price']) ? (float) $orderPayload['price'] : null,
+        ]);
 
-            $attempts[] = [
-                'label' => 'taker-market-fallback',
-                'payload' => $fallbackPayload,
-                'order_type' => OrderType::MARKET,
-                'price' => null,
-                'options' => $this->extractOrderOptions($fallbackPayload),
-                'schedule_timeout' => false,
-            ];
-        }
+        $this->journeyLogger->info('order_journey.execution.attempt', [
+            'symbol' => $plan->symbol,
+            'decision_key' => $decisionKey,
+            'attempt' => $attemptLabel,
+            'attempt_index' => $attemptIndex,
+            'attempt_total' => $attemptTotal,
+            'mode' => $orderOptions['mode'] ?? null,
+            'order_type' => $enforcedOrderType->value,
+            'reason' => 'submit_exchange_order',
+        ]);
 
-        $attemptCount = count($attempts);
-        $orderResult = null;
-        $selectedAttempt = null;
+        $orderResult = $this->providers->getOrderProvider()->placeOrder(
+            symbol: $orderPayload['symbol'],
+            side: $side,
+            type: $enforcedOrderType,
+            quantity: (float)$orderPayload['size'],
+            price: isset($orderPayload['price']) ? (float)$orderPayload['price'] : null,
+            stopPrice: null,
+            options: $orderOptions
+        );
 
-        foreach ($attempts as $index => $attempt) {
-            $attemptPayload = $attempt['payload'] + [
-                'decision_key' => $decisionKey,
-                'attempt' => $attempt['label'],
-                'attempt_index' => $index + 1,
-                'attempt_total' => $attemptCount,
-            ];
-            $this->logger->debug('execution.order_submit', $attemptPayload);
-            $this->orderLogger->info('order.submit.attempt', [
+        $this->logger->debug('execution.order_response', [
+            'symbol' => $plan->symbol,
+            'result' => $orderResult ? $orderResult->toArray() : null,
+            'decision_key' => $decisionKey,
+            'attempt' => $attemptLabel,
+        ]);
+
+        if ($orderResult !== null) {
+            $this->logger->info('positions.order_submit.success', [
+                'result' => 'success',
                 'symbol' => $plan->symbol,
                 'decision_key' => $decisionKey,
                 'client_order_id' => $clientOrderId,
-                'attempt' => $attempt['label'],
-                'attempt_index' => $index + 1,
-                'attempt_total' => $attemptCount,
-                'side_numeric' => $attempt['payload']['side'],
-                'order_type' => $attempt['order_type']->value,
-                'mode' => $attempt['options']['mode'] ?? null,
-                'size' => (float) $attempt['payload']['size'],
-                'price' => $attempt['payload']['price'] ?? null,
+                'attempt' => $attemptLabel,
+                'attempt_index' => $attemptIndex,
+                'attempt_total' => $attemptTotal,
+                'order_id' => $orderResult->orderId,
             ]);
-
-            $this->journeyLogger->info('order_journey.execution.attempt', [
+            $this->orderLogger->info('order.submit.success', [
                 'symbol' => $plan->symbol,
                 'decision_key' => $decisionKey,
-                'attempt' => $attempt['label'],
-                'attempt_index' => $index + 1,
-                'attempt_total' => $attemptCount,
-                'mode' => $attempt['options']['mode'] ?? null,
-                'order_type' => $attempt['order_type']->value,
-                'reason' => 'submit_exchange_order',
+                'client_order_id' => $clientOrderId,
+                'attempt' => $attemptLabel,
+                'order_id' => $orderResult->orderId,
             ]);
-
-            $currentResult = $this->providers->getOrderProvider()->placeOrder(
-                symbol: $attempt['payload']['symbol'],
-                side: $side,
-                type: $attempt['order_type'],
-                quantity: (float)$attempt['payload']['size'],
-                price: $attempt['price'],
-                stopPrice: null,
-                options: $attempt['options']
-            );
-
-            $this->logger->debug('execution.order_response', [
+            $this->journeyLogger->info('order_journey.execution.order_ack', [
                 'symbol' => $plan->symbol,
-                'result' => $currentResult ? $currentResult->toArray() : null,
                 'decision_key' => $decisionKey,
-                'attempt' => $attempt['label'],
+                'attempt' => $attemptLabel,
+                'order_id' => $orderResult->orderId,
+                'reason' => 'exchange_returned_order_id',
             ]);
-
-            if ($currentResult !== null) {
-                $orderResult = $currentResult;
-                $selectedAttempt = $attempt;
-                $this->logger->info('positions.order_submit.success', [
-                    'result' => 'success',
-                    'symbol' => $plan->symbol,
-                    'decision_key' => $decisionKey,
-                    'client_order_id' => $clientOrderId,
-                    'attempt' => $attempt['label'],
-                    'attempt_index' => $index + 1,
-                    'attempt_total' => $attemptCount,
-                    'order_id' => $currentResult->orderId,
-                ]);
-                $this->orderLogger->info('order.submit.success', [
-                    'symbol' => $plan->symbol,
-                    'decision_key' => $decisionKey,
-                    'client_order_id' => $clientOrderId,
-                    'attempt' => $attempt['label'],
-                    'order_id' => $currentResult->orderId,
-                ]);
-                $this->journeyLogger->info('order_journey.execution.order_ack', [
-                    'symbol' => $plan->symbol,
-                    'decision_key' => $decisionKey,
-                    'attempt' => $attempt['label'],
-                    'order_id' => $currentResult->orderId,
-                    'reason' => 'exchange_returned_order_id',
-                ]);
-                break;
-            }
-
+        } else {
             $this->logger->warning('execution.order_attempt_failed', [
                 'symbol' => $plan->symbol,
-                'attempt' => $attempt['label'],
-                'order_type' => $attempt['order_type']->value,
-                'mode' => $attempt['options']['mode'] ?? null,
+                'attempt' => $attemptLabel,
+                'order_type' => $enforcedOrderType->value,
+                'mode' => $orderOptions['mode'] ?? null,
                 'decision_key' => $decisionKey,
             ]);
             $this->logger->warning('positions.order_submit.fail', [
@@ -239,40 +213,40 @@ final class ExecutionBox
                 'symbol' => $plan->symbol,
                 'decision_key' => $decisionKey,
                 'client_order_id' => $clientOrderId,
-                'attempt' => $attempt['label'],
-                'attempt_index' => $index + 1,
-                'attempt_total' => $attemptCount,
-                'order_type' => $attempt['order_type']->value,
-                'mode' => $attempt['options']['mode'] ?? null,
+                'attempt' => $attemptLabel,
+                'attempt_index' => $attemptIndex,
+                'attempt_total' => $attemptTotal,
+                'order_type' => $enforcedOrderType->value,
+                'mode' => $orderOptions['mode'] ?? null,
             ]);
             $this->orderLogger->warning('order.submit.attempt_failed', [
                 'symbol' => $plan->symbol,
                 'decision_key' => $decisionKey,
                 'client_order_id' => $clientOrderId,
-                'attempt' => $attempt['label'],
-                'order_type' => $attempt['order_type']->value,
-                'mode' => $attempt['options']['mode'] ?? null,
+                'attempt' => $attemptLabel,
+                'order_type' => $enforcedOrderType->value,
+                'mode' => $orderOptions['mode'] ?? null,
                 'reason' => 'exchange_returned_null',
             ]);
             $this->journeyLogger->warning('order_journey.execution.attempt_failed', [
                 'symbol' => $plan->symbol,
                 'decision_key' => $decisionKey,
-                'attempt' => $attempt['label'],
-                'mode' => $attempt['options']['mode'] ?? null,
+                'attempt' => $attemptLabel,
+                'mode' => $orderOptions['mode'] ?? null,
                 'reason' => 'exchange_returned_null',
             ]);
         }
 
         $this->logger->info('trade_entry.order_submitted', [
-            'payload' => $selectedAttempt['payload'] ?? $payload,
+            'payload' => $orderPayload,
             'leverage' => $leverageResult,
             'order' => $orderResult ? $orderResult->toArray() : null,
-            'attempt' => $selectedAttempt['label'] ?? null,
+            'attempt' => $orderResult !== null ? $attemptLabel : null,
         ]);
         $this->journeyLogger->info('order_journey.execution.summary', [
             'symbol' => $plan->symbol,
             'decision_key' => $decisionKey,
-            'attempt' => $selectedAttempt['label'] ?? null,
+            'attempt' => $orderResult !== null ? $attemptLabel : null,
             'order_id' => $orderResult?->orderId,
             'reason' => 'execution_attempts_concluded',
         ]);
@@ -280,57 +254,13 @@ final class ExecutionBox
             'symbol' => $plan->symbol,
             'decision_key' => $decisionKey,
             'client_order_id' => $clientOrderId,
-            'attempt' => $selectedAttempt['label'] ?? null,
+            'attempt' => $attemptLabel,
             'order_id' => $orderResult?->orderId,
             'status' => $orderResult !== null ? 'submitted' : 'failed',
         ]);
 
         $orderId = $orderResult?->orderId;
         $isOk = $orderResult !== null;
-
-        if ($isOk && $orderId !== null && $selectedAttempt !== null && $selectedAttempt['schedule_timeout']) {
-            $delayMs = max(1_000, $this->orderTimeoutSeconds * 1_000);
-            try {
-                $this->messageBus->dispatch(
-                    new CancelOrderMessage(
-                        symbol: $plan->symbol,
-                        exchangeOrderId: $orderId,
-                        clientOrderId: $clientOrderId,
-                        decisionKey: $decisionKey
-                    ),
-                    [new DelayStamp($delayMs)]
-                );
-                $this->logger->debug('execution.timeout_scheduled', [
-                    'symbol' => $plan->symbol,
-                    'exchange_order_id' => $orderId,
-                    'client_order_id' => $clientOrderId,
-                    'delay_ms' => $delayMs,
-                    'decision_key' => $decisionKey,
-                ]);
-                $this->journeyLogger->debug('order_journey.execution.timeout_programmed', [
-                    'symbol' => $plan->symbol,
-                    'decision_key' => $decisionKey,
-                    'order_id' => $orderId,
-                    'delay_ms' => $delayMs,
-                    'reason' => 'auto_cancel_timeout_scheduled',
-                ]);
-            } catch (\Throwable $dispatchError) {
-                $this->logger->error('execution.timeout_schedule_failed', [
-                    'symbol' => $plan->symbol,
-                    'exchange_order_id' => $orderId,
-                    'client_order_id' => $clientOrderId,
-                    'decision_key' => $decisionKey,
-                    'error' => $dispatchError->getMessage(),
-                ]);
-                $this->journeyLogger->error('order_journey.execution.timeout_schedule_failed', [
-                    'symbol' => $plan->symbol,
-                    'decision_key' => $decisionKey,
-                    'order_id' => $orderId,
-                    'reason' => 'failed_to_schedule_timeout',
-                    'error' => $dispatchError->getMessage(),
-                ]);
-            }
-        }
 
         if (!$isOk) {
             $this->logger->error('execution.order_error', [
@@ -344,7 +274,7 @@ final class ExecutionBox
                 'symbol' => $plan->symbol,
                 'decision_key' => $decisionKey,
                 'client_order_id' => $clientOrderId,
-                'attempt' => $selectedAttempt['label'] ?? null,
+                'attempt' => $attemptLabel,
                 'order_id' => $orderResult?->orderId,
                 'reason' => 'all_attempts_failed',
             ]);
@@ -352,7 +282,7 @@ final class ExecutionBox
                 'symbol' => $plan->symbol,
                 'decision_key' => $decisionKey,
                 'client_order_id' => $clientOrderId,
-                'attempt' => $selectedAttempt['label'] ?? null,
+                'attempt' => $attemptLabel,
                 'reason' => 'all_attempts_failed',
             ]);
             $this->journeyLogger->error('order_journey.execution.failed', [
@@ -369,7 +299,7 @@ final class ExecutionBox
             raw: [
                 'leverage' => $leverageResult,
                 'order' => $orderResult ? $orderResult->toArray() : null,
-                'attempt' => $selectedAttempt['label'] ?? null,
+                'attempt' => $orderResult !== null ? $attemptLabel : null,
             ],
         );
     }
