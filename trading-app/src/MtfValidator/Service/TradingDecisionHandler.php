@@ -25,6 +25,7 @@ final class TradingDecisionHandler
         private readonly AuditLoggerInterface $auditLogger,
         #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $logger,
         #[Autowire(service: 'monolog.logger.positions_flow')] private readonly LoggerInterface $positionsFlowLogger,
+        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $orderJourneyLogger,
         private readonly TradingDecisionConfig $decisionConfig,
         private readonly MtfValidationConfig $mtfConfig,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
@@ -40,8 +41,18 @@ final class TradingDecisionHandler
             return $symbolResult;
         }
 
-        if (!$this->canExecuteTrading($symbolResult)) {
-            return $this->createSkippedResult($symbolResult, 'trading_conditions_not_met');
+        $decisionKey = $this->generateDecisionKey($symbolResult->symbol);
+
+        $this->orderJourneyLogger->info('order_journey.signal_ready', [
+            'symbol' => $symbolResult->symbol,
+            'execution_tf' => $symbolResult->executionTf,
+            'side' => $symbolResult->signalSide,
+            'decision_key' => $decisionKey,
+            'reason' => 'mtf_signal_ready',
+        ]);
+
+        if (!$this->canExecuteTrading($symbolResult, $decisionKey)) {
+            return $this->createSkippedResult($symbolResult, 'trading_conditions_not_met', $decisionKey);
         }
 
         $tradeRequest = $this->buildTradeEntryRequest(
@@ -51,19 +62,38 @@ final class TradingDecisionHandler
         );
 
         if ($tradeRequest === null) {
-            return $this->createSkippedResult($symbolResult, 'unable_to_build_request');
+            $this->orderJourneyLogger->warning('order_journey.trade_request.unable_to_build', [
+                'symbol' => $symbolResult->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => 'builder_returned_null',
+            ]);
+            return $this->createSkippedResult($symbolResult, 'unable_to_build_request', $decisionKey);
         }
 
-        try {
-            // Correlate logs across MTF + TradeEntry
-            try { $decisionKey = sprintf('mtf:%s:%s', $symbolResult->symbol, bin2hex(random_bytes(6))); }
-            catch (\Throwable) { $decisionKey = uniqid('mtf:' . $symbolResult->symbol . ':', true); }
+        $this->orderJourneyLogger->info('order_journey.trade_request.built', [
+            'symbol' => $tradeRequest->symbol,
+            'decision_key' => $decisionKey,
+            'order_type' => $tradeRequest->orderType,
+            'order_mode' => $tradeRequest->orderMode,
+            'risk_pct' => $tradeRequest->riskPct,
+            'initial_margin_usdt' => $tradeRequest->initialMarginUsdt,
+            'stop_from' => $tradeRequest->stopFrom,
+            'reason' => 'mtf_defaults_applied',
+        ]);
 
+        try {
             $this->positionsFlowLogger->info('[PositionsFlow] Executing trade entry', [
                 'symbol' => $symbolResult->symbol,
                 'execution_tf' => $symbolResult->executionTf,
                 'side' => $symbolResult->signalSide,
                 'decision_key' => $decisionKey,
+            ]);
+
+            $this->orderJourneyLogger->info('order_journey.trade_entry.dispatch', [
+                'symbol' => $symbolResult->symbol,
+                'decision_key' => $decisionKey,
+                'dry_run' => $mtfRunDto->dryRun,
+                'reason' => $mtfRunDto->dryRun ? 'dry_run_simulation' : 'live_execution',
             ]);
 
             $execution = $mtfRunDto->dryRun
@@ -75,7 +105,17 @@ final class TradingDecisionHandler
                 'client_order_id' => $execution->clientOrderId,
                 'exchange_order_id' => $execution->exchangeOrderId,
                 'raw' => $execution->raw,
+                'decision_key' => $decisionKey,
             ];
+
+            $this->orderJourneyLogger->info('order_journey.trade_entry.result', [
+                'symbol' => $symbolResult->symbol,
+                'decision_key' => $decisionKey,
+                'status' => $execution->status,
+                'client_order_id' => $execution->clientOrderId,
+                'exchange_order_id' => $execution->exchangeOrderId,
+                'reason' => 'trade_entry_service_completed',
+            ]);
 
             // Disable symbol after a real order submission to avoid immediate re-entries via MTF
             // Note: dry-run does not toggle switches.
@@ -130,6 +170,13 @@ final class TradingDecisionHandler
                 'error' => $e->getMessage(),
             ]);
 
+            $this->orderJourneyLogger->error('order_journey.trade_entry.failed', [
+                'symbol' => $symbolResult->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => 'exception_during_trade_entry',
+                'error' => $e->getMessage(),
+            ]);
+
             $this->auditLogger->logAction(
                 'TRADE_ENTRY_FAILED',
                 'TRADE_ENTRY',
@@ -157,9 +204,14 @@ final class TradingDecisionHandler
         }
     }
 
-    private function canExecuteTrading(SymbolResultDto $symbolResult): bool
+    private function canExecuteTrading(SymbolResultDto $symbolResult, ?string $decisionKey = null): bool
     {
         if ($symbolResult->executionTf === null) {
+            $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+                'symbol' => $symbolResult->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => 'missing_execution_tf',
+            ]);
             return false;
         }
 
@@ -169,10 +221,21 @@ final class TradingDecisionHandler
                 'symbol' => $symbolResult->symbol,
                 'execution_tf' => $symbolResult->executionTf,
             ]);
+            $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+                'symbol' => $symbolResult->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => 'unsupported_execution_tf',
+                'execution_tf' => $symbolResult->executionTf,
+            ]);
             return false;
         }
 
         if ($symbolResult->signalSide === null) {
+            $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+                'symbol' => $symbolResult->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => 'missing_signal_side',
+            ]);
             return false;
         }
 
@@ -181,8 +244,20 @@ final class TradingDecisionHandler
             $this->logger->debug('[Trading Decision] Missing price and ATR', [
                 'symbol' => $symbolResult->symbol,
             ]);
+            $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+                'symbol' => $symbolResult->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => 'missing_price_and_atr',
+            ]);
             return false;
         }
+
+        $this->orderJourneyLogger->debug('order_journey.preconditions.passed', [
+            'symbol' => $symbolResult->symbol,
+            'decision_key' => $decisionKey,
+            'execution_tf' => $symbolResult->executionTf,
+            'signal_side' => $symbolResult->signalSide,
+        ]);
 
         return true;
     }
@@ -255,6 +330,26 @@ final class TradingDecisionHandler
             $marketMaxSpreadPct /= 100.0;
         }
 
+        $insideTicks = (int)($defaults['inside_ticks'] ?? 1);
+        $maxDeviationPct = isset($defaults['max_deviation_pct']) ? (float)$defaults['max_deviation_pct'] : null;
+        $implausiblePct = isset($defaults['implausible_pct']) ? (float)$defaults['implausible_pct'] : null;
+        $zoneMaxDeviationPct = isset($defaults['zone_max_deviation_pct']) ? (float)$defaults['zone_max_deviation_pct'] : null;
+
+        $tpPolicy = (string)($defaults['tp_policy'] ?? 'pivot_conservative');
+        $tpBufferPct = isset($defaults['tp_buffer_pct']) ? (float)$defaults['tp_buffer_pct'] : null;
+        if ($tpBufferPct !== null && $tpBufferPct <= 0.0) {
+            $tpBufferPct = null;
+        }
+        $tpBufferTicks = isset($defaults['tp_buffer_ticks']) ? (int)$defaults['tp_buffer_ticks'] : null;
+        if ($tpBufferTicks !== null && $tpBufferTicks <= 0) {
+            $tpBufferTicks = null;
+        }
+        $tpMinKeepRatio = (float)($defaults['tp_min_keep_ratio'] ?? 0.95);
+        $tpMaxExtraR = isset($defaults['tp_max_extra_r']) ? (float)$defaults['tp_max_extra_r'] : null;
+        if ($tpMaxExtraR !== null && $tpMaxExtraR < 0.0) {
+            $tpMaxExtraR = null;
+        }
+
         $sideEnum = $side === 'LONG' ? Side::Long : Side::Short;
 
         return new TradeEntryRequest(
@@ -270,12 +365,29 @@ final class TradingDecisionHandler
             stopFrom: $stopFrom,
             atrValue: $atrValue,
             atrK: (float)$atrK,
-            marketMaxSpreadPct: $marketMaxSpreadPct
+            marketMaxSpreadPct: $marketMaxSpreadPct,
+            insideTicks: $insideTicks,
+            maxDeviationPct: $maxDeviationPct,
+            implausiblePct: $implausiblePct,
+            zoneMaxDeviationPct: $zoneMaxDeviationPct,
+            tpPolicy: $tpPolicy,
+            tpBufferPct: $tpBufferPct,
+            tpBufferTicks: $tpBufferTicks,
+            tpMinKeepRatio: $tpMinKeepRatio,
+            tpMaxExtraR: $tpMaxExtraR,
         );
     }
 
-    private function createSkippedResult(SymbolResultDto $symbolResult, string $reason): SymbolResultDto
+    private function createSkippedResult(SymbolResultDto $symbolResult, string $reason, ?string $decisionKey = null): SymbolResultDto
     {
+        if ($decisionKey !== null) {
+            $this->orderJourneyLogger->info('order_journey.trade_request.skipped', [
+                'symbol' => $symbolResult->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => $reason,
+            ]);
+        }
+
         return new SymbolResultDto(
             symbol: $symbolResult->symbol,
             status: $symbolResult->status,
@@ -301,11 +413,29 @@ final class TradingDecisionHandler
                 'client_order_id' => $decision['client_order_id'] ?? null,
                 'exchange_order_id' => $decision['exchange_order_id'] ?? null,
             ]);
+
+            $this->orderJourneyLogger->info('order_journey.trade_entry.submitted', [
+                'symbol' => $symbol,
+                'decision_key' => $decision['decision_key'] ?? null,
+                'status' => $decision['status'] ?? null,
+                'client_order_id' => $decision['client_order_id'] ?? null,
+                'exchange_order_id' => $decision['exchange_order_id'] ?? null,
+                'reason' => 'order_sent_to_exchange',
+            ]);
         } catch (\Throwable $e) {
             $this->logger->error('[Trading Decision] Failed to log trade entry', [
                 'symbol' => $symbol,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    private function generateDecisionKey(string $symbol): string
+    {
+        try {
+            return sprintf('mtf:%s:%s', $symbol, bin2hex(random_bytes(6)));
+        } catch (\Throwable) {
+            return uniqid('mtf:' . $symbol . ':', true);
         }
     }
 }
