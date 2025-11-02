@@ -20,6 +20,10 @@ final class BalanceSignalService
     /**
      * Traite un signal de balance reçu du ws-worker.
      * 
+     * NOTE: This is intentional Phase 1 behavior - currently only logs balance updates.
+     * Persistence will be implemented in Phase 2.
+     * See docs/WS_WORKER_BALANCE_INTEGRATION.md for the complete roadmap.
+     * 
      * Pour l'instant, ce service log simplement les informations.
      * Dans le futur, il pourra :
      * - Persister les données dans une table AccountBalance
