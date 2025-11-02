@@ -27,32 +27,32 @@ class MtfSwitchRepository extends ServiceEntityRepository
     public function isSymbolSwitchOn(string $symbol): bool
     {
         $switch = $this->findOneBy(['switchKey' => "SYMBOL:{$symbol}"]);
-        
+
         if (!$switch) {
             return true; // Par défaut, le switch est ON
         }
-        
+
         // Si le switch est expiré, on le considère comme ON
         if ($switch->isExpired()) {
             return true;
         }
-        
+
         return $switch->isOn();
     }
 
     public function isSymbolTimeframeSwitchOn(string $symbol, string $timeframe): bool
     {
         $switch = $this->findOneBy(['switchKey' => "SYMBOL_TF:{$symbol}:{$timeframe}"]);
-        
+
         if (!$switch) {
             return true; // Par défaut, le switch est ON
         }
-        
+
         // Si le switch est expiré, on le considère comme ON
         if ($switch->isExpired()) {
             return true;
         }
-        
+
         return $switch->isOn();
     }
 
@@ -156,6 +156,18 @@ class MtfSwitchRepository extends ServiceEntityRepository
     }
 
     /**
+     * Désactive un symbole pour une durée de 15 minutes
+     */
+    public function turnOffSymbolFor15Minutes(string $symbol): void
+    {
+        $switch = $this->getOrCreateSymbolSwitch($symbol);
+        $switch->turnOff();
+        $switch->setExpiresAt(new \DateTimeImmutable('+15 Minutes', new \DateTimeZone('UTC')));
+        $switch->setDescription("Symbole désactivé temporairement pour 4h - " . date('Y-m-d H:i:s'));
+        $this->getEntityManager()->flush();
+    }
+
+    /**
      * Désactive un symbole pour une durée personnalisée
      */
     public function turnOffSymbolForDuration(string $symbol, string $duration): void
@@ -197,7 +209,7 @@ class MtfSwitchRepository extends ServiceEntityRepository
     public function cleanupExpiredSwitches(): int
     {
         $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
-        
+
         $qb = $this->createQueryBuilder('s');
         $expiredSwitches = $qb
             ->where('s.expiresAt IS NOT NULL')
