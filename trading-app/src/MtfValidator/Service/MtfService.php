@@ -781,7 +781,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             try {
                 $result5m['atr'] = $this->computeAtrValue($symbol, '5m');
             } catch (\Throwable $e) {
-                // ignore ATR errors
+                $this->logger->error('[MTF] ATR computation exception', [
+                    'symbol' => $symbol,
+                    'timeframe' => '5m',
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+                $result5m['atr'] = null;  // Explicitement null au lieu de laisser indéfini
             }
 
             // Persister systématiquement un snapshot 5m (après calcul ATR)
@@ -859,7 +865,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             try {
                 $result1m['atr'] = $this->computeAtrValue($symbol, '1m');
             } catch (\Throwable $e) {
-                // ignore ATR errors
+                $this->logger->error('[MTF] ATR computation exception', [
+                    'symbol' => $symbol,
+                    'timeframe' => '1m',
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+                $result1m['atr'] = null;  // Explicitement null au lieu de laisser indéfini
             }
 
             // Persister systématiquement un snapshot 1m (après calcul ATR)
@@ -1056,10 +1068,25 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $period = 14;
         $method = 'wilder';
         $tfEnum = Timeframe::from($tf);
+        
+        // Tentative 1 : Récupérer les klines
         $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
+        
+        $this->logger->debug('[MTF] ATR computation start', [
+            'symbol' => $symbol,
+            'tf' => $tf,
+            'klines_count' => count($klines),
+            'period' => $period,
+        ]);
+        
         if (empty($klines)) {
+            $this->logger->warning('[MTF] No klines for ATR computation', [
+                'symbol' => $symbol,
+                'tf' => $tf,
+            ]);
             return null;
         }
+        
         $ohlc = [];
         foreach ($klines as $k) {
             $ohlc[] = [
@@ -1068,8 +1095,78 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 'close' => (float)$k->close->toFloat(),
             ];
         }
+        
         $calc = new \App\Indicator\Core\AtrCalculator();
-        return $calc->computeWithRules($ohlc, $period, $method, strtolower($tf));
+        $atr = $calc->computeWithRules($ohlc, $period, $method, strtolower($tf));
+        
+        // GARDE : Si ATR = 0, réessayer une fois (les klines étaient peut-être en cours d'insertion)
+        if ($atr === 0.0) {
+            error_log(sprintf('[TO_BE_DELETED][MTF_ATR_ZERO] symbol=%s tf=%s ohlc=%d', $symbol, $tf, count($ohlc)));
+            $this->logger->warning('[MTF] ATR = 0.0, retrying klines fetch', [
+                'symbol' => $symbol,
+                'tf' => $tf,
+                'first_attempt_klines' => count($klines),
+                'first_candle' => $ohlc[0] ?? null,
+                'last_candle' => $ohlc[count($ohlc) - 1] ?? null,
+            ]);
+            
+            // Attendre 100ms pour laisser les klines s'insérer en DB
+            usleep(100000);
+            
+            // Tentative 2 : Récupérer les klines à nouveau
+            $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
+            
+            if (empty($klines)) {
+                $this->logger->error('[MTF] No klines on retry for ATR computation', [
+                    'symbol' => $symbol,
+                    'tf' => $tf,
+                ]);
+                return null;
+            }
+            
+            $ohlc = [];
+            foreach ($klines as $k) {
+                $ohlc[] = [
+                    'high' => (float)$k->high->toFloat(),
+                    'low' => (float)$k->low->toFloat(),
+                    'close' => (float)$k->close->toFloat(),
+                ];
+            }
+            
+            $atr = $calc->computeWithRules($ohlc, $period, $method, strtolower($tf));
+            
+            if ($atr === 0.0) {
+                error_log(sprintf('[TO_BE_DELETED][MTF_ATR_ZERO_RETRY] symbol=%s tf=%s retry=%d', $symbol, $tf, count($klines)));
+                $this->logger->error('[MTF] ATR still 0.0 after retry', [
+                    'symbol' => $symbol,
+                    'tf' => $tf,
+                    'retry_klines_count' => count($klines),
+                    'ohlc_count' => count($ohlc),
+                    'sample_candles' => [
+                        'first' => $ohlc[0] ?? null,
+                        'mid' => $ohlc[(int)(count($ohlc) / 2)] ?? null,
+                        'last' => $ohlc[count($ohlc) - 1] ?? null,
+                    ],
+                ]);
+                // Retourner null au lieu de 0.0 pour indiquer un ATR invalide
+                return null;
+            }
+            
+            $this->logger->info('[MTF] ATR computed successfully on retry', [
+                'symbol' => $symbol,
+                'tf' => $tf,
+                'atr' => $atr,
+            ]);
+        }
+        
+        $this->logger->debug('[MTF] ATR computation result', [
+            'symbol' => $symbol,
+            'tf' => $tf,
+            'atr' => $atr,
+            'is_valid' => $atr !== null && $atr > 0.0,
+        ]);
+        
+        return $atr;
     }
 
     /**

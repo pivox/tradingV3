@@ -94,9 +94,80 @@ final class AtrCalculator implements IndicatorInterface
             $high = array_column($ohlc, 'high');
             $low  = array_column($ohlc, 'low');
             $close= array_column($ohlc, 'close');
+            
+            // DEBUG: Vérifier les données d'entrée
+            $hasInvalid = false;
+            for ($i = 0; $i < min(count($high), 5); $i++) {
+                if (!is_finite($high[$i]) || !is_finite($low[$i]) || !is_finite($close[$i])) {
+                    $hasInvalid = true;
+                    error_log(sprintf(
+                        '[ATR] Invalid input data at index %d: H=%s L=%s C=%s',
+                        $i,
+                        var_export($high[$i], true),
+                        var_export($low[$i], true),
+                        var_export($close[$i], true)
+                    ));
+                }
+                if ($high[$i] < $low[$i]) {
+                    error_log(sprintf(
+                        '[ATR] Invalid kline at index %d: high < low (H=%.8f < L=%.8f)',
+                        $i,
+                        $high[$i],
+                        $low[$i]
+                    ));
+                    $hasInvalid = true;
+                }
+            }
+            
             $arr = \trader_atr($high, $low, $close, $period);
+            
             if (is_array($arr)) {
-                return array_values(array_map('floatval', $arr));
+                // DEBUG: Vérifier la sortie de trader_atr
+                $nanCount = 0;
+                $infCount = 0;
+                $zeroCount = 0;
+                $validCount = 0;
+                foreach ($arr as $val) {
+                    if (is_nan($val)) {
+                        $nanCount++;
+                    } elseif (is_infinite($val)) {
+                        $infCount++;
+                    } elseif ($val == 0.0) {
+                        $zeroCount++;
+                    } elseif (is_finite($val) && $val > 0.0) {
+                        $validCount++;
+                    }
+                }
+
+                if ($nanCount > 0 || $infCount > 0 || ($validCount === 0 && count($arr) > 0)) {
+                    error_log(sprintf(
+                        '[ATR] trader_atr output: total=%d, valid=%d, zero=%d, nan=%d, inf=%d, input_had_invalid=%s',
+                        count($arr),
+                        $validCount,
+                        $zeroCount,
+                        $nanCount,
+                        $infCount,
+                        $hasInvalid ? 'YES' : 'NO'
+                    ));
+                }
+
+                // Filtrer les NaN/Inf et convertir en float. On conserve les zéros pour détecter les séries plates.
+                $filtered = array_map('floatval', array_filter($arr, static function($val) {
+                    return is_finite($val);
+                }));
+
+                // Si tous les éléments valides sont <= 0, considérer la série invalide → fallback PHP
+                $positive = array_filter($filtered, static function($val) {
+                    return $val > 0.0;
+                });
+
+                if (!empty($filtered) && !empty($positive)) {
+                    return array_values($filtered);
+                }
+
+                error_log('[ATR] trader_atr produced non-positive series, falling back to PHP calculation');
+                error_log(sprintf('[TO_BE_DELETED][ATR_TRADER_FALLBACK] total=%d zeros=%d symbol_hint=%s', count($arr), $zeroCount, $hasInvalid ? 'invalid_input' : 'n/a'));
+                // ne pas retourner, laisser le calcul PHP plus bas s'exécuter
             }
         }
         if ($period <= 0) {
@@ -150,12 +221,14 @@ final class AtrCalculator implements IndicatorInterface
     ): float {
         $n = count($ohlc);
         if ($period <= 0 || $n <= $period) {
+            error_log(sprintf('[TO_BE_DELETED][ATR_INVALID_SAMPLE] tf=%s n=%d period=%d', $timeframe ?? 'n/a', $n, $period));
             return 0.0;
         }
 
         // Série ATR pour pouvoir estimer la médiane roulante
         $series = $this->computeSeries($ohlc, $period, $method);
         if ($series === []) {
+            error_log(sprintf('[TO_BE_DELETED][ATR_SERIES_EMPTY] tf=%s n=%d period=%d method=%s', $timeframe ?? 'n/a', $n, $period, $method));
             return 0.0;
         }
         $latest = (float) end($series);
@@ -186,6 +259,10 @@ final class AtrCalculator implements IndicatorInterface
                     $latest = $cap; // ignorer l'excès
                 }
             }
+        }
+
+        if ($latest <= 0.0) {
+            error_log(sprintf('[TO_BE_DELETED][ATR_LATEST_NON_POSITIVE] tf=%s latest=%.10f period=%d n=%d', $timeframe ?? 'n/a', $latest, $period, $n));
         }
 
         return $latest;
