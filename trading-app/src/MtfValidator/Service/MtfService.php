@@ -1069,7 +1069,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $method = 'wilder';
         $tfEnum = Timeframe::from($tf);
         
-        // Tentative 1 : Récupérer les klines
+        // Attempt 1: Retrieve the klines
         $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
         
         $this->logger->debug('[MTF] ATR computation start', [
