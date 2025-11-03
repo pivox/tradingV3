@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace App\Indicator\Core;
 
+use Psr\Log\LoggerInterface;
+
 /**
  * ATR calculator (Wilder or Simple) for OHLCV arrays.
  * Each candle must include: high, low, close (floats).
@@ -11,6 +13,26 @@ namespace App\Indicator\Core;
  
 final class AtrCalculator implements IndicatorInterface
 {
+    public function __construct(
+        private readonly ?LoggerInterface $logger = null
+    ) {
+    }
+    
+    private function log(string $level, string $message, array $context = []): void
+    {
+        if ($this->logger === null) {
+            error_log($message . (empty($context) ? '' : ' ' . json_encode($context)));
+            return;
+        }
+        
+        match ($level) {
+            'debug' => $this->logger->debug($message, $context),
+            'info' => $this->logger->info($message, $context),
+            'warning' => $this->logger->warning($message, $context),
+            'error' => $this->logger->error($message, $context),
+            default => $this->logger->warning($message, $context),
+        };
+    }
     /**
      * Description textuelle de l'ATR (Average True Range).
      */
@@ -94,9 +116,81 @@ final class AtrCalculator implements IndicatorInterface
             $high = array_column($ohlc, 'high');
             $low  = array_column($ohlc, 'low');
             $close= array_column($ohlc, 'close');
+            
+            // DEBUG: Check input data
+            $hasInvalid = false;
+            for ($i = 0; $i < min(count($high), 5); $i++) {
+                if (!is_finite($high[$i]) || !is_finite($low[$i]) || !is_finite($close[$i])) {
+                    $hasInvalid = true;
+                    $this->log('warning', '[ATR] Invalid input data', [
+                        'index' => $i,
+                        'high' => var_export($high[$i], true),
+                        'low' => var_export($low[$i], true),
+                        'close' => var_export($close[$i], true),
+                    ]);
+                }
+                if ($high[$i] < $low[$i]) {
+                    $this->log('warning', '[ATR] Invalid kline: high < low', [
+                        'index' => $i,
+                        'high' => $high[$i],
+                        'low' => $low[$i],
+                    ]);
+                    $hasInvalid = true;
+                }
+            }
+            
             $arr = \trader_atr($high, $low, $close, $period);
+            
             if (is_array($arr)) {
-                return array_values(array_map('floatval', $arr));
+                // DEBUG: Check the output of trader_atr
+                $nanCount = 0;
+                $infCount = 0;
+                $zeroCount = 0;
+                $validCount = 0;
+                foreach ($arr as $val) {
+                    if (is_nan($val)) {
+                        $nanCount++;
+                    } elseif (is_infinite($val)) {
+                        $infCount++;
+                    } elseif ($val == 0.0) {
+                        $zeroCount++;
+                    } elseif (is_finite($val) && $val > 0.0) {
+                        $validCount++;
+                    }
+                }
+
+                if ($nanCount > 0 || $infCount > 0 || ($validCount === 0 && count($arr) > 0)) {
+                    $this->log('warning', '[ATR] trader_atr output analysis', [
+                        'total' => count($arr),
+                        'valid' => $validCount,
+                        'zero' => $zeroCount,
+                        'nan' => $nanCount,
+                        'inf' => $infCount,
+                        'input_had_invalid' => $hasInvalid ? 'YES' : 'NO',
+                    ]);
+                }
+
+                // Filtrer les NaN/Inf et convertir en float. On conserve les zéros pour détecter les séries plates.
+                $filtered = array_map('floatval', array_filter($arr, static function($val) {
+                    return is_finite($val);
+                }));
+
+                // If all valid elements are <= 0, consider the series invalid → fallback to PHP calculation
+                $positive = array_filter($filtered, static function($val) {
+                    return $val > 0.0;
+                });
+
+                if (!empty($filtered) && !empty($positive)) {
+                    return array_values($filtered);
+                }
+
+                $this->log('warning', '[ATR] trader_atr produced non-positive series, falling back to PHP calculation');
+                $this->log('warning', '[TO_BE_DELETED][ATR_TRADER_FALLBACK]', [
+                    'total' => count($arr),
+                    'zeros' => $zeroCount,
+                    'symbol_hint' => $hasInvalid ? 'invalid_input' : 'n/a',
+                ]);
+                // Do not return; let the PHP calculation below execute
             }
         }
         if ($period <= 0) {
@@ -150,12 +244,23 @@ final class AtrCalculator implements IndicatorInterface
     ): float {
         $n = count($ohlc);
         if ($period <= 0 || $n <= $period) {
+            $this->log('warning', '[TO_BE_DELETED][ATR_INVALID_SAMPLE]', [
+                'timeframe' => $timeframe ?? 'n/a',
+                'n' => $n,
+                'period' => $period,
+            ]);
             return 0.0;
         }
 
         // Série ATR pour pouvoir estimer la médiane roulante
         $series = $this->computeSeries($ohlc, $period, $method);
         if ($series === []) {
+            $this->log('warning', '[TO_BE_DELETED][ATR_SERIES_EMPTY]', [
+                'timeframe' => $timeframe ?? 'n/a',
+                'n' => $n,
+                'period' => $period,
+                'method' => $method,
+            ]);
             return 0.0;
         }
         $latest = (float) end($series);
@@ -186,6 +291,15 @@ final class AtrCalculator implements IndicatorInterface
                     $latest = $cap; // ignorer l'excès
                 }
             }
+        }
+
+        if ($latest <= 0.0) {
+            $this->log('warning', '[TO_BE_DELETED][ATR_LATEST_NON_POSITIVE]', [
+                'timeframe' => $timeframe ?? 'n/a',
+                'latest' => $latest,
+                'period' => $period,
+                'n' => $n,
+            ]);
         }
 
         return $latest;

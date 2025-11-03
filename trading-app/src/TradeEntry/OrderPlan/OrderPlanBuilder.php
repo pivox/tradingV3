@@ -278,6 +278,42 @@ final class OrderPlanBuilder
             throw new \RuntimeException('Stop loss invalide');
         }
 
+        // CRITICAL GUARD: Minimum stop-loss distance (protection against stops that are too tight)
+        $MIN_STOP_DISTANCE_PCT = 0.005; // 0.5% minimum
+        $stopDistancePct = abs($stop - $entry) / max($entry, 1e-9);
+        
+        if ($stopDistancePct < $MIN_STOP_DISTANCE_PCT) {
+            $this->flowLogger->error('order_plan.stop_too_tight', [
+                'symbol' => $req->symbol,
+                'side' => $req->side->value,
+                'entry' => $entry,
+                'stop' => $stop,
+                'distance' => abs($stop - $entry),
+                'distance_pct' => $stopDistancePct,
+                'min_required_pct' => $MIN_STOP_DISTANCE_PCT,
+                'atr_value' => $req->atrValue,
+                'stop_from' => $req->stopFrom,
+                'decision_key' => $decisionKey,
+            ]);
+            $this->journeyLogger->error('order_journey.plan_builder.stop_too_tight', [
+                'symbol' => $req->symbol,
+                'decision_key' => $decisionKey,
+                'distance_pct' => $stopDistancePct,
+                'min_required_pct' => $MIN_STOP_DISTANCE_PCT,
+                'reason' => 'stop_distance_below_minimum',
+            ]);
+            throw new \RuntimeException(sprintf(
+                'Stop loss trop serré pour %s: %.2f%% < %.2f%% minimum (entry=%.8f, stop=%.8f, atr=%s, stop_from=%s)',
+                $req->symbol,
+                $stopDistancePct * 100,
+                $MIN_STOP_DISTANCE_PCT * 100,
+                $entry,
+                $stop,
+                $req->atrValue !== null ? (string)$req->atrValue : 'null',
+                $req->stopFrom
+            ));
+        }
+
         $takeProfit = $this->tpc->fromRMultiple($entry, $stop, $req->side, (float)$req->rMultiple, $precision);
 
         if (is_array($pre->pivotLevels) && !empty($pre->pivotLevels) && $req->rMultiple > 0.0) {

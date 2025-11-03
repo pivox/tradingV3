@@ -19,11 +19,31 @@ final readonly class KlineDto
 
     public function __construct(array $items) {
         $this->timestamp = (int) ($items['open_time'] ?? $items['timestamp'] ?? 0);
-        $this->open = BigDecimal::of($items['open_price']);
-        $this->high = BigDecimal::of($items['high_price']);
-        $this->low = BigDecimal::of($items['low_price']);
-        $this->close = BigDecimal::of($items['close_price']);
-        $this->volume = BigDecimal::of($items['volume']);
+        
+        // Gestion robuste des valeurs manquantes ou invalides
+        $openPrice = $items['open_price'] ?? $items['open'] ?? null;
+        $highPrice = $items['high_price'] ?? $items['high'] ?? null;
+        $lowPrice = $items['low_price'] ?? $items['low'] ?? null;
+        $closePrice = $items['close_price'] ?? $items['close'] ?? null;
+        $volumeVal = $items['volume'] ?? null;
+        
+        // Validation : si une valeur critique est null/vide, lancer une exception claire
+        if ($openPrice === null || $highPrice === null || $lowPrice === null || $closePrice === null) {
+            throw new \InvalidArgumentException(sprintf(
+                'KlineDto: données incomplètes - open=%s, high=%s, low=%s, close=%s, keys=%s',
+                var_export($openPrice, true),
+                var_export($highPrice, true),
+                var_export($lowPrice, true),
+                var_export($closePrice, true),
+                implode(',', array_keys($items))
+            ));
+        }
+        
+        $this->open = BigDecimal::of($openPrice);
+        $this->high = BigDecimal::of($highPrice);
+        $this->low = BigDecimal::of($lowPrice);
+        $this->close = BigDecimal::of($closePrice);
+        $this->volume = $volumeVal !== null ? BigDecimal::of($volumeVal) : BigDecimal::of('0');
         $this->source = $items['source'] ?? 'REST';
         $this->openTime = self::toUtcDateTime($this->timestamp);
     }
