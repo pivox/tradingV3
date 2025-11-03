@@ -62,6 +62,21 @@ final class TradeEntryController extends AbstractController
                 $marketSpread /= 100;
             }
 
+            $pivotSlPolicy = (string)($data['pivot_sl_policy'] ?? ($defaults['pivot_sl_policy'] ?? 'nearest_below'));
+            $pivotSlBufferPct = isset($data['pivot_sl_buffer_pct'])
+                ? (float)$data['pivot_sl_buffer_pct']
+                : (isset($defaults['pivot_sl_buffer_pct']) ? (float)$defaults['pivot_sl_buffer_pct'] : null);
+            if ($pivotSlBufferPct !== null && $pivotSlBufferPct < 0.0) {
+                $pivotSlBufferPct = null;
+            }
+
+            $pivotSlMinKeepRatio = isset($data['pivot_sl_min_keep_ratio'])
+                ? (float)$data['pivot_sl_min_keep_ratio']
+                : (isset($defaults['pivot_sl_min_keep_ratio']) ? (float)$defaults['pivot_sl_min_keep_ratio'] : null);
+            if ($pivotSlMinKeepRatio !== null && $pivotSlMinKeepRatio <= 0.0) {
+                $pivotSlMinKeepRatio = null;
+            }
+
             $requestDto = new TradeEntryRequest(
                 symbol: (string)$data['symbol'],
                 side: $side,
@@ -73,6 +88,9 @@ final class TradeEntryController extends AbstractController
                 rMultiple: isset($data['r_multiple']) ? (float)$data['r_multiple'] : (float)($defaults['r_multiple'] ?? 2.0),
                 entryLimitHint: isset($data['entry_limit_hint']) ? (float)$data['entry_limit_hint'] : null,
                 stopFrom: $data['stop_from'] ?? ($defaults['stop_from'] ?? 'risk'),
+                pivotSlPolicy: $pivotSlPolicy,
+                pivotSlBufferPct: $pivotSlBufferPct,
+                pivotSlMinKeepRatio: $pivotSlMinKeepRatio,
                 atrValue: isset($data['atr_value']) ? (float)$data['atr_value'] : null,
                 atrK: isset($data['atr_k']) ? (float)$data['atr_k'] : (float)($defaults['atr_k'] ?? 1.5),
                 marketMaxSpreadPct: $marketSpread,

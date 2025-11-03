@@ -110,6 +110,15 @@ L'application suit une architecture hexagonale avec :
 - Transport Messenger : un container `trading-app-messenger` lance `php bin/console messenger:consume order_timeout` en continu (s'appuie sur le service `redis` embarqué). Si vous faites tourner l'app sans Docker, exécutez la même commande manuellement.
 - Logs utiles : `execution.order_attempt_failed`, `execution.timeout_scheduled`, `trade_entry.timeout.cancel_attempt` documentent les étapes maker → taker et l'annulation différée.
 
+### Stop-loss pivot & garde minimale
+
+- Politique configurable : `pivot_sl_policy` supporte désormais `nearest_below`, `strongest_below`, ainsi que les clés explicites `s1` / `s2` (et `r1` / `r2` côté short). L’algorithme choisit en priorité le niveau demandé et retombe sur un pivot cohérent s’il est manquant.
+- Pivots absents : si l’indicateur ne renvoie aucun pivot journalier valide, le système bascule automatiquement sur le stop `risk` (calcul distance-risk).
+- Garde 0,5 % universelle : après toute bascule (pivot → risk, ou risque budgeté), le builder impose une distance minimale de 0,5 % (≥ 1 tick). Si le stop calculé est trop serré, il est repoussé jusqu’à ce seuil puis la taille est recalculée avant le levier, ce qui évite les expositions à 50x pour un simple tick.
+- Journaux : les ajustements sont visibles via `order_plan.stop_min_distance_adjusted` (risk) ou `order_plan.stop_min_distance_adjusted_pivot` (pivot conservé et repoussé).
+- Impact sur sizing : l’ajustement est effectué **avant** la quantification finale du volume, garantissant que le levier reflète bien la distance étendue.
+codex resume 019a49f3-50e7-7552-8cd6-4ad3b3fad83b
+
 ## 🔧 Développement
 
 ### Structure des fichiers
