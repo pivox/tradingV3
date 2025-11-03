@@ -430,7 +430,8 @@ SELECT
     candle_close_ts,
     NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC'
   ) AS candle_ts,
-  run_id
+  run_id,
+  cause
 FROM mtf_audit
 WHERE 1=1
   {$where}
@@ -442,6 +443,292 @@ SQL;
         $types['limit']  = ParameterType::INTEGER;
 
         return $this->conn->executeQuery($sql, $params, $types)->fetchAllAssociative();
+    }
+
+    /**
+     * Retourne, par symbole, la dernière validation réussie pour chaque timeframe.
+     * Inclut en option le dernier audit "READY" (MTF_CONTEXT ou *_READY) pour 1m.
+     *
+     * @param string|null $symbolSearch Filtre partiel sur le symbole (ILIKE)
+     * @param string[]    $timeframes   Timeframes à inclure, ordre respecté dans la réponse
+     *
+     * @return array<int,array{
+     *     symbol:string,
+     *     timeframes: array<string,null|array{event_ts:?string,created_at:?string}>,
+     *     ready: null|array{event_ts:?string,created_at:?string}
+     * }>
+     */
+    public function getLatestValidationSuccessesPerSymbol(
+        ?string $symbolSearch = null,
+        array $timeframes = ['4h','1h','15m','5m','1m']
+    ): array {
+        $allowedTimeframes = ['4h','1h','15m','5m','1m'];
+        $normalizedTfs = array_values(array_intersect($allowedTimeframes, array_map('strtolower', $timeframes)));
+        if ($normalizedTfs === []) {
+            return [];
+        }
+
+        $params = [];
+        $types  = [];
+
+        if ($symbolSearch !== null && $symbolSearch !== '') {
+            $params['search'] = '%' . strtoupper($symbolSearch) . '%';
+            $types['search']  = ParameterType::STRING;
+        }
+
+        $stepValues = array_map(
+            static fn(string $tf): string => strtoupper($tf) . '_VALIDATION_SUCCESS',
+            $normalizedTfs
+        );
+        $params['step_values'] = $stepValues;
+        $types['step_values']  = ArrayParameterType::STRING;
+
+        $symbolClause = '';
+        if (isset($params['search'])) {
+            $symbolClause = ' AND UPPER(symbol) LIKE :search';
+        }
+
+        $caseExpression = <<<SQL
+CASE
+  WHEN UPPER(step) = '4H_VALIDATION_SUCCESS' THEN '4h'
+  WHEN UPPER(step) = '1H_VALIDATION_SUCCESS' THEN '1h'
+  WHEN UPPER(step) = '15M_VALIDATION_SUCCESS' THEN '15m'
+  WHEN UPPER(step) = '5M_VALIDATION_SUCCESS' THEN '5m'
+  WHEN UPPER(step) = '1M_VALIDATION_SUCCESS' THEN '1m'
+  ELSE NULL
+END
+SQL;
+
+        $successSql = <<<SQL
+WITH success_events AS (
+  SELECT
+    symbol,
+    {$caseExpression} AS timeframe,
+    COALESCE(
+      candle_close_ts,
+      NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC',
+      created_at
+    ) AS event_ts,
+    created_at,
+    cause
+  FROM mtf_audit
+  WHERE UPPER(step) IN (:step_values)
+  {$symbolClause}
+),
+ranked_success AS (
+  SELECT
+    symbol,
+    timeframe,
+    event_ts,
+    created_at,
+    cause,
+    ROW_NUMBER() OVER (PARTITION BY symbol, timeframe ORDER BY event_ts DESC, created_at DESC) AS rn
+  FROM success_events
+  WHERE timeframe IS NOT NULL
+)
+SELECT symbol, timeframe, event_ts, created_at, cause
+FROM ranked_success
+WHERE rn = 1
+SQL;
+
+        $successRows = $this->conn->executeQuery($successSql, $params, $types)->fetchAllAssociative();
+
+        $failureStepValues = array_map(
+            static fn(string $tf): string => strtoupper($tf) . '_VALIDATION_FAILED',
+            $normalizedTfs
+        );
+        $params['failure_step_values'] = $failureStepValues;
+        $types['failure_step_values'] = ArrayParameterType::STRING;
+
+        $failureSql = <<<SQL
+WITH failure_events AS (
+  SELECT
+    symbol,
+    {$caseExpression} AS timeframe,
+    COALESCE(
+      candle_close_ts,
+      NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC',
+      created_at
+    ) AS event_ts,
+    created_at,
+    cause
+  FROM mtf_audit
+  WHERE UPPER(step) IN (:failure_step_values)
+  {$symbolClause}
+),
+ranked_failure AS (
+  SELECT
+    symbol,
+    timeframe,
+    event_ts,
+    created_at,
+    cause,
+    ROW_NUMBER() OVER (PARTITION BY symbol, timeframe ORDER BY event_ts DESC, created_at DESC) AS rn
+  FROM failure_events
+  WHERE timeframe IS NOT NULL
+)
+SELECT symbol, timeframe, event_ts, created_at, cause
+FROM ranked_failure
+WHERE rn = 1
+SQL;
+
+        $failureRows = $this->conn->executeQuery($failureSql, $params, $types)->fetchAllAssociative();
+
+        $readySql = <<<SQL
+WITH ready_events AS (
+  SELECT
+    symbol,
+    COALESCE(
+      candle_close_ts,
+      NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC',
+      created_at
+    ) AS event_ts,
+    created_at
+  FROM mtf_audit
+  WHERE (
+    UPPER(step) = 'MTF_CONTEXT'
+    OR UPPER(step) LIKE '%READY%'
+  )
+  {$symbolClause}
+),
+ranked_ready AS (
+  SELECT
+    symbol,
+    event_ts,
+    created_at,
+    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY event_ts DESC, created_at DESC) AS rn
+  FROM ready_events
+)
+SELECT symbol, event_ts, created_at
+FROM ranked_ready
+WHERE rn = 1
+SQL;
+
+        $readyRows = $this->conn->executeQuery($readySql, $params, $types)->fetchAllAssociative();
+
+        $results = [];
+
+        foreach ($successRows as $row) {
+            $symbol = (string)($row['symbol'] ?? '');
+            $timeframe = (string)($row['timeframe'] ?? '');
+            if ($symbol === '' || !in_array($timeframe, $normalizedTfs, true)) {
+                continue;
+            }
+
+            if (!isset($results[$symbol])) {
+                $results[$symbol] = [
+                    'symbol' => $symbol,
+                    'timeframes' => [],
+                    'ready' => null,
+                ];
+            }
+
+            $eventDt = $this->toDateTime($row['event_ts'] ?? null);
+            $createdDt = $this->toDateTime($row['created_at'] ?? null);
+            $latestDt = $eventDt;
+            if ($createdDt !== null && ($latestDt === null || $createdDt > $latestDt)) {
+                $latestDt = $createdDt;
+            }
+
+            $results[$symbol]['timeframes'][$timeframe] = [
+                'status' => 'success',
+                'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
+                'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
+                'cause' => $row['cause'] ?? null,
+                '_latest_ts' => $latestDt?->getTimestamp(),
+            ];
+        }
+
+        foreach ($failureRows as $row) {
+            $symbol = (string)($row['symbol'] ?? '');
+            $timeframe = (string)($row['timeframe'] ?? '');
+            if ($symbol === '' || !in_array($timeframe, $normalizedTfs, true)) {
+                continue;
+            }
+
+            if (!isset($results[$symbol])) {
+                $results[$symbol] = [
+                    'symbol' => $symbol,
+                    'timeframes' => [],
+                    'ready' => null,
+                ];
+            }
+
+            $eventDt = $this->toDateTime($row['event_ts'] ?? null);
+            $createdDt = $this->toDateTime($row['created_at'] ?? null);
+            $latestDt = $eventDt;
+            if ($createdDt !== null && ($latestDt === null || $createdDt > $latestDt)) {
+                $latestDt = $createdDt;
+            }
+            $latestTimestamp = $latestDt?->getTimestamp();
+
+            $existing = $results[$symbol]['timeframes'][$timeframe] ?? null;
+            $existingTimestamp = is_array($existing) ? ($existing['_latest_ts'] ?? null) : null;
+
+            if ($latestTimestamp === null) {
+                if ($existing === null) {
+                    $results[$symbol]['timeframes'][$timeframe] = [
+                        'status' => 'failed',
+                        'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
+                        'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
+                        'cause' => $row['cause'] ?? null,
+                        '_latest_ts' => null,
+                    ];
+                }
+            } elseif (
+                $existing === null
+                || $existingTimestamp === null
+                || $latestTimestamp >= $existingTimestamp
+            ) {
+                $results[$symbol]['timeframes'][$timeframe] = [
+                    'status' => 'failed',
+                    'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
+                    'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
+                    'cause' => $row['cause'] ?? null,
+                    '_latest_ts' => $latestTimestamp,
+                ];
+            }
+        }
+
+        foreach ($readyRows as $row) {
+            $symbol = (string)($row['symbol'] ?? '');
+            if ($symbol === '') {
+                continue;
+            }
+
+            if (!isset($results[$symbol])) {
+                $results[$symbol] = [
+                    'symbol' => $symbol,
+                    'timeframes' => [],
+                    'ready' => null,
+                ];
+            }
+
+            $results[$symbol]['ready'] = [
+                'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
+                'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
+            ];
+        }
+
+        if ($results === []) {
+            return [];
+        }
+
+        ksort($results);
+
+        foreach ($results as &$entry) {
+            $ordered = [];
+            foreach ($normalizedTfs as $tf) {
+                $ordered[$tf] = $entry['timeframes'][$tf] ?? null;
+                if (is_array($ordered[$tf]) && array_key_exists('_latest_ts', $ordered[$tf])) {
+                    unset($ordered[$tf]['_latest_ts']);
+                }
+            }
+            $entry['timeframes'] = $ordered;
+        }
+        unset($entry);
+
+        return array_values($results);
     }
 
     /**
@@ -723,5 +1010,51 @@ SQL;
                 $e
             );
         }
+    }
+
+    private function normalizeTimestamp(mixed $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            $dt = \DateTimeImmutable::createFromInterface($value);
+        } elseif (is_string($value)) {
+            try {
+                $dt = new \DateTimeImmutable($value);
+            } catch (\Throwable) {
+                return null;
+            }
+        } else {
+            return null;
+        }
+
+        return $dt->setTimezone(new \DateTimeZone('UTC'))->format(\DateTimeInterface::ATOM);
+    }
+
+    private function toDateTime(mixed $value): ?\DateTimeImmutable
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if ($value instanceof \DateTimeImmutable) {
+            return $value;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return \DateTimeImmutable::createFromInterface($value);
+        }
+
+        if (is_string($value)) {
+            try {
+                return new \DateTimeImmutable($value);
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+
+        return null;
     }
 }
