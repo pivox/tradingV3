@@ -4,17 +4,22 @@ declare(strict_types=1);
 
 namespace App\Repository;
 
+use App\Common\Enum\Timeframe;
 use App\Entity\MtfSwitch;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
+use Psr\Clock\ClockInterface;
 
 /**
  * @extends ServiceEntityRepository<MtfSwitch>
  */
 class MtfSwitchRepository extends ServiceEntityRepository
 {
-    public function __construct(ManagerRegistry $registry)
-    {
+    public function __construct(
+        ManagerRegistry $registry,
+        private readonly KlineRepository $klineRepository,
+        private readonly ClockInterface $clock
+    ) {
         parent::__construct($registry, MtfSwitch::class);
     }
 
@@ -162,8 +167,11 @@ class MtfSwitchRepository extends ServiceEntityRepository
     {
         $switch = $this->getOrCreateSymbolSwitch($symbol);
         $switch->turnOff();
-        $switch->setExpiresAt(new \DateTimeImmutable('+15 Minutes', new \DateTimeZone('UTC')));
-        $switch->setDescription("Symbole désactivé temporairement pour 4h - " . date('Y-m-d H:i:s'));
+        
+        // Utiliser la date de la dernière kline 15m comme référence
+        $referenceDate = $this->getReferenceDateForSymbol($symbol, Timeframe::TF_15M);
+        $switch->setExpiresAt($referenceDate->modify('+15 minutes'));
+        $switch->setDescription("Symbole désactivé temporairement pour 15 minutes - " . date('Y-m-d H:i:s'));
         $this->getEntityManager()->flush();
     }
 
@@ -174,8 +182,13 @@ class MtfSwitchRepository extends ServiceEntityRepository
     {
         $switch = $this->getOrCreateSymbolSwitch($symbol);
         $switch->turnOff();
+        
+        // Extraire le timeframe de la duration et obtenir la date de référence
+        $timeframe = $this->extractTimeframeFromDuration($duration);
+        $referenceDate = $this->getReferenceDateForSymbol($symbol, $timeframe);
+        
         $convertedDuration = $this->convertDurationForPhp($duration);
-        $switch->setExpiresAt(new \DateTimeImmutable("+{$convertedDuration}", new \DateTimeZone('UTC')));
+        $switch->setExpiresAt($referenceDate->modify("+{$convertedDuration}"));
         $switch->setDescription("Symbole désactivé temporairement pour {$duration} - " . date('Y-m-d H:i:s'));
         $this->getEntityManager()->flush();
     }
@@ -201,6 +214,65 @@ class MtfSwitchRepository extends ServiceEntityRepository
         }
 
         return $duration;
+    }
+
+    /**
+     * Extrait le timeframe à partir d'une duration string
+     * Exemples: "15 minutes" -> TF_15M, "1 hour" -> TF_1H, "15m" -> TF_15M
+     */
+    private function extractTimeframeFromDuration(string $duration): Timeframe
+    {
+        // Format court: "15m", "1h", "4h", "1d"
+        if (preg_match('/^(\d+)([mhd])$/', $duration, $matches)) {
+            $value = (int) $matches[1];
+            $unit = $matches[2];
+            
+            if ($unit === 'm') {
+                return Timeframe::tryFromMinutes($value) 
+                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
+            } elseif ($unit === 'h') {
+                return Timeframe::tryFromMinutes($value * 60)
+                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
+            } elseif ($unit === 'd') {
+                return Timeframe::tryFromMinutes($value * 1440)
+                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
+            }
+        }
+        
+        // Format textuel: "15 minutes", "1 hour", "1 hours", etc.
+        if (preg_match('/^(\d+)\s+(minute|minutes|hour|hours|day|days)$/i', $duration, $matches)) {
+            $value = (int) $matches[1];
+            $unit = strtolower($matches[2]);
+            
+            if (in_array($unit, ['minute', 'minutes'], true)) {
+                return Timeframe::tryFromMinutes($value)
+                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
+            } elseif (in_array($unit, ['hour', 'hours'], true)) {
+                return Timeframe::tryFromMinutes($value * 60)
+                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
+            } elseif (in_array($unit, ['day', 'days'], true)) {
+                return Timeframe::tryFromMinutes($value * 1440)
+                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
+            }
+        }
+        
+        throw new \InvalidArgumentException("Format de duration non reconnu: {$duration}");
+    }
+
+    /**
+     * Obtient la date de référence pour un symbole et timeframe
+     * Utilise l'openTime de la dernière kline, ou now si aucune kline n'existe
+     */
+    private function getReferenceDateForSymbol(string $symbol, Timeframe $timeframe): \DateTimeImmutable
+    {
+        $lastKline = $this->klineRepository->findLastBySymbolAndTimeframe($symbol, $timeframe);
+        
+        if ($lastKline !== null) {
+            return $lastKline->getOpenTime();
+        }
+        
+        // Fallback sur now si aucune kline n'existe
+        return $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
     }
 
     /**
