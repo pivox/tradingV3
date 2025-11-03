@@ -117,7 +117,7 @@ final class AtrCalculator implements IndicatorInterface
             $low  = array_column($ohlc, 'low');
             $close= array_column($ohlc, 'close');
             
-            // DEBUG: Vérifier les données d'entrée
+            // DEBUG: Check input data
             $hasInvalid = false;
             for ($i = 0; $i < min(count($high), 5); $i++) {
                 if (!is_finite($high[$i]) || !is_finite($low[$i]) || !is_finite($close[$i])) {
