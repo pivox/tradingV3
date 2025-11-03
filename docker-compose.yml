@@ -154,7 +154,7 @@ services:
       - TEMPORAL_ADDRESS=temporal-grpc:7233
       - TASK_QUEUE_NAME=cron_symfony_mtf_workers
       - MTF_WORKERS_URL=http://trading-app-nginx:80/api/mtf/run
-      - MTF_WORKERS_COUNT=5
+      - MTF_WORKERS_COUNT=8  # Ajusté pour 370 symboles (220 top + 150 mid) avec limites BitMart 12 req/2s
       - MTF_WORKERS_DRY_RUN=false
     depends_on:
       temporal:
