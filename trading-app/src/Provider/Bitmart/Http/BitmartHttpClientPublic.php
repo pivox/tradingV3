@@ -151,113 +151,115 @@ class BitmartHttpClientPublic
         int|string $step,
         ?int $startTs = null,
         ?int $endTs   = null,
-        int $limit   = 100
+        int $limit    = 100
     ): ListKlinesDto {
+        // --- 1. Normalisation de l’unité ---
         $stepMinutes = GranularityHelper::normalizeToMinutes($step);
-       // $nowSec      = (int) floor($this->getSystemTimeMs() / 1000);
-        $endTs = $endTs ?? $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->getTimestamp();
-        $nowSec = $endTs;
-        [$defaultFrom, $computedLastClose, $stepSec] = $this->computeWindow($stepMinutes, $limit +1, $nowSec);
+        $stepSeconds = $stepMinutes * 60;
+
+        // --- 2. Définir les bornes temporelles ---
+        $nowUtc = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+        $nowSec = $nowUtc->getTimestamp();
+        $endTs  = $endTs ?? $nowSec;
+
+        // Si aucun start_ts, on le déduit du nombre de bougies à récupérer
+        if ($startTs === null) {
+            $startTs = $endTs - ($limit * $stepSeconds);
+        }
+
+        // --- 3. Appel API ---
         $payload = $this->requestJson('GET', self::PATH_KLINE, [
             'symbol'     => $symbol,
             'step'       => $stepMinutes,
-            'start_time' => $defaultFrom,
-            'end_time'   => $computedLastClose,
+            'start_time' => $startTs,
+            'end_time'   => $endTs,
         ]);
 
-        if (($payload['code'] ?? null) !== 1000 || !isset($payload['data']) || !\is_array($payload['data'])) {
+        // --- 4. Vérification de la réponse ---
+        if (($payload['code'] ?? null) !== 1000 || !isset($payload['data']) || !is_array($payload['data'])) {
             $code   = $payload['code'] ?? 'unknown';
             $msg    = $payload['message'] ?? 'unknown';
-            $count  = \is_array($payload['data'] ?? null) ? \count($payload['data']) : 0;
+            $count  = is_array($payload['data'] ?? null) ? count($payload['data']) : 0;
             $detail = sprintf(
-                'BitMart: réponse kline invalide (symbol=%s, step=%s, start_time=%d, end_time=%d, targetLastClose=%d, data_count=%d, code=%s, message=%s)',
+                'BitMart: réponse Kline invalide (symbol=%s, step=%s, start_time=%d, end_time=%d, data_count=%d, code=%s, message=%s)',
                 $symbol,
                 (string) $stepMinutes,
                 (int) $startTs,
-                (int) $defaultFrom,
-                (int) $computedLastClose,
+                (int) $endTs,
                 $count,
                 (string) $code,
                 (string) $msg,
             );
-            throw new RuntimeException($detail);
+            throw new \RuntimeException($detail);
         }
 
-        // Normaliser l'accès au timestamp du dernier élément, quel que soit le type (array indexé/associatif ou DTO)
-        $lastIndex = \count($payload['data']) - 1;
-        $last = $payload['data'][$lastIndex] ?? null;
+        // --- 5. Vérification de la dernière bougie (encore ouverte ?) ---
+        $data = $payload['data'];
+        $lastIndex = count($data) - 1;
+        $last = $data[$lastIndex] ?? null;
 
-        $extractTs = static function(mixed $item): ?int {
-            // KlineDto provider
+        // Extraction timestamp (compatible BitMart/DTO)
+        $extractTs = static function (mixed $item): ?int {
             if ($item instanceof \App\Provider\Bitmart\Dto\KlineDto) {
                 return (int) $item->timestamp;
             }
-            // Contrat générique KlineDto (provider contract)
             if ($item instanceof \App\Contract\Provider\Dto\KlineDto) {
-                return (int) ($item->openTime->getTimestamp() ?? 0);
+                return (int) $item->openTime->getTimestamp();
             }
-            // Tableau associatif
-            if (\is_array($item)) {
-                if (isset($item['timestamp'])) {
-                    return (int) $item['timestamp'];
-                }
-                if (isset($item['open_time'])) {
-                    return (int) $item['open_time'];
-                }
-                // Tableau indexé numériquement (timestamp souvent à l'index 0)
-                if (isset($item[0]) && \is_numeric($item[0])) {
-                    return (int) $item[0];
-                }
+            if (is_array($item)) {
+                return $item['timestamp'] ?? $item['open_time'] ?? (is_numeric($item[0] ?? null) ? (int) $item[0] : null);
             }
             return null;
         };
-
-        $lastTs = $extractTs($last);
-        if ($lastTs !== null) {
-            $lastOpenTime = (new \DateTimeImmutable('@' . $lastTs))->setTimezone(new \DateTimeZone('UTC'));
-            // Comparaison en secondes vs fenêtre en secondes (stepMinutes * 60)
-            if ($this->clock->now()->getTimestamp() - $lastOpenTime->getTimestamp() < ($stepMinutes * 60)) {
-                // Si la dernière bougie n'est pas encore clôturée, on la retire
-                unset($payload['data'][$lastIndex]);
+        if (($lastTs = $extractTs($last)) !== null) {
+            $lastOpen = (new \DateTimeImmutable("@$lastTs"))->setTimezone(new \DateTimeZone('UTC'));
+            $lastClose = $lastOpen->modify("+{$stepMinutes} minutes");
+                $t = (new \DateTimeImmutable("@".$data[$lastIndex]['timestamp']))->setTimezone(new \DateTimeZone('UTC'));
+            if ($nowUtc < $lastClose) {
+                // dernière bougie pas encore close
+                unset($data[$lastIndex]);
             }
         }
 
-        // NORMALISER les données BitMart (tableau numérique → associatif)
-        // BitMart retourne: [timestamp, open_price, high_price, low_price, close_price, volume]
-        $normalized = array_map(function($item) {
-            // Si déjà un objet DTO, le laisser tel quel
+        // --- 6. Normalisation du format de données ---
+        $normalized = array_map(static function ($item) {
             if (is_object($item)) {
                 return $item;
             }
-            // Si tableau numérique BitMart, convertir en associatif
             if (is_array($item) && isset($item[0]) && !isset($item['timestamp'])) {
+                // format [timestamp, open, high, low, close, volume]
                 return [
-                    'timestamp' => (int)($item[0] ?? 0),
+                    'timestamp'  => (int)($item[0] ?? 0),
                     'open_price' => (string)($item[1] ?? '0'),
                     'high_price' => (string)($item[2] ?? '0'),
-                    'low_price' => (string)($item[3] ?? '0'),
-                    'close_price' => (string)($item[4] ?? '0'),
-                    'volume' => (string)($item[5] ?? '0'),
-                    'source' => 'REST'
+                    'low_price'  => (string)($item[3] ?? '0'),
+                    'close_price'=> (string)($item[4] ?? '0'),
+                    'volume'     => (string)($item[5] ?? '0'),
+                    'source'     => 'REST',
                 ];
             }
-            // Sinon retourner tel quel (déjà associatif)
             return $item;
-        }, $payload['data']);
+        }, array_values($data));
 
-        // Normaliser la structure retournée en ListKlinesDto
-        $list = new ListKlinesDto(\array_values($normalized));
+        // --- 7. Conversion finale ---
+        $list = new ListKlinesDto($normalized);
+
+        // --- 8. Logging informatif ---
         try {
-            $count = count($list->toArray());
-            $this->bitmartLogger->info('[Bitmart] Klines fetched', [
-                'symbol' => $symbol,
-                'step_min' => $stepMinutes,
-                'count' => $count,
+            $this->bitmartLogger->info('[BitMart] Klines fetched', [
+                'symbol'    => $symbol,
+                'step_min'  => $stepMinutes,
+                'count'     => count($normalized),
+                'start_ts'  => $startTs,
+                'end_ts'    => $endTs,
             ]);
-        } catch (\Throwable) {}
-        return $list;
+        } catch (\Throwable) {
+            // On évite toute propagation d'erreur liée au logger
+        }
 
+        return $list;
     }
+
 
 
     /**

@@ -153,8 +153,27 @@ final class MtfService
     /**
          * Decide whether a cached timeframe result can be reused as-is.
      */
-    private function shouldReuseCachedResult(?array $cached): bool
+    private function shouldReuseCachedResult(?array $cached, string $timeframe, string $symbol): bool
     {
+        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+        $expiredAT = $array['kline_time'] ?? null;
+        if (!$expiredAT instanceof \DateTimeImmutable) {
+            return false;
+        }
+        $addInterval = match ($timeframe) {
+            '4h' => new \DateInterval('PT4H'),
+            '1h' => new \DateInterval('PT1H'),
+            '15m' => new \DateInterval('PT15M'),
+            '5m' => new \DateInterval('PT5M'),
+            '1m' => new \DateInterval('PT1M'),
+            default => throw new \InvalidArgumentException('Invalid timeframe'),
+        };
+        $expiresAt = $expiredAT->add($addInterval);
+        if ($now >= $expiresAt) {
+            $cacheKey = $this->buildTfCacheKey($symbol, $timeframe);
+            $this->validationCache->delete($cacheKey);
+            return false;
+        }
         if (!is_array($cached)) {
             return false;
         }
@@ -563,7 +582,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '4h';
             }
-            if ($this->shouldReuseCachedResult($cached)) {
+            if ($this->shouldReuseCachedResult($cached, '4h', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 4h', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
@@ -615,7 +634,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '1h';
             }
-            if ($this->shouldReuseCachedResult($cached)) {
+            if ($this->shouldReuseCachedResult($cached, '1h', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 1h', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
@@ -687,7 +706,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '15m';
             }
-            if ($this->shouldReuseCachedResult($cached)) {
+            if ($this->shouldReuseCachedResult($cached, '15m', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 15m', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
@@ -758,7 +777,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '5m';
             }
-            if ($this->shouldReuseCachedResult($cached)) {
+            if ($this->shouldReuseCachedResult($cached, '5m', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 5m', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
@@ -842,7 +861,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '1m';
             }
-            if ($this->shouldReuseCachedResult($cached)) {
+            if ($this->shouldReuseCachedResult($cached, '1m', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 1m', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
@@ -1068,17 +1087,17 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $period = 14;
         $method = 'wilder';
         $tfEnum = Timeframe::from($tf);
-        
+
         // Attempt 1: Retrieve the klines
         $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
-        
+
         $this->logger->debug('[MTF] ATR computation start', [
             'symbol' => $symbol,
             'tf' => $tf,
             'klines_count' => count($klines),
             'period' => $period,
         ]);
-        
+
         if (empty($klines)) {
             $this->logger->warning('[MTF] No klines for ATR computation', [
                 'symbol' => $symbol,
@@ -1086,7 +1105,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             ]);
             return null;
         }
-        
+
         $ohlc = [];
         foreach ($klines as $k) {
             $ohlc[] = [
@@ -1095,10 +1114,10 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 'close' => (float)$k->close->toFloat(),
             ];
         }
-        
+
         $calc = new \App\Indicator\Core\AtrCalculator($this->logger);
         $atr = $calc->computeWithRules($ohlc, $period, $method, strtolower($tf));
-        
+
         // GARDE : Si ATR = 0, réessayer une fois (les klines étaient peut-être en cours d'insertion)
         if ($atr === 0.0) {
             $this->logger->warning('[TO_BE_DELETED][MTF_ATR_ZERO]', [
@@ -1113,13 +1132,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 'first_candle' => $ohlc[0] ?? null,
                 'last_candle' => $ohlc[count($ohlc) - 1] ?? null,
             ]);
-            
+
             // Attendre 100ms pour laisser les klines s'insérer en DB
             usleep(100000);
-            
+
             // Tentative 2 : Récupérer les klines à nouveau
             $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
-            
+
             if (empty($klines)) {
                 $this->logger->error('[MTF] No klines on retry for ATR computation', [
                     'symbol' => $symbol,
@@ -1127,7 +1146,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 ]);
                 return null;
             }
-            
+
             $ohlc = [];
             foreach ($klines as $k) {
                 $ohlc[] = [
@@ -1136,9 +1155,9 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'close' => (float)$k->close->toFloat(),
                 ];
             }
-            
+
             $atr = $calc->computeWithRules($ohlc, $period, $method, strtolower($tf));
-            
+
             if ($atr === 0.0) {
                 $this->logger->error('[TO_BE_DELETED][MTF_ATR_ZERO_RETRY]', [
                     'symbol' => $symbol,
@@ -1159,21 +1178,21 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 // Retourner null au lieu de 0.0 pour indiquer un ATR invalide
                 return null;
             }
-            
+
             $this->logger->info('[MTF] ATR computed successfully on retry', [
                 'symbol' => $symbol,
                 'tf' => $tf,
                 'atr' => $atr,
             ]);
         }
-        
+
         $this->logger->debug('[MTF] ATR computation result', [
             'symbol' => $symbol,
             'tf' => $tf,
             'atr' => $atr,
             'is_valid' => $atr !== null && $atr > 0.0,
         ]);
-        
+
         return $atr;
     }
 
