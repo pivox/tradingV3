@@ -142,7 +142,7 @@ final class AtrCalculator implements IndicatorInterface
             $arr = \trader_atr($high, $low, $close, $period);
             
             if (is_array($arr)) {
-                // DEBUG: Vérifier la sortie de trader_atr
+                // DEBUG: Check the output of trader_atr
                 $nanCount = 0;
                 $infCount = 0;
                 $zeroCount = 0;
