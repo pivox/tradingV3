@@ -190,7 +190,7 @@ final class AtrCalculator implements IndicatorInterface
                     'zeros' => $zeroCount,
                     'symbol_hint' => $hasInvalid ? 'invalid_input' : 'n/a',
                 ]);
-                // ne pas retourner, laisser le calcul PHP plus bas s'exécuter
+                // Do not return; let the PHP calculation below execute
             }
         }
         if ($period <= 0) {
