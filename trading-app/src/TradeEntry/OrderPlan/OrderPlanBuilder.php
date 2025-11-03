@@ -205,21 +205,96 @@ final class OrderPlanBuilder
 
         $sizingDistance = $tick * 10;
         $stopAtr = null;
+        $stopPivot = null;
+        $pivotGuardAtr = null;
+
+        $hasAtrInputs = $req->atrValue !== null
+            && \is_finite($req->atrValue)
+            && $req->atrValue > 0.0
+            && \is_finite($req->atrK)
+            && $req->atrK > 0.0;
+
+        if ($req->stopFrom === 'pivot' && !empty($pre->pivotLevels)) {
+            $stopPivot = $this->slc->fromPivot(
+                entry: $entry,
+                side: $req->side,
+                pivotLevels: $pre->pivotLevels,
+                policy: $req->pivotSlPolicy ?? 'nearest_below',
+                bufferPct: $req->pivotSlBufferPct ?? 0.0015,
+                pricePrecision: $precision
+            );
+
+            $sizingDistance = max(abs($entry - $stopPivot), $tick);
+
+            $shouldGuardPivot = ($req->pivotSlMinKeepRatio ?? 0.0) > 0.0;
+            if ($shouldGuardPivot && $hasAtrInputs) {
+                $pivotGuardAtr = $this->slc->fromAtr($entry, $req->side, (float)$req->atrValue, (float)$req->atrK, $precision);
+            }
+        }
 
         if ($req->stopFrom === 'atr') {
-            if (!\is_finite($req->atrValue) || $req->atrValue <= 0.0 || $req->atrK <= 0.0) {
+            if (!$hasAtrInputs) {
                 throw new \InvalidArgumentException('ATR invalide pour stopFrom=atr');
             }
             $stopAtr = $this->slc->fromAtr($entry, $req->side, (float)$req->atrValue, (float)$req->atrK, $precision);
             $sizingDistance = max(abs($entry - $stopAtr), $tick);
         }
 
+        if ($stopPivot !== null && $pivotGuardAtr !== null) {
+            $pivotDistance = abs($entry - $stopPivot);
+            $atrDistance = abs($entry - $pivotGuardAtr);
+            if ($atrDistance > 0.0) {
+                $minDistance = max($tick, (float)$req->pivotSlMinKeepRatio * $atrDistance);
+                if ($pivotDistance < $minDistance) {
+                    $direction = $req->side === Side::Long ? -1.0 : 1.0;
+                    $target = $entry + $direction * $minDistance;
+                    $adjusted = $req->side === Side::Long
+                        ? TickQuantizer::quantize(max($target, $tick), $precision)
+                        : TickQuantizer::quantizeUp($target, $precision);
+
+                    $isMoreConservative = ($req->side === Side::Long && $adjusted < $stopPivot)
+                        || ($req->side === Side::Short && $adjusted > $stopPivot);
+
+                    if ($isMoreConservative) {
+                        $previousStop = $stopPivot;
+                        $stopPivot = $adjusted;
+                        $sizingDistance = max(abs($entry - $stopPivot), $tick);
+
+                        $this->flowLogger->info('order_plan.pivot_stop_min_keep_ratio_adjust', [
+                            'symbol' => $req->symbol,
+                            'side' => $req->side->value,
+                            'entry' => $entry,
+                            'pivot_stop_before' => $previousStop,
+                            'pivot_stop_after' => $stopPivot,
+                            'pivot_distance' => $pivotDistance,
+                            'min_distance' => $minDistance,
+                            'atr_reference_stop' => $pivotGuardAtr,
+                            'pivot_sl_min_keep_ratio' => $req->pivotSlMinKeepRatio,
+                            'decision_key' => $decisionKey,
+                        ]);
+                        $this->journeyLogger->info('order_journey.plan_builder.pivot_stop_adjusted', [
+                            'symbol' => $req->symbol,
+                            'decision_key' => $decisionKey,
+                            'entry' => $entry,
+                            'pivot_stop_before' => $previousStop,
+                            'pivot_stop_after' => $stopPivot,
+                            'pivot_distance' => $pivotDistance,
+                            'min_distance' => $minDistance,
+                            'reason' => 'pivot_stop_upheld_by_min_keep_ratio',
+                        ]);
+                    }
+                }
+            }
+        }
+
         $size = $this->positionSizer->fromRiskAndDistance($riskUsdt, $sizingDistance, $contractSize, $minVolume);
 
         $stopRisk = $this->slc->fromRisk($entry, $req->side, $riskUsdt, $size, $contractSize, $precision);
-        $stop = $stopAtr !== null
-            ? $this->slc->conservative($req->side, $stopAtr, $stopRisk)
-            : $stopRisk;
+        $stop = match (true) {
+            $stopPivot !== null => $stopPivot,
+            $stopAtr !== null => $this->slc->conservative($req->side, $stopAtr, $stopRisk),
+            default => $stopRisk,
+        };
 
         $finalDistance = max(abs($entry - $stop), $tick);
         if (abs($finalDistance - $sizingDistance) > 1e-12) {
@@ -244,6 +319,88 @@ final class OrderPlanBuilder
             'reason' => 'position_size_computed',
         ]);
 
+        $minTick = TickQuantizer::tick($precision);
+        if ($stop <= 0.0 || abs($stop - $entry) < $minTick) {
+            if ($req->side === Side::Long) {
+                $stop = TickQuantizer::quantize(max($entry - $minTick, $minTick), $precision);
+            } else {
+                $stop = TickQuantizer::quantizeUp($entry + $minTick, $precision);
+            }
+        }
+        if ($stop <= 0.0 || $stop === $entry) {
+            throw new \RuntimeException('Stop loss invalide');
+        }
+
+        // CRITICAL GUARD: Minimum stop-loss distance (protection against stops that are too tight)
+        $MIN_STOP_DISTANCE_PCT = 0.005; // 0.5% minimum
+        $stopDistancePct = abs($stop - $entry) / max($entry, 1e-9);
+
+        if ($stopDistancePct < $MIN_STOP_DISTANCE_PCT) {
+            $minAbsoluteDistance = max($tick, $MIN_STOP_DISTANCE_PCT * $entry);
+            $target = $req->side === Side::Long
+                ? max($entry - $minAbsoluteDistance, $tick)
+                : $entry + $minAbsoluteDistance;
+            $target = $req->side === Side::Long
+                ? TickQuantizer::quantize($target, $precision)
+                : TickQuantizer::quantizeUp($target, $precision);
+
+            if (!\is_finite($target) || $target <= 0.0 || $target === $entry) {
+                throw new \RuntimeException('Impossible d\'appliquer la distance minimale sur le stop');
+            }
+
+            $previousStop = $stop;
+            $previousSize = $size;
+
+            $stop = $target;
+            if ($stopPivot !== null) {
+                $stopPivot = $stop;
+            }
+
+            $sizingDistance = max(abs($entry - $stop), $tick);
+            $size = $this->positionSizer->fromRiskAndDistance($riskUsdt, $sizingDistance, $contractSize, $minVolume);
+            $stopRisk = $this->slc->fromRisk($entry, $req->side, $riskUsdt, (int)$size, $contractSize, $precision);
+
+            $logContext = [
+                'symbol' => $req->symbol,
+                'side' => $req->side->value,
+                'entry' => $entry,
+                'stop_before' => $previousStop,
+                'stop_after' => $stop,
+                'size_before' => $previousSize,
+                'size_after' => $size,
+                'min_distance_pct' => $MIN_STOP_DISTANCE_PCT,
+                'decision_key' => $decisionKey,
+            ];
+
+            if ($stopPivot !== null) {
+                $this->flowLogger->notice('order_plan.stop_min_distance_adjusted_pivot', $logContext + [
+                    'reason' => 'pivot_stop_adjusted',
+                ]);
+                $this->journeyLogger->notice('order_journey.plan_builder.stop_min_distance_adjusted_pivot', [
+                    'symbol' => $req->symbol,
+                    'decision_key' => $decisionKey,
+                    'entry' => $entry,
+                    'stop_before' => $previousStop,
+                    'stop_after' => $stop,
+                    'reason' => 'pivot_stop_min_distance_enforced',
+                ]);
+            } else {
+                $this->flowLogger->notice('order_plan.stop_min_distance_adjusted', $logContext + [
+                    'reason' => 'risk_stop_adjusted',
+                ]);
+                $this->journeyLogger->notice('order_journey.plan_builder.stop_min_distance_adjusted', [
+                    'symbol' => $req->symbol,
+                    'decision_key' => $decisionKey,
+                    'entry' => $entry,
+                    'stop_before' => $previousStop,
+                    'stop_after' => $stop,
+                    'reason' => 'risk_stop_min_distance_enforced',
+                ]);
+            }
+
+            $stopDistancePct = abs($stop - $entry) / max($entry, 1e-9);
+        }
+
         if ($volPrecision === 0) {
             $size = (float)floor($size);
         } else {
@@ -266,53 +423,6 @@ final class OrderPlanBuilder
             ));
         }
 
-        $minTick = TickQuantizer::tick($precision);
-        if ($stop <= 0.0 || abs($stop - $entry) < $minTick) {
-            if ($req->side === Side::Long) {
-                $stop = TickQuantizer::quantize(max($entry - $minTick, $minTick), $precision);
-            } else {
-                $stop = TickQuantizer::quantizeUp($entry + $minTick, $precision);
-            }
-        }
-        if ($stop <= 0.0 || $stop === $entry) {
-            throw new \RuntimeException('Stop loss invalide');
-        }
-
-        // CRITICAL GUARD: Minimum stop-loss distance (protection against stops that are too tight)
-        $MIN_STOP_DISTANCE_PCT = 0.005; // 0.5% minimum
-        $stopDistancePct = abs($stop - $entry) / max($entry, 1e-9);
-        
-        if ($stopDistancePct < $MIN_STOP_DISTANCE_PCT) {
-            $this->flowLogger->error('order_plan.stop_too_tight', [
-                'symbol' => $req->symbol,
-                'side' => $req->side->value,
-                'entry' => $entry,
-                'stop' => $stop,
-                'distance' => abs($stop - $entry),
-                'distance_pct' => $stopDistancePct,
-                'min_required_pct' => $MIN_STOP_DISTANCE_PCT,
-                'atr_value' => $req->atrValue,
-                'stop_from' => $req->stopFrom,
-                'decision_key' => $decisionKey,
-            ]);
-            $this->journeyLogger->error('order_journey.plan_builder.stop_too_tight', [
-                'symbol' => $req->symbol,
-                'decision_key' => $decisionKey,
-                'distance_pct' => $stopDistancePct,
-                'min_required_pct' => $MIN_STOP_DISTANCE_PCT,
-                'reason' => 'stop_distance_below_minimum',
-            ]);
-            throw new \RuntimeException(sprintf(
-                'Stop loss trop serré pour %s: %.2f%% < %.2f%% minimum (entry=%.8f, stop=%.8f, atr=%s, stop_from=%s)',
-                $req->symbol,
-                $stopDistancePct * 100,
-                $MIN_STOP_DISTANCE_PCT * 100,
-                $entry,
-                $stop,
-                $req->atrValue !== null ? (string)$req->atrValue : 'null',
-                $req->stopFrom
-            ));
-        }
 
         $takeProfit = $this->tpc->fromRMultiple($entry, $stop, $req->side, (float)$req->rMultiple, $precision);
 
@@ -340,6 +450,7 @@ final class OrderPlanBuilder
             'symbol' => $req->symbol,
             'entry' => $entry,
             'stop_from' => $req->stopFrom,
+            'stop_pivot' => $stopPivot,
             'atr_value' => $req->atrValue,
             'atr_k' => $req->atrK,
             'stop_atr' => $stopAtr,
@@ -347,6 +458,10 @@ final class OrderPlanBuilder
             'stop' => $stop,
             'tp' => $takeProfit,
             'r_multiple' => $req->rMultiple,
+            'pivot_sl_policy' => $req->pivotSlPolicy,
+            'pivot_sl_buffer_pct' => $req->pivotSlBufferPct,
+            'pivot_sl_min_keep_ratio' => $req->pivotSlMinKeepRatio,
+            'pivot_guard_atr' => $pivotGuardAtr,
             'decision_key' => $decisionKey,
         ]);
         $this->journeyLogger->debug('order_journey.plan_builder.stop_tp', [
@@ -355,6 +470,10 @@ final class OrderPlanBuilder
             'entry' => $entry,
             'stop' => $stop,
             'take_profit' => $takeProfit,
+            'stop_pivot' => $stopPivot,
+            'pivot_sl_policy' => $req->pivotSlPolicy,
+            'pivot_sl_buffer_pct' => $req->pivotSlBufferPct,
+            'pivot_sl_min_keep_ratio' => $req->pivotSlMinKeepRatio,
             'reason' => 'risk_targets_calculated',
         ]);
 

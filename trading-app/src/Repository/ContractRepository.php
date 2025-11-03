@@ -326,8 +326,8 @@ class ContractRepository extends ServiceEntityRepository
         $maxAgeHours       = (int)    $this->config->getFilter('max_age_hours', 880);
         $openUnit          = (string) $this->config->getFilter('open_unit', 's');   // ✅ seconds
 
-        $topN   = (int) $this->config->getLimit('top_n', 100);
-        $midN   = (int) $this->config->getLimit('mid_n', 50);
+        $topN   = (int) $this->config->getLimit('top_n', 210);
+        $midN   = (int) $this->config->getLimit('mid_n', 120);
         $orderTop = strtoupper($this->config->getOrder('top', 'DESC'));
         $orderMid = strtoupper($this->config->getOrder('mid', 'ASC'));
         $validOrder = ['ASC', 'DESC'];
@@ -442,6 +442,8 @@ SELECT symbol FROM (
         if ($topN > 0) $stmt->bindValue('topN', $topN, ParameterType::INTEGER);
         if ($midN > 0) $stmt->bindValue('midN', $midN, ParameterType::INTEGER);
 
-        return $stmt->executeQuery()->fetchFirstColumn();
+        $symbols = $stmt->executeQuery()->fetchFirstColumn();
+
+        return array_values(array_unique($symbols));
     }
 }

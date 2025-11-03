@@ -23,7 +23,10 @@ mtf_validation:
         order_type: 'limit'
         open_type: 'isolated'
         order_mode: 1
-        stop_from: 'atr'
+        stop_from: 'pivot'
+        pivot_sl_policy: 'nearest_below'  # ou 'strongest_below', 's1', 's2'
+        pivot_sl_buffer_pct: 0.0015       # petit décalage pour éviter le front-run (0.15%)
+        pivot_sl_min_keep_ratio: 0.8      # au moins 80 % de la distance ATR si plus serré
         market_max_spread_pct: 0.001
         inside_ticks: 1
         max_deviation_pct: 0.005

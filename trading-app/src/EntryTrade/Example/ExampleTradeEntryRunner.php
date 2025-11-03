@@ -34,6 +34,15 @@ final class ExampleTradeEntryRunner
         $defaults = $this->mtfConfig->getDefaults();
         $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 2.0);
         $riskPct = max(0.0, $riskPctPercent > 1.0 ? $riskPctPercent / 100.0 : $riskPctPercent);
+        $pivotSlPolicy = (string)($defaults['pivot_sl_policy'] ?? 'nearest_below');
+        $pivotSlBufferPct = isset($defaults['pivot_sl_buffer_pct']) ? (float)$defaults['pivot_sl_buffer_pct'] : null;
+        if ($pivotSlBufferPct !== null && $pivotSlBufferPct < 0.0) {
+            $pivotSlBufferPct = null;
+        }
+        $pivotSlMinKeepRatio = isset($defaults['pivot_sl_min_keep_ratio']) ? (float)$defaults['pivot_sl_min_keep_ratio'] : null;
+        if ($pivotSlMinKeepRatio !== null && $pivotSlMinKeepRatio <= 0.0) {
+            $pivotSlMinKeepRatio = null;
+        }
 
         $request = new TradeEntryRequest(
             symbol: $symbol,
@@ -46,6 +55,9 @@ final class ExampleTradeEntryRunner
             rMultiple: (float)($defaults['r_multiple'] ?? 2.0),
             entryLimitHint: $price,
             stopFrom: $atr !== null ? 'atr' : ($defaults['stop_from'] ?? 'risk'),
+            pivotSlPolicy: $pivotSlPolicy,
+            pivotSlBufferPct: $pivotSlBufferPct,
+            pivotSlMinKeepRatio: $pivotSlMinKeepRatio,
             atrValue: $atr,
             atrK: (float)($defaults['atr_k'] ?? 1.5),
             marketMaxSpreadPct: (float)($defaults['market_max_spread_pct'] ?? 0.001)

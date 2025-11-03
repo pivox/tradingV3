@@ -318,7 +318,7 @@ final class TradingDecisionHandler
 
         $stopFrom = $defaults['stop_from'] ?? 'risk';
         $atrK = (float)($defaults['atr_k'] ?? 1.5);
-        $atrValue = ($stopFrom === 'atr' && $atr !== null && $atr > 0.0) ? $atr : null;
+        $atrValue = ($atr !== null && $atr > 0.0) ? $atr : null;
         
         // GARDE CRITIQUE : Si stop_from='atr' est configuré mais ATR invalide/manquant, REJETER l'ordre
         if ($stopFrom === 'atr' && ($atrValue === null || $atrValue <= 0.0)) {
@@ -371,6 +371,16 @@ final class TradingDecisionHandler
             $tpMaxExtraR = null;
         }
 
+        $pivotSlPolicy = (string)($defaults['pivot_sl_policy'] ?? 'nearest_below');
+        $pivotSlBufferPct = isset($defaults['pivot_sl_buffer_pct']) ? (float)$defaults['pivot_sl_buffer_pct'] : null;
+        if ($pivotSlBufferPct !== null && $pivotSlBufferPct < 0.0) {
+            $pivotSlBufferPct = null;
+        }
+        $pivotSlMinKeepRatio = isset($defaults['pivot_sl_min_keep_ratio']) ? (float)$defaults['pivot_sl_min_keep_ratio'] : null;
+        if ($pivotSlMinKeepRatio !== null && $pivotSlMinKeepRatio <= 0.0) {
+            $pivotSlMinKeepRatio = null;
+        }
+
         $sideEnum = $side === 'LONG' ? Side::Long : Side::Short;
 
         return new TradeEntryRequest(
@@ -384,6 +394,9 @@ final class TradingDecisionHandler
             rMultiple: (float)($defaults['r_multiple'] ?? 2.0),
             entryLimitHint: $entryLimitHint,
             stopFrom: $stopFrom,
+            pivotSlPolicy: $pivotSlPolicy,
+            pivotSlBufferPct: $pivotSlBufferPct,
+            pivotSlMinKeepRatio: $pivotSlMinKeepRatio,
             atrValue: $atrValue,
             atrK: (float)$atrK,
             marketMaxSpreadPct: $marketMaxSpreadPct,

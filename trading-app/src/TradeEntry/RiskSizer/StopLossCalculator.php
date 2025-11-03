@@ -53,4 +53,93 @@ final class StopLossCalculator
     {
         return $side === Side::Long ? min($a, $b) : max($a, $b);
     }
+    public function fromPivot(
+        float $entry,
+        Side $side,
+        array $pivotLevels,
+        string $policy = 'nearest_below',
+        ?float $bufferPct = 0.0015,
+        int $pricePrecision = 2
+    ): float {
+        if (empty($pivotLevels)) {
+            throw new \InvalidArgumentException('Aucun pivot fourni pour calcul du stop pivot');
+        }
+
+        if ($side === Side::Long) {
+            // Trouver le pivot juste en dessous de l’entrée (S1, S2, etc.)
+            $candidates = array_filter($pivotLevels, fn($v, $k) =>
+                str_starts_with(strtolower($k), 's') && $v < $entry,
+                ARRAY_FILTER_USE_BOTH
+            );
+            if (!empty($candidates)) {
+                $candidates = array_change_key_case($candidates, CASE_LOWER);
+            }
+
+            if (empty($candidates)) {
+                throw new \RuntimeException('Aucun pivot inférieur à l’entrée trouvé pour un long');
+            }
+
+            // Appliquer la politique (nearest ou strongest)
+            $policyKey = strtolower($policy);
+            $pivot = null;
+
+            if (str_starts_with($policyKey, 's') && isset($candidates[$policyKey])) {
+                $pivot = $candidates[$policyKey];
+            } elseif ($policyKey === 'strongest_below') {
+                foreach (['s2', 's1', 's3'] as $preferred) {
+                    if (isset($candidates[$preferred])) {
+                        $pivot = $candidates[$preferred];
+                        break;
+                    }
+                }
+            }
+
+            if ($pivot === null) {
+                $pivot = $policyKey === 'nearest_below'
+                    ? max($candidates)
+                    : reset($candidates);
+            }
+
+            // Ajouter un buffer (sous le pivot)
+            $stop = $pivot * (1 - abs($bufferPct ?? 0.0));
+            return TickQuantizer::quantize($stop, $pricePrecision);
+        }
+
+        // SHORT — pivot au-dessus de l’entrée
+        $candidates = array_filter($pivotLevels, fn($v, $k) =>
+            str_starts_with(strtolower($k), 'r') && $v > $entry,
+            ARRAY_FILTER_USE_BOTH
+        );
+        if (!empty($candidates)) {
+            $candidates = array_change_key_case($candidates, CASE_LOWER);
+        }
+
+        if (empty($candidates)) {
+            throw new \RuntimeException('Aucun pivot supérieur à l’entrée trouvé pour un short');
+        }
+
+        $policyKey = strtolower($policy);
+        $pivot = null;
+
+        if (str_starts_with($policyKey, 'r') && isset($candidates[$policyKey])) {
+            $pivot = $candidates[$policyKey];
+        } elseif ($policyKey === 'strongest_above') {
+            foreach (['r2', 'r1', 'r3'] as $preferred) {
+                if (isset($candidates[$preferred])) {
+                    $pivot = $candidates[$preferred];
+                    break;
+                }
+            }
+        }
+
+        if ($pivot === null) {
+            $pivot = $policyKey === 'nearest_above'
+                ? min($candidates)
+                : reset($candidates);
+        }
+
+        $stop = $pivot * (1 + abs($bufferPct ?? 0.0));
+        return TickQuantizer::quantizeUp($stop, $pricePrecision);
+    }
+
 }
