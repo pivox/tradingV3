@@ -151,7 +151,7 @@ final class MtfService
     }
 
     /**
-     * Decide whether a cached timeframe result can be reused as-is.
+         * Decide whether a cached timeframe result can be reused as-is.
      */
     private function shouldReuseCachedResult(?array $cached): bool
     {
@@ -1096,12 +1096,16 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             ];
         }
         
-        $calc = new \App\Indicator\Core\AtrCalculator();
+        $calc = new \App\Indicator\Core\AtrCalculator($this->logger);
         $atr = $calc->computeWithRules($ohlc, $period, $method, strtolower($tf));
         
         // GARDE : Si ATR = 0, réessayer une fois (les klines étaient peut-être en cours d'insertion)
         if ($atr === 0.0) {
-            error_log(sprintf('[TO_BE_DELETED][MTF_ATR_ZERO] symbol=%s tf=%s ohlc=%d', $symbol, $tf, count($ohlc)));
+            $this->logger->warning('[TO_BE_DELETED][MTF_ATR_ZERO]', [
+                'symbol' => $symbol,
+                'tf' => $tf,
+                'ohlc_count' => count($ohlc),
+            ]);
             $this->logger->warning('[MTF] ATR = 0.0, retrying klines fetch', [
                 'symbol' => $symbol,
                 'tf' => $tf,
@@ -1136,7 +1140,11 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $atr = $calc->computeWithRules($ohlc, $period, $method, strtolower($tf));
             
             if ($atr === 0.0) {
-                error_log(sprintf('[TO_BE_DELETED][MTF_ATR_ZERO_RETRY] symbol=%s tf=%s retry=%d', $symbol, $tf, count($klines)));
+                $this->logger->error('[TO_BE_DELETED][MTF_ATR_ZERO_RETRY]', [
+                    'symbol' => $symbol,
+                    'tf' => $tf,
+                    'retry_klines_count' => count($klines),
+                ]);
                 $this->logger->error('[MTF] ATR still 0.0 after retry', [
                     'symbol' => $symbol,
                     'tf' => $tf,
