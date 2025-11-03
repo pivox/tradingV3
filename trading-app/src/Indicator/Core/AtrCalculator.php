@@ -175,7 +175,7 @@ final class AtrCalculator implements IndicatorInterface
                     return is_finite($val);
                 }));
 
-                // Si tous les éléments valides sont <= 0, considérer la série invalide → fallback PHP
+                // If all valid elements are <= 0, consider the series invalid → fallback to PHP calculation
                 $positive = array_filter($filtered, static function($val) {
                     return $val > 0.0;
                 });
