@@ -122,8 +122,10 @@ final class TradingDecisionHandler
             if (!$mtfRunDto->dryRun && ($execution->status === 'submitted')) {
                 try {
                     $this->mtfSwitchRepository->turnOffSymbolFor15Minutes($symbolResult->symbol);
-                    $this->logger->info('[Trading Decision] Symbol switched OFF for 4 hours after order', [
+                    $this->logger->info('[Trading Decision] Symbol switched OFF for 15 minutes after order', [
                         'symbol' => $symbolResult->symbol,
+                        'duration' => '15 minutes',
+                        'reason' => 'order_submitted',
                     ]);
                 } catch (\Throwable $e) {
                     $this->logger->error('[Trading Decision] Failed to switch OFF symbol', [
@@ -317,6 +319,25 @@ final class TradingDecisionHandler
         $stopFrom = $defaults['stop_from'] ?? 'risk';
         $atrK = (float)($defaults['atr_k'] ?? 1.5);
         $atrValue = ($stopFrom === 'atr' && $atr !== null && $atr > 0.0) ? $atr : null;
+        
+        // GARDE CRITIQUE : Si stop_from='atr' est configuré mais ATR invalide/manquant, REJETER l'ordre
+        if ($stopFrom === 'atr' && ($atrValue === null || $atrValue <= 0.0)) {
+            $this->logger->warning('[Trading Decision] ATR required but invalid/missing', [
+                'symbol' => $symbolResult->symbol,
+                'stop_from' => $stopFrom,
+                'atr' => $atr,
+                'atr_value' => $atrValue,
+            ]);
+            $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+                'symbol' => $symbolResult->symbol,
+                'reason' => 'atr_required_but_invalid',
+                'stop_from' => $stopFrom,
+                'atr' => $atr,
+            ]);
+            return null;  // BLOQUER l'ordre au lieu de basculer silencieusement sur 'risk'
+        }
+        
+        // Fallback vers 'risk' SEULEMENT si stop_from n'était PAS configuré sur 'atr' à la base
         if ($atrValue === null && $stopFrom === 'atr') {
             $stopFrom = 'risk';
         }

@@ -222,8 +222,31 @@ class BitmartHttpClientPublic
             }
         }
 
-        // Normaliser la structure retournée en ListKlinesDto pour éviter les accès mixtes plus loin
-        $list = new ListKlinesDto(\array_values($payload['data']));
+        // NORMALISER les données BitMart (tableau numérique → associatif)
+        // BitMart retourne: [timestamp, open_price, high_price, low_price, close_price, volume]
+        $normalized = array_map(function($item) {
+            // Si déjà un objet DTO, le laisser tel quel
+            if (is_object($item)) {
+                return $item;
+            }
+            // Si tableau numérique BitMart, convertir en associatif
+            if (is_array($item) && isset($item[0]) && !isset($item['timestamp'])) {
+                return [
+                    'timestamp' => (int)($item[0] ?? 0),
+                    'open_price' => (string)($item[1] ?? '0'),
+                    'high_price' => (string)($item[2] ?? '0'),
+                    'low_price' => (string)($item[3] ?? '0'),
+                    'close_price' => (string)($item[4] ?? '0'),
+                    'volume' => (string)($item[5] ?? '0'),
+                    'source' => 'REST'
+                ];
+            }
+            // Sinon retourner tel quel (déjà associatif)
+            return $item;
+        }, $payload['data']);
+
+        // Normaliser la structure retournée en ListKlinesDto
+        $list = new ListKlinesDto(\array_values($normalized));
         try {
             $count = count($list->toArray());
             $this->bitmartLogger->info('[Bitmart] Klines fetched', [
