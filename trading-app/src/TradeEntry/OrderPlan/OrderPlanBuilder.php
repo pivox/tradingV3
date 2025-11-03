@@ -278,7 +278,7 @@ final class OrderPlanBuilder
             throw new \RuntimeException('Stop loss invalide');
         }
 
-        // GARDE CRITIQUE : Distance minimale du stop-loss (protection contre stops trop serrés)
+        // CRITICAL GUARD: Minimum stop-loss distance (protection against stops that are too tight)
         $MIN_STOP_DISTANCE_PCT = 0.005; // 0.5% minimum
         $stopDistancePct = abs($stop - $entry) / max($entry, 1e-9);
         
