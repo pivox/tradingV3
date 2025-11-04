@@ -13,7 +13,6 @@ use App\Provider\Bitmart\Dto\ListKlinesDto;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
 use App\Repository\KlineRepository;
 use Brick\Math\BigDecimal;
-use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 use Symfony\Contracts\HttpClient\Exception\ServerExceptionInterface;
@@ -29,8 +28,7 @@ final class BitmartKlineProvider implements KlineProviderInterface
     public function __construct(
         private readonly BitmartHttpClientPublic $bitmartClient,
         private readonly KlineRepository $klineRepository,
-        private readonly LoggerInterface $logger,
-        private readonly ClockInterface $clock,
+        private readonly LoggerInterface $logger
     ) {}
 
     public function getKlines(string $symbol, Timeframe $timeframe, int $limit = 499): array
@@ -267,23 +265,18 @@ final class BitmartKlineProvider implements KlineProviderInterface
 
     private function expectedLastOpenTime(Timeframe $timeframe): \DateTimeImmutable
     {
-        $now = $this->clock->now();
+        $utcNow = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
 
-        // Durée en secondes par timeframe
-        $seconds = match ($timeframe->value) {
-            '4h' => 4 * 3600,
-            '1h' => 3600,
-            '15m' => 15 * 60,
-            '5m' => 5 * 60,
-            '1m' => 60,
+        $interval = match ($timeframe->value) {
+            '4h' => new \DateInterval('PT4H'),
+            '1h' => new \DateInterval('PT1H'),
+            '15m' => new \DateInterval('PT15M'),
+            '5m' => new \DateInterval('PT5M'),
+            '1m' => new \DateInterval('PT1M'),
             default => throw new \InvalidArgumentException('Timeframe non supporté: ' . $timeframe->value),
         };
 
-        // On arrondit l'heure actuelle à la dernière borne du timeframe
-        $timestamp = (int) floor($now->getTimestamp() / $seconds) * $seconds;
-
-        return (new \DateTimeImmutable('@' . $timestamp))
-            ->setTimezone($now->getTimezone());
+        return $utcNow->sub($interval);
     }
 
     public function hasGaps(string $symbol, Timeframe $timeframe): bool
