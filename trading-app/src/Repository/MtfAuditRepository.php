@@ -716,10 +716,34 @@ SQL;
 
         ksort($results);
 
+        // Vérifier pour chaque symbole/timeframe si la dernière bougie close existe
+        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $tfSecondsMap = [
+            '4h' => 14400,
+            '1h' => 3600,
+            '15m' => 900,
+            '5m' => 300,
+            '1m' => 60,
+        ];
+
         foreach ($results as &$entry) {
             $ordered = [];
             foreach ($normalizedTfs as $tf) {
-                $ordered[$tf] = $entry['timeframes'][$tf] ?? null;
+                $tfData = $entry['timeframes'][$tf] ?? null;
+                if ($tfData !== null && is_array($tfData) && $tfData['status'] === 'success') {
+                    // Calculer l'openTime attendu pour la dernière bougie close
+                    $eventTs = $this->toDateTime($tfData['event_ts'] ?? null);
+                    if ($eventTs !== null) {
+                        // event_ts est le candle_close_ts, donc l'openTime est event_ts - durée du timeframe
+                        $tfSeconds = $tfSecondsMap[$tf] ?? 0;
+                        if ($tfSeconds > 0) {
+                            $expectedOpenTime = $eventTs->modify("-{$tfSeconds} seconds");
+                            $klineExists = $this->checkKlineExists($entry['symbol'], $tf, $expectedOpenTime);
+                            $tfData['kline_exists'] = $klineExists;
+                        }
+                    }
+                }
+                $ordered[$tf] = $tfData;
                 if (is_array($ordered[$tf]) && array_key_exists('_latest_ts', $ordered[$tf])) {
                     unset($ordered[$tf]['_latest_ts']);
                 }
@@ -729,6 +753,49 @@ SQL;
         unset($entry);
 
         return array_values($results);
+    }
+
+    /**
+     * Vérifie si une bougie existe dans hot_kline pour un symbole/timeframe/openTime donné.
+     * 
+     * @param string $symbol
+     * @param string $timeframe
+     * @param \DateTimeImmutable $openTime
+     * @return bool|null null si erreur, true si existe et close, false si n'existe pas ou pas close
+     */
+    private function checkKlineExists(string $symbol, string $timeframe, \DateTimeImmutable $openTime): ?bool
+    {
+        try {
+            $sql = <<<SQL
+SELECT is_closed
+FROM hot_kline
+WHERE symbol = :symbol
+  AND timeframe = :timeframe
+  AND open_time = :open_time
+LIMIT 1
+SQL;
+            
+            $result = $this->conn->fetchOne($sql, [
+                'symbol' => $symbol,
+                'timeframe' => $timeframe,
+                'open_time' => $openTime->format('Y-m-d H:i:s'),
+            ], [
+                'symbol' => ParameterType::STRING,
+                'timeframe' => ParameterType::STRING,
+                'open_time' => ParameterType::STRING,
+            ]);
+
+            if ($result === false) {
+                // La bougie n'existe pas
+                return false;
+            }
+
+            // La bougie existe, retourner si elle est close
+            return (bool)$result;
+        } catch (\Throwable) {
+            // En cas d'erreur, retourner null
+            return null;
+        }
     }
 
     /**
