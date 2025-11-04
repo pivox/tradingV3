@@ -418,6 +418,11 @@ class Contract
         $this->maxLeverage = $maxLeverage;
         return $this;
     }
+    public function getPricePrecision(): ?string
+    {
+        return $this->pricePrecision;
+    }
+
     public function setPricePrecision(?string $pricePrecision): static
     {
         $this->pricePrecision = $pricePrecision;
