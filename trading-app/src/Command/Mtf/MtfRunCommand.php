@@ -103,7 +103,10 @@ class MtfRunCommand extends Command
 
                     if (!empty($result['errors'])) {
                         foreach ($result['errors'] as $error) {
-                            $io->warning($error);
+                            $formattedError = $this->formatErrorForDisplay($error);
+                            if ($formattedError !== null) {
+                                $io->warning($formattedError);
+                            }
                         }
                     }
 
@@ -168,7 +171,10 @@ class MtfRunCommand extends Command
 
             if (!empty($errors)) {
                 foreach ($errors as $message) {
-                    $io->warning($message);
+                    $formattedError = $this->formatErrorForDisplay($message);
+                    if ($formattedError !== null) {
+                        $io->warning($formattedError);
+                    }
                 }
                 $io->warning('MTF run terminé avec des erreurs.');
                 return Command::FAILURE;
@@ -868,5 +874,21 @@ class MtfRunCommand extends Command
         }
 
         $this->entityManager->flush();
+    }
+
+    /**
+     * Convertit une erreur (tableau ou string) en chaîne de caractères pour l'affichage
+     */
+    private function formatErrorForDisplay(mixed $error): ?string
+    {
+        if ($error === null) {
+            return null;
+        }
+
+        if (is_array($error)) {
+            return json_encode($error, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        }
+
+        return (string) $error;
     }
 }
