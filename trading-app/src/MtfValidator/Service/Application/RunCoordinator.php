@@ -15,6 +15,17 @@ use App\Contract\Provider\KlineProviderInterface;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
 use App\Provider\Bitmart\Service\KlineJsonIngestionService;
 use App\Repository\ContractRepository;
+use App\Repository\KlineRepository;
+use App\Repository\MtfAuditRepository;
+use App\Repository\MtfStateRepository;
+use App\Repository\MtfSwitchRepository;
+use App\Entity\ValidationCache as ValidationCacheEntity;
+use App\Runtime\Cache\DbValidationCache;
+use App\Entity\IndicatorSnapshot;
+use App\Repository\IndicatorSnapshotRepository;
+use App\Contract\Signal\SignalValidationServiceInterface;
+use App\MtfValidator\Service\Dto\InternalTimeframeResultDto;
+
 use App\Repository\MtfAuditRepository;
 use App\Repository\MtfStateRepository;
 use App\Repository\MtfSwitchRepository;
@@ -27,6 +38,9 @@ use App\MtfValidator\Service\Timeframe\Timeframe1hService;
 use App\MtfValidator\Service\Timeframe\Timeframe15mService;
 use App\MtfValidator\Service\Timeframe\Timeframe5mService;
 use App\MtfValidator\Service\Timeframe\Timeframe1mService;
+use App\Service\Dto\Internal\ProcessingContextDto;
+use App\Service\Timeframe\TimeframePipeline;
+use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;
@@ -36,6 +50,7 @@ final class RunCoordinator
 {
     public function __construct(
         private readonly MtfTimeService $timeService,
+        private readonly KlineRepository $klineRepository,
         private readonly MtfStateRepository $mtfStateRepository,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly MtfAuditRepository $mtfAuditRepository,
@@ -47,6 +62,7 @@ final class RunCoordinator
         private readonly MtfValidationConfig $mtfValidationConfig,
         private readonly BitmartHttpClientPublic $bitmartClient,
         private readonly KlineProviderInterface $klineProvider,
+        private readonly EntityManagerInterface $entityManager,
         private readonly ClockInterface $clock,
         private readonly EventDispatcherInterface $eventDispatcher,
         private readonly Timeframe4hService $timeframe4hService,
@@ -54,13 +70,311 @@ final class RunCoordinator
         private readonly Timeframe15mService $timeframe15mService,
         private readonly Timeframe5mService $timeframe5mService,
         private readonly Timeframe1mService $timeframe1mService,
+        private readonly TimeframePipeline $timeframePipeline,
+        private readonly ?DbValidationCache $validationCache = null,
         private readonly TimeframeCacheService $timeframeCacheService,
         private readonly SnapshotPersister $snapshotPersister,
         private readonly ?KlineJsonIngestionService $klineJsonIngestion = null,
     ) {
     }
 
-    private function isGraceWindowResult(array $result): bool
+    /**
+     * Parse various kline_time representations into a UTC DateTimeImmutable.
+     * Accepts DateTimeInterface, numeric timestamps (s/ms), or common date strings.
+     */
+    public function parseKlineTime(mixed $raw): ?\DateTimeImmutable
+    {
+        try {
+            if ($raw instanceof \DateTimeImmutable) {
+                return $raw->setTimezone(new \DateTimeZone('UTC'));
+            }
+            if ($raw instanceof \DateTimeInterface) {
+                return (new \DateTimeImmutable($raw->format('Y-m-d H:i:s'), $raw->getTimezone()))
+                    ->setTimezone(new \DateTimeZone('UTC'));
+            }
+            // Numeric timestamp (seconds or milliseconds)
+            if (is_int($raw) || is_float($raw) || (is_string($raw) && ctype_digit($raw))) {
+                $num = (int) $raw;
+                if ($num > 2000000000) { // likely milliseconds
+                    $num = intdiv($num, 1000);
+                }
+                $dt = (new \DateTimeImmutable('@' . $num))->setTimezone(new \DateTimeZone('UTC'));
+                return $dt;
+            }
+            if (is_string($raw) && $raw !== '') {
+                // Try native parser first
+                try {
+                    return (new \DateTimeImmutable($raw, new \DateTimeZone('UTC')))
+                        ->setTimezone(new \DateTimeZone('UTC'));
+                } catch (\Throwable) {
+                    // Try explicit common format
+                    $dt = \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $raw, new \DateTimeZone('UTC'));
+                    if ($dt instanceof \DateTimeImmutable) {
+                        return $dt->setTimezone(new \DateTimeZone('UTC'));
+                    }
+                }
+            }
+        } catch (\Throwable) {
+            // fallthrough
+        }
+        return null;
+    }
+
+    public function buildTfCacheKey(string $symbol, string $tf): string
+    {
+        return sprintf('mtf_tf_state_%s_%s', strtoupper($symbol), strtolower($tf));
+    }
+
+    public function computeTfExpiresAt(string $tf): \DateTimeImmutable
+    {
+        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+        $minute = (int)$now->format('i');
+        $hour = (int)$now->format('H');
+        $second = 0;
+        switch ($tf) {
+            case '4h':
+                $baseHour = $hour - ($hour % 4);
+                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+                    ->setTime($baseHour, 0, 0)
+                    ->modify('+4 hours');
+                return $next->modify('-1 second');
+            case '1h':
+                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+                    ->setTime($hour, 0, 0)
+                    ->modify('+1 hour');
+                return $next->modify('-1 second');
+            case '15m':
+                $baseMin = $minute - ($minute % 15);
+                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+                    ->setTime($hour, $baseMin, 0)
+                    ->modify('+15 minutes');
+                return $next->modify('-1 second');
+            case '5m':
+                $baseMin = $minute - ($minute % 5);
+                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+                    ->setTime($hour, $baseMin, 0)
+                    ->modify('+5 minutes');
+                return $next->modify('-1 second');
+            case '1m':
+            default:
+                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+                    ->setTime($hour, $minute, $second)
+                    ->modify('+1 minute');
+                return $next->modify('-1 second');
+        }
+    }
+
+    /**
+         * Decide whether a cached timeframe result can be reused as-is.
+     */
+    public function shouldReuseCachedResult(?array $cached, string $timeframe, string $symbol): bool
+    {
+        if (!is_array($cached)) {
+            return false;
+        }
+
+        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+        $expiredAt = $cached['kline_time'] ?? null;
+        if (!$expiredAt instanceof \DateTimeImmutable) {
+            return false;
+        }
+        $addInterval = match ($timeframe) {
+            '4h' => new \DateInterval('PT4H'),
+            '1h' => new \DateInterval('PT1H'),
+            '15m' => new \DateInterval('PT15M'),
+            '5m' => new \DateInterval('PT5M'),
+            '1m' => new \DateInterval('PT1M'),
+            default => throw new \InvalidArgumentException('Invalid timeframe'),
+        };
+        $expiresAt = $expiredAt->add($addInterval);
+        if ($now >= $expiresAt) {
+            $cacheKey = $this->buildTfCacheKey($symbol, $timeframe);
+            $this->validationCache?->delete($cacheKey);
+            return false;
+        }
+        $status = strtoupper((string)($cached['status'] ?? ''));
+        return $status === 'VALID';
+    }
+
+    public function getCachedTfResult(string $symbol, string $tf, ?bool &$hadRecord = null): ?array
+    {
+        $hadRecord = null;
+        try {
+            $repo = $this->entityManager->getRepository(ValidationCacheEntity::class);
+            $cacheKey = $this->buildTfCacheKey($symbol, $tf);
+            /** @var ValidationCacheEntity|null $rec */
+            $rec = $repo->findOneBy(['cacheKey' => $cacheKey]);
+            if ($rec === null) {
+                $hadRecord = false;
+                return null;
+            }
+            $hadRecord = true;
+            if ($rec->isExpired()) {
+                return null;
+            }
+            $payload = $rec->getPayload();
+            return [
+                'status' => $payload['status'] ?? 'INVALID',
+                'signal_side' => $payload['signal_side'] ?? 'NONE',
+                'kline_time' => isset($payload['kline_time']) ? new \DateTimeImmutable($payload['kline_time'], new \DateTimeZone('UTC')) : null,
+                'from_cache' => true,
+            ];
+        } catch (\Throwable $e) {
+            $this->logger->debug('[MTF] Cache read failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    public function putCachedTfResult(string $symbol, string $tf, array $result): void
+    {
+        if ($this->isGraceWindowResult($result)) {
+            $this->logger->debug('[MTF] Skip cache write for grace window result', ['symbol' => $symbol, 'tf' => $tf]);
+            return;
+        }
+        try {
+            $repo = $this->entityManager->getRepository(ValidationCacheEntity::class);
+            $cacheKey = $this->buildTfCacheKey($symbol, $tf);
+            $rec = $repo->findOneBy(['cacheKey' => $cacheKey]) ?? new ValidationCacheEntity();
+            $klineIso = null;
+            $parsed = $this->parseKlineTime($result['kline_time'] ?? null);
+            if ($parsed instanceof \DateTimeImmutable) {
+                $klineIso = $parsed->format('Y-m-d H:i:s');
+            }
+            $rec->setCacheKey($cacheKey)
+                ->setPayload([
+                    'status' => $result['status'] ?? 'INVALID',
+                    'signal_side' => $result['signal_side'] ?? 'NONE',
+                    'kline_time' => $klineIso,
+                ])
+                ->setExpiresAt($this->computeTfExpiresAt($tf));
+            $this->entityManager->persist($rec);
+            $this->entityManager->flush();
+        } catch (\Throwable $e) {
+            $this->logger->debug('[MTF] Cache write failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
+        }
+    }
+
+    public function persistIndicatorSnapshot(string $symbol, string $tf, array $result): void
+    {
+        if ($this->isGraceWindowResult($result)) {
+            return;
+        }
+        try {
+            $repo = $this->entityManager->getRepository(IndicatorSnapshot::class);
+            if (!$repo instanceof IndicatorSnapshotRepository) {
+                return;
+            }
+            $klineTime = $this->parseKlineTime($result['kline_time'] ?? null);
+            if (!$klineTime instanceof \DateTimeImmutable) {
+                // No valid kline time, skip persistence to avoid corrupt records
+                return;
+            }
+
+            $values = [];
+            // Extraire et aplatir un sous-ensemble du contexte indicateur pour éviter les collisions de clés typées
+            $context = $result['indicator_context'] ?? [];
+            if (is_array($context)) {
+                // RSI
+                if (isset($context['rsi']) && is_numeric($context['rsi'])) {
+                    $values['rsi'] = (float)$context['rsi'];
+                }
+                // ATR (du contexte)
+                if (isset($context['atr']) && is_numeric($context['atr'])) {
+                    $values['atr'] = (string)$context['atr'];
+                }
+                // VWAP
+                if (isset($context['vwap']) && is_numeric($context['vwap'])) {
+                    $values['vwap'] = (string)$context['vwap'];
+                }
+                // MACD (aplatir vers macd, macd_signal, macd_histogram)
+                if (isset($context['macd'])) {
+                    $macd = $context['macd'];
+                    if (is_array($macd)) {
+                        if (isset($macd['macd']) && is_numeric($macd['macd'])) {
+                            $values['macd'] = (string)$macd['macd'];
+                        }
+                        if (isset($macd['signal']) && is_numeric($macd['signal'])) {
+                            $values['macd_signal'] = (string)$macd['signal'];
+                        }
+                        if (isset($macd['hist']) && is_numeric($macd['hist'])) {
+                            $values['macd_histogram'] = (string)$macd['hist'];
+                        }
+                    } elseif (is_numeric($macd)) {
+                        $values['macd'] = (string)$macd;
+                    }
+                }
+                // EMA (map 20,50,200)
+                if (isset($context['ema']) && is_array($context['ema'])) {
+                    foreach ([20, 50, 200] as $period) {
+                        if (isset($context['ema'][(string)$period]) && is_numeric($context['ema'][(string)$period])) {
+                            $values['ema' . $period] = (string)$context['ema'][(string)$period];
+                        } elseif (isset($context['ema'][$period]) && is_numeric($context['ema'][$period])) {
+                            $values['ema' . $period] = (string)$context['ema'][$period];
+                        }
+                    }
+                }
+                // Bollinger
+                if (isset($context['bollinger']) && is_array($context['bollinger'])) {
+                    $boll = $context['bollinger'];
+                    if (isset($boll['upper']) && is_numeric($boll['upper'])) { $values['bb_upper'] = (string)$boll['upper']; }
+                    if (isset($boll['middle']) && is_numeric($boll['middle'])) { $values['bb_middle'] = (string)$boll['middle']; }
+                    if (isset($boll['lower']) && is_numeric($boll['lower'])) { $values['bb_lower'] = (string)$boll['lower']; }
+                }
+                // ADX (valeur unique ou période 14)
+                if (isset($context['adx'])) {
+                    $adx = $context['adx'];
+                    if (is_array($adx)) {
+                        $val = $adx['14'] ?? null;
+                        if (is_numeric($val)) { $values['adx'] = (string)$val; }
+                    } elseif (is_numeric($adx)) {
+                        $values['adx'] = (string)$adx;
+                    }
+                }
+                // MA (si le contexte expose ma9/ma21 directement)
+                foreach (['ma9', 'ma21'] as $maKey) {
+                    if (isset($context[$maKey]) && is_numeric($context[$maKey])) {
+                        $values[$maKey] = (string)$context[$maKey];
+                    }
+                }
+                // Close
+                if (isset($context['close']) && is_numeric($context['close'])) {
+                    $values['close'] = (string)$context['close'];
+                }
+            }
+            // Priorité aux champs directs utiles (ex: ATR calculé en dehors du contexte)
+            if (isset($result['atr']) && is_numeric($result['atr'])) { $values['atr'] = (string)$result['atr']; }
+
+            $snapshot = (new IndicatorSnapshot())
+                ->setSymbol(strtoupper($symbol))
+                ->setTimeframe(\App\Common\Enum\Timeframe::from($tf))
+                ->setKlineTime($klineTime->setTimezone(new \DateTimeZone('UTC')))
+                ->setValues($values)
+                ->setSource('PHP');
+
+            // Déterminer insert vs update pour le log
+            $existing = $repo->findOneBy([
+                'symbol' => $snapshot->getSymbol(),
+                'timeframe' => $snapshot->getTimeframe(),
+                'klineTime' => $snapshot->getKlineTime(),
+            ]);
+
+            $repo->upsert($snapshot);
+
+            // Info log for observability
+            $this->logger->info('[MTF] Indicator snapshot persisted', [
+                'symbol' => strtoupper($symbol),
+                'timeframe' => $tf,
+                'kline_time' => $klineTime->format('Y-m-d H:i:s'),
+                'values_count' => count($values),
+                'source' => 'PHP',
+                'action' => $existing ? 'update' : 'insert',
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->debug('[MTF] Indicator snapshot persist failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
+        }
+    }
+
+    public function isGraceWindowResult(array $result): bool
     {
         return strtoupper((string)($result['status'] ?? '')) === 'GRACE_WINDOW';
     }
@@ -228,6 +542,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             );
             // Toujours persister un snapshot pour trace, quel que soit le statut
             try {
+                $this->persistIndicatorSnapshot($symbol, $currentTf, $result);
                 $this->snapshotPersister->persist($symbol, $currentTf, $result);
             } catch (\Throwable) {
                 // best-effort
@@ -282,6 +597,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '4h';
             }
+
             if ($this->timeframeCacheService->shouldReuseCachedResult($cached, '4h', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 4h', [
                     'symbol' => $symbol,
@@ -290,8 +606,8 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $result4h = $cached;
             } else {
                 $result4h = $this->runTimeframeProcessor(
-                    $this->timeframe4hService,
-                    $symbol,
+                $this->timeframe4hService,
+                $symbol,
                 $runId,
                 $now,
                 $validationStates,
@@ -299,6 +615,9 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $forceRun,
                 $skipContextValidation
             );
+
+            // Persister systématiquement un snapshot 4h (même en INVALID)
+
                 $this->timeframeCacheService->storeResult($symbol, '4h', $result4h);
             }
             // Persister systématiquement un snapshot 4h (même en INVALID)
@@ -329,11 +648,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $result1h = null;
         if ($include1h) {
             $hadCache1h = null;
+
             $cached = $this->timeframeCacheService->getCachedResult($symbol, '1h', $hadCache1h);
             if ($hadCache1h === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '1h';
             }
+
             if ($this->timeframeCacheService->shouldReuseCachedResult($cached, '1h', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 1h', [
                     'symbol' => $symbol,
@@ -351,6 +672,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $forceRun,
                 $skipContextValidation
             );
+              
                 $this->timeframeCacheService->storeResult($symbol, '1h', $result1h);
             }
             // Persister systématiquement un snapshot 1h
@@ -401,11 +723,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         if ($include15m) {
             $this->logger->debug('[MTF] Start TF 15m', ['symbol' => $symbol]);
             $hadCache15m = null;
+
             $cached = $this->timeframeCacheService->getCachedResult($symbol, '15m', $hadCache15m);
             if ($hadCache15m === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '15m';
             }
+
             if ($this->timeframeCacheService->shouldReuseCachedResult($cached, '15m', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 15m', [
                     'symbol' => $symbol,
@@ -472,11 +796,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         if ($include5m) {
             $this->logger->debug('[MTF] Start TF 5m', ['symbol' => $symbol]);
             $hadCache5m = null;
+
             $cached = $this->timeframeCacheService->getCachedResult($symbol, '5m', $hadCache5m);
             if ($hadCache5m === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '5m';
             }
+
             if ($this->timeframeCacheService->shouldReuseCachedResult($cached, '5m', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 5m', [
                     'symbol' => $symbol,
@@ -494,6 +820,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $forceRun,
                 $skipContextValidation
             );
+
                 $this->timeframeCacheService->storeResult($symbol, '5m', $result5m);
             }
             // Calculer ATR 5m (toujours)
@@ -510,6 +837,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
 
             // Persister systématiquement un snapshot 5m (après calcul ATR)
+
             $this->snapshotPersister->persist($symbol, '5m', $result5m);
             if ($this->isGraceWindowResult($result5m)) {
                 return $result5m + ['failed_timeframe' => '5m'];
@@ -556,11 +884,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         if ($include1m) {
             $this->logger->debug('[MTF] Start TF 1m', ['symbol' => $symbol]);
             $hadCache1m = null;
+
             $cached = $this->timeframeCacheService->getCachedResult($symbol, '1m', $hadCache1m);
             if ($hadCache1m === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '1m';
             }
+
             if ($this->timeframeCacheService->shouldReuseCachedResult($cached, '1m', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 1m', [
                     'symbol' => $symbol,
@@ -578,6 +908,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $forceRun,
                 $skipContextValidation
             );
+
                 $this->timeframeCacheService->storeResult($symbol, '1m', $result1m);
             }
             // Calculer ATR 1m (toujours)
@@ -594,6 +925,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
 
             // Persister systématiquement un snapshot 1m (après calcul ATR)
+
             $this->snapshotPersister->persist($symbol, '1m', $result1m);
             if ($this->isGraceWindowResult($result1m)) {
                 return $result1m + ['failed_timeframe' => '1m'];
@@ -912,12 +1244,44 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         bool $forceRun,
         bool $skipContextValidation = false
     ): array {
+       $processingContext = new ProcessingContextDto(
+            runId: $runId->toString(),
+            symbol: $symbol,
+          now: $now,
+            collector: $collector,
+            forceTimeframeCheck: $forceTimeframeCheck,
+            forceRun: $forceRun,
+          skipContextValidation: $skipContextValidation,
+            currentTimeframe: $processor->getTimeframeValue()
+        );
+
         $context = ValidationContextDto::create(
             runId: $runId->toString(),
             now: $now,
             collector: $collector,
             forceTimeframeCheck: $forceTimeframeCheck,
             forceRun: $forceRun,
+            skipContextValidation: $skipContextValidation,
+            currentTimeframe: $processor->getTimeframeValue()
+        );
+
+        $this->timeframePipeline->run($processingContext);
+        $collector = $processingContext->collector;
+
+        $timeframeKey = strtolower($processor->getTimeframeValue());
+        $internal = $processingContext->getResult($timeframeKey);
+
+        if (!$internal instanceof InternalTimeframeResultDto) {
+            $fallbackContext = $processingContext->toContractContext();
+            $resultDto = $processor->processTimeframe($symbol, $fallbackContext);
+            $internal = InternalTimeframeResultDto::fromContractDto($resultDto);
+        }
+
+        $payload = $internal->toArray();
+        if ($processingContext->isCacheHit($timeframeKey)) {
+            $payload['from_cache'] = true;
+        }
+
             skipContextValidation: $skipContextValidation
         );
 
@@ -932,6 +1296,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         ];
 
         return $result;
+
     }
 
     /**
