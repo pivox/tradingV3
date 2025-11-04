@@ -133,6 +133,86 @@ def test_format_mtf_response_error():
     print(result["summary"])
 
 
+def test_format_mtf_response_with_errors():
+    """Test formatting a response with errors."""
+    raw_response = {
+        "ok": True,
+        "status": 200,
+        "body": json.dumps({
+            "status": "success",
+            "data": {
+                "summary": {
+                    "execution_time_seconds": 15.0,
+                    "symbols_processed": 3,
+                    "success_rate": 0,
+                    "dry_run": False,
+                },
+                "results": {},
+                "errors": [
+                    "Error processing symbol X",
+                    {"message": "Connection timeout"},
+                ]
+            }
+        }),
+        "url": "http://test",
+        "payload": {"workers": 2}
+    }
+    
+    result = format_mtf_response(raw_response)
+    
+    assert "Errors:" in result["summary"]
+    assert "Error processing symbol X" in result["summary"]
+    assert "Connection timeout" in result["summary"]
+    
+    print("✅ Test passed (with errors)!")
+    print("\nFormatted summary:")
+    print(result["summary"])
+
+
+def test_format_mtf_response_ready_status():
+    """Test formatting a response with READY status."""
+    raw_response = {
+        "ok": True,
+        "status": 200,
+        "body": json.dumps({
+            "status": "success",
+            "data": {
+                "summary": {
+                    "execution_time_seconds": 10.0,
+                    "symbols_processed": 2,
+                    "success_rate": 50,
+                    "dry_run": False,
+                },
+                "results": {
+                    "BTCUSDT": {
+                        "symbol": "BTCUSDT",
+                        "status": "READY",
+                        "execution_tf": "5m",
+                    },
+                    "ETHUSDT": {
+                        "symbol": "ETHUSDT",
+                        "status": "VALID",
+                        "execution_tf": "1m",
+                    }
+                }
+            }
+        }),
+        "url": "http://test",
+        "payload": {"workers": 1}
+    }
+    
+    result = format_mtf_response(raw_response)
+    
+    # Check that READY is treated as SUCCESS
+    assert "BTCUSDT" in result["summary"]
+    assert "5m" in result["summary"]
+    assert result["success_contracts"]["5m"] == ["BTCUSDT"]
+    
+    print("✅ Test passed (READY status)!")
+    print("\nFormatted summary:")
+    print(result["summary"])
+
+
 if __name__ == "__main__":
     print("Running response_formatter tests...\n")
     test_format_mtf_response_with_success()
@@ -140,5 +220,9 @@ if __name__ == "__main__":
     test_format_mtf_response_no_success()
     print("\n" + "="*50 + "\n")
     test_format_mtf_response_error()
+    print("\n" + "="*50 + "\n")
+    test_format_mtf_response_with_errors()
+    print("\n" + "="*50 + "\n")
+    test_format_mtf_response_ready_status()
     print("\n✅ All tests passed!")
 
