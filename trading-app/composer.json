@@ -25,6 +25,7 @@
     "doctrine/doctrine-migrations-bundle": "^3.5",
     "doctrine/dbal": "^3.7",
     "react/socket": "^1.12",
+    "react/http": "^1.7 || ^2.0 || ^3.0",
     "ratchet/pawl": "^0.4",
     "guzzlehttp/guzzle": "^7.8",
     "ramsey/uuid": "^4.7",

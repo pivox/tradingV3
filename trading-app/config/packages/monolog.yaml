@@ -1,5 +1,5 @@
 monolog:
-  channels: ['mtf', 'validation', 'signals', 'positions', 'positions_flow', 'order', 'order_journey', 'bitmart', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity']
+  channels: ['mtf', 'validation', 'signals', 'positions', 'positions_flow', 'order', 'order_journey', 'bitmart', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity', 'ws_agent']
   handlers:
     # =====================
     # --- Handler Temporal (Asynchrone) ---
@@ -254,6 +254,15 @@ monolog:
       max_files: 5
       level: 'info'
       channels: ['bitmart']
+      formatter: App\Logging\CustomLineFormatter
+
+    # Canal WS Agent - WebSocket agent pour écouter les ordres BitMart
+    ws_agent_rotating:
+      type: rotating_file
+      path: '%env(APP_LOG_DIR)%/ws-agent.log'
+      max_files: 10
+      level: 'info'
+      channels: ['ws_agent']
       formatter: App\Logging\CustomLineFormatter
 
     # Canal High Conviction - Stratégies validées

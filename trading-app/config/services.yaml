@@ -282,3 +282,10 @@ services:
             - bitmart
         tags:
             - { name: monolog.logger, channel: bitmart }
+
+    monolog.logger.ws_agent:
+        parent: monolog.logger
+        arguments:
+            - ws_agent
+        tags:
+            - { name: monolog.logger, channel: ws_agent }
