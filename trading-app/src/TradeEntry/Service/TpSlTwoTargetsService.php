@@ -92,6 +92,7 @@ final class TpSlTwoTargetsService
         $pivotSlBufferPct = isset($defaults['pivot_sl_buffer_pct']) ? (float)$defaults['pivot_sl_buffer_pct'] : null;
         $pivotSlMinKeepRatio = isset($defaults['pivot_sl_min_keep_ratio']) ? (float)$defaults['pivot_sl_min_keep_ratio'] : null;
         $rMultiple = (float)($req->rMultiple ?? ($defaults['r_multiple'] ?? 2.0));
+        $slFullByDefault = (bool)($defaults['sl_full_size'] ?? true);
 
         // Stop par pivot si disponible, sinon par risque
         if (!empty($pivotLevels)) {
@@ -189,7 +190,16 @@ final class TpSlTwoTargetsService
         // 4) Annulations (SL si différent, TP existants)
         $cancelled = [];
         $orderProvider = $this->providers->getOrderProvider();
-        $open = $orderProvider->getOpenOrders($symbol);
+        try {
+            $open = $orderProvider->getOpenOrders($symbol);
+        } catch (\Throwable $e) {
+            $open = [];
+            $this->journeyLogger->warning('order_journey.tp2sl.open_orders_failed', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+                'reason' => 'fetch_open_orders_failed',
+            ]);
+        }
 
         // Détermination sens fermeture
         $closeSide = $req->side === EntrySide::Long ? OrderSide::SELL : OrderSide::BUY;
@@ -212,8 +222,17 @@ final class TpSlTwoTargetsService
             if ($existingSl !== null) {
                 $p = $priceOf($existingSl);
                 if ($p !== null && abs($p - $stop) > max($tick, 1e-8)) {
-                    if ($orderProvider->cancelOrder($existingSl->orderId)) {
-                        $cancelled[] = $existingSl->orderId;
+                    try {
+                        if ($orderProvider->cancelOrder($existingSl->orderId)) {
+                            $cancelled[] = $existingSl->orderId;
+                        }
+                    } catch (\Throwable $e) {
+                        $this->journeyLogger->warning('order_journey.tp2sl.cancel_sl_failed', [
+                            'symbol' => $symbol,
+                            'order_id' => $existingSl->orderId,
+                            'error' => $e->getMessage(),
+                            'reason' => 'cancel_sl_exception',
+                        ]);
                     }
                 }
             }
@@ -223,8 +242,17 @@ final class TpSlTwoTargetsService
         if ($req->cancelExistingTakeProfits) {
             foreach ($closing as $o) {
                 if (!$isSl($o)) {
-                    if ($orderProvider->cancelOrder($o->orderId)) {
-                        $cancelled[] = $o->orderId;
+                    try {
+                        if ($orderProvider->cancelOrder($o->orderId)) {
+                            $cancelled[] = $o->orderId;
+                        }
+                    } catch (\Throwable $e) {
+                        $this->journeyLogger->warning('order_journey.tp2sl.cancel_tp_failed', [
+                            'symbol' => $symbol,
+                            'order_id' => $o->orderId,
+                            'error' => $e->getMessage(),
+                            'reason' => 'cancel_tp_exception',
+                        ]);
                     }
                 }
             }
@@ -290,6 +318,10 @@ final class TpSlTwoTargetsService
             $size2 = (int)min($size2, (int)$maxVol);
         }
 
+        // Déterminer taille SL (full vs résiduel après split)
+        $slFull = (bool)($req->slFullSize ?? $slFullByDefault);
+        $slSize = $slFull ? (int)$size : (int)max(0, $size - $size1 - $size2);
+
         $submitted = [];
         $bitmartCloseSide = ($req->side === EntrySide::Long) ? 2 : 3; // 2=close_long, 3=close_short
 
@@ -300,14 +332,12 @@ final class TpSlTwoTargetsService
             'reduceOnly' => true,
         ];
 
-        // SL pleine taille (comportement codé en dur)
-        $slSize = (int)$size;
+        // Quantifier SL size au multiple minVol
+        $slSize = $slSize > 0 ? (int)floor($slSize / $minVol) * $minVol : 0;
         // Préparer un base CID pour tracer les ordres
         $baseCid = $this->makeBaseCid($symbol, $req->side, $decisionKey);
 
         if ($slSize > 0) {
-            // Quantifier SL size au multiple minVol
-            $slSize = (int)floor($slSize / $minVol) * $minVol;
             $options = $optionsBase + ['client_order_id' => $baseCid . '-SL'];
             // Submit SL as a stop-limit (triggered) by using stopPrice; keep limit price equal to stop for determinism
             $dto = $orderProvider->placeOrder(
@@ -387,6 +417,11 @@ final class TpSlTwoTargetsService
             'decision_key' => $decisionKey,
             'submitted_count' => \count($submitted),
             'cancelled_count' => \count($cancelled),
+            'ratio' => $ratio,
+            'size' => $size,
+            'size1' => $size1,
+            'size2' => $size2,
+            'sl_size' => $slSize,
             'reason' => 'tp_two_targets_submitted',
         ]);
 
@@ -437,12 +472,14 @@ final class TpSlTwoTargetsService
                 return $default;
             }
 
-            // Prendre l'état le plus récent
+            // Filtrer les états expirés puis trier par klineTime desc
+            $states = array_values(array_filter($states, static fn($s) => method_exists($s, 'isExpired') ? !$s->isExpired() : true));
+            if (empty($states)) {
+                return $default;
+            }
             usort($states, static function ($a, $b) {
-                $ta = method_exists($a, 'klineTime') ? $a->klineTime : ($a->klineTime ?? null);
-                $tb = method_exists($b, 'klineTime') ? $b->klineTime : ($b->klineTime ?? null);
-                $tsa = $ta instanceof \DateTimeImmutable ? $ta->getTimestamp() : 0;
-                $tsb = $tb instanceof \DateTimeImmutable ? $tb->getTimestamp() : 0;
+                $tsa = ($a->klineTime ?? null) instanceof \DateTimeImmutable ? $a->klineTime->getTimestamp() : 0;
+                $tsb = ($b->klineTime ?? null) instanceof \DateTimeImmutable ? $b->klineTime->getTimestamp() : 0;
                 return $tsb <=> $tsa;
             });
 

@@ -16,6 +16,7 @@ final class TpSlTwoTargetsRequest
         public readonly ?float $splitPct = null,
         public readonly ?bool $cancelExistingStopLossIfDifferent = true,
         public readonly ?bool $cancelExistingTakeProfits = true,
+        public readonly ?bool $slFullSize = null,
         // Hints to drive TpSplitResolver (optional)
         public readonly ?string $momentum = null,        // 'faible'|'moyen'|'fort'
         public readonly ?int $mtfValidCount = null,      // 0..3
