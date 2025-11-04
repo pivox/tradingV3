@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Service;
 
+use App\Contract\Provider\OrderProviderInterface;
 use App\Provider\Bitmart\WebSocket\BitmartWebsocketPrivate;
 use App\Repository\FuturesOrderRepository;
 use App\Repository\OrderIntentRepository;
@@ -38,6 +39,7 @@ final class WsAgentService
         private readonly FuturesOrderSyncService $syncService,
         private readonly EntityManagerInterface $entityManager,
         private readonly HttpClientInterface $httpClient,
+        private readonly OrderProviderInterface $orderProvider,
         #[Autowire(service: 'monolog.logger.ws_agent')]
         private readonly LoggerInterface $logger,
         #[Autowire('%env(BITMART_WS_PRIVATE_URL)%')]
@@ -115,6 +117,76 @@ final class WsAgentService
                     'status' => 'ok',
                     'message' => 'order_tracked',
                 ]));
+            }
+
+            // Endpoint pour synchroniser les ordres ouverts
+            if ($path === '/internal/sync-orders' && $method === 'POST') {
+                $body = json_decode($request->getBody()->getContents(), true);
+                if (!is_array($body)) {
+                    return new Response(400, ['Content-Type' => 'application/json'], json_encode([
+                        'status' => 'error',
+                        'reason' => 'invalid_json',
+                    ]));
+                }
+
+                $symbol = $body['symbol'] ?? null;
+                if (!$symbol) {
+                    return new Response(400, ['Content-Type' => 'application/json'], json_encode([
+                        'status' => 'error',
+                        'reason' => 'missing_symbol',
+                    ]));
+                }
+
+                try {
+                    $count = $this->syncOpenOrders($symbol);
+                    return new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                        'status' => 'ok',
+                        'symbol' => $symbol,
+                        'synced_count' => $count,
+                    ]));
+                } catch (\Throwable $e) {
+                    $this->logger->error('[WsAgent] Error syncing orders', [
+                        'symbol' => $symbol,
+                        'error' => $e->getMessage(),
+                    ]);
+                    return new Response(500, ['Content-Type' => 'application/json'], json_encode([
+                        'status' => 'error',
+                        'reason' => 'sync_failed',
+                        'error' => $e->getMessage(),
+                    ]));
+                }
+            }
+
+            // Endpoint pour récupérer les ordres
+            if ($path === '/orders' && $method === 'GET') {
+                $queryParams = $request->getQueryParams();
+                $symbol = $queryParams['symbol'] ?? null;
+                $status = $queryParams['status'] ?? null;
+                $kind = $queryParams['kind'] ?? null; // 'main', 'sl', 'tp'
+                $limit = isset($queryParams['limit']) ? (int) $queryParams['limit'] : 100;
+                $limit = max(1, min(500, $limit));
+
+                try {
+                    $orders = $this->futuresOrderRepository->findWithFilters($symbol, $status, $kind, $limit);
+                    $data = array_map(function ($order) {
+                        return $this->serializeOrder($order);
+                    }, $orders);
+
+                    return new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                        'status' => 'ok',
+                        'count' => count($data),
+                        'data' => $data,
+                    ]));
+                } catch (\Throwable $e) {
+                    $this->logger->error('[WsAgent] Error fetching orders', [
+                        'error' => $e->getMessage(),
+                    ]);
+                    return new Response(500, ['Content-Type' => 'application/json'], json_encode([
+                        'status' => 'error',
+                        'reason' => 'fetch_failed',
+                        'error' => $e->getMessage(),
+                    ]));
+                }
             }
 
             // Health check
@@ -460,6 +532,89 @@ final class WsAgentService
         }
         $this->isAuthenticated = false;
         $this->isSubscribed = false;
+    }
+
+    /**
+     * Synchronise les ordres ouverts depuis l'API BitMart pour un symbole donné
+     * @return int Nombre d'ordres synchronisés
+     */
+    public function syncOpenOrders(string $symbol): int
+    {
+        try {
+            // getOpenOrders() synchronise déjà les ordres via syncService dans BitmartOrderProvider
+            $orders = $this->orderProvider->getOpenOrders($symbol);
+            $count = count($orders);
+            
+            $this->logger->info('[WsAgent] Synced open orders', [
+                'symbol' => $symbol,
+                'count' => $count,
+            ]);
+
+            return $count;
+        } catch (\Throwable $e) {
+            $this->logger->error('[WsAgent] Error syncing open orders', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Sérialise un ordre pour l'API
+     * @param \App\Entity\FuturesOrder $order
+     * @return array<string,mixed>
+     */
+    private function serializeOrder(\App\Entity\FuturesOrder $order): array
+    {
+        $rawData = $order->getRawData();
+        $kind = $this->detectOrderKind($rawData);
+
+        return [
+            'id' => $order->getId(),
+            'order_id' => $order->getOrderId(),
+            'client_order_id' => $order->getClientOrderId(),
+            'symbol' => $order->getSymbol(),
+            'kind' => $kind,
+            'side' => $order->getSide(),
+            'type' => $order->getType(),
+            'status' => $order->getStatus(),
+            'price' => $order->getPrice(),
+            'size' => $order->getSize(),
+            'filled_size' => $order->getFilledSize(),
+            'filled_notional' => $order->getFilledNotional(),
+            'open_type' => $order->getOpenType(),
+            'position_mode' => $order->getPositionMode(),
+            'leverage' => $order->getLeverage(),
+            'fee' => $order->getFee(),
+            'fee_currency' => $order->getFeeCurrency(),
+            'account' => $order->getAccount(),
+            'created_time' => $order->getCreatedTime(),
+            'updated_time' => $order->getUpdatedTime(),
+            'created_at' => $order->getCreatedAt()->format('c'),
+            'updated_at' => $order->getUpdatedAt()->format('c'),
+        ];
+    }
+
+    /**
+     * Détecte le type d'ordre (main, sl, tp) depuis les données brutes
+     * @param array<string,mixed> $rawData
+     * @return string 'main', 'sl', 'tp', ou 'unknown'
+     */
+    private function detectOrderKind(array $rawData): string
+    {
+        // Si l'ordre a preset_take_profit_price dans rawData, c'est un TP
+        if (isset($rawData['preset_take_profit_price']) && $rawData['preset_take_profit_price'] !== null) {
+            return 'tp';
+        }
+
+        // Si l'ordre a preset_stop_loss_price dans rawData, c'est un SL
+        if (isset($rawData['preset_stop_loss_price']) && $rawData['preset_stop_loss_price'] !== null) {
+            return 'sl';
+        }
+
+        // Sinon, c'est probablement un ordre principal
+        return 'main';
     }
 }
 
