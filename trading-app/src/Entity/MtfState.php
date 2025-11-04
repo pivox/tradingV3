@@ -40,7 +40,7 @@ class MtfState
     #[ORM\Column(type: Types::JSON, options: ['default' => '{}'])]
     private array $sides = [];
 
-    #[ORM\Column(type: 'postgres_timestamp', options: ['default' => 'CURRENT_TIMESTAMP'])]
+    #[ORM\Column(type: 'postgres_timestamp')]
     private \DateTimeImmutable $updatedAt;
 
     public function __construct()

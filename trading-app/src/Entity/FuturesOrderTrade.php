@@ -20,7 +20,7 @@ class FuturesOrderTrade
     #[ORM\Column(type: Types::BIGINT)]
     private ?int $id = null;
 
-    #[ORM\Column(type: Types::STRING, length: 80, unique: true, nullable: true)]
+    #[ORM\Column(type: Types::STRING, length: 80, nullable: true)]
     private ?string $tradeId = null;
 
     #[ORM\Column(type: Types::STRING, length: 80)]

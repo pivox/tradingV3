@@ -21,7 +21,7 @@ parameters:
     trade_entry.order_timeout_seconds: 120
     # Durée de réactivation du MtfSwitch après annulation d'ordre (au lieu de 4h)
     env(ORDER_TIMEOUT_SWITCH_DURATION): '15m'
-    
+
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
 
     # Configuration MTF/Decision: déplacée dans config/app/mtf_validations.yaml (mtf_validation.defaults)
@@ -59,7 +59,7 @@ services:
     #     class: Redis
     #     calls:
     #         - [connect, ['127.0.0.1', 6379]]
-    
+
     # Option 2: Mock Redis pour les tests (décommentez si Redis n'est pas disponible)
     Redis:
         class: App\Runtime\Concurrency\MockRedis
@@ -173,7 +173,7 @@ services:
             $logger: '@logger'
         calls:
             - [ load, ['@App\Config\MtfValidationConfig'] ]
-    
+
     # Nouveau registre des conditions avec AutowireLocator/AutowireIterator
     App\Indicator\Registry\ConditionRegistry:
         arguments:
@@ -218,9 +218,6 @@ services:
     App\Service\BacktestClockService:
         public: true
 
-    App\Repository\HotKlineRepository:
-        arguments:
-            $registry: '@doctrine'
 
     # WebSocket Dispatcher Services
     App\Service\AssignmentStorageInterface: '@App\Service\CsvAssignmentStorage'
@@ -261,12 +258,12 @@ services:
     # === TradeEntry Services ===
     # Les services TradeEntry sont auto-configurés via le namespace `App\` et `autoconfigure`.
     # Plus besoin de l'attribut #[AsService]; ajouter des configs spécifiques si nécessaire.
-    
+
     # Configuration TradeEntry avec paramètres par défaut
     # App\TradeEntry\PreOrder\PreOrderBuilder:
     #     arguments:
     #         $defaults: '%trade_entry.defaults%'
-    
+
     # Logger spécifique pour TradeEntry
     monolog.logger.trade_entry:
         parent: monolog.logger

@@ -28,10 +28,10 @@ class MtfSwitch
     #[ORM\Column(type: Types::TEXT, nullable: true)]
     private ?string $description = null;
 
-    #[ORM\Column(type: 'postgres_timestamp', options: ['default' => 'CURRENT_TIMESTAMP'])]
+    #[ORM\Column(type: 'postgres_timestamp')]
     private \DateTimeImmutable $createdAt;
 
-    #[ORM\Column(type: 'postgres_timestamp', options: ['default' => 'CURRENT_TIMESTAMP'])]
+    #[ORM\Column(type: 'postgres_timestamp')]
     private \DateTimeImmutable $updatedAt;
 
     #[ORM\Column(type: 'postgres_timestamp', nullable: true)]

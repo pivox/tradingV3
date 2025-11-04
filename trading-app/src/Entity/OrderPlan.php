@@ -29,13 +29,13 @@ class OrderPlan
     #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Common\Enum\SignalSide::class)]
     private \App\Common\Enum\SignalSide $side;
 
-    #[ORM\Column(type: Types::JSON)]
+    #[ORM\Column(type: Types::JSON, options: ['jsonb' => true])]
     private array $riskJson = [];
 
-    #[ORM\Column(type: Types::JSON)]
+    #[ORM\Column(type: Types::JSON, options: ['jsonb' => true])]
     private array $contextJson = [];
 
-    #[ORM\Column(type: Types::JSON)]
+    #[ORM\Column(type: Types::JSON, options: ['jsonb' => true])]
     private array $execJson = [];
 
     #[ORM\Column(type: Types::STRING, length: 20, options: ['default' => 'PLANNED'])]
