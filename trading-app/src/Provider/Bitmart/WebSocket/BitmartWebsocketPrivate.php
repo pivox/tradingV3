@@ -206,12 +206,11 @@ final class BitmartWebsocketPrivate extends BitmartWebsocketBase
      */
     private function normalizeChannel(string $channel): string
     {
-        return match ($channel) {
-            'order' => self::CHANNEL_ORDER,
-            'position' => self::CHANNEL_POSITION,
-            default => str_starts_with($channel, 'asset:')
-                ? sprintf(self::CHANNEL_ASSET_PATTERN, substr($channel, 6))
-                : $channel,
+        return match (true) {
+            $channel === 'order' => self::CHANNEL_ORDER,
+            $channel === 'position' => self::CHANNEL_POSITION,
+            str_starts_with($channel, 'asset:') => sprintf(self::CHANNEL_ASSET_PATTERN, substr($channel, 6)),
+            default => throw new \InvalidArgumentException("Unrecognized channel name: '$channel'"),
         };
     }
 }
