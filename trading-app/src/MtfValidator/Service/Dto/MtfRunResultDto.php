@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Service\Dto;
 
+use App\MtfValidator\Service\Dto\Internal\InternalRunSummaryDto;
+
 /**
  * DTO pour le résultat d'exécution MTF
  */
@@ -13,7 +15,7 @@ final class MtfRunResultDto
         public readonly string $runId,
         public readonly array $symbols,
         public readonly array $results,
-        public readonly RunSummaryDto $summary,
+        public readonly InternalRunSummaryDto $summary,
         public readonly \DateTimeImmutable $startedAt,
         public readonly \DateTimeImmutable $completedAt,
         public readonly float $executionTimeSeconds

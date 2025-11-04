@@ -9,11 +9,11 @@ use App\Contract\Runtime\AuditLoggerInterface;
 use App\Contract\Runtime\FeatureSwitchInterface;
 use App\Contract\Runtime\LockManagerInterface;
 use App\Config\MtfValidationConfig;
+use App\MtfValidator\Service\Dto\Internal\InternalRunSummaryDto;
 use App\MtfValidator\Service\Dto\MtfRunResultDto;
-use App\MtfValidator\Service\Dto\RunSummaryDto;
+use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\MtfValidator\Service\SymbolProcessor;
 use App\MtfValidator\Service\TradingDecisionHandler;
-use App\MtfValidator\Service\Dto\SymbolResultDto;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;
@@ -241,13 +241,13 @@ final class MtfRunOrchestrator
         array $results,
         float $startTime,
         MtfRunDto $mtfRunDto
-    ): RunSummaryDto {
+    ): InternalRunSummaryDto {
         $executionTime = microtime(true) - $startTime;
         $successful = count(array_filter($results, fn($r) => strtoupper($r['status'] ?? '') === 'SUCCESS'));
         $failed = count(array_filter($results, fn($r) => strtoupper($r['status'] ?? '') === 'ERROR'));
         $skipped = count(array_filter($results, fn($r) => strtoupper($r['status'] ?? '') === 'SKIPPED'));
 
-        return new RunSummaryDto(
+        return new InternalRunSummaryDto(
             runId: $runId->toString(),
             executionTimeSeconds: round($executionTime, 3),
             symbolsRequested: count($results),
@@ -266,7 +266,7 @@ final class MtfRunOrchestrator
 
     private function yieldBlockedResult(MtfRunDto $mtfRunDto, UuidInterface $runId, float $startTime, string $reason): \Generator
     {
-        $summary = new RunSummaryDto(
+        $summary = new InternalRunSummaryDto(
             runId: $runId->toString(),
             executionTimeSeconds: round(microtime(true) - $startTime, 3),
             symbolsRequested: 0,
@@ -287,7 +287,7 @@ final class MtfRunOrchestrator
 
     private function yieldEmptyResult(MtfRunDto $mtfRunDto, UuidInterface $runId, float $startTime): \Generator
     {
-        $summary = new RunSummaryDto(
+        $summary = new InternalRunSummaryDto(
             runId: $runId->toString(),
             executionTimeSeconds: round(microtime(true) - $startTime, 3),
             symbolsRequested: 0,
@@ -306,7 +306,7 @@ final class MtfRunOrchestrator
         yield from $this->yieldFinalResult($summary, [], $startTime, $runId);
     }
 
-    private function yieldFinalResult(RunSummaryDto $summary, array $results, float $startTime, UuidInterface $runId): \Generator
+    private function yieldFinalResult(InternalRunSummaryDto $summary, array $results, float $startTime, UuidInterface $runId): \Generator
     {
         yield [
             'symbol' => 'FINAL',

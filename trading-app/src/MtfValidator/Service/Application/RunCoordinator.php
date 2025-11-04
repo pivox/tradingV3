@@ -7,6 +7,7 @@ namespace App\MtfValidator\Service\Application;
 use App\Common\Enum\Timeframe;
 use App\Config\MtfConfigProviderInterface;
 use App\Config\MtfValidationConfig;
+use App\Contract\MtfValidator\Dto\ValidationContextDto;
 use App\Contract\MtfValidator\TimeframeProcessorInterface;
 use App\Entity\MtfAudit;
 use App\Event\MtfAuditEvent;
@@ -24,6 +25,14 @@ use App\Entity\IndicatorSnapshot;
 use App\Repository\IndicatorSnapshotRepository;
 use App\Contract\Signal\SignalValidationServiceInterface;
 use App\MtfValidator\Service\Dto\InternalTimeframeResultDto;
+
+use App\Repository\MtfAuditRepository;
+use App\Repository\MtfStateRepository;
+use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Service\MtfTimeService;
+use App\MtfValidator\Service\SnapshotPersister;
+use App\MtfValidator\Service\TimeframeCacheService;
+use App\Contract\Signal\SignalValidationServiceInterface;
 use App\MtfValidator\Service\Timeframe\Timeframe4hService;
 use App\MtfValidator\Service\Timeframe\Timeframe1hService;
 use App\MtfValidator\Service\Timeframe\Timeframe15mService;
@@ -63,6 +72,8 @@ final class RunCoordinator
         private readonly Timeframe1mService $timeframe1mService,
         private readonly TimeframePipeline $timeframePipeline,
         private readonly ?DbValidationCache $validationCache = null,
+        private readonly TimeframeCacheService $timeframeCacheService,
+        private readonly SnapshotPersister $snapshotPersister,
         private readonly ?KlineJsonIngestionService $klineJsonIngestion = null,
     ) {
     }
@@ -532,6 +543,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             // Toujours persister un snapshot pour trace, quel que soit le statut
             try {
                 $this->persistIndicatorSnapshot($symbol, $currentTf, $result);
+                $this->snapshotPersister->persist($symbol, $currentTf, $result);
             } catch (\Throwable) {
                 // best-effort
             }
@@ -580,12 +592,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         if ($include4h) {
             $this->logger->debug('[MTF] Start TF 4h', ['symbol' => $symbol]);
             $hadCache4h = null;
-            $cached = $this->getCachedTfResult($symbol, '4h', $hadCache4h);
+            $cached = $this->timeframeCacheService->getCachedResult($symbol, '4h', $hadCache4h);
             if ($hadCache4h === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '4h';
             }
-            if ($this->shouldReuseCachedResult($cached, '4h', $symbol)) {
+
+            if ($this->timeframeCacheService->shouldReuseCachedResult($cached, '4h', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 4h', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
@@ -602,10 +615,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $forceRun,
                 $skipContextValidation
             );
-                $this->putCachedTfResult($symbol, '4h', $result4h);
+
+            // Persister systématiquement un snapshot 4h (même en INVALID)
+
+                $this->timeframeCacheService->storeResult($symbol, '4h', $result4h);
             }
             // Persister systématiquement un snapshot 4h (même en INVALID)
-            $this->persistIndicatorSnapshot($symbol, '4h', $result4h);
+            $this->snapshotPersister->persist($symbol, '4h', $result4h);
             if ($this->isGraceWindowResult($result4h)) {
                 return $result4h + ['failed_timeframe' => '4h'];
             }
@@ -632,12 +648,14 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $result1h = null;
         if ($include1h) {
             $hadCache1h = null;
-            $cached = $this->getCachedTfResult($symbol, '1h', $hadCache1h);
+
+            $cached = $this->timeframeCacheService->getCachedResult($symbol, '1h', $hadCache1h);
             if ($hadCache1h === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '1h';
             }
-            if ($this->shouldReuseCachedResult($cached, '1h', $symbol)) {
+
+            if ($this->timeframeCacheService->shouldReuseCachedResult($cached, '1h', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 1h', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
@@ -654,10 +672,11 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $forceRun,
                 $skipContextValidation
             );
-                $this->putCachedTfResult($symbol, '1h', $result1h);
+              
+                $this->timeframeCacheService->storeResult($symbol, '1h', $result1h);
             }
             // Persister systématiquement un snapshot 1h
-            $this->persistIndicatorSnapshot($symbol, '1h', $result1h);
+            $this->snapshotPersister->persist($symbol, '1h', $result1h);
             if ($this->isGraceWindowResult($result1h)) {
                 return $result1h + ['failed_timeframe' => '1h'];
             }
@@ -704,12 +723,14 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         if ($include15m) {
             $this->logger->debug('[MTF] Start TF 15m', ['symbol' => $symbol]);
             $hadCache15m = null;
-            $cached = $this->getCachedTfResult($symbol, '15m', $hadCache15m);
+
+            $cached = $this->timeframeCacheService->getCachedResult($symbol, '15m', $hadCache15m);
             if ($hadCache15m === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '15m';
             }
-            if ($this->shouldReuseCachedResult($cached, '15m', $symbol)) {
+
+            if ($this->timeframeCacheService->shouldReuseCachedResult($cached, '15m', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 15m', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
@@ -726,10 +747,10 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $forceRun,
                 $skipContextValidation
             );
-                $this->putCachedTfResult($symbol, '15m', $result15m);
+                $this->timeframeCacheService->storeResult($symbol, '15m', $result15m);
             }
             // Persister systématiquement un snapshot 15m
-            $this->persistIndicatorSnapshot($symbol, '15m', $result15m);
+            $this->snapshotPersister->persist($symbol, '15m', $result15m);
             if ($this->isGraceWindowResult($result15m)) {
                 return $result15m + ['failed_timeframe' => '15m'];
             }
@@ -775,12 +796,14 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         if ($include5m) {
             $this->logger->debug('[MTF] Start TF 5m', ['symbol' => $symbol]);
             $hadCache5m = null;
-            $cached = $this->getCachedTfResult($symbol, '5m', $hadCache5m);
+
+            $cached = $this->timeframeCacheService->getCachedResult($symbol, '5m', $hadCache5m);
             if ($hadCache5m === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '5m';
             }
-            if ($this->shouldReuseCachedResult($cached, '5m', $symbol)) {
+
+            if ($this->timeframeCacheService->shouldReuseCachedResult($cached, '5m', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 5m', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
@@ -797,7 +820,8 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $forceRun,
                 $skipContextValidation
             );
-                $this->putCachedTfResult($symbol, '5m', $result5m);
+
+                $this->timeframeCacheService->storeResult($symbol, '5m', $result5m);
             }
             // Calculer ATR 5m (toujours)
             try {
@@ -813,7 +837,8 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
 
             // Persister systématiquement un snapshot 5m (après calcul ATR)
-            $this->persistIndicatorSnapshot($symbol, '5m', $result5m);
+
+            $this->snapshotPersister->persist($symbol, '5m', $result5m);
             if ($this->isGraceWindowResult($result5m)) {
                 return $result5m + ['failed_timeframe' => '5m'];
             }
@@ -859,12 +884,14 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         if ($include1m) {
             $this->logger->debug('[MTF] Start TF 1m', ['symbol' => $symbol]);
             $hadCache1m = null;
-            $cached = $this->getCachedTfResult($symbol, '1m', $hadCache1m);
+
+            $cached = $this->timeframeCacheService->getCachedResult($symbol, '1m', $hadCache1m);
             if ($hadCache1m === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '1m';
             }
-            if ($this->shouldReuseCachedResult($cached, '1m', $symbol)) {
+
+            if ($this->timeframeCacheService->shouldReuseCachedResult($cached, '1m', $symbol)) {
                 $this->logger->debug('[MTF] Cache HIT 1m', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
@@ -881,7 +908,8 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $forceRun,
                 $skipContextValidation
             );
-                $this->putCachedTfResult($symbol, '1m', $result1m);
+
+                $this->timeframeCacheService->storeResult($symbol, '1m', $result1m);
             }
             // Calculer ATR 1m (toujours)
             try {
@@ -897,7 +925,8 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
 
             // Persister systématiquement un snapshot 1m (après calcul ATR)
-            $this->persistIndicatorSnapshot($symbol, '1m', $result1m);
+
+            $this->snapshotPersister->persist($symbol, '1m', $result1m);
             if ($this->isGraceWindowResult($result1m)) {
                 return $result1m + ['failed_timeframe' => '1m'];
             }
@@ -1215,9 +1244,19 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         bool $forceRun,
         bool $skipContextValidation = false
     ): array {
-        $processingContext = new ProcessingContextDto(
+       $processingContext = new ProcessingContextDto(
             runId: $runId->toString(),
             symbol: $symbol,
+          now: $now,
+            collector: $collector,
+            forceTimeframeCheck: $forceTimeframeCheck,
+            forceRun: $forceRun,
+          skipContextValidation: $skipContextValidation,
+            currentTimeframe: $processor->getTimeframeValue()
+        );
+
+        $context = ValidationContextDto::create(
+            runId: $runId->toString(),
             now: $now,
             collector: $collector,
             forceTimeframeCheck: $forceTimeframeCheck,
@@ -1243,7 +1282,21 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $payload['from_cache'] = true;
         }
 
-        return $payload;
+            skipContextValidation: $skipContextValidation
+        );
+
+        $resultDto = $processor->processTimeframe($symbol, $context);
+        $result = $resultDto->toArray();
+
+        $collector[] = [
+            'tf' => $resultDto->timeframe,
+            'status' => $resultDto->status,
+            'signal_side' => $resultDto->signalSide ?? 'NONE',
+            'kline_time' => $resultDto->klineTime,
+        ];
+
+        return $result;
+
     }
 
     /**
@@ -1422,69 +1475,6 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $audit->getDetails(),
             $audit->getSeverity()
         ), MtfAuditEvent::NAME);
-    }
-
-    /**
-     * Persiste les résultats MTF (cache de validation)
-     */
-    private function persistMtfResults(
-        string $symbol,
-        Timeframe $timeframe,
-        \DateTimeImmutable $klineTime,
-        string $signalSide,
-        array $evaluation,
-        array $collector
-    ): void {
-        try {
-            // Persister le cache de validation
-            if ($this->validationCache !== null) {
-                $status = match ($signalSide) {
-                    'LONG', 'SHORT' => 'VALID',
-                    'NONE' => 'INVALID',
-                    default => 'PENDING'
-                };
-
-                $details = [
-                    'signal_side' => $signalSide,
-                    'conditions_long' => $evaluation['conditions_long'] ?? [],
-                    'conditions_short' => $evaluation['conditions_short'] ?? [],
-                    'indicator_context' => $evaluation['indicator_context'] ?? [],
-                    'mtf_collector' => $collector,
-                    'persisted_by' => 'mtf_service'
-                ];
-
-                // Calculer l'expiration selon le timeframe (moins 1 seconde pour éviter les problèmes de timing)
-                $now = $this->timeService->getCurrentAlignedUtc();
-                $expirationTime = $this->timeService->getValidationCacheTtl($now, $timeframe);
-                $expirationTime = $expirationTime->modify('-1 second');
-                $expirationMinutes = (int) ceil(($expirationTime->getTimestamp() - $now->getTimestamp()) / 60);
-
-                $this->validationCache->cacheMtfValidation(
-                    $symbol,
-                    $timeframe,
-                    $klineTime,
-                    $status,
-                    $details,
-                    $expirationMinutes
-                );
-
-                $this->logger->info('MTF validation cached', [
-                    'symbol' => $symbol,
-                    'timeframe' => $timeframe->value,
-                    'status' => $status,
-                    'kline_time' => $klineTime->format('Y-m-d H:i:s'),
-                    'expiration_minutes' => $expirationMinutes,
-                    'expiration_time' => $expirationTime->format('Y-m-d H:i:s')
-                ]);
-            }
-        } catch (\Exception $e) {
-            $this->logger->error('Failed to persist MTF results', [
-                'symbol' => $symbol,
-                'timeframe' => $timeframe->value,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-        }
     }
 
     /**
