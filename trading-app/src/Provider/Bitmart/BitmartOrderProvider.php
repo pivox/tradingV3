@@ -11,7 +11,13 @@ use App\Contract\Provider\Dto\SymbolBidAskDto;
 use App\Contract\Provider\OrderProviderInterface;
 use App\Provider\Bitmart\Http\BitmartHttpClientPrivate;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
+use App\Repository\ContractRepository;
+use App\Service\FuturesOrderSyncService;
+use App\Service\OrderIntentManager;
+use App\Entity\OrderIntent;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 /**
  * Provider Bitmart pour les ordres
@@ -29,7 +35,13 @@ final class BitmartOrderProvider implements OrderProviderInterface
     public function __construct(
         private readonly BitmartHttpClientPrivate $bitmartClient,
         private readonly BitmartHttpClientPublic $bitmartClientPublic,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $logger,
+        private readonly ?FuturesOrderSyncService $syncService = null,
+        private readonly ?OrderIntentManager $intentManager = null,
+        private readonly ?ContractRepository $contractRepository = null,
+        private readonly ?HttpClientInterface $httpClient = null,
+        #[Autowire('%env(WS_AGENT_BASE_URI)%')]
+        private readonly ?string $wsAgentBaseUri = null,
     ) {}
 
     public function placeOrder(
@@ -41,6 +53,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
         ?float $stopPrice = null,
         array $options = []
     ): ?OrderDto {
+        $intent = null;
         try {
             // Bitmart Futures V2 expects:
             //  - side: numeric (1=open_long, 4=open_short) for entry orders
@@ -75,11 +88,90 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 $payload[$k] = $v;
             }
 
+            // Créer OrderIntent avant l'envoi si le service est disponible
+            if ($this->intentManager) {
+                $quantization = $this->extractQuantization($symbol);
+                $rawInputs = [
+                    'symbol' => $symbol,
+                    'side' => $side->value,
+                    'type' => $type->value,
+                    'quantity' => $quantity,
+                    'price' => $price,
+                    'stopPrice' => $stopPrice,
+                    'options' => $options,
+                ];
+                
+                $intent = $this->intentManager->createIntent($payload, $quantization, $rawInputs);
+                
+                // Valider l'intent (validation basique)
+                $validationErrors = $this->validateOrderParams($payload);
+                if (!$this->intentManager->validateIntent($intent, $validationErrors)) {
+                    // Validation échouée, mais on continue quand même l'envoi
+                    $this->logger->warning('[BitmartOrderProvider] Intent validation failed but continuing', [
+                        'client_order_id' => $intent->getClientOrderId(),
+                        'errors' => $validationErrors,
+                    ]);
+                }
+                
+                $this->intentManager->markReadyToSend($intent);
+            }
+
             $response = $this->bitmartClient->submitOrder($payload);
 
             if (isset($response['data']['order_id'])) {
                 // Bitmart may return order_id as int; cast to string for DTO expectations
                 $orderId = (string) $response['data']['order_id'];
+
+                // Marquer l'intent comme SENT
+                if ($intent && $this->intentManager) {
+                    try {
+                        $this->intentManager->markAsSent($intent, $orderId);
+                    } catch (\Throwable $e) {
+                        $this->logger->warning('[BitmartOrderProvider] Failed to mark intent as sent', [
+                            'order_id' => $orderId,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+
+                // Synchroniser la réponse de soumission si disponible
+                if ($this->syncService && isset($response['data'])) {
+                    try {
+                        $this->syncService->syncOrderFromApi($response['data']);
+                    } catch (\Throwable $e) {
+                        // Log mais ne pas bloquer le flux
+                        $this->logger->warning('[BitmartOrderProvider] Failed to sync order on submit', [
+                            'order_id' => $orderId,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+
+                // Notifier ws-agent qu'un ordre vient d'être créé
+                $clientOrderId = $response['data']['client_order_id'] ?? $payload['client_order_id'] ?? null;
+                if ($this->httpClient && $this->wsAgentBaseUri && $clientOrderId) {
+                    try {
+                        $wsAgentUrl = rtrim($this->wsAgentBaseUri, '/') . '/internal/track-order';
+                        $this->httpClient->request('POST', $wsAgentUrl, [
+                            'json' => [
+                                'client_order_id' => $clientOrderId,
+                                'order_id' => $orderId,
+                                'symbol' => $symbol,
+                            ],
+                            'timeout' => 2.0,
+                        ]);
+                        $this->logger->debug('[BitmartOrderProvider] Notified ws-agent', [
+                            'client_order_id' => $clientOrderId,
+                            'order_id' => $orderId,
+                        ]);
+                    } catch (\Throwable $e) {
+                        // Log mais ne pas bloquer le flux
+                        $this->logger->warning('[BitmartOrderProvider] Failed to notify ws-agent', [
+                            'order_id' => $orderId,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
 
                 // Short retry loop for eventual consistency on order-detail
                 $orderDto = null;
@@ -119,8 +211,28 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 ]);
             }
 
+            // Marquer l'intent comme FAILED si pas encore marqué
+            if ($intent && $this->intentManager) {
+                try {
+                    $this->intentManager->markAsFailed($intent, 'Order submission returned no order_id');
+                } catch (\Throwable $e) {
+                    $this->logger->warning('[BitmartOrderProvider] Failed to mark intent as failed', [
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
             return null;
         } catch (\Exception $e) {
+            // Marquer l'intent comme FAILED en cas d'exception
+            if ($intent && $this->intentManager) {
+                try {
+                    $this->intentManager->markAsFailed($intent, $e->getMessage());
+                } catch (\Throwable $innerE) {
+                    // Ignore
+                }
+            }
+
             $this->logger->error("Erreur lors de la création de l'ordre", [
                 'symbol' => $symbol,
                 'side' => $side->value,
@@ -134,11 +246,31 @@ final class BitmartOrderProvider implements OrderProviderInterface
 
     public function cancelOrder(string $orderId): bool
     {
+        // Trouver l'OrderIntent associé si disponible
+        $intent = null;
+        if ($this->intentManager) {
+            $intent = $this->intentManager->findIntent(orderId: $orderId);
+        }
+
         $lastError = null;
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
             try {
                 $response = $this->bitmartClient->cancelOrder($orderId);
-                return isset($response['data']['result']) && $response['data']['result'] === 'success';
+                $success = isset($response['data']['result']) && $response['data']['result'] === 'success';
+                
+                // Marquer l'intent comme CANCELLED si succès
+                if ($success && $intent && $this->intentManager) {
+                    try {
+                        $this->intentManager->markAsCancelled($intent);
+                    } catch (\Throwable $e) {
+                        $this->logger->warning('[BitmartOrderProvider] Failed to mark intent as cancelled', [
+                            'order_id' => $orderId,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+                
+                return $success;
             } catch (\Throwable $e) {
                 $lastError = $e;
             }
@@ -156,6 +288,81 @@ final class BitmartOrderProvider implements OrderProviderInterface
         return false;
     }
 
+    /**
+     * Extrait les données de quantification depuis le contrat
+     * @return array<string,mixed>
+     */
+    private function extractQuantization(string $symbol): array
+    {
+        if (!$this->contractRepository) {
+            return [];
+        }
+
+        $contract = $this->contractRepository->findBySymbol(strtoupper($symbol));
+        if (!$contract) {
+            return [];
+        }
+
+        // Utiliser la réflexion pour accéder à volPrecision si nécessaire
+        // ou simplement omettre si le getter n'existe pas
+        $quantization = [
+            'tick_size' => $contract->getTickSize(),
+            'price_precision' => $contract->getPricePrecision(),
+            'min_volume' => $contract->getMinVolume(),
+            'max_volume' => $contract->getMaxVolume(),
+            'market_max_volume' => $contract->getMarketMaxVolume(),
+            'contract_size' => $contract->getContractSize(),
+            'min_size' => $contract->getMinSize(),
+            'max_size' => $contract->getMaxSize(),
+        ];
+
+        // Ajouter vol_precision via réflexion si disponible
+        try {
+            $reflection = new \ReflectionClass($contract);
+            if ($reflection->hasProperty('volPrecision')) {
+                $property = $reflection->getProperty('volPrecision');
+                $property->setAccessible(true);
+                $quantization['vol_precision'] = $property->getValue($contract);
+            }
+        } catch (\Throwable $e) {
+            // Ignorer si la réflexion échoue
+        }
+
+        return $quantization;
+    }
+
+    /**
+     * Valide les paramètres de l'ordre
+     * @param array<string,mixed> $payload
+     * @return array<string,string>|null Erreurs de validation, null si valide
+     */
+    private function validateOrderParams(array $payload): ?array
+    {
+        $errors = [];
+
+        if (empty($payload['symbol'])) {
+            $errors['symbol'] = 'Symbol is required';
+        }
+
+        if (empty($payload['side']) || !in_array($payload['side'], [1, 2, 3, 4], true)) {
+            $errors['side'] = 'Invalid side value';
+        }
+
+        if (empty($payload['type']) || !in_array($payload['type'], ['limit', 'market'], true)) {
+            $errors['type'] = 'Invalid type value';
+        }
+
+        if (empty($payload['size']) || $payload['size'] <= 0) {
+            $errors['size'] = 'Size must be positive';
+        }
+
+        if ($payload['type'] === 'limit' && empty($payload['price'])) {
+            $errors['price'] = 'Price is required for limit orders';
+        }
+
+        return count($errors) > 0 ? $errors : null;
+    }
+
     public function getOrder(string $orderId): ?OrderDto
     {
         $lastError = null;
@@ -163,6 +370,18 @@ final class BitmartOrderProvider implements OrderProviderInterface
             try {
                 $response = $this->bitmartClient->getOrderDetail($orderId);
                 if (isset($response['data'])) {
+                    // Synchroniser l'ordre dans la base de données
+                    if ($this->syncService) {
+                        try {
+                            $this->syncService->syncOrderFromApi($response['data']);
+                        } catch (\Throwable $e) {
+                            // Log mais ne pas bloquer le flux
+                            $this->logger->warning('[BitmartOrderProvider] Failed to sync order detail', [
+                                'order_id' => $orderId,
+                                'error' => $e->getMessage(),
+                            ]);
+                        }
+                    }
                     return OrderDto::fromArray($response['data']);
                 }
                 $lastError = new \RuntimeException('Invalid order detail response structure.');
@@ -190,6 +409,20 @@ final class BitmartOrderProvider implements OrderProviderInterface
             try {
                 $response = $this->bitmartClient->getOpenOrders($symbol);
                 if (isset($response['data']['orders'])) {
+                    // Synchroniser tous les ordres ouverts
+                    if ($this->syncService) {
+                        foreach ($response['data']['orders'] as $orderData) {
+                            try {
+                                $this->syncService->syncOrderFromApi($orderData);
+                            } catch (\Throwable $e) {
+                                // Log mais ne pas bloquer le flux
+                                $this->logger->warning('[BitmartOrderProvider] Failed to sync open order', [
+                                    'order_id' => $orderData['order_id'] ?? null,
+                                    'error' => $e->getMessage(),
+                                ]);
+                            }
+                        }
+                    }
                     return array_map(fn($order) => OrderDto::fromArray($order), $response['data']['orders']);
                 }
                 $lastError = new \RuntimeException('Invalid open orders response structure.');
@@ -217,6 +450,20 @@ final class BitmartOrderProvider implements OrderProviderInterface
             try {
                 $response = $this->bitmartClient->getOrderHistory($symbol, $limit);
                 if (isset($response['data']['orders'])) {
+                    // Synchroniser tous les ordres de l'historique
+                    if ($this->syncService) {
+                        foreach ($response['data']['orders'] as $orderData) {
+                            try {
+                                $this->syncService->syncOrderFromApi($orderData);
+                            } catch (\Throwable $e) {
+                                // Log mais ne pas bloquer le flux
+                                $this->logger->warning('[BitmartOrderProvider] Failed to sync history order', [
+                                    'order_id' => $orderData['order_id'] ?? null,
+                                    'error' => $e->getMessage(),
+                                ]);
+                            }
+                        }
+                    }
                     return array_map(fn($order) => OrderDto::fromArray($order), $response['data']['orders']);
                 }
                 $lastError = new \RuntimeException('Invalid order history response structure.');
