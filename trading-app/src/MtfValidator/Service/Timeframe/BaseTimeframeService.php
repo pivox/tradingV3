@@ -355,13 +355,13 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
             // best effort
         }
 
-        // Renseigner candle_close_ts si kline_time présent
+        // Renseigner candle_open_ts si kline_time présent
         try {
             if (isset($context['kline_time']) && $context['kline_time']) {
                 if ($context['kline_time'] instanceof \DateTimeImmutable) {
-                    $audit->setCandleCloseTs($context['kline_time']);
+                    $audit->setCandleOpenTs($context['kline_time']);
                 } elseif (is_string($context['kline_time']) && $context['kline_time'] !== '') {
-                    $audit->setCandleCloseTs(new \DateTimeImmutable($context['kline_time'], new \DateTimeZone('UTC')));
+                    $audit->setCandleOpenTs(new \DateTimeImmutable($context['kline_time'], new \DateTimeZone('UTC')));
                 }
             }
         } catch (\Throwable) {

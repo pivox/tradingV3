@@ -1383,14 +1383,14 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         }
         $audit->setDetails($details);
 
-        // Optionnel: timeframe & candle_close_ts si fournis
+        // Optionnel: timeframe & candle_open_ts si fournis
         if (isset($data['timeframe']) && is_string($data['timeframe'])) {
             try {
                 $audit->setTimeframe(\App\Common\Enum\Timeframe::from($data['timeframe']));
             } catch (\Throwable) {}
         }
         if (isset($data['kline_time']) && $data['kline_time'] instanceof \DateTimeImmutable) {
-            $audit->setCandleCloseTs($data['kline_time']);
+            $audit->setCandleOpenTs($data['kline_time']);
         }
         if (isset($data['severity']) && is_numeric($data['severity'])) {
             $audit->setSeverity((int)$data['severity']);

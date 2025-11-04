@@ -545,14 +545,52 @@ class MtfController extends AbstractController
 
             $status = empty($result['errors']) ? 'success' : 'partial_success';
 
+            // Extraire les symboles rejetés (tous les statuts non-SUCCESS)
+            $rejectedBy = [];
+            $lastValidated = [];
+            $results = $result['results'] ?? [];
+            
+            foreach ($results as $symbol => $symbolResult) {
+                $resultStatus = strtoupper((string)($symbolResult['status'] ?? ''));
+                
+                // Collecter les rejetés
+                if ($resultStatus !== 'SUCCESS') {
+                    $rejectedBy[] = $symbol;
+                }
+                
+                // Collecter les derniers validés (SUCCESS uniquement)
+                if ($resultStatus === 'SUCCESS') {
+                    $executionTf = $symbolResult['execution_tf'] ?? null;
+                    $signalSide = $symbolResult['signal_side'] ?? null;
+                    
+                    // Calculer le timeframe précédent (tf-1) ou 'READY' pour 1m
+                    $timeframe = $this->getPreviousTimeframe($executionTf);
+                    
+                    // Ajouter seulement si on a au moins le symbole
+                    // Exemples JSON pour cas limites :
+                    // - Si execution_tf manquant : timeframe sera null, signal_side peut être null
+                    // - Si signal_side manquant : side sera null
+                    // Exemple: {"symbol": "BTCUSDT", "side": null, "timeframe": null}
+                    // Exemple: {"symbol": "ETHUSDT", "side": "LONG", "timeframe": "15m"}
+                    // Exemple: {"symbol": "ADAUSDT", "side": "SHORT", "timeframe": "READY"}
+                    $lastValidated[] = [
+                        'symbol' => $symbol,
+                        'side' => $signalSide,
+                        'timeframe' => $timeframe,
+                    ];
+                }
+            }
+
             return $this->json([
                 'status' => $status,
                 'message' => 'MTF run completed',
                 'data' => [
                     'summary' => $result['summary'] ?? [],
-                    'results' => $result['results'] ?? [],
+                  //  'results' => $results,
                     'errors' => $result['errors'] ?? [],
                     'workers' => $workers,
+                    'rejected_by' => $rejectedBy,
+                    'last_validated' => $lastValidated,
                 ],
             ]);
         } catch (\Throwable $e) {
@@ -752,6 +790,38 @@ class MtfController extends AbstractController
             'results' => $results,
             'errors' => $errors,
         ];
+    }
+
+    /**
+     * Calcule le timeframe précédent (tf-1) pour un timeframe donné.
+     * Retourne 'READY' pour '1m', null pour les timeframes non reconnus ou manquants.
+     * 
+     * Mapping :
+     * - '15m' → '1h'
+     * - '5m' → '15m'
+     * - '1m' → 'READY'
+     * - '1h' → '4h'
+     * - '4h' → null (pas de timeframe supérieur)
+     * 
+     * @param string|null $timeframe Le timeframe d'exécution
+     * @return string|null Le timeframe précédent ou 'READY' pour 1m
+     */
+    private function getPreviousTimeframe(?string $timeframe): ?string
+    {
+        if ($timeframe === null || $timeframe === '') {
+            return null;
+        }
+        
+        $normalized = strtolower(trim($timeframe));
+        
+        return match ($normalized) {
+            '15m' => '1h',
+            '5m' => '15m',
+            '1m' => 'READY',
+            '1h' => '4h',
+            '4h' => null,
+            default => null,
+        };
     }
 
     /**

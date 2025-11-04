@@ -38,3 +38,5 @@ La migration générée par Doctrine supprime les valeurs par défaut (`ALTER id
 6. ✅ **Index renommés** : Doctrine renomme automatiquement selon ses conventions (normal)
 7. ✅ **Contraintes FK** : Ajoutées avec vérification d'existence pour éviter les erreurs
 
+
+

@@ -220,10 +220,12 @@ mtf_validation:
 
             '15m':  # Exécution / timing (relaxé temporairement pour tests)
                 long:
-                    - any_of:
-                          - all_of: [ macd_hist_gt_eps ]
-                          - all_of: [ atr_rel_in_range_15m, close_above_vwap_or_ma9 ]
-                          - all_of: [ ema20_over_50_with_tolerance ]
+                    - all_of:
+                        - any_of:
+                            - all_of: [ macd_hist_gt_eps ]
+                            - all_of: [ atr_rel_in_range_15m, close_above_vwap_or_ma9 ]
+                            - all_of: [ ema20_over_50_with_tolerance ]
+                        - rsi_lt_70
                 short:
                     - any_of:
                           - all_of: [ macd_hist_decreasing_n ]

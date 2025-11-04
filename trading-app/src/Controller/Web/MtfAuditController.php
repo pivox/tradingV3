@@ -145,7 +145,7 @@ class MtfAuditController extends AbstractController
             'timeframe' => $audit->getTimeframe()?->value,
             'cause' => $audit->getCause(),
             'created_at' => $audit->getCreatedAt()->format('Y-m-d H:i:s'),
-            'candle_close_ts' => $audit->getCandleCloseTs()?->format('Y-m-d H:i:s'),
+            'candle_open_ts' => $audit->getCandleOpenTs()?->format('Y-m-d H:i:s'),
             'severity' => $audit->getSeverity(),
             'details' => $audit->getDetails(),
         ]);

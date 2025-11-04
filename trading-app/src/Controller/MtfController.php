@@ -641,15 +641,61 @@ class MtfController extends AbstractController
             // Calculer un résumé par TF à partir des résultats (failed_timeframe > execution_tf > N/A)
             $summaryByTf = $this->buildSummaryByTimeframe($result['results'] ?? []);
 
+            // Extraire les symboles rejetés (tous les statuts non-SUCCESS)
+            $rejectedBy = [];
+            $lastValidated = [];
+            $results = $result['results'] ?? [];
+            
+            foreach ($results as $symbol => $symbolResult) {
+                // Skip summary entry and invalid symbols
+                if ($symbol === 'FINAL' || !is_string($symbol) || $symbol === '') {
+                    continue;
+                }
+                
+                if (!is_array($symbolResult)) {
+                    continue;
+                }
+                
+                $resultStatus = strtoupper((string)($symbolResult['status'] ?? ''));
+                
+                // Collecter les rejetés (tous les statuts non-SUCCESS)
+                if ($resultStatus !== 'SUCCESS') {
+                    $rejectedBy[] = $symbol;
+                }
+                
+                // Collecter les derniers validés (SUCCESS uniquement)
+                if ($resultStatus === 'SUCCESS') {
+                    $executionTf = $symbolResult['execution_tf'] ?? null;
+                    $signalSide = $symbolResult['signal_side'] ?? null;
+                    
+                    // Calculer le timeframe précédent (tf-1) ou 'READY' pour 1m
+                    $timeframe = $this->getPreviousTimeframe($executionTf);
+                    
+                    $lastValidated[] = [
+                        'symbol' => $symbol,
+                        'side' => $signalSide,
+                        'timeframe' => $timeframe,
+                    ];
+                }
+            }
+            
+            // Trier les listes pour un affichage cohérent
+            sort($rejectedBy);
+            usort($lastValidated, function($a, $b) {
+                return strcmp($a['symbol'] ?? '', $b['symbol'] ?? '');
+            });
+
             return $this->json([
                 'status' => $status,
                 'message' => 'MTF run completed',
                 'data' => [
                     'summary' => $result['summary'] ?? [],
-                    'results' => $result['results'] ?? [],
+                    'results' => $results,
                     'errors' => $result['errors'] ?? [],
                     'workers' => $workers,
                     'summary_by_tf' => $summaryByTf,
+                    'rejected_by' => $rejectedBy,
+                    'last_validated' => $lastValidated,
                 ],
             ]);
         } catch (\Throwable $e) {
@@ -878,6 +924,38 @@ class MtfController extends AbstractController
             'results' => $results,
             'errors' => $errors,
         ];
+    }
+
+    /**
+     * Calcule le timeframe précédent (tf-1) pour un timeframe donné.
+     * Retourne 'READY' pour '1m', null pour les timeframes non reconnus ou manquants.
+     * 
+     * Mapping :
+     * - '15m' → '1h'
+     * - '5m' → '15m'
+     * - '1m' → 'READY'
+     * - '1h' → '4h'
+     * - '4h' → null (pas de timeframe supérieur)
+     * 
+     * @param string|null $timeframe Le timeframe d'exécution
+     * @return string|null Le timeframe précédent ou 'READY' pour 1m
+     */
+    private function getPreviousTimeframe(?string $timeframe): ?string
+    {
+        if ($timeframe === null || $timeframe === '') {
+            return null;
+        }
+        
+        $normalized = strtolower(trim($timeframe));
+        
+        return match ($normalized) {
+            '15m' => '1h',
+            '5m' => '15m',
+            '1m' => 'READY',
+            '1h' => '4h',
+            '4h' => null,
+            default => null,
+        };
     }
 
     /**

@@ -42,8 +42,8 @@ class MtfAudit
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, options: ['default' => 'CURRENT_TIMESTAMP'])]
     private \DateTimeImmutable $createdAt;
 
-    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, options: ['comment' => 'Heure de clôture de la bougie concernée'])]
-    private ?\DateTimeImmutable $candleCloseTs = null;
+    #[ORM\Column(name: 'candle_open_ts', type: Types::DATETIMETZ_IMMUTABLE, nullable: true, options: ['comment' => 'Heure d\'ouverture de la bougie concernée'])]
+    private ?\DateTimeImmutable $candleOpenTs = null;
 
     #[ORM\Column(type: Types::SMALLINT, options: ['default' => 0, 'comment' => 'Niveau de sévérité 0..n'])]
     private int $severity = 0;
@@ -146,14 +146,14 @@ class MtfAudit
         return $this;
     }
 
-    public function getCandleCloseTs(): ?\DateTimeImmutable
+    public function getCandleOpenTs(): ?\DateTimeImmutable
     {
-        return $this->candleCloseTs;
+        return $this->candleOpenTs;
     }
 
-    public function setCandleCloseTs(?\DateTimeImmutable $ts): static
+    public function setCandleOpenTs(?\DateTimeImmutable $ts): static
     {
-        $this->candleCloseTs = $ts;
+        $this->candleOpenTs = $ts;
         return $this;
     }
 

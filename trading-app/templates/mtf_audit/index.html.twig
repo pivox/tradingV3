@@ -230,12 +230,28 @@ const SUMMARY_DURATIONS_MS = {
     '1m': 60 * 1000,
 };
 
-// Calcule l'open_time de la dernière bougie fermée pour un timeframe donné.
+/**
+ * Calcule l'openTime de la dernière bougie fermée pour un timeframe donné.
+ * Logique équivalente à expectedLastOpenTime() en PHP.
+ */
 function getLastOpenTimestamp(now, timeframe) {
     const stepMs = SUMMARY_DURATIONS_MS[timeframe] || 0;
     if (stepMs === 0) return 0;
-    const aligned = Math.floor(now / stepMs) * stepMs; // borne inférieure courante (close courante)
-    return aligned - stepMs; // open_time de la dernière bougie fermée
+    const aligned = Math.floor(now / stepMs) * stepMs; // borne inférieure courante
+    return aligned - stepMs; // openTime de la dernière bougie fermée
+}
+
+/**
+ * Calcule le closeTime (horaire de clôture) de la dernière bougie fermée pour un timeframe donné.
+ * C'est l'horaire du kline "en cours" (la dernière bougie qui s'est fermée).
+ */
+function getCurrentKlineCloseTime(now, timeframe) {
+    const stepMs = SUMMARY_DURATIONS_MS[timeframe] || 0;
+    if (stepMs === 0) return 0;
+    // Aligner sur la borne inférieure
+    const aligned = Math.floor(now / stepMs) * stepMs;
+    // Le closeTime de la dernière bougie fermée est simplement la borne alignée
+    return aligned;
 }
 
 let summaryData = [];
@@ -502,6 +518,13 @@ function renderSummaryTable() {
                 }
             }
 
+            // Calculer l'horaire du kline en cours (closeTime de la dernière bougie fermée)
+            const now = Date.now();
+            const currentKlineCloseTime = getCurrentKlineCloseTime(now, tf);
+            const currentKlineMarkup = currentKlineCloseTime > 0 
+                ? `<div class="small text-info mb-1"><i class="bi bi-clock me-1"></i>Kline attendu: ${formatTimeUtcShort(currentKlineCloseTime)} UTC</div>`
+                : '';
+            
             let label;
             if (isFailed) {
                 const baseLabel = eventValue !== '-' ? eventValue : displayValue;
@@ -513,7 +536,7 @@ function renderSummaryTable() {
                 label = '-';
             }
 
-            return `<td class="${cellClass}">${label}${readyMarkup}${causeMarkup}</td>`;
+            return `<td class="${cellClass}">${currentKlineMarkup}${label}${readyMarkup}${causeMarkup}</td>`;
         }).join('');
 
         return `

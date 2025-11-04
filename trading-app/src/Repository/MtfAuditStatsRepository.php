@@ -45,7 +45,7 @@ final class MtfAuditStatsRepository
             $types['tf'] = \PDO::PARAM_STR;
         }
 
-        $sql = 'SELECT symbol, timeframe, total, nb_passed, pass_rate, avg_atr_rel, avg_spread_bps, avg_severity, last_candle_close_ts, last_created_at, '
+        $sql = 'SELECT symbol, timeframe, total, nb_passed, pass_rate, avg_atr_rel, avg_spread_bps, avg_severity, last_candle_open_ts, last_created_at, '
              . ' nb_alignment_failed, nb_validation_failed_4h, nb_validation_failed_1h, nb_validation_failed_15m, nb_validation_failed_5m, nb_validation_failed_1m'
              . ' FROM mtf_audit_stats';
         if ($where !== []) {
@@ -117,7 +117,7 @@ final class MtfAuditStatsRepository
             5 => 'avg_atr_rel',
             6 => 'avg_spread_bps',
             7 => 'avg_severity',
-            8 => 'last_candle_close_ts',
+            8 => 'last_candle_open_ts',
             9 => 'last_created_at',
             10 => 'nb_alignment_failed',
             11 => 'nb_validation_failed_4h',
@@ -139,7 +139,7 @@ final class MtfAuditStatsRepository
         $filtered = (int)$this->connection->fetchOne($sqlCount, $params, $types);
 
         // Rows
-        $sql = 'SELECT symbol, timeframe, total, nb_passed, pass_rate, avg_atr_rel, avg_spread_bps, avg_severity, last_candle_close_ts, last_created_at, '
+        $sql = 'SELECT symbol, timeframe, total, nb_passed, pass_rate, avg_atr_rel, avg_spread_bps, avg_severity, last_candle_open_ts, last_created_at, '
              . ' nb_alignment_failed, nb_validation_failed_4h, nb_validation_failed_1h, nb_validation_failed_15m, nb_validation_failed_5m, nb_validation_failed_1m'
              . ' FROM mtf_audit_stats';
         if ($where !== []) { $sql .= ' WHERE ' . implode(' AND ', $where); }

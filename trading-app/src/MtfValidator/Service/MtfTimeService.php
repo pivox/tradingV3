@@ -58,6 +58,14 @@ final class MtfTimeService
 
     /**
      * Vérifie si on est dans la fenêtre de grâce pour un timeframe
+     * 
+     * IMPORTANT: Dans le contexte MTF, cette méthode ne devrait être appelée qu'avec
+     * les 5 timeframes supportés: TF_4H, TF_1H, TF_15M, TF_5M, TF_1M.
+     * 
+     * Si un timeframe non géré est passé, cela indique un bug dans le système MTF :
+     * - Vérifier que les services Timeframe*Service retournent uniquement les timeframes attendus
+     * - Vérifier qu'aucun timeframe non MTF (TF_1D, TF_30M, etc.) n'est utilisé dans le flux MTF
+     * - Vérifier que computeAtrValue() et autres méthodes utilisent uniquement les timeframes MTF
      */
     public function isInGraceWindow(\DateTimeImmutable $now, Timeframe $timeframe, int $graceMinutes = 4): bool
     {
@@ -68,10 +76,25 @@ final class MtfTimeService
         //  - 15m      => 1 minutes
         //  - 5m       => 1 minute
         //  - 1m       => 0 minute (pas de fenêtre de grâce)
+        // 
+        // GARDE-FOU: Si un timeframe non MTF est passé, cela indique un bug à corriger
         if (\func_num_args() < 3) {
             $graceMinutes = match ($timeframe) {
-                Timeframe::TF_4H, Timeframe::TF_1H => 1, Timeframe::TF_15M => 1,
+                Timeframe::TF_4H, Timeframe::TF_1H => 1,
+                Timeframe::TF_15M, Timeframe::TF_5M => 1,
                 Timeframe::TF_1M => 0,
+                default => throw new \InvalidArgumentException(
+                    sprintf(
+                        'Unhandled timeframe %s (%s) in isInGraceWindow. '
+                        . 'This timeframe is not supported in MTF validation context. '
+                        . 'Only TF_4H, TF_1H, TF_15M, TF_5M, TF_1M are allowed. '
+                        . 'If you see this error, check: (1) Timeframe*Service implementations return correct timeframes, '
+                        . '(2) No non-MTF timeframes (TF_1D, TF_30M, etc.) are used in MTF flow, '
+                        . '(3) computeAtrValue() and other methods use only MTF timeframes.',
+                        $timeframe->name,
+                        $timeframe->value
+                    )
+                ),
             };
         }
 
