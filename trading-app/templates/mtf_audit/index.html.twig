@@ -225,6 +225,30 @@ const SUMMARY_DURATIONS_MS = {
     '1m': 60 * 1000,
 };
 
+/**
+ * Calcule le timestamp de clôture de la dernière bougie close pour un timeframe donné.
+ * Exemple: à 11h59 UTC, pour 1h, retourne 11h00 (timestamp de clôture de la bougie 10h00-11h00).
+ * 
+ * Le event_ts dans les audits correspond à candle_close_ts (timestamp de clôture).
+ * Si une bougie 1h ouvre à 10h00, elle se ferme à 11h00, donc event_ts = 11h00.
+ */
+function getLastValidKlineTimestamp(now, timeframe) {
+    const stepMs = SUMMARY_DURATIONS_MS[timeframe] || 0;
+    if (stepMs === 0) {
+        return 0;
+    }
+    
+    // Aligner l'heure actuelle sur la borne inférieure du timeframe
+    // Ex: 11h59 -> 11h00 pour 1h
+    const alignedTimestamp = Math.floor(now / stepMs) * stepMs;
+    
+    // La dernière bougie close est celle qui se termine à cette borne
+    // Donc si on est entre 11h00 et 12h00, la dernière close est 11h00
+    // Si on est exactement à 12h00, la dernière close est aussi 11h00 (car 12h00 est la prochaine)
+    // Si on est avant 12h00, alignedTimestamp est 11h00, qui est le close de la bougie 10h-11h
+    return alignedTimestamp;
+}
+
 let summaryData = [];
 let summaryLoaded = false;
 let summaryLoading = false;
@@ -448,13 +472,25 @@ function renderSummaryTable() {
             const causeMarkup = tfData?.cause
                 ? `<div class="mt-1 small ${isFailed ? 'text-danger' : 'text-muted'}">${escapeHtml(tfData.cause)}</div>`
                 : '';
+            
+            // Indicateur de présence de la bougie dans la base
+            let klineIndicator = '';
+            if (status === 'success' && tfData?.kline_exists !== undefined) {
+                if (tfData.kline_exists === true) {
+                    klineIndicator = '<span class="badge bg-success bg-opacity-25 ms-1" title="Bougie existe dans hot_kline"><i class="bi bi-check-circle text-success"></i></span>';
+                } else if (tfData.kline_exists === false) {
+                    klineIndicator = '<span class="badge bg-warning bg-opacity-25 ms-1" title="Bougie absente ou non close dans hot_kline"><i class="bi bi-exclamation-triangle text-warning"></i></span>';
+                } else {
+                    klineIndicator = '<span class="badge bg-secondary bg-opacity-25 ms-1" title="Vérification impossible"><i class="bi bi-question-circle text-secondary"></i></span>';
+                }
+            }
 
             let label;
             if (isFailed) {
                 const baseLabel = eventValue !== '-' ? eventValue : displayValue;
                 label = `<div><strong>Échec</strong>${baseLabel !== '-' ? ` • ${baseLabel}` : ''}</div>`;
             } else if (status === 'success') {
-                label = displayValue;
+                label = `<div>${displayValue}${klineIndicator}</div>`;
             } else {
                 label = '-';
             }
@@ -504,12 +540,15 @@ function enrichSummaryRow(row, now) {
         if (status === 'success' && baseTs > 0) {
             result.computed.validationCount += 1;
             result.computed.maxTimestamp = Math.max(result.computed.maxTimestamp, baseTs);
-            const ttl = SUMMARY_DURATIONS_MS[tf] || 0;
-            let isFresh = ttl > 0 && (baseTs + ttl) >= now;
-
-            if (!isFresh && tf === '1m' && readyValue > 0) {
-                isFresh = ttl > 0 && (readyValue + ttl) >= now;
-            }
+            
+            // Calculer la dernière bougie valide pour ce timeframe
+            const lastValidKlineTs = getLastValidKlineTimestamp(now, tf);
+            
+            // Tolérance de 5 secondes pour les comparaisons (arrondis de timestamps)
+            const tolerance = 5000;
+            
+            // La validation est "fresh" si son event_ts correspond à la dernière bougie valide
+            let isFresh = lastValidKlineTs > 0 && Math.abs(baseTs - lastValidKlineTs) <= tolerance;
 
             result.computed.freshMap[tf] = isFresh;
             if (isFresh) {
@@ -524,7 +563,12 @@ function enrichSummaryRow(row, now) {
     });
 
     if (readyValue > 0) {
-        if ((readyValue + ttl1m) >= now) {
+        // Pour le 1m, on peut aussi utiliser le ready si disponible
+        const lastValid1m = getLastValidKlineTimestamp(now, '1m');
+        const tolerance = 5000;
+        const isReadyFresh = lastValid1m > 0 && Math.abs(readyValue - lastValid1m) <= tolerance;
+        
+        if (isReadyFresh) {
             result.computed.readyDisplay = formatDateUtc(readyTsString);
             result.computed.maxTimestamp = Math.max(result.computed.maxTimestamp, readyValue);
             const tf1m = result.timeframes['1m'] || null;
