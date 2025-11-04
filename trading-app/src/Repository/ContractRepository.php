@@ -38,45 +38,27 @@ class ContractRepository extends ServiceEntityRepository
             return [];
         }
 
-        // Charger les entités et préserver l’ordre des symboles
+        // Utiliser un tri en PHP pour éviter les problèmes avec les fonctions SQL natives
+        // qui ne sont pas reconnues par Doctrine DQL
         $qb = $this->createQueryBuilder('c')
             ->where('c.symbol IN (:symbols)')
             ->setParameter('symbols', $symbols);
 
-        // Préserver l’ordre avec Postgres (array_position)
-        $conn = $this->getEntityManager()->getConnection();
-        $platform = $conn->getDatabasePlatform()->getName(); // 'postgresql' | 'mysql' | ...
-
-        if ($platform === 'postgresql') {
-            // ORDER BY array_position(ARRAY['BTCUSDT','ETHUSDT', ...], c.symbol)
-            $ordered = "'" . implode("','", array_map('addslashes', $symbols)) . "'";
-            $qb->add('orderBy', "array_position(ARRAY[$ordered]::text[], c.symbol)");
-        } elseif ($platform === 'mysql') {
-            // MySQL: FIELD(c.symbol, 'BTCUSDT','ETHUSDT', ...)
-            $ordered = "'" . implode("','", array_map('addslashes', $symbols)) . "'";
-            $qb->add('orderBy', "FIELD(c.symbol, $ordered)");
-        } else {
-            // Fallback: pas d’ordre garanti par le SGBD → on triera en PHP
-        }
-
         $entities = $qb->getQuery()->getResult();
 
-        // Fallback ordre en PHP si besoin (autres SGBD)
-        if ($platform !== 'postgresql' && $platform !== 'mysql') {
-            $bySymbol = [];
-            foreach ($entities as $e) {
-                $bySymbol[$e->getSymbol()] = $e;
+        // Trier en PHP pour préserver l'ordre des symboles
+        $bySymbol = [];
+        foreach ($entities as $e) {
+            $bySymbol[$e->getSymbol()] = $e;
+        }
+        $orderedEntities = [];
+        foreach ($symbols as $s) {
+            if (isset($bySymbol[$s])) {
+                $orderedEntities[] = $bySymbol[$s];
             }
-            $orderedEntities = [];
-            foreach ($symbols as $s) {
-                if (isset($bySymbol[$s])) {
-                    $orderedEntities[] = $bySymbol[$s];
-                }
-            }
-            return $orderedEntities;
         }
 
-        return $entities;
+        return $orderedEntities;
     }
 
     /**

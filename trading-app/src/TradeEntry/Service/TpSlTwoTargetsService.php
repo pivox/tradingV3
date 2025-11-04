@@ -266,6 +266,7 @@ final class TpSlTwoTargetsService
         }
         if ($ratio === null) { $ratio = 0.5; }
         
+
         $ratio = max(0.0, min(1.0, $ratio));
         $size1 = (int)floor($size * $ratio);
         $size2 = (int)max(0, $size - $size1);

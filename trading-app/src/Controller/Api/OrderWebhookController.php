@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller\Api;
 
 use App\Domain\Trading\Order\OrderLifecycleService;
+use App\Service\FuturesOrderSyncService;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -15,6 +16,7 @@ final class OrderWebhookController
     public function __construct(
         private readonly OrderLifecycleService $orderLifecycleService,
         private readonly LoggerInterface $logger,
+        private readonly ?FuturesOrderSyncService $syncService = null,
     ) {
     }
 
@@ -38,6 +40,19 @@ final class OrderWebhookController
 
         $normalizedEvents = $this->normalizeEvents($payload['data'] ?? []);
         foreach ($normalizedEvents as $event) {
+            // Synchroniser l'ordre depuis l'événement WebSocket
+            if ($this->syncService) {
+                try {
+                    $this->syncService->syncOrderFromWebSocket($event);
+                } catch (\Throwable $e) {
+                    // Log mais ne pas bloquer le flux
+                    $this->logger->warning('[OrderWebhook] Failed to sync order from WebSocket', [
+                        'order_id' => $event['order_id'] ?? null,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+            
             $this->orderLifecycleService->handleEvent($event);
         }
 
