@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 
 def format_mtf_response(raw_response: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Parse and format MTF API response to show concise summary + SUCCESS contracts for 5m/1m.
+    Parse and format MTF API response to show concise summary + SUCCESS/READY contracts and errors.
     
     Args:
         raw_response: Raw response dict from mtf_api_call activity
@@ -33,6 +33,7 @@ def format_mtf_response(raw_response: Dict[str, Any]) -> Dict[str, Any]:
     data = body.get("data", {})
     summary = data.get("summary", {})
     results = data.get("results", {})
+    errors = data.get("errors", [])
     
     # Extract global metrics
     execution_time = summary.get("execution_time_seconds", 0)
@@ -40,8 +41,11 @@ def format_mtf_response(raw_response: Dict[str, Any]) -> Dict[str, Any]:
     success_rate = summary.get("success_rate", 0)
     dry_run = summary.get("dry_run", False)
     
-    # Extract SUCCESS contracts by timeframe
+    # Extract SUCCESS/READY contracts by timeframe
     success_by_tf = _extract_success_contracts(results)
+    
+    # Extract errors from results (symbols with status ERROR)
+    errors_from_results = _extract_errors_from_results(results)
     
     # Build summary text
     summary_lines = [
@@ -51,7 +55,7 @@ def format_mtf_response(raw_response: Dict[str, Any]) -> Dict[str, Any]:
         "",
     ]
     
-    # Add SUCCESS contracts (prioritize 5m, 1m, then others)
+    # Add SUCCESS/READY contracts (prioritize 5m, 1m, then others)
     priority_tfs = ["5m", "1m", "15m", "1h", "4h"]
     success_displayed = False
     
@@ -71,13 +75,17 @@ def format_mtf_response(raw_response: Dict[str, Any]) -> Dict[str, Any]:
     if not success_displayed:
         summary_lines.append("🎯 SUCCESS: None")
     
-    # Add INVALID breakdown by timeframe (condensed)
-    tf_counts = _count_by_timeframe(results)
-    if tf_counts:
+    # Add errors section (from data.errors + from results with ERROR status)
+    all_errors = list(errors) + errors_from_results
+    if all_errors:
         summary_lines.append("")
-        summary_lines.append("📉 INVALID by timeframe:")
-        for tf, count in sorted(tf_counts.items()):
-            summary_lines.append(f"  • {tf}: {count} symbols")
+        summary_lines.append("❌ Errors:")
+        for error in all_errors:
+            if isinstance(error, dict):
+                error_msg = error.get("message", str(error))
+            else:
+                error_msg = str(error)
+            summary_lines.append(f"  • {error_msg}")
     
     return {
         "summary": "\n".join(summary_lines),
@@ -94,7 +102,7 @@ def format_mtf_response(raw_response: Dict[str, Any]) -> Dict[str, Any]:
 
 def _extract_success_contracts(results: Dict[str, Any]) -> Dict[str, List[str]]:
     """
-    Extract SUCCESS contracts grouped by execution timeframe.
+    Extract SUCCESS/READY contracts grouped by execution timeframe.
     
     Args:
         results: Results dict from MTF API response
@@ -109,7 +117,7 @@ def _extract_success_contracts(results: Dict[str, Any]) -> Dict[str, List[str]]:
             continue
             
         status = result.get("status", "").upper()
-        if status == "SUCCESS" or status == "VALID":
+        if status in ("SUCCESS", "VALID", "READY"):
             execution_tf = result.get("execution_tf") or result.get("timeframe")
             if execution_tf:
                 if execution_tf not in success_by_tf:
@@ -119,27 +127,29 @@ def _extract_success_contracts(results: Dict[str, Any]) -> Dict[str, List[str]]:
     return success_by_tf
 
 
-def _count_by_timeframe(results: Dict[str, Any]) -> Dict[str, int]:
+def _extract_errors_from_results(results: Dict[str, Any]) -> List[str]:
     """
-    Count symbols by failed_timeframe from INVALID results.
+    Extract errors from results (symbols with status ERROR).
     
     Args:
         results: Results dict from MTF API response
         
     Returns:
-        Dict mapping timeframe -> count of symbols
+        List of error messages (format: "SYMBOL: message")
     """
-    tf_counts: Dict[str, int] = {}
+    errors: List[str] = []
     
     for symbol, result in results.items():
-        if symbol == "FINAL":
+        if symbol == "FINAL":  # Skip summary entry
             continue
             
         status = result.get("status", "").upper()
-        if status == "INVALID":
-            failed_tf = result.get("failed_timeframe")
-            if failed_tf:
-                tf_counts[failed_tf] = tf_counts.get(failed_tf, 0) + 1
+        if status == "ERROR":
+            error_info = result.get("error", {})
+            if isinstance(error_info, dict):
+                error_msg = error_info.get("message", "Unknown error")
+            else:
+                error_msg = str(error_info) if error_info else "Unknown error"
+            errors.append(f"{symbol}: {error_msg}")
     
-    return tf_counts
-
+    return errors
