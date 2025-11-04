@@ -1113,69 +1113,6 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
     }
 
     /**
-     * Persiste les résultats MTF (cache de validation)
-     */
-    private function persistMtfResults(
-        string $symbol,
-        Timeframe $timeframe,
-        \DateTimeImmutable $klineTime,
-        string $signalSide,
-        array $evaluation,
-        array $collector
-    ): void {
-        try {
-            // Persister le cache de validation
-            if ($this->validationCache !== null) {
-                $status = match ($signalSide) {
-                    'LONG', 'SHORT' => 'VALID',
-                    'NONE' => 'INVALID',
-                    default => 'PENDING'
-                };
-
-                $details = [
-                    'signal_side' => $signalSide,
-                    'conditions_long' => $evaluation['conditions_long'] ?? [],
-                    'conditions_short' => $evaluation['conditions_short'] ?? [],
-                    'indicator_context' => $evaluation['indicator_context'] ?? [],
-                    'mtf_collector' => $collector,
-                    'persisted_by' => 'mtf_service'
-                ];
-
-                // Calculer l'expiration selon le timeframe (moins 1 seconde pour éviter les problèmes de timing)
-                $now = $this->timeService->getCurrentAlignedUtc();
-                $expirationTime = $this->timeService->getValidationCacheTtl($now, $timeframe);
-                $expirationTime = $expirationTime->modify('-1 second');
-                $expirationMinutes = (int) ceil(($expirationTime->getTimestamp() - $now->getTimestamp()) / 60);
-
-                $this->validationCache->cacheMtfValidation(
-                    $symbol,
-                    $timeframe,
-                    $klineTime,
-                    $status,
-                    $details,
-                    $expirationMinutes
-                );
-
-                $this->logger->info('MTF validation cached', [
-                    'symbol' => $symbol,
-                    'timeframe' => $timeframe->value,
-                    'status' => $status,
-                    'kline_time' => $klineTime->format('Y-m-d H:i:s'),
-                    'expiration_minutes' => $expirationMinutes,
-                    'expiration_time' => $expirationTime->format('Y-m-d H:i:s')
-                ]);
-            }
-        } catch (\Exception $e) {
-            $this->logger->error('Failed to persist MTF results', [
-                'symbol' => $symbol,
-                'timeframe' => $timeframe->value,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-        }
-    }
-
-    /**
      * Expose le traitement d'un symbole pour délégation externe.
      * @return \Generator<int, array{symbol: string, result: array, progress: array}, array>
      */
