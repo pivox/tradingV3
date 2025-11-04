@@ -19,21 +19,8 @@ final class Version20250115000001 extends AbstractMigration
 
     public function up(Schema $schema): void
     {
-        // Vérifier si la table order_plan existe
-        $orderPlanExists = false;
-        try {
-            $result = $this->connection->executeQuery("
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_schema = 'public' 
-                    AND table_name = 'order_plan'
-                )
-            ")->fetchOne();
-            $orderPlanExists = (bool) $result;
-        } catch (\Throwable $e) {
-            // Si la vérification échoue, on continue sans FK
-            $orderPlanExists = false;
-        }
+        // Vérifier si la table order_plan existe de manière agnostique
+        $orderPlanExists = $schema->hasTable('order_plan');
 
         // ============================================================
         // Table: order_intent
