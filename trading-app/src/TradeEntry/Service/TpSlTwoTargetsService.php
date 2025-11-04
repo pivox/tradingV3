@@ -12,11 +12,15 @@ use App\TradeEntry\Policy\PreTradeChecks;
 use App\TradeEntry\RiskSizer\StopLossCalculator;
 use App\TradeEntry\RiskSizer\TakeProfitCalculator;
 use App\TradeEntry\Types\Side as EntrySide;
+use App\TradeEntry\TpSplit\TpSplitResolver;
+use App\TradeEntry\TpSplit\Dto\TpSplitContext;
+use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Common\Enum\OrderSide;
 use App\Common\Enum\OrderType;
 use App\Contract\Provider\Dto\OrderDto;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use App\Runtime\Cache\DbValidationCache;
 
 final class TpSlTwoTargetsService
 {
@@ -29,6 +33,9 @@ final class TpSlTwoTargetsService
         private readonly MtfValidationConfig $mtfConfig,
         #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
+        private readonly ?TpSplitResolver $tpSplitResolver = null,
+        private readonly ?IndicatorProviderInterface $indicatorProvider = null,
+        private readonly ?DbValidationCache $validationCache = null,
     ) {}
 
     /**
@@ -85,6 +92,7 @@ final class TpSlTwoTargetsService
         $pivotSlBufferPct = isset($defaults['pivot_sl_buffer_pct']) ? (float)$defaults['pivot_sl_buffer_pct'] : null;
         $pivotSlMinKeepRatio = isset($defaults['pivot_sl_min_keep_ratio']) ? (float)$defaults['pivot_sl_min_keep_ratio'] : null;
         $rMultiple = (float)($req->rMultiple ?? ($defaults['r_multiple'] ?? 2.0));
+        $slFullByDefault = (bool)($defaults['sl_full_size'] ?? true);
 
         // Stop par pivot si disponible, sinon par risque
         if (!empty($pivotLevels)) {
@@ -182,7 +190,16 @@ final class TpSlTwoTargetsService
         // 4) Annulations (SL si différent, TP existants)
         $cancelled = [];
         $orderProvider = $this->providers->getOrderProvider();
-        $open = $orderProvider->getOpenOrders($symbol);
+        try {
+            $open = $orderProvider->getOpenOrders($symbol);
+        } catch (\Throwable $e) {
+            $open = [];
+            $this->journeyLogger->warning('order_journey.tp2sl.open_orders_failed', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+                'reason' => 'fetch_open_orders_failed',
+            ]);
+        }
 
         // Détermination sens fermeture
         $closeSide = $req->side === EntrySide::Long ? OrderSide::SELL : OrderSide::BUY;
@@ -205,8 +222,17 @@ final class TpSlTwoTargetsService
             if ($existingSl !== null) {
                 $p = $priceOf($existingSl);
                 if ($p !== null && abs($p - $stop) > max($tick, 1e-8)) {
-                    if ($orderProvider->cancelOrder($existingSl->orderId)) {
-                        $cancelled[] = $existingSl->orderId;
+                    try {
+                        if ($orderProvider->cancelOrder($existingSl->orderId)) {
+                            $cancelled[] = $existingSl->orderId;
+                        }
+                    } catch (\Throwable $e) {
+                        $this->journeyLogger->warning('order_journey.tp2sl.cancel_sl_failed', [
+                            'symbol' => $symbol,
+                            'order_id' => $existingSl->orderId,
+                            'error' => $e->getMessage(),
+                            'reason' => 'cancel_sl_exception',
+                        ]);
                     }
                 }
             }
@@ -216,15 +242,59 @@ final class TpSlTwoTargetsService
         if ($req->cancelExistingTakeProfits) {
             foreach ($closing as $o) {
                 if (!$isSl($o)) {
-                    if ($orderProvider->cancelOrder($o->orderId)) {
-                        $cancelled[] = $o->orderId;
+                    try {
+                        if ($orderProvider->cancelOrder($o->orderId)) {
+                            $cancelled[] = $o->orderId;
+                        }
+                    } catch (\Throwable $e) {
+                        $this->journeyLogger->warning('order_journey.tp2sl.cancel_tp_failed', [
+                            'symbol' => $symbol,
+                            'order_id' => $o->orderId,
+                            'error' => $e->getMessage(),
+                            'reason' => 'cancel_tp_exception',
+                        ]);
                     }
                 }
             }
         }
 
         // 5) Soumettre SL (limité) et 2 ordres TP (split du size)
-        $ratio = $req->splitPct ?? 0.5;
+        // Détermination ratio TP1/TP2: priorité à la requête, sinon resolver basé sur contexte
+        $ratio = $req->splitPct;
+        if ($ratio === null && $this->tpSplitResolver !== null) {
+            // Déduire automatiquement depuis le pipeline MTF si absent
+            $auto = $this->deriveMtfHints($symbol);
+            $momentum = $req->momentum ?? $auto['momentum'];
+            $mtfValid = $req->mtfValidCount ?? $auto['mtf_valid_count'];
+            $pullback = (bool)($req->pullbackClear ?? false);
+            $late = (bool)($req->lateEntry ?? false);
+
+            // ATR% via IndicatorProvider (fallback: estimer depuis EntryZone ATR si dispo)
+            $mark = (float)($pre->markPrice ?? $pre->bestAsk ?? $pre->bestBid ?? 0.0);
+            $atrAbs = null;
+            if ($this->indicatorProvider !== null) {
+                try {
+                    $tf = $this->resolveAtrTimeframe();
+                    $atrAbs = $this->indicatorProvider->getAtr('tp_split', $symbol, $tf);
+                } catch (\Throwable) {
+                    $atrAbs = null;
+                }
+            }
+            $atrPct = ($atrAbs !== null && $mark > 0.0) ? (100.0 * $atrAbs / $mark) : 1.5;
+
+            $ctx = new TpSplitContext(
+                symbol: $symbol,
+                momentum: strtolower($momentum),
+                atrPct: $atrPct,
+                mtfValidCount: max(0, min(3, (int)$mtfValid)),
+                pullbackClear: $pullback,
+                lateEntry: $late,
+            );
+            $ratio = $this->tpSplitResolver->resolve($ctx);
+        }
+        if ($ratio === null) { $ratio = 0.5; }
+        
+
         $ratio = max(0.0, min(1.0, $ratio));
         $size1 = (int)floor($size * $ratio);
         $size2 = (int)max(0, $size - $size1);
@@ -248,6 +318,10 @@ final class TpSlTwoTargetsService
             $size2 = (int)min($size2, (int)$maxVol);
         }
 
+        // Déterminer taille SL (full vs résiduel après split)
+        $slFull = (bool)($req->slFullSize ?? $slFullByDefault);
+        $slSize = $slFull ? (int)$size : (int)max(0, $size - $size1 - $size2);
+
         $submitted = [];
         $bitmartCloseSide = ($req->side === EntrySide::Long) ? 2 : 3; // 2=close_long, 3=close_short
 
@@ -258,14 +332,12 @@ final class TpSlTwoTargetsService
             'reduceOnly' => true,
         ];
 
-        // SL pleine taille (comportement codé en dur)
-        $slSize = (int)$size;
+        // Quantifier SL size au multiple minVol
+        $slSize = $slSize > 0 ? (int)floor($slSize / $minVol) * $minVol : 0;
         // Préparer un base CID pour tracer les ordres
         $baseCid = $this->makeBaseCid($symbol, $req->side, $decisionKey);
 
         if ($slSize > 0) {
-            // Quantifier SL size au multiple minVol
-            $slSize = (int)floor($slSize / $minVol) * $minVol;
             $options = $optionsBase + ['client_order_id' => $baseCid . '-SL'];
             // Submit SL as a stop-limit (triggered) by using stopPrice; keep limit price equal to stop for determinism
             $dto = $orderProvider->placeOrder(
@@ -345,6 +417,11 @@ final class TpSlTwoTargetsService
             'decision_key' => $decisionKey,
             'submitted_count' => \count($submitted),
             'cancelled_count' => \count($cancelled),
+            'ratio' => $ratio,
+            'size' => $size,
+            'size1' => $size1,
+            'size2' => $size2,
+            'sl_size' => $slSize,
             'reason' => 'tp_two_targets_submitted',
         ]);
 
@@ -362,6 +439,83 @@ final class TpSlTwoTargetsService
         // Position entity side is LONG|SHORT
         $pos = $this->positions->findOneBySymbolSide($symbol, $side === EntrySide::Long ? 'LONG' : 'SHORT');
         return $pos;
+    }
+
+    private function resolveAtrTimeframe(): string
+    {
+        try {
+            $cfg = $this->mtfConfig->getConfig();
+            // optional override in mtf_validations.yaml: defaults.atr_tf
+            $tf = $cfg['defaults']['atr_tf'] ?? null;
+            if (is_string($tf) && $tf !== '') {
+                return $tf;
+            }
+        } catch (\Throwable) {}
+        return '5m';
+    }
+
+    /**
+     * Déduit momentum et mtf_valid_count depuis le cache MTF si disponible.
+     * Retourne des valeurs par défaut raisonnables sinon.
+     * @return array{momentum:string, mtf_valid_count:int}
+     */
+    private function deriveMtfHints(string $symbol): array
+    {
+        $default = ['momentum' => 'moyen', 'mtf_valid_count' => 2];
+        if ($this->validationCache === null) {
+            return $default;
+        }
+
+        try {
+            $states = $this->validationCache->getValidationStates($symbol);
+            if (empty($states)) {
+                return $default;
+            }
+
+            // Filtrer les états expirés puis trier par klineTime desc
+            $states = array_values(array_filter($states, static fn($s) => method_exists($s, 'isExpired') ? !$s->isExpired() : true));
+            if (empty($states)) {
+                return $default;
+            }
+            usort($states, static function ($a, $b) {
+                $tsa = ($a->klineTime ?? null) instanceof \DateTimeImmutable ? $a->klineTime->getTimestamp() : 0;
+                $tsb = ($b->klineTime ?? null) instanceof \DateTimeImmutable ? $b->klineTime->getTimestamp() : 0;
+                return $tsb <=> $tsa;
+            });
+
+            $latest = $states[0];
+            $details = $latest->details ?? [];
+            $collector = $details['mtf_collector'] ?? [];
+
+            // Déterminer la base TF depuis la config (context) sinon fallback 3 TF usuelles
+            $cfg = $this->mtfConfig->getConfig();
+            $contextTfs = array_map('strtolower', (array)($cfg['validation']['context'] ?? ($cfg['mtf']['context'] ?? [])));
+            if (empty($contextTfs)) {
+                $contextTfs = ['1h','15m','5m'];
+            }
+            $contextSet = array_flip($contextTfs);
+
+            $validCount = 0;
+            foreach ($collector as $row) {
+                $tf = strtolower((string)($row['tf'] ?? $row['timeframe'] ?? ''));
+                $status = strtoupper((string)($row['status'] ?? ''));
+                if ($tf !== '' && isset($contextSet[$tf]) && $status === 'VALID') {
+                    $validCount++;
+                }
+            }
+            $validCount = max(0, min(3, (int)$validCount));
+
+            $momentum = 'moyen';
+            if ($validCount >= 3) {
+                $momentum = 'fort';
+            } elseif ($validCount <= 1) {
+                $momentum = 'faible';
+            }
+
+            return ['momentum' => $momentum, 'mtf_valid_count' => $validCount];
+        } catch (\Throwable) {
+            return $default;
+        }
     }
 
     private function makeBaseCid(string $symbol, EntrySide $side, ?string $decisionKey): string
