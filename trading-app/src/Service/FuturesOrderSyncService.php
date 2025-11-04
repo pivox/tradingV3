@@ -292,16 +292,18 @@ final class FuturesOrderSyncService
     public function syncOrderFromWebSocket(array $eventData): ?FuturesOrder
     {
         // Mapper les champs WebSocket normalisés vers le format API
+        $filledSize = $eventData['deal_size'] ?? $eventData['filled_size'] ?? null;
+
         $normalized = [
             'order_id' => $eventData['order_id'] ?? null,
             'client_order_id' => $eventData['client_order_id'] ?? null,
             'symbol' => $eventData['symbol'] ?? null,
             'side' => $eventData['side'] ?? null,
             'type' => $eventData['type'] ?? null,
-            'status' => $this->mapWebSocketStateToStatus($eventData['state'] ?? null),
+            'status' => $this->mapWebSocketStateToStatus($eventData['state'] ?? null, $filledSize),
             'price' => $eventData['price'] ?? null,
             'size' => $eventData['size'] ?? null,
-            'filled_size' => $eventData['deal_size'] ?? $eventData['filled_size'] ?? null,
+            'filled_size' => $filledSize,
             'filled_notional' => null, // Pas disponible dans WebSocket
             'open_type' => $eventData['open_type'] ?? null,
             'position_mode' => $eventData['position_mode'] ?? null,
@@ -327,7 +329,7 @@ final class FuturesOrderSyncService
      * 
      * Le statut final dépend aussi de deal_size pour distinguer filled vs cancelled
      */
-    private function mapWebSocketStateToStatus(?int $state): ?string
+    private function mapWebSocketStateToStatus(?int $state, mixed $filledSize = null): ?string
     {
         if ($state === null) {
             return null;
@@ -337,9 +339,30 @@ final class FuturesOrderSyncService
         return match ($state) {
             1 => 'pending',      // APPROVAL
             2 => 'pending',      // CHECK
-            4 => 'filled',       // FINISH (sera affiné selon deal_size si disponible)
+            4 => $this->mapFilledStateFromExecutedSize($filledSize),
             default => 'unknown',
         };
+    }
+
+    private function mapFilledStateFromExecutedSize(mixed $filledSize): ?string
+    {
+        if ($filledSize === null) {
+            return null; // Attendre des données complémentaires pour déterminer le statut final
+        }
+
+        if (is_numeric($filledSize)) {
+            $executed = (float) $filledSize;
+
+            if ($executed > 0.0) {
+                return 'filled';
+            }
+
+            if ($executed === 0.0) {
+                return 'cancelled';
+            }
+        }
+
+        return null;
     }
 
     private function extractString(array $data, string $key, ?string $default = null): ?string

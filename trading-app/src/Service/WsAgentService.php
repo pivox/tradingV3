@@ -27,7 +27,8 @@ final class WsAgentService
     private ?LoopInterface $loop = null;
     private bool $isAuthenticated = false;
     private bool $isSubscribed = false;
-    private array $trackedOrders = []; // client_order_id => ['order_id', 'symbol', 'status']
+    private array $trackedOrders = []; // tracking_key => ['order_id', 'client_order_id', 'symbol', 'status']
+    private array $trackedOrderAliases = []; // alias => tracking_key
     private ?string $wsUrl = null;
 
     public function __construct(
@@ -108,7 +109,7 @@ final class WsAgentService
                     ]));
                 }
 
-                $this->trackOrder($clientOrderId ?? '', $orderId, $symbol ?? '');
+                $this->trackOrder($clientOrderId, $orderId, $symbol ?? '');
 
                 return new Response(202, ['Content-Type' => 'application/json'], json_encode([
                     'status' => 'ok',
@@ -338,8 +339,8 @@ final class WsAgentService
     private function notifyOrderSubmitted(?string $orderId, ?string $clientOrderId, ?string $symbol): void
     {
         // Vérifier si on track cet ordre
-        $trackingKey = $clientOrderId ?? $orderId;
-        if (!$trackingKey || !isset($this->trackedOrders[$trackingKey])) {
+        $trackingKey = $this->resolveTrackingKey($clientOrderId, $orderId);
+        if ($trackingKey === null) {
             return;
         }
 
@@ -381,13 +382,28 @@ final class WsAgentService
     /**
      * Ajoute un ordre à tracker (appelé depuis l'endpoint HTTP)
      */
-    public function trackOrder(string $clientOrderId, ?string $orderId, string $symbol): void
+    public function trackOrder(?string $clientOrderId, ?string $orderId, string $symbol): void
     {
-        $this->trackedOrders[$clientOrderId] = [
+        $clientOrderId = $this->sanitizeTrackingKey($clientOrderId);
+        $orderId = $this->sanitizeTrackingKey($orderId);
+
+        $primaryKey = $clientOrderId ?? $orderId;
+        if ($primaryKey === null) {
+            $this->logger->warning('[WsAgent] Attempted to track order without identifiers');
+
+            return;
+        }
+
+        $this->trackedOrders[$primaryKey] = [
             'order_id' => $orderId,
+            'client_order_id' => $clientOrderId,
             'symbol' => $symbol,
             'status' => 'pending',
         ];
+
+        foreach (array_unique(array_filter([$clientOrderId, $orderId], static fn ($value) => $value !== null)) as $alias) {
+            $this->trackedOrderAliases[$alias] = $primaryKey;
+        }
 
         // S'assurer que la connexion est établie et qu'on est abonné
         if (!$this->isSubscribed) {
@@ -399,6 +415,41 @@ final class WsAgentService
             'order_id' => $orderId,
             'symbol' => $symbol,
         ]);
+    }
+
+    private function resolveTrackingKey(?string $clientOrderId, ?string $orderId): ?string
+    {
+        $candidates = array_filter([
+            $this->sanitizeTrackingKey($clientOrderId),
+            $this->sanitizeTrackingKey($orderId),
+        ], static fn ($value) => $value !== null);
+
+        foreach ($candidates as $candidate) {
+            if (isset($this->trackedOrders[$candidate])) {
+                return $candidate;
+            }
+
+            if (isset($this->trackedOrderAliases[$candidate])) {
+                $primary = $this->trackedOrderAliases[$candidate];
+
+                if (isset($this->trackedOrders[$primary])) {
+                    return $primary;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function sanitizeTrackingKey(?string $key): ?string
+    {
+        if ($key === null) {
+            return null;
+        }
+
+        $normalized = trim($key);
+
+        return $normalized !== '' ? $normalized : null;
     }
 
     private function disconnect(): void
