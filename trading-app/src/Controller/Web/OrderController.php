@@ -117,7 +117,13 @@ class OrderController extends AbstractController
                                 }
                                 
                                 // Quantifier le prix du SL selon la précision
-                                $stopLossPrice = TickQuantizer::quantize($stopLossPrice, $pricePrecision);
+                                if ((int) $side === 1) {
+                                    // Long: quantize down
+                                    $stopLossPrice = TickQuantizer::quantizeDown($stopLossPrice, $pricePrecision);
+                                } else {
+                                    // Short: quantize up
+                                    $stopLossPrice = TickQuantizer::quantizeUp($stopLossPrice, $pricePrecision);
+                                }
                                 
                                 // Validation du SL
                                 if ($stopLossPrice <= 0) {
