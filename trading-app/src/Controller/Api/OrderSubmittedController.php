@@ -17,8 +17,8 @@ final class OrderSubmittedController
     public function __construct(
         private readonly FuturesOrderRepository $futuresOrderRepository,
         private readonly OrderIntentRepository $orderIntentRepository,
-        private readonly ?OrderIntentManager $intentManager = null,
         private readonly LoggerInterface $logger,
+        private readonly ?OrderIntentManager $intentManager = null,
     ) {
     }
 
