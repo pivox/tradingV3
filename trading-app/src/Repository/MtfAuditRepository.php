@@ -161,7 +161,7 @@ WITH base AS (
     symbol,
     created_at,
     COALESCE(
-      candle_close_ts,
+      candle_open_ts,
       NULLIF(details->> 'kline_time', '')::timestamp AT TIME ZONE 'UTC'
     ) AS candle_ts,
     jsonb_array_elements_text(COALESCE(details->'conditions_failed','[]'::jsonb)) AS condition_name
@@ -345,7 +345,7 @@ WITH base AS (
     step,
     created_at,
     COALESCE(
-      candle_close_ts,
+      candle_open_ts,
       NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC'
     ) AS candle_ts
   FROM mtf_audit
@@ -427,7 +427,7 @@ SELECT
   COALESCE(details->>'side', 'n/a') AS side,
   created_at,
   COALESCE(
-    candle_close_ts,
+    candle_open_ts,
     NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC'
   ) AS candle_ts,
   run_id,
@@ -443,6 +443,176 @@ SQL;
         $types['limit']  = ParameterType::INTEGER;
 
         return $this->conn->executeQuery($sql, $params, $types)->fetchAllAssociative();
+    }
+
+    /**
+     * Retourne les validations par symbole avec indicateur "in_window" basé sur expectedLastOpenTime.
+     * Version SQL optimisée de getLatestValidationSuccessesPerSymbol avec calcul de fenêtre temporelle.
+     *
+     * @param string|null $symbolSearch Filtre partiel sur le symbole (ILIKE)
+     *
+     * @return array<int,array{
+     *     symbol: string,
+     *     in_window_4h: int,
+     *     in_window_1h: int,
+     *     in_window_15m: int,
+     *     in_window_5m: int,
+     *     in_window_1m: int,
+     *     validation_at_4h: string|null,
+     *     validation_at_1h: string|null,
+     *     validation_at_15m: string|null,
+     *     validation_at_5m: string|null,
+     *     validation_at_1m: string|null,
+     * }>
+     */
+    public function getValidationSummaryWithInWindow(
+        ?string $symbolSearch = null
+    ): array {
+        $params = [];
+        $types = [];
+
+        $symbolClause = '';
+        if ($symbolSearch !== null && $symbolSearch !== '') {
+            $params['search'] = '%' . strtoupper($symbolSearch) . '%';
+            $types['search'] = ParameterType::STRING;
+            $symbolClause = ' AND UPPER(symbol) LIKE :search';
+        }
+
+        // Calcul SQL du timestamp de clôture attendu de la dernière bougie fermée
+        // Logique équivalente à expectedLastOpenTime() :
+        // 1. Aligner sur la borne inférieure: floor(extract(epoch from now()) / seconds) * seconds
+        // 2. Retirer un intervalle pour obtenir l'openTime de la dernière bougie fermée
+        // 3. Le closeTime attendu = openTime + intervalle = aligned - intervalle + intervalle = aligned
+        // Mais pour être explicite, on calcule: aligned - intervalle + intervalle = aligned
+        // En fait, le closeTime attendu est simplement la borne alignée actuelle
+
+        $sql = <<<SQL
+WITH latest_validations AS (
+    SELECT 
+        symbol,
+        timeframe,
+        step,
+        candle_open_ts,
+        ROW_NUMBER() OVER (PARTITION BY symbol, timeframe ORDER BY candle_open_ts DESC, created_at DESC) AS rn
+    FROM mtf_audit
+    WHERE candle_open_ts IS NOT NULL
+      AND (
+        (timeframe = '4h' AND UPPER(step) = '4H_VALIDATION_SUCCESS') OR
+        (timeframe = '1h' AND UPPER(step) = '1H_VALIDATION_SUCCESS') OR
+        (timeframe = '15m' AND UPPER(step) = '15M_VALIDATION_SUCCESS') OR
+        (timeframe = '5m' AND UPPER(step) = '5M_VALIDATION_SUCCESS') OR
+        (timeframe = '1m' AND UPPER(step) = '1M_VALIDATION_SUCCESS')
+      )
+      {$symbolClause}
+)
+SELECT * FROM (
+    SELECT
+        symbol,
+        -- 4h: Calculer l'openTime attendu de la dernière bougie fermée (expectedLastOpenTime)
+        -- Logique: aligner sur borne, retirer intervalle pour obtenir l'openTime de la dernière bougie fermée
+        MAX(CASE 
+            WHEN timeframe = '4h' AND rn = 1 THEN
+                CASE 
+                    WHEN candle_open_ts = (
+                        to_timestamp(FLOOR(EXTRACT(EPOCH FROM timezone('UTC', now())) / 14400) * 14400 - 14400) AT TIME ZONE 'UTC'
+                    )
+                    THEN 1 
+                    ELSE 0 
+                END
+            ELSE 0
+        END) AS in_window_4h,
+        
+        to_char(MAX(CASE WHEN timeframe = '4h' AND rn = 1 THEN candle_open_ts END), 'YYYY-MM-DD HH24:MI:SS') AS validation_at_4h,
+        
+        -- 1h
+        MAX(CASE 
+            WHEN timeframe = '1h' AND rn = 1 THEN
+                CASE 
+                    WHEN candle_open_ts = (
+                        to_timestamp(FLOOR(EXTRACT(EPOCH FROM timezone('UTC', now())) / 3600) * 3600 - 3600) AT TIME ZONE 'UTC'
+                    )
+                    THEN 1 
+                    ELSE 0 
+                END
+            ELSE 0
+        END) AS in_window_1h,
+        
+        to_char(MAX(CASE WHEN timeframe = '1h' AND rn = 1 THEN candle_open_ts END), 'YYYY-MM-DD HH24:MI:SS') AS validation_at_1h,
+        
+        -- 15m
+        MAX(CASE 
+            WHEN timeframe = '15m' AND rn = 1 THEN
+                CASE 
+                    WHEN candle_open_ts = (
+                        to_timestamp(FLOOR(EXTRACT(EPOCH FROM timezone('UTC', now())) / 900) * 900 - 900) AT TIME ZONE 'UTC'
+                    )
+                    THEN 1 
+                    ELSE 0 
+                END
+            ELSE 0
+        END) AS in_window_15m,
+        
+        to_char(MAX(CASE WHEN timeframe = '15m' AND rn = 1 THEN candle_open_ts END), 'YYYY-MM-DD HH24:MI:SS') AS validation_at_15m,
+        
+        -- 5m
+        MAX(CASE 
+            WHEN timeframe = '5m' AND rn = 1 THEN
+                CASE 
+                    WHEN candle_open_ts = (
+                        to_timestamp(FLOOR(EXTRACT(EPOCH FROM timezone('UTC', now())) / 300) * 300 - 300) AT TIME ZONE 'UTC'
+                    )
+                    THEN 1 
+                    ELSE 0 
+                END
+            ELSE 0
+        END) AS in_window_5m,
+        
+        to_char(MAX(CASE WHEN timeframe = '5m' AND rn = 1 THEN candle_open_ts END), 'YYYY-MM-DD HH24:MI:SS') AS validation_at_5m,
+        
+        -- 1m
+        MAX(CASE 
+            WHEN timeframe = '1m' AND rn = 1 THEN
+                CASE 
+                    WHEN candle_open_ts = (
+                        to_timestamp(FLOOR(EXTRACT(EPOCH FROM timezone('UTC', now())) / 60) * 60 - 60) AT TIME ZONE 'UTC'
+                    )
+                    THEN 1 
+                    ELSE 0 
+                END
+            ELSE 0
+        END) AS in_window_1m,
+        
+        to_char(MAX(CASE WHEN timeframe = '1m' AND rn = 1 THEN candle_open_ts END), 'YYYY-MM-DD HH24:MI:SS') AS validation_at_1m
+        
+    FROM latest_validations
+    GROUP BY symbol
+) AS t
+ORDER BY (
+    COALESCE(in_window_4h, 0) +
+    COALESCE(in_window_1h, 0) +
+    COALESCE(in_window_15m, 0) +
+    COALESCE(in_window_5m, 0) +
+    COALESCE(in_window_1m, 0)
+) DESC, symbol
+SQL;
+
+        $rows = $this->conn->executeQuery($sql, $params, $types)->fetchAllAssociative();
+        
+        return array_map(function (array $row): array {
+            return [
+                'symbol' => (string)($row['symbol'] ?? ''),
+                'in_window_4h' => (int)($row['in_window_4h'] ?? 0),
+                'in_window_1h' => (int)($row['in_window_1h'] ?? 0),
+                'in_window_15m' => (int)($row['in_window_15m'] ?? 0),
+                'in_window_5m' => (int)($row['in_window_5m'] ?? 0),
+                'in_window_1m' => (int)($row['in_window_1m'] ?? 0),
+                'validation_at_4h' => $row['validation_at_4h'] ?? null,
+                'validation_at_1h' => $row['validation_at_1h'] ?? null,
+                'validation_at_15m' => $row['validation_at_15m'] ?? null,
+                'validation_at_5m' => $row['validation_at_5m'] ?? null,
+                'validation_at_1m' => $row['validation_at_1m'] ?? null,
+            ];
+        }, $rows);
     }
 
     /**
@@ -505,7 +675,19 @@ WITH success_events AS (
     id,
     symbol,
     {$caseExpression} AS timeframe,
-    COALESCE(candle_close_ts, NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC') AS event_ts,
+    -- event_ts = candle_open_ts + durée du timeframe (pour obtenir le closeTime)
+    COALESCE(
+      CASE 
+        WHEN {$caseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
+        WHEN {$caseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
+        WHEN {$caseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
+        WHEN {$caseExpression} = '5m' THEN candle_open_ts + INTERVAL '5 minutes'
+        WHEN {$caseExpression} = '1m' THEN candle_open_ts + INTERVAL '1 minute'
+        ELSE NULL
+      END,
+      NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC'
+    ) AS event_ts,
+    candle_open_ts,
     created_at,
     cause
   FROM mtf_audit
@@ -518,13 +700,14 @@ ranked_success AS (
     symbol,
     timeframe,
     event_ts,
+    candle_open_ts,
     created_at,
     cause,
     ROW_NUMBER() OVER (PARTITION BY symbol, timeframe ORDER BY event_ts DESC, created_at DESC) AS rn
   FROM success_events
   WHERE timeframe IS NOT NULL
 )
-SELECT id, symbol, timeframe, event_ts, created_at, cause
+SELECT id, symbol, timeframe, event_ts, candle_open_ts, created_at, cause
 FROM ranked_success
 WHERE rn = 1
 SQL;
@@ -544,7 +727,19 @@ WITH failure_events AS (
     id,
     symbol,
     {$caseExpression} AS timeframe,
-    COALESCE(candle_close_ts, NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC') AS event_ts,
+    -- event_ts = candle_open_ts + durée du timeframe (pour obtenir le closeTime)
+    COALESCE(
+      CASE 
+        WHEN {$caseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
+        WHEN {$caseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
+        WHEN {$caseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
+        WHEN {$caseExpression} = '5m' THEN candle_open_ts + INTERVAL '5 minutes'
+        WHEN {$caseExpression} = '1m' THEN candle_open_ts + INTERVAL '1 minute'
+        ELSE NULL
+      END,
+      NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC'
+    ) AS event_ts,
+    candle_open_ts,
     created_at,
     cause
   FROM mtf_audit
@@ -557,13 +752,14 @@ ranked_failure AS (
     symbol,
     timeframe,
     event_ts,
+    candle_open_ts,
     created_at,
     cause,
     ROW_NUMBER() OVER (PARTITION BY symbol, timeframe ORDER BY event_ts DESC, created_at DESC) AS rn
   FROM failure_events
   WHERE timeframe IS NOT NULL
 )
-SELECT id, symbol, timeframe, event_ts, created_at, cause
+SELECT id, symbol, timeframe, event_ts, candle_open_ts, created_at, cause
 FROM ranked_failure
 WHERE rn = 1
 SQL;
@@ -575,7 +771,8 @@ WITH ready_events AS (
   SELECT
     id,
     symbol,
-    COALESCE(candle_close_ts, NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC') AS event_ts,
+    -- Pour READY, on utilise directement candle_open_ts (pas de timeframe spécifique)
+    COALESCE(candle_open_ts, NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC') AS event_ts,
     created_at
   FROM mtf_audit
   WHERE (
@@ -729,10 +926,9 @@ SQL;
             foreach ($normalizedTfs as $tf) {
                 $tfData = $entry['timeframes'][$tf] ?? null;
                 if ($tfData !== null && is_array($tfData) && $tfData['status'] === 'success') {
-                    // Calculer l'openTime attendu pour la dernière bougie close
+                    // event_ts est maintenant le closeTime (candle_open_ts + durée), donc l'openTime est event_ts - durée
                     $eventTs = $this->toDateTime($tfData['event_ts'] ?? null);
                     if ($eventTs !== null) {
-                        // event_ts est le candle_close_ts, donc l'openTime est event_ts - durée du timeframe
                         $tfSeconds = $tfSecondsMap[$tf] ?? 0;
                         if ($tfSeconds > 0) {
                             $expectedOpenTime = $eventTs->modify("-{$tfSeconds} seconds");

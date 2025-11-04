@@ -175,7 +175,7 @@ contract_pipeline:
         - retries            # compteur d'essais
         - stale              # bool, selon TTL d'orchestration
     idempotency:
-        decision_key: '{symbol}:{timeframe}:{candle_close_ts}'  # empêche double action sur même bougie
+        decision_key: '{symbol}:{timeframe}:{candle_open_ts}'  # empêche double action sur même bougie
     meta: >
         Traçabilité et idempotence par TF. Permet audits, reprises propres et anti multi-soumissions.
 
@@ -308,7 +308,7 @@ post_validation:
         mark_index_gap_bps_max: 15.0   # écart Mark/Index max => n'est pas encore implémenté
 
     idempotency:
-        decision_key_tpl: "{symbol}:{timeframe}:{candle_close_ts}"
+        decision_key_tpl: "{symbol}:{timeframe}:{candle_open_ts}"
         max_attempts: 3                # max tentatives par décision
 
     telemetry:

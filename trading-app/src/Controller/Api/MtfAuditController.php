@@ -147,7 +147,7 @@ class MtfAuditController extends AbstractController
                     'verdict' => $verdict,
                     'payload' => $audit->getDetails(),
                     'timestamp' => $formatDate($audit->getCreatedAt()),
-                    'candleTimestamp' => $formatDate($audit->getCandleCloseTs()),
+                    'candleTimestamp' => $formatDate($audit->getCandleOpenTs()),
                 ];
             },
             $audits
