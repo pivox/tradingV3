@@ -53,6 +53,8 @@ final class ExecuteOrderPlan
 
             if ($result->status === 'submitted') {
                 $this->positionsLogger->info('execute_order_plan.submitted', $context + ['decision_key' => $decisionKey]);
+            } elseif ($result->status === 'skipped') {
+                $this->positionsLogger->warning('execute_order_plan.skipped', $context + ['decision_key' => $decisionKey, 'raw' => $result->raw]);
             } else {
                 $this->positionsLogger->error('execute_order_plan.failed', $context + ['decision_key' => $decisionKey, 'raw' => $result->raw]);
             }

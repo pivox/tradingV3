@@ -72,7 +72,12 @@ final class TradeEntryService
             'reason' => 'execution_finished',
         ]);
 
-        $this->metrics->incr($result->status === 'submitted' ? 'submitted' : 'errors');
+        $metric = match ($result->status) {
+            'submitted' => 'submitted',
+            'skipped' => 'skipped',
+            default => 'errors',
+        };
+        $this->metrics->incr($metric);
 
         return $result;
     }
