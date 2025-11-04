@@ -22,10 +22,10 @@ class FuturesOrder
     #[ORM\Column(type: Types::BIGINT)]
     private ?int $id = null;
 
-    #[ORM\Column(type: Types::STRING, length: 80, nullable: true, unique: true)]
+    #[ORM\Column(type: Types::STRING, length: 80, nullable: true)]
     private ?string $orderId = null;
 
-    #[ORM\Column(type: Types::STRING, length: 80, nullable: true, unique: true)]
+    #[ORM\Column(type: Types::STRING, length: 80, nullable: true)]
     private ?string $clientOrderId = null;
 
     #[ORM\Column(type: Types::STRING, length: 50)]
