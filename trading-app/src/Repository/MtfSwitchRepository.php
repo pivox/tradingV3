@@ -222,41 +222,77 @@ class MtfSwitchRepository extends ServiceEntityRepository
      */
     private function extractTimeframeFromDuration(string $duration): Timeframe
     {
-        // Format court: "15m", "1h", "4h", "1d"
-        if (preg_match('/^(\d+)([mhd])$/', $duration, $matches)) {
-            $value = (int) $matches[1];
-            $unit = $matches[2];
-            
-            if ($unit === 'm') {
-                return Timeframe::tryFromMinutes($value) 
-                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
-            } elseif ($unit === 'h') {
-                return Timeframe::tryFromMinutes($value * 60)
-                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
-            } elseif ($unit === 'd') {
-                return Timeframe::tryFromMinutes($value * 1440)
-                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
-            }
+        $minutes = $this->convertDurationToMinutes($duration);
+
+        if ($minutes <= 0) {
+            throw new \InvalidArgumentException("Duration doit être positive: {$duration}");
         }
-        
-        // Format textuel: "15 minutes", "1 hour", "1 hours", etc.
+
+        return $this->resolveTimeframeFromMinutes($minutes);
+    }
+
+    private function convertDurationToMinutes(string $duration): int
+    {
+        $duration = trim($duration);
+
+        if ($duration === '') {
+            throw new \InvalidArgumentException('Duration vide non supportée.');
+        }
+
+        if (preg_match('/^(\d+)([mhd])$/i', $duration, $matches)) {
+            $value = (int) $matches[1];
+            $unit = strtolower($matches[2]);
+
+            return match ($unit) {
+                'm' => $value,
+                'h' => $value * 60,
+                'd' => $value * 1440,
+                default => throw new \InvalidArgumentException("Unité non supportée pour {$duration}"),
+            };
+        }
+
         if (preg_match('/^(\d+)\s+(minute|minutes|hour|hours|day|days)$/i', $duration, $matches)) {
             $value = (int) $matches[1];
             $unit = strtolower($matches[2]);
-            
-            if (in_array($unit, ['minute', 'minutes'], true)) {
-                return Timeframe::tryFromMinutes($value)
-                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
-            } elseif (in_array($unit, ['hour', 'hours'], true)) {
-                return Timeframe::tryFromMinutes($value * 60)
-                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
-            } elseif (in_array($unit, ['day', 'days'], true)) {
-                return Timeframe::tryFromMinutes($value * 1440)
-                    ?? throw new \InvalidArgumentException("Timeframe non supporté pour {$duration}");
+
+            return match (true) {
+                in_array($unit, ['minute', 'minutes'], true) => $value,
+                in_array($unit, ['hour', 'hours'], true) => $value * 60,
+                in_array($unit, ['day', 'days'], true) => $value * 1440,
+                default => throw new \InvalidArgumentException("Unité non supportée pour {$duration}"),
+            };
+        }
+
+        throw new \InvalidArgumentException("Format de duration non reconnu: {$duration}");
+    }
+
+    private function resolveTimeframeFromMinutes(int $minutes): Timeframe
+    {
+        $timeframes = Timeframe::cases();
+        usort(
+            $timeframes,
+            static fn (Timeframe $a, Timeframe $b): int => $a->getStepInMinutes() <=> $b->getStepInMinutes()
+        );
+
+        $bestMatch = null;
+        foreach ($timeframes as $timeframe) {
+            $step = $timeframe->getStepInMinutes();
+            if ($minutes >= $step && $minutes % $step === 0) {
+                $bestMatch = $timeframe;
             }
         }
-        
-        throw new \InvalidArgumentException("Format de duration non reconnu: {$duration}");
+
+        if ($bestMatch !== null) {
+            return $bestMatch;
+        }
+
+        foreach (array_reverse($timeframes) as $timeframe) {
+            if ($minutes >= $timeframe->getStepInMinutes()) {
+                return $timeframe;
+            }
+        }
+
+        return $timeframes[0];
     }
 
     /**
@@ -333,6 +369,5 @@ class MtfSwitchRepository extends ServiceEntityRepository
             ->getResult();
     }
 }
-
 
 
