@@ -26,3 +26,68 @@ migration
 
 # codex conversatio history 
 - position codex resume 0199eef0-132c-7903-83cd-56c3162970b2
+
+---
+
+# BUG: EntityManager is closed - order_journey.symbol_processor.failed
+
+## Analyse de la cause racine
+
+**Problème identifié** : Chaîne d'erreur en cascade
+
+1. `processTimeframeInternal()` dans `BaseTimeframeService` appelle `getKlines()` (ligne 95)
+2. Si une exception Doctrine se produit (ex: timeout DB, connexion perdue), Doctrine ferme automatiquement l'EntityManager
+3. Le catch block (ligne 242) appelle `auditStep()` (ligne 250) pour logger l'erreur
+4. `auditStep()` utilise l'EntityManager (ligne 372-373) qui est maintenant fermé
+5. Nouvelle exception "EntityManager is closed" qui masque l'exception originale
+
+**Problèmes identifiés** :
+- `auditStep()` dans `BaseTimeframeService` (ligne 372-373) : utilise l'EntityManager sans protection
+- `getOrCreateForSymbol()` dans `MtfStateRepository` (ligne 28) : flush() échoue si EntityManager est fermé
+- `updateState()` dans `BaseTimeframeService` (ligne 274) : appelle `getOrCreateForSymbol()` qui peut échouer
+- `flush()` dans `MtfService::processSymbol()` (lignes 549, 948) : utilisé après des opérations qui peuvent avoir échoué
+
+**L'erreur est pertinente** : elle masque l'exception originale et empêche l'audit.
+
+## Plan d'action
+
+### Actions à réaliser
+
+1. **Protéger `auditStep()` dans `BaseTimeframeService`**
+   - Fichier: `trading-app/src/MtfValidator/Service/Timeframe/BaseTimeframeService.php`
+   - Ligne 371-374 : ajouter un try-catch autour de l'utilisation de l'EntityManager
+   - Logger un warning si l'audit ne peut pas être persisté (best-effort)
+
+2. **Protéger `getOrCreateForSymbol()` dans `MtfStateRepository`**
+   - Fichier: `trading-app/src/Repository/MtfStateRepository.php`
+   - Ligne 27-28 : ajouter un try-catch autour du flush()
+   - Gérer gracieusement le cas où l'EntityManager est fermé
+
+3. **Protéger les `flush()` dans `MtfService::processSymbol()`**
+   - Fichier: `trading-app/src/MtfValidator/Service/MtfService.php`
+   - Ligne 549 : protéger flush() après updateState()
+   - Ligne 948 : protéger flush() après les updateState()
+   - Protéger les appels auditStep() après une exception potentielle
+
+4. **Améliorer la gestion d'erreur dans `SymbolProcessor`**
+   - Fichier: `trading-app/src/MtfValidator/Service/SymbolProcessor.php`
+   - Distinguer les exceptions Doctrine des autres exceptions
+   - Préserver l'exception originale dans les logs
+
+### Critères de réussite
+
+- ✅ Plus d'erreur "EntityManager is closed" dans les logs
+- ✅ Les exceptions originales sont préservées et loggées correctement
+- ✅ L'audit fonctionne en best-effort même si l'EntityManager est fermé
+- ✅ Pas de régression dans le traitement des symboles
+
+### Fichiers à modifier
+
+- [ ] `trading-app/src/MtfValidator/Service/Timeframe/BaseTimeframeService.php` [EDIT]
+- [ ] `trading-app/src/Repository/MtfStateRepository.php` [EDIT]
+- [ ] `trading-app/src/MtfValidator/Service/MtfService.php` [EDIT]
+- [ ] `trading-app/src/MtfValidator/Service/SymbolProcessor.php` [EDIT] (optionnel, amélioration)
+
+### Statut
+- 🔍 Analyse terminée
+- ⏳ En attente d'approbation pour implémentation
