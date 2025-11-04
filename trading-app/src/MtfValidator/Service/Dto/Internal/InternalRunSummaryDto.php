@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace App\MtfValidator\Service\Dto;
+namespace App\MtfValidator\Service\Dto\Internal;
 
 /**
- * DTO pour le résumé d'exécution
+ * Représente le résumé interne d'une exécution MTF.
  */
-final class RunSummaryDto
+final class InternalRunSummaryDto
 {
     public function __construct(
         public readonly string $runId,
@@ -22,27 +22,9 @@ final class RunSummaryDto
         public readonly bool $forceRun,
         public readonly ?string $currentTf,
         public readonly \DateTimeImmutable $timestamp,
-        public readonly string $status
-    ) {}
-
-    public function getTotalSymbols(): int
-    {
-        return $this->symbolsRequested;
-    }
-
-    public function getProcessedSymbols(): int
-    {
-        return $this->symbolsProcessed;
-    }
-
-    public function getSuccessRate(): float
-    {
-        return $this->successRate;
-    }
-
-    public function isCompleted(): bool
-    {
-        return $this->status === 'completed';
+        public readonly string $status,
+        public readonly ?string $message = null
+    ) {
     }
 
     public function toArray(): array
@@ -60,7 +42,8 @@ final class RunSummaryDto
             'force_run' => $this->forceRun,
             'current_tf' => $this->currentTf,
             'timestamp' => $this->timestamp->format('Y-m-d H:i:s'),
-            'status' => $this->status
+            'status' => $this->status,
+            'message' => $this->message,
         ];
     }
 }

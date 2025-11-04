@@ -44,11 +44,18 @@ MtfValidator/Service/
 │   └── MtfRunOrchestrator.php   # Orchestrateur principal
 ├── SymbolProcessor.php           # Traitement des symboles
 ├── TradingDecisionHandler.php    # Gestion des décisions trading
-└── Dto/                          # DTOs internes
+└── Dto/
+    ├── Internal/                 # DTOs purement métiers
+    │   ├── InternalMtfRunDto.php
+    │   └── InternalRunSummaryDto.php
+    ├── Mapper/
+    │   └── ContractMapper.php    # Pont contrat ↔ interne
     ├── MtfRunResultDto.php
     ├── SymbolResultDto.php
-    └── RunSummaryDto.php
+    └── ProcessingContextDto.php
 ```
+
+Le `ContractMapper` centralise les conversions `fromContract` et `toContract` afin d'isoler toute connaissance des contrats publics dans un seul composant. Le `MtfRunService` travaille désormais exclusivement avec les DTOs internes (`InternalMtfRunDto`, `InternalRunSummaryDto`) et délègue la transformation vers les contrats (`MtfRunRequestDto`, `MtfRunResponseDto`, `MtfRunDto`) à ce mapper.
 
 ## Avantages de la Refactorisation
 

@@ -8,7 +8,6 @@ use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\Contract\Runtime\FeatureSwitchInterface;
 use App\Contract\Runtime\LockManagerInterface;
-use App\MtfValidator\Service\Dto\RunSummaryDto;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\MtfValidator\Service\Runner\MtfRunOrchestrator;
 use App\MtfValidator\Service\SymbolProcessor;
