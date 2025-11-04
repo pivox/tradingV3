@@ -24,7 +24,7 @@ appelle l'activité `mtf_api_call` qui poste la charge utile sur Symfony.
 | `MTF_WORKERS_URL`        | `http://trading-app-nginx:80/api/mtf/run`    |
 | `MTF_WORKERS_COUNT`      | `5`                                          |
 
-Les scripts présents dans `scripts/new` permettent de créer/suspendre/supprimer
+Les scripts présents dans `scripts` permettent de créer/suspendre/supprimer
 les schedules Temporal associées.
 
 ## Schedule MTF Workers
@@ -46,22 +46,22 @@ Exécution périodique du workflow MTF (toutes les minutes par défaut).
 
 ```bash
 # Créer le schedule (avec preview)
-python scripts/new/manage_mtf_workers_schedule.py create --dry-run
+python scripts/manage_mtf_workers_schedule.py create --dry-run
 
 # Créer le schedule
-python scripts/new/manage_mtf_workers_schedule.py create
+python scripts/manage_mtf_workers_schedule.py create
 
 # Voir le statut
-python scripts/new/manage_mtf_workers_schedule.py status
+python scripts/manage_mtf_workers_schedule.py status
 
 # Mettre en pause
-python scripts/new/manage_mtf_workers_schedule.py pause
+python scripts/manage_mtf_workers_schedule.py pause
 
 # Reprendre
-python scripts/new/manage_mtf_workers_schedule.py resume
+python scripts/manage_mtf_workers_schedule.py resume
 
 # Supprimer
-python scripts/new/manage_mtf_workers_schedule.py delete
+python scripts/manage_mtf_workers_schedule.py delete
 ```
 
 ## Schedule Contract Sync
@@ -81,22 +81,22 @@ Exécution quotidienne de la synchronisation des contrats (tous les jours à 09:
 
 ```bash
 # Créer le schedule (avec preview)
-python scripts/new/manage_contract_sync_schedule.py create --dry-run
+python scripts/manage_contract_sync_schedule.py create --dry-run
 
 # Créer le schedule
-python scripts/new/manage_contract_sync_schedule.py create
+python scripts/manage_contract_sync_schedule.py create
 
 # Voir le statut
-python scripts/new/manage_contract_sync_schedule.py status
+python scripts/manage_contract_sync_schedule.py status
 
 # Mettre en pause
-python scripts/new/manage_contract_sync_schedule.py pause
+python scripts/manage_contract_sync_schedule.py pause
 
 # Reprendre
-python scripts/new/manage_contract_sync_schedule.py resume
+python scripts/manage_contract_sync_schedule.py resume
 
 # Supprimer
-python scripts/new/manage_contract_sync_schedule.py delete
+python scripts/manage_contract_sync_schedule.py delete
 ```
 
 **Timeout personnalisé :**
