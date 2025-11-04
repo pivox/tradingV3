@@ -106,7 +106,7 @@ final class ContractMapper
         }
 
         $parsed = \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $timestamp);
-        if ($parsed instanceof \DateTimeImmutable) {
+        if ($parsed !== false) {
             return $parsed;
         }
 
