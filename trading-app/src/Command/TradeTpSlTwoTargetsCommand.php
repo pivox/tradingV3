@@ -30,7 +30,7 @@ final class TradeTpSlTwoTargetsCommand extends Command
             ->addOption('entry', null, InputOption::VALUE_REQUIRED, 'Prix d\'entrée moyen (sinon lu depuis Position)')
             ->addOption('size', null, InputOption::VALUE_REQUIRED, 'Taille (contrats), sinon depuis Position')
             ->addOption('r', null, InputOption::VALUE_REQUIRED, 'R multiple pour TP1', '2.0')
-            ->addOption('split', null, InputOption::VALUE_REQUIRED, 'Fraction du size sur TP1 (0..1)', '0.5')
+            ->addOption('split', null, InputOption::VALUE_REQUIRED, 'Fraction du size sur TP1 (0..1)')
             ->addOption('keep-sl', null, InputOption::VALUE_NONE, 'Ne pas annuler SL existant même si différent')
             ->addOption('keep-tp', null, InputOption::VALUE_NONE, 'Ne pas annuler TP existants')
         ;
@@ -49,13 +49,14 @@ final class TradeTpSlTwoTargetsCommand extends Command
 
         $entry = $input->getOption('entry');
         $size = $input->getOption('size');
+        $split = $input->getOption('split');
         $dto = new TpSlTwoTargetsRequest(
             symbol: $symbol,
             side: $side,
             entryPrice: $entry !== null ? (float)$entry : null,
             size: $size !== null ? (int)$size : null,
             rMultiple: (float)$input->getOption('r'),
-            splitPct: (float)$input->getOption('split'),
+            splitPct: $split !== null ? (float)$split : null,
             cancelExistingStopLossIfDifferent: !$input->getOption('keep-sl'),
             cancelExistingTakeProfits: !$input->getOption('keep-tp'),
         );

@@ -43,15 +43,29 @@ final class TradeTpSlController extends AbstractController
             return new JsonResponse(['error' => 'Invalid side value'], 400);
         }
 
+        // Clamp split_pct to [0,1]
+        $split = isset($data['split_pct']) ? (float)$data['split_pct'] : null;
+        if ($split !== null) {
+            if ($split > 1.0 && $split <= 100.0) {
+                $split *= 0.01;
+            }
+            $split = max(0.0, min(1.0, $split));
+        }
+
         $dto = new TpSlTwoTargetsRequest(
             symbol: (string)$data['symbol'],
             side: $side,
             entryPrice: isset($data['entry_price']) ? (float)$data['entry_price'] : null,
             size: isset($data['size']) ? (int)$data['size'] : null,
             rMultiple: isset($data['r_multiple']) ? (float)$data['r_multiple'] : null,
-            splitPct: isset($data['split_pct']) ? (float)$data['split_pct'] : 0.5,
+            splitPct: $split,
             cancelExistingStopLossIfDifferent: isset($data['cancel_sl_if_diff']) ? (bool)$data['cancel_sl_if_diff'] : true,
             cancelExistingTakeProfits: isset($data['cancel_tp']) ? (bool)$data['cancel_tp'] : true,
+            slFullSize: isset($data['sl_full_size']) ? (bool)$data['sl_full_size'] : null,
+            momentum: isset($data['momentum']) ? (string)$data['momentum'] : null,
+            mtfValidCount: isset($data['mtf_valid_count']) ? (int)$data['mtf_valid_count'] : null,
+            pullbackClear: isset($data['pullback_clear']) ? (bool)$data['pullback_clear'] : null,
+            lateEntry: isset($data['late_entry']) ? (bool)$data['late_entry'] : null,
         );
 
         try {
