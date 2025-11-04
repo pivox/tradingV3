@@ -49,7 +49,7 @@ final class TradeTpSlController extends AbstractController
             entryPrice: isset($data['entry_price']) ? (float)$data['entry_price'] : null,
             size: isset($data['size']) ? (int)$data['size'] : null,
             rMultiple: isset($data['r_multiple']) ? (float)$data['r_multiple'] : null,
-            splitPct: isset($data['split_pct']) ? (float)$data['split_pct'] : 0.5,
+            splitPct: isset($data['split_pct']) ? (float)$data['split_pct'] : null,
             cancelExistingStopLossIfDifferent: isset($data['cancel_sl_if_diff']) ? (bool)$data['cancel_sl_if_diff'] : true,
             cancelExistingTakeProfits: isset($data['cancel_tp']) ? (bool)$data['cancel_tp'] : true,
             momentum: isset($data['momentum']) ? (string)$data['momentum'] : null,
