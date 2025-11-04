@@ -116,7 +116,12 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 $this->intentManager->markReadyToSend($intent);
             }
 
-            $response = $this->bitmartClient->submitOrder($payload);
+            $orderPayload = $payload;
+            if (isset($orderPayload['leverage'])) {
+                unset($orderPayload['leverage']);
+            }
+
+            $response = $this->bitmartClient->submitOrder($orderPayload);
 
             if (isset($response['data']['order_id'])) {
                 // Bitmart may return order_id as int; cast to string for DTO expectations

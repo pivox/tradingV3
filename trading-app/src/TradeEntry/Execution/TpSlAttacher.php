@@ -23,6 +23,7 @@ final class TpSlAttacher
             'mode' => $plan->orderMode,
             'open_type' => $plan->openType,
             'size' => $plan->size,
+            'leverage' => $plan->leverage,
             'client_order_id' => $clientOrderId,
         ];
 

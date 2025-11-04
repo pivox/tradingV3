@@ -38,6 +38,43 @@ final class ExecutionBox
             'decision_key' => $decisionKey,
         ]);
 
+        if ($plan->leverage < 5) {
+            $clientOrderId = $this->idempotency->newClientOrderId();
+            $this->logger->warning('execution.leverage_below_min', [
+                'symbol' => $plan->symbol,
+                'leverage' => $plan->leverage,
+                'min_required' => 5,
+                'decision_key' => $decisionKey,
+                'client_order_id' => $clientOrderId,
+            ]);
+            $this->journeyLogger->warning('order_journey.execution.skipped', [
+                'symbol' => $plan->symbol,
+                'decision_key' => $decisionKey,
+                'client_order_id' => $clientOrderId,
+                'reason' => 'leverage_below_min',
+                'leverage' => $plan->leverage,
+                'min_required' => 5,
+            ]);
+            $this->orderLogger->warning('order.leverage.skip', [
+                'symbol' => $plan->symbol,
+                'decision_key' => $decisionKey,
+                'client_order_id' => $clientOrderId,
+                'leverage' => $plan->leverage,
+                'min_required' => 5,
+            ]);
+
+            return new ExecutionResult(
+                clientOrderId: $clientOrderId,
+                exchangeOrderId: null,
+                status: 'skipped',
+                raw: [
+                    'reason' => 'leverage_below_min',
+                    'leverage' => $plan->leverage,
+                    'min_required' => 5,
+                ],
+            );
+        }
+
         $clientOrderId = $this->idempotency->newClientOrderId();
 
         $this->logger->debug('execution.leverage_submit', [
@@ -318,6 +355,7 @@ final class ExecutionBox
             'mode' => $payload['mode'] ?? null,
             'open_type' => $payload['open_type'],
             'client_order_id' => $payload['client_order_id'],
+            'leverage' => $payload['leverage'] ?? null,
         ];
 
         foreach ([
