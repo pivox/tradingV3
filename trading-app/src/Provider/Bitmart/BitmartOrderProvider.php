@@ -178,6 +178,28 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     }
                 }
 
+                // Synchroniser tous les ordres ouverts pour ce symbole (inclut les SL/TP)
+                if ($this->httpClient && $this->wsAgentBaseUri) {
+                    try {
+                        $wsAgentSyncUrl = rtrim($this->wsAgentBaseUri, '/') . '/internal/sync-orders';
+                        $this->httpClient->request('POST', $wsAgentSyncUrl, [
+                            'json' => [
+                                'symbol' => $symbol,
+                            ],
+                            'timeout' => 5.0,
+                        ]);
+                        $this->logger->debug('[BitmartOrderProvider] Triggered sync of open orders', [
+                            'symbol' => $symbol,
+                        ]);
+                    } catch (\Throwable $e) {
+                        // Log mais ne pas bloquer le flux
+                        $this->logger->warning('[BitmartOrderProvider] Failed to trigger sync of open orders', [
+                            'symbol' => $symbol,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+
                 // Short retry loop for eventual consistency on order-detail
                 $orderDto = null;
                 for ($i = 0; $i < 3; $i++) {
