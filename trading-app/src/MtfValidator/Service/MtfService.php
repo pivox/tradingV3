@@ -7,7 +7,6 @@ namespace App\MtfValidator\Service;
 use App\Common\Enum\Timeframe;
 use App\Config\MtfConfigProviderInterface;
 use App\Config\MtfValidationConfig;
-use App\Contract\MtfValidator\Dto\ValidationContextDto;
 use App\Contract\MtfValidator\TimeframeProcessorInterface;
 use App\Entity\MtfAudit;
 use App\Event\MtfAuditEvent;
@@ -24,11 +23,14 @@ use App\Runtime\Cache\DbValidationCache;
 use App\Entity\IndicatorSnapshot;
 use App\Repository\IndicatorSnapshotRepository;
 use App\Contract\Signal\SignalValidationServiceInterface;
+use App\MtfValidator\Service\Dto\InternalTimeframeResultDto;
 use App\MtfValidator\Service\Timeframe\Timeframe4hService;
 use App\MtfValidator\Service\Timeframe\Timeframe1hService;
 use App\MtfValidator\Service\Timeframe\Timeframe15mService;
 use App\MtfValidator\Service\Timeframe\Timeframe5mService;
 use App\MtfValidator\Service\Timeframe\Timeframe1mService;
+use App\Service\Dto\Internal\ProcessingContextDto;
+use App\Service\Timeframe\TimeframePipeline;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
@@ -59,6 +61,7 @@ final class MtfService
         private readonly Timeframe15mService $timeframe15mService,
         private readonly Timeframe5mService $timeframe5mService,
         private readonly Timeframe1mService $timeframe1mService,
+        private readonly TimeframePipeline $timeframePipeline,
         private readonly ?DbValidationCache $validationCache = null,
         private readonly ?KlineJsonIngestionService $klineJsonIngestion = null,
     ) {
@@ -1212,26 +1215,35 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         bool $forceRun,
         bool $skipContextValidation = false
     ): array {
-        $context = ValidationContextDto::create(
+        $processingContext = new ProcessingContextDto(
             runId: $runId->toString(),
+            symbol: $symbol,
             now: $now,
             collector: $collector,
             forceTimeframeCheck: $forceTimeframeCheck,
             forceRun: $forceRun,
-            skipContextValidation: $skipContextValidation
+            skipContextValidation: $skipContextValidation,
+            currentTimeframe: $processor->getTimeframeValue()
         );
 
-        $resultDto = $processor->processTimeframe($symbol, $context);
-        $result = $resultDto->toArray();
+        $this->timeframePipeline->run($processingContext);
+        $collector = $processingContext->collector;
 
-        $collector[] = [
-            'tf' => $resultDto->timeframe,
-            'status' => $resultDto->status,
-            'signal_side' => $resultDto->signalSide ?? 'NONE',
-            'kline_time' => $resultDto->klineTime,
-        ];
+        $timeframeKey = strtolower($processor->getTimeframeValue());
+        $internal = $processingContext->getResult($timeframeKey);
 
-        return $result;
+        if (!$internal instanceof InternalTimeframeResultDto) {
+            $fallbackContext = $processingContext->toContractContext();
+            $resultDto = $processor->processTimeframe($symbol, $fallbackContext);
+            $internal = InternalTimeframeResultDto::fromContractDto($resultDto);
+        }
+
+        $payload = $internal->toArray();
+        if ($processingContext->isCacheHit($timeframeKey)) {
+            $payload['from_cache'] = true;
+        }
+
+        return $payload;
     }
 
     /**
