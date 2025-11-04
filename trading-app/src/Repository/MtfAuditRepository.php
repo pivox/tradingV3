@@ -502,13 +502,10 @@ SQL;
         $successSql = <<<SQL
 WITH success_events AS (
   SELECT
+    id,
     symbol,
     {$caseExpression} AS timeframe,
-    COALESCE(
-      candle_close_ts,
-      NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC',
-      created_at
-    ) AS event_ts,
+    COALESCE(candle_close_ts, NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC') AS event_ts,
     created_at,
     cause
   FROM mtf_audit
@@ -517,6 +514,7 @@ WITH success_events AS (
 ),
 ranked_success AS (
   SELECT
+    id,
     symbol,
     timeframe,
     event_ts,
@@ -526,7 +524,7 @@ ranked_success AS (
   FROM success_events
   WHERE timeframe IS NOT NULL
 )
-SELECT symbol, timeframe, event_ts, created_at, cause
+SELECT id, symbol, timeframe, event_ts, created_at, cause
 FROM ranked_success
 WHERE rn = 1
 SQL;
@@ -543,13 +541,10 @@ SQL;
         $failureSql = <<<SQL
 WITH failure_events AS (
   SELECT
+    id,
     symbol,
     {$caseExpression} AS timeframe,
-    COALESCE(
-      candle_close_ts,
-      NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC',
-      created_at
-    ) AS event_ts,
+    COALESCE(candle_close_ts, NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC') AS event_ts,
     created_at,
     cause
   FROM mtf_audit
@@ -558,6 +553,7 @@ WITH failure_events AS (
 ),
 ranked_failure AS (
   SELECT
+    id,
     symbol,
     timeframe,
     event_ts,
@@ -567,7 +563,7 @@ ranked_failure AS (
   FROM failure_events
   WHERE timeframe IS NOT NULL
 )
-SELECT symbol, timeframe, event_ts, created_at, cause
+SELECT id, symbol, timeframe, event_ts, created_at, cause
 FROM ranked_failure
 WHERE rn = 1
 SQL;
@@ -577,12 +573,9 @@ SQL;
         $readySql = <<<SQL
 WITH ready_events AS (
   SELECT
+    id,
     symbol,
-    COALESCE(
-      candle_close_ts,
-      NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC',
-      created_at
-    ) AS event_ts,
+    COALESCE(candle_close_ts, NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC') AS event_ts,
     created_at
   FROM mtf_audit
   WHERE (
@@ -593,13 +586,14 @@ WITH ready_events AS (
 ),
 ranked_ready AS (
   SELECT
+    id,
     symbol,
     event_ts,
     created_at,
     ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY event_ts DESC, created_at DESC) AS rn
   FROM ready_events
 )
-SELECT symbol, event_ts, created_at
+SELECT id, symbol, event_ts, created_at
 FROM ranked_ready
 WHERE rn = 1
 SQL;
@@ -635,6 +629,7 @@ SQL;
                 'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
                 'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
                 'cause' => $row['cause'] ?? null,
+                'audit_id' => isset($row['id']) ? (int)$row['id'] : null,
                 '_latest_ts' => $latestDt?->getTimestamp(),
             ];
         }
@@ -672,6 +667,7 @@ SQL;
                         'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
                         'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
                         'cause' => $row['cause'] ?? null,
+                        'audit_id' => isset($row['id']) ? (int)$row['id'] : null,
                         '_latest_ts' => null,
                     ];
                 }
@@ -685,6 +681,7 @@ SQL;
                     'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
                     'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
                     'cause' => $row['cause'] ?? null,
+                    'audit_id' => isset($row['id']) ? (int)$row['id'] : null,
                     '_latest_ts' => $latestTimestamp,
                 ];
             }
@@ -707,6 +704,7 @@ SQL;
             $results[$symbol]['ready'] = [
                 'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
                 'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
+                'audit_id' => isset($row['id']) ? (int)$row['id'] : null,
             ];
         }
 
@@ -738,8 +736,10 @@ SQL;
                         $tfSeconds = $tfSecondsMap[$tf] ?? 0;
                         if ($tfSeconds > 0) {
                             $expectedOpenTime = $eventTs->modify("-{$tfSeconds} seconds");
-                            $klineExists = $this->checkKlineExists($entry['symbol'], $tf, $expectedOpenTime);
-                            $tfData['kline_exists'] = $klineExists;
+                            $klineId = $this->findKlineId($entry['symbol'], $tf, $expectedOpenTime);
+                            $tfData['kline_id'] = $klineId;
+                            // Conserver l'indicateur d'existence si possible via klines (id non null)
+                            $tfData['kline_exists'] = $klineId !== null ? true : ($tfData['kline_exists'] ?? null);
                         }
                     }
                 }
@@ -1123,5 +1123,33 @@ SQL;
         }
 
         return null;
+    }
+
+    /**
+     * Retourne l'ID de la bougie (table klines) si elle existe pour (symbol, timeframe, open_time).
+     */
+    private function findKlineId(string $symbol, string $timeframe, \DateTimeImmutable $openTime): ?int
+    {
+        try {
+            $sql = <<<SQL
+SELECT id
+FROM klines
+WHERE symbol = :symbol
+  AND timeframe = :timeframe
+  AND open_time = :open_time
+LIMIT 1
+SQL;
+            $id = $this->conn->fetchOne($sql, [
+                'symbol' => $symbol,
+                'timeframe' => $timeframe,
+                'open_time' => $openTime->format('Y-m-d H:i:sP'),
+            ]);
+            if ($id === false || $id === null) {
+                return null;
+            }
+            return (int)$id;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }
