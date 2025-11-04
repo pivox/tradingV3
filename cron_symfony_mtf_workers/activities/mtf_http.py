@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict
 
 import httpx
@@ -16,10 +17,19 @@ async def mtf_api_call(url: str, payload: Dict[str, Any] | None = None) -> Dict[
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, json=data)
+        
+        # Parse JSON body as object instead of string for cleaner output
+        body_text = response.text
+        try:
+            body_json = json.loads(body_text)
+        except json.JSONDecodeError:
+            # If parsing fails, keep as string
+            body_json = body_text
+        
         raw_response = {
             "ok": response.is_success,
             "status": response.status_code,
-            "body": response.text,
+            "body": body_json,  # Now it's a parsed JSON object, not a string
             "url": url,
             "payload": data,
         }

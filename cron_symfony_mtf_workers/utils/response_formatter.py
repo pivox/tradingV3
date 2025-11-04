@@ -22,11 +22,19 @@ def format_mtf_response(raw_response: Dict[str, Any]) -> Dict[str, Any]:
             "full_response": raw_response,
         }
     
-    try:
-        body = json.loads(raw_response["body"])
-    except (json.JSONDecodeError, KeyError):
+    # Body may already be parsed as dict (from activity) or still be a string
+    body = raw_response.get("body")
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except (json.JSONDecodeError, KeyError):
+            return {
+                "summary": "⚠️  Invalid JSON response",
+                "full_response": raw_response,
+            }
+    elif not isinstance(body, dict):
         return {
-            "summary": "⚠️  Invalid JSON response",
+            "summary": "⚠️  Invalid response format",
             "full_response": raw_response,
         }
     
