@@ -36,6 +36,11 @@ td.table-danger-subtle {
     background-color: #fee2e2 !important;
     color: #991b1b !important;
 }
+/* Mise en évidence de la dernière bougie fermée (tous statuts) */
+td.kline-current {
+    background-color: #bbf7d0 !important; /* vert clair */
+    color: #065f46 !important;           /* texte vert foncé lisible */
+}
 </style>
 
 <div class="row">
@@ -225,33 +230,18 @@ const SUMMARY_DURATIONS_MS = {
     '1m': 60 * 1000,
 };
 
-/**
- * Calcule le timestamp de clôture de la dernière bougie close pour un timeframe donné.
- * Exemple: à 11h59 UTC, pour 1h, retourne 11h00 (timestamp de clôture de la bougie 10h00-11h00).
- * 
- * Le event_ts dans les audits correspond à candle_close_ts (timestamp de clôture).
- * Si une bougie 1h ouvre à 10h00, elle se ferme à 11h00, donc event_ts = 11h00.
- */
-function getLastValidKlineTimestamp(now, timeframe) {
+// Calcule l'open_time de la dernière bougie fermée pour un timeframe donné.
+function getLastOpenTimestamp(now, timeframe) {
     const stepMs = SUMMARY_DURATIONS_MS[timeframe] || 0;
-    if (stepMs === 0) {
-        return 0;
-    }
-    
-    // Aligner l'heure actuelle sur la borne inférieure du timeframe
-    // Ex: 11h59 -> 11h00 pour 1h
-    const alignedTimestamp = Math.floor(now / stepMs) * stepMs;
-    
-    // La dernière bougie close est celle qui se termine à cette borne
-    // Donc si on est entre 11h00 et 12h00, la dernière close est 11h00
-    // Si on est exactement à 12h00, la dernière close est aussi 11h00 (car 12h00 est la prochaine)
-    // Si on est avant 12h00, alignedTimestamp est 11h00, qui est le close de la bougie 10h-11h
-    return alignedTimestamp;
+    if (stepMs === 0) return 0;
+    const aligned = Math.floor(now / stepMs) * stepMs; // borne inférieure courante (close courante)
+    return aligned - stepMs; // open_time de la dernière bougie fermée
 }
 
 let summaryData = [];
 let summaryLoaded = false;
 let summaryLoading = false;
+let summaryRefTimeMs = null; // référence temporelle = payload.generated_at
 
 $(document).ready(function() {
     // Initialisation de DataTables
@@ -385,6 +375,10 @@ function refreshSummary(forceReload) {
             const count = typeof payload.count === 'number' ? payload.count : summaryData.length;
             document.getElementById('summaryCount').textContent = count.toString();
             document.getElementById('summaryUpdated').textContent = formatDateUtc(payload.generated_at || payload.generatedAt || null);
+            // Ancrer les calculs "kline courant" à l'instant de génération serveur pour éviter la dérive avec Date.now()
+            const ref = payload.generated_at || payload.generatedAt || null;
+            const parsed = ref ? Date.parse(ref) : NaN;
+            summaryRefTimeMs = Number.isNaN(parsed) ? null : parsed;
             renderSummaryTable();
         })
         .catch((err) => {
@@ -406,7 +400,7 @@ function renderSummaryTable() {
     const tbody = document.querySelector('#summaryTable tbody');
     const emptyAlert = document.getElementById('summaryEmpty');
     const filterValue = ($('#summarySearch').val() || '').toString().trim().toUpperCase();
-    const now = Date.now();
+    const now = summaryRefTimeMs || Date.now();
 
     if (!Array.isArray(summaryData) || summaryData.length === 0) {
         tbody.innerHTML = `
@@ -438,12 +432,19 @@ function renderSummaryTable() {
     emptyAlert.classList.add('d-none');
 
     prepared.sort((a, b) => {
+        // 1) Plus de cellules "vertes" (kline courante)
+        if (b.computed.currentKlineCount !== a.computed.currentKlineCount) {
+            return b.computed.currentKlineCount - a.computed.currentKlineCount;
+        }
+        // 2) Plus de TF à jour (fresh)
         if (b.computed.freshCount !== a.computed.freshCount) {
             return b.computed.freshCount - a.computed.freshCount;
         }
+        // 3) Plus de validations success
         if (b.computed.validationCount !== a.computed.validationCount) {
             return b.computed.validationCount - a.computed.validationCount;
         }
+        // 4) Plus récent
         return (b.computed.maxTimestamp || 0) - (a.computed.maxTimestamp || 0);
     });
 
@@ -451,8 +452,9 @@ function renderSummaryTable() {
         const symbolLabel = escapeHtml(row.symbol || '');
         const counts = `
             <div class="mtf-summary-counts">
+                <span><i class="bi bi-square-fill text-success me-1"></i>${row.computed.currentKlineCount} verts</span>
+                <span><i class="bi bi-brightness-high text-success me-1"></i>${row.computed.freshCount} à jour</span>
                 <span><i class="bi bi-check2-circle text-success me-1"></i>${row.computed.validationCount} validations</span>
-                <span><i class="bi bi-brightness-high text-success me-1"></i>${row.computed.freshCount} récentes</span>
             </div>
         `;
         const cells = SUMMARY_TIMEFRAMES.map((tf) => {
@@ -463,14 +465,29 @@ function renderSummaryTable() {
             const eventValue = formatDateUtc(tfData ? tfData.event_ts : null);
             const isFresh = status === 'success' && row.computed.freshMap[tf] === true;
             const isFailed = status === 'failed';
-            const cellClass = isFailed ? 'table-danger-subtle' : (isFresh ? 'table-success-subtle' : '');
+            const isCurrentKline = row.computed.klineCurrentMap[tf] === true;
+            const baseClass = isFailed ? 'table-danger-subtle' : (isFresh ? 'table-success-subtle' : '');
+            const cellClass = `${baseClass} ${isCurrentKline ? 'kline-current' : ''}`.trim();
+            const stepMs = SUMMARY_DURATIONS_MS[tf] || 0;
+            const eventTsMs = parseTimestamp(tfData ? tfData.event_ts : null);
+            let rangeMarkup = '';
+            if (eventTsMs > 0 && stepMs > 0) {
+                const openMs = eventTsMs - stepMs;
+                rangeMarkup = `<div><strong>${formatTimeUtcShort(openMs)} → ${formatTimeUtcShort(eventTsMs)} UTC</strong></div>`;
+            }
+            const detailsMarkup = displayValue !== '-' ? `<div class="small text-muted">${displayValue}</div>` : '';
 
             const showReady = status === 'success' && tf === '1m' && row.computed.readyDisplay;
+            const readyIdRaw = row.ready && row.ready.audit_id ? row.ready.audit_id : null;
+            const readyId = readyIdRaw ? ` (ID: <a href="#" onclick="viewDetails(${readyIdRaw}); return false;">${readyIdRaw}</a>)` : '';
             const readyMarkup = showReady
-                ? `<div class="mtf-summary-ready"><i class="bi bi-lightning-charge text-warning me-1"></i>Ready: ${row.computed.readyDisplay}</div>`
+                ? `<div class="mtf-summary-ready"><i class="bi bi-lightning-charge text-warning me-1"></i>Ready: ${row.computed.readyDisplay}${readyId}</div>`
                 : '';
             const causeMarkup = tfData?.cause
                 ? `<div class="mt-1 small ${isFailed ? 'text-danger' : 'text-muted'}">${escapeHtml(tfData.cause)}</div>`
+                : '';
+            const idMarkup = (tfData && tfData.audit_id)
+                ? `<div class="small text-muted">ID: <a href="#" onclick="viewDetails(${tfData.audit_id}); return false;">${tfData.audit_id}</a></div>`
                 : '';
             
             // Indicateur de présence de la bougie dans la base
@@ -488,9 +505,10 @@ function renderSummaryTable() {
             let label;
             if (isFailed) {
                 const baseLabel = eventValue !== '-' ? eventValue : displayValue;
-                label = `<div><strong>Échec</strong>${baseLabel !== '-' ? ` • ${baseLabel}` : ''}</div>`;
+                label = `<div><strong>Échec</strong>${baseLabel !== '-' ? ` • ${baseLabel}` : ''}</div>${rangeMarkup}${idMarkup}${detailsMarkup}`;
             } else if (status === 'success') {
-                label = `<div>${displayValue}${klineIndicator}</div>`;
+                // Affiche la plage open → close, puis l'horodatage d'origine en petit
+                label = `<div>${rangeMarkup}${klineIndicator}${idMarkup}${detailsMarkup}</div>`;
             } else {
                 label = '-';
             }
@@ -522,6 +540,8 @@ function enrichSummaryRow(row, now) {
             freshCount: 0,
             maxTimestamp: 0,
             freshMap: {},
+            klineCurrentMap: {},
+            currentKlineCount: 0,
             readyDisplay: null,
         },
     };
@@ -536,19 +556,36 @@ function enrichSummaryRow(row, now) {
         const eventTs = parseTimestamp(tfData ? tfData.event_ts : null);
         const createdTs = parseTimestamp(tfData ? tfData.created_at : null);
         const baseTs = Math.max(eventTs, createdTs);
+        const stepMs = SUMMARY_DURATIONS_MS[tf] || 0;
+        const lastOpenTs = getLastOpenTimestamp(now, tf);
+
+        // Tolérance de 5 secondes pour éviter les dérives d'arrondis
+        const tolerance = 5000;
+
+        // Détecte si la cellule correspond à la dernière bougie fermée (comparaison sur open_time uniquement)
+        let isCurrentKline = false;
+        if (lastOpenTs > 0 && stepMs > 0) {
+            const eventOpenCandidate = eventTs > 0 ? (eventTs - stepMs) : 0;
+            if (eventOpenCandidate > 0 && Math.abs(eventOpenCandidate - lastOpenTs) <= tolerance) {
+                isCurrentKline = true;
+            }
+        }
+        result.computed.klineCurrentMap[tf] = isCurrentKline;
+        if (isCurrentKline) {
+            result.computed.currentKlineCount += 1;
+        }
 
         if (status === 'success' && baseTs > 0) {
             result.computed.validationCount += 1;
             result.computed.maxTimestamp = Math.max(result.computed.maxTimestamp, baseTs);
-            
-            // Calculer la dernière bougie valide pour ce timeframe
-            const lastValidKlineTs = getLastValidKlineTimestamp(now, tf);
-            
-            // Tolérance de 5 secondes pour les comparaisons (arrondis de timestamps)
-            const tolerance = 5000;
-            
-            // La validation est "fresh" si son event_ts correspond à la dernière bougie valide
-            let isFresh = lastValidKlineTs > 0 && Math.abs(baseTs - lastValidKlineTs) <= tolerance;
+            // Est "à jour" si l'open_time de l'event colle au dernier open_time
+            let isFresh = false;
+            if (lastOpenTs > 0 && stepMs > 0) {
+                const eventOpenCandidate = eventTs > 0 ? (eventTs - stepMs) : 0;
+                if (eventOpenCandidate > 0 && Math.abs(eventOpenCandidate - lastOpenTs) <= tolerance) {
+                    isFresh = true;
+                }
+            }
 
             result.computed.freshMap[tf] = isFresh;
             if (isFresh) {
@@ -563,10 +600,10 @@ function enrichSummaryRow(row, now) {
     });
 
     if (readyValue > 0) {
-        // Pour le 1m, on peut aussi utiliser le ready si disponible
-        const lastValid1m = getLastValidKlineTimestamp(now, '1m');
+        // Pour le 1m, on peut aussi utiliser le ready si disponible (comparaison sur open_time)
+        const lastOpen1m = getLastOpenTimestamp(now, '1m');
         const tolerance = 5000;
-        const isReadyFresh = lastValid1m > 0 && Math.abs(readyValue - lastValid1m) <= tolerance;
+        const isReadyFresh = lastOpen1m > 0 && Math.abs((readyValue - (SUMMARY_DURATIONS_MS['1m'] || 60000)) - lastOpen1m) <= tolerance;
         
         if (isReadyFresh) {
             result.computed.readyDisplay = formatDateUtc(readyTsString);
@@ -603,6 +640,19 @@ function formatDateUtc(value) {
     return new Date(parsed).toLocaleString('fr-FR', {
         timeZone: 'UTC',
         hour12: false,
+    });
+}
+
+function formatTimeUtcShort(ms) {
+    if (!ms || Number.isNaN(ms)) {
+        return '-';
+    }
+    const d = new Date(ms);
+    return d.toLocaleTimeString('fr-FR', {
+        timeZone: 'UTC',
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
     });
 }
 
