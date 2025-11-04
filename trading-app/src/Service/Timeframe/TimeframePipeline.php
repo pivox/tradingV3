@@ -114,7 +114,7 @@ final class TimeframePipeline
                 break;
             }
 
-            if (strtoupper($internal->status) !== 'VALID') {
+            if ($internal->status !== 'VALID') {
                 $this->logger->debug('[TimeframePipeline] Non valid status, stopping pipeline', [
                     'run_id' => $context->runId,
                     'symbol' => $context->symbol,
