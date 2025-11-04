@@ -118,8 +118,8 @@ class OrderController extends AbstractController
                                 
                                 // Quantifier le prix du SL selon la précision
                                 if ((int) $side === 1) {
-                                    // Long: quantize down
-                                    $stopLossPrice = TickQuantizer::quantizeDown($stopLossPrice, $pricePrecision);
+                                    // Long: quantize up (closer to entry to maintain risk constraint)
+                                    $stopLossPrice = TickQuantizer::quantizeUp($stopLossPrice, $pricePrecision);
                                 } else {
                                     // Short: quantize up
                                     $stopLossPrice = TickQuantizer::quantizeUp($stopLossPrice, $pricePrecision);
