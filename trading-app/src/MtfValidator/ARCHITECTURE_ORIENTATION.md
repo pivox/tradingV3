@@ -51,8 +51,12 @@ MtfValidator/Service/                     # LOGIQUE INTERNE
 │   ├── Timeframe1hService.php
 │   └── Timeframe4hService.php
 └── Dto/                                # DTOs internes
-    ├── InternalMtfRunDto.php
-    ├── InternalTimeframeResultDto.php
+    ├── Internal/
+    │   ├── InternalMtfRunDto.php
+    │   ├── InternalRunSummaryDto.php
+    │   └── InternalTimeframeResultDto.php
+    ├── Mapper/
+    │   └── ContractMapper.php
     └── ProcessingContextDto.php
 ```
 
@@ -72,10 +76,10 @@ class Timeframe1mService extends BaseTimeframeService
 ### 2. **Conversion DTOs**
 ```php
 // Conversion public -> interne
-$internalRequest = InternalMtfRunDto::fromContractRequest($runId, $request);
+$internalRequest = ContractMapper::fromContractRequest($runId, $request);
 
 // Conversion interne -> public
-return $internalResult->toContractDto();
+return ContractMapper::toContractResponse($internalSummary, $streamedResults, $errors);
 ```
 
 ### 3. **Interface Contract**
