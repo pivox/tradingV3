@@ -183,12 +183,15 @@ class MtfSwitchRepository extends ServiceEntityRepository
         $switch = $this->getOrCreateSymbolSwitch($symbol);
         $switch->turnOff();
         
-        // Extraire le timeframe de la duration et obtenir la date de référence
-        $timeframe = $this->extractTimeframeFromDuration($duration);
-        $referenceDate = $this->getReferenceDateForSymbol($symbol, $timeframe);
+        // Calculer l'expiration à partir de maintenant (comme turnOffSymbolFor4Hours)
+        // pour éviter que tous les symboles aient le même expires_at
+        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
         
-        $convertedDuration = $this->convertDurationForPhp($duration);
-        $switch->setExpiresAt($referenceDate->modify("+{$convertedDuration}"));
+        // Convertir la durée en minutes et calculer explicitement l'expiration
+        $minutes = $this->convertDurationToMinutes($duration);
+        $expiresAt = $now->modify("+{$minutes} minutes");
+        
+        $switch->setExpiresAt($expiresAt);
         $switch->setDescription("Symbole désactivé temporairement pour {$duration} - " . date('Y-m-d H:i:s'));
         $this->getEntityManager()->flush();
     }
@@ -198,6 +201,18 @@ class MtfSwitchRepository extends ServiceEntityRepository
      */
     private function convertDurationForPhp(string $duration): string
     {
+        // Normaliser "X minutes" en "X minutes" (format compatible avec modify)
+        if (preg_match('/^(\d+)\s+(minute|minutes)$/i', $duration, $matches)) {
+            $value = (int) $matches[1];
+            return "{$value} minutes";
+        }
+
+        // Normaliser "X hours" en "X hours"
+        if (preg_match('/^(\d+)\s+(hour|hours)$/i', $duration, $matches)) {
+            $value = (int) $matches[1];
+            return "{$value} hours";
+        }
+
         // Convertir les formats non supportés par PHP en formats supportés
         if (preg_match('/^(\d+)m$/', $duration, $matches)) {
             $minutes = (int) $matches[1];
@@ -205,12 +220,12 @@ class MtfSwitchRepository extends ServiceEntityRepository
                 $hours = intval($minutes / 60);
                 $remainingMinutes = $minutes % 60;
                 if ($remainingMinutes > 0) {
-                    return "{$hours}h {$remainingMinutes}m";
+                    return "{$hours} hours {$remainingMinutes} minutes";
                 } else {
-                    return "{$hours}h";
+                    return "{$hours} hours";
                 }
             }
-            return $duration; // Moins de 60 minutes, PHP peut le gérer
+            return "{$minutes} minutes"; // Convertir en format explicite
         }
 
         return $duration;
