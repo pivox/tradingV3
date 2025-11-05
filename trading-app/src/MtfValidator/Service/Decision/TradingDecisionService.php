@@ -42,7 +42,7 @@ final class TradingDecisionService
             );
         }
 
-        if (strtoupper($symbolResult->status) !== 'READY') {
+        if (!$symbolResult->isReady()) {
             return new TradingDecisionEvaluation(
                 TradingDecisionEvaluation::ACTION_NONE,
                 $symbolResult,

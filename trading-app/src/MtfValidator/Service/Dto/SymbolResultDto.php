@@ -37,6 +37,11 @@ final class SymbolResultDto
         return strtoupper($this->status) === 'SKIPPED';
     }
 
+    public function isReady(): bool
+    {
+        return strtoupper($this->status) === 'READY';
+    }
+
     public function hasTradingDecision(): bool
     {
         return $this->tradingDecision !== null;

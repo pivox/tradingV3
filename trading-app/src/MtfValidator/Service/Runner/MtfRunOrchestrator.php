@@ -93,7 +93,7 @@ final class MtfRunOrchestrator
 
                 // Gérer la décision de trading uniquement pour READY ou SUCCESS
                 $effective = $symbolResult;
-                if ($effective->isSuccess() || strtoupper($effective->status) === 'READY') {
+                if ($effective->isSuccess() || $effective->isReady()) {
                     $this->metricsAggregator->decisionLifecycleStart($effective);
                     $effective = $this->tradingDecisionHandler->handleTradingDecision(
                         $effective,

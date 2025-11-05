@@ -46,41 +46,38 @@ class MtfRunService implements MtfValidatorInterface
             $runIdUuid = Uuid::fromString($runId);
             $executionResults = $this->orchestrator->execute($mtfRunDto, $runIdUuid);
 
-            $progressEvents = [];
+            // Agréger les résultats du générateur
             $symbolResults = [];
             $summaryPayload = null;
+            $progressEvents = [];
 
             foreach ($executionResults as $result) {
                 if (!is_array($result)) {
                     continue;
                 }
 
-                if (isset($result['summary']) && is_array($result['summary'])) {
-                    $summaryPayload = $result['summary'];
-                    if (isset($result['results']) && is_array($result['results'])) {
-                        $symbolResults = $result['results'] + $symbolResults;
-                    }
-                    continue;
-                }
-
+                // Gérer le résultat FINAL qui contient le résumé et les résultats finaux
                 if (($result['symbol'] ?? null) === 'FINAL') {
                     if (isset($result['result']) && is_array($result['result'])) {
                         $summaryPayload = $result['result'];
                     }
                     if (isset($result['results']) && is_array($result['results'])) {
-                        $symbolResults = $symbolResults + $result['results'];
+                        $symbolResults = array_merge($symbolResults, $result['results']);
                     }
                     continue;
                 }
 
+                // Gérer les résultats de symboles individuels
                 if (isset($result['symbol'], $result['result']) && is_array($result['result'])) {
-                    $symbolResults[(string) $result['symbol']] = $result['result'];
+                    $symbolKey = (string) $result['symbol'];
+                    $symbolResults[$symbolKey] = $result['result'];
                 }
 
+                // Conserver les événements de progression pour le fallback
                 $progressEvents[] = $result;
             }
 
-            $finalResults = $symbolResults;
+            // Récupérer le résultat final du générateur si disponible
             if ($executionResults instanceof \Generator) {
                 $final = $executionResults->getReturn();
                 if (is_array($final)) {
@@ -88,11 +85,13 @@ class MtfRunService implements MtfValidatorInterface
                         $summaryPayload = $final['summary'];
                     }
                     if (isset($final['results']) && is_array($final['results'])) {
-                        $finalResults = array_merge($finalResults, $final['results']);
+                        $symbolResults = array_merge($symbolResults, $final['results']);
                     }
                 }
             }
 
+            // Fallback : indexer les résultats depuis les événements de progression si aucun résultat n'a été trouvé
+            $finalResults = $symbolResults;
             if ($finalResults === []) {
                 $finalResults = self::indexResultsBySymbol($progressEvents);
             }

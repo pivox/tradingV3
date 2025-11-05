@@ -1255,16 +1255,6 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             currentTimeframe: $processor->getTimeframeValue()
         );
 
-        $context = ValidationContextDto::create(
-            runId: $runId->toString(),
-            now: $now,
-            collector: $collector,
-            forceTimeframeCheck: $forceTimeframeCheck,
-            forceRun: $forceRun,
-            skipContextValidation: $skipContextValidation,
-            currentTimeframe: $processor->getTimeframeValue()
-        );
-
         $this->timeframePipeline->run($processingContext);
         $collector = $processingContext->collector;
 
@@ -1282,20 +1272,15 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $payload['from_cache'] = true;
         }
 
-            skipContextValidation: $skipContextValidation
-        );
-
-        $resultDto = $processor->processTimeframe($symbol, $context);
-        $result = $resultDto->toArray();
-
+        // Mettre à jour le collector avec les données du timeframePipeline
         $collector[] = [
-            'tf' => $resultDto->timeframe,
-            'status' => $resultDto->status,
-            'signal_side' => $resultDto->signalSide ?? 'NONE',
-            'kline_time' => $resultDto->klineTime,
+            'tf' => $internal->timeframe,
+            'status' => $internal->status,
+            'signal_side' => $internal->signalSide ?? 'NONE',
+            'kline_time' => $internal->klineTime,
         ];
 
-        return $result;
+        return $payload;
 
     }
 

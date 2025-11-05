@@ -38,7 +38,7 @@ final class TradingDecisionHandler
             return $symbolResult;
         }
 
-        if (strtoupper($symbolResult->status) !== 'READY') {
+        if (!$symbolResult->isReady()) {
             return $symbolResult;
         }
 
