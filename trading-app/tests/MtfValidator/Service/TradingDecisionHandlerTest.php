@@ -2,61 +2,60 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\MtfValidator\Service;
-
 use App\Common\Enum\SignalSide;
+use App\Config\{MtfValidationConfig, TradingDecisionConfig};
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
+use App\MtfValidator\Service\Decision\TradingDecisionService;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
+use App\MtfValidator\Service\Metrics\RunMetricsAggregator;
 use App\MtfValidator\Service\TradingDecisionHandler;
-use App\Config\{TradingDecisionConfig, MtfValidationConfig};
-use App\TradeEntry\Dto\TradeEntryRequest;
+use App\Repository\MtfSwitchRepository;
 use App\TradeEntry\Dto\ExecutionResult;
+use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Service\TradeEntryService;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
-class TradingDecisionHandlerTest extends TestCase
+final class TradingDecisionHandlerTest extends TestCase
 {
     private TradingDecisionHandler $handler;
     /** @var TradeEntryService&MockObject */
     private TradeEntryService $tradeEntryService;
+    /** @var MtfSwitchRepository&MockObject */
+    private MtfSwitchRepository $mtfSwitchRepository;
+    /** @var AuditLoggerInterface&MockObject */
     private AuditLoggerInterface $auditLogger;
+    private RunMetricsAggregator $metricsAggregator;
     private LoggerInterface $logger;
     private LoggerInterface $positionsFlowLogger;
 
     protected function setUp(): void
     {
         $this->tradeEntryService = $this->createMock(TradeEntryService::class);
+        $this->mtfSwitchRepository = $this->createMock(MtfSwitchRepository::class);
         $this->auditLogger = $this->createMock(AuditLoggerInterface::class);
-        $this->logger = $this->createMock(LoggerInterface::class);
-        $this->positionsFlowLogger = $this->createMock(LoggerInterface::class);
+        $orderJourneyLogger = new NullLogger();
+        $this->metricsAggregator = new RunMetricsAggregator($this->auditLogger, $orderJourneyLogger);
 
-        $defaults = [
-            'risk_pct_percent' => 2.0,
-            'initial_margin_usdt' => 100.0,
-            'order_type' => 'limit',
-            'open_type' => 'isolated',
-            'order_mode' => 4,
-            'r_multiple' => 2.0,
-            'stop_from' => 'atr',
-            'atr_k' => 1.5,
-            'market_max_spread_pct' => 0.001,
-            'timeframe_multipliers' => [
-                '1m' => 1.0,
-                '5m' => 0.75,
-            ],
-        ];
+        $this->logger = new NullLogger();
+        $this->positionsFlowLogger = new NullLogger();
+
+        $decisionService = new TradingDecisionService(
+            decisionConfig: new TradingDecisionConfig(),
+            mtfConfig: new MtfValidationConfig(),
+            mtfSwitchRepository: $this->mtfSwitchRepository,
+            logger: $this->logger,
+        );
 
         $this->handler = new TradingDecisionHandler(
             tradeEntryService: $this->tradeEntryService,
-            decisionConfig: new TradingDecisionConfig(),
-            mtfConfig: new MtfValidationConfig(),
-            auditLogger: $this->auditLogger,
+            decisionService: $decisionService,
+            metricsAggregator: $this->metricsAggregator,
             logger: $this->logger,
             positionsFlowLogger: $this->positionsFlowLogger,
-            tradeEntryDefaults: $defaults,
         );
     }
 
@@ -70,18 +69,18 @@ class TradingDecisionHandlerTest extends TestCase
         $this->assertSame($symbolResult, $result);
     }
 
-    public function testHandleTradingDecisionSkipsWhenConditionsNotMet(): void
+    public function testHandleTradingDecisionSkipsWhenExecutionTimeframeMissing(): void
     {
         $symbolResult = new SymbolResultDto(
-            'BTCUSDT',
-            'READY',
-            '5m',
-            SignalSide::LONG->value,
-            null,
-            null,
-            null,
-            50000.0,
-            null
+            symbol: 'BTCUSDT',
+            status: 'READY',
+            executionTf: null,
+            signalSide: SignalSide::LONG->value,
+            tradingDecision: null,
+            error: null,
+            context: null,
+            currentPrice: 50000.0,
+            atr: null
         );
         $dto = new MtfRunDto(symbols: ['BTCUSDT']);
 
@@ -89,25 +88,24 @@ class TradingDecisionHandlerTest extends TestCase
 
         $this->assertSame('READY', $result->status);
         $this->assertNotNull($result->tradingDecision);
-        $this->assertEquals('skipped', $result->tradingDecision['status']);
+        $this->assertSame('skipped', $result->tradingDecision['status']);
+        $this->assertSame('trading_conditions_not_met', $result->tradingDecision['reason']);
     }
 
     public function testHandleTradingDecisionWithSuccessfulExecution(): void
     {
         $symbolResult = new SymbolResultDto(
-            'BTCUSDT',
-            'READY',
-            '1m',
-            SignalSide::LONG->value,
-            null,
-            null,
-            null,
-            50250.0,
-            35.0
+            symbol: 'BTCUSDT',
+            status: 'READY',
+            executionTf: '1m',
+            signalSide: SignalSide::LONG->value,
+            tradingDecision: null,
+            error: null,
+            context: null,
+            currentPrice: 50250.0,
+            atr: 35.0
         );
         $dto = new MtfRunDto(symbols: ['BTCUSDT']);
-
-        // plus de résolution de prix côté MTF — le preflight/builder gère best bid/ask
 
         $execution = new ExecutionResult(
             clientOrderId: 'cid123',
@@ -120,13 +118,12 @@ class TradingDecisionHandlerTest extends TestCase
             ->expects($this->once())
             ->method('buildAndExecute')
             ->with($this->callback(function (TradeEntryRequest $request): bool {
-                $this->assertEquals('BTCUSDT', $request->symbol);
-                $this->assertEquals('limit', $request->orderType);
-                $this->assertEquals('isolated', $request->openType);
-                $this->assertEquals(4, $request->orderMode);
-                $this->assertEquals(100.0, $request->initialMarginUsdt);
-                $this->assertEqualsWithDelta(0.02, $request->riskPct, 1e-6);
-                $this->assertEquals(50250.0, $request->entryLimitHint);
+                $this->assertSame('BTCUSDT', $request->symbol);
+                $this->assertSame('limit', $request->orderType);
+                $this->assertSame('isolated', $request->openType);
+                $this->assertSame(1, $request->orderMode);
+                $this->assertSame(50.0, $request->initialMarginUsdt);
+                $this->assertEqualsWithDelta(0.05, $request->riskPct, 1e-6);
 
                 return true;
             }))
@@ -142,30 +139,32 @@ class TradingDecisionHandlerTest extends TestCase
                 $this->arrayHasKey('status')
             );
 
+        $this->mtfSwitchRepository
+            ->expects($this->once())
+            ->method('turnOffSymbolFor15Minutes')
+            ->with('BTCUSDT');
+
         $result = $this->handler->handleTradingDecision($symbolResult, $dto);
 
-        $this->assertEquals('READY', $result->status);
-        $this->assertEquals('submitted', $result->tradingDecision['status']);
-        $this->assertEquals('cid123', $result->tradingDecision['client_order_id']);
-        $this->assertEquals('ex123', $result->tradingDecision['exchange_order_id']);
+        $this->assertSame('submitted', $result->tradingDecision['status']);
+        $this->assertSame('cid123', $result->tradingDecision['client_order_id']);
+        $this->assertSame('ex123', $result->tradingDecision['exchange_order_id']);
     }
 
     public function testHandleTradingDecisionHandlesException(): void
     {
         $symbolResult = new SymbolResultDto(
-            'BTCUSDT',
-            'READY',
-            '1m',
-            SignalSide::SHORT->value,
-            null,
-            null,
-            null,
-            20000.0,
-            20.0
+            symbol: 'BTCUSDT',
+            status: 'READY',
+            executionTf: '1m',
+            signalSide: SignalSide::SHORT->value,
+            tradingDecision: null,
+            error: null,
+            context: null,
+            currentPrice: 20000.0,
+            atr: 20.0
         );
         $dto = new MtfRunDto(symbols: ['BTCUSDT']);
-
-        // pas d'appel au resolver, attentes retirées
 
         $this->tradeEntryService
             ->expects($this->once())
@@ -184,8 +183,8 @@ class TradingDecisionHandlerTest extends TestCase
 
         $result = $this->handler->handleTradingDecision($symbolResult, $dto);
 
-        $this->assertEquals('READY', $result->status);
-        $this->assertEquals('error', $result->tradingDecision['status']);
-        $this->assertEquals('exchange failure', $result->tradingDecision['error']);
+        $this->assertSame('error', $result->tradingDecision['status']);
+        $this->assertSame('exchange failure', $result->tradingDecision['error']);
     }
 }
+
