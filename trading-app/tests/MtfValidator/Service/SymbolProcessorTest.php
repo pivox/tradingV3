@@ -231,7 +231,12 @@ class SymbolProcessorTest extends TestCase
 }
 
     /**
-     * @param array<int,array<string,mixed>> $yields
+     * Creates a generator for testing purposes that yields each value in the provided array,
+     * and then returns the specified final result.
+     *
+     * @param array<int,array<string,mixed>> $yields Array of values to yield from the generator.
+     * @param mixed $return The final value to return when the generator is exhausted.
+     * @return \Generator Yields each value in $yields and returns $return.
      */
     private function createGenerator(array $yields, mixed $return): \Generator
     {
