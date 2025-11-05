@@ -17,6 +17,12 @@ Cet endpoint exécute manuellement la logique MTF complète en bouclant sur les 
 | `symbols` | array | Non | `['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT', 'DOTUSDT']` | Liste des symboles à traiter |
 | `dry_run` | boolean | Non | `true` | Mode dry-run (pas de création d'order plans) |
 | `force_run` | boolean | Non | `false` | Forcer l'exécution même si les kill switches sont OFF |
+| `current_tf` | string | Non | `null` | Limiter à un timeframe (`4h`, `1h`, `15m`, `5m`, `1m`) |
+| `force_timeframe_check` | boolean | Non | `false` | Forcer la revalidation même si la dernière kline est fraîche |
+| `skip_context` | boolean | Non | `false` | Bypasser l'alignement de contexte sur les TF d'exécution |
+| `lock_per_symbol` | boolean | Non | `false` | Utiliser un verrou par symbole (utile pour des runs unitaires) |
+| `user_id` | string | Non | `null` | Identifiant métier propagé aux audits/Logs |
+| `ip_address` | string | Non | `null` | IP d'origine pour l'audit |
 
 ### Exemple de requête
 
@@ -26,7 +32,12 @@ curl -X POST http://localhost:8082/api/mtf/run \
   -d '{
     "symbols": ["BTCUSDT", "ETHUSDT"],
     "dry_run": true,
-    "force_run": false
+    "force_run": false,
+    "current_tf": "1h",
+    "force_timeframe_check": true,
+    "lock_per_symbol": true,
+    "user_id": "ops-squad",
+    "ip_address": "192.168.0.15"
   }'
 ```
 

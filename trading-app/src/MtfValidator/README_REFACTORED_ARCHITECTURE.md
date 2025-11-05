@@ -141,6 +141,15 @@ class LockManager implements LockManagerInterface
 {
     // Implémentation
 }
+
+// Agrégation des processeurs de timeframe via AutowireIterator
+class MyTimeframeRegistry
+{
+    public function __construct(
+        #[AutowireIterator('app.mtf.timeframe.processor')]
+        private iterable $processors,
+    ) {}
+}
 ```
 
 ## Migration
