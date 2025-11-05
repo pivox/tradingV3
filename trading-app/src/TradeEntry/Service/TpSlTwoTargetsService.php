@@ -483,7 +483,7 @@ final class TpSlTwoTargetsService
             $size2 = 0;
         }
 
-        $minVol = (int)max(1, (int)$pretrade['pre']->minVolume);
+        $minVol = max(1, (int)$pretrade['pre']->minVolume);
         $size1 = $this->quantizeSize($size1, $minVol);
         $size2 = $this->quantizeSize($size2, $minVol);
 
