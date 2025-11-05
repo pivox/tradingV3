@@ -135,7 +135,7 @@ class MtfSwitch
         if ($this->expiresAt === null) {
             return false;
         }
-        
+
         return $this->expiresAt <= new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
     }
 
@@ -183,12 +183,12 @@ class MtfSwitch
         if ($this->isSymbolSwitch()) {
             return substr($this->switchKey, 7); // Remove 'SYMBOL:'
         }
-        
+
         if ($this->isSymbolTimeframeSwitch()) {
             $parts = explode(':', $this->switchKey);
             return $parts[1] ?? null;
         }
-        
+
         return null;
     }
 
@@ -198,7 +198,7 @@ class MtfSwitch
             $parts = explode(':', $this->switchKey);
             return $parts[2] ?? null;
         }
-        
+
         return null;
     }
 }
