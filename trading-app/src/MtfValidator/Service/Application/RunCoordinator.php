@@ -7,7 +7,6 @@ namespace App\MtfValidator\Service\Application;
 use App\Common\Enum\Timeframe;
 use App\Config\MtfConfigProviderInterface;
 use App\Config\MtfValidationConfig;
-use App\Contract\MtfValidator\Dto\ValidationContextDto;
 use App\Contract\MtfValidator\TimeframeProcessorInterface;
 use App\Entity\MtfAudit;
 use App\Event\MtfAuditEvent;
@@ -66,9 +65,9 @@ final class RunCoordinator
         private readonly Timeframe5mService $timeframe5mService,
         private readonly Timeframe1mService $timeframe1mService,
         private readonly TimeframePipeline $timeframePipeline,
-        private readonly ?DbValidationCache $validationCache = null,
         private readonly TimeframeCacheService $timeframeCacheService,
         private readonly SnapshotPersister $snapshotPersister,
+        private readonly ?DbValidationCache $validationCache = null,
         private readonly ?KlineJsonIngestionService $klineJsonIngestion = null,
     ) {
     }
@@ -599,6 +598,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result4h = $cached;
+                $this->appendValidationState($validationStates, '4h', $result4h);
             } else {
                 $result4h = $this->runTimeframeProcessor(
                 $this->timeframe4hService,
@@ -613,7 +613,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             // Persister systématiquement un snapshot 4h (même en INVALID)
 
-                $this->timeframeCacheService->putCachedResult($symbol, '4h', $result4h);
+                $this->timeframeCacheService->storeResult($symbol, '4h', $result4h);
             }
             // Persister systématiquement un snapshot 4h (même en INVALID)
             $this->snapshotPersister->persist($symbol, '4h', $result4h);
@@ -656,6 +656,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result1h = $cached;
+                $this->appendValidationState($validationStates, '1h', $result1h);
             } else {
                 $result1h = $this->runTimeframeProcessor(
                 $this->timeframe1hService,
@@ -731,6 +732,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result15m = $cached;
+                $this->appendValidationState($validationStates, '15m', $result15m);
             } else {
                 $result15m = $this->runTimeframeProcessor(
                 $this->timeframe15mService,
@@ -804,6 +806,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result5m = $cached;
+                $this->appendValidationState($validationStates, '5m', $result5m);
             } else {
                 $result5m = $this->runTimeframeProcessor(
                 $this->timeframe5mService,
@@ -892,6 +895,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result1m = $cached;
+                $this->appendValidationState($validationStates, '1m', $result1m);
             } else {
                 $result1m = $this->runTimeframeProcessor(
                 $this->timeframe1mService,
@@ -1250,16 +1254,6 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             currentTimeframe: $processor->getTimeframeValue()
         );
 
-        $context = ValidationContextDto::create(
-            runId: $runId->toString(),
-            now: $now,
-            collector: $collector,
-            forceTimeframeCheck: $forceTimeframeCheck,
-            forceRun: $forceRun,
-            skipContextValidation: $skipContextValidation,
-            currentTimeframe: $processor->getTimeframeValue()
-        );
-
         $this->timeframePipeline->run($processingContext);
         $collector = $processingContext->collector;
 
@@ -1287,6 +1281,17 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         return $payload;
 
+    }
+
+    private function appendValidationState(array &$collector, string $timeframe, array $result): void
+    {
+        $collector[] = [
+            'tf' => $timeframe,
+            'status' => $result['status'] ?? 'UNKNOWN',
+            'signal_side' => $result['signal_side'] ?? 'NONE',
+            'kline_time' => $result['kline_time'] ?? null,
+            'from_cache' => (bool)($result['from_cache'] ?? false),
+        ];
     }
 
     /**

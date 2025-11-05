@@ -426,14 +426,38 @@ class MtfController extends AbstractController
     {
         try {
             $runId = \Ramsey\Uuid\Uuid::uuid4();
-            $result = $this->mtfService->executeMtfCycle($runId);
+            $stream = $this->mtfService->executeMtfCycle($runId);
+            $events = [];
+            $finalResults = [];
+
+            if ($stream instanceof \Generator) {
+                foreach ($stream as $payload) {
+                    if (is_array($payload)) {
+                        $events[] = $payload;
+                    }
+                }
+
+                $returnValue = $stream->getReturn();
+                if (is_array($returnValue)) {
+                    $finalResults = $returnValue;
+                }
+            } elseif (is_iterable($stream)) {
+                foreach ($stream as $payload) {
+                    if (is_array($payload)) {
+                        $events[] = $payload;
+                    }
+                }
+            } elseif (is_array($stream)) {
+                $finalResults = $stream;
+            }
             
             return $this->json([
                 'status' => 'success',
                 'message' => 'MTF cycle executed',
                 'data' => [
                     'run_id' => $runId->toString(),
-                    'result' => $result,
+                    'events' => $events,
+                    'final_results' => $finalResults,
                     'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
                 ]
             ]);
@@ -551,35 +575,22 @@ class MtfController extends AbstractController
             $lastValidated = [];
             $results = $result['results'] ?? [];
             
+            $successfulStatuses = ['READY', 'SUCCESS'];
             foreach ($results as $symbol => $symbolResult) {
                 $resultStatus = strtoupper((string)($symbolResult['status'] ?? ''));
-                
-                // Collecter les rejetés
-                if ($resultStatus !== 'SUCCESS') {
-                    $rejectedBy[] = $symbol;
-                }
-                
-                // Collecter les derniers validés (SUCCESS uniquement)
-                if ($resultStatus === 'SUCCESS') {
-                    $executionTf = $symbolResult['execution_tf'] ?? null;
-                    $signalSide = $symbolResult['signal_side'] ?? null;
-                    
-                    // Calculer le timeframe précédent (tf-1) ou 'READY' pour 1m
-                    $timeframe = $this->getPreviousTimeframe($executionTf);
-                    
-                    // Ajouter seulement si on a au moins le symbole
-                    // Exemples JSON pour cas limites :
-                    // - Si execution_tf manquant : timeframe sera null, signal_side peut être null
-                    // - Si signal_side manquant : side sera null
-                    // Exemple: {"symbol": "BTCUSDT", "side": null, "timeframe": null}
-                    // Exemple: {"symbol": "ETHUSDT", "side": "LONG", "timeframe": "15m"}
-                    // Exemple: {"symbol": "ADAUSDT", "side": "SHORT", "timeframe": "READY"}
+                $executionTf = $symbolResult['execution_tf'] ?? null;
+                $signalSide = $symbolResult['signal_side'] ?? null;
+
+                if (in_array($resultStatus, $successfulStatuses, true)) {
                     $lastValidated[] = [
                         'symbol' => $symbol,
                         'side' => $signalSide,
-                        'timeframe' => $timeframe,
+                        'timeframe' => $this->getPreviousTimeframe($executionTf),
                     ];
+                    continue;
                 }
+
+                $rejectedBy[] = $symbol;
             }
 
             return $this->json([
