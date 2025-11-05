@@ -179,7 +179,8 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 }
 
                 // Synchroniser tous les ordres ouverts pour ce symbole (inclut les SL/TP)
-                if ($this->httpClient && $this->wsAgentBaseUri) {
+                if ($this->httpClient && $this->wsAgentBaseUri && false) {
+
                     try {
                         $wsAgentSyncUrl = rtrim($this->wsAgentBaseUri, '/') . '/internal/sync-orders';
                         $this->httpClient->request('POST', $wsAgentSyncUrl, [
