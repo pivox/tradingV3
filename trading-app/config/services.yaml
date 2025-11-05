@@ -38,7 +38,6 @@ services:
         exclude:
             - '../src/DependencyInjection/'
             - '../src/Entity/'
-            - '../src/Logging/'
             - '../src/Kernel.php'
             - '../src/*/LookAtit'
 
@@ -251,7 +250,7 @@ services:
             $eps: 1.0e-12
         tags: ['app.indicator.condition']
 
-    # Formateur de logging personnalisé
+    # Formateur de logging personnalisé (service public requis par Monolog)
     App\Logging\CustomLineFormatter:
         public: true
 
