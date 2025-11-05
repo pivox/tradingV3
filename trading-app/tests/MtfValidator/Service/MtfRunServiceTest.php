@@ -5,205 +5,160 @@ declare(strict_types=1);
 namespace App\Tests\MtfValidator\Service;
 
 use App\Contract\MtfValidator\Dto\MtfRunDto;
+use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
+use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
 use App\MtfValidator\Service\MtfRunService;
 use App\MtfValidator\Service\Runner\MtfRunOrchestrator;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
-use Ramsey\Uuid\Uuid;
+use Ramsey\Uuid\UuidInterface;
 
-class MtfRunServiceTest extends TestCase
+final class MtfRunServiceTest extends TestCase
 {
-    private MtfRunService $mtfRunService;
+    private MtfRunService $service;
+
+    /** @var MtfRunOrchestrator&MockObject */
     private MtfRunOrchestrator $orchestrator;
+
+    /** @var LoggerInterface&MockObject */
     private LoggerInterface $logger;
 
     protected function setUp(): void
     {
         $this->orchestrator = $this->createMock(MtfRunOrchestrator::class);
         $this->logger = $this->createMock(LoggerInterface::class);
-        $this->mtfRunService = new MtfRunService($this->orchestrator, $this->logger);
+        $this->service = new MtfRunService($this->orchestrator, $this->logger);
     }
 
-    public function testRunSuccess(): void
+    public function testRunAggregatesGeneratorResults(): void
     {
-        $dto = new MtfRunDto(
-            symbols: ['BTCUSDT', 'ETHUSDT'],
-            dryRun: false,
-            forceRun: false
+        $request = new MtfRunRequestDto(symbols: ['BTCUSDT', 'ETHUSDT']);
+
+        $generator = $this->createGenerator(
+            [
+                [
+                    'symbol' => 'BTCUSDT',
+                    'result' => ['status' => 'SUCCESS', 'symbol' => 'BTCUSDT'],
+                ],
+                [
+                    'symbol' => 'ETHUSDT',
+                    'result' => ['status' => 'ERROR', 'symbol' => 'ETHUSDT'],
+                ],
+                [
+                    'symbol' => 'FINAL',
+                    'result' => ['status' => 'completed', 'timestamp' => '2024-01-01 10:00:00'],
+                ],
+            ],
+            [
+                'summary' => [
+                    'status' => 'completed',
+                    'timestamp' => '2024-01-01 10:00:00',
+                    'message' => 'All done',
+                ],
+                'results' => [
+                    'BTCUSDT' => ['status' => 'SUCCESS'],
+                    'ETHUSDT' => ['status' => 'ERROR'],
+                ],
+            ]
         );
 
-        $expectedResult = [
-            'summary' => ['run_id' => 'test', 'status' => 'completed'],
-            'results' => ['BTCUSDT' => ['status' => 'SUCCESS']]
-        ];
-
-        $this->orchestrator->expects($this->once())
+        $this->orchestrator
+            ->expects($this->once())
             ->method('execute')
-            ->with($dto, $this->isInstanceOf(Uuid::class))
-            ->willReturn(new \ArrayIterator($expectedResult));
+            ->with(
+                $this->callback(fn ($dto) => $dto instanceof MtfRunDto && $dto->symbols === ['BTCUSDT', 'ETHUSDT']),
+                $this->isInstanceOf(UuidInterface::class)
+            )
+            ->willReturn($generator);
 
-        $this->logger->expects($this->once())
+        $this->logger
+            ->expects($this->once())
             ->method('info')
-            ->with('[MTF Run] Starting execution', $this->isType('array'));
+            ->with(
+                '[MTF Run] Starting execution',
+                $this->callback(fn (array $context): bool => $context['symbols_count'] === 2)
+            );
 
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-        $this->assertEquals($expectedResult, $result);
+        $response = $this->service->run($request);
+
+        $this->assertInstanceOf(MtfRunResponseDto::class, $response);
+        $this->assertSame('partial_success', $response->status);
+        $this->assertSame(2, $response->symbolsProcessed);
+        $this->assertSame(1, $response->symbolsSuccessful);
+        $this->assertSame(1, $response->symbolsFailed);
+        $this->assertSame(50.0, $response->successRate);
+        $this->assertArrayHasKey('BTCUSDT', $response->results);
+        $this->assertArrayHasKey('ETHUSDT', $response->results);
+        $this->assertCount(1, $response->errors);
+        $this->assertSame('ETHUSDT', $response->errors[0]['symbol']);
+        $this->assertSame('All done', $response->message);
     }
 
-    public function testRunWithDryRun(): void
+    public function testRunFallsBackToStreamedResultsWhenFinalIsMissing(): void
     {
-        $dto = new MtfRunDto(
-            symbols: ['BTCUSDT'],
-            dryRun: true,
-            forceRun: false
-        );
+        $request = new MtfRunRequestDto(symbols: ['BTCUSDT']);
 
-        $this->orchestrator->expects($this->once())
+        $generator = $this->createGenerator([
+            [
+                'symbol' => 'BTCUSDT',
+                'result' => [
+                    'status' => 'GRACE_WINDOW',
+                    'symbol' => 'BTCUSDT',
+                ],
+            ],
+        ]);
+
+        $this->orchestrator
+            ->expects($this->once())
             ->method('execute')
-            ->willReturn(new \ArrayIterator([]));
+            ->with($this->isInstanceOf(MtfRunDto::class), $this->isInstanceOf(UuidInterface::class))
+            ->willReturn($generator);
 
-        $this->logger->expects($this->once())
-            ->method('info')
-            ->with('[MTF Run] Starting execution', $this->callback(function ($data) {
-                return $data['dry_run'] === true;
-            }));
+        $this->logger->expects($this->once())->method('info');
 
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-        $this->assertIsArray($result);
+        $response = $this->service->run($request);
+
+        $this->assertSame('success', $response->status);
+        $this->assertSame(1, $response->symbolsProcessed);
+        $this->assertSame(0, $response->symbolsSuccessful);
+        $this->assertSame(0, $response->symbolsFailed);
+        $this->assertSame(1, $response->symbolsSkipped);
+        $this->assertArrayHasKey('BTCUSDT', $response->results);
     }
 
-    public function testRunWithForceRun(): void
+    public function testRunRethrowsAndLogsOnFailure(): void
     {
-        $dto = new MtfRunDto(
-            symbols: ['BTCUSDT'],
-            dryRun: false,
-            forceRun: true
-        );
+        $request = new MtfRunRequestDto(symbols: ['BTCUSDT']);
 
-        $this->orchestrator->expects($this->once())
+        $this->orchestrator
+            ->expects($this->once())
             ->method('execute')
-            ->willReturn(new \ArrayIterator([]));
+            ->willThrowException(new \RuntimeException('boom'));
 
-        $this->logger->expects($this->once())
-            ->method('info')
-            ->with('[MTF Run] Starting execution', $this->callback(function ($data) {
-                return $data['force_run'] === true;
-            }));
-
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-        $this->assertIsArray($result);
-    }
-
-    public function testRunWithSpecificTimeframe(): void
-    {
-        $dto = new MtfRunDto(
-            symbols: ['BTCUSDT'],
-            dryRun: false,
-            forceRun: false,
-            currentTf: '1h'
-        );
-
-        $this->orchestrator->expects($this->once())
-            ->method('execute')
-            ->willReturn(new \ArrayIterator([]));
-
-        $this->logger->expects($this->once())
-            ->method('info')
-            ->with('[MTF Run] Starting execution', $this->callback(function ($data) {
-                return $data['symbols_count'] === 1;
-            }));
-
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-        $this->assertIsArray($result);
-    }
-
-    public function testRunWithEmptySymbols(): void
-    {
-        $dto = new MtfRunDto(
-            symbols: [],
-            dryRun: false,
-            forceRun: false
-        );
-
-        $this->orchestrator->expects($this->once())
-            ->method('execute')
-            ->willReturn(new \ArrayIterator([]));
-
-        $this->logger->expects($this->once())
-            ->method('info')
-            ->with('[MTF Run] Starting execution', $this->callback(function ($data) {
-                return $data['symbols_count'] === 0;
-            }));
-
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-        $this->assertIsArray($result);
-    }
-
-    public function testRunWithException(): void
-    {
-        $dto = new MtfRunDto(
-            symbols: ['BTCUSDT'],
-            dryRun: false,
-            forceRun: false
-        );
-
-        $exception = new \RuntimeException('Test error');
-
-        $this->orchestrator->expects($this->once())
-            ->method('execute')
-            ->willThrowException($exception);
-
-        $this->logger->expects($this->once())
+        $this->logger
+            ->expects($this->once())
             ->method('error')
-            ->with('[MTF Run] Execution failed', $this->callback(function ($data) {
-                return $data['error'] === 'Test error';
-            }));
+            ->with(
+                '[MTF Run] Execution failed',
+                $this->callback(fn (array $context): bool => $context['error'] === 'boom')
+            );
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Test error');
+        $this->expectExceptionMessage('boom');
 
-        iterator_to_array($this->mtfRunService->run($dto));
+        $this->service->run($request);
     }
 
-    public function testRunGeneratesUniqueRunId(): void
+    /**
+     * @param array<int, array<string, mixed>> $yields
+     */
+    private function createGenerator(array $yields, ?array $returnValue = null): \Generator
     {
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
+        foreach ($yields as $payload) {
+            yield $payload;
+        }
 
-        $this->orchestrator->expects($this->exactly(2))
-            ->method('execute')
-            ->with($dto, $this->isInstanceOf(Uuid::class))
-            ->willReturn(new \ArrayIterator([]));
-
-        // First run
-        iterator_to_array($this->mtfRunService->run($dto));
-        
-        // Second run should generate different UUID
-        iterator_to_array($this->mtfRunService->run($dto));
-    }
-
-    public function testRunLogsCorrectParameters(): void
-    {
-        $dto = new MtfRunDto(
-            symbols: ['BTCUSDT', 'ETHUSDT'],
-            dryRun: true,
-            forceRun: false,
-            currentTf: '1h',
-            forceTimeframeCheck: true,
-            lockPerSymbol: true
-        );
-
-        $this->orchestrator->expects($this->once())
-            ->method('execute')
-            ->willReturn(new \ArrayIterator([]));
-
-        $this->logger->expects($this->once())
-            ->method('info')
-            ->with('[MTF Run] Starting execution', $this->callback(function ($data) {
-                return $data['symbols_count'] === 2 &&
-                       $data['dry_run'] === true &&
-                       $data['force_run'] === false;
-            }));
-
-        iterator_to_array($this->mtfRunService->run($dto));
+        return $returnValue;
     }
 }

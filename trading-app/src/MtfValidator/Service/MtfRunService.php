@@ -44,34 +44,60 @@ class MtfRunService implements MtfValidatorInterface
             $mtfRunDto = ContractMapper::toContractRunDto($internalRequest);
 
             $runIdUuid = Uuid::fromString($runId);
-            $generator = $this->orchestrator->execute($mtfRunDto, $runIdUuid);
+            $executionResults = $this->orchestrator->execute($mtfRunDto, $runIdUuid);
 
-            $streamedResults = [];
+            $progressEvents = [];
+            $symbolResults = [];
             $summaryPayload = null;
 
-            foreach ($generator as $result) {
-                if (isset($result['summary'])) {
-                    $summaryPayload = $result['summary'];
+            foreach ($executionResults as $result) {
+                if (!is_array($result)) {
                     continue;
                 }
 
-                $streamedResults[] = $result;
+                if (isset($result['summary']) && is_array($result['summary'])) {
+                    $summaryPayload = $result['summary'];
+                    if (isset($result['results']) && is_array($result['results'])) {
+                        $symbolResults = $result['results'] + $symbolResults;
+                    }
+                    continue;
+                }
+
+                if (($result['symbol'] ?? null) === 'FINAL') {
+                    if (isset($result['result']) && is_array($result['result'])) {
+                        $summaryPayload = $result['result'];
+                    }
+                    if (isset($result['results']) && is_array($result['results'])) {
+                        $symbolResults = $result['results'] + $symbolResults;
+                    }
+                    continue;
+                }
+
+                if (isset($result['symbol'], $result['result']) && is_array($result['result'])) {
+                    $symbolResults[(string) $result['symbol']] = $result['result'];
+                }
+
+                $progressEvents[] = $result;
             }
 
-            $final = $generator->getReturn();
-            $finalResults = [];
-            if (is_array($final)) {
-                $summaryPayload = $final['summary'] ?? $summaryPayload;
-                if (isset($final['results']) && is_array($final['results'])) {
-                    $finalResults = $final['results'];
+            $finalResults = $symbolResults;
+            if ($executionResults instanceof \Generator) {
+                $final = $executionResults->getReturn();
+                if (is_array($final)) {
+                    if (isset($final['summary']) && is_array($final['summary'])) {
+                        $summaryPayload = $final['summary'];
+                    }
+                    if (isset($final['results']) && is_array($final['results'])) {
+                        $finalResults = $final['results'] + $finalResults;
+                    }
                 }
             }
 
-            $executionTime = microtime(true) - $startTime;
+            if ($finalResults === []) {
+                $finalResults = self::indexResultsBySymbol($progressEvents);
+            }
 
-            $resultsForStats = $finalResults !== []
-                ? $finalResults
-                : self::indexResultsBySymbol($streamedResults);
+            $executionTime = microtime(true) - $startTime;
 
             $status = 'success';
             $symbolsSuccessful = 0;
@@ -79,7 +105,7 @@ class MtfRunService implements MtfValidatorInterface
             $symbolsSkipped = 0;
             $errors = [];
 
-            foreach ($resultsForStats as $result) {
+            foreach ($finalResults as $symbol => $result) {
                 $result = (array) $result;
                 $state = strtoupper((string) ($result['status'] ?? ''));
                 switch ($state) {
@@ -88,7 +114,10 @@ class MtfRunService implements MtfValidatorInterface
                         break;
                     case 'ERROR':
                         $symbolsFailed++;
-                        $errors[] = $result;
+                        $errors[] = [
+                            'symbol' => is_string($symbol) ? $symbol : ($result['symbol'] ?? null),
+                            'details' => $result,
+                        ];
                         break;
                     case 'SKIPPED':
                     case 'GRACE_WINDOW':
@@ -118,9 +147,11 @@ class MtfRunService implements MtfValidatorInterface
                 $summaryPayload
             );
 
+            $resultsForResponse = $finalResults !== [] ? $finalResults : $progressEvents;
+
             return ContractMapper::toContractResponse(
                 $internalSummary,
-                $streamedResults,
+                $resultsForResponse,
                 $errors
             );
         } catch (\Throwable $e) {
