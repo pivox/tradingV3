@@ -7,18 +7,13 @@ namespace App\MtfValidator\Service\Runner;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\FeatureSwitchInterface;
 use App\Contract\Runtime\LockManagerInterface;
-use App\Config\MtfValidationConfig;
 use App\MtfValidator\Service\Dto\Internal\InternalRunSummaryDto;
-use App\MtfValidator\Service\Dto\MtfRunResultDto;
-use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\MtfValidator\Service\SymbolProcessor;
 use App\MtfValidator\Service\TradingDecisionHandler;
-use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\MtfValidator\Service\Metrics\RunMetricsAggregator;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;
-use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
  * Orchestrateur principal pour l'exécution des cycles MTF

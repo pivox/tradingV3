@@ -6,7 +6,7 @@ namespace App\MtfValidator\Service\Metrics;
 
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
-use App\MtfValidator\Service\Dto\RunSummaryDto;
+use App\MtfValidator\Service\Dto\Internal\InternalRunSummaryDto;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Dto\TradeEntryRequest;
@@ -258,9 +258,9 @@ final class RunMetricsAggregator
         }
     }
 
-    public function completeRun(float $durationSeconds): RunSummaryDto
+    public function completeRun(float $durationSeconds): InternalRunSummaryDto
     {
-        $summary = new RunSummaryDto(
+        $summary = new InternalRunSummaryDto(
             runId: $this->currentRunId ?? 'unknown',
             executionTimeSeconds: round($durationSeconds, 3),
             symbolsRequested: $this->requestedSymbols,
@@ -295,12 +295,12 @@ final class RunMetricsAggregator
         return $summary;
     }
 
-    public function completeWithStatus(string $status, float $durationSeconds): RunSummaryDto
+    public function completeWithStatus(string $status, float $durationSeconds): InternalRunSummaryDto
     {
-        $summary = new RunSummaryDto(
+        $summary = new InternalRunSummaryDto(
             runId: $this->currentRunId ?? 'unknown',
             executionTimeSeconds: round($durationSeconds, 3),
-            symbolsRequested: 0,
+            symbolsRequested: $this->requestedSymbols,
             symbolsProcessed: 0,
             symbolsSuccessful: 0,
             symbolsFailed: 0,
