@@ -225,11 +225,6 @@ services:
         arguments:
             $filePath: '%kernel.project_dir%/var/hot_assignment.csv'
 
-    App\Service\ContractDispatcher:
-        arguments:
-            $storage: '@App\Service\AssignmentStorageInterface'
-            $http: '@http_client'
-            $workersCsv: '%env(WS_WORKERS)%'
     # === Handler Monolog qui publie dans Messenger (Async) ===
     # On le rend public pour pouvoir le référencer depuis monolog.yaml (type: service, id: ...)
     App\Indicator\Condition\CloseMinusEma200GtCondition:

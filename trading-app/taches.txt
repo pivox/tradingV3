@@ -278,7 +278,6 @@ CI : phpunit, psalm, phpstan, eslint, jest.
 Action	Commande / Endpoint
 Purger cache	bin/console app:purge:validation-cache
 Backfill données	bin/console app:backfill:klines BTCUSDT --tf=15m
-Redémarrer WS	docker restart ws-worker
 Forcer revalidation	API : /api/cron/bitmart/refresh-{tf}
 Monitoring	/api/debug/mtf/state/{symbol}
 Audit recent	/api/debug/mtf/audit/{symbol}
