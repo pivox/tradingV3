@@ -7,8 +7,10 @@ namespace App\MtfValidator\Service\Runner;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\FeatureSwitchInterface;
 use App\Contract\Runtime\LockManagerInterface;
+use App\Config\MtfValidationConfig;
+use App\MtfValidator\Service\Dto\Internal\InternalRunSummaryDto;
 use App\MtfValidator\Service\Dto\MtfRunResultDto;
-use App\MtfValidator\Service\Dto\RunSummaryDto;
+use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\MtfValidator\Service\SymbolProcessor;
 use App\MtfValidator\Service\TradingDecisionHandler;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
@@ -179,6 +181,7 @@ final class MtfRunOrchestrator
     {
         $summary = $this->metricsAggregator->completeWithStatus($reason, microtime(true) - $startTime);
 
+
         yield from $this->yieldFinalResult($summary, [], $startTime, $runId);
     }
 
@@ -189,7 +192,7 @@ final class MtfRunOrchestrator
         yield from $this->yieldFinalResult($summary, [], $startTime, $runId);
     }
 
-    private function yieldFinalResult(RunSummaryDto $summary, array $results, float $startTime, UuidInterface $runId): \Generator
+    private function yieldFinalResult(InternalRunSummaryDto $summary, array $results, float $startTime, UuidInterface $runId): \Generator
     {
         yield [
             'symbol' => 'FINAL',

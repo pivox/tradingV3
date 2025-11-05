@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Controller;
 
+use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\Provider\MainProviderInterface;
 use App\MtfValidator\Service\MtfService;
 use App\MtfValidator\Service\MtfRunService;
@@ -646,37 +647,55 @@ class MtfController extends AbstractController
      */
     private function runSequential(array $symbols, bool $dryRun, bool $forceRun, ?string $currentTf, bool $forceTimeframeCheck): array
     {
-        $generator = $this->mtfRunService->run($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck);
+        $requestDto = new MtfRunRequestDto(
+            symbols: $symbols,
+            dryRun: $dryRun,
+            forceRun: $forceRun,
+            currentTf: $currentTf,
+            forceTimeframeCheck: $forceTimeframeCheck
+        );
 
-        if (!$generator instanceof \Generator) {
-            return [
-                'summary' => is_array($generator) ? ($generator['summary'] ?? []) : [],
-                'results' => is_array($generator) ? ($generator['results'] ?? []) : [],
-                'errors' => [],
-            ];
-        }
+        $response = $this->mtfRunService->run($requestDto);
 
-        $summary = [];
         $results = [];
-
-        foreach ($generator as $yielded) {
-            $symbol = $yielded['symbol'] ?? null;
-            $result = $yielded['result'] ?? null;
-            if (is_string($symbol) && $symbol !== 'FINAL' && is_array($result)) {
-                $results[$symbol] = $result;
+        foreach ($response->results as $entry) {
+            if (!isset($entry['symbol'], $entry['result'])) {
+                continue;
             }
+
+            $symbol = (string) $entry['symbol'];
+            if ($symbol === 'FINAL') {
+                continue;
+            }
+
+            $results[$symbol] = (array) $entry['result'];
         }
 
-        $final = $generator->getReturn();
-        if (is_array($final)) {
-            $summary = $final['summary'] ?? $summary;
-            $results = $final['results'] ?? $results;
-        }
+        $summary = [
+            'run_id' => $response->runId,
+            'execution_time_seconds' => $response->executionTimeSeconds,
+            'symbols_requested' => $response->symbolsRequested,
+            'symbols_processed' => $response->symbolsProcessed,
+            'symbols_successful' => $response->symbolsSuccessful,
+            'symbols_failed' => $response->symbolsFailed,
+            'symbols_skipped' => $response->symbolsSkipped,
+            'success_rate' => $response->successRate,
+            'dry_run' => $dryRun,
+            'force_run' => $forceRun,
+            'current_tf' => $currentTf,
+            'timestamp' => $response->timestamp->format('Y-m-d H:i:s'),
+            'status' => match ($response->status) {
+                'success' => 'completed',
+                'partial_success' => 'completed_with_errors',
+                default => 'error',
+            },
+            'message' => $response->message,
+        ];
 
         return [
             'summary' => $summary,
             'results' => $results,
-            'errors' => [],
+            'errors' => $response->errors,
         ];
     }
 

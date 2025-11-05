@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Service\Dto;
 
+use App\Contract\MtfValidator\Dto\TimeframeResultDto;
+
 /**
  * DTO interne pour les résultats de timeframe
  */
@@ -26,9 +28,9 @@ final class InternalTimeframeResultDto
         public readonly ?array $metadata = null
     ) {}
 
-    public function toContractDto(): \App\Contract\MtfValidator\Dto\TimeframeResultDto
+    public function toContractDto(): TimeframeResultDto
     {
-        return new \App\Contract\MtfValidator\Dto\TimeframeResultDto(
+        return new TimeframeResultDto(
             timeframe: $this->timeframe,
             status: $this->status,
             signalSide: $this->signalSide,
@@ -42,6 +44,25 @@ final class InternalTimeframeResultDto
             failedConditionsShort: $this->failedConditionsShort,
             reason: $this->reason,
             error: $this->error
+        );
+    }
+
+    public static function fromContractDto(TimeframeResultDto $dto): self
+    {
+        return new self(
+            timeframe: $dto->timeframe,
+            status: $dto->status,
+            signalSide: $dto->signalSide,
+            klineTime: $dto->klineTime,
+            currentPrice: $dto->currentPrice,
+            atr: $dto->atr,
+            indicatorContext: $dto->indicatorContext,
+            conditionsLong: $dto->conditionsLong,
+            conditionsShort: $dto->conditionsShort,
+            failedConditionsLong: $dto->failedConditionsLong,
+            failedConditionsShort: $dto->failedConditionsShort,
+            reason: $dto->reason,
+            error: $dto->error
         );
     }
 

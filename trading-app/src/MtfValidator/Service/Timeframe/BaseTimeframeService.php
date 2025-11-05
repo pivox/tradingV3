@@ -19,7 +19,7 @@ use App\Repository\MtfStateRepository;
 use App\Contract\Signal\SignalValidationServiceInterface;
 use App\MtfValidator\Service\MtfTimeService;
 use App\MtfValidator\Service\Dto\InternalTimeframeResultDto;
-use App\MtfValidator\Service\Dto\ProcessingContextDto;
+use App\Service\Dto\Internal\ProcessingContextDto;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
@@ -63,8 +63,9 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
         string $symbol,
         ValidationContextDto $context
     ): TimeframeResultDto {
-        $processingContext = ProcessingContextDto::fromContractContext($symbol, $context);
+        $processingContext = ProcessingContextDto::fromContractContext($symbol, $context, $this->getTimeframe()->value);
         $internalResult = $this->processTimeframeInternal($processingContext);
+
         return $internalResult->toContractDto();
     }
 
@@ -98,11 +99,18 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
             // Kill switch TF (sauf si force-run est activé)
             if (!$forceRun && !$this->mtfSwitchRepository->canProcessSymbolTimeframe($symbol, $timeframe->value)) {
                 $this->auditStep($runId, $symbol, "{$timeframe->value}_KILL_SWITCH_OFF", "{$timeframe->value} kill switch is OFF", ['timeframe' => $timeframe->value, 'force_run' => $forceRun]);
-                return new InternalTimeframeResultDto(
+                $result = new InternalTimeframeResultDto(
                     timeframe: $timeframe->value,
                     status: 'SKIPPED',
                     reason: "{$timeframe->value} kill switch OFF"
                 );
+                $context->addResult($result);
+                $context->pushCollectorEntry($result);
+                $context->markHardStop($timeframe->value, 'KILL_SWITCH_OFF', [
+                    'force_run' => $forceRun,
+                ]);
+
+                return $result;
             }
 
             // Fenêtre de grâce (sauf si force-run est activé)
@@ -111,12 +119,17 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
                     'symbol' => $symbol,
                     'timeframe' => $timeframe->value,
                 ]);
-                return new InternalTimeframeResultDto(
+                $result = new InternalTimeframeResultDto(
                     timeframe: $timeframe->value,
                     status: 'GRACE_WINDOW',
                     signalSide: 'NONE',
                     reason: "In grace window for {$timeframe->value}"
                 );
+                $context->addResult($result);
+                $context->pushCollectorEntry($result);
+                $context->markHardStop($timeframe->value, 'GRACE_WINDOW');
+
+                return $result;
             }
 
             // ✅ SUITE NORMALE : Vérifications de fraîcheur, kill switches, etc.
@@ -165,7 +178,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
                             'passed' => true,
                             'severity' => 0,
                         ]);
-                        return new InternalTimeframeResultDto(
+                        $result = new InternalTimeframeResultDto(
                             timeframe: $timeframe->value,
                             status: 'VALID',
                             signalSide: $signalSide,
@@ -175,6 +188,10 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
                             indicatorContext: $signalData['indicator_context'] ?? null,
                             reason: 'skip_context'
                         );
+                        $context->addResult($result);
+                        $context->pushCollectorEntry($result);
+
+                        return $result;
                     }
                 }
                 // Extraire les listes de conditions depuis le payload du service de signal
@@ -200,7 +217,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
                     'conditions_failed' => array_values(array_merge($failedLong, $failedShort)),
                 ]);
 
-                return new InternalTimeframeResultDto(
+                $result = new InternalTimeframeResultDto(
                     timeframe: $timeframe->value,
                     status: 'INVALID',
                     signalSide: $signalSide,
@@ -214,6 +231,13 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
                     failedConditionsShort: $failedShort,
                     reason: "{$timeframe->value} validation failed"
                 );
+                $context->addResult($result);
+                $context->pushCollectorEntry($result);
+                $context->markHardStop($timeframe->value, 'VALIDATION_FAILED', [
+                    'signal_side' => $signalSide,
+                ]);
+
+                return $result;
             }
 
             // Succès (VALIDATED ou PENDING)
@@ -227,7 +251,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
                 'severity' => 0,
             ]);
 
-            return new InternalTimeframeResultDto(
+            $result = new InternalTimeframeResultDto(
                 timeframe: $timeframe->value,
                 status: 'VALID',
                 signalSide: $signalSide,
@@ -238,6 +262,10 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
                 conditionsLong: $signalData['conditions_long'] ?? [],
                 conditionsShort: $signalData['conditions_short'] ?? []
             );
+            $context->addResult($result);
+            $context->pushCollectorEntry($result);
+
+            return $result;
 
         } catch (\Throwable $ex) {
             $this->logger->error("[MTF] Exception in {$timeframe->value} processing", [
@@ -254,7 +282,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
                 'severity' => 3,
             ]);
 
-            return new InternalTimeframeResultDto(
+            $result = new InternalTimeframeResultDto(
                 timeframe: $timeframe->value,
                 status: 'ERROR',
                 reason: 'Exception in processing: ' . $ex->getMessage(),
@@ -263,6 +291,13 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
                     'trace' => $ex->getTraceAsString()
                 ]
             );
+            $context->addResult($result);
+            $context->pushCollectorEntry($result);
+            $context->markHardStop($timeframe->value, 'EXCEPTION', [
+                'message' => $ex->getMessage(),
+            ]);
+
+            return $result;
         }
     }
 
