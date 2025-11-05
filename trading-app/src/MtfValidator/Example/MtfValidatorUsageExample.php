@@ -7,7 +7,7 @@ namespace App\MtfValidator\Example;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Contract\MtfValidator\TimeframeProcessorInterface;
-use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\DependencyInjection\Attribute\AutowireIterator;
 
 /**
  * Exemple d'utilisation des nouveaux contrats MtfValidator
@@ -15,12 +15,12 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class MtfValidatorUsageExample
 {
     public function __construct(
-        #[Autowire(service: 'app.mtf.validator')]
         private readonly MtfValidatorInterface $mtfValidator,
 
-        #[Autowire(service: 'app.mtf.timeframe.processor')]
-        private readonly TimeframeProcessorInterface $timeframeProcessor
-    ) {}
+        #[AutowireIterator('app.mtf.timeframe.processor')]
+        private readonly iterable $timeframeProcessors
+    ) {
+    }
 
     /**
      * Exemple d'utilisation du validateur MTF
@@ -34,7 +34,8 @@ final class MtfValidatorUsageExample
             forceRun: false,
             currentTf: '1h',
             forceTimeframeCheck: false,
-            lockPerSymbol: false,
+            skipContextValidation: false,
+            lockPerSymbol: true,
             userId: 'user123',
             ipAddress: '192.168.1.1'
         );
@@ -54,6 +55,7 @@ final class MtfValidatorUsageExample
         // Afficher les détails
         echo "Taux de succès: " . $response->successRate . "%\n";
         echo "Temps d'exécution: " . $response->executionTimeSeconds . "s\n";
+        echo "Décisions retournées: " . count($response->results) . " entrées\n";
     }
 
     /**
@@ -61,14 +63,18 @@ final class MtfValidatorUsageExample
      */
     public function exampleTimeframeProcessing(): void
     {
-        // Vérifier si le processeur peut traiter un timeframe
-        if ($this->timeframeProcessor->canProcess('1h')) {
-            echo "Le processeur peut traiter le timeframe 1h\n";
-        }
+        foreach ($this->timeframeProcessors as $processor) {
+            if (!$processor instanceof TimeframeProcessorInterface) {
+                continue;
+            }
 
-        // Obtenir le timeframe géré
-        $timeframe = $this->timeframeProcessor->getTimeframeValue();
-        echo "Timeframe géré: " . $timeframe . "\n";
+            $timeframe = $processor->getTimeframeValue();
+            echo sprintf("Processeur détecté pour le timeframe %s\n", $timeframe);
+
+            if ($processor->canProcess('1h')) {
+                echo " → compatible avec la validation 1h\n";
+            }
+        }
     }
 
     /**

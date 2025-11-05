@@ -62,14 +62,58 @@ docker-compose exec trading-app-php php bin/console bitmart:fetch-klines BTCUSDT
 docker-compose exec trading-app-php php bin/console bitmart:fetch-klines BTCUSDT --from="2024-01-01 00:00:00" --to="2024-01-02 00:00:00"
 ```
 
+#### Lancer un run MTF contractuel
+
+```bash
+# Dry-run multi-symboles avec verrous globaux
+docker-compose exec trading-app-php php bin/console mtf:run \
+  --symbols="BTCUSDT,ETHUSDT" \
+  --dry-run=1 \
+  --force-timeframe-check
+
+# Exécution ciblée 1h avec verrou par symbole et métadonnées utilisateur
+docker-compose exec trading-app-php php bin/console mtf:run \
+  --tf=1h \
+  --lock-per-symbol \
+  --user-id="ops-squad" \
+  --ip-address="192.168.0.15"
+```
+
 ## 🏗️ Architecture
 
-L'application suit une architecture hexagonale avec :
+L'application implémente désormais explicitement le découpage **Application / Domaine / Infrastructure** introduit par le nouveau contrat MTF :
 
-- **Domain** : Logique métier pure (DTOs, Enums, Services)
-- **Application** : Workflows et orchestration
-- **Infrastructure** : Adaptateurs externes (BitMart API, Base de données)
-- **Presentation** : Contrôleurs et commandes CLI
+```mermaid
+flowchart LR
+    subgraph Application
+        facade(MtfRunService / MtfValidatorInterface)
+        orchestrator(MtfRunOrchestrator)
+        decision(TradingDecisionHandler)
+    end
+
+    subgraph Domaine
+        strategies(HighConvictionValidation)
+        dto(DTO internes)
+    end
+
+    subgraph Infrastructure
+        repo(Repositories Doctrine)
+        provider(Providers BitMart)
+        cache(Caches Redis/DB)
+    end
+
+    facade --> orchestrator --> decision
+    orchestrator --> repo
+    orchestrator --> provider
+    decision --> provider
+    decision --> repo
+    orchestrator --> strategies
+```
+
+- **Application** : façade `MtfValidatorInterface`, orchestrateur, gestion des verrous et des switches.
+- **Domaine** : stratégies, DTOs, règles métier (ex : alignement multi-timeframe).
+- **Infrastructure** : bases de données, clients HTTP/WebSocket, caches.
+- **Présentation** : contrôleurs REST, commandes CLI (ex. `mtf:run`).
 
 ## 📊 Fonctionnalités
 
