@@ -169,6 +169,7 @@ final class SignalValidationService implements SignalValidationServiceInterface
         $this->persistValidationResult($result, $contractEntity, $klines, $knownSignals);
 
         $this->validationLogger->info('validation.mtf_status', [
+            'symbol' => $contractEntity->getSymbol(),
             'tf' => $tfLower,
             'status' => $status,
             'curr' => $currentSignalValue,

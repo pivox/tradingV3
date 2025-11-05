@@ -54,7 +54,7 @@ final class Signal4hService extends AbstractSignal
             'timestamp' => time(),
             'indicator_context' => $context,
         ];
-        $this->signalsLogger->info('signals.tick', ['tf'=>$tf,'signal'=>$signal]);
+        $this->signalsLogger->info('signals.tick', ['symbol'=>$contract->getSymbol(),'tf'=>$tf,'signal'=>$signal]);
         return $out;
     }
 }
