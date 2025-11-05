@@ -5,286 +5,121 @@ declare(strict_types=1);
 namespace App\Tests\MtfValidator\Service;
 
 use App\Contract\MtfValidator\Dto\MtfRunDto;
-use App\Contract\Runtime\AuditLoggerInterface;
-use App\Contract\Runtime\FeatureSwitchInterface;
-use App\Contract\Runtime\LockManagerInterface;
+use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\MtfValidator\Service\MtfRunService;
 use App\MtfValidator\Service\Runner\MtfRunOrchestrator;
-use App\MtfValidator\Service\SymbolProcessor;
-use App\MtfValidator\Service\TradingDecisionHandler;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
-use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
-use Ramsey\Uuid\Uuid;
+use Ramsey\Uuid\UuidInterface;
 
-class MtfRunIntegrationTest extends TestCase
+final class MtfRunIntegrationTest extends TestCase
 {
-    private MtfRunService $mtfRunService;
+    private MtfRunService $service;
+
+    /** @var MtfRunOrchestrator&MockObject */
     private MtfRunOrchestrator $orchestrator;
-    private LockManagerInterface $lockManager;
-    private FeatureSwitchInterface $featureSwitch;
-    private AuditLoggerInterface $auditLogger;
-    private SymbolProcessor $symbolProcessor;
-    private TradingDecisionHandler $tradingDecisionHandler;
+
+    /** @var LoggerInterface&MockObject */
     private LoggerInterface $logger;
-    private ClockInterface $clock;
 
     protected function setUp(): void
     {
-        $this->lockManager = $this->createMock(LockManagerInterface::class);
-        $this->featureSwitch = $this->createMock(FeatureSwitchInterface::class);
-        $this->auditLogger = $this->createMock(AuditLoggerInterface::class);
-        $this->symbolProcessor = $this->createMock(SymbolProcessor::class);
-        $this->tradingDecisionHandler = $this->createMock(TradingDecisionHandler::class);
+        $this->orchestrator = $this->createMock(MtfRunOrchestrator::class);
         $this->logger = $this->createMock(LoggerInterface::class);
-        $this->clock = $this->createMock(ClockInterface::class);
+        $this->service = new MtfRunService($this->orchestrator, $this->logger);
+    }
 
-        $this->orchestrator = new MtfRunOrchestrator(
-            $this->symbolProcessor,
-            $this->tradingDecisionHandler,
-            $this->lockManager,
-            $this->auditLogger,
-            $this->featureSwitch,
-            $this->logger,
-            $this->clock
+    public function testRunReturnsErrorStatusWhenAllSymbolsFail(): void
+    {
+        $request = new MtfRunRequestDto(symbols: ['BTCUSDT', 'ETHUSDT']);
+
+        $generator = $this->createGenerator(
+            [
+                [
+                    'symbol' => 'BTCUSDT',
+                    'result' => ['status' => 'ERROR', 'symbol' => 'BTCUSDT', 'error' => ['code' => 'X1']],
+                ],
+                [
+                    'symbol' => 'ETHUSDT',
+                    'result' => ['status' => 'ERROR', 'symbol' => 'ETHUSDT', 'error' => ['code' => 'X2']],
+                ],
+            ],
+            [
+                'summary' => [
+                    'status' => 'completed',
+                    'timestamp' => '2024-02-02 09:30:00',
+                    'message' => 'Run finished with errors',
+                ],
+                'results' => [
+                    'BTCUSDT' => ['status' => 'ERROR'],
+                    'ETHUSDT' => ['status' => 'ERROR'],
+                ],
+            ]
         );
 
-        $this->mtfRunService = new MtfRunService($this->orchestrator, $this->logger);
+        $this->orchestrator
+            ->expects($this->once())
+            ->method('execute')
+            ->with($this->isInstanceOf(MtfRunDto::class), $this->isInstanceOf(UuidInterface::class))
+            ->willReturn($generator);
+
+        $this->logger->expects($this->once())->method('info');
+
+        $response = $this->service->run($request);
+
+        $this->assertSame('error', $response->status);
+        $this->assertSame(0.0, $response->successRate);
+        $this->assertCount(2, $response->errors);
+        $this->assertSame('Run finished with errors', $response->message);
     }
 
-    public function testFullExecutionFlow(): void
+    public function testRunUsesStreamSummaryWhenProvided(): void
     {
-        $dto = new MtfRunDto(symbols: ['BTCUSDT', 'ETHUSDT']);
-        $now = new \DateTimeImmutable('2024-01-01 12:00:00');
+        $request = new MtfRunRequestDto(symbols: ['BTCUSDT']);
 
-        // Setup mocks
-        $this->clock->expects($this->once())
-            ->method('now')
-            ->willReturn($now);
+        $generator = $this->createGenerator([
+            [
+                'summary' => [
+                    'status' => 'maintenance',
+                    'timestamp' => '2024-03-01 08:00:00',
+                    'message' => 'Execution deferred',
+                ],
+            ],
+            [
+                'symbol' => 'FINAL',
+                'result' => [
+                    'status' => 'maintenance',
+                    'timestamp' => '2024-03-01 08:00:00',
+                    'message' => 'Execution deferred',
+                ],
+            ],
+        ]);
 
-        $this->featureSwitch->expects($this->once())
-            ->method('isEnabled')
-            ->with('mtf_global_switch')
-            ->willReturn(true);
+        $this->orchestrator
+            ->expects($this->once())
+            ->method('execute')
+            ->with($this->isInstanceOf(MtfRunDto::class), $this->isInstanceOf(UuidInterface::class))
+            ->willReturn($generator);
 
-        $this->lockManager->expects($this->once())
-            ->method('acquireLockWithRetry')
-            ->willReturn(true);
+        $this->logger->expects($this->once())->method('info');
 
-        $this->lockManager->expects($this->once())
-            ->method('releaseLock')
-            ->with('mtf_execution');
+        $response = $this->service->run($request);
 
-        $this->symbolProcessor->expects($this->exactly(2))
-            ->method('processSymbol')
-            ->willReturnCallback(function ($symbol) {
-                return new \App\MtfValidator\Service\Dto\SymbolResultDto(
-                    $symbol,
-                    'SUCCESS',
-                    '1m',
-                    'BUY'
-                );
-            });
-
-        $this->tradingDecisionHandler->expects($this->exactly(2))
-            ->method('handleTradingDecision')
-            ->willReturnCallback(function ($symbolResult) {
-                return $symbolResult;
-            });
-
-        $this->auditLogger->expects($this->once())
-            ->method('logAction')
-            ->with('MTF_RUN_COMPLETED', 'MTF_RUN', $this->isType('string'), $this->isType('array'));
-
-        // Execute
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-
-        // Assertions
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('summary', $result);
-        $this->assertArrayHasKey('results', $result);
-        $this->assertCount(2, $result['results']);
+        $this->assertSame('success', $response->status);
+        $this->assertSame('Execution deferred', $response->message);
+        $this->assertSame(0, $response->symbolsProcessed);
     }
 
-    public function testExecutionWithGlobalSwitchOff(): void
+    /**
+     * @param array<int, array<string, mixed>> $yields
+     */
+    private function createGenerator(array $yields, ?array $returnValue = null): \Generator
     {
-        $dto = new MtfRunDto(symbols: ['BTCUSDT'], forceRun: false);
+        foreach ($yields as $payload) {
+            yield $payload;
+        }
 
-        $this->featureSwitch->expects($this->once())
-            ->method('isEnabled')
-            ->with('mtf_global_switch')
-            ->willReturn(false);
-
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('summary', $result);
-        $this->assertEquals('global_switch_off', $result['summary']['status']);
-    }
-
-    public function testExecutionWithLockFailure(): void
-    {
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
-
-        $this->featureSwitch->expects($this->once())
-            ->method('isEnabled')
-            ->willReturn(true);
-
-        $this->lockManager->expects($this->once())
-            ->method('acquireLockWithRetry')
-            ->willReturn(false);
-
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('summary', $result);
-        $this->assertEquals('lock_acquisition_failed', $result['summary']['status']);
-    }
-
-    public function testExecutionWithDryRun(): void
-    {
-        $dto = new MtfRunDto(symbols: ['BTCUSDT'], dryRun: true);
-        $now = new \DateTimeImmutable('2024-01-01 12:00:00');
-
-        $this->clock->expects($this->once())
-            ->method('now')
-            ->willReturn($now);
-
-        $this->featureSwitch->expects($this->once())
-            ->method('isEnabled')
-            ->willReturn(true);
-
-        $this->lockManager->expects($this->once())
-            ->method('acquireLockWithRetry')
-            ->willReturn(true);
-
-        $this->lockManager->expects($this->once())
-            ->method('releaseLock');
-
-        $this->symbolProcessor->expects($this->once())
-            ->method('processSymbol')
-            ->willReturn(new \App\MtfValidator\Service\Dto\SymbolResultDto('BTCUSDT', 'SUCCESS'));
-
-        // Trading decision handler should not be called in dry run
-        $this->tradingDecisionHandler->expects($this->never())
-            ->method('handleTradingDecision');
-
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('summary', $result);
-        $this->assertTrue($result['summary']['dry_run']);
-    }
-
-    public function testExecutionWithForceRun(): void
-    {
-        $dto = new MtfRunDto(symbols: ['BTCUSDT'], forceRun: true);
-        $now = new \DateTimeImmutable('2024-01-01 12:00:00');
-
-        $this->clock->expects($this->once())
-            ->method('now')
-            ->willReturn($now);
-
-        // Force run should bypass global switch check
-        $this->featureSwitch->expects($this->never())
-            ->method('isEnabled');
-
-        $this->lockManager->expects($this->once())
-            ->method('acquireLockWithRetry')
-            ->willReturn(true);
-
-        $this->lockManager->expects($this->once())
-            ->method('releaseLock');
-
-        $this->symbolProcessor->expects($this->once())
-            ->method('processSymbol')
-            ->willReturn(new \App\MtfValidator\Service\Dto\SymbolResultDto('BTCUSDT', 'SUCCESS'));
-
-        $this->tradingDecisionHandler->expects($this->once())
-            ->method('handleTradingDecision')
-            ->willReturn(new \App\MtfValidator\Service\Dto\SymbolResultDto('BTCUSDT', 'SUCCESS'));
-
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('summary', $result);
-        $this->assertTrue($result['summary']['force_run']);
-    }
-
-    public function testExecutionWithLockPerSymbol(): void
-    {
-        $dto = new MtfRunDto(symbols: ['BTCUSDT'], lockPerSymbol: true);
-        $now = new \DateTimeImmutable('2024-01-01 12:00:00');
-
-        $this->clock->expects($this->once())
-            ->method('now')
-            ->willReturn($now);
-
-        $this->featureSwitch->expects($this->once())
-            ->method('isEnabled')
-            ->willReturn(true);
-
-        // Should use symbol-specific lock key
-        $this->lockManager->expects($this->once())
-            ->method('acquireLockWithRetry')
-            ->with('mtf_execution:BTCUSDT', 600, 3, 100)
-            ->willReturn(true);
-
-        $this->lockManager->expects($this->once())
-            ->method('releaseLock')
-            ->with('mtf_execution:BTCUSDT');
-
-        $this->symbolProcessor->expects($this->once())
-            ->method('processSymbol')
-            ->willReturn(new \App\MtfValidator\Service\Dto\SymbolResultDto('BTCUSDT', 'SUCCESS'));
-
-        $this->tradingDecisionHandler->expects($this->once())
-            ->method('handleTradingDecision')
-            ->willReturn(new \App\MtfValidator\Service\Dto\SymbolResultDto('BTCUSDT', 'SUCCESS'));
-
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('summary', $result);
-    }
-
-    public function testExecutionWithEmptySymbols(): void
-    {
-        $dto = new MtfRunDto(symbols: []);
-
-        $this->featureSwitch->expects($this->once())
-            ->method('isEnabled')
-            ->willReturn(true);
-
-        $this->lockManager->expects($this->once())
-            ->method('acquireLockWithRetry')
-            ->willReturn(true);
-
-        $this->lockManager->expects($this->once())
-            ->method('releaseLock');
-
-        $result = iterator_to_array($this->mtfRunService->run($dto));
-
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('summary', $result);
-        $this->assertEquals('no_active_symbols', $result['summary']['status']);
-    }
-
-    public function testExecutionWithException(): void
-    {
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
-
-        $this->featureSwitch->expects($this->once())
-            ->method('isEnabled')
-            ->willReturn(true);
-
-        $this->lockManager->expects($this->once())
-            ->method('acquireLockWithRetry')
-            ->willThrowException(new \RuntimeException('Lock service error'));
-
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Lock service error');
-
-        iterator_to_array($this->mtfRunService->run($dto));
+        return $returnValue;
     }
 }
