@@ -68,7 +68,7 @@ class MtfRunService implements MtfValidatorInterface
                         $summaryPayload = $result['result'];
                     }
                     if (isset($result['results']) && is_array($result['results'])) {
-                        $symbolResults = $result['results'] + $symbolResults;
+                        $symbolResults = $symbolResults + $result['results'];
                     }
                     continue;
                 }
