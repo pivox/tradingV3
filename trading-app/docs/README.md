@@ -6,14 +6,47 @@ Cette documentation couvre l'ensemble du système de trading V3, avec un focus p
 
 ## 🏗️ Architecture
 
-Le système de trading V3 est composé de plusieurs modules :
+Depuis la refonte MTF 2024, le socle est explicitement découpé entre **Application** (orchestration) et **Infrastructure** (adaptateurs). Ce schéma décrit le flux principal :
 
-- **Système d'indicateurs techniques** : Calculs d'indicateurs avec switch PHP/SQL
-- **Système de trading** : Gestion des positions et ordres
-- **Système de données** : Gestion des bougies et données de marché
-- **Système de monitoring** : Surveillance et alertes
+```mermaid
+flowchart LR
+    Facade(MtfValidatorInterface)
+    Orchestrator(MtfRunOrchestrator)
+    Processor(SymbolProcessor)
+    Service(MtfService \n + Timeframe services)
+    Decision(TradingDecisionHandler)
+    Infra((Providers / Repositories))
+
+    Facade --> Orchestrator --> Processor --> Service --> Decision
+    Decision --> Infra
+    Service --> Infra
+```
+
+- **Application** : façade `MtfValidatorInterface`, orchestrateur et pipeline de décisions.
+- **Domain** : stratégies de validation (ex : High Conviction) et DTOs.
+- **Infrastructure** : repositories Doctrine, clients BitMart, cache Redis/DB.
+
+Les README spécifiques (ex. `src/MtfValidator/README_REFACTORED_ARCHITECTURE.md`) détaillent les responsabilités de chaque couche.
+
+## 🧭 Flux décisionnel MTF
+
+Le pipeline runtime suit trois étapes clefs :
+
+1. **Façade** : `MtfRunService` expose l'interface `MtfValidatorInterface` et transforme les `MtfRunRequestDto` en DTO internes.
+2. **Pipeline** : `MtfRunOrchestrator` séquence le verrouillage, la vérification des switches et l'évaluation des timeframes via `SymbolProcessor`.
+3. **Décision** : `TradingDecisionHandler` applique les règles d'engagement et délègue à `TradeEntryService` (simulateur ou exécution réelle).
+
+Les décisions sont journalisées dans les canaux `order_journey` et `positions_flow`, ce qui permet un suivi bout-en-bout (validation → ordre BitMart).
 
 ## 📖 Documentation disponible
+
+### 🧠 MTF Validator (Contrats 2024)
+
+#### [API Run contractuelle](./MTF_RUN_API.md)
+Documentation des nouvelles options d'exécution (`lock_per_symbol`, `user_id`, `ip_address`) et du flux façade → pipeline → décisions.
+
+#### [Checklist de migration](./MTF_MIGRATION_CHECKLIST.md)
+Liste d'actions pour basculer les intégrations CLI/Temporal et mettre à jour les contrôles d'observabilité.
 
 ### 🎯 Système de Switch PHP/SQL
 

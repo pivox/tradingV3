@@ -19,17 +19,20 @@ class SymbolProcessorTest extends TestCase
     private MtfService $mtfService;
     private LoggerInterface $logger;
     private ClockInterface $clock;
+    private LoggerInterface $orderJourneyLogger;
 
     protected function setUp(): void
     {
         $this->mtfService = $this->createMock(MtfService::class);
         $this->logger = $this->createMock(LoggerInterface::class);
         $this->clock = $this->createMock(ClockInterface::class);
-        
+        $this->orderJourneyLogger = $this->createMock(LoggerInterface::class);
+
         $this->symbolProcessor = new SymbolProcessor(
             $this->mtfService,
             $this->logger,
-            $this->clock
+            $this->clock,
+            $this->orderJourneyLogger
         );
     }
 
@@ -48,15 +51,10 @@ class SymbolProcessorTest extends TestCase
             'atr' => 100.0
         ];
 
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn($mtfResult);
-
         $this->mtfService->expects($this->once())
             ->method('runForSymbol')
-            ->with($runId, $symbol, $now, null, false, false)
-            ->willReturn($generator);
+            ->with($runId, $symbol, $now, null, false, false, false)
+            ->willReturn($this->createGenerator([['result' => $mtfResult]], $mtfResult));
 
         $this->logger->expects($this->once())
             ->method('debug')
@@ -107,14 +105,9 @@ class SymbolProcessorTest extends TestCase
         $dto = new MtfRunDto(symbols: [$symbol]);
         $now = new \DateTimeImmutable('2024-01-01 12:00:00');
 
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn(null);
-
         $this->mtfService->expects($this->once())
             ->method('runForSymbol')
-            ->willReturn($generator);
+            ->willReturn($this->createGenerator([], null));
 
         $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
 
@@ -132,15 +125,10 @@ class SymbolProcessorTest extends TestCase
         $dto = new MtfRunDto(symbols: [$symbol], forceRun: true);
         $now = new \DateTimeImmutable('2024-01-01 12:00:00');
 
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn(['status' => 'SUCCESS']);
-
         $this->mtfService->expects($this->once())
             ->method('runForSymbol')
-            ->with($runId, $symbol, $now, null, false, true)
-            ->willReturn($generator);
+            ->with($runId, $symbol, $now, null, false, true, false)
+            ->willReturn($this->createGenerator([['result' => ['status' => 'SUCCESS']]], ['status' => 'SUCCESS']));
 
         $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
 
@@ -155,15 +143,10 @@ class SymbolProcessorTest extends TestCase
         $dto = new MtfRunDto(symbols: [$symbol], forceTimeframeCheck: true);
         $now = new \DateTimeImmutable('2024-01-01 12:00:00');
 
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn(['status' => 'SUCCESS']);
-
         $this->mtfService->expects($this->once())
             ->method('runForSymbol')
-            ->with($runId, $symbol, $now, null, true, false)
-            ->willReturn($generator);
+            ->with($runId, $symbol, $now, null, true, false, false)
+            ->willReturn($this->createGenerator([['result' => ['status' => 'SUCCESS']]], ['status' => 'SUCCESS']));
 
         $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
 
@@ -178,15 +161,10 @@ class SymbolProcessorTest extends TestCase
         $dto = new MtfRunDto(symbols: [$symbol], currentTf: '1h');
         $now = new \DateTimeImmutable('2024-01-01 12:00:00');
 
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn(['status' => 'SUCCESS']);
-
         $this->mtfService->expects($this->once())
             ->method('runForSymbol')
-            ->with($runId, $symbol, $now, '1h', false, false)
-            ->willReturn($generator);
+            ->with($runId, $symbol, $now, '1h', false, false, false)
+            ->willReturn($this->createGenerator([['result' => ['status' => 'SUCCESS']]], ['status' => 'SUCCESS']));
 
         $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
 
@@ -201,14 +179,9 @@ class SymbolProcessorTest extends TestCase
         $dto = new MtfRunDto(symbols: [$symbol], forceRun: true, forceTimeframeCheck: true);
         $now = new \DateTimeImmutable('2024-01-01 12:00:00');
 
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn(['status' => 'SUCCESS']);
-
         $this->mtfService->expects($this->once())
             ->method('runForSymbol')
-            ->willReturn($generator);
+            ->willReturn($this->createGenerator([['result' => ['status' => 'SUCCESS']]], ['status' => 'SUCCESS']));
 
         $this->logger->expects($this->once())
             ->method('debug')
@@ -241,14 +214,9 @@ class SymbolProcessorTest extends TestCase
             'trading_decision' => ['status' => 'pending']
         ];
 
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn($mtfResult);
-
         $this->mtfService->expects($this->once())
             ->method('runForSymbol')
-            ->willReturn($generator);
+            ->willReturn($this->createGenerator([['result' => $mtfResult]], $mtfResult));
 
         $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
 
@@ -260,5 +228,22 @@ class SymbolProcessorTest extends TestCase
         $this->assertEquals(150.0, $result->atr);
         $this->assertEquals(['trend' => 'bearish'], $result->context);
         $this->assertEquals(['status' => 'pending'], $result->tradingDecision);
+}
+
+    /**
+     * Creates a generator for testing purposes that yields each value in the provided array,
+     * and then returns the specified final result.
+     *
+     * @param array<int,array<string,mixed>> $yields Array of values to yield from the generator.
+     * @param mixed $return The final value to return when the generator is exhausted.
+     * @return \Generator Yields each value in $yields and returns $return.
+     */
+    private function createGenerator(array $yields, mixed $return): \Generator
+    {
+        foreach ($yields as $yield) {
+            yield $yield;
+        }
+
+        return $return;
     }
 }

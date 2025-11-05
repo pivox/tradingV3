@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Command\Mtf;
 
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
-use App\MtfValidator\Service\MtfRunService;
+use App\Contract\MtfValidator\MtfValidatorInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -15,7 +15,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 #[AsCommand(name: 'mtf:run-worker', description: 'Exécute le traitement MTF pour un sous-ensemble de symboles (mode worker).')]
 final class MtfRunWorkerCommand extends Command
 {
-    public function __construct(private readonly MtfRunService $mtfRunService)
+    public function __construct(private readonly MtfValidatorInterface $mtfValidator)
     {
         parent::__construct();
     }
@@ -30,7 +30,10 @@ final class MtfRunWorkerCommand extends Command
             ->addOption('force-timeframe-check', null, InputOption::VALUE_NONE, 'Force l\'analyse du timeframe même si la dernière kline est récente')
             ->addOption('skip-context', null, InputOption::VALUE_NONE, 'Ignorer l\'alignement de contexte pour les TF d\'exécution')
             ->addOption('auto-switch-invalid', null, InputOption::VALUE_NONE, 'Active la gestion auto des symboles INVALID (transmis au service)')
-            ->addOption('switch-duration', null, InputOption::VALUE_OPTIONAL, 'Durée de désactivation pour les INVALID', '1d');
+            ->addOption('switch-duration', null, InputOption::VALUE_OPTIONAL, 'Durée de désactivation pour les INVALID', '1d')
+            ->addOption('lock-per-symbol', null, InputOption::VALUE_NONE, 'Forcer l\'utilisation d\'un verrou par symbole (activé par défaut)')
+            ->addOption('user-id', null, InputOption::VALUE_OPTIONAL, 'Identifiant utilisateur propagé au pipeline MTF')
+            ->addOption('ip-address', null, InputOption::VALUE_OPTIONAL, 'Adresse IP associée à la requête');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -53,6 +56,11 @@ final class MtfRunWorkerCommand extends Command
         $autoSwitchInvalid = (bool) $input->getOption('auto-switch-invalid');
         $skipContext = (bool) $input->getOption('skip-context');
         $switchDuration = (string) $input->getOption('switch-duration');
+        $lockPerSymbol = $input->hasParameterOption('--lock-per-symbol') ? (bool) $input->getOption('lock-per-symbol') : true;
+        $userId = $input->getOption('user-id');
+        $userId = is_string($userId) && $userId !== '' ? $userId : null;
+        $ipAddress = $input->getOption('ip-address');
+        $ipAddress = is_string($ipAddress) && $ipAddress !== '' ? $ipAddress : null;
 
         try {
             // En mode worker, activer le verrou par symbole pour éviter le blocage global
@@ -63,9 +71,11 @@ final class MtfRunWorkerCommand extends Command
                 currentTf: $currentTf,
                 forceTimeframeCheck: $forceTimeframeCheck,
                 skipContextValidation: $skipContext,
-                lockPerSymbol: true
+                lockPerSymbol: $lockPerSymbol,
+                userId: $userId,
+                ipAddress: $ipAddress
             );
-            $response = $this->mtfRunService->run($request);
+            $response = $this->mtfValidator->run($request);
 
             // Convertir les résultats en map symbol => result
             $resultsMap = [];
@@ -88,6 +98,10 @@ final class MtfRunWorkerCommand extends Command
                     'force_timeframe_check' => $forceTimeframeCheck,
                     'auto_switch_invalid' => $autoSwitchInvalid,
                     'switch_duration' => $switchDuration,
+                    'lock_per_symbol' => $lockPerSymbol,
+                    'skip_context' => $skipContext,
+                    'user_id' => $userId,
+                    'ip_address' => $ipAddress,
                 ],
             ];
 
