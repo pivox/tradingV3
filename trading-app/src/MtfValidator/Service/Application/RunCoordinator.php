@@ -25,14 +25,9 @@ use App\Entity\IndicatorSnapshot;
 use App\Repository\IndicatorSnapshotRepository;
 use App\Contract\Signal\SignalValidationServiceInterface;
 use App\MtfValidator\Service\Dto\InternalTimeframeResultDto;
-
-use App\Repository\MtfAuditRepository;
-use App\Repository\MtfStateRepository;
-use App\Repository\MtfSwitchRepository;
 use App\MtfValidator\Service\MtfTimeService;
 use App\MtfValidator\Service\SnapshotPersister;
 use App\MtfValidator\Service\TimeframeCacheService;
-use App\Contract\Signal\SignalValidationServiceInterface;
 use App\MtfValidator\Service\Timeframe\Timeframe4hService;
 use App\MtfValidator\Service\Timeframe\Timeframe1hService;
 use App\MtfValidator\Service\Timeframe\Timeframe15mService;
@@ -618,7 +613,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             // Persister systématiquement un snapshot 4h (même en INVALID)
 
-                $this->timeframeCacheService->storeResult($symbol, '4h', $result4h);
+                $this->timeframeCacheService->putCachedResult($symbol, '4h', $result4h);
             }
             // Persister systématiquement un snapshot 4h (même en INVALID)
             $this->snapshotPersister->persist($symbol, '4h', $result4h);
@@ -672,7 +667,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $forceRun,
                 $skipContextValidation
             );
-              
+
                 $this->timeframeCacheService->storeResult($symbol, '1h', $result1h);
             }
             // Persister systématiquement un snapshot 1h
@@ -1282,20 +1277,15 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $payload['from_cache'] = true;
         }
 
-            skipContextValidation: $skipContextValidation
-        );
-
-        $resultDto = $processor->processTimeframe($symbol, $context);
-        $result = $resultDto->toArray();
-
+        // Mettre à jour le collector avec les données du timeframePipeline
         $collector[] = [
-            'tf' => $resultDto->timeframe,
-            'status' => $resultDto->status,
-            'signal_side' => $resultDto->signalSide ?? 'NONE',
-            'kline_time' => $resultDto->klineTime,
+            'tf' => $internal->timeframe,
+            'status' => $internal->status,
+            'signal_side' => $internal->signalSide ?? 'NONE',
+            'kline_time' => $internal->klineTime,
         ];
 
-        return $result;
+        return $payload;
 
     }
 

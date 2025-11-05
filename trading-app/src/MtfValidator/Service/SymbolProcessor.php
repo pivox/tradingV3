@@ -58,15 +58,17 @@ final class SymbolProcessor
                 $mtfRunDto->skipContextValidation
             );
 
-            // Consommer le generator et récupérer le résultat
-            $result = null;
+            // Consommer le générateur et récupérer le résultat final
+            $lastYieldedResult = null;
             foreach ($mtfGenerator as $mtfYieldedData) {
-                $result = $mtfYieldedData['result'];
+                if (isset($mtfYieldedData['result']) && is_array($mtfYieldedData['result'])) {
+                    $lastYieldedResult = $mtfYieldedData['result'];
+                }
             }
 
-            // Récupérer le résultat final
+            // Le résultat final est soit le return du générateur, soit le dernier résultat yieldé
             $finalResult = $mtfGenerator->getReturn();
-            $symbolResult = $finalResult ?? $result;
+            $symbolResult = is_array($finalResult) ? $finalResult : $lastYieldedResult;
 
             if ($symbolResult === null) {
                 $this->orderJourneyLogger->error('order_journey.symbol_processor.no_result', [
