@@ -613,7 +613,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             // Persister systématiquement un snapshot 4h (même en INVALID)
 
-                $this->timeframeCacheService->storeResult($symbol, '4h', $result4h);
+                $this->timeframeCacheService->putCachedResult($symbol, '4h', $result4h);
             }
             // Persister systématiquement un snapshot 4h (même en INVALID)
             $this->snapshotPersister->persist($symbol, '4h', $result4h);
