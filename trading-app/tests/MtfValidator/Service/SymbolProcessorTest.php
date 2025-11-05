@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace App\Tests\MtfValidator\Service;
 
 use App\Contract\MtfValidator\Dto\MtfRunDto;
+use App\Contract\Provider\Dto\OrderDto;
+use App\MtfValidator\Service\Application\PositionsSnapshot;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
-use App\MtfValidator\Service\MtfService;
 use App\MtfValidator\Service\SymbolProcessor;
+use App\MtfValidator\Service\Timeframe\CascadeTimelineService;
+use App\Repository\MtfSwitchRepository;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
@@ -16,20 +19,28 @@ use Ramsey\Uuid\Uuid;
 class SymbolProcessorTest extends TestCase
 {
     private SymbolProcessor $symbolProcessor;
-    private MtfService $mtfService;
+    private CascadeTimelineService $cascadeService;
     private LoggerInterface $logger;
     private ClockInterface $clock;
+    private MtfSwitchRepository $switchRepository;
+    private PositionsSnapshot $emptySnapshot;
 
     protected function setUp(): void
     {
-        $this->mtfService = $this->createMock(MtfService::class);
+        $this->cascadeService = $this->createMock(CascadeTimelineService::class);
         $this->logger = $this->createMock(LoggerInterface::class);
         $this->clock = $this->createMock(ClockInterface::class);
-        
+        $this->switchRepository = $this->createMock(MtfSwitchRepository::class);
+        $this->emptySnapshot = new PositionsSnapshot([], [], []);
+
+        $this->switchRepository->method('isSymbolSwitchOn')->willReturn(true);
+        $this->switchRepository->method('isSymbolTimeframeSwitchOn')->willReturn(true);
+
         $this->symbolProcessor = new SymbolProcessor(
-            $this->mtfService,
+            $this->cascadeService,
             $this->logger,
-            $this->clock
+            $this->clock,
+            $this->switchRepository,
         );
     }
 
@@ -40,225 +51,113 @@ class SymbolProcessorTest extends TestCase
         $dto = new MtfRunDto(symbols: [$symbol]);
         $now = new \DateTimeImmutable('2024-01-01 12:00:00');
 
-        $mtfResult = [
-            'status' => 'SUCCESS',
-            'execution_tf' => '1m',
-            'signal_side' => 'BUY',
-            'current_price' => 50000.0,
-            'atr' => 100.0
-        ];
+        $expected = new SymbolResultDto(
+            symbol: $symbol,
+            status: 'SUCCESS',
+            executionTf: '1m',
+            signalSide: 'LONG'
+        );
 
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn($mtfResult);
-
-        $this->mtfService->expects($this->once())
-            ->method('runForSymbol')
-            ->with($runId, $symbol, $now, null, false, false)
-            ->willReturn($generator);
+        $this->cascadeService->expects($this->once())
+            ->method('execute')
+            ->with($symbol, $runId, $dto, $now, null, $this->isType('array'))
+            ->willReturn($expected);
 
         $this->logger->expects($this->once())
             ->method('debug')
             ->with('[Symbol Processor] Processing symbol', $this->isType('array'));
 
-        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
+        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now, $this->emptySnapshot);
 
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertEquals($symbol, $result->symbol);
-        $this->assertEquals('SUCCESS', $result->status);
-        $this->assertEquals('1m', $result->executionTf);
-        $this->assertEquals('BUY', $result->signalSide);
-        $this->assertEquals(50000.0, $result->currentPrice);
-        $this->assertEquals(100.0, $result->atr);
+        $this->assertSame($expected, $result);
     }
 
-    public function testProcessSymbolWithError(): void
+    public function testProcessSymbolHandlesException(): void
     {
         $symbol = 'BTCUSDT';
         $runId = Uuid::uuid4();
         $dto = new MtfRunDto(symbols: [$symbol]);
         $now = new \DateTimeImmutable('2024-01-01 12:00:00');
 
-        $this->mtfService->expects($this->once())
-            ->method('runForSymbol')
-            ->willThrowException(new \RuntimeException('MTF service error'));
+        $this->cascadeService->expects($this->once())
+            ->method('execute')
+            ->willThrowException(new \RuntimeException('cascade error'));
 
         $this->logger->expects($this->once())
             ->method('error')
-            ->with('[Symbol Processor] Error processing symbol', $this->callback(function ($data) {
-                return $data['symbol'] === $symbol &&
-                       $data['error'] === 'MTF service error';
+            ->with('[Symbol Processor] Error processing symbol', $this->callback(function (array $context) use ($symbol) {
+                return $context['symbol'] === $symbol && $context['error'] === 'cascade error';
             }));
 
-        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
+        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now, $this->emptySnapshot);
 
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertEquals($symbol, $result->symbol);
         $this->assertEquals('ERROR', $result->status);
         $this->assertIsArray($result->error);
-        $this->assertEquals('MTF service error', $result->error['message']);
     }
 
-    public function testProcessSymbolWithNullResult(): void
+    public function testProcessSymbolOverridesTimeframeWithAdjustments(): void
     {
-        $symbol = 'BTCUSDT';
+        $symbol = 'ETHUSDT';
         $runId = Uuid::uuid4();
         $dto = new MtfRunDto(symbols: [$symbol]);
         $now = new \DateTimeImmutable('2024-01-01 12:00:00');
 
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn(null);
+        $snapshot = new PositionsSnapshot([], [], [
+            $symbol => true,
+        ]);
 
-        $this->mtfService->expects($this->once())
-            ->method('runForSymbol')
-            ->willReturn($generator);
+        $expected = new SymbolResultDto(symbol: $symbol, status: 'SUCCESS');
 
-        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
+        $this->cascadeService->expects($this->once())
+            ->method('execute')
+            ->with($symbol, $runId, $dto, $now, '1m', $this->isType('array'))
+            ->willReturn($expected);
 
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertEquals($symbol, $result->symbol);
-        $this->assertEquals('ERROR', $result->status);
-        $this->assertIsArray($result->error);
-        $this->assertEquals('No result from MTF service', $result->error['message']);
+        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now, $snapshot);
+
+        $this->assertSame($expected, $result);
     }
 
-    public function testProcessSymbolWithForceRun(): void
+    public function testProcessSymbolOverridesTimeframeWithOpenOrders(): void
     {
-        $symbol = 'BTCUSDT';
-        $runId = Uuid::uuid4();
-        $dto = new MtfRunDto(symbols: [$symbol], forceRun: true);
-        $now = new \DateTimeImmutable('2024-01-01 12:00:00');
-
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn(['status' => 'SUCCESS']);
-
-        $this->mtfService->expects($this->once())
-            ->method('runForSymbol')
-            ->with($runId, $symbol, $now, null, false, true)
-            ->willReturn($generator);
-
-        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
-
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertEquals('SUCCESS', $result->status);
-    }
-
-    public function testProcessSymbolWithForceTimeframeCheck(): void
-    {
-        $symbol = 'BTCUSDT';
-        $runId = Uuid::uuid4();
-        $dto = new MtfRunDto(symbols: [$symbol], forceTimeframeCheck: true);
-        $now = new \DateTimeImmutable('2024-01-01 12:00:00');
-
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn(['status' => 'SUCCESS']);
-
-        $this->mtfService->expects($this->once())
-            ->method('runForSymbol')
-            ->with($runId, $symbol, $now, null, true, false)
-            ->willReturn($generator);
-
-        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
-
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertEquals('SUCCESS', $result->status);
-    }
-
-    public function testProcessSymbolWithCurrentTf(): void
-    {
-        $symbol = 'BTCUSDT';
-        $runId = Uuid::uuid4();
-        $dto = new MtfRunDto(symbols: [$symbol], currentTf: '1h');
-        $now = new \DateTimeImmutable('2024-01-01 12:00:00');
-
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn(['status' => 'SUCCESS']);
-
-        $this->mtfService->expects($this->once())
-            ->method('runForSymbol')
-            ->with($runId, $symbol, $now, '1h', false, false)
-            ->willReturn($generator);
-
-        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
-
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertEquals('SUCCESS', $result->status);
-    }
-
-    public function testProcessSymbolLogsCorrectly(): void
-    {
-        $symbol = 'BTCUSDT';
-        $runId = Uuid::uuid4();
-        $dto = new MtfRunDto(symbols: [$symbol], forceRun: true, forceTimeframeCheck: true);
-        $now = new \DateTimeImmutable('2024-01-01 12:00:00');
-
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn(['status' => 'SUCCESS']);
-
-        $this->mtfService->expects($this->once())
-            ->method('runForSymbol')
-            ->willReturn($generator);
-
-        $this->logger->expects($this->once())
-            ->method('debug')
-            ->with('[Symbol Processor] Processing symbol', $this->callback(function ($data) {
-                return $data['symbol'] === $symbol &&
-                       $data['run_id'] === $runId->toString() &&
-                       $data['force_run'] === true &&
-                       $data['force_timeframe_check'] === true;
-            }));
-
-        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
-
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-    }
-
-    public function testProcessSymbolWithComplexResult(): void
-    {
-        $symbol = 'BTCUSDT';
+        $symbol = 'LTCUSDT';
         $runId = Uuid::uuid4();
         $dto = new MtfRunDto(symbols: [$symbol]);
         $now = new \DateTimeImmutable('2024-01-01 12:00:00');
 
-        $mtfResult = [
-            'status' => 'READY',
-            'execution_tf' => '1m',
-            'signal_side' => 'SELL',
-            'current_price' => 45000.0,
-            'atr' => 150.0,
-            'context' => ['trend' => 'bearish'],
-            'trading_decision' => ['status' => 'pending']
-        ];
+        $order = $this->createMock(OrderDto::class);
+        $snapshot = new PositionsSnapshot([], [
+            $symbol => [$order],
+        ], []);
 
-        $generator = $this->createMock(\Generator::class);
-        $generator->expects($this->once())
-            ->method('getReturn')
-            ->willReturn($mtfResult);
+        $expected = new SymbolResultDto(symbol: $symbol, status: 'READY');
 
-        $this->mtfService->expects($this->once())
-            ->method('runForSymbol')
-            ->willReturn($generator);
+        $this->cascadeService->expects($this->once())
+            ->method('execute')
+            ->with($symbol, $runId, $dto, $now, '15m', $this->isType('array'))
+            ->willReturn($expected);
 
-        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now);
+        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now, $snapshot);
 
-        $this->assertInstanceOf(SymbolResultDto::class, $result);
-        $this->assertEquals('READY', $result->status);
-        $this->assertEquals('1m', $result->executionTf);
-        $this->assertEquals('SELL', $result->signalSide);
-        $this->assertEquals(45000.0, $result->currentPrice);
-        $this->assertEquals(150.0, $result->atr);
-        $this->assertEquals(['trend' => 'bearish'], $result->context);
-        $this->assertEquals(['status' => 'pending'], $result->tradingDecision);
+        $this->assertSame($expected, $result);
+    }
+
+    public function testProcessSymbolRespectsCurrentTimeframe(): void
+    {
+        $symbol = 'BNBUSDT';
+        $runId = Uuid::uuid4();
+        $dto = new MtfRunDto(symbols: [$symbol], currentTf: '5m');
+        $now = new \DateTimeImmutable('2024-01-01 12:00:00');
+
+        $expected = new SymbolResultDto(symbol: $symbol, status: 'SUCCESS');
+
+        $this->cascadeService->expects($this->once())
+            ->method('execute')
+            ->with($symbol, $runId, $dto, $now, '5m', $this->isType('array'))
+            ->willReturn($expected);
+
+        $result = $this->symbolProcessor->processSymbol($symbol, $runId, $dto, $now, $this->emptySnapshot);
+
+        $this->assertSame($expected, $result);
     }
 }

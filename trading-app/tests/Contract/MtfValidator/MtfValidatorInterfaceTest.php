@@ -79,6 +79,8 @@ class MtfValidatorInterfaceTest extends TestCase
             symbolsFailed: 0,
             symbolsSkipped: 0,
             successRate: 100.0,
+            contractsProcessed: 2,
+            lastSuccessfulTimeframe: '1m',
             results: ['BTCUSDT' => ['status' => 'success']],
             errors: [],
             timestamp: new \DateTimeImmutable(),
@@ -106,6 +108,8 @@ class MtfValidatorInterfaceTest extends TestCase
             symbolsFailed: 0,
             symbolsSkipped: 0,
             successRate: 100.0,
+            contractsProcessed: 1,
+            lastSuccessfulTimeframe: '1m',
             results: [],
             errors: [],
             timestamp: new \DateTimeImmutable()
@@ -121,6 +125,8 @@ class MtfValidatorInterfaceTest extends TestCase
             symbolsFailed: 1,
             symbolsSkipped: 0,
             successRate: 50.0,
+            contractsProcessed: 2,
+            lastSuccessfulTimeframe: '5m',
             results: [],
             errors: [],
             timestamp: new \DateTimeImmutable()
@@ -136,6 +142,8 @@ class MtfValidatorInterfaceTest extends TestCase
             symbolsFailed: 1,
             symbolsSkipped: 0,
             successRate: 0.0,
+            contractsProcessed: 0,
+            lastSuccessfulTimeframe: null,
             results: [],
             errors: [],
             timestamp: new \DateTimeImmutable()

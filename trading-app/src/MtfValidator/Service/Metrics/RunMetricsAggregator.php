@@ -23,6 +23,8 @@ final class RunMetricsAggregator
     private int $successCount = 0;
     private int $failedCount = 0;
     private int $skippedCount = 0;
+    private int $contractsProcessed = 0;
+    private ?string $lastSuccessfulTimeframe = null;
     /** @var array<string, array> */
     private array $results = [];
 
@@ -249,6 +251,14 @@ final class RunMetricsAggregator
         $status = strtoupper($result->status);
         $this->results[$result->symbol] = $result->toArray();
 
+        if (!$result->isSkipped()) {
+            $this->contractsProcessed++;
+        }
+
+        if ($result->isSuccess() && $result->executionTf !== null) {
+            $this->lastSuccessfulTimeframe = $result->executionTf;
+        }
+
         if ($status === 'SUCCESS') {
             $this->successCount++;
         } elseif ($status === 'ERROR') {
@@ -271,6 +281,8 @@ final class RunMetricsAggregator
             successRate: $this->processedSymbols > 0
                 ? round(($this->successCount / $this->processedSymbols) * 100, 2)
                 : 0.0,
+            contractsProcessed: $this->contractsProcessed,
+            lastSuccessfulTimeframe: $this->lastSuccessfulTimeframe,
             dryRun: $this->runContext?->dryRun ?? false,
             forceRun: $this->runContext?->forceRun ?? false,
             currentTf: $this->runContext?->currentTf,
@@ -306,6 +318,8 @@ final class RunMetricsAggregator
             symbolsFailed: 0,
             symbolsSkipped: 0,
             successRate: 0.0,
+            contractsProcessed: 0,
+            lastSuccessfulTimeframe: null,
             dryRun: $this->runContext?->dryRun ?? false,
             forceRun: $this->runContext?->forceRun ?? false,
             currentTf: $this->runContext?->currentTf,
@@ -348,6 +362,8 @@ final class RunMetricsAggregator
         $this->successCount = 0;
         $this->failedCount = 0;
         $this->skippedCount = 0;
+        $this->contractsProcessed = 0;
+        $this->lastSuccessfulTimeframe = null;
         $this->results = [];
     }
 }
