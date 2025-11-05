@@ -43,15 +43,15 @@
                     </div>
                     <div class="col-md-4">
                         <label for="symbol" class="form-label">Symbole</label>
-                        <input type="text" class="form-control" id="symbol" name="symbol" 
-                               value="{{ app.request.query.get('symbol') }}" 
+                        <input type="text" class="form-control" id="symbol" name="symbol"
+                               value="{{ app.request.query.get('symbol') }}"
                                placeholder="Ex: BTCUSDT">
                     </div>
                     <div class="col-md-4 d-flex align-items-end">
                         <button type="submit" class="btn btn-primary me-2">
                             <i class="bi bi-search"></i> Filtrer
                         </button>
-                        <a href="{{ path('websocket_management') }}" class="btn btn-outline-secondary">
+                        <a href="#" class="btn btn-outline-secondary">
                             <i class="bi bi-x-circle"></i> Effacer
                         </a>
                     </div>
@@ -116,7 +116,7 @@
                     {% for tf in timeframes %}
                     <div class="col-md-2 col-sm-4 col-6 mb-2">
                         <div class="form-check">
-                            <input class="form-check-input timeframe-checkbox" type="checkbox" 
+                            <input class="form-check-input timeframe-checkbox" type="checkbox"
                                    value="{{ tf }}" id="tf_{{ tf }}" checked>
                             <label class="form-check-label" for="tf_{{ tf }}">
                                 <span class="badge bg-secondary">{{ tf }}</span>
@@ -163,7 +163,7 @@
                             {% for contract in contracts %}
                             <tr data-symbol="{{ contract.symbol }}">
                                 <td>
-                                    <input type="checkbox" class="form-check-input contract-checkbox" 
+                                    <input type="checkbox" class="form-check-input contract-checkbox"
                                            value="{{ contract.symbol }}">
                                 </td>
                                 <td>
@@ -181,11 +181,11 @@
                                 <td>{{ contract.type ?? '-' }}</td>
                                 <td>
                                     <div class="btn-group btn-group-sm" role="group">
-                                        <button type="button" class="btn btn-success subscribe-btn" 
+                                        <button type="button" class="btn btn-success subscribe-btn"
                                                 data-symbol="{{ contract.symbol }}">
                                             <i class="bi bi-play"></i>
                                         </button>
-                                        <button type="button" class="btn btn-danger unsubscribe-btn" 
+                                        <button type="button" class="btn btn-danger unsubscribe-btn"
                                                 data-symbol="{{ contract.symbol }}">
                                             <i class="bi bi-stop"></i>
                                         </button>
@@ -298,7 +298,7 @@ $(document).ready(function() {
     function showStatus(message, type = 'info') {
         var icon = 'bi-info-circle';
         var alertClass = 'alert-info';
-        
+
         switch(type) {
             case 'success':
                 icon = 'bi-check-circle';
@@ -315,16 +315,16 @@ $(document).ready(function() {
                 alertClass = 'alert-warning';
                 break;
         }
-        
+
         // Mettre à jour le message principal
         $('#statusMessages')
             .removeClass('alert-info alert-success alert-danger alert-warning')
             .addClass(alertClass)
             .html('<i class="' + icon + '"></i> ' + message);
-        
+
         // Ajouter à l'historique
         addToHistory(message, type);
-        
+
         // Mettre à jour les compteurs
         updateCounters();
     }
@@ -332,10 +332,10 @@ $(document).ready(function() {
     // Fonction pour ajouter une entrée à l'historique
     function addToHistory(message, type) {
         var timestamp = new Date().toLocaleTimeString();
-        var icon = type === 'success' ? 'bi-check-circle text-success' : 
-                   type === 'error' ? 'bi-exclamation-triangle text-danger' : 
+        var icon = type === 'success' ? 'bi-check-circle text-success' :
+                   type === 'error' ? 'bi-exclamation-triangle text-danger' :
                    type === 'warning' ? 'bi-exclamation-circle text-warning' : 'bi-info-circle text-info';
-        
+
         var historyEntry = `
             <div class="d-flex justify-content-between align-items-center py-1 border-bottom">
                 <div>
@@ -345,9 +345,9 @@ $(document).ready(function() {
                 <small class="text-muted">${timestamp}</small>
             </div>
         `;
-        
+
         $('#operationHistory').prepend(historyEntry);
-        
+
         // Limiter l'historique à 10 entrées
         var entries = $('#operationHistory > div');
         if (entries.length > 10) {
@@ -430,16 +430,16 @@ $(document).ready(function() {
             .then(function(results) {
                 var successResults = results.filter(r => r.success);
                 var errorResults = results.filter(r => !r.success);
-                
+
                 if (successResults.length > 0) {
                     var successMessages = successResults.map(r => r.response.message || `${r.symbol}: Succès`);
                     showStatus(
-                        action === 'subscribe' 
+                        action === 'subscribe'
                             ? `✅ Abonnement réussi pour ${successResults.length}/${symbols.length} contrats`
                             : `✅ Désabonnement réussi pour ${successResults.length}/${symbols.length} contrats`,
                         'success'
                     );
-                    
+
                     // Mettre à jour les statuts visuels
                     successResults.forEach(function(result) {
                         if (action === 'subscribe') {
@@ -451,7 +451,7 @@ $(document).ready(function() {
                         }
                     });
                 }
-                
+
                 if (errorResults.length > 0) {
                     var errorMessages = errorResults.map(r => `${r.symbol}: ${r.error || 'Erreur inconnue'}`);
                     showStatus(
@@ -628,7 +628,7 @@ $(document).ready(function() {
         for (var worker in stats) {
             var count = stats[worker];
             var percentage = count > 0 ? Math.round((count / Object.values(stats).reduce((a, b) => a + b, 0)) * 100) : 0;
-            
+
             html += `
                 <div class="col-md-2 col-sm-4 col-6 mb-3">
                     <div class="card text-center">

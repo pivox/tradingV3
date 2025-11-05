@@ -261,39 +261,6 @@ services:
 #      - backend-net
 #      - shared-net
 
-  ws-worker:
-    build: ./ws-worker
-    image: ws-worker:latest
-    working_dir: /var/www/html
-    volumes:
-      - ./ws-worker:/var/www/html
-    command: ["php", "bin/console", "ws:run"]
-    ports:
-      - "8089:8088"
-    environment:
-      <<: *global-env
-      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
-      CTRL_ADDR: 0.0.0.0:8088
-      BITMART_API_SECRET: ${BITMART_SECRET_KEY}
-      BITMART_PUBLIC_WS_URI: wss://openapi-ws-v2.bitmart.com/api?protocol=1.1
-      BITMART_PRIVATE_WS_URI: wss://openapi-ws-v2.bitmart.com/user?protocol=1.1
-      TRADING_APP_BASE_URI: ${TRADING_APP_BASE_URI:-http://trading-app-nginx}
-      TRADING_APP_ORDER_SIGNAL_PATH: ${TRADING_APP_ORDER_SIGNAL_PATH:-/api/ws-worker/orders}
-      TRADING_APP_BALANCE_SIGNAL_PATH: ${TRADING_APP_BALANCE_SIGNAL_PATH:-/api/ws-worker/balance}
-      TRADING_APP_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
-      TRADING_APP_REQUEST_TIMEOUT: ${TRADING_APP_REQUEST_TIMEOUT:-2.0}
-      TRADING_APP_SIGNAL_MAX_RETRIES: ${TRADING_APP_SIGNAL_MAX_RETRIES:-5}
-      TRADING_APP_SIGNAL_FAILURE_LOG: ${TRADING_APP_SIGNAL_FAILURE_LOG:-/var/log/trading/order-signal-failures.log}
-      TRADING_APP_BALANCE_FAILURE_LOG: ${TRADING_APP_BALANCE_FAILURE_LOG:-/var/log/trading/balance-signal-failures.log}
-    depends_on:
-      - trading-app-db
-    networks:
-      - shared-net
-      - trading-app-net
-#    deploy:
-#      replicas: 5   # ← démarre pour ~100 contrats (5 sockets ~500 canaux)
-    restart: always
-
   ##################################
   # TRADING-APP (nouvelle application)
   ##################################
@@ -325,7 +292,6 @@ services:
       LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
       LOG_LEVEL_MAIN: info
       DEFAULT_URI: http://localhost:8082
-      WS_WORKERS: tradingv3-ws-worker-1:8088,tradingv3-ws-worker-2:8088,tradingv3-ws-worker-3:8088,tradingv3-ws-worker-4:8088,tradingv3-ws-worker-5:8088
       LOG_LEVEL_SIGNALS: info
       LOG_LEVEL_POSITIONS: info
       LOG_LEVEL_INDICATORS: info
