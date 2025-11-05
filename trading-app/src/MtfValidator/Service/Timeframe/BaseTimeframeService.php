@@ -87,7 +87,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
             $limit = 270; // fallback
             try {
                 $cfg = $this->mtfConfig->getConfig();
-                $limit = (int)($cfg['timeframes'][$timeframe->value]['guards']['min_bars'] ?? 270);
+                $limit = (int)($cfg['timeframes'][$timeframe->value]['guards']['min_bars'] ?? 220) +2;
             } catch (\Throwable $ex) {
                 $this->logger->error("[MTF] Error loading config for {$timeframe->value}, using default limit", ['error' => $ex->getMessage()]);
             }
