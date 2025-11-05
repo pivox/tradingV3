@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Command\Mtf;
 
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
-use App\MtfValidator\Service\MtfRunService;
+use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Entity\MtfSwitch;
 use App\Contract\Provider\MainProviderInterface;
 use App\Contract\Provider\Dto\ContractDto as ProviderContractDto;
@@ -30,7 +30,7 @@ use Symfony\Component\Process\Process;
 class MtfRunCommand extends Command
 {
     public function __construct(
-        private readonly MtfRunService $mtfRunService,
+        private readonly MtfValidatorInterface $mtfValidator,
         private readonly MainProviderInterface $mainProvider,
         private readonly ContractRepository $contractRepository,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
@@ -50,6 +50,9 @@ class MtfRunCommand extends Command
             ->addOption('sync-contracts', null, InputOption::VALUE_NONE, 'Forcer la synchronisation (fetch + upsert) des contrats au démarrage (activé par défaut)')
             ->addOption('force-timeframe-check', null, InputOption::VALUE_NONE, 'Force l\'analyse du timeframe même si la dernière kline est récente')
             ->addOption('skip-context', null, InputOption::VALUE_NONE, 'Ignorer l\'alignement de contexte pour les TF d\'exécution (bypass de validation contextuelle)')
+            ->addOption('lock-per-symbol', null, InputOption::VALUE_NONE, 'Utiliser des verrous par symbole (recommandé pour exécutions unitaires)')
+            ->addOption('user-id', null, InputOption::VALUE_OPTIONAL, 'Identifiant utilisateur propagé au pipeline MTF')
+            ->addOption('ip-address', null, InputOption::VALUE_OPTIONAL, 'Adresse IP associée à la requête')
             ->addOption('auto-switch-invalid', null, InputOption::VALUE_NONE, 'Ajoute automatiquement les symboles INVALID à mtf_switch après l\'exécution')
             ->addOption('switch-duration', null, InputOption::VALUE_OPTIONAL, 'Durée de désactivation pour les symboles INVALID (ex: 4h, 1d, 1w)', '1d')
             ->addOption('limit', null, InputOption::VALUE_OPTIONAL, 'Nombre maximum de symboles à traiter quand --symbols est absent (0 = illimité)', '0')
@@ -75,6 +78,11 @@ class MtfRunCommand extends Command
         $workers = max(1, (int) $input->getOption('workers'));
         $limitOpt = (int) $input->getOption('limit');
         $limit = $limitOpt < 0 ? 0 : $limitOpt; // 0 = pas de limite
+        $lockPerSymbol = (bool) $input->getOption('lock-per-symbol');
+        $userId = $input->getOption('user-id');
+        $userId = is_string($userId) && $userId !== '' ? $userId : null;
+        $ipAddress = $input->getOption('ip-address');
+        $ipAddress = is_string($ipAddress) && $ipAddress !== '' ? $ipAddress : null;
 
         $io->title('MTF Run');
         $io->text([
@@ -152,6 +160,9 @@ class MtfRunCommand extends Command
                 'skip_context' => $skipContext,
                 'auto_switch_invalid' => $autoSwitchInvalid,
                 'switch_duration' => $switchDuration,
+                'lock_per_symbol' => $lockPerSymbol,
+                'user_id' => $userId,
+                'ip_address' => $ipAddress,
             ];
 
             $io->section($workers > 1 ? sprintf('Exécution MTF en parallèle (%d workers)', $workers) : 'Exécution MTF en cours...');
@@ -205,9 +216,12 @@ class MtfRunCommand extends Command
             forceRun: $options['force_run'],
             currentTf: $options['current_tf'],
             forceTimeframeCheck: $options['force_timeframe_check'],
-            skipContextValidation: (bool)($options['skip_context'] ?? false)
+            skipContextValidation: (bool)($options['skip_context'] ?? false),
+            lockPerSymbol: (bool)($options['lock_per_symbol'] ?? false),
+            userId: $options['user_id'] ?? null,
+            ipAddress: $options['ip_address'] ?? null
         );
-        $response = $this->mtfRunService->run($mtfRunRequestDto);
+        $response = $this->mtfValidator->run($mtfRunRequestDto);
 
         // Construire les détails à partir de la réponse
         $details = [];
@@ -243,6 +257,9 @@ class MtfRunCommand extends Command
             'dry_run' => $options['dry_run'],
             'force_run' => $options['force_run'],
             'current_tf' => $options['current_tf'],
+            'lock_per_symbol' => $options['lock_per_symbol'],
+            'user_id' => $options['user_id'],
+            'ip_address' => $options['ip_address'],
             'timestamp' => $response->timestamp->format('Y-m-d H:i:s'),
             'status' => $response->status === 'success' ? 'completed' : ($response->status === 'partial_success' ? 'completed_with_errors' : 'error'),
         ];
@@ -377,6 +394,9 @@ class MtfRunCommand extends Command
             'dry_run' => $options['dry_run'],
             'force_run' => $options['force_run'],
             'current_tf' => $options['current_tf'],
+            'lock_per_symbol' => $options['lock_per_symbol'],
+            'user_id' => $options['user_id'],
+            'ip_address' => $options['ip_address'],
             'timestamp' => date('Y-m-d H:i:s'),
             'status' => empty($errors) ? 'completed' : 'completed_with_errors',
         ];
@@ -544,6 +564,15 @@ class MtfRunCommand extends Command
         }
         if (!empty($options['skip_context'])) {
             $command[] = '--skip-context';
+        }
+        if (!empty($options['lock_per_symbol'])) {
+            $command[] = '--lock-per-symbol';
+        }
+        if (!empty($options['user_id'])) {
+            $command[] = '--user-id=' . $options['user_id'];
+        }
+        if (!empty($options['ip_address'])) {
+            $command[] = '--ip-address=' . $options['ip_address'];
         }
 
         return $command;
