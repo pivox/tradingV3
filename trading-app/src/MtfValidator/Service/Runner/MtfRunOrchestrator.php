@@ -331,6 +331,7 @@ final class MtfRunOrchestrator
             ],
         ];
 
-        return ['summary' => $summary->toArray(), 'results' => $results];
+        // Yield le summary pour qu'il soit accessible via foreach
+        yield ['summary' => $summary->toArray(), 'results' => $results];
     }
 }
