@@ -12,7 +12,7 @@ final class TpSlTwoTargetsRequest
         public readonly Side $side,
         public readonly ?float $entryPrice = null,
         public readonly ?int $size = null,
-        public readonly ?float $rMultiple = null,
+        public readonly ?float $rMultiple = 2.0,
         public readonly ?float $splitPct = null,
         public readonly ?bool $cancelExistingStopLossIfDifferent = true,
         public readonly ?bool $cancelExistingTakeProfits = true,
