@@ -102,6 +102,8 @@ class MtfRunService implements MtfValidatorInterface
             $symbolsSuccessful = 0;
             $symbolsFailed = 0;
             $symbolsSkipped = 0;
+            $contractsProcessed = 0;
+            $lastSuccessfulTimeframe = null;
             $errors = [];
 
             foreach ($finalResults as $symbol => $result) {
@@ -110,9 +112,14 @@ class MtfRunService implements MtfValidatorInterface
                 switch ($state) {
                     case 'SUCCESS':
                         $symbolsSuccessful++;
+                        $contractsProcessed++;
+                        if (isset($result['execution_tf']) && is_string($result['execution_tf'])) {
+                            $lastSuccessfulTimeframe = $result['execution_tf'];
+                        }
                         break;
                     case 'ERROR':
                         $symbolsFailed++;
+                        $contractsProcessed++;
                         $errors[] = [
                             'symbol' => is_string($symbol) ? $symbol : ($result['symbol'] ?? null),
                             'details' => $result,
@@ -121,6 +128,11 @@ class MtfRunService implements MtfValidatorInterface
                     case 'SKIPPED':
                     case 'GRACE_WINDOW':
                         $symbolsSkipped++;
+                        break;
+                    default:
+                        if ($state !== '') {
+                            $contractsProcessed++;
+                        }
                         break;
                 }
             }
@@ -143,6 +155,8 @@ class MtfRunService implements MtfValidatorInterface
                 $symbolsSkipped,
                 $successRate,
                 $status,
+                $contractsProcessed,
+                $lastSuccessfulTimeframe,
                 $summaryPayload
             );
 

@@ -54,6 +54,8 @@ final class ContractMapper
         int $symbolsSkipped,
         float $successRate,
         string $status,
+        int $contractsProcessed,
+        ?string $lastSuccessfulTimeframe,
         ?array $summaryPayload = null
     ): InternalRunSummaryDto {
         $timestamp = self::extractTimestamp($summaryPayload['timestamp'] ?? null) ?? new \DateTimeImmutable();
@@ -68,6 +70,8 @@ final class ContractMapper
             symbolsFailed: $symbolsFailed,
             symbolsSkipped: $symbolsSkipped,
             successRate: $successRate,
+            contractsProcessed: $contractsProcessed,
+            lastSuccessfulTimeframe: $lastSuccessfulTimeframe,
             dryRun: $internal->dryRun,
             forceRun: $internal->forceRun,
             currentTf: $internal->currentTf,
@@ -92,6 +96,8 @@ final class ContractMapper
             symbolsFailed: $summary->symbolsFailed,
             symbolsSkipped: $summary->symbolsSkipped,
             successRate: $summary->successRate,
+            contractsProcessed: $summary->contractsProcessed,
+            lastSuccessfulTimeframe: $summary->lastSuccessfulTimeframe,
             results: $results,
             errors: $errors,
             timestamp: $summary->timestamp,

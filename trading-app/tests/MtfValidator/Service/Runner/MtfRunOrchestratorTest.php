@@ -8,6 +8,8 @@ use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\Contract\Runtime\FeatureSwitchInterface;
 use App\Contract\Runtime\LockManagerInterface;
+use App\MtfValidator\Service\Application\PositionsSnapshot;
+use App\MtfValidator\Service\Application\PositionsSnapshotService;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\MtfValidator\Service\Runner\MtfRunOrchestrator;
 use App\MtfValidator\Service\SymbolProcessor;
@@ -27,6 +29,8 @@ class MtfRunOrchestratorTest extends TestCase
     private FeatureSwitchInterface $featureSwitch;
     private LoggerInterface $logger;
     private ClockInterface $clock;
+    private PositionsSnapshotService $positionsSnapshotService;
+    private PositionsSnapshot $positionsSnapshot;
 
     protected function setUp(): void
     {
@@ -37,9 +41,21 @@ class MtfRunOrchestratorTest extends TestCase
         $this->featureSwitch = $this->createMock(FeatureSwitchInterface::class);
         $this->logger = $this->createMock(LoggerInterface::class);
         $this->clock = $this->createMock(ClockInterface::class);
+        $this->positionsSnapshotService = $this->createMock(PositionsSnapshotService::class);
+        $this->positionsSnapshot = new PositionsSnapshot([], [], []);
+
+        $this->positionsSnapshotService->method('buildSnapshot')
+            ->willReturn($this->positionsSnapshot);
+        $this->positionsSnapshotService->method('filterSymbols')
+            ->willReturnCallback(static fn(MtfRunDto $dto, PositionsSnapshot $snapshot): array => $dto->symbols);
+        $this->positionsSnapshotService->method('applySymbolOutcome')
+            ->willReturn(null);
+        $this->positionsSnapshotService->method('refreshAfterRun')
+            ->willReturn(null);
 
         $this->orchestrator = new MtfRunOrchestrator(
             $this->symbolProcessor,
+            $this->positionsSnapshotService,
             $this->tradingDecisionHandler,
             $this->lockManager,
             $this->auditLogger,
@@ -77,7 +93,7 @@ class MtfRunOrchestratorTest extends TestCase
 
         $this->symbolProcessor->expects($this->once())
             ->method('processSymbol')
-            ->with('BTCUSDT', $runId, $dto, $now)
+            ->with('BTCUSDT', $runId, $dto, $now, $this->positionsSnapshot)
             ->willReturn($symbolResult);
 
         $this->tradingDecisionHandler->expects($this->once())

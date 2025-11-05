@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\MtfValidator\Service;
 
 use App\Contract\MtfValidator\Dto\MtfRunDto;
+use App\MtfValidator\Service\Application\PositionsSnapshot;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
-use App\MtfValidator\Service\MtfService;
+use App\MtfValidator\Service\Timeframe\CascadeTimelineService;
+use App\Repository\MtfSwitchRepository;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;
@@ -18,9 +20,10 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class SymbolProcessor
 {
     public function __construct(
-        private readonly MtfService $mtfService,
+        private readonly CascadeTimelineService $cascadeTimelineService,
         private readonly LoggerInterface $logger,
         private readonly ClockInterface $clock,
+        private readonly MtfSwitchRepository $switchRepository,
         #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
@@ -31,7 +34,8 @@ final class SymbolProcessor
         string $symbol,
         UuidInterface $runId,
         MtfRunDto $mtfRunDto,
-        \DateTimeImmutable $now
+        \DateTimeImmutable $now,
+        PositionsSnapshot $snapshot
     ): SymbolResultDto {
         $this->logger->debug('[Symbol Processor] Processing symbol', [
             'symbol' => $symbol,
@@ -48,64 +52,30 @@ final class SymbolProcessor
         ]);
 
         try {
-            $mtfGenerator = $this->mtfService->runForSymbol(
-                $runId,
+            $symbolContext = $snapshot->getSymbolContext($symbol);
+            $overrideTf = $this->resolveTimeframeOverride($symbol, $mtfRunDto, $symbolContext);
+
+            $result = $this->cascadeTimelineService->execute(
                 $symbol,
+                $runId,
+                $mtfRunDto,
                 $now,
-                $mtfRunDto->currentTf,
-                $mtfRunDto->forceTimeframeCheck,
-                $mtfRunDto->forceRun,
-                $mtfRunDto->skipContextValidation
+                $overrideTf,
+                $symbolContext
             );
-
-            // Consommer le générateur et récupérer le résultat final
-            $lastYieldedResult = null;
-            foreach ($mtfGenerator as $mtfYieldedData) {
-                if (isset($mtfYieldedData['result']) && is_array($mtfYieldedData['result'])) {
-                    $lastYieldedResult = $mtfYieldedData['result'];
-                }
-            }
-
-            // Le résultat final est soit le return du générateur, soit le dernier résultat yieldé
-            $finalResult = $mtfGenerator->getReturn();
-            $symbolResult = is_array($finalResult) ? $finalResult : $lastYieldedResult;
-
-            if ($symbolResult === null) {
-                $this->orderJourneyLogger->error('order_journey.symbol_processor.no_result', [
-                    'symbol' => $symbol,
-                    'run_id' => $runId->toString(),
-                    'decision_key' => $decisionKey,
-                    'reason' => 'mtf_service_returned_null',
-                ]);
-                return new SymbolResultDto(
-                    symbol: $symbol,
-                    status: 'ERROR',
-                    error: ['message' => 'No result from MTF service']
-                );
-            }
 
             $this->orderJourneyLogger->info('order_journey.symbol_processor.completed', [
                 'symbol' => $symbol,
                 'run_id' => $runId->toString(),
                 'decision_key' => $decisionKey,
-                'status' => $symbolResult['status'] ?? 'UNKNOWN',
-                'execution_tf' => $symbolResult['execution_tf'] ?? null,
-                'signal_side' => $symbolResult['signal_side'] ?? null,
+                'status' => $result->status,
+                'execution_tf' => $result->executionTf,
+                'signal_side' => $result->signalSide,
+                'override_tf' => $overrideTf,
                 'reason' => 'mtf_symbol_processing_end',
             ]);
 
-            return new SymbolResultDto(
-                symbol: $symbol,
-                status: $symbolResult['status'] ?? 'UNKNOWN',
-                executionTf: $symbolResult['execution_tf'] ?? null,
-                failedTimeframe: $symbolResult['failed_timeframe'] ?? null,
-                signalSide: $symbolResult['signal_side'] ?? null,
-                tradingDecision: $symbolResult['trading_decision'] ?? null,
-                error: $symbolResult['error'] ?? null,
-                context: $symbolResult['context'] ?? null,
-                currentPrice: $symbolResult['current_price'] ?? null,
-                atr: $symbolResult['atr'] ?? null
-            );
+            return $result;
 
         } catch (\Throwable $e) {
             $this->logger->error('[Symbol Processor] Error processing symbol', [
@@ -130,5 +100,43 @@ final class SymbolProcessor
                 ]
             );
         }
+    }
+
+    private function resolveTimeframeOverride(string $symbol, MtfRunDto $dto, array $symbolContext): ?string
+    {
+        if ($dto->currentTf !== null) {
+            return $dto->currentTf;
+        }
+
+        if (!$this->switchRepository->isSymbolSwitchOn($symbol)) {
+            return '15m';
+        }
+
+        if (!$this->switchRepository->isSymbolTimeframeSwitchOn($symbol, '1m')) {
+            return '1m';
+        }
+
+        $ordersCount = 0;
+        if (isset($symbolContext['orders']) && is_iterable($symbolContext['orders'])) {
+            if (is_array($symbolContext['orders']) || $symbolContext['orders'] instanceof \Countable) {
+                $ordersCount = count($symbolContext['orders']);
+            } else {
+                foreach ($symbolContext['orders'] as $_) {
+                    $ordersCount++;
+                }
+            }
+        }
+
+        $adjustmentRequested = (bool)($symbolContext['adjustment_requested'] ?? false);
+
+        if ($adjustmentRequested) {
+            return '1m';
+        }
+
+        if ($ordersCount > 0) {
+            return '15m';
+        }
+
+        return null;
     }
 }

@@ -546,9 +546,6 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
 
             if (($result['status'] ?? null) !== 'VALID') {
-                $this->auditStep($runId, $symbol, strtoupper($currentTf) . '_VALIDATION_FAILED', $result['reason'] ?? "$currentTf validation failed", [
-                    'from_cache' => (bool)($result['from_cache'] ?? false),
-                ]);
                 return $result + ['failed_timeframe' => $currentTf];
             }
 
@@ -622,19 +619,6 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
 
             if (($result4h['status'] ?? null) !== 'VALID') {
-                $this->auditStep($runId, $symbol, '4H_VALIDATION_FAILED', $result4h['reason'] ?? '4H validation failed', [
-                    'timeframe' => '4h',
-                    'kline_time' => $result4h['kline_time'] ?? null,
-                    'failed_conditions_long' => $result4h['failed_conditions_long'] ?? [],
-                    'failed_conditions_short' => $result4h['failed_conditions_short'] ?? [],
-                    'conditions_long' => $result4h['conditions_long'] ?? [],
-                    'conditions_short' => $result4h['conditions_short'] ?? [],
-                    'current_price' => $result4h['current_price'] ?? null,
-                    'atr' => $result4h['atr'] ?? null,
-                    'passed' => false,
-                    'severity' => 2,
-                    'from_cache' => (bool)($result4h['from_cache'] ?? false),
-                ]);
                 return $result4h + ['failed_timeframe' => '4h'];
             }
             $this->timeframe4hService->updateState($symbol, $result4h);
@@ -679,19 +663,6 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             if (($result1h['status'] ?? null) !== 'VALID') {
                 $this->logger->info('[MTF] 1h not VALID, stop cascade', ['symbol' => $symbol, 'reason' => $result1h['reason'] ?? null]);
-                $this->auditStep($runId, $symbol, '1H_VALIDATION_FAILED', $result1h['reason'] ?? '1H validation failed', [
-                    'timeframe' => '1h',
-                    'kline_time' => $result1h['kline_time'] ?? null,
-                    'failed_conditions_long' => $result1h['failed_conditions_long'] ?? [],
-                    'failed_conditions_short' => $result1h['failed_conditions_short'] ?? [],
-                    'conditions_long' => $result1h['conditions_long'] ?? [],
-                    'conditions_short' => $result1h['conditions_short'] ?? [],
-                    'current_price' => $result1h['current_price'] ?? null,
-                    'atr' => $result1h['atr'] ?? null,
-                    'passed' => false,
-                    'severity' => 2,
-                    'from_cache' => (bool)($result1h['from_cache'] ?? false),
-                ]);
                 return $result1h + ['failed_timeframe' => '1h'];
             }
             if ($include4h) {
@@ -753,19 +724,6 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
 
             if (($result15m['status'] ?? null) !== 'VALID') {
-                $this->auditStep($runId, $symbol, '15M_VALIDATION_FAILED', $result15m['reason'] ?? '15M validation failed', [
-                    'timeframe' => '15m',
-                    'kline_time' => $result15m['kline_time'] ?? null,
-                    'failed_conditions_long' => $result15m['failed_conditions_long'] ?? [],
-                    'failed_conditions_short' => $result15m['failed_conditions_short'] ?? [],
-                    'conditions_long' => $result15m['conditions_long'] ?? [],
-                    'conditions_short' => $result15m['conditions_short'] ?? [],
-                    'current_price' => $result15m['current_price'] ?? null,
-                    'atr' => $result15m['atr'] ?? null,
-                    'passed' => false,
-                    'severity' => 2,
-                    'from_cache' => (bool)($result15m['from_cache'] ?? false),
-                ]);
                 return $result15m + ['failed_timeframe' => '15m'];
             }
             // Règle: 15m doit matcher 1h si 1h est inclus
@@ -842,19 +800,6 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
 
             if (($result5m['status'] ?? null) !== 'VALID') {
-                $this->auditStep($runId, $symbol, '5M_VALIDATION_FAILED', $result5m['reason'] ?? '5M validation failed', [
-                    'timeframe' => '5m',
-                    'kline_time' => $result5m['kline_time'] ?? null,
-                    'failed_conditions_long' => $result5m['failed_conditions_long'] ?? [],
-                    'failed_conditions_short' => $result5m['failed_conditions_short'] ?? [],
-                    'conditions_long' => $result5m['conditions_long'] ?? [],
-                    'conditions_short' => $result5m['conditions_short'] ?? [],
-                    'current_price' => $result5m['current_price'] ?? null,
-                    'atr' => $result5m['atr'] ?? null,
-                    'passed' => false,
-                    'severity' => 2,
-                    'from_cache' => (bool)($result5m['from_cache'] ?? false),
-                ]);
                 return $result5m + ['failed_timeframe' => '5m'];
             }
             // Règle: 5m doit matcher 15m si 15m est inclus
@@ -931,19 +876,6 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
 
             if (($result1m['status'] ?? null) !== 'VALID') {
-                $this->auditStep($runId, $symbol, '1M_VALIDATION_FAILED', $result1m['reason'] ?? '1M validation failed', [
-                    'timeframe' => '1m',
-                    'kline_time' => $result1m['kline_time'] ?? null,
-                    'failed_conditions_long' => $result1m['failed_conditions_long'] ?? [],
-                    'failed_conditions_short' => $result1m['failed_conditions_short'] ?? [],
-                    'conditions_long' => $result1m['conditions_long'] ?? [],
-                    'conditions_short' => $result1m['conditions_short'] ?? [],
-                    'current_price' => $result1m['current_price'] ?? null,
-                    'atr' => $result1m['atr'] ?? null,
-                    'passed' => false,
-                    'severity' => 2,
-                    'from_cache' => (bool)($result1m['from_cache'] ?? false),
-                ]);
                 return $result1m + ['failed_timeframe' => '1m'];
             }
 

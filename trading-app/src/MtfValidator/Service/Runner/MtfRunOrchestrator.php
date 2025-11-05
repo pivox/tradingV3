@@ -7,6 +7,7 @@ namespace App\MtfValidator\Service\Runner;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\FeatureSwitchInterface;
 use App\Contract\Runtime\LockManagerInterface;
+use App\MtfValidator\Service\Application\PositionsSnapshotService;
 use App\MtfValidator\Service\Dto\Internal\InternalRunSummaryDto;
 use App\MtfValidator\Service\SymbolProcessor;
 use App\MtfValidator\Service\TradingDecisionHandler;
@@ -23,6 +24,7 @@ final class MtfRunOrchestrator
 {
     public function __construct(
         private readonly SymbolProcessor $symbolProcessor,
+        private readonly PositionsSnapshotService $positionsSnapshotService,
         private readonly TradingDecisionHandler $tradingDecisionHandler,
         private readonly LockManagerInterface $lockManager,
         private readonly FeatureSwitchInterface $featureSwitch,
@@ -61,9 +63,12 @@ final class MtfRunOrchestrator
             return;
         }
 
+        $snapshot = null;
+        $snapshotRefreshed = false;
+
         try {
-            // Utiliser la liste de symboles fournie par le DTO
-            $symbols = $mtfRunDto->symbols;
+            $snapshot = $this->positionsSnapshotService->buildSnapshot($mtfRunDto);
+            $symbols = $this->positionsSnapshotService->filterSymbols($mtfRunDto, $snapshot);
             if (empty($symbols)) {
                 yield from $this->yieldEmptyResult($mtfRunDto, $runId, $startTime);
                 return;
@@ -86,7 +91,8 @@ final class MtfRunOrchestrator
                     $symbol,
                     $runId,
                     $mtfRunDto,
-                    $this->clock->now()
+                    $this->clock->now(),
+                    $snapshot
                 );
 
                 $this->metricsAggregator->symbolMtfResult($symbolResult);
@@ -106,6 +112,12 @@ final class MtfRunOrchestrator
                 $results[$symbol] = $symbolResult->toArray();
                 $this->metricsAggregator->recordSymbolResult($symbolResult);
 
+                $this->positionsSnapshotService->applySymbolOutcome(
+                    $symbol,
+                    $snapshot->getSymbolContext($symbol),
+                    $symbolResult->toArray()
+                );
+
                 // Yield progress
                 yield [
                     'symbol' => $symbol,
@@ -122,9 +134,22 @@ final class MtfRunOrchestrator
 
             $summary = $this->metricsAggregator->completeRun(microtime(true) - $startTime);
 
+            $this->positionsSnapshotService->refreshAfterRun();
+            $snapshotRefreshed = true;
+
             yield from $this->yieldFinalResult($summary, $results, $startTime, $runId);
 
         } finally {
+            if ($snapshot !== null && !$snapshotRefreshed) {
+                try {
+                    $this->positionsSnapshotService->refreshAfterRun();
+                } catch (\Throwable $exception) {
+                    $this->logger->warning('[MTF Orchestrator] Failed to refresh snapshot after run', [
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
+            }
+
             $this->lockManager->releaseLock($lockKey);
             $this->metricsAggregator->lockReleased($lockKey);
             $this->metricsAggregator->reset();
