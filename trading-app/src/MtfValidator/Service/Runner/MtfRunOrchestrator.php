@@ -182,10 +182,20 @@ final class MtfRunOrchestrator
 
         } finally {
             $this->lockManager->releaseLock($lockKey);
-            $this->orderJourneyLogger->debug('order_journey.orchestrator.lock_released', [
+            // Extraire le symbol du lock_key si disponible
+            $symbol = null;
+            if (strpos($lockKey, ':') !== false) {
+                $parts = explode(':', $lockKey);
+                $symbol = $parts[1] ?? null;
+            }
+            $logContext = [
                 'run_id' => $runIdString,
                 'lock_key' => $lockKey,
-            ]);
+            ];
+            if ($symbol) {
+                $logContext['symbol'] = $symbol;
+            }
+            $this->orderJourneyLogger->debug('order_journey.orchestrator.lock_released', $logContext);
         }
     }
 

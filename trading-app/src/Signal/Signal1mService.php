@@ -65,7 +65,7 @@ final class Signal1mService extends AbstractSignal
             'timestamp'=>time(),
             'indicator_context'=>$context
         ];
-        $this->signalsLogger->info('signals.tick',['tf'=>$tf,'signal'=>$signal]);
+        $this->signalsLogger->info('signals.tick',['symbol'=>$contract->getSymbol(),'tf'=>$tf,'signal'=>$signal]);
         return $out;
     }
 
