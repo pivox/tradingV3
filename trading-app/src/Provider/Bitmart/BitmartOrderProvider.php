@@ -100,9 +100,9 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     'stopPrice' => $stopPrice,
                     'options' => $options,
                 ];
-                
+
                 $intent = $this->intentManager->createIntent($payload, $quantization, $rawInputs);
-                
+
                 // Valider l'intent (validation basique)
                 $validationErrors = $this->validateOrderParams($payload);
                 if (!$this->intentManager->validateIntent($intent, $validationErrors)) {
@@ -112,7 +112,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                         'errors' => $validationErrors,
                     ]);
                 }
-                
+
                 $this->intentManager->markReadyToSend($intent);
             }
 
@@ -285,7 +285,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
             try {
                 $response = $this->bitmartClient->cancelOrder($orderId);
                 $success = isset($response['data']['result']) && $response['data']['result'] === 'success';
-                
+
                 // Marquer l'intent comme CANCELLED si succès
                 if ($success && $intent && $this->intentManager) {
                     try {
@@ -297,7 +297,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                         ]);
                     }
                 }
-                
+
                 return $success;
             } catch (\Throwable $e) {
                 $lastError = $e;
