@@ -66,6 +66,7 @@ final class TradeTpSlController extends AbstractController
             mtfValidCount: isset($data['mtf_valid_count']) ? (int)$data['mtf_valid_count'] : null,
             pullbackClear: isset($data['pullback_clear']) ? (bool)$data['pullback_clear'] : null,
             lateEntry: isset($data['late_entry']) ? (bool)$data['late_entry'] : null,
+            dryRun: isset($data['dry_run']) ? (bool)$data['dry_run'] : false,
         );
 
         try {
@@ -77,6 +78,7 @@ final class TradeTpSlController extends AbstractController
         return new JsonResponse([
             'symbol' => $dto->symbol,
             'side' => $side->value,
+            'dry_run' => $dto->dryRun ?? false,
             'sl' => $result['sl'],
             'tp1' => $result['tp1'],
             'tp2' => $result['tp2'],
