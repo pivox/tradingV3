@@ -89,7 +89,7 @@ final class SignalValidationService implements SignalValidationServiceInterface
      * @param Kline[] $klines
      * @param array<string,array{signal?:string}> $knownSignals
      */
-    public function validate(string $tf, array $klines, array $knownSignals = [], ?Contract $contract = null): SignalValidationResultDto
+    public function validate(string $tf, array $klines, array $knownSignals = [], ?Contract $contract = null, bool $skipContextValidation = false): SignalValidationResultDto
     {
         $tfLower = strtolower($tf);
         $service = $this->findService($tfLower);
@@ -140,8 +140,13 @@ final class SignalValidationService implements SignalValidationServiceInterface
                 $alignedPartial = (count($nonNonePart) === 1 && count($uniquePart) === 1);
                 $status = ($alignedPartial && !$currentSignal->isNone()) ? 'PENDING' : 'FAILED';
             }
-        } elseif ($isExecutionTf && $summary['context_fully_aligned'] && $currentSignalValue === $summary['context_dir'] && !$currentSignal->isNone()) {
-            $status = 'VALIDATED';
+        } elseif ($isExecutionTf) {
+            // Si skipContextValidation est activé, bypass la validation de contexte pour les TF d'exécution
+            if ($skipContextValidation && !$currentSignal->isNone()) {
+                $status = 'VALIDATED';
+            } elseif ($summary['context_fully_aligned'] && $currentSignalValue === $summary['context_dir'] && !$currentSignal->isNone()) {
+                $status = 'VALIDATED';
+            }
         }
 
         $evaluationDto = new SignalEvaluationDto(
