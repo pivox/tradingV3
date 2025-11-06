@@ -11,8 +11,10 @@ class MtfValidationConfig
 
     public function __construct(?string $path = null)
     {
-        $this->path = $path ?? \dirname(__DIR__, 2) . '/config/app/mtf_validations.yaml';
-        $this->config = Yaml::parseFile($this->path)['mtf_validation'] ?? [];
+        // Nouveau chemin par défaut: src/MtfValidator/config/validations.yaml
+        $this->path = $path ?? \dirname(__DIR__, 2) . '/src/MtfValidator/config/validations.yaml';
+        $parsed = Yaml::parseFile($this->path) ?? [];
+        $this->config = $parsed['mtf_validation'] ?? [];
     }
 
     public function getConfig(): array
