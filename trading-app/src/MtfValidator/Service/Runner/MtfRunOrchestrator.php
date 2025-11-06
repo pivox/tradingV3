@@ -8,12 +8,15 @@ use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\Contract\Runtime\FeatureSwitchInterface;
 use App\Contract\Runtime\LockManagerInterface;
+use App\Contract\Provider\OrderProviderInterface;
+use App\Contract\Provider\AccountProviderInterface;
 use App\Config\MtfValidationConfig;
 use App\MtfValidator\Service\Dto\MtfRunResultDto;
 use App\MtfValidator\Service\Dto\RunSummaryDto;
 use App\MtfValidator\Service\SymbolProcessor;
 use App\MtfValidator\Service\TradingDecisionHandler;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
+use App\Repository\MtfSwitchRepository;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;
@@ -35,6 +38,9 @@ final class MtfRunOrchestrator
         private readonly ClockInterface $clock,
         private readonly MtfValidationConfig $mtfConfig,
         #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $orderJourneyLogger,
+        private readonly ?AccountProviderInterface $accountProvider = null,
+        private readonly ?OrderProviderInterface $orderProvider = null,
+        private readonly ?MtfSwitchRepository $mtfSwitchRepository = null,
     ) {}
 
     /**
@@ -83,6 +89,20 @@ final class MtfRunOrchestrator
             // Utiliser la liste de symboles fournie par le DTO
             $symbols = $mtfRunDto->symbols;
             if (empty($symbols)) {
+                yield from $this->yieldEmptyResult($mtfRunDto, $runId, $startTime);
+                return;
+            }
+
+            // Filtrer les symboles avec ordres/positions ouverts et désactiver le switch,
+            // sauf si déjà filtrés en amont (workers/contrôleur)
+            if (!$mtfRunDto->skipOpenStateFilter) {
+                $symbols = $this->filterSymbolsWithOpenOrdersOrPositions($symbols, $runIdString);
+            }
+
+            if (empty($symbols)) {
+                $this->logger->info('[MTF Orchestrator] All symbols filtered out (have open orders/positions)', [
+                    'run_id' => $runIdString,
+                ]);
                 yield from $this->yieldEmptyResult($mtfRunDto, $runId, $startTime);
                 return;
             }
@@ -333,5 +353,150 @@ final class MtfRunOrchestrator
 
         // Yield le summary pour qu'il soit accessible via foreach
         yield ['summary' => $summary->toArray(), 'results' => $results];
+    }
+
+    /**
+     * Filtre les symboles ayant des ordres ou positions ouverts
+     * Désactive le switch pour ces symboles (1 min si déjà OFF, 15 min sinon)
+     * Retourne la liste des symboles à exclure de la boucle
+     */
+    public function filterSymbolsWithOpenOrdersOrPositions(array $symbols, string $runIdString): array
+    {
+        if (empty($symbols) || (!$this->accountProvider && !$this->orderProvider)) {
+            return $symbols;
+        }
+
+        $symbolsToExclude = [];
+        $symbolsToProcess = [];
+
+        // Récupérer les symboles avec positions ouvertes depuis l'exchange
+        $openPositionSymbols = [];
+        if ($this->accountProvider) {
+            try {
+                $openPositions = $this->accountProvider->getOpenPositions();
+                $this->logger->debug('[MTF Orchestrator] Fetched open positions', [
+                    'run_id' => $runIdString,
+                    'count' => count($openPositions),
+                ]);
+                
+                foreach ($openPositions as $position) {
+                    // PositionDto a une propriété symbol
+                    $positionSymbol = strtoupper($position->symbol ?? '');
+                    if ($positionSymbol !== '' && !in_array($positionSymbol, $openPositionSymbols, true)) {
+                        $openPositionSymbols[] = $positionSymbol;
+                        $this->logger->debug('[MTF Orchestrator] Found open position', [
+                            'run_id' => $runIdString,
+                            'symbol' => $positionSymbol,
+                            'size' => $position->size->toFloat(),
+                        ]);
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('[MTF Orchestrator] Failed to fetch open positions from exchange', [
+                    'run_id' => $runIdString,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+            }
+        }
+
+        // Récupérer les symboles avec ordres ouverts depuis l'exchange (ordres normaux uniquement, pas TP/SL)
+        $openOrderSymbols = [];
+        if ($this->orderProvider) {
+            try {
+                // getOpenOrders() récupère uniquement les ordres normaux, pas les TP/SL (plan orders)
+                $openOrders = $this->orderProvider->getOpenOrders();
+                $this->logger->debug('[MTF Orchestrator] Fetched open orders', [
+                    'run_id' => $runIdString,
+                    'count' => count($openOrders),
+                ]);
+                
+                foreach ($openOrders as $order) {
+                    // OrderDto a une propriété symbol
+                    $orderSymbol = strtoupper($order->symbol ?? '');
+                    if ($orderSymbol !== '' && !in_array($orderSymbol, $openOrderSymbols, true)) {
+                        $openOrderSymbols[] = $orderSymbol;
+                        $this->logger->debug('[MTF Orchestrator] Found open order', [
+                            'run_id' => $runIdString,
+                            'symbol' => $orderSymbol,
+                            'order_id' => $order->orderId ?? 'N/A',
+                            'type' => $order->type->value ?? 'N/A',
+                        ]);
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('[MTF Orchestrator] Failed to fetch open orders from exchange', [
+                    'run_id' => $runIdString,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+            }
+        }
+
+        // Combiner les symboles à exclure
+        $symbolsWithActivity = array_unique(array_merge($openPositionSymbols, $openOrderSymbols));
+
+        // Traiter chaque symbole
+        foreach ($symbols as $symbol) {
+            $symbolUpper = strtoupper($symbol);
+            
+            if (in_array($symbolUpper, $symbolsWithActivity, true)) {
+                // Symbol a des ordres/positions ouverts → exclure de la boucle
+                $symbolsToExclude[] = $symbolUpper;
+                
+                // Désactiver le switch selon l'état actuel
+                if ($this->mtfSwitchRepository) {
+                    try {
+                        $isSwitchOff = !$this->mtfSwitchRepository->isSymbolSwitchOn($symbolUpper);
+                        
+                        if ($isSwitchOff) {
+                            // Switch déjà OFF → désactiver pour 1 minute
+                            $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, '1m');
+                            $this->logger->info('[MTF Orchestrator] Symbol switch extended (was OFF)', [
+                                'run_id' => $runIdString,
+                                'symbol' => $symbolUpper,
+                                'duration' => '1 minute',
+                                'reason' => 'has_open_orders_or_positions',
+                            ]);
+                        } else {
+                            // Switch ON → désactiver pour 15 minutes
+                            $this->mtfSwitchRepository->turnOffSymbolFor15Minutes($symbolUpper);
+                            $this->logger->info('[MTF Orchestrator] Symbol switch disabled', [
+                                'run_id' => $runIdString,
+                                'symbol' => $symbolUpper,
+                                'duration' => '15 minutes',
+                                'reason' => 'has_open_orders_or_positions',
+                            ]);
+                        }
+                    } catch (\Throwable $e) {
+                        $this->logger->error('[MTF Orchestrator] Failed to disable symbol switch', [
+                            'run_id' => $runIdString,
+                            'symbol' => $symbolUpper,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+            } else {
+                // Symbol n'a pas d'ordres/positions → inclure dans la boucle
+                $symbolsToProcess[] = $symbol;
+            }
+        }
+
+        if (!empty($symbolsToExclude)) {
+            $this->logger->info('[MTF Orchestrator] Filtered symbols with open orders/positions', [
+                'run_id' => $runIdString,
+                'excluded_count' => count($symbolsToExclude),
+                'excluded_symbols' => array_slice($symbolsToExclude, 0, 10), // Log first 10
+                'remaining_count' => count($symbolsToProcess),
+            ]);
+            $this->orderJourneyLogger->info('order_journey.orchestrator.symbols_filtered', [
+                'run_id' => $runIdString,
+                'excluded_count' => count($symbolsToExclude),
+                'remaining_count' => count($symbolsToProcess),
+                'reason' => 'open_orders_or_positions_exclusion',
+            ]);
+        }
+
+        return $symbolsToProcess;
     }
 }

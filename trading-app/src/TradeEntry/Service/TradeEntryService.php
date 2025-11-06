@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\TradeEntry\Service;
 
 use App\TradeEntry\Dto\{TradeEntryRequest, ExecutionResult};
+use App\TradeEntry\Hook\PostExecutionHookInterface;
 use App\TradeEntry\Workflow\{BuildPreOrder, BuildOrderPlan, ExecuteOrderPlan};
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -18,8 +19,11 @@ final class TradeEntryService
         #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
-    public function buildAndExecute(TradeEntryRequest $request, ?string $decisionKey = null): ExecutionResult
-    {
+    public function buildAndExecute(
+        TradeEntryRequest $request,
+        ?string $decisionKey = null,
+        ?PostExecutionHookInterface $hook = null
+    ): ExecutionResult {
         // Correlation key for logs across steps (allow external propagation)
         if ($decisionKey === null) {
             try {
@@ -79,11 +83,19 @@ final class TradeEntryService
         };
         $this->metrics->incr($metric);
 
+        // Appeler le hook si fourni et si l'ordre a été soumis
+        if ($hook !== null && $result->status === 'submitted') {
+            $hook->onSubmitted($request, $result, $decisionKey);
+        }
+
         return $result;
     }
 
-    public function buildAndSimulate(TradeEntryRequest $request, ?string $decisionKey = null): ExecutionResult
-    {
+    public function buildAndSimulate(
+        TradeEntryRequest $request,
+        ?string $decisionKey = null,
+        ?PostExecutionHookInterface $hook = null
+    ): ExecutionResult {
         if ($decisionKey === null) {
             try {
                 $decisionKey = sprintf('te:%s:%s', $request->symbol, bin2hex(random_bytes(6)));
@@ -104,7 +116,7 @@ final class TradeEntryService
         $plan = ($this->planner)($request, $preflight, $decisionKey);
 
         $cid = 'SIM-' . substr(sha1($decisionKey), 0, 12);
-        return new ExecutionResult(
+        $result = new ExecutionResult(
             clientOrderId: $cid,
             exchangeOrderId: null,
             status: 'simulated',
@@ -127,5 +139,12 @@ final class TradeEntryService
                 ],
             ],
         );
+
+        // Appeler le hook si fourni
+        if ($hook !== null) {
+            $hook->onSimulated($request, $result, $decisionKey);
+        }
+
+        return $result;
     }
 }
