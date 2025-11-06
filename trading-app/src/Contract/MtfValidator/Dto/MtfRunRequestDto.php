@@ -17,6 +17,7 @@ final class MtfRunRequestDto
         public readonly bool $forceTimeframeCheck = false,
         public readonly bool $skipContextValidation = false,
         public readonly bool $lockPerSymbol = false,
+        public readonly bool $skipOpenStateFilter = false,
         public readonly ?string $userId = null,
         public readonly ?string $ipAddress = null
     ) {}
@@ -31,6 +32,7 @@ final class MtfRunRequestDto
             forceTimeframeCheck: (bool) ($data['force_timeframe_check'] ?? false),
             skipContextValidation: (bool) ($data['skip_context'] ?? false),
             lockPerSymbol: (bool) ($data['lock_per_symbol'] ?? false),
+            skipOpenStateFilter: (bool) ($data['skip_open_state_filter'] ?? false),
             userId: $data['user_id'] ?? null,
             ipAddress: $data['ip_address'] ?? null
         );
@@ -46,6 +48,7 @@ final class MtfRunRequestDto
             'force_timeframe_check' => $this->forceTimeframeCheck,
             'skip_context' => $this->skipContextValidation,
             'lock_per_symbol' => $this->lockPerSymbol,
+            'skip_open_state_filter' => $this->skipOpenStateFilter,
             'user_id' => $this->userId,
             'ip_address' => $this->ipAddress
         ];

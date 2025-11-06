@@ -28,8 +28,9 @@ interface SignalValidationServiceInterface
      * @param array             $klines
      * @param array<string,array{signal?:string}> $knownSignals
      * @param Contract|null     $contract
+     * @param bool              $skipContextValidation Si true, bypass la validation de contexte pour les TF d'exécution
      *
      * @return SignalValidationResultDto
      */
-    public function validate(string $tf, array $klines, array $knownSignals = [], ?Contract $contract = null): SignalValidationResultDto;
+    public function validate(string $tf, array $klines, array $knownSignals = [], ?Contract $contract = null, bool $skipContextValidation = false): SignalValidationResultDto;
 }
