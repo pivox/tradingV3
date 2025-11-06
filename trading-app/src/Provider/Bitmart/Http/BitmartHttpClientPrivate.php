@@ -15,11 +15,15 @@ final class BitmartHttpClientPrivate
     use throttleBitmartRequestTrait;
 
     private const TIMEOUT = 10.0;
+    private const MAX_RETRIES = 3;           // Retries on 429
+    private const BASE_BACKOFF_MS = 300;     // Initial backoff
+    private const MAX_BACKOFF_MS = 2000;     // Cap per attempt
 
     // Chemins d'API BitMart privés
     private const PATH_ACCOUNT = '/contract/private/assets-detail';
-    private const PATH_POSITION = '/contract/private/position';
-    private const PATH_ORDER_PENDING = '/contract/private/order-pending';
+    private const PATH_POSITION = '/contract/private/position-v2';
+    private const PATH_ORDER_PENDING = '/contract/private/get-open-orders';
+    private const PATH_PLAN_ORDERS = '/contract/private/current-plan-order'; // Pour les ordres TP/SL (Plan Orders)
     private const PATH_ORDER_DETAIL = '/contract/private/order-detail';
     private const PATH_ORDER_HISTORY = '/contract/private/order-history';
     private const PATH_SUBMIT_ORDER = '/contract/private/submit-order';
@@ -96,32 +100,84 @@ final class BitmartHttpClientPrivate
             $options['json'] = $json;
         }
 
-        try {
-            $response = $this->bitmartFuturesV2->request($method, $path, $options);
-            // Mettre à jour les infos de rate à partir des headers
-            $this->updateBucketFromHeaders($bucketKey, $response->getHeaders(false));
-            $status = $response->getStatusCode();
-            $parsed = $this->parseBitmartResponse($response);
-            $this->bitmartLogger->info('[Bitmart] Response', [
-                'method' => $method,
-                'path' => $path,
-                'status' => $status,
-                'code' => $parsed['code'] ?? null,
-            ]);
-            return $parsed;
-        } catch (\Throwable $e) {
-            // Include JSON payload for submit-order failures to aid diagnostics
-            $context = [
-                'method' => $method,
-                'path' => $path,
-                'error' => $e->getMessage(),
-            ];
-            if ($path === self::PATH_SUBMIT_ORDER && $json !== null) {
-                $context['json'] = $json;
+        $attempt = 0;
+        do {
+            try {
+                $response = $this->bitmartFuturesV2->request($method, $path, $options);
+                // Mettre à jour les infos de rate à partir des headers
+                $this->updateBucketFromHeaders($bucketKey, $response->getHeaders(false));
+                $status = $response->getStatusCode();
+                $rawContent = $response->getContent(false);
+
+                // 429 Too Many Requests → backoff + retry
+                if ($status === 429) {
+                    $attempt++;
+                    $waitUs = $this->computeBackoffUs($bucketKey, $response->getHeaders(false), $attempt);
+                    $this->bitmartLogger->warning('[Bitmart] 429 Too Many Requests; backing off', [
+                        'method' => $method,
+                        'path' => $path,
+                        'attempt' => $attempt,
+                        'wait_ms' => (int) round($waitUs / 1000),
+                        'raw' => substr($rawContent, 0, 300),
+                    ]);
+                    if ($attempt >= self::MAX_RETRIES) {
+                        // Dernière tentative → lever avec le message brut
+                        throw new \RuntimeException('BitMart HTTP 429 after retries: ' . $rawContent);
+                    }
+                    if ($waitUs > 0) {
+                        usleep($waitUs);
+                    }
+                    // Essayer de nouveau
+                    continue;
+                }
+
+                // Log détaillé pour debug
+                $this->bitmartLogger->debug('[Bitmart] Request details', [
+                    'method' => $method,
+                    'path' => $path,
+                    'query' => $query,
+                    'full_url' => ($method . ' ' . $path . (empty($query) ? '' : '?' . http_build_query($query))),
+                ]);
+
+                $parsed = $this->parseBitmartResponse($response, $path);
+                $this->bitmartLogger->info('[Bitmart] Response', [
+                    'method' => $method,
+                    'path' => $path,
+                    'status' => $status,
+                    'code' => $parsed['code'] ?? null,
+                    'message' => $parsed['message'] ?? null,
+                    'has_data' => isset($parsed['data']),
+                    'data_keys' => isset($parsed['data']) && is_array($parsed['data']) ? array_keys($parsed['data']) : null,
+                ]);
+
+                // Log détaillé pour les endpoints de listing
+                if (in_array($path, [self::PATH_ORDER_PENDING, self::PATH_POSITION, self::PATH_PLAN_ORDERS], true)) {
+                    $this->bitmartLogger->debug('[Bitmart] Listing endpoint response', [
+                        'path' => $path,
+                        'status' => $status,
+                        'code' => $parsed['code'] ?? null,
+                        'raw_response_preview' => substr($rawContent, 0, 500),
+                        'parsed_data_structure' => isset($parsed['data']) ? json_encode($parsed['data'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) : null,
+                    ]);
+                }
+
+                return $parsed;
+            } catch (\Throwable $e) {
+                // Include JSON payload for submit-order failures to aid diagnostics
+                $context = [
+                    'method' => $method,
+                    'path' => $path,
+                    'error' => $e->getMessage(),
+                ];
+                if ($path === self::PATH_SUBMIT_ORDER && $json !== null) {
+                    $context['json'] = $json;
+                }
+                $this->bitmartLogger->error('[Bitmart] Request failed', $context);
+                throw $e;
             }
-            $this->bitmartLogger->error('[Bitmart] Request failed', $context);
-            throw $e;
-        }
+        } while ($attempt < self::MAX_RETRIES);
+        // Inatteignable mais requis par l'analyseur
+        throw new \RuntimeException('BitMart unexpected error (retry loop exited)');
     }
 
     /**
@@ -146,6 +202,10 @@ final class BitmartHttpClientPrivate
                 break;
             case self::PATH_ORDER_PENDING:
                 $bucket = 'PRIVATE_GET_OPEN_ORDERS';
+                $limit = 50; $window = 2.0;
+                break;
+            case self::PATH_PLAN_ORDERS:
+                $bucket = 'PRIVATE_GET_PLAN_ORDERS';
                 $limit = 50; $window = 2.0;
                 break;
             case self::PATH_ORDER_DETAIL:
@@ -216,20 +276,92 @@ final class BitmartHttpClientPrivate
      * @return array<mixed>
      * @throws TransportExceptionInterface
      */
-    private function parseBitmartResponse(ResponseInterface $response): array
+    private function parseBitmartResponse(ResponseInterface $response, string $path = ''): array
     {
         $status = $response->getStatusCode();
+        
+        // Gérer les HTTP 404 pour les endpoints de listing (peut arriver quand pas de résultats)
+        if ($status === 404 && in_array($path, [self::PATH_ORDER_PENDING, self::PATH_POSITION, self::PATH_PLAN_ORDERS], true)) {
+            $content = $response->getContent(false);
+            try {
+                $json = json_decode($content, true);
+                // Si c'est un 404 avec code 30000, traiter comme "pas de résultats"
+                if (isset($json['code']) && (int) $json['code'] === 30000) {
+                    return [
+                        'code' => 30000,
+                        'message' => $json['message'] ?? 'Not found',
+                        'data' => [
+                            'orders' => [],
+                            'positions' => [],
+                        ],
+                    ];
+                }
+            } catch (\Throwable $e) {
+                // Si le parsing échoue, continuer avec l'erreur normale
+            }
+            // Si pas de code 30000, lever l'exception normale
+            throw new \RuntimeException('BitMart HTTP '.$status.': '.$content);
+        }
+        
         if ($status < 200 || $status >= 300) {
             throw new \RuntimeException('BitMart HTTP '.$status.': '.$response->getContent(false));
         }
 
         $json = $response->toArray(false);
-        if (!isset($json['code']) || (int) $json['code'] !== 1000) {
+        $code = (int) ($json['code'] ?? 0);
+        
+        // Code 30000 "Not found" est un cas normal pour les endpoints de listing (pas de résultats)
+        // Selon la doc BitMart: code 30000 avec HTTP 200 = "Not found" (état normal)
+        if ($code === 30000 && in_array($path, [self::PATH_ORDER_PENDING, self::PATH_POSITION, self::PATH_PLAN_ORDERS], true)) {
+            // Retourner une structure vide pour indiquer "pas de résultats" sans lever d'exception
+            return [
+                'code' => 30000,
+                'message' => $json['message'] ?? 'Not found',
+                'data' => [
+                    'orders' => [],
+                    'positions' => [],
+                ],
+            ];
+        }
+        
+        if ($code !== 1000) {
             $code = $json['code'] ?? 'unknown';
             $msg  = $json['message'] ?? 'unknown';
             throw new \RuntimeException('BitMart API error: code='.$code.' message='.$msg);
         }
         return $json;
+    }
+
+    /**
+     * Calcule le backoff (microsecondes) à partir des headers ou fallback exponentiel (avec jitter).
+     */
+    private function computeBackoffUs(string $bucketKey, array $headers, int $attempt): int
+    {
+        $now = microtime(true);
+
+        // 1) Retry-After (secondes) si présent
+        $retryAfter = $this->findHeaderValue($headers, 'Retry-After');
+        if (is_string($retryAfter) && is_numeric(trim($retryAfter))) {
+            $sec = (float) trim($retryAfter);
+            return (int) round(min($sec * 1000.0, self::MAX_BACKOFF_MS) * 1000.0);
+        }
+
+        // 2) Headers X-BM-RateLimit-Reset précédemment enregistrés (reset_ts)
+        $state = $this->readBucketState($bucketKey);
+        $header = $state['header'] ?? [];
+        if (isset($header['reset_ts']) && is_numeric($header['reset_ts'])) {
+            $resetTs = (float) $header['reset_ts'];
+            if ($resetTs > $now) {
+                $waitSec = max(0.0, $resetTs - $now);
+                return (int) round(min($waitSec * 1000.0, self::MAX_BACKOFF_MS) * 1000.0);
+            }
+        }
+
+        // 3) Fallback exponentiel avec jitter
+        $base = self::BASE_BACKOFF_MS * (2 ** max(0, $attempt - 1));
+        $base = min($base, self::MAX_BACKOFF_MS);
+        $jitter = random_int(0, (int) round($base * 0.25));
+        return (int) (($base + $jitter) * 1000);
     }
 
     // ===== MÉTHODES DÉDIÉES POUR LES ENDPOINTS PRIVÉS =====
@@ -244,29 +376,63 @@ final class BitmartHttpClientPrivate
     }
 
     /**
-     * GET /contract/private/position
+     * GET /contract/private/position-v2
      * Récupère les positions ouvertes.
+     * 
+     * @param string|null $symbol Symbole à filtrer (optionnel)
+     * @param string|null $account Type de compte: 'futures' ou 'copy_trading' (optionnel, par défaut 'futures')
      */
-    public function getPositions(?string $symbol = null): array
+    public function getPositions(?string $symbol = null, ?string $account = 'futures'): array
     {
         $query = [];
         if ($symbol !== null) {
             $query['symbol'] = $symbol;
+        }
+        // Ajouter le paramètre account si spécifié (selon la doc BitMart, certains endpoints le requièrent)
+        if ($account !== null) {
+            $query['account'] = $account;
         }
         return $this->requestJsonPrivate('GET', self::PATH_POSITION, $query);
     }
 
     /**
-     * GET /contract/private/order-pending
-     * Récupère les ordres en attente.
+     * GET /contract/private/get-open-orders
+     * Récupère les ordres en attente (ordres normaux, pas les TP/SL).
+     * 
+     * @param string|null $symbol Symbole à filtrer (optionnel)
+     * @param string|null $account Type de compte: 'futures' ou 'copy_trading' (optionnel, par défaut 'futures')
      */
-    public function getOpenOrders(?string $symbol = null): array
+    public function getOpenOrders(?string $symbol = null, ?string $account = 'futures'): array
     {
         $query = [];
         if ($symbol !== null) {
             $query['symbol'] = $symbol;
         }
+        // Ajouter le paramètre account si spécifié (selon la doc BitMart, certains endpoints le requièrent)
+        if ($account !== null) {
+            $query['account'] = $account;
+        }
         return $this->requestJsonPrivate('GET', self::PATH_ORDER_PENDING, $query);
+    }
+
+    /**
+     * GET /contract/private/current-plan-order
+     * Récupère les ordres planifiés (Plan Orders) incluant les TP/SL.
+     * 
+     * @param string|null $symbol Symbole à filtrer (optionnel)
+     * @param string|null $account Type de compte: 'futures' ou 'copy_trading' (optionnel, par défaut 'futures')
+     */
+    public function getPlanOrders(?string $symbol = null, ?string $account = 'futures'): array
+    {
+        $query = [];
+        if ($symbol !== null) {
+            $query['symbol'] = $symbol;
+        }
+        // Ajouter le paramètre account si spécifié
+        if ($account !== null) {
+            $query['account'] = $account;
+        }
+        return $this->requestJsonPrivate('GET', self::PATH_PLAN_ORDERS, $query);
     }
 
     /**

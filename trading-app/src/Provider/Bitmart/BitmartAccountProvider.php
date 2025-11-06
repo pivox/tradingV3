@@ -66,16 +66,53 @@ final class BitmartAccountProvider implements AccountProviderInterface
         try {
             $response = $this->bitmartClient->getPositions($symbol);
 
-            if (isset($response['data']['positions'])) {
-                return array_map(fn($position) => PositionDto::fromArray($position), $response['data']['positions']);
-            }
-
-            return [];
-        } catch (\Exception $e) {
-            $this->logger->error("Erreur lors de la récupération des positions ouvertes", [
+            // Log pour debug : structure de la réponse
+            $this->logger->debug("BitMart positions response structure", [
                 'symbol' => $symbol,
-                'error' => $e->getMessage()
+                'has_data' => isset($response['data']),
+                'data_keys' => isset($response['data']) ? array_keys($response['data']) : [],
+                'code' => $response['code'] ?? null,
+                'message' => $response['message'] ?? null,
             ]);
+
+            // Pour position-v2, la structure peut être directement dans 'data' ou dans 'data.positions'
+            $positions = [];
+            if (isset($response['data']['positions'])) {
+                $positions = $response['data']['positions'];
+            } elseif (isset($response['data']) && is_array($response['data']) && !empty($response['data'])) {
+                // Fallback : parfois position-v2 retourne directement un tableau dans 'data'
+                $firstItem = reset($response['data']);
+                if (is_array($firstItem) && isset($firstItem['symbol'])) {
+                    $positions = $response['data'];
+                }
+            }
+            
+            // Filtrer les positions avec amount > 0 (BitMart retourne toujours long+short même si vides)
+            $positions = array_filter($positions, function($position) {
+                $amount = $position['current_amount'] ?? $position['size'] ?? 0;
+                return (float)$amount > 0;
+            });
+            
+            if (empty($positions)) {
+                return [];
+            }
+            
+            return array_map(fn($position) => PositionDto::fromArray($position), $positions);
+        } catch (\Exception $e) {
+            $msg = $e->getMessage();
+            $isRateLimited = (stripos($msg, '429') !== false) || (stripos($msg, '30013') !== false) || str_contains($msg, 'Too Many Requests');
+            if ($isRateLimited) {
+                $this->logger->warning("Erreur lors de la récupération des positions ouvertes (rate limited)", [
+                    'symbol' => $symbol,
+                    'error' => $msg,
+                ]);
+            } else {
+                $this->logger->error("Erreur lors de la récupération des positions ouvertes", [
+                    'symbol' => $symbol,
+                    'error' => $msg,
+                    'trace' => $e->getTraceAsString(),
+                ]);
+            }
             return [];
         }
     }

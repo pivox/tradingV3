@@ -152,55 +152,6 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     }
                 }
 
-                // Notifier ws-agent qu'un ordre vient d'être créé
-                $clientOrderId = $response['data']['client_order_id'] ?? $payload['client_order_id'] ?? null;
-                if ($this->httpClient && $this->wsAgentBaseUri && $clientOrderId) {
-                    try {
-                        $wsAgentUrl = rtrim($this->wsAgentBaseUri, '/') . '/internal/track-order';
-                        $this->httpClient->request('POST', $wsAgentUrl, [
-                            'json' => [
-                                'client_order_id' => $clientOrderId,
-                                'order_id' => $orderId,
-                                'symbol' => $symbol,
-                            ],
-                            'timeout' => 2.0,
-                        ]);
-                        $this->logger->debug('[BitmartOrderProvider] Notified ws-agent', [
-                            'client_order_id' => $clientOrderId,
-                            'order_id' => $orderId,
-                        ]);
-                    } catch (\Throwable $e) {
-                        // Log mais ne pas bloquer le flux
-                        $this->logger->warning('[BitmartOrderProvider] Failed to notify ws-agent', [
-                            'order_id' => $orderId,
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
-                }
-
-                // Synchroniser tous les ordres ouverts pour ce symbole (inclut les SL/TP)
-                if ($this->httpClient && $this->wsAgentBaseUri && false) {
-
-                    try {
-                        $wsAgentSyncUrl = rtrim($this->wsAgentBaseUri, '/') . '/internal/sync-orders';
-                        $this->httpClient->request('POST', $wsAgentSyncUrl, [
-                            'json' => [
-                                'symbol' => $symbol,
-                            ],
-                            'timeout' => 5.0,
-                        ]);
-                        $this->logger->debug('[BitmartOrderProvider] Triggered sync of open orders', [
-                            'symbol' => $symbol,
-                        ]);
-                    } catch (\Throwable $e) {
-                        // Log mais ne pas bloquer le flux
-                        $this->logger->warning('[BitmartOrderProvider] Failed to trigger sync of open orders', [
-                            'symbol' => $symbol,
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
-                }
-
                 // Short retry loop for eventual consistency on order-detail
                 $orderDto = null;
                 for ($i = 0; $i < 3; $i++) {
@@ -436,10 +387,36 @@ final class BitmartOrderProvider implements OrderProviderInterface
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
             try {
                 $response = $this->bitmartClient->getOpenOrders($symbol);
-                if (isset($response['data']['orders'])) {
+                
+                // Log pour debug : structure de la réponse
+                $this->logger->debug('[BitmartOrderProvider] Open orders response structure', [
+                    'symbol' => $symbol,
+                    'has_data' => isset($response['data']),
+                    'data_keys' => isset($response['data']) ? array_keys($response['data']) : [],
+                    'code' => $response['code'] ?? null,
+                    'message' => $response['message'] ?? null,
+                    'attempt' => $i + 1,
+                ]);
+                
+                // BitMart peut retourner soit data.orders soit data directement comme tableau
+                $orders = null;
+                if (isset($response['data']['orders']) && is_array($response['data']['orders'])) {
+                    $orders = $response['data']['orders'];
+                } elseif (isset($response['data']) && is_array($response['data'])) {
+                    // Si data est directement un tableau (peut être vide ou contenir des ordres)
+                    if (!empty($response['data']) && isset($response['data'][0]) && is_array($response['data'][0])) {
+                        // Vérifier si c'est un tableau d'ordres (premier élément a order_id)
+                        if (isset($response['data'][0]['order_id'])) {
+                            $orders = $response['data'];
+                        }
+                    }
+                    // Si data est un tableau vide, orders reste null et on retourne []
+                }
+                
+                if ($orders !== null) {
                     // Synchroniser tous les ordres ouverts
                     if ($this->syncService) {
-                        foreach ($response['data']['orders'] as $orderData) {
+                        foreach ($orders as $orderData) {
                             try {
                                 $this->syncService->syncOrderFromApi($orderData);
                             } catch (\Throwable $e) {
@@ -451,9 +428,20 @@ final class BitmartOrderProvider implements OrderProviderInterface
                             }
                         }
                     }
-                    return array_map(fn($order) => OrderDto::fromArray($order), $response['data']['orders']);
+                    return array_map(fn($order) => OrderDto::fromArray($order), $orders);
                 }
-                $lastError = new \RuntimeException('Invalid open orders response structure.');
+                
+                // Si code 30000 ou data vide, c'est normal (pas d'ordres)
+                if ((isset($response['code']) && (int) $response['code'] === 30000) 
+                    || (isset($response['data']) && is_array($response['data']) && empty($response['data']))) {
+                    $this->logger->debug('[BitmartOrderProvider] No open orders', [
+                        'symbol' => $symbol,
+                        'code' => $response['code'] ?? null,
+                    ]);
+                    return [];
+                }
+                
+                $lastError = new \RuntimeException('Invalid open orders response structure. Response: ' . json_encode($response));
             } catch (\Throwable $e) {
                 $lastError = $e;
             }
@@ -465,7 +453,77 @@ final class BitmartOrderProvider implements OrderProviderInterface
         if ($lastError) {
             $this->logger->error("Erreur lors de la récupération des ordres ouverts", [
                 'symbol' => $symbol,
-                'error' => $lastError->getMessage()
+                'error' => $lastError->getMessage(),
+                'trace' => $lastError->getTraceAsString(),
+            ]);
+        }
+        return [];
+    }
+
+    /**
+     * Récupère les ordres planifiés (Plan Orders) incluant les TP/SL
+     * 
+     * @param string|null $symbol Symbole à filtrer (optionnel)
+     * @return array Tableau d'ordres planifiés
+     */
+    public function getPlanOrders(?string $symbol = null): array
+    {
+        $lastError = null;
+        for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
+            try {
+                $response = $this->bitmartClient->getPlanOrders($symbol);
+                
+                $this->logger->debug('[BitmartOrderProvider] Plan orders response structure', [
+                    'symbol' => $symbol,
+                    'has_data' => isset($response['data']),
+                    'data_keys' => isset($response['data']) ? array_keys($response['data']) : [],
+                    'code' => $response['code'] ?? null,
+                    'message' => $response['message'] ?? null,
+                    'attempt' => $i + 1,
+                ]);
+                
+                // BitMart peut retourner soit data.orders soit data directement comme tableau
+                $orders = null;
+                if (isset($response['data']['orders']) && is_array($response['data']['orders'])) {
+                    $orders = $response['data']['orders'];
+                } elseif (isset($response['data']) && is_array($response['data'])) {
+                    if (!empty($response['data']) && isset($response['data'][0]) && is_array($response['data'][0])) {
+                        if (isset($response['data'][0]['order_id']) || isset($response['data'][0]['plan_order_id'])) {
+                            $orders = $response['data'];
+                        }
+                    }
+                }
+                
+                if ($orders !== null) {
+                    // Les plan orders peuvent avoir une structure légèrement différente
+                    // On retourne les données brutes pour l'instant car OrderDto pourrait ne pas correspondre
+                    return $orders;
+                }
+                
+                // Si code 30000 ou data vide, c'est normal (pas d'ordres)
+                if ((isset($response['code']) && (int) $response['code'] === 30000) 
+                    || (isset($response['data']) && is_array($response['data']) && empty($response['data']))) {
+                    $this->logger->debug('[BitmartOrderProvider] No plan orders', [
+                        'symbol' => $symbol,
+                        'code' => $response['code'] ?? null,
+                    ]);
+                    return [];
+                }
+                
+                $lastError = new \RuntimeException('Invalid plan orders response structure. Response: ' . json_encode($response));
+            } catch (\Throwable $e) {
+                $lastError = $e;
+            }
+
+            if ($i < self::RETRY_ATTEMPTS - 1) {
+                usleep(self::RETRY_SLEEP_US);
+            }
+        }
+        if ($lastError) {
+            $this->logger->error("Erreur lors de la récupération des ordres planifiés", [
+                'symbol' => $symbol,
+                'error' => $lastError->getMessage(),
+                'trace' => $lastError->getTraceAsString(),
             ]);
         }
         return [];
