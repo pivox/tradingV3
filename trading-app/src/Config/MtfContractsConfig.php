@@ -18,7 +18,15 @@ final class MtfContractsConfig
 
     private array $config;
     public function __construct(private readonly string $path) {
-        $this->config = Yaml::parseFile($this->path) ?? [];
+        $parsed = Yaml::parseFile($this->path) ?? [];
+        // Support ancien format (mtf_contracts) et nouveau (contracts)
+        if (isset($parsed['contracts'])) {
+            $this->config = $parsed['contracts'];
+        } elseif (isset($parsed['mtf_contracts'])) {
+            $this->config = $parsed['mtf_contracts'];
+        } else {
+            $this->config = $parsed; // Fallback si structure plate
+        }
     }
 
     private function sel(): array   { return $this->config['selection'] ?? []; }

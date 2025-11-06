@@ -1,0 +1,276 @@
+# Configuration des validations MTF pour le module MtfValidator
+# Fichier déplacé depuis config/app/mtf_validations.yaml
+mtf_validation:
+    defaults:
+        # ✅ UTILISÉES
+        allowed_execution_timeframes: ['1m','5m','15m']  # TradingDecisionHandler.php
+        require_price_or_atr: true                        # TradingDecisionHandler.php
+        atr_k: 1.5                                        # TradingDecisionHandler.php, TpSlTwoTargetsService.php, OrderPlanBuilder.php
+        tp1_r: 2.0                                        # Utilisé (via r_multiple)
+        r_multiple: 2.0                                   # TradingDecisionHandler.php
+        order_type: 'limit'                               # TradingDecisionHandler.php, OrderPlanBuilder.php
+        open_type: 'isolated'                             # TradingDecisionHandler.php, OrderPlanBuilder.php
+        order_mode: 1                                     # TradingDecisionHandler.php, OrderPlanBuilder.php
+        stop_from: 'atr'                                  # TradingDecisionHandler.php, OrderPlanBuilder.php
+        pivot_sl_policy: 'nearest_below'                  # TradingDecisionHandler.php, TpSlTwoTargetsService.php
+        pivot_sl_buffer_pct: 0.003                        # TradingDecisionHandler.php, TpSlTwoTargetsService.php
+        pivot_sl_min_keep_ratio: 0.8                     # TradingDecisionHandler.php, TpSlTwoTargetsService.php
+        market_max_spread_pct: 0.001                      # TradingDecisionHandler.php
+        inside_ticks: 1                                   # OrderPlanBuilder.php
+        max_deviation_pct: 0.005                          # TradingDecisionHandler.php
+        implausible_pct: 0.02                             # TradingDecisionHandler.php
+        zone_max_deviation_pct: 0.007                     # TradingDecisionHandler.php
+        tp_policy: 'pivot_conservative'                   # TradingDecisionHandler.php, TpSlTwoTargetsService.php
+        tp_buffer_pct: 0.001                              # TradingDecisionHandler.php, TpSlTwoTargetsService.php
+        tp_buffer_ticks: 0                                # TradingDecisionHandler.php, TpSlTwoTargetsService.php
+        tp_min_keep_ratio: 0.95                          # TradingDecisionHandler.php, TpSlTwoTargetsService.php
+        tp_max_extra_r: 0.5                              # TradingDecisionHandler.php
+        timeframe_multipliers:                            # TradingDecisionHandler.php, TradingParameters.php
+            '1m': 1.0
+            '5m': 0.75
+            '15m': 0.5
+            '1h': 0.35
+            '4h': 0.25
+        atr_pct_thresholds:                               # IndicatorEngineProvider.php, AtrCalibrateCommand.php
+            '1m':  { min: 0.0010, max: 0.0300 }
+            '5m':  { min: 0.0010, max: 0.0300 }
+            '15m': { min: 0.0015, max: 0.0300 }
+            '1h':  { min: 0.0008, max: 0.0250 }
+            '4h':  { min: 0.0005, max: 0.0200 }
+        fallback_account_balance: 0.0                     # TradingDecisionHandler.php
+        risk_pct_percent: 5.0                             # TradingDecisionHandler.php, TpSlTwoTargetsService.php, DynamicLeverageService.php
+        initial_margin_usdt: 20.0                         # TradingDecisionHandler.php, TpSlTwoTargetsService.php, OrderPlanBuilder.php
+        k_dynamic: 10.0                                   # DynamicLeverageService.php
+
+        # ❌ NON UTILISÉES (à vérifier si obsolètes ou prévues pour usage futur)
+        tick_size: 0.1                                    # ❌ NON UTILISÉ
+        zone_ttl_sec: 240                                 # ❌ NON UTILISÉ
+        k_low: 1.2                                        # ❌ NON UTILISÉ
+        k_high: 0.4                                       # ❌ NON UTILISÉ
+        k_stop_atr: 1.5                                   # ❌ NON UTILISÉ
+        tp1_size_pct: 60                                  # ❌ NON UTILISÉ
+        lev_min: 2.0                                      # ❌ NON UTILISÉ
+        lev_max: 20.0                                     # ❌ NON UTILISÉ
+        rsi_cap: 70.0                                     # ❌ NON UTILISÉ
+        require_pullback: true                            # ❌ NON UTILISÉ
+        min_volume_ratio: 1.5                            # ❌ NON UTILISÉ
+
+    rules:
+        # ⚠️ UTILISÉES INDIRECTEMENT: Chargées dynamiquement via ConditionRegistry et ConditionLoader
+        # --- MACD / RSI / EMA de base (inchangés ou consolidés) ---
+        macd_hist_gt_eps:
+            op: '>'
+            left: 'macd_hist'
+            right: 0.0
+            eps: 1.0e-6
+
+        ema20_over_50_with_tolerance:
+            any_of:
+                - ema_20_gt_50
+                - ema_20_minus_ema_50_gt: -0.0012   # +50% de tolérance (Option 2)
+                - ema_20_slope_pos                  # Nouvelle condition : pente positive
+
+        ema_above_200_with_tolerance:
+            any_of:
+                - close_above_ema_200
+                - close_minus_ema_200_gt: -0.0030
+                - ema200_slope_pos                   # Nouvelle condition : pente positive
+
+        ema_below_200_with_tolerance:
+            any_of:
+                - close_below_ema_200
+                - close_minus_ema_200_lt: -0.0025   # < -0,25 % (augmenté pour équilibrer)
+                - ema200_slope_neg                   # Nouvelle condition : pente négative
+
+        rsi_lt_softcap: { lt: 78 }
+        rsi_gt_softfloor: { gt: 30 }
+        rsi_lt_70: { lt: 70 }
+
+        close_above_vwap_or_ma9:
+            any_of: [ close_above_vwap, close_above_ma_9 ]
+
+        price_below_ma21_plus_2atr:
+            lt_fields: [ 'close', 'ma_21_plus_2atr' ]
+            allow_touch: true                    # tolère un léger dépassement (anti faux négatifs)
+
+        pullback_confirmed:
+            any_of:
+                - ma9_cross_up_ma21
+                - near_vwap: true
+            validity_bars: 3
+
+        # --- Anti-bruit MACD : hystérésis & slope au lieu de monotonie stricte ---
+        macd_line_cross_up_with_hysteresis:
+            require_prev_below: true
+            min_gap: 0.0008
+            cool_down_bars: 2
+
+        macd_line_cross_down_with_hysteresis:
+            require_prev_above: true
+            min_gap: 0.0015          # Augmenté de 0.0003 à 0.0015 (0.15%)
+            cool_down_bars: 4        # Augmenté de 2 à 4 barres
+
+        macd_hist_slope_pos:
+            derivative_gt: 0.0       # pente > 0
+            persist_n: 2             # 2 barres consécutives (pas besoin "increasing" strict)
+
+        macd_hist_slope_neg:
+            derivative_lt: 0.0
+            persist_n: 2
+
+        # --- Slope EMA200 adoucie (plus stable) ---
+        ema200_slope_pos:
+            slope_left: 'ema_200'
+            slope_lookback: 13
+            op: '>'
+            right: 0.0
+            eps: 1.0e-12
+
+        ema200_slope_neg:
+            slope_left: 'ema_200'
+            slope_lookback: 21       # moyenne de pente plus longue
+            op: '<'
+            right: 0.0
+            eps: 1.0e-12
+
+        # --- ATR adaptatif (15m/5m) : plage élargie + buckets de volatilité ---
+        atr_rel_in_range_15m:
+            use_atr_tf: [ '1m', '5m' ]    # choisit la plus stable selon la vol
+            min: 0.0015                   # élargi encore plus (0.15%)
+            max: 0.035                    # élargi encore plus (3.5%)
+            adapt_with_vol_bucket: true   # élargir en high-vol, resserrer en low-vol
+
+        atr_rel_in_range_5m:
+            use_atr_tf: [ '1m' ]
+            min: 0.0010                   # élargi encore plus (0.10%)
+            max: 0.040                    # élargi encore plus (4.0%)
+            adapt_with_vol_bucket: true
+
+        # --- Compat : règles existantes (toujours disponibles si référencées) ---
+        macd_line_below_signal:
+            lt_fields: [ 'macd', 'macd_signal' ]
+
+        # ===== DRAFT OPTIONS (À TESTER SI NÉCESSAIRE) =====
+        # Option 2 : Tolérance Modérée (ACTIVÉE)
+        ema20_over_50_with_tolerance_moderate:
+            any_of:
+                - ema_20_gt_50
+                - ema_20_minus_ema_50_gt: -0.0012   # +50% de tolérance
+                - ema_20_slope_pos
+
+        ema_above_200_with_tolerance_moderate:
+            any_of:
+                - close_above_ema_200
+                - close_minus_ema_200_gt: -0.0020   # +33% de tolérance
+                - ema200_slope_pos
+
+        macd_line_above_signal:
+            gt_fields: [ 'macd', 'macd_signal' ]
+
+        macd_hist_increasing_n:
+            increasing: { field: 'macd_hist', n: 2 }
+
+        macd_hist_decreasing_n:
+            decreasing: { field: 'macd_hist', n: 2 }
+
+    validation:
+        # ⚠️ UTILISÉES INDIRECTEMENT: Utilisées via MtfValidationConfig::getValidation()
+        start_from_timeframe: '4h'
+
+        timeframe:
+
+            '4h':  # Contexte / structure (durci : structure de base requise)
+                long:
+                    - all_of:     # structure : exiger la structure de base OU tolérance + confirmation
+                          - any_of:
+                              - all_of: [ ema_50_gt_200, close_above_ema_200 ]  # structure stricte
+                              - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]  # tolérance + confirmation
+                    - price_regime_ok_long
+                short:
+                    - all_of:     # structure : exiger la structure de base OU tolérance + confirmation
+                          - any_of:
+                              - all_of: [ ema_50_lt_200, close_below_ema_200 ]  # structure stricte
+                              - all_of: [ ema_below_200_with_tolerance, ema_50_lt_200 ]  # tolérance + confirmation
+                    - price_regime_ok_short
+
+            '1h':  # Biais + momentum (durci : structure + momentum requis)
+                long:
+                    - all_of:     # structure : exiger structure ET momentum
+                          - any_of:
+                              - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]
+                              - all_of: [ ema200_slope_pos, ema_50_gt_200 ]
+                          - any_of:     # momentum : au moins 1 condition forte
+                              - all_of: [ macd_hist_gt_eps ]
+                              - all_of: [ macd_line_cross_up_with_hysteresis ]
+                              - all_of: [ macd_hist_slope_pos ]
+                    - price_regime_ok_long
+
+                short:
+                    - all_of:     # structure : exiger structure ET momentum
+                          - any_of:
+                              - all_of: [ ema_below_200_with_tolerance, ema_50_lt_200 ]
+                              - all_of: [ ema200_slope_neg, ema_50_lt_200 ]
+                          - any_of:     # momentum : au moins 1 condition forte
+                              - all_of: [ macd_line_cross_down_with_hysteresis ]
+                              - all_of: [ macd_hist_decreasing_n ]
+                              - all_of: [ macd_hist_slope_neg ]
+                    - price_regime_ok_short
+
+            '15m':  # Exécution / timing (durci : multi-conditions requises)
+                long:
+                    - all_of:     # Toutes les conditions doivent être remplies
+                        - any_of:
+                            - all_of: [ macd_hist_gt_eps, ema20_over_50_with_tolerance ]
+                            - all_of: [ macd_line_cross_up_with_hysteresis, close_above_vwap_or_ma9 ]
+                        - ema20_over_50_with_tolerance  # Structure EMA requise
+                        - rsi_lt_70  # RSI non surchauffé
+                        - close_above_vwap_or_ma9  # Prix au-dessus du support
+                        - atr_volatility_ok  # Volatilité ATR dans une fourchette exploitable
+                short:
+                    - all_of:     # Toutes les conditions doivent être remplies
+                        - any_of:
+                            - all_of: [ macd_line_cross_down_with_hysteresis ]
+                            - all_of: [ macd_hist_decreasing_n, ema_20_lt_50 ]
+                        - ema_20_lt_50  # Structure EMA requise
+                        - rsi_gt_softfloor  # RSI non survendu
+                        - close_below_vwap  # Prix sous VWAP côté short
+                        - atr_volatility_ok  # Volatilité ATR dans une fourchette exploitable
+
+            '5m':   # Finesse d'entrée (durci : multi-conditions requises)
+                long:
+                    - all_of:     # Toutes les conditions doivent être remplies
+                        - any_of:
+                            - all_of: [ macd_hist_gt_eps, ema20_over_50_with_tolerance ]
+                            - all_of: [ macd_line_cross_up_with_hysteresis, close_above_vwap_or_ma9 ]
+                        - ema20_over_50_with_tolerance  # Structure EMA requise
+                        - close_above_vwap_or_ma9  # Prix au-dessus du support
+                        - rsi_lt_70  # RSI non surchauffé
+                        - atr_volatility_ok  # Volatilité ATR dans une fourchette exploitable
+                short:
+                    - all_of:     # Toutes les conditions doivent être remplies
+                        - any_of:
+                            - all_of: [ macd_line_cross_down_with_hysteresis ]
+                            - all_of: [ macd_hist_decreasing_n, ema_20_lt_50 ]
+                        - ema_20_lt_50  # Structure EMA requise
+                        - rsi_gt_softfloor  # RSI non survendu
+                        - close_below_vwap  # Prix sous VWAP côté short
+                        - atr_volatility_ok  # Volatilité ATR dans une fourchette exploitable
+
+            '1m':   # Micro-timing (durci : multi-conditions requises)
+                long:
+                    - all_of:     # Toutes les conditions doivent être remplies
+                        - macd_hist_gt_eps  # Momentum MACD positif
+                        - ema20_over_50_with_tolerance  # Structure EMA requise
+                        - close_above_vwap_or_ma9  # Prix au-dessus du support
+                        - rsi_lt_70  # RSI non surchauffé
+                        - macd_hist_slope_pos  # Momentum en accélération
+                        - atr_volatility_ok    # Volatilité ATR dans une fourchette exploitable
+                short:
+                    - all_of:     # Toutes les conditions doivent être remplies
+                        - macd_hist_decreasing_n  # Momentum MACD négatif
+                        - ema_20_lt_50  # Structure EMA requise
+                        - rsi_gt_softfloor  # RSI non survendu
+                        - close_below_vwap      # Prix sous VWAP côté short
+                        - macd_hist_slope_neg   # Momentum en accélération
+                        - atr_volatility_ok     # Volatilité ATR dans une fourchette exploitable
+
