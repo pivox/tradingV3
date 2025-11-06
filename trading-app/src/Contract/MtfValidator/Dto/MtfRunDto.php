@@ -12,6 +12,8 @@ class MtfRunDto
         public bool $forceTimeframeCheck = false,
         public bool $skipContextValidation = false,
         public bool $lockPerSymbol = false,
+        // When true, orchestrator will skip fetching open orders/positions to prefilter symbols
+        public bool $skipOpenStateFilter = false,
     )
     {
     }
@@ -26,6 +28,7 @@ class MtfRunDto
             'force_timeframe_check' => $this->forceTimeframeCheck,
             'skip_context' => $this->skipContextValidation,
             'lock_per_symbol' => $this->lockPerSymbol,
+            'skip_open_state_filter' => $this->skipOpenStateFilter,
         ];
     }
 

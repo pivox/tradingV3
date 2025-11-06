@@ -22,5 +22,6 @@ final class TpSlTwoTargetsRequest
         public readonly ?int $mtfValidCount = null,      // 0..3
         public readonly ?bool $pullbackClear = null,
         public readonly ?bool $lateEntry = null,
+        public readonly ?bool $dryRun = false,
     ) {}
 }
