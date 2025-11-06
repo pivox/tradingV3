@@ -42,7 +42,7 @@ TradeEntry/
 │   ├── StopLossCalculator.php
 │   └── TakeProfitCalculator.php
 ├── Service/
-│   ├── Leverage/DefaultLeverageService.php
+│   ├── Leverage/DynamicLeverageService.php
 │   ├── TradeEntryAlertService.php
 │   ├── TradeEntryBacktestService.php
 │   ├── TradeEntryMetricsService.php
