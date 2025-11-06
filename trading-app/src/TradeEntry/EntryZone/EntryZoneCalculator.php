@@ -7,7 +7,7 @@ use App\TradeEntry\Dto\EntryZone;
 use App\TradeEntry\Types\Side;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\TradeEntry\Pricing\TickQuantizer;
-use App\Service\TradingConfigService;
+use App\Config\TradeEntryConfig;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -21,7 +21,7 @@ final class EntryZoneCalculator
 
     public function __construct(
         private readonly ?IndicatorProviderInterface $indicators = null,
-        private readonly ?TradingConfigService $config = null,
+        private readonly ?TradeEntryConfig $config = null,
         private readonly ?string $defaultTfOverride = null,
         private readonly ?float $kAtrOverride = null,
         private readonly ?float $wMinOverride = null,
@@ -45,8 +45,7 @@ final class EntryZoneCalculator
         }
 
         // Lecture config (avec valeurs par défaut robustes)
-        $cfg = $this->config?->getConfig() ?? [];
-        $post = $cfg['post_validation'] ?? [];
+        $post = $this->config?->getPostValidation() ?? [];
         $ez = $post['entry_zone'] ?? [];
         $execTf = $post['execution_timeframe']['default'] ?? null;
 

@@ -234,7 +234,7 @@ final readonly class PreTradeChecks
             }
 
             $filtered = [];
-            foreach (['pp', 'r1', 'r2', 'r3', 's1', 's2', 's3'] as $key) {
+            foreach (['pp', 'r1', 'r2', 'r3', 'r4', 'r5', 'r6', 's1', 's2', 's3', 's4', 's5', 's6'] as $key) {
                 if (isset($data[$key]) && is_finite((float)$data[$key])) {
                     $filtered[$key] = (float)$data[$key];
                 }

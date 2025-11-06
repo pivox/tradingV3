@@ -17,8 +17,8 @@ final class ExampleTradeEntryRunner
 {
     public function __construct(
         private readonly TradeEntryService $tradeEntryService,
-        #[Autowire(service: 'App\\Config\\MtfValidationConfig')]
-        private readonly \App\Config\MtfValidationConfig $mtfConfig,
+        #[Autowire(service: 'App\\Config\\TradeEntryConfig')]
+        private readonly \App\Config\TradeEntryConfig $tradeEntryConfig,
     ) {}
 
     /**
@@ -31,7 +31,7 @@ final class ExampleTradeEntryRunner
      */
     public function placeLimitOrder(string $symbol, Side $side, float $price, ?float $atr = null)
     {
-        $defaults = $this->mtfConfig->getDefaults();
+        $defaults = $this->tradeEntryConfig->getDefaults();
         $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 2.0);
         $riskPct = max(0.0, $riskPctPercent > 1.0 ? $riskPctPercent / 100.0 : $riskPctPercent);
         $pivotSlPolicy = (string)($defaults['pivot_sl_policy'] ?? 'nearest_below');
