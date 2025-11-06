@@ -9,6 +9,8 @@ use App\Indicator\Context\IndicatorContextBuilder;
 use App\Indicator\Registry\ConditionRegistry as CompiledRegistry;
 use App\Indicator\ConditionLoader\TimeframeEvaluator;
 use App\Indicator\Core\AtrCalculator;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 
 #[AsAlias(id: IndicatorEngineInterface::class)]
@@ -19,6 +21,8 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
         private readonly TimeframeEvaluator $timeframeEvaluator,
         private readonly CompiledRegistry $compiledRegistry,
         private readonly AtrCalculator $atrCalc,
+        private readonly \App\Config\MtfValidationConfig $mtfValidationConfig,
+        #[Autowire(service: 'monolog.logger.validation')] private readonly LoggerInterface $validationLogger,
     ) {}
 
     public function buildContext(string $symbol, string $timeframe, array $klines, array $options = []): array
@@ -66,6 +70,33 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
             ->lows($lows)
             ->volumes($vols)
             ->ohlc($ohlc);
+
+        // Inject per-timeframe ATR volatility thresholds from mtf_validations.yaml if available
+        $minApplied = null; $maxApplied = null; $source = 'defaults';
+        try {
+            $atrPct = $this->mtfValidationConfig->getDefault('atr_pct_thresholds', []);
+            if (\is_array($atrPct) && isset($atrPct[$timeframe]) && \is_array($atrPct[$timeframe])) {
+                $min = $atrPct[$timeframe]['min'] ?? null;
+                $max = $atrPct[$timeframe]['max'] ?? null;
+                if (\is_numeric($min)) { $builder->minAtrPct($minApplied = (float)$min); $source = 'mtf_validations.defaults'; }
+                if (\is_numeric($max)) { $builder->maxAtrPct($maxApplied = (float)$max); $source = 'mtf_validations.defaults'; }
+            }
+        } catch (\Throwable) {
+            // best effort; fallback to defaults from builder
+        }
+
+        // Log application des seuils ATR/close utilisés (qu'ils viennent du YAML ou des defaults du builder)
+        if ($minApplied === null || $maxApplied === null) {
+            // valeurs par défaut du builder
+            $minApplied = 0.001; $maxApplied = 0.03; $source = 'builder.defaults';
+        }
+        $this->validationLogger->info('validation.atr_thresholds.applied', [
+            'symbol' => $symbol,
+            'timeframe' => $timeframe,
+            'min_atr_pct' => $minApplied,
+            'max_atr_pct' => $maxApplied,
+            'source' => $source,
+        ]);
 
         // optional overrides
         if (isset($options['entry_price'])) $builder->entryPrice((float)$options['entry_price']);
