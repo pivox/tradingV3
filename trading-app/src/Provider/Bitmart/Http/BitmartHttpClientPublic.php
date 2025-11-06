@@ -26,8 +26,9 @@ class BitmartHttpClientPublic
     use throttleBitmartRequestTrait;
 
     private const TIMEOUT  = 10.0; // seconds
-    private const RETRY_COUNT = 1;
-    private const RETRY_DELAY_MS = 200;
+    private const MAX_RETRIES = 3;           // Retries on 429
+    private const BASE_BACKOFF_MS = 300;     // Initial backoff
+    private const MAX_BACKOFF_MS = 2000;     // Cap per attempt
 
     // Chemins d'API BitMart
     private const PATH_SYSTEM_TIME = '/system/time';
@@ -421,31 +422,51 @@ class BitmartHttpClientPublic
         ]);
         $this->throttleBucket($this->lockFactory, $bucketKey, $limit, $windowSec);
 
-        try {
-            $response = $this->bitmartFuturesV2->request($method, $path, [
-                'query' => $query,
-                // timeouts de secours si le client n'est pas correctement scopé
-                'timeout' => self::TIMEOUT,
-            ]);
-            // Mise à jour des infos de rate à partir des headers
-            $this->updateBucketFromHeaders($bucketKey, $response->getHeaders(false));
-            $status = $response->getStatusCode();
-            $parsed = $this->parseBitmartResponse($response);
-            $this->bitmartLogger->info('[Bitmart] Response', [
-                'method' => $method,
-                'path' => $path,
-                'status' => $status,
-                'code' => $parsed['code'] ?? null,
-            ]);
-            return $parsed;
-        } catch (\Throwable $e) {
-            $this->bitmartLogger->error('[Bitmart] Request failed', [
-                'method' => $method,
-                'path' => $path,
-                'error' => $e->getMessage(),
-            ]);
-            throw $e;
-        }
+        $attempt = 0;
+        do {
+            try {
+                $response = $this->bitmartFuturesV2->request($method, $path, [
+                    'query' => $query,
+                    // timeouts de secours si le client n'est pas correctement scopé
+                    'timeout' => self::TIMEOUT,
+                ]);
+                // Mise à jour des infos de rate à partir des headers
+                $this->updateBucketFromHeaders($bucketKey, $response->getHeaders(false));
+                $status = $response->getStatusCode();
+                if ($status === 429) {
+                    $attempt++;
+                    $waitUs = $this->computeBackoffUs($bucketKey, $response->getHeaders(false), $attempt);
+                    $this->bitmartLogger->warning('[Bitmart] 429 Too Many Requests; backing off', [
+                        'method' => $method,
+                        'path' => $path,
+                        'attempt' => $attempt,
+                        'wait_ms' => (int) round($waitUs / 1000),
+                    ]);
+                    if ($attempt >= self::MAX_RETRIES) {
+                        throw new RuntimeException('BitMart HTTP 429 after retries');
+                    }
+                    if ($waitUs > 0) {
+                        usleep($waitUs);
+                    }
+                    continue;
+                }
+                $parsed = $this->parseBitmartResponse($response);
+                $this->bitmartLogger->info('[Bitmart] Response', [
+                    'method' => $method,
+                    'path' => $path,
+                    'status' => $status,
+                    'code' => $parsed['code'] ?? null,
+                ]);
+                return $parsed;
+            } catch (\Throwable $e) {
+                $this->bitmartLogger->error('[Bitmart] Request failed', [
+                    'method' => $method,
+                    'path' => $path,
+                    'error' => $e->getMessage(),
+                ]);
+                throw $e;
+            }
+        } while ($attempt < self::MAX_RETRIES);
     }
 
     /**
@@ -485,6 +506,38 @@ class BitmartHttpClientPublic
         }
 
         return [$bucket, $limit, $window];
+    }
+
+    /**
+     * Calcule le backoff (microsecondes) à partir des headers ou fallback exponentiel (avec jitter).
+     */
+    private function computeBackoffUs(string $bucketKey, array $headers, int $attempt): int
+    {
+        $now = microtime(true);
+
+        // 1) Retry-After (secondes) si présent
+        $retryAfter = $this->findHeaderValue($headers, 'Retry-After');
+        if (is_string($retryAfter) && is_numeric(trim($retryAfter))) {
+            $sec = (float) trim($retryAfter);
+            return (int) round(min($sec * 1000.0, self::MAX_BACKOFF_MS) * 1000.0);
+        }
+
+        // 2) Headers X-BM-RateLimit-Reset précédemment enregistrés (reset_ts)
+        $state = $this->readBucketState($bucketKey);
+        $header = $state['header'] ?? [];
+        if (isset($header['reset_ts']) && is_numeric($header['reset_ts'])) {
+            $resetTs = (float) $header['reset_ts'];
+            if ($resetTs > $now) {
+                $waitSec = max(0.0, $resetTs - $now);
+                return (int) round(min($waitSec * 1000.0, self::MAX_BACKOFF_MS) * 1000.0);
+            }
+        }
+
+        // 3) Fallback exponentiel avec jitter
+        $base = self::BASE_BACKOFF_MS * (2 ** max(0, $attempt - 1));
+        $base = min($base, self::MAX_BACKOFF_MS);
+        $jitter = random_int(0, (int) round($base * 0.25));
+        return (int) (($base + $jitter) * 1000);
     }
 
     /**
