@@ -13,6 +13,7 @@ interface LeverageServiceInterface
         float $budgetUsdt,
         float $availableUsdt,
         int $minLeverage,
-        int $maxLeverage
+        int $maxLeverage,
+        ?float $stopPct = null
     ): int;
 }
