@@ -15,7 +15,6 @@ parameters:
     app.mtf_log_level: 'info'
     # Configuration pour le backtesting avec une heure fixe
     app.clock.fixed_time: null  # null = temps réel, sinon DateTimeImmutable pour backtesting
-    trading.file: '%kernel.project_dir%/config/trading.yml'
     bitmart_public_base_uri: '%env(string:BITMART_PUBLIC_API_URL)%'
     bitmart_private_base_uri: '%env(string:BITMART_PRIVATE_API_URL)%'
     trade_entry.order_timeout_seconds: 120
@@ -100,7 +99,7 @@ services:
         public: true
     App\Config\MtfContractsConfig:
         arguments:
-            $path: '%kernel.project_dir%/config/app/mtf_contracts.yaml'
+            $path: '%kernel.project_dir%/src/Provider/config/contracts.yaml'
 
     # BitMart HTTP Client
     App\Provider\Bitmart\Http\BitmartHttpClientPublic:
@@ -164,7 +163,22 @@ services:
     App\Config\MtfConfigProviderInterface: '@App\Config\TradingParameters'
     App\Config\MtfValidationConfig:
         arguments:
-            $path: '%kernel.project_dir%/config/app/mtf_validations.yaml'
+            $path: '%kernel.project_dir%/src/MtfValidator/config/validations.yaml'
+
+    App\Config\TradeEntryConfig:
+        arguments:
+            $path: '%kernel.project_dir%/config/app/trade_entry.yaml'
+        autowire: false
+
+    App\Config\SignalConfig:
+        arguments:
+            $path: '%kernel.project_dir%/config/app/signal.yaml'
+        autowire: false
+
+    App\Config\IndicatorConfig:
+        arguments:
+            $path: '%kernel.project_dir%/config/app/indicator.yaml'
+        autowire: false
 
     # Registre des conditions: injection automatique via AutowireLocator/AutowireIterator
     App\Indicator\ConditionLoader\ConditionRegistry:
@@ -196,6 +210,7 @@ services:
         arguments:
             $indicatorMain: '@App\Contract\Indicator\IndicatorMainProviderInterface'
             $tradingConfigService: '@App\Service\TradingConfigService'
+            $signalConfig: '@App\Config\SignalConfig'
             $klineDataService: '@App\Service\KlineDataService'
         tags: ['controller.service_arguments']
 
@@ -203,6 +218,7 @@ services:
     App\Service\TradingConfigService:
         arguments:
             $parameterBag: '@parameter_bag'
+            $tradeEntryConfig: '@App\Config\TradeEntryConfig'
 
     App\Service\KlineDataService: ~
 
@@ -211,7 +227,10 @@ services:
     # Config Services
     App\Config\TradingParameters:
         arguments:
-            $configFile: '%trading.file%'
+            $configFile: '%kernel.project_dir%/config/app/trade_entry.yaml'
+            $indicatorConfig: '@App\Config\IndicatorConfig'
+            $signalConfig: '@App\Config\SignalConfig'
+            $tradeEntryConfig: '@App\Config\TradeEntryConfig'
 
     # Service utilitaire pour le backtesting avec heure fixe
     App\Service\BacktestClockService:
@@ -224,6 +243,9 @@ services:
     App\Service\CsvAssignmentStorage:
         arguments:
             $filePath: '%kernel.project_dir%/var/hot_assignment.csv'
+
+    # Leverage Service - Dynamic calculation based on stop loss distance
+    App\Contract\EntryTrade\LeverageServiceInterface: '@App\TradeEntry\Service\Leverage\DynamicLeverageService'
 
     # === Handler Monolog qui publie dans Messenger (Async) ===
     # On le rend public pour pouvoir le référencer depuis monolog.yaml (type: service, id: ...)
