@@ -1,0 +1,71 @@
+# Configuration Signal
+# Sections extraites de trading.yml et organisées par fonctionnalité
+
+signal:
+    # ======== MTF FRAMESET ========
+    # ⚠️ UTILISÉES INDIRECTEMENT: Accès via getConfig()['mtf'] dans SignalValidationService.php, BaseTimeframeService.php, TpSlTwoTargetsService.php
+    mtf:
+        context: [4h, 1h]
+        execution: [15m, 5m, 1m]
+        meta: >
+            Contexte: 4h & 1h (tendance/validation). Exécution: 15m/5m/1m (timing).
+
+    # ======== TIMEFRAMES ========
+    # ✅ UTILISÉES: TradingConfigService::getMinBars(), TradingConfigService::getTimeframes()
+    timeframes:
+        '4h':  { guards: { min_bars: 200 } }
+        '1h':  { guards: { min_bars: 200 } }
+        '15m': { guards: { min_bars: 50 } }
+        '5m':  { guards: { min_bars: 50 } }
+        '1m':  { guards: { min_bars: 200 } }
+        meta: >
+            min_bars = max des exigences par indicateur utilisé sur le TF.
+            VWAP est intraday (reset quotidien), pas de plancher fixe au-delà du TF lui-même.
+
+    # ======== HIGH-CONVICTION DETECTION ========
+    # ✅ UTILISÉES: TradingConfigService::getConvictionHighConfig()
+    conviction_high:
+        all:
+            - mtf_confluence_ok          # 4h/1h/15m alignés même sens
+            - rsi_4h_gt_50               # momentum de fond sain
+            - rsi_4h_lt_70               # éviter surachat 4h
+            - rsi_1h_gt_50               # dynamique intermédiaire OK
+            - adx_gt_25                  # tendance suffisamment forte
+            - macd_hist_2x_mean           # accélération significative
+            - pullback_confirmed_ma21_vwap
+        meta: >
+            Marque les setups à forte probabilité: confluence MTF + momentum fort mais non sur-étiré.
+            Utilisé par leverage.conviction pour limiter/booster le levier de manière contrôlée.
+
+    # ======== REVERSAL PROTECTION (ANTI-RETOURNEMENT) ========
+    # ✅ UTILISÉES: TradingConfigService::getReversalProtectionConfig()
+    reversal_protection:
+        none_of:
+            - extended_above_ma21_2atr: true   # long: extension excessive
+            - extended_below_ma21_2atr: true   # short: extension excessive
+            - rsi_gt_85: true                  # éviter longs en surachat extrême (assoupli: 70->85)
+            - rsi_lt_15: true                  # éviter shorts en survente extrême (assoupli: 30->15)
+        meta: >
+            Garde-fous assouplis: seules les extensions ATR et RSI extrêmes bloquent les entrées.
+            Divergences et patterns de chandeliers retirés pour plus d'opportunités.
+
+    # ======== SCALP MODE TRIGGER (1–5 minutes) ========
+    # ✅ UTILISÉES: TradingConfigService::getScalpModeConfig()
+    scalp_mode_trigger:
+        all:
+            - mtf_confirmed: true              # 15m & 5m alignés avec 1m (ema_20/50 + macd_hist)
+            - timeframe: '1m'                  # exécution micro
+            - atr_rel_in_range: [0.001, 0.004] # 0.1–0.4 % du prix
+            - volume_rel_gt_1_5x: true         # participation confirmée
+            - ema_20_gt_50_or_lt_50: true      # autorise long OU short selon sens
+            - macd_hist_sign_aligned: true     # signe MACD aligné avec le sens
+            - vwap_slope_stable: true
+        overrides:
+            time_stop: '5m'                    # sortie forcée max
+            sl_atr_mult: 0.75                  # SL initial = 0.75x ATR(1m)
+            tp_r_multiple: 2.0                 # TP = 2R
+            leverage_multiplier: 0.5           # prudence en micro (déjà dans tf_multiplier=0.5)
+        meta: >
+            N'active le scalping 1m que si 15m et 5m confirment la direction. Exige ATR/volume suffisants,
+            VWAP stable et momentum cohérent. Applique un time-stop court et un SL/TP rapides.
+

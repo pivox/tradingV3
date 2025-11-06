@@ -1,0 +1,48 @@
+# Configuration Indicator
+# Sections extraites de trading.yml et organisées par fonctionnalité
+
+indicator:
+    # ======== INDICATORS ========
+    # ✅ UTILISÉES: TradingConfigService::getIndicatorsConfig()
+    indicators:
+        ema:
+            fast: 20
+            mid: 50
+            trend: 200
+            pullback_fast: 9                   # pour détection pullback
+            pullback_mid: 21                   # "MA21" implémentée en EMA(21)
+        macd:
+            fast: 12
+            slow: 26
+            signal: 9
+        vwap:
+            daily: true
+            timezone: 'UTC'
+        rsi:
+            period: 14
+            source: close
+        meta: >
+            EMA(20/50/200) pour structure, EMA(9/21) pour pullback, MACD (12,26,9) pour momentum,
+            VWAP daily pour repère intraday, RSI(14) pour filtrage de timing.
+
+    # ======== ATR ========
+    # ✅ UTILISÉES: TradingConfigService::getAtrConfig()
+    atr:
+        period: 14
+        method: wilder
+        timeframe: '5m'
+        sl_multiplier: 1.5                   # SL = k * ATR
+        r_multiple: 2.0
+        meta: >
+            ATR(5m) pour le stop et le R-multiple. SL initial = 1.5x ATR, TP = 2R.
+
+    # ======== INDICATOR CALCULATION MODE ========
+    # ✅ UTILISÉES: TradingConfigService::getIndicatorCalculationConfig()
+    calculation:
+        mode: php                            # 'php' ou 'sql'
+        fallback_to_php: true                # fallback vers PHP si SQL échoue
+        performance_threshold_ms: 10        # seuil de performance pour switch automatique
+        meta: >
+            Mode de calcul des indicateurs: 'sql' utilise les vues matérialisées PostgreSQL,
+            'php' utilise les calculs en mémoire. Fallback automatique si SQL échoue.
+

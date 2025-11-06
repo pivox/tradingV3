@@ -2,48 +2,27 @@ mtf_validation:
     defaults:
         allowed_execution_timeframes: ['1m','5m','15m']
         require_price_or_atr: true
-        # --- Trade Entry defaults (moved from services parameters) ---
+        # Flag pour valider tous les timeframes en dry-run (y compris 4h et 1h normalement réservés au contexte)
+        dry_run_validate_all_timeframes: true
         tick_size: 0.1
         zone_ttl_sec: 240
         k_low: 1.2
         k_high: 0.4
         k_stop_atr: 1.5
-        atr_k: 1.5
         tp1_r: 2.0
         tp1_size_pct: 60
         lev_min: 2.0
         lev_max: 20.0
-        k_dynamic: 10.0
         rsi_cap: 70.0
         require_pullback: true
         min_volume_ratio: 1.5
-        initial_margin_usdt: 50.0
-        risk_pct_percent: 5.0
-        r_multiple: 2.0
-        order_type: 'limit'
-        open_type: 'isolated'
-        order_mode: 1
-        stop_from: 'pivot'
-        pivot_sl_policy: 'nearest_below'  # ou 'strongest_below', 's1', 's2'
-        pivot_sl_buffer_pct: 0.0015       # petit décalage pour éviter le front-run (0.15%)
-        pivot_sl_min_keep_ratio: 0.8      # au moins 80 % de la distance ATR si plus serré
-        market_max_spread_pct: 0.001
-        inside_ticks: 1
-        max_deviation_pct: 0.005
-        implausible_pct: 0.02
-        zone_max_deviation_pct: 0.007
-        tp_policy: 'pivot_conservative'
-        tp_buffer_pct: 0.001
-        tp_buffer_ticks: 0
-        tp_min_keep_ratio: 0.95
-        tp_max_extra_r: 0.5
-        timeframe_multipliers:
-            '1m': 1.0
-            '5m': 0.75
-            '15m': 0.5
-            '1h': 0.35
-            '4h': 0.25
-        fallback_account_balance: 0.0
+        # Seuils ATR/close par timeframe pour atr_volatility_ok
+        atr_pct_thresholds:
+            '1m':  { min: 0.0010, max: 0.0300 }
+            '5m':  { min: 0.0010, max: 0.0300 }
+            '15m': { min: 0.0015, max: 0.0300 }
+            '1h':  { min: 0.0008, max: 0.0250 }
+            '4h':  { min: 0.0005, max: 0.0200 }
     rules:
         # --- MACD / RSI / EMA de base (inchangés ou consolidés) ---
         macd_hist_gt_eps:
@@ -176,79 +155,101 @@ mtf_validation:
             decreasing: { field: 'macd_hist', n: 2 }
 
     validation:
-        start_from_timeframe: '4h'
+        start_from_timeframe: '15m'
 
         timeframe:
 
-            '4h':  # Contexte / structure (adouci pour plus de signaux)
+            '4h':  # Contexte / structure (durci : structure de base requise)
                 long:
-                    - any_of:     # structure : au moins 1 des 3 (plus flexible)
-                          - all_of: [ ema_50_gt_200, close_above_ema_200 ]
-                          - all_of: [ ema_above_200_with_tolerance ]  # ajouté pour adoucir
-                          - all_of: [ ema200_slope_pos ]              # ajouté pour adoucir
+                    - all_of:     # structure : exiger la structure de base OU tolérance + confirmation
+                          - any_of:
+                              - all_of: [ ema_50_gt_200, close_above_ema_200 ]  # structure stricte
+                              - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]  # tolérance + confirmation
                     - price_regime_ok_long
                 short:
-                    - any_of:     # structure : au moins 1 des 3 (plus flexible)
-                          - all_of: [ ema_50_lt_200, close_below_ema_200 ]
-                          - all_of: [ ema_below_200_with_tolerance ]  # ajouté pour adoucir
-                          - all_of: [ ema200_slope_neg ]              # ajouté pour adoucir
+                    - all_of:     # structure : exiger la structure de base OU tolérance + confirmation
+                          - any_of:
+                              - all_of: [ ema_50_lt_200, close_below_ema_200 ]  # structure stricte
+                              - all_of: [ ema_below_200_with_tolerance, ema_50_lt_200 ]  # tolérance + confirmation
                     - price_regime_ok_short
 
-            '1h':  # Biais + momentum (adouci)
+            '1h':  # Biais + momentum (durci : structure + momentum requis)
                 long:
-                    - any_of:     # structure : au moins 1 des 3
-                          - all_of: [ ema_above_200_with_tolerance ]
-                          - all_of: [ ema200_slope_pos ]         # pente ≥ 0 (lookback 21)
-                          - all_of: [ ema_50_gt_200 ]
-                    - any_of:     # momentum : anti-bruit
-                          - all_of: [ macd_hist_gt_eps ]
-                          - all_of: [ macd_line_cross_up_with_hysteresis ]
-                          - all_of: [ macd_hist_slope_pos ]      # slope + persistance (= remplace monotonicité stricte)
+                    - all_of:     # structure : exiger structure ET momentum
+                          - any_of:
+                              - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]
+                              - all_of: [ ema200_slope_pos, ema_50_gt_200 ]
+                          - any_of:     # momentum : au moins 1 condition forte
+                              - all_of: [ macd_hist_gt_eps ]
+                              - all_of: [ macd_line_cross_up_with_hysteresis ]
+                              - all_of: [ macd_hist_slope_pos ]
                     - price_regime_ok_long
 
                 short:
-                    - any_of:     # structure : au moins 1 des 4 (équilibré avec LONG)
-                          - all_of: [ ema_below_200_with_tolerance ]
-                          - all_of: [ ema_50_lt_200 ]            # ajouté pour équilibrer
-                          - all_of: [ close_below_ema_200 ]       # ajouté pour équilibrer
-                          - all_of: [ ema200_slope_neg ]          # ajouté pour équilibrer
-                    - any_of:     # momentum : anti-bruit (équilibré avec LONG)
-                          - all_of: [ macd_line_cross_down_with_hysteresis ]
-                          - all_of: [ macd_hist_slope_neg ]
-                          - all_of: [ macd_hist_decreasing_n ]   # fallback compat
+                    - all_of:     # structure : exiger structure ET momentum
+                          - any_of:
+                              - all_of: [ ema_below_200_with_tolerance, ema_50_lt_200 ]
+                              - all_of: [ ema200_slope_neg, ema_50_lt_200 ]
+                          - any_of:     # momentum : au moins 1 condition forte
+                              - all_of: [ macd_line_cross_down_with_hysteresis ]
+                              - all_of: [ macd_hist_decreasing_n ]
+                              - all_of: [ macd_hist_slope_neg ]
                     - price_regime_ok_short
 
-            '15m':  # Exécution / timing (relaxé temporairement pour tests)
+            '15m':  # Exécution / timing (durci : multi-conditions requises)
                 long:
-                    - all_of:
+                    - all_of:     # Toutes les conditions doivent être remplies
                         - any_of:
-                            - all_of: [ macd_hist_gt_eps ]
-                            - all_of: [ atr_rel_in_range_15m, close_above_vwap_or_ma9 ]
-                            - all_of: [ ema20_over_50_with_tolerance ]
-                        - rsi_lt_70
+                            - all_of: [ macd_hist_gt_eps, ema20_over_50_with_tolerance ]
+                            - all_of: [ macd_line_cross_up_with_hysteresis, close_above_vwap_or_ma9 ]
+                        - ema20_over_50_with_tolerance  # Structure EMA requise
+                        - rsi_lt_70  # RSI non surchauffé
+                        - close_above_vwap_or_ma9  # Prix au-dessus du support
+                        - atr_volatility_ok  # Volatilité ATR dans une fourchette exploitable
                 short:
-                    - any_of:
-                          - all_of: [ macd_hist_decreasing_n ]
-                          - all_of: [ ema_below_200_with_tolerance ]
+                    - all_of:     # Toutes les conditions doivent être remplies
+                        - any_of:
+                            - all_of: [ macd_line_cross_down_with_hysteresis ]
+                            - all_of: [ macd_hist_decreasing_n, ema_20_lt_50 ]
+                        - ema_20_lt_50  # Structure EMA requise
+                        - rsi_gt_softfloor  # RSI non survendu
+                        - close_below_vwap  # Prix sous VWAP côté short
+                        - atr_volatility_ok  # Volatilité ATR dans une fourchette exploitable
 
-            '5m':   # Finesse d'entrée (relaxé pour tests)
+            '5m':   # Finesse d'entrée (durci : multi-conditions requises)
                 long:
-                    - any_of:
-                          - all_of: [ macd_hist_gt_eps ]
-                          - all_of: [ atr_rel_in_range_15m, close_above_vwap_or_ma9 ]
-                          - all_of: [ ema20_over_50_with_tolerance ]
+                    - all_of:     # Toutes les conditions doivent être remplies
+                        - any_of:
+                            - all_of: [ macd_hist_gt_eps, ema20_over_50_with_tolerance ]
+                            - all_of: [ macd_line_cross_up_with_hysteresis, close_above_vwap_or_ma9 ]
+                        - ema20_over_50_with_tolerance  # Structure EMA requise
+                        - close_above_vwap_or_ma9  # Prix au-dessus du support
+                        - rsi_lt_70  # RSI non surchauffé
+                        - atr_volatility_ok  # Volatilité ATR dans une fourchette exploitable
                 short:
-                    - any_of:
-                          - all_of: [ macd_hist_decreasing_n ]
-                          - all_of: [ ema_below_200_with_tolerance ]
+                    - all_of:     # Toutes les conditions doivent être remplies
+                        - any_of:
+                            - all_of: [ macd_line_cross_down_with_hysteresis ]
+                            - all_of: [ macd_hist_decreasing_n, ema_20_lt_50 ]
+                        - ema_20_lt_50  # Structure EMA requise
+                        - rsi_gt_softfloor  # RSI non survendu
+                        - close_below_vwap  # Prix sous VWAP côté short
+                        - atr_volatility_ok  # Volatilité ATR dans une fourchette exploitable
 
-            '1m':   # Micro-timing (relaxé pour tests)
+            '1m':   # Micro-timing (durci : multi-conditions requises)
                 long:
-                    - any_of:
-                          - all_of: [ macd_hist_gt_eps ]
-                          - all_of: [ atr_rel_in_range_15m, close_above_vwap_or_ma9 ]
-                          - all_of: [ ema20_over_50_with_tolerance ]
+                    - all_of:     # Toutes les conditions doivent être remplies
+                        - macd_hist_gt_eps  # Momentum MACD positif
+                        - ema20_over_50_with_tolerance  # Structure EMA requise
+                        - close_above_vwap_or_ma9  # Prix au-dessus du support
+                        - rsi_lt_70  # RSI non surchauffé
+                        - macd_hist_slope_pos  # Momentum en accélération
+                        - atr_volatility_ok    # Volatilité ATR dans une fourchette exploitable
                 short:
-                    - any_of:
-                          - all_of: [ macd_hist_decreasing_n ]
-                          - all_of: [ ema_below_200_with_tolerance ]
+                    - all_of:     # Toutes les conditions doivent être remplies
+                        - macd_hist_decreasing_n  # Momentum MACD négatif
+                        - ema_20_lt_50  # Structure EMA requise
+                        - rsi_gt_softfloor  # RSI non survendu
+                        - close_below_vwap      # Prix sous VWAP côté short
+                        - macd_hist_slope_neg   # Momentum en accélération
+                        - atr_volatility_ok     # Volatilité ATR dans une fourchette exploitable

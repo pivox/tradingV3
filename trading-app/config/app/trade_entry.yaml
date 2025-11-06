@@ -1,0 +1,149 @@
+# Configuration TradeEntry
+# Sections extraites de trading.yml et organisées par fonctionnalité
+
+# ======== VERSION & META ========
+# Version de la configuration (utilisée pour le versioning du cache)
+version: '2.5.92'
+
+# Métadonnées de la configuration
+meta:
+    name: SCALPING v2.0 - MTF + Pipeline + Leverage
+    description: >
+        Configuration complète avec persistance par timeframe, orchestration any_of ou séquentielle,
+        et levier dérivé du % risque avec multiplicateur par TF (clamp sur caps).
+        Indicateurs utilisés: EMA, MACD, VWAP, ATR (+ RSI pour le timing d'exécution).
+    created_at: '2025-10-05'
+
+trade_entry:
+    # ======== DEFAULTS (Paramètres par défaut pour TradeEntry) ========
+    # Clés déplacées depuis mtf_validations.yaml (section defaults)
+    defaults:
+        # --- Sizing & Risk ---
+        risk_pct_percent: 5.0                    # % risque par défaut (converti en décimal)
+        initial_margin_usdt: 20.0                 # Marge initiale en USDT
+        fallback_account_balance: 0.0             # Solde de fallback si marge invalide
+        timeframe_multipliers:                    # Multiplicateurs par timeframe pour ajuster sizing
+            '1m': 1.0
+            '5m': 0.75
+            '15m': 0.5
+            '1h': 0.35
+            '4h': 0.25
+        r_multiple: 2.0                           # Multiple R pour TP
+
+        # --- Stop Loss ---
+        stop_from: 'atr'                          # Source du stop ('atr' ou 'risk')
+        atr_k: 1.5                                # Multiplicateur ATR pour stop
+        pivot_sl_policy: 'nearest_below'           # Politique de Stop Loss pivot (ou 'strongest_below', 's1', 's2')
+        pivot_sl_buffer_pct: 0.003                # Buffer SL pivot en % (petit décalage pour éviter le front-run)
+        pivot_sl_min_keep_ratio: 0.8              # Ratio min à conserver pour SL pivot (au moins 80% de la distance ATR)
+        sl_full_size: true                        # SL de taille complète par défaut
+
+        # --- Take Profit ---
+        tp_policy: 'pivot_conservative'            # Politique de Take Profit
+        tp_buffer_pct: 0.001                       # Buffer TP en %
+        tp_buffer_ticks: 0                         # Buffer TP en ticks
+        tp_min_keep_ratio: 0.95                    # Ratio min à conserver pour TP
+        tp_max_extra_r: 0.5                        # R supplémentaire max pour TP
+
+        # --- Order Configuration ---
+        order_type: 'limit'                        # Type d'ordre ('limit' ou 'market')
+        open_type: 'isolated'                      # Type d'ouverture ('isolated' ou 'cross')
+        order_mode: 1                              # Mode d'ordre (1=taker, 4=maker)
+
+        # --- Market & Spread Guards ---
+        market_max_spread_pct: 0.001               # Spread max accepté (converti si > 1.0)
+        inside_ticks: 1                            # Nombre de ticks à l'intérieur
+        max_deviation_pct: 0.005                    # Déviation max (optionnel)
+        implausible_pct: 0.02                      # Seuil d'implausibilité (optionnel)
+        zone_max_deviation_pct: 0.007              # Déviation max de zone (optionnel)
+
+        # --- Leverage ---
+        k_dynamic: 10.0                            # Multiplicateur dynamique pour cap du levier
+
+    # ======== RISK MANAGEMENT ========
+    # ✅ UTILISÉES: TradingConfigService::getRiskConfig(), TradingParameters::riskPct()
+    risk:
+        fixed_risk_pct: 5.0                        # % du capital risqué par trade (base)
+        daily_max_loss_pct: 6.0                     # Coupe-circuit journalier
+        max_concurrent_positions: 4                  # Limite de positions simultanées
+        meta: >
+            Risque fixe par trade, coupe-circuit journalier et limite de positions simultanées.
+
+    # ======== LEVERAGE CONFIGURATION ========
+    # ✅ UTILISÉES: TradingConfigService::getLeverageConfig(), TradingParameters::getTimeframeMultipliers()
+    leverage:
+        mode: dynamic_from_risk                     # base = risk_pct / stop_pct (puis clamps)
+        floor: 1.0                                   # Levier minimum
+        exchange_cap: 20.0                          # Levier maximum de l'exchange
+        per_symbol_caps:                            # Caps par symbole
+            - { symbol_regex: "^(BTC|ETH).*", cap: 10.0 }
+            - { symbol_regex: "^NVDAXUSDT$", cap: 5.0 }
+        timeframe_multipliers:                       # Multiplicateurs par timeframe
+            '4h': 1.0
+            '1h': 1.0
+            '15m': 1.0
+            '5m': 0.75
+            '1m': 0.5
+        confidence_multiplier:                       # Multiplicateur de confiance
+            enabled: true
+            default: 1.0
+            when_upstream_stale: 0.8                 # ex: 15m expiré mais 5m valide
+            when_tie_breaker_used: 0.8
+        conviction:                                  # Boost de conviction
+            enabled: true
+            cap_pct_of_exchange: 0.60                # 60% du levier max exchange si conviction_high
+            meta: >
+                Quand un setup high-conviction est détecté, le levier final = min(levier_dynamique, 0.60 * exchange_cap),
+                puis clamps par per_symbol_caps et tf_multiplier.
+        rounding:                                    # Arrondi du levier final
+            precision: 2                             # arrondi du levier final (ex. 12.34)
+            mode: floor
+        meta: >
+            Levier dérivé du risque et de la distance de stop (ATR), borné par des caps globaux/symbole/TF.
+            Un boost mesuré est possible via conviction_high.
+
+    # ======== TRADING DECISION ========
+    # ✅ UTILISÉES: TradingDecisionHandler.php via TradeEntryConfig
+    decision:
+        # Timeframes autorisés pour l'exécution (pilotent TradingDecisionHandler::canExecuteTrading)
+        allowed_execution_timeframes: ['1m','5m','15m']
+        # Exiger au moins un prix courant ou un ATR pour tenter une exécution
+        require_price_or_atr: true
+
+    # ======== ENTRY BUDGET & QUANTIZATION ========
+    # ❌ NON UTILISÉES: Section complète non référencée dans le code
+    entry:
+        prefer_maker: true
+        fallback_taker: true
+        budget:
+            mode: fixed_or_available
+            fixed_usdt_if_available: 40       # utilise 40 USDT si dispo, sinon solde dispo
+        quantization:
+            price_tick: from_exchange
+            qty_step: from_exchange
+        slippage_guard_bps: 8                # 0.08% max dérive
+        spread_guard_bps: 6                  # 0.06% max spread
+        meta: >
+            Préférence maker mais fallback taker si nécessaire. Budget d'ouverture fixe/solde dispo.
+            Quantification aux règles exchange et garde-fous de spread/slippage.
+
+    # ======== POST-VALIDATION (ENTRY ZONE + POSITION OPENER) ========
+    post_validation:
+        entry_zone:
+            # ✅ UTILISÉES: EntryZoneCalculator.php
+            vwap_anchor: true
+            k_atr: 0.30                    # largeur relative à ATR (retour zone modérée)
+            w_min: 0.0005                  # largeur minimale (0.05%)
+            w_max: 0.0100                  # largeur maximale (1.00%)
+            quantize_to_exchange_step: true # quantification aux pas exchange
+
+        # ✅ UTILISÉES: TradingDecisionHandler.php
+        idempotency:
+            decision_key_tpl: "{symbol}:{timeframe}:{candle_open_ts}"
+            max_attempts: 3                # max tentatives par décision
+        meta: >
+            Configuration Post-Validation pour EntryZone + PositionOpener.
+            Transforme un signal validé (MTF) en plans d'exécution sûrs, traçables et idempotents.
+            Sélection dynamique 1m vs 5m, calcul du dernier prix (WS->REST->K-line),
+            sizing, levier, orchestration, état, tests, observabilité.
+
