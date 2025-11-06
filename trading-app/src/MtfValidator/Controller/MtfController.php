@@ -6,6 +6,7 @@ namespace App\MtfValidator\Controller;
 
 use App\Contract\Provider\MainProviderInterface;
 use App\MtfValidator\Service\MtfService;
+use App\MtfValidator\Service\Runner\MtfRunOrchestrator;
 use App\MtfValidator\Service\MtfRunService;
 use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
@@ -38,6 +39,7 @@ class MtfController extends AbstractController
         private readonly OrderPlanRepository $orderPlanRepository,
         private readonly LoggerInterface $logger,
         private readonly MtfRunService $mtfRunService,
+        private readonly MtfRunOrchestrator $orchestrator,
         private readonly ClockInterface $clock,
         private readonly ContractRepository $contractRepository,
         private readonly MainProviderInterface $mainProvider,
@@ -531,6 +533,13 @@ class MtfController extends AbstractController
 
         try {
             if ($workers > 1) {
+                // Pré-filtrer côté contrôleur pour réduire les 429 et passer l'info aux workers
+                try {
+                    $prefilterRunId = Uuid::uuid4()->toString();
+                    $symbols = $this->orchestrator->filterSymbolsWithOpenOrdersOrPositions($symbols, 'http:' . $prefilterRunId);
+                } catch (\Throwable $e) {
+                    $this->logger->warning('[MTF Controller] Pré-filtrage échoué', ['error' => $e->getMessage()]);
+                }
                 $result = $this->runParallelViaWorkers(
                     $symbols,
                     $dryRun,
@@ -706,6 +715,7 @@ class MtfController extends AbstractController
             'force_run' => $forceRun,
             'current_tf' => $currentTf,
             'force_timeframe_check' => $forceTimeframeCheck,
+            'skip_open_filter' => true,
         ];
 
         while (!$queue->isEmpty() || $active !== []) {
@@ -851,6 +861,10 @@ class MtfController extends AbstractController
         }
         if ($options['force_timeframe_check']) {
             $command[] = '--force-timeframe-check';
+        }
+
+        if (!empty($options['skip_open_filter'])) {
+            $command[] = '--skip-open-filter';
         }
 
         return $command;

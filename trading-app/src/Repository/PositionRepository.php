@@ -32,6 +32,38 @@ class PositionRepository extends ServiceEntityRepository
         $em->persist($position);
         $em->flush();
     }
+
+    /**
+     * Récupère toutes les positions ouvertes
+     * @return Position[]
+     */
+    public function findAllOpen(): array
+    {
+        return $this->findBy(['status' => 'OPEN']);
+    }
+
+    /**
+     * Récupère les symboles uniques des positions ouvertes
+     * @return string[]
+     */
+    public function findOpenSymbols(): array
+    {
+        $qb = $this->createQueryBuilder('p');
+        $results = $qb
+            ->select('DISTINCT p.symbol')
+            ->where('p.status = :status')
+            ->setParameter('status', 'OPEN')
+            ->getQuery()
+            ->getResult();
+
+        // Doctrine peut retourner soit un tableau associatif ['symbol' => '...'], soit un tableau indexé
+        return array_map(function($row) {
+            if (is_array($row)) {
+                return isset($row['symbol']) ? (string)$row['symbol'] : (string)array_values($row)[0];
+            }
+            return (string)$row;
+        }, $results);
+    }
 }
 
 

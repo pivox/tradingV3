@@ -9,6 +9,7 @@ use App\Repository\ContractRepository;
 use App\Repository\KlineRepository;
 use App\Service\KlineDataService;
 use App\Service\TradingConfigService;
+use App\Config\SignalConfig;
 use App\Contract\Signal\SignalValidationServiceInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -21,6 +22,7 @@ class IndicatorTestController extends AbstractController
 {
     private IndicatorMainProviderInterface $indicatorMain;
     private TradingConfigService $tradingConfigService;
+    private SignalConfig $signalConfig;
     private KlineDataService $klineDataService;
     private ContractRepository $contractRepository;
     private KlineRepository $klineRepository;
@@ -30,6 +32,7 @@ class IndicatorTestController extends AbstractController
     public function __construct(
         IndicatorMainProviderInterface $indicatorMain,
         TradingConfigService $tradingConfigService,
+        SignalConfig $signalConfig,
         KlineDataService $klineDataService,
         ContractRepository $contractRepository,
         KlineRepository $klineRepository,
@@ -38,6 +41,7 @@ class IndicatorTestController extends AbstractController
     ) {
         $this->indicatorMain = $indicatorMain;
         $this->tradingConfigService = $tradingConfigService;
+        $this->signalConfig = $signalConfig;
         $this->klineDataService = $klineDataService;
         $this->contractRepository = $contractRepository;
         $this->klineRepository = $klineRepository;
@@ -49,16 +53,16 @@ class IndicatorTestController extends AbstractController
     public function testPage(): Response
     {
         $tradingConfig = $this->tradingConfigService->getConfig();
-        $availableTimeframes = $this->tradingConfigService->getTimeframes();
+        $availableTimeframes = $this->signalConfig->getTimeframes();
 
         // Créer un mapping des timeframes avec leurs règles de validation
         $timeframesWithRules = [];
         foreach ($availableTimeframes as $tf) {
-            $rules = $this->tradingConfigService->getTimeframeValidationRules($tf);
+            $minBars = $this->signalConfig->getMinBars($tf);
             $timeframesWithRules[$tf] = [
                 'label' => $this->getTimeframeLabel($tf),
-                'rules' => $rules,
-                'min_bars' => $rules['min_bars'] ?? 50
+                'rules' => [],
+                'min_bars' => $minBars
             ];
         }
 
@@ -94,13 +98,13 @@ class IndicatorTestController extends AbstractController
             $customData = $data['custom_data'] ?? null;
             $klinesJson = $data['klines_json'] ?? null;
 
-            // Validation du timeframe avec trading.yml
-            if (!$this->tradingConfigService->isTimeframeValid($timeframe)) {
+            // Validation du timeframe avec signal.yaml
+            if (!$this->signalConfig->isTimeframeValid($timeframe)) {
                 return new JsonResponse([
                     'success' => false,
                     'error' => 'Invalid timeframe',
-                    'message' => "Le timeframe '$timeframe' n'est pas configuré dans trading.yml",
-                    'available_timeframes' => $this->tradingConfigService->getTimeframes()
+                    'message' => "Le timeframe '$timeframe' n'est pas configuré dans signal.yaml",
+                    'available_timeframes' => $this->signalConfig->getTimeframes()
                 ], Response::HTTP_BAD_REQUEST);
             }
 
@@ -560,12 +564,12 @@ class IndicatorTestController extends AbstractController
             }
 
             // Validation du timeframe
-            if (!$this->tradingConfigService->isTimeframeValid($timeframe)) {
+            if (!$this->signalConfig->isTimeframeValid($timeframe)) {
                 return new JsonResponse([
                     'success' => false,
                     'error' => 'Invalid timeframe',
-                    'message' => "Le timeframe '$timeframe' n'est pas configuré dans trading.yml",
-                    'available_timeframes' => $this->tradingConfigService->getTimeframes()
+                    'message' => "Le timeframe '$timeframe' n'est pas configuré dans signal.yaml",
+                    'available_timeframes' => $this->signalConfig->getTimeframes()
                 ], Response::HTTP_BAD_REQUEST);
             }
 
