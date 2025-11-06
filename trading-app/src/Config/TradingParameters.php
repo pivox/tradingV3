@@ -12,9 +12,24 @@ class TradingParameters implements MtfConfigProviderInterface
 
     public function __construct(
         private readonly string $configFile,
+        private readonly ?IndicatorConfig $indicatorConfig = null,
+        private readonly ?SignalConfig $signalConfig = null,
+        private readonly ?TradeEntryConfig $tradeEntryConfig = null,
     ){
-        $this->cache = $this->parseYamlFile($this->configFile);
-        $this->cachedVersion = $this->cache['version'] ?? null;
+        // Charger depuis trade_entry.yaml si disponible, sinon configFile (fallback)
+        if ($this->tradeEntryConfig !== null) {
+            $tradeEntryPath = \dirname(__DIR__, 2) . '/config/app/trade_entry.yaml';
+            if (is_file($tradeEntryPath)) {
+                $this->cache = $this->parseYamlFile($tradeEntryPath);
+                $this->cachedVersion = $this->cache['version'] ?? null;
+            } else {
+                $this->cache = $this->parseYamlFile($this->configFile);
+                $this->cachedVersion = $this->cache['version'] ?? null;
+            }
+        } else {
+            $this->cache = $this->parseYamlFile($this->configFile);
+            $this->cachedVersion = $this->cache['version'] ?? null;
+        }
     }
 
     /**
@@ -40,7 +55,7 @@ class TradingParameters implements MtfConfigProviderInterface
     }
 
     /**
-     * Charge la configuration principale (scalping/mtf) depuis config/trading.yml.
+     * Charge la configuration principale depuis config/app/trade_entry.yaml (migration depuis trading.yml).
      * @return array<string,mixed>
      */
     public function all(): array
@@ -51,18 +66,28 @@ class TradingParameters implements MtfConfigProviderInterface
 
     public function riskPct(): float
     {
+        if ($this->tradeEntryConfig !== null) {
+            $risk = $this->tradeEntryConfig->getRisk();
+            return (float) (($risk['fixed_risk_pct'] ?? 5.0) / 100.0);
+        }
         $cfg = $this->all();
         return (float) (($cfg['risk']['fixed_risk_pct'] ?? 5.0) / 100.0);
     }
 
     public function atrPeriod(): int
     {
+        if ($this->indicatorConfig !== null) {
+            return $this->indicatorConfig->getAtrPeriod();
+        }
         $cfg = $this->all();
         return (int) ($cfg['atr']['period'] ?? 14);
     }
 
     public function slMult(): float
     {
+        if ($this->indicatorConfig !== null) {
+            return $this->indicatorConfig->getAtrSlMultiplier();
+        }
         $cfg = $this->all();
         return (float) ($cfg['atr']['sl_multiplier'] ?? 1.5);
     }
@@ -76,8 +101,11 @@ class TradingParameters implements MtfConfigProviderInterface
 
     public function getFetchLimitForTimeframe(string $tf): int
     {
+        if ($this->signalConfig !== null) {
+            return $this->signalConfig->getMinBars($tf);
+        }
         $cfg = $this->all();
-        return (int)($cfg['timeframes'][$timeframe->value]['guards']['min_bars'] ?? 270);
+        return (int)($cfg['timeframes'][$tf]['guards']['min_bars'] ?? 270);
     }
 
     /**
@@ -85,6 +113,11 @@ class TradingParameters implements MtfConfigProviderInterface
      */
     public function getTimeframeMultipliers(): array
     {
+        if ($this->tradeEntryConfig !== null) {
+            $leverage = $this->tradeEntryConfig->getLeverage();
+            $multipliers = $leverage['timeframe_multipliers'] ?? [];
+            return \is_array($multipliers) ? $multipliers : [];
+        }
         $cfg = $this->all();
         $multipliers = $cfg['leverage']['timeframe_multipliers'] ?? [];
         return \is_array($multipliers) ? $multipliers : [];
@@ -96,13 +129,28 @@ class TradingParameters implements MtfConfigProviderInterface
     private function checkVersionAndRefresh(): void
     {
         if ($this->cache === null) {
+            if ($this->tradeEntryConfig !== null) {
+                $tradeEntryPath = \dirname(__DIR__, 2) . '/config/app/trade_entry.yaml';
+                if (is_file($tradeEntryPath)) {
+                    $this->cache = $this->parseYamlFile($tradeEntryPath);
+                    $this->cachedVersion = $this->cache['version'] ?? null;
+                    return;
+                }
+            }
             $this->cache = $this->parseYamlFile($this->configFile);
             $this->cachedVersion = $this->cache['version'] ?? null;
             return;
         }
 
         // Vérifier si le fichier a été modifié
-        $currentConfig = $this->parseYamlFile($this->configFile);
+        $fileToCheck = $this->configFile;
+        if ($this->tradeEntryConfig !== null) {
+            $tradeEntryPath = \dirname(__DIR__, 2) . '/config/app/trade_entry.yaml';
+            if (is_file($tradeEntryPath)) {
+                $fileToCheck = $tradeEntryPath;
+            }
+        }
+        $currentConfig = $this->parseYamlFile($fileToCheck);
         $currentVersion = $currentConfig['version'] ?? null;
 
         // Si la version a changé, rafraîchir le cache
