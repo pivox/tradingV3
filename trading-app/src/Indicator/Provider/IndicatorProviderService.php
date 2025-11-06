@@ -297,22 +297,39 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
             $pp = ($high + $low + $close) / 3.0;
             $range = $high - $low;
+            $ppMinusLow = $pp - $low;
+            $highMinusPp = $high - $pp;
 
+            // Résistances (R1 à R6)
             $r1 = 2 * $pp - $low;
-            $s1 = 2 * $pp - $high;
             $r2 = $pp + $range;
+            $r3 = $high + 2 * $ppMinusLow;
+            $r4 = $high + 3 * $ppMinusLow;
+            $r5 = $high + 4 * $ppMinusLow;
+            $r6 = $high + 5 * $ppMinusLow;
+
+            // Supports (S1 à S6)
+            $s1 = 2 * $pp - $high;
             $s2 = $pp - $range;
-            $r3 = $high + 2 * ($pp - $low);
-            $s3 = $low - 2 * ($high - $pp);
+            $s3 = $low - 2 * $highMinusPp;
+            $s4 = $low - 3 * $highMinusPp;
+            $s5 = $low - 4 * $highMinusPp;
+            $s6 = $low - 5 * $highMinusPp;
 
             return [
                 'pp' => $pp,
                 'r1' => $r1,
                 'r2' => $r2,
                 'r3' => $r3,
+                'r4' => $r4,
+                'r5' => $r5,
+                'r6' => $r6,
                 's1' => $s1,
                 's2' => $s2,
                 's3' => $s3,
+                's4' => $s4,
+                's5' => $s5,
+                's6' => $s6,
             ];
         }
 
