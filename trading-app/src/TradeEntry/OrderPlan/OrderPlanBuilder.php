@@ -238,6 +238,50 @@ final class OrderPlanBuilder
             }
             $stopAtr = $this->slc->fromAtr($entry, $req->side, (float)$req->atrValue, (float)$req->atrK, $precision);
             $sizingDistance = max(abs($entry - $stopAtr), $tick);
+            
+            // CRITICAL GUARD: Appliquer la garde minimale absolue de 0.5% aussi pour les SL basés sur ATR
+            // Cette garde doit être appliquée AVANT la sélection du stop final pour garantir
+            // que tous les SL respectent le minimum absolu, indépendamment de la méthode de calcul
+            $MIN_STOP_DISTANCE_PCT = 0.005; // 0.5% minimum absolu
+            $atrStopDistancePct = abs($entry - $stopAtr) / max($entry, 1e-9);
+            
+            if ($atrStopDistancePct < $MIN_STOP_DISTANCE_PCT) {
+                $minAbsoluteDistance = max($tick, $MIN_STOP_DISTANCE_PCT * $entry);
+                $target = $req->side === Side::Long
+                    ? max($entry - $minAbsoluteDistance, $tick)
+                    : $entry + $minAbsoluteDistance;
+                $target = $req->side === Side::Long
+                    ? TickQuantizer::quantize(max($target, $tick), $precision)
+                    : TickQuantizer::quantizeUp($target, $precision);
+                
+                if (\is_finite($target) && $target > 0.0 && $target !== $entry) {
+                    $previousAtrStop = $stopAtr;
+                    $stopAtr = $target;
+                    $sizingDistance = max(abs($entry - $stopAtr), $tick);
+                    
+                    $this->flowLogger->info('order_plan.atr_stop_min_absolute_distance_enforced', [
+                        'symbol' => $req->symbol,
+                        'side' => $req->side->value,
+                        'entry' => $entry,
+                        'atr_stop_before' => $previousAtrStop,
+                        'atr_stop_after' => $stopAtr,
+                        'distance_pct_before' => round($atrStopDistancePct * 100, 4),
+                        'distance_pct_after' => round($MIN_STOP_DISTANCE_PCT * 100, 2),
+                        'min_absolute_distance_pct' => $MIN_STOP_DISTANCE_PCT * 100,
+                        'decision_key' => $decisionKey,
+                    ]);
+                    $this->journeyLogger->info('order_journey.plan_builder.atr_stop_min_absolute_distance_enforced', [
+                        'symbol' => $req->symbol,
+                        'decision_key' => $decisionKey,
+                        'entry' => $entry,
+                        'atr_stop_before' => $previousAtrStop,
+                        'atr_stop_after' => $stopAtr,
+                        'distance_pct_before' => round($atrStopDistancePct * 100, 4),
+                        'distance_pct_after' => round($MIN_STOP_DISTANCE_PCT * 100, 2),
+                        'reason' => 'atr_stop_min_absolute_distance_0_5_pct_enforced',
+                    ]);
+                }
+            }
         }
 
         if ($stopPivot !== null && $pivotGuardAtr !== null) {
@@ -283,6 +327,52 @@ final class OrderPlanBuilder
                             'reason' => 'pivot_stop_upheld_by_min_keep_ratio',
                         ]);
                     }
+                }
+            }
+        }
+
+        // CRITICAL GUARD: Appliquer la garde minimale absolue de 0.5% aussi pour les SL pivot
+        // Cette garde doit être appliquée AVANT la sélection du stop final pour garantir
+        // que tous les SL respectent le minimum absolu, indépendamment de la méthode de calcul
+        if ($stopPivot !== null) {
+            $MIN_STOP_DISTANCE_PCT = 0.005; // 0.5% minimum absolu
+            $pivotStopDistancePct = abs($entry - $stopPivot) / max($entry, 1e-9);
+            
+            if ($pivotStopDistancePct < $MIN_STOP_DISTANCE_PCT) {
+                $minAbsoluteDistance = max($tick, $MIN_STOP_DISTANCE_PCT * $entry);
+                $target = $req->side === Side::Long
+                    ? max($entry - $minAbsoluteDistance, $tick)
+                    : $entry + $minAbsoluteDistance;
+                $target = $req->side === Side::Long
+                    ? TickQuantizer::quantize(max($target, $tick), $precision)
+                    : TickQuantizer::quantizeUp($target, $precision);
+                
+                if (\is_finite($target) && $target > 0.0 && $target !== $entry) {
+                    $previousPivotStop = $stopPivot;
+                    $stopPivot = $target;
+                    $sizingDistance = max(abs($entry - $stopPivot), $tick);
+                    
+                    $this->flowLogger->info('order_plan.pivot_stop_min_absolute_distance_enforced', [
+                        'symbol' => $req->symbol,
+                        'side' => $req->side->value,
+                        'entry' => $entry,
+                        'pivot_stop_before' => $previousPivotStop,
+                        'pivot_stop_after' => $stopPivot,
+                        'distance_pct_before' => round($pivotStopDistancePct * 100, 4),
+                        'distance_pct_after' => round($MIN_STOP_DISTANCE_PCT * 100, 2),
+                        'min_absolute_distance_pct' => $MIN_STOP_DISTANCE_PCT * 100,
+                        'decision_key' => $decisionKey,
+                    ]);
+                    $this->journeyLogger->info('order_journey.plan_builder.pivot_stop_min_absolute_distance_enforced', [
+                        'symbol' => $req->symbol,
+                        'decision_key' => $decisionKey,
+                        'entry' => $entry,
+                        'pivot_stop_before' => $previousPivotStop,
+                        'pivot_stop_after' => $stopPivot,
+                        'distance_pct_before' => round($pivotStopDistancePct * 100, 4),
+                        'distance_pct_after' => round($MIN_STOP_DISTANCE_PCT * 100, 2),
+                        'reason' => 'pivot_stop_min_absolute_distance_0_5_pct_enforced',
+                    ]);
                 }
             }
         }
@@ -355,6 +445,9 @@ final class OrderPlanBuilder
             if ($stopPivot !== null) {
                 $stopPivot = $stop;
             }
+            if ($stopAtr !== null) {
+                $stopAtr = $stop;
+            }
 
             $sizingDistance = max(abs($entry - $stop), $tick);
             $size = $this->positionSizer->fromRiskAndDistance($riskUsdt, $sizingDistance, $contractSize, $minVolume);
@@ -383,6 +476,18 @@ final class OrderPlanBuilder
                     'stop_before' => $previousStop,
                     'stop_after' => $stop,
                     'reason' => 'pivot_stop_min_distance_enforced',
+                ]);
+            } elseif ($stopAtr !== null) {
+                $this->flowLogger->notice('order_plan.stop_min_distance_adjusted_atr', $logContext + [
+                    'reason' => 'atr_stop_adjusted',
+                ]);
+                $this->journeyLogger->notice('order_journey.plan_builder.stop_min_distance_adjusted_atr', [
+                    'symbol' => $req->symbol,
+                    'decision_key' => $decisionKey,
+                    'entry' => $entry,
+                    'stop_before' => $previousStop,
+                    'stop_after' => $stop,
+                    'reason' => 'atr_stop_min_distance_enforced',
                 ]);
             } else {
                 $this->flowLogger->notice('order_plan.stop_min_distance_adjusted', $logContext + [
@@ -446,6 +551,9 @@ final class OrderPlanBuilder
             );
         }
 
+        // Calculer stopPct pour le calcul dynamique du levier
+        $stopPct = abs($stop - $entry) / max($entry, 1e-9);
+
         $this->flowLogger->debug('order_plan.stop_and_tp', [
             'symbol' => $req->symbol,
             'entry' => $entry,
@@ -456,6 +564,7 @@ final class OrderPlanBuilder
             'stop_atr' => $stopAtr,
             'stop_risk' => $stopRisk,
             'stop' => $stop,
+            'stop_pct' => $stopPct,
             'tp' => $takeProfit,
             'r_multiple' => $req->rMultiple,
             'pivot_sl_policy' => $req->pivotSlPolicy,
@@ -469,6 +578,7 @@ final class OrderPlanBuilder
             'decision_key' => $decisionKey,
             'entry' => $entry,
             'stop' => $stop,
+            'stop_pct' => $stopPct,
             'take_profit' => $takeProfit,
             'stop_pivot' => $stopPivot,
             'pivot_sl_policy' => $req->pivotSlPolicy,
@@ -485,7 +595,8 @@ final class OrderPlanBuilder
             $req->initialMarginUsdt,
             $pre->availableUsdt,
             $pre->minLeverage,
-            $pre->maxLeverage
+            $pre->maxLeverage,
+            $stopPct
         );
 
         $notional = $entry * $contractSize * $sizeContracts;
