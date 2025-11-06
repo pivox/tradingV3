@@ -33,6 +33,7 @@ final class TradeTpSlTwoTargetsCommand extends Command
             ->addOption('split', null, InputOption::VALUE_REQUIRED, 'Fraction du size sur TP1 (0..1)')
             ->addOption('keep-sl', null, InputOption::VALUE_NONE, 'Ne pas annuler SL existant même si différent')
             ->addOption('keep-tp', null, InputOption::VALUE_NONE, 'Ne pas annuler TP existants')
+            ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Mode simulation : aucun ordre ne sera annulé ou placé')
         ;
     }
 
@@ -50,6 +51,12 @@ final class TradeTpSlTwoTargetsCommand extends Command
         $entry = $input->getOption('entry');
         $size = $input->getOption('size');
         $split = $input->getOption('split');
+        $dryRun = $input->getOption('dry-run');
+        
+        if ($dryRun) {
+            $output->writeln('<info>Mode DRY-RUN activé : aucun ordre ne sera annulé ou placé</info>');
+        }
+        
         $dto = new TpSlTwoTargetsRequest(
             symbol: $symbol,
             side: $side,
@@ -59,6 +66,7 @@ final class TradeTpSlTwoTargetsCommand extends Command
             splitPct: $split !== null ? (float)$split : null,
             cancelExistingStopLossIfDifferent: !$input->getOption('keep-sl'),
             cancelExistingTakeProfits: !$input->getOption('keep-tp'),
+            dryRun: $dryRun,
         );
 
         try {
@@ -68,10 +76,15 @@ final class TradeTpSlTwoTargetsCommand extends Command
             return Command::FAILURE;
         }
 
+        if ($dryRun) {
+            $output->writeln('<comment>=== MODE DRY-RUN ===</comment>');
+        }
         $output->writeln(sprintf('SL=%.8f TP1=%.8f TP2=%.8f', $result['sl'], $result['tp1'], $result['tp2']));
         foreach ($result['submitted'] as $row) {
+            $prefix = $dryRun ? '[DRY-RUN] ' : '';
             $output->writeln(sprintf(
-                'Submitted %s %s @ %.8f size=%d id=%s cid=%s',
+                '%sSubmitted %s %s @ %.8f size=%d id=%s cid=%s',
+                $prefix,
                 $row['type'],
                 $row['side'],
                 $row['price'],
@@ -81,7 +94,8 @@ final class TradeTpSlTwoTargetsCommand extends Command
             ));
         }
         if (!empty($result['cancelled'])) {
-            $output->writeln('Cancelled: ' . implode(', ', $result['cancelled']));
+            $prefix = $dryRun ? '[DRY-RUN] ' : '';
+            $output->writeln($prefix . 'Cancelled: ' . implode(', ', $result['cancelled']));
         }
 
         return Command::SUCCESS;

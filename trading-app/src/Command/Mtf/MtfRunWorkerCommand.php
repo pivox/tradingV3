@@ -29,6 +29,7 @@ final class MtfRunWorkerCommand extends Command
             ->addOption('tf', null, InputOption::VALUE_OPTIONAL, 'Limite à un timeframe (4h|1h|15m|5m|1m)')
             ->addOption('force-timeframe-check', null, InputOption::VALUE_NONE, 'Force l\'analyse du timeframe même si la dernière kline est récente')
             ->addOption('skip-context', null, InputOption::VALUE_NONE, 'Ignorer l\'alignement de contexte pour les TF d\'exécution')
+            ->addOption('skip-open-filter', null, InputOption::VALUE_NONE, 'Ne pas refiltrer les symboles par ordres/positions ouverts (déjà fait en amont)')
             ->addOption('auto-switch-invalid', null, InputOption::VALUE_NONE, 'Active la gestion auto des symboles INVALID (transmis au service)')
             ->addOption('switch-duration', null, InputOption::VALUE_OPTIONAL, 'Durée de désactivation pour les INVALID', '1d')
             ->addOption('lock-per-symbol', null, InputOption::VALUE_NONE, 'Forcer l\'utilisation d\'un verrou par symbole (activé par défaut)')
@@ -55,6 +56,7 @@ final class MtfRunWorkerCommand extends Command
         $forceTimeframeCheck = (bool) $input->getOption('force-timeframe-check');
         $autoSwitchInvalid = (bool) $input->getOption('auto-switch-invalid');
         $skipContext = (bool) $input->getOption('skip-context');
+        $skipOpenFilter = (bool) $input->getOption('skip-open-filter');
         $switchDuration = (string) $input->getOption('switch-duration');
         $lockPerSymbol = $input->hasParameterOption('--lock-per-symbol') ? (bool) $input->getOption('lock-per-symbol') : true;
         $userId = $input->getOption('user-id');
@@ -72,6 +74,7 @@ final class MtfRunWorkerCommand extends Command
                 forceTimeframeCheck: $forceTimeframeCheck,
                 skipContextValidation: $skipContext,
                 lockPerSymbol: $lockPerSymbol,
+                skipOpenStateFilter: $skipOpenFilter,
                 userId: $userId,
                 ipAddress: $ipAddress
             );

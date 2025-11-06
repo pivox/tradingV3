@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Command\Mtf;
 
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
+use App\MtfValidator\Service\Runner\MtfRunOrchestrator;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Entity\MtfSwitch;
 use App\Contract\Provider\MainProviderInterface;
@@ -35,6 +36,7 @@ class MtfRunCommand extends Command
         private readonly ContractRepository $contractRepository,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly EntityManagerInterface $entityManager,
+        private readonly MtfRunOrchestrator $orchestrator,
         #[Autowire('%kernel.project_dir%')] private readonly string $projectDir,
     ) {
         parent::__construct();
@@ -152,6 +154,15 @@ class MtfRunCommand extends Command
                 return Command::SUCCESS;
             }
 
+            // Pré-filtrer les symboles avec ordres/positions ouverts une seule fois côté parent,
+            // puis indiquer aux workers de ne pas refaire le filtrage (évite des appels 429)
+            try {
+                $prefilterRunId = Uuid::uuid4()->toString();
+                $symbols = $this->orchestrator->filterSymbolsWithOpenOrdersOrPositions($symbols, 'cli:' . $prefilterRunId);
+            } catch (\Throwable $e) {
+                $io->warning('Pré-filtrage des symboles échoué: ' . $e->getMessage());
+            }
+
             $executionOptions = [
                 'dry_run' => $dryRun,
                 'force_run' => $forceRun,
@@ -163,6 +174,7 @@ class MtfRunCommand extends Command
                 'lock_per_symbol' => $lockPerSymbol,
                 'user_id' => $userId,
                 'ip_address' => $ipAddress,
+                'skip_open_filter' => true,
             ];
 
             $io->section($workers > 1 ? sprintf('Exécution MTF en parallèle (%d workers)', $workers) : 'Exécution MTF en cours...');
@@ -218,6 +230,7 @@ class MtfRunCommand extends Command
             forceTimeframeCheck: $options['force_timeframe_check'],
             skipContextValidation: (bool)($options['skip_context'] ?? false),
             lockPerSymbol: (bool)($options['lock_per_symbol'] ?? false),
+            skipOpenStateFilter: (bool)($options['skip_open_filter'] ?? false),
             userId: $options['user_id'] ?? null,
             ipAddress: $options['ip_address'] ?? null
         );
@@ -573,6 +586,10 @@ class MtfRunCommand extends Command
         }
         if (!empty($options['ip_address'])) {
             $command[] = '--ip-address=' . $options['ip_address'];
+        }
+
+        if (!empty($options['skip_open_filter'])) {
+            $command[] = '--skip-open-filter';
         }
 
         return $command;
