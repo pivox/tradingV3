@@ -1,0 +1,163 @@
+<?php
+declare(strict_types=1);
+
+namespace App\TradeEntry\Builder;
+
+use App\Config\TradeEntryConfig;
+use App\MtfValidator\Service\Dto\SymbolResultDto;
+use App\TradeEntry\Dto\TradeEntryRequest;
+use App\TradeEntry\Types\Side;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+
+/**
+ * Builder pour créer un TradeEntryRequest depuis un signal MTF (SymbolResultDto).
+ * Délègue la logique de construction depuis TradingDecisionHandler.
+ */
+final class TradeEntryRequestBuilder
+{
+    public function __construct(
+        private readonly TradeEntryConfig $tradeEntryConfig,
+        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $logger,
+        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $orderJourneyLogger,
+    ) {}
+
+    /**
+     * Construit un TradeEntryRequest depuis un SymbolResultDto MTF.
+     * 
+     * @param SymbolResultDto $symbolResult Résultat de validation MTF
+     * @param float|null $price Prix courant (optionnel, peut venir de $symbolResult)
+     * @param float|null $atr Valeur ATR (optionnel, peut venir de $symbolResult)
+     * @return TradeEntryRequest|null null si construction impossible
+     */
+    public function fromMtfSignal(
+        SymbolResultDto $symbolResult,
+        ?float $price = null,
+        ?float $atr = null
+    ): ?TradeEntryRequest {
+        $side = strtoupper((string)$symbolResult->signalSide);
+        if (!in_array($side, ['LONG', 'SHORT'], true)) {
+            return null;
+        }
+
+        $price = $price ?? $symbolResult->currentPrice;
+        $atr = $atr ?? $symbolResult->atr;
+
+        $executionTf = strtolower($symbolResult->executionTf ?? '1m');
+        $defaults = $this->tradeEntryConfig->getDefaults();
+        $multipliers = $defaults['timeframe_multipliers'] ?? [];
+        $tfMultiplier = (float)($multipliers[$executionTf] ?? 1.0);
+
+        $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 2.0);
+        $riskPct = max(0.0, $riskPctPercent / 100.0) * $tfMultiplier;
+        if ($riskPct <= 0.0) {
+            return null;
+        }
+
+        $initialMargin = max(0.0, (float)($defaults['initial_margin_usdt'] ?? 100.0) * $tfMultiplier);
+        if ($initialMargin <= 0.0) {
+            $fallbackCapital = (float)($defaults['fallback_account_balance'] ?? 0.0);
+            $initialMargin = $fallbackCapital * $riskPct;
+        }
+
+        if ($initialMargin <= 0.0) {
+            return null;
+        }
+
+        $stopFrom = $defaults['stop_from'] ?? 'risk';
+        $atrK = (float)($defaults['atr_k'] ?? 1.5);
+        $atrValue = ($atr !== null && $atr > 0.0) ? $atr : null;
+        
+        // GARDE CRITIQUE : Si stop_from='atr' est configuré mais ATR invalide/manquant, REJETER l'ordre
+        if ($stopFrom === 'atr' && ($atrValue === null || $atrValue <= 0.0)) {
+            $this->logger->warning('[TradeEntryRequestBuilder] ATR required but invalid/missing', [
+                'symbol' => $symbolResult->symbol,
+                'stop_from' => $stopFrom,
+                'atr' => $atr,
+                'atr_value' => $atrValue,
+            ]);
+            $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+                'symbol' => $symbolResult->symbol,
+                'reason' => 'atr_required_but_invalid',
+                'stop_from' => $stopFrom,
+                'atr' => $atr,
+            ]);
+            return null;  // BLOQUER l'ordre au lieu de basculer silencieusement sur 'risk'
+        }
+        
+        // Fallback vers 'risk' SEULEMENT si stop_from n'était PAS configuré sur 'atr' à la base
+        if ($atrValue === null && $stopFrom === 'atr') {
+            $stopFrom = 'risk';
+        }
+
+        $orderType = $defaults['order_type'] ?? 'limit';
+        // entryLimitHint est optionnel; si null, OrderPlanBuilder utilisera best bid/ask
+        $entryLimitHint = ($orderType === 'limit' && $price !== null) ? $price : null;
+
+        $marketMaxSpreadPct = (float)($defaults['market_max_spread_pct'] ?? 0.001);
+        if ($marketMaxSpreadPct > 1.0) {
+            $marketMaxSpreadPct /= 100.0;
+        }
+
+        $insideTicks = (int)($defaults['inside_ticks'] ?? 1);
+        $maxDeviationPct = isset($defaults['max_deviation_pct']) ? (float)$defaults['max_deviation_pct'] : null;
+        $implausiblePct = isset($defaults['implausible_pct']) ? (float)$defaults['implausible_pct'] : null;
+        $zoneMaxDeviationPct = isset($defaults['zone_max_deviation_pct']) ? (float)$defaults['zone_max_deviation_pct'] : null;
+
+        $tpPolicy = (string)($defaults['tp_policy'] ?? 'pivot_conservative');
+        $tpBufferPct = isset($defaults['tp_buffer_pct']) ? (float)$defaults['tp_buffer_pct'] : null;
+        if ($tpBufferPct !== null && $tpBufferPct <= 0.0) {
+            $tpBufferPct = null;
+        }
+        $tpBufferTicks = isset($defaults['tp_buffer_ticks']) ? (int)$defaults['tp_buffer_ticks'] : null;
+        if ($tpBufferTicks !== null && $tpBufferTicks <= 0) {
+            $tpBufferTicks = null;
+        }
+        $tpMinKeepRatio = (float)($defaults['tp_min_keep_ratio'] ?? 0.95);
+        $tpMaxExtraR = isset($defaults['tp_max_extra_r']) ? (float)$defaults['tp_max_extra_r'] : null;
+        if ($tpMaxExtraR !== null && $tpMaxExtraR < 0.0) {
+            $tpMaxExtraR = null;
+        }
+
+        $pivotSlPolicy = (string)($defaults['pivot_sl_policy'] ?? 'nearest_below');
+        $pivotSlBufferPct = isset($defaults['pivot_sl_buffer_pct']) ? (float)$defaults['pivot_sl_buffer_pct'] : null;
+        if ($pivotSlBufferPct !== null && $pivotSlBufferPct < 0.0) {
+            $pivotSlBufferPct = null;
+        }
+        $pivotSlMinKeepRatio = isset($defaults['pivot_sl_min_keep_ratio']) ? (float)$defaults['pivot_sl_min_keep_ratio'] : null;
+        if ($pivotSlMinKeepRatio !== null && $pivotSlMinKeepRatio <= 0.0) {
+            $pivotSlMinKeepRatio = null;
+        }
+
+        $sideEnum = $side === 'LONG' ? Side::Long : Side::Short;
+
+        return new TradeEntryRequest(
+            symbol: $symbolResult->symbol,
+            side: $sideEnum,
+            orderType: $orderType,
+            openType: $defaults['open_type'] ?? 'isolated',
+            orderMode: (int)($defaults['order_mode'] ?? 1),
+            initialMarginUsdt: $initialMargin,
+            riskPct: $riskPct,
+            rMultiple: (float)($defaults['r_multiple'] ?? 2.0),
+            entryLimitHint: $entryLimitHint,
+            stopFrom: $stopFrom,
+            pivotSlPolicy: $pivotSlPolicy,
+            pivotSlBufferPct: $pivotSlBufferPct,
+            pivotSlMinKeepRatio: $pivotSlMinKeepRatio,
+            atrValue: $atrValue,
+            atrK: (float)$atrK,
+            marketMaxSpreadPct: $marketMaxSpreadPct,
+            insideTicks: $insideTicks,
+            maxDeviationPct: $maxDeviationPct,
+            implausiblePct: $implausiblePct,
+            zoneMaxDeviationPct: $zoneMaxDeviationPct,
+            tpPolicy: $tpPolicy,
+            tpBufferPct: $tpBufferPct,
+            tpBufferTicks: $tpBufferTicks,
+            tpMinKeepRatio: $tpMinKeepRatio,
+            tpMaxExtraR: $tpMaxExtraR,
+        );
+    }
+}
+
