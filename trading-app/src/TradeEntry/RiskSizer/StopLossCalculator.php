@@ -86,7 +86,8 @@ final class StopLossCalculator
             if (str_starts_with($policyKey, 's') && isset($candidates[$policyKey])) {
                 $pivot = $candidates[$policyKey];
             } elseif ($policyKey === 'strongest_below') {
-                foreach (['s2', 's1', 's3'] as $preferred) {
+                // Priorité aux supports les plus forts (S2, S1, S3, puis S4, S5, S6)
+                foreach (['s2', 's1', 's3', 's4', 's5', 's6'] as $preferred) {
                     if (isset($candidates[$preferred])) {
                         $pivot = $candidates[$preferred];
                         break;
@@ -124,7 +125,8 @@ final class StopLossCalculator
         if (str_starts_with($policyKey, 'r') && isset($candidates[$policyKey])) {
             $pivot = $candidates[$policyKey];
         } elseif ($policyKey === 'strongest_above') {
-            foreach (['r2', 'r1', 'r3'] as $preferred) {
+            // Priorité aux résistances les plus fortes (R2, R1, R3, puis R4, R5, R6)
+            foreach (['r2', 'r1', 'r3', 'r4', 'r5', 'r6'] as $preferred) {
                 if (isset($candidates[$preferred])) {
                     $pivot = $candidates[$preferred];
                     break;

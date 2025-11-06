@@ -120,7 +120,7 @@ final class TakeProfitCalculator
             if ($pp !== null && $entry < $pp) {
                 $levels[] = $pp;
             }
-            foreach (['r1', 'r2', 'r3'] as $key) {
+            foreach (['r1', 'r2', 'r3', 'r4', 'r5', 'r6'] as $key) {
                 if (isset($pivotLevels[$key])) {
                     $levels[] = $pivotLevels[$key];
                 }
@@ -131,7 +131,7 @@ final class TakeProfitCalculator
             if ($pp !== null && $entry > $pp) {
                 $levels[] = $pp;
             }
-            foreach (['s1', 's2', 's3'] as $key) {
+            foreach (['s1', 's2', 's3', 's4', 's5', 's6'] as $key) {
                 if (isset($pivotLevels[$key])) {
                     $levels[] = $pivotLevels[$key];
                 }

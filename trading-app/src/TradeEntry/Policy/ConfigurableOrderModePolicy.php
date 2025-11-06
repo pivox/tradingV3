@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Policy;
 
-use App\Config\MtfValidationConfig;
+use App\Config\TradeEntryConfig;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 
@@ -11,7 +11,7 @@ use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 final class ConfigurableOrderModePolicy implements OrderModePolicyInterface
 {
     public function __construct(
-        private readonly MtfValidationConfig $config,
+        private readonly TradeEntryConfig $config,
         private readonly MakerOnlyPolicy $makerOnlyPolicy,
         private readonly TakerOnlyPolicy $takerOnlyPolicy,
     ) {
