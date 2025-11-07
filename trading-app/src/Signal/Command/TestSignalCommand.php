@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Command\Signal;
+namespace App\Signal\Command;
 
 use App\Common\Dto\SignalDto;
 use App\Common\Enum\SignalSide;
@@ -10,8 +10,8 @@ use App\Common\Enum\Timeframe;
 use App\Contract\Provider\MainProviderInterface;
 use App\Contract\Signal\SignalMainProviderInterface;
 use App\Contract\Signal\SignalServiceInterface;
-use App\Entity\Contract;
-use App\Repository\ContractRepository;
+use App\Provider\Entity\Contract;
+use App\Provider\Repository\ContractRepository;
 use App\Signal\SignalPersistenceService;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;

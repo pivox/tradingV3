@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App\Command\Indicator;
+namespace App\Indicator\Command;
 
 use App\Common\Enum\Timeframe as TimeframeEnum;
 use App\Contract\Indicator\IndicatorMainProviderInterface;
-use App\Repository\ContractRepository;
+use App\Provider\Repository\ContractRepository;
 use App\Contract\Provider\MainProviderInterface as LegacyMainProviderInterfaceAlias; // in case
 use App\Contract\Provider\MainProviderInterface;
 use Symfony\Component\Console\Attribute\AsCommand;

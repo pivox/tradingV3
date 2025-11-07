@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Command\Provider;
+namespace App\Provider\Command;
 
-use App\Repository\KlineRepository;
+use App\Provider\Repository\KlineRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -46,15 +46,15 @@ class KlinesSummaryCommand extends Command
         $io->section('Statistiques générales');
 
         // Nombre total de klines
-        $totalKlines = $this->entityManager->createQuery('SELECT COUNT(k) FROM App\Entity\Kline k')->getSingleScalarResult();
+        $totalKlines = $this->entityManager->createQuery('SELECT COUNT(k) FROM App\Provider\Entity\Kline k')->getSingleScalarResult();
         $io->writeln("📊 Total klines: $totalKlines");
 
         // Nombre de symboles uniques
-        $uniqueSymbols = $this->entityManager->createQuery('SELECT COUNT(DISTINCT k.symbol) FROM App\Entity\Kline k')->getSingleScalarResult();
+        $uniqueSymbols = $this->entityManager->createQuery('SELECT COUNT(DISTINCT k.symbol) FROM App\Provider\Entity\Kline k')->getSingleScalarResult();
         $io->writeln("📈 Symboles uniques: $uniqueSymbols");
 
         // Timeframes disponibles
-        $timeframes = $this->entityManager->createQuery('SELECT DISTINCT k.timeframe FROM App\Entity\Kline k ORDER BY k.timeframe')->getResult();
+        $timeframes = $this->entityManager->createQuery('SELECT DISTINCT k.timeframe FROM App\Provider\Entity\Kline k ORDER BY k.timeframe')->getResult();
         $timeframeList = array_map(fn($tf) => $tf['timeframe']->value, $timeframes);
         $io->writeln("⏰ Timeframes: " . implode(', ', $timeframeList));
     }
@@ -65,7 +65,7 @@ class KlinesSummaryCommand extends Command
 
         $query = $this->entityManager->createQuery('
             SELECT k.symbol, k.timeframe, MAX(k.openTime) as latest_time
-            FROM App\Entity\Kline k
+            FROM App\Provider\Entity\Kline k
             WHERE k.openTime > :cutoff
             GROUP BY k.symbol, k.timeframe
             ORDER BY latest_time DESC
@@ -104,7 +104,7 @@ class KlinesSummaryCommand extends Command
 
         $query = $this->entityManager->createQuery('
             SELECT k.symbol, k.timeframe, MAX(k.openTime) as latest_time
-            FROM App\Entity\Kline k
+            FROM App\Provider\Entity\Kline k
             WHERE k.openTime <= :cutoff
             GROUP BY k.symbol, k.timeframe
             ORDER BY latest_time ASC

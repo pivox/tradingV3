@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-namespace App\Command;
+namespace App\TradeEntry\Command;
 
 use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
 use App\TradeEntry\Service\TpSlTwoTargetsService;
