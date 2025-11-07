@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Event;
+namespace App\MtfValidator\Event;
 
 use Symfony\Contracts\EventDispatcher\Event;
 

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\EventSubscriber;
+namespace App\MtfValidator\EventSubscriber;
 
-use App\Event\MtfAuditEvent;
-use App\Entity\MtfAudit;
+use App\MtfValidator\Event\MtfAuditEvent;
+use App\MtfValidator\Entity\MtfAudit;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\ConsoleEvents;
