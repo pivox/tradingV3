@@ -2,11 +2,11 @@
 
 namespace App\Controller\Web;
 
-use App\Entity\Contract;
-use App\Entity\Kline;
+use App\Provider\Entity\Contract;
+use App\Provider\Entity\Kline;
 use App\Entity\Signal;
-use App\Repository\ContractRepository;
-use App\Repository\KlineRepository;
+use App\Provider\Repository\ContractRepository;
+use App\Provider\Repository\KlineRepository;
 use App\Repository\SignalRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;

@@ -4,10 +4,10 @@ namespace App\Controller\Web;
 
 use App\Common\Enum\Timeframe;
 use App\Entity\Signal;
-use App\Repository\ContractRepository;
+use App\Provider\Repository\ContractRepository;
 use App\Repository\IndicatorSnapshotRepository;
-use App\Repository\KlineRepository;
-use App\Repository\MtfAuditStatsRepository;
+use App\Provider\Repository\KlineRepository;
+use App\MtfValidator\Repository\MtfAuditStatsRepository;
 use App\Repository\SignalRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -46,7 +46,7 @@ class SignalsController extends AbstractController
         $lastSignalsByContract = $this->signalRepository->findLastSignalsGrouped();
         $timeframes = ['1m', '5m', '15m', '1h', '4h'];
 
-        return $this->render('signals/index.html.twig', [
+        return $this->render('Signal/index.html.twig', [
             'signals' => $signals,
             'stats' => $stats,
             'lastSignalsByContract' => $lastSignalsByContract,
@@ -64,7 +64,7 @@ class SignalsController extends AbstractController
             throw $this->createNotFoundException('Signal non trouvé');
         }
 
-        return $this->render('signals/show.html.twig', [
+        return $this->render('Signal/show.html.twig', [
             'signal' => $signal,
         ]);
     }
@@ -85,7 +85,7 @@ class SignalsController extends AbstractController
             $analysisData[] = $this->analyzeSignal($signal);
         }
 
-        return $this->render('signals/_signal_analysis_results.html.twig', [
+        return $this->render('Signal/_signal_analysis_results.html.twig', [
             'signals' => $analysisData,
         ]);
     }
@@ -101,7 +101,7 @@ class SignalsController extends AbstractController
 
         $analysis = $this->analyzeSignal($signal);
 
-        return $this->render('signals/_signal_details_modal.html.twig', [
+        return $this->render('Signal/_signal_details_modal.html.twig', [
             'signal' => $signal,
             'analysis' => $analysis,
         ]);
@@ -176,7 +176,7 @@ class SignalsController extends AbstractController
             return $b['total'] <=> $a['total'];
         });
 
-        return $this->render('signals/_mtf_overview_results.html.twig', [
+        return $this->render('Signal/_mtf_overview_results.html.twig', [
             'rows' => $rows,
         ]);
     }

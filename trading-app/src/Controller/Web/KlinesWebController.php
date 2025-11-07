@@ -2,8 +2,8 @@
 
 namespace App\Controller\Web;
 
-use App\Entity\Kline;
-use App\Repository\KlineRepository;
+use App\Provider\Entity\Kline;
+use App\Provider\Repository\KlineRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Request;
@@ -29,7 +29,7 @@ class KlinesWebController extends AbstractController
         $klines = $this->klineRepository->findWithFilters($symbol, $timeframe, $dateFrom, $dateTo);
         $stats = $this->getKlinesStats();
 
-        return $this->render('klines/index.html.twig', [
+        return $this->render('Provider/klines/index.html.twig', [
             'klines' => $klines,
             'stats' => $stats,
         ]);
@@ -44,7 +44,7 @@ class KlinesWebController extends AbstractController
             throw $this->createNotFoundException('Kline non trouvée');
         }
 
-        return $this->render('klines/show.html.twig', [
+        return $this->render('Provider/klines/show.html.twig', [
             'kline' => $kline,
         ]);
     }
