@@ -8,7 +8,7 @@ use App\Contract\Provider\Dto\ContractDto;
 use App\Contract\Provider\ContractProviderInterface;
 use App\Provider\Bitmart\Dto\ContractDto as BitmartContractDto;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
-use App\Repository\ContractRepository;
+use App\Provider\Repository\ContractRepository;
 use Psr\Log\LoggerInterface;
 
 /**

@@ -7,7 +7,7 @@ namespace App\Provider\Bitmart\Service;
 use App\Contract\Provider\MainProviderInterface;
 use App\Provider\Bitmart\Dto\KlineDto;
 use App\Common\Enum\Timeframe;
-use App\Repository\KlineRepository;
+use App\Provider\Repository\KlineRepository;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 

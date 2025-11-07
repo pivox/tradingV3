@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Provider;
 
-use App\Repository\KlineRepository;
-use App\Repository\MtfAuditRepository;
+use App\Provider\Repository\KlineRepository;
+use App\MtfValidator\Repository\MtfAuditRepository;
 use App\Repository\SignalRepository;
 use Doctrine\DBAL\Connection;
 use Psr\Log\LoggerInterface;
