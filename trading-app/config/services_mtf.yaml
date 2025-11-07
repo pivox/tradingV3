@@ -7,7 +7,7 @@ services:
   App\MtfValidator\Service\MtfBackfillService:
     arguments:
       $klineProvider: '@app.provider.kline'
-      $klineRepository: '@App\Repository\KlineRepository'
+      $klineRepository: '@App\Provider\Repository\KlineRepository'
       $rateLimiter: '@App\Infrastructure\RateLimiter\TokenBucketRateLimiter'
       $timeService: '@App\MtfValidator\Service\MtfTimeService'
       $logger: '@logger'
@@ -18,14 +18,14 @@ services:
   # Temporal Services
 
   # Controllers
-  App\Controller\MtfController:
+  App\MtfValidator\Controller\MtfController:
     arguments:
       $mtfService: '@App\MtfValidator\Service\MtfService'
-      $klineRepository: '@App\Repository\KlineRepository'
+      $klineRepository: '@App\Provider\Repository\KlineRepository'
       $mtfStateRepository: '@App\Repository\MtfStateRepository'
-      $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
-      $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
-      $mtfLockRepository: '@App\Repository\MtfLockRepository'
+      $mtfSwitchRepository: '@App\MtfValidator\Repository\MtfSwitchRepository'
+      $mtfAuditRepository: '@App\MtfValidator\Repository\MtfAuditRepository'
+      $mtfLockRepository: '@App\MtfValidator\Repository\MtfLockRepository'
       $orderPlanRepository: '@App\Repository\OrderPlanRepository'
       $logger: '@logger'
       $mtfRunService: '@App\MtfValidator\Service\MtfRunService'

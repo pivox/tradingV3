@@ -99,7 +99,7 @@ services:
         public: true
     App\Config\MtfContractsConfig:
         arguments:
-            $path: '%kernel.project_dir%/src/Provider/config/contracts.yaml'
+            $path: '%kernel.project_dir%/config/app/mtf_contracts.yaml'
 
     # BitMart HTTP Client
     App\Provider\Bitmart\Http\BitmartHttpClientPublic:
@@ -115,14 +115,14 @@ services:
     # Kline Provider
 
     # MTF Controller
-    App\Controller\MtfController:
+    App\MtfValidator\Controller\MtfController:
         arguments:
             $mtfService: '@App\MtfValidator\Service\MtfService'
-            $klineRepository: '@App\Repository\KlineRepository'
+            $klineRepository: '@App\Provider\Repository\KlineRepository'
             $mtfStateRepository: '@App\Repository\MtfStateRepository'
-            $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
-            $mtfAuditRepository: '@App\Repository\MtfAuditRepository'
-            $mtfLockRepository: '@App\Repository\MtfLockRepository'
+            $mtfSwitchRepository: '@App\MtfValidator\Repository\MtfSwitchRepository'
+            $mtfAuditRepository: '@App\MtfValidator\Repository\MtfAuditRepository'
+            $mtfLockRepository: '@App\MtfValidator\Repository\MtfLockRepository'
             $orderPlanRepository: '@App\Repository\OrderPlanRepository'
             $logger: '@logger'
             $mtfRunService: '@App\MtfValidator\Service\MtfRunService'
@@ -151,13 +151,17 @@ services:
     # BitMart WebSocket Client
 
     # Repositories
-    App\Repository\KlineRepository:
+    App\Provider\Repository\KlineRepository:
         arguments:
             $registry: '@doctrine'
+            $logger: '@logger'
 
-    App\Repository\ContractRepository:
+    App\Provider\Repository\ContractRepository:
         arguments:
             $registry: '@doctrine'
+            $conn: '@doctrine.dbal.default_connection'
+            $config: '@App\Config\MtfContractsConfig'
+            $clock: '@Psr\Clock\ClockInterface'
 
     # Alias pour l’interface de configuration MTF -> implémentation TradingParameters
     App\Config\MtfConfigProviderInterface: '@App\Config\TradingParameters'
@@ -206,7 +210,7 @@ services:
             $atrCalc: '@App\Indicator\Core\AtrCalculator'
 
     # Contrôleur de test des indicateurs
-    App\Controller\Web\IndicatorTestController:
+    App\Indicator\Controller\IndicatorTestController:
         arguments:
             $indicatorMain: '@App\Contract\Indicator\IndicatorMainProviderInterface'
             $tradingConfigService: '@App\Service\TradingConfigService'

@@ -76,7 +76,7 @@ trade_entry:
         floor: 1.0                                   # Levier minimum
         exchange_cap: 20.0                          # Levier maximum de l'exchange
         per_symbol_caps:                            # Caps par symbole
-            - { symbol_regex: "^(BTC|ETH).*", cap: 10.0 }
+            - { symbol_regex: "^(BTC|ETH|BNB).*", cap: 10.0 }
             - { symbol_regex: "^NVDAXUSDT$", cap: 5.0 }
         timeframe_multipliers:                       # Multiplicateurs par timeframe
             '4h': 1.0

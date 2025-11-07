@@ -1,5 +1,5 @@
 mtf_api:
-  resource: '../src/Controller/MtfController.php'
+  resource: '../src/MtfValidator/Controller/MtfController.php'
   type: attribute
   prefix: /api/mtf
 

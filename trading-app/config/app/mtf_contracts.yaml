@@ -5,12 +5,21 @@ mtf_contracts:
         filters:
             quote_currency: 'USDT'
             status: 'Trading'
-            min_turnover: 500000          # volume minimal 24h (USDT)
-            mid_max_turnover: 2000000     # volume max pour "mid caps"
-            require_not_expired: false   # ✅ nouveau
-            max_age_hours: 880          # ✅ nouveau (filtre open_timestamp)
-            expire_unit: 'ms'      # 's' ou 'ms' selon ta colonne expire_timestamp
-            open_unit: 'ms'        # 's' ou 'ms' selon ta colonne open_timestamp
+
+            # --- Liquidité / turnover 24h ---
+            # On ne garde que les contrats avec >= 1M USDT de turnover 24h
+            min_turnover: 1000000          # seuil "MID" (>= 1M)
+
+            # Jusqu'à 5M = MID, au-dessus = TOP
+            mid_max_turnover: 5000000      # 1M–5M = mid caps, >5M = top
+
+            # --- Validité contrat ---
+            require_not_expired: false      # tu laisses BitMart gérer l'expiration
+            max_age_hours: 880              # filtre sur open_timestamp
+            expire_unit: 'ms'               # à adapter à ton schéma
+            open_unit: 'ms'
+
         limits:
-            top_n: 100                    # nb de contrats très liquides
-            mid_n: 50                     # nb de contrats mid-liquides
+            # Objectif : ~40–50 contrats max exploités par l’algo
+            top_n: 70       # les 25 plus gros turnovers (>= mid_max_turnover)
+            mid_n: 20       # 20 contrats supplémentaires dans la zone 1M–5M

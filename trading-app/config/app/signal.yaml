@@ -5,10 +5,11 @@ signal:
     # ======== MTF FRAMESET ========
     # ⚠️ UTILISÉES INDIRECTEMENT: Accès via getConfig()['mtf'] dans SignalValidationService.php, BaseTimeframeService.php, TpSlTwoTargetsService.php
     mtf:
-        context: [4h, 1h]
-        execution: [15m, 5m, 1m]
+        list_tf: [4h, 1h, 15m, 5m, 1m]
+        context_count: 2  # Nombre de timeframes de contexte (les 2 premiers: 4h, 1h)
         meta: >
-            Contexte: 4h & 1h (tendance/validation). Exécution: 15m/5m/1m (timing).
+            Liste complète des timeframes MTF. Les context_count premiers sont contexte (tendance/validation),
+            le reste est exécution (timing). Par défaut: 2 premiers = contexte, reste = exécution.
 
     # ======== TIMEFRAMES ========
     # ✅ UTILISÉES: TradingConfigService::getMinBars(), TradingConfigService::getTimeframes()
