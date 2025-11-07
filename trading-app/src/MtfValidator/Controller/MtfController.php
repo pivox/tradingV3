@@ -6,14 +6,13 @@ namespace App\MtfValidator\Controller;
 
 use App\Contract\Provider\MainProviderInterface;
 use App\MtfValidator\Service\MtfService;
-use App\MtfValidator\Service\Runner\MtfRunOrchestrator;
 use App\MtfValidator\Service\MtfRunService;
-use App\Repository\ContractRepository;
-use App\Repository\KlineRepository;
-use App\Repository\MtfAuditRepository;
-use App\Repository\MtfLockRepository;
+use App\Provider\Repository\ContractRepository;
+use App\Provider\Repository\KlineRepository;
+use App\MtfValidator\Repository\MtfAuditRepository;
+use App\MtfValidator\Repository\MtfLockRepository;
 use App\Repository\MtfStateRepository;
-use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\Repository\OrderPlanRepository;
 use Ramsey\Uuid\Uuid;
 use Psr\Clock\ClockInterface;
@@ -39,7 +38,6 @@ class MtfController extends AbstractController
         private readonly OrderPlanRepository $orderPlanRepository,
         private readonly LoggerInterface $logger,
         private readonly MtfRunService $mtfRunService,
-        private readonly MtfRunOrchestrator $orchestrator,
         private readonly ClockInterface $clock,
         private readonly ContractRepository $contractRepository,
         private readonly MainProviderInterface $mainProvider,
@@ -206,7 +204,100 @@ class MtfController extends AbstractController
         }
     }
 
-    // TODO: Implémenter les méthodes de workflow si nécessaire
+    #[Route('/pause', name: 'pause', methods: ['POST'])]
+    public function pauseWorkflow(): JsonResponse
+    {
+        try {
+            $this->workflowService->pauseMtfWorkflow();
+            
+            return $this->json([
+                'status' => 'success',
+                'message' => 'MTF workflow paused',
+                'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
+            ]);
+        } catch (\Exception $e) {
+            $this->logger->error('[MTF Controller] Failed to pause workflow', [
+                'error' => $e->getMessage()
+            ]);
+            
+            return $this->json([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    #[Route('/resume', name: 'resume', methods: ['POST'])]
+    public function resumeWorkflow(): JsonResponse
+    {
+        try {
+            $this->workflowService->resumeMtfWorkflow();
+            
+            return $this->json([
+                'status' => 'success',
+                'message' => 'MTF workflow resumed',
+                'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
+            ]);
+        } catch (\Exception $e) {
+            $this->logger->error('[MTF Controller] Failed to resume workflow', [
+                'error' => $e->getMessage()
+            ]);
+            
+            return $this->json([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    #[Route('/stop', name: 'stop', methods: ['POST'])]
+    public function stopWorkflow(): JsonResponse
+    {
+        try {
+            $this->workflowService->stopMtfWorkflow();
+            
+            return $this->json([
+                'status' => 'success',
+                'message' => 'MTF workflow stopped',
+                'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
+            ]);
+        } catch (\Exception $e) {
+            $this->logger->error('[MTF Controller] Failed to stop workflow', [
+                'error' => $e->getMessage()
+            ]);
+            
+            return $this->json([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    #[Route('/restart', name: 'restart', methods: ['POST'])]
+    public function restartWorkflow(): JsonResponse
+    {
+        try {
+            $workflowId = $this->workflowService->restartMtfWorkflow();
+            
+            return $this->json([
+                'status' => 'success',
+                'message' => 'MTF workflow restarted',
+                'data' => [
+                    'workflow_id' => $workflowId,
+                    'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
+                ]
+            ]);
+        } catch (\Exception $e) {
+            $this->logger->error('[MTF Controller] Failed to restart workflow', [
+                'error' => $e->getMessage()
+            ]);
+            
+            return $this->json([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
 
     #[Route('/switches', name: 'switches', methods: ['GET'])]
     public function getSwitches(): JsonResponse
@@ -533,13 +624,6 @@ class MtfController extends AbstractController
 
         try {
             if ($workers > 1) {
-                // Pré-filtrer côté contrôleur pour réduire les 429 et passer l'info aux workers
-                try {
-                    $prefilterRunId = Uuid::uuid4()->toString();
-                    $symbols = $this->orchestrator->filterSymbolsWithOpenOrdersOrPositions($symbols, 'http:' . $prefilterRunId);
-                } catch (\Throwable $e) {
-                    $this->logger->warning('[MTF Controller] Pré-filtrage échoué', ['error' => $e->getMessage()]);
-                }
                 $result = $this->runParallelViaWorkers(
                     $symbols,
                     $dryRun,
@@ -554,15 +638,27 @@ class MtfController extends AbstractController
 
             $status = empty($result['errors']) ? 'success' : 'partial_success';
 
+            // Calculer un résumé par TF à partir des résultats (failed_timeframe > execution_tf > N/A)
+            $summaryByTf = $this->buildSummaryByTimeframe($result['results'] ?? []);
+
             // Extraire les symboles rejetés (tous les statuts non-SUCCESS)
             $rejectedBy = [];
             $lastValidated = [];
             $results = $result['results'] ?? [];
             
             foreach ($results as $symbol => $symbolResult) {
+                // Skip summary entry and invalid symbols
+                if ($symbol === 'FINAL' || !is_string($symbol) || $symbol === '') {
+                    continue;
+                }
+                
+                if (!is_array($symbolResult)) {
+                    continue;
+                }
+                
                 $resultStatus = strtoupper((string)($symbolResult['status'] ?? ''));
                 
-                // Collecter les rejetés
+                // Collecter les rejetés (tous les statuts non-SUCCESS)
                 if ($resultStatus !== 'SUCCESS') {
                     $rejectedBy[] = $symbol;
                 }
@@ -575,13 +671,6 @@ class MtfController extends AbstractController
                     // Calculer le timeframe précédent (tf-1) ou 'READY' pour 1m
                     $timeframe = $this->getPreviousTimeframe($executionTf);
                     
-                    // Ajouter seulement si on a au moins le symbole
-                    // Exemples JSON pour cas limites :
-                    // - Si execution_tf manquant : timeframe sera null, signal_side peut être null
-                    // - Si signal_side manquant : side sera null
-                    // Exemple: {"symbol": "BTCUSDT", "side": null, "timeframe": null}
-                    // Exemple: {"symbol": "ETHUSDT", "side": "LONG", "timeframe": "15m"}
-                    // Exemple: {"symbol": "ADAUSDT", "side": "SHORT", "timeframe": "READY"}
                     $lastValidated[] = [
                         'symbol' => $symbol,
                         'side' => $signalSide,
@@ -589,15 +678,22 @@ class MtfController extends AbstractController
                     ];
                 }
             }
+            
+            // Trier les listes pour un affichage cohérent
+            sort($rejectedBy);
+            usort($lastValidated, function($a, $b) {
+                return strcmp($a['symbol'] ?? '', $b['symbol'] ?? '');
+            });
 
             return $this->json([
                 'status' => $status,
                 'message' => 'MTF run completed',
                 'data' => [
                     'summary' => $result['summary'] ?? [],
-                  //  'results' => $results,
+                    'results' => $results,
                     'errors' => $result['errors'] ?? [],
                     'workers' => $workers,
+                    'summary_by_tf' => $summaryByTf,
                     'rejected_by' => $rejectedBy,
                     'last_validated' => $lastValidated,
                 ],
@@ -612,6 +708,31 @@ class MtfController extends AbstractController
                 'message' => $e->getMessage(),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /**
+     * Construit un résumé groupé par dernier timeframe atteint
+     * @param array<string, array<string, mixed>> $results
+     * @return array<string, string[]>
+     */
+    private function buildSummaryByTimeframe(array $results): array
+    {
+        $groups = [];
+        foreach ($results as $symbol => $info) {
+            if (!is_array($info)) { continue; }
+            $lastTf = $info['failed_timeframe'] ?? ($info['execution_tf'] ?? null);
+            $key = is_string($lastTf) && $lastTf !== '' ? $lastTf : 'N/A';
+            if (!isset($groups[$key])) { $groups[$key] = []; }
+            $groups[$key][] = (string)$symbol;
+        }
+
+        // Optionnel: trier les TF de 4h -> 1m, puis N/A
+        $order = ['4h' => 5, '1h' => 4, '15m' => 3, '5m' => 2, '1m' => 1, 'N/A' => 0];
+        uksort($groups, function($a, $b) use ($order) {
+            return ($order[$b] ?? 0) - ($order[$a] ?? 0);
+        });
+
+        return $groups;
     }
 
     /**
@@ -715,7 +836,6 @@ class MtfController extends AbstractController
             'force_run' => $forceRun,
             'current_tf' => $currentTf,
             'force_timeframe_check' => $forceTimeframeCheck,
-            'skip_open_filter' => true,
         ];
 
         while (!$queue->isEmpty() || $active !== []) {
@@ -723,7 +843,9 @@ class MtfController extends AbstractController
                 $symbol = $queue->dequeue();
                 $process = new Process(
                     $this->buildWorkerCommand($symbol, $options),
-                    $this->projectDir
+                    $this->projectDir,
+                    // activer les traces détaillées côté worker
+                    ['APP_DEBUG' => '1']
                 );
                 $process->start();
                 $active[] = ['symbol' => $symbol, 'process' => $process];
@@ -766,8 +888,10 @@ class MtfController extends AbstractController
                         }
                     }
                 } else {
-                    $errorOutput = trim($process->getErrorOutput());
-                    $errors[] = sprintf('Worker %s: %s', $symbol, $errorOutput !== '' ? $errorOutput : 'unknown error');
+                    $stderr = trim($process->getErrorOutput());
+                    $stdout = trim($process->getOutput());
+                    $msg = $stderr !== '' ? $stderr : ($stdout !== '' ? $stdout : 'unknown error');
+                    $errors[] = sprintf('Worker %s: %s', $symbol, $msg);
                 }
             }
 
@@ -845,8 +969,9 @@ class MtfController extends AbstractController
      */
     private function buildWorkerCommand(string $symbol, array $options): array
     {
+        $php = $this->detectPhpCliBinary();
         $command = [
-            'php',
+            $php,
             'bin/console',
             'mtf:run-worker',
             '--symbols=' . $symbol,
@@ -863,10 +988,24 @@ class MtfController extends AbstractController
             $command[] = '--force-timeframe-check';
         }
 
-        if (!empty($options['skip_open_filter'])) {
-            $command[] = '--skip-open-filter';
-        }
-
         return $command;
+    }
+
+    private function detectPhpCliBinary(): string
+    {
+        $candidates = [];
+        $env = getenv('PHP_CLI_BIN');
+        if (is_string($env) && $env !== '') { $candidates[] = $env; }
+        $candidates[] = '/usr/local/bin/php';
+        $candidates[] = '/usr/bin/php';
+        $candidates[] = 'php';
+        foreach ($candidates as $bin) {
+            // If absolute path, ensure it exists; otherwise rely on PATH
+            if ($bin[0] === '/' && !is_file($this->projectDir . '/bin/console')) {
+                // nothing
+            }
+            return $bin;
+        }
+        return 'php';
     }
 }

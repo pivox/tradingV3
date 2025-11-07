@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Controller\Api;
+namespace App\MtfValidator\Controller\Api;
 
-use App\Entity\MtfAudit;
-use App\Repository\MtfAuditRepository;
+use App\MtfValidator\Entity\MtfAudit;
+use App\MtfValidator\Repository\MtfAuditRepository;
 use Ramsey\Uuid\Uuid;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;

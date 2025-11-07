@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Controller\Web;
+namespace App\MtfValidator\Controller\Web;
 
-use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -21,7 +21,7 @@ class MtfSwitchWebController extends AbstractController
     #[Route('/mtf/switches', name: 'mtf_switches_index', methods: ['GET'])]
     public function index(): Response
     {
-        return $this->render('mtf_switch/index.html.twig', [
+        return $this->render('MtfValidator/switch/index.html.twig', [
             'switches' => [],
         ]);
     }

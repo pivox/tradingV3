@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Controller\Web;
+namespace App\MtfValidator\Controller\Web;
 
-use App\Repository\MtfAuditRepository;
+use App\MtfValidator\Repository\MtfAuditRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -21,7 +21,7 @@ class MtfAuditController extends AbstractController
     #[Route('/mtf/audit', name: 'mtf_audit_index')]
     public function index(Request $request): Response
     {
-        return $this->render('mtf_audit/index.html.twig', [
+        return $this->render('MtfValidator/audit/index.html.twig', [
             // Server-side DataTables: no preloaded rows
             'audits' => [],
             'runId' => null,
@@ -31,7 +31,7 @@ class MtfAuditController extends AbstractController
     #[Route('/mtf/audit/run/{runId}', name: 'mtf_audit_run', requirements: ['runId' => '[0-9a-fA-F-]{36}'], methods: ['GET'])]
     public function byRun(string $runId): Response
     {
-        return $this->render('mtf_audit/index.html.twig', [
+        return $this->render('MtfValidator/audit/index.html.twig', [
             'audits' => [],
             'runId' => $runId,
         ]);

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Controller\Api;
+namespace App\Indicator\Controller;
 
 use App\Common\Enum\Timeframe;
 use App\Contract\Indicator\IndicatorProviderInterface;

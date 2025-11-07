@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Controller\Web;
+namespace App\MtfValidator\Controller\Web;
 
 use App\Repository\OrderPlanRepository;
 use Doctrine\ORM\EntityManagerInterface;
@@ -46,7 +46,7 @@ class MtfOrderPlanController extends AbstractController
             // best-effort
         }
 
-        return $this->render('order_plan/index.html.twig', [
+        return $this->render('MtfValidator/order_plan/index.html.twig', [
             'orderPlans' => [],
             'kpis' => $kpis,
         ]);
