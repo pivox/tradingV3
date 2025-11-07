@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Runtime\Concurrency\Dto;
+namespace App\MtfValidator\Runtime\Concurrency\Dto;
 
 /**
  * DTO interne pour la configuration des commutateurs

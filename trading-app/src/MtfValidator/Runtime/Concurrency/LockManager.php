@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App\Runtime\Concurrency;
+namespace App\MtfValidator\Runtime\Concurrency;
 
 use App\Contract\Runtime\LockManagerInterface;
 use App\Contract\Runtime\Dto\LockInfoDto;
-use App\Runtime\Concurrency\Dto\LockResultDto;
+use App\MtfValidator\Runtime\Concurrency\Dto\LockResultDto;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 
