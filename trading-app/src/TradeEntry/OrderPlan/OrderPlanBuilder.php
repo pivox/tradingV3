@@ -1,9 +1,11 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\TradeEntry\OrderPlan;
 
 use App\Contract\EntryTrade\LeverageServiceInterface;
+use App\Contract\Indicator\IndicatorProviderInterface;
 use App\TradeEntry\Dto\{TradeEntryRequest, PreflightReport};
 use App\TradeEntry\Pricing\TickQuantizer;
 use App\TradeEntry\Dto\EntryZone;
@@ -14,6 +16,10 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class OrderPlanBuilder
 {
+    private const MIN_STOP_DISTANCE_PCT = 0.005; // 0.5% minimal absolu
+
+    private static bool $deprecationWarningLogged = false;
+
     public function __construct(
         private readonly PositionSizer $positionSizer,
         private readonly StopLossCalculator $slc,
@@ -22,17 +28,26 @@ final class OrderPlanBuilder
         #[Autowire(service: 'monolog.logger.positions_flow')] private readonly LoggerInterface $flowLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
+        private readonly IndicatorProviderInterface $indicatorProvider,
     ) {}
 
-    public function build(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null, ?EntryZone $zone = null): OrderPlanModel
-    {
+    public function build(
+        TradeEntryRequest $req,
+        PreflightReport $pre,
+        ?string $decisionKey = null,
+        ?EntryZone $zone = null
+    ): OrderPlanModel {
+        // --- Exchange precisions & limits ---
         $precision       = $pre->pricePrecision;
+        $tick            = $pre->tickSize ?? TickQuantizer::tick($precision);
         $contractSize    = $pre->contractSize;
         $minVolume       = $pre->minVolume;
         $volPrecision    = $pre->volPrecision ?? 0;
+        $sizeStep        = $volPrecision > 0 ? pow(10, -$volPrecision) : 1.0;
         $maxVolume       = $pre->maxVolume;
         $marketMaxVolume = $pre->marketMaxVolume;
 
+        // --- Budget / risk ---
         $availableBudget = min(max((float)$req->initialMarginUsdt, 0.0), max((float)$pre->availableUsdt, 0.0));
         if ($availableBudget <= 0.0) {
             $this->journeyLogger->error('order_journey.plan_builder.no_budget', [
@@ -40,11 +55,9 @@ final class OrderPlanBuilder
                 'decision_key' => $decisionKey,
                 'initial_margin_usdt' => $req->initialMarginUsdt,
                 'available_usdt' => $pre->availableUsdt,
-                'reason' => 'insufficient_margin',
             ]);
             throw new \RuntimeException('Budget indisponible pour construire le plan');
         }
-
         $riskPct = $this->normalizePercent($req->riskPct);
         $riskUsdt = $availableBudget * $riskPct;
         if ($riskUsdt <= 0.0) {
@@ -53,19 +66,17 @@ final class OrderPlanBuilder
                 'decision_key' => $decisionKey,
                 'risk_pct' => $req->riskPct,
                 'available_budget' => $availableBudget,
-                'reason' => 'computed_risk_zero',
             ]);
             throw new \RuntimeException('Risk USDT nul, ajuster riskPct ou margin');
         }
 
-        $tick = $pre->tickSize ?? TickQuantizer::tick($precision);
-        $sizeStep = $volPrecision > 0 ? pow(10, -$volPrecision) : 1.0;
-
+        // --- Market snapshot ---
         $bestBid = (float)$pre->bestBid;
         $bestAsk = (float)$pre->bestAsk;
         $mid     = 0.5 * ($bestBid + $bestAsk);
         $mark    = $pre->markPrice ?? $mid;
 
+        // --- Entry price (limit or market) + garde de cohérence ---
         $insideTicks         = max(1, (int)($req->insideTicks ?? 1));
         $maxDeviationPct     = $this->normalizePercent($req->maxDeviationPct ?? 0.005);
         $implausiblePct      = $this->normalizePercent($req->implausiblePct ?? 0.02);
@@ -75,107 +86,50 @@ final class OrderPlanBuilder
             if ($req->side === Side::Long) {
                 $entry = min($bestAsk - $tick, $bestBid + $insideTicks * $tick);
                 if ($req->entryLimitHint !== null) {
-                    $hint = max((float)$req->entryLimitHint, $tick);
-                    $hint = TickQuantizer::quantize($hint, $precision);
-                    $entry = max($entry, $bestBid - 2 * $tick);
-                    $entry = min($entry, $hint);
+                    $hint  = TickQuantizer::quantize(max((float)$req->entryLimitHint, $tick), $precision);
+                    $entry = min(max($entry, $bestBid - 2 * $tick), $hint);
                 }
-                $dev = abs($entry - $mark) / max($mark, 1e-8);
-                if ($dev > $maxDeviationPct) {
+                if (abs($entry - $mark) / max($mark, 1e-8) > $maxDeviationPct) {
                     $entry = min($bestAsk - $tick, $bestBid + $tick);
                 }
-                $entry = max($entry, $tick);
-                $entry = TickQuantizer::quantize($entry, $precision);
+                $entry = TickQuantizer::quantize(max($entry, $tick), $precision);
             } else {
                 $entry = max($bestBid + $tick, $bestAsk - $insideTicks * $tick);
                 if ($req->entryLimitHint !== null) {
-                    $hint = max((float)$req->entryLimitHint, $tick);
-                    $hint = TickQuantizer::quantizeUp($hint, $precision);
-                    $entry = min($entry, $bestAsk + 2 * $tick);
-                    $entry = max($entry, $hint);
+                    $hint  = TickQuantizer::quantizeUp(max((float)$req->entryLimitHint, $tick), $precision);
+                    $entry = max(min($entry, $bestAsk + 2 * $tick), $hint);
                 }
-                $dev = abs($entry - $mark) / max($mark, 1e-8);
-                if ($dev > $maxDeviationPct) {
+                if (abs($entry - $mark) / max($mark, 1e-8) > $maxDeviationPct) {
                     $entry = max($bestBid + $tick, $bestAsk - $tick);
                 }
-                $entry = max($entry, $tick);
-                $entry = TickQuantizer::quantizeUp($entry, $precision);
+                $entry = TickQuantizer::quantizeUp(max($entry, $tick), $precision);
             }
         } else {
             $entry = $req->side === Side::Long ? $bestAsk : $bestBid;
         }
 
-        $this->flowLogger->debug('order_plan.entry_price_baseline', [
-            'symbol' => $req->symbol,
-            'side' => $req->side->value,
-            'best_bid' => $bestBid,
-            'best_ask' => $bestAsk,
-            'mark_price' => $mark,
-            'entry' => $entry,
-            'inside_ticks' => $insideTicks,
-            'max_dev_pct' => $maxDeviationPct,
+        $this->flowLogger->debug('order_plan.entry_price', [
+            'symbol' => $req->symbol, 'side' => $req->side->value,
+            'best_bid' => $bestBid, 'best_ask' => $bestAsk, 'mark' => $mark, 'entry' => $entry,
             'decision_key' => $decisionKey,
-        ]);
-        $this->journeyLogger->debug('order_journey.plan_builder.entry_selected', [
-            'symbol' => $req->symbol,
-            'decision_key' => $decisionKey,
-            'entry' => $entry,
-            'side' => $req->side->value,
-            'order_type' => $req->orderType,
-            'reason' => 'entry_price_finalized',
         ]);
 
         if (!\is_finite($entry) || $entry <= 0.0) {
-            $this->journeyLogger->error('order_journey.plan_builder.invalid_entry', [
-                'symbol' => $req->symbol,
-                'decision_key' => $decisionKey,
-                'entry' => $entry,
-                'reason' => 'entry_non_positive',
-            ]);
             throw new \RuntimeException('Prix d\'entrée invalide');
         }
 
+        // --- Clamp à l'Entry Zone si proche du marché ---
         if ($zone instanceof EntryZone) {
             $zoneDeviation = $mark > 0.0 ? max(abs($zone->min - $mark), abs($zone->max - $mark)) / $mark : 0.0;
             if ($zoneDeviation <= $zoneMaxDeviationPct) {
                 $clamped = max($zone->min, min($entry, $zone->max));
-                $adj = $req->side === Side::Long
+                $entry = $req->side === Side::Long
                     ? TickQuantizer::quantize($clamped, $precision)
                     : TickQuantizer::quantizeUp($clamped, $precision);
-                if ($adj !== $entry) {
-                    $this->flowLogger->info('order_plan.entry_clamped_to_zone', [
-                        'symbol' => $req->symbol,
-                        'entry_before' => $entry,
-                        'entry_after' => $adj,
-                        'zone_min' => $zone->min,
-                        'zone_max' => $zone->max,
-                        'decision_key' => $decisionKey,
-                    ]);
-                    $this->journeyLogger->info('order_journey.plan_builder.entry_clamped', [
-                        'symbol' => $req->symbol,
-                        'decision_key' => $decisionKey,
-                        'entry_before' => $entry,
-                        'entry_after' => $adj,
-                        'zone_min' => $zone->min,
-                        'zone_max' => $zone->max,
-                        'reason' => 'entry_adjusted_to_zone',
-                    ]);
-                    $entry = $adj;
-                }
-            } else {
-                $this->flowLogger->warning('order_plan.zone_ignored_far_from_market', [
-                    'symbol' => $req->symbol,
-                    'zone_min' => $zone->min,
-                    'zone_max' => $zone->max,
-                    'mark' => $mark,
-                    'zone_dev_pct' => $zoneDeviation,
-                    'decision_key' => $decisionKey,
-                ]);
-                $this->journeyLogger->info('order_journey.plan_builder.zone_ignored', [
-                    'symbol' => $req->symbol,
-                    'decision_key' => $decisionKey,
-                    'zone_dev_pct' => $zoneDeviation,
-                    'reason' => 'zone_far_from_market',
+
+                $this->journeyLogger->info('order_journey.plan_builder.entry_clamped', [
+                    'symbol' => $req->symbol, 'decision_key' => $decisionKey,
+                    'zone_min' => $zone->min, 'zone_max' => $zone->max, 'entry' => $entry,
                 ]);
             }
         }
@@ -188,31 +142,19 @@ final class OrderPlanBuilder
                 ? TickQuantizer::quantize($fallback, $precision)
                 : TickQuantizer::quantizeUp($fallback, $precision);
 
-            $this->flowLogger->warning('order_plan.entry_price_fallback', [
-                'symbol' => $req->symbol,
-                'entry_after' => $entry,
-                'mark' => $mark,
-                'implausible_pct' => $implausiblePct,
-                'decision_key' => $decisionKey,
-            ]);
             $this->journeyLogger->warning('order_journey.plan_builder.entry_fallback', [
-                'symbol' => $req->symbol,
-                'decision_key' => $decisionKey,
-                'entry_after' => $entry,
-                'reason' => 'entry_too_far_from_mark',
+                'symbol' => $req->symbol, 'decision_key' => $decisionKey, 'entry' => $entry,
             ]);
         }
 
+        // --- Stops: ATR / Pivot / Risk, avec garde 0.5% AVANT sizing ---
         $sizingDistance = $tick * 10;
         $stopAtr = null;
         $stopPivot = null;
-        $pivotGuardAtr = null;
 
         $hasAtrInputs = $req->atrValue !== null
-            && \is_finite($req->atrValue)
-            && $req->atrValue > 0.0
-            && \is_finite($req->atrK)
-            && $req->atrK > 0.0;
+            && \is_finite($req->atrValue) && $req->atrValue > 0.0
+            && \is_finite($req->atrK)     && $req->atrK > 0.0;
 
         if ($req->stopFrom === 'pivot' && !empty($pre->pivotLevels)) {
             $stopPivot = $this->slc->fromPivot(
@@ -223,13 +165,7 @@ final class OrderPlanBuilder
                 bufferPct: $req->pivotSlBufferPct ?? 0.0015,
                 pricePrecision: $precision
             );
-
             $sizingDistance = max(abs($entry - $stopPivot), $tick);
-
-            $shouldGuardPivot = ($req->pivotSlMinKeepRatio ?? 0.0) > 0.0;
-            if ($shouldGuardPivot && $hasAtrInputs) {
-                $pivotGuardAtr = $this->slc->fromAtr($entry, $req->side, (float)$req->atrValue, (float)$req->atrK, $precision);
-            }
         }
 
         if ($req->stopFrom === 'atr') {
@@ -238,274 +174,81 @@ final class OrderPlanBuilder
             }
             $stopAtr = $this->slc->fromAtr($entry, $req->side, (float)$req->atrValue, (float)$req->atrK, $precision);
             $sizingDistance = max(abs($entry - $stopAtr), $tick);
-            
-            // CRITICAL GUARD: Appliquer la garde minimale absolue de 0.5% aussi pour les SL basés sur ATR
-            // Cette garde doit être appliquée AVANT la sélection du stop final pour garantir
-            // que tous les SL respectent le minimum absolu, indépendamment de la méthode de calcul
-            $MIN_STOP_DISTANCE_PCT = 0.005; // 0.5% minimum absolu
+
             $atrStopDistancePct = abs($entry - $stopAtr) / max($entry, 1e-9);
-            
-            if ($atrStopDistancePct < $MIN_STOP_DISTANCE_PCT) {
-                $minAbsoluteDistance = max($tick, $MIN_STOP_DISTANCE_PCT * $entry);
-                $target = $req->side === Side::Long
-                    ? max($entry - $minAbsoluteDistance, $tick)
-                    : $entry + $minAbsoluteDistance;
-                $target = $req->side === Side::Long
-                    ? TickQuantizer::quantize(max($target, $tick), $precision)
+            if ($atrStopDistancePct < self::MIN_STOP_DISTANCE_PCT) {
+                $minAbs = max($tick, self::MIN_STOP_DISTANCE_PCT * $entry);
+                $target = $req->side === Side::Long ? max($entry - $minAbs, $tick) : $entry + $minAbs;
+                $stopAtr = $req->side === Side::Long
+                    ? TickQuantizer::quantize($target, $precision)
                     : TickQuantizer::quantizeUp($target, $precision);
-                
-                if (\is_finite($target) && $target > 0.0 && $target !== $entry) {
-                    $previousAtrStop = $stopAtr;
-                    $stopAtr = $target;
-                    $sizingDistance = max(abs($entry - $stopAtr), $tick);
-                    
-                    $this->flowLogger->info('order_plan.atr_stop_min_absolute_distance_enforced', [
-                        'symbol' => $req->symbol,
-                        'side' => $req->side->value,
-                        'entry' => $entry,
-                        'atr_stop_before' => $previousAtrStop,
-                        'atr_stop_after' => $stopAtr,
-                        'distance_pct_before' => round($atrStopDistancePct * 100, 4),
-                        'distance_pct_after' => round($MIN_STOP_DISTANCE_PCT * 100, 2),
-                        'min_absolute_distance_pct' => $MIN_STOP_DISTANCE_PCT * 100,
-                        'decision_key' => $decisionKey,
-                    ]);
-                    $this->journeyLogger->info('order_journey.plan_builder.atr_stop_min_absolute_distance_enforced', [
-                        'symbol' => $req->symbol,
-                        'decision_key' => $decisionKey,
-                        'entry' => $entry,
-                        'atr_stop_before' => $previousAtrStop,
-                        'atr_stop_after' => $stopAtr,
-                        'distance_pct_before' => round($atrStopDistancePct * 100, 4),
-                        'distance_pct_after' => round($MIN_STOP_DISTANCE_PCT * 100, 2),
-                        'reason' => 'atr_stop_min_absolute_distance_0_5_pct_enforced',
-                    ]);
-                }
+                $sizingDistance = max(abs($entry - $stopAtr), $tick);
             }
         }
 
-        if ($stopPivot !== null && $pivotGuardAtr !== null) {
-            $pivotDistance = abs($entry - $stopPivot);
-            $atrDistance = abs($entry - $pivotGuardAtr);
-            if ($atrDistance > 0.0) {
-                $minDistance = max($tick, (float)$req->pivotSlMinKeepRatio * $atrDistance);
-                if ($pivotDistance < $minDistance) {
-                    $direction = $req->side === Side::Long ? -1.0 : 1.0;
-                    $target = $entry + $direction * $minDistance;
-                    $adjusted = $req->side === Side::Long
-                        ? TickQuantizer::quantize(max($target, $tick), $precision)
-                        : TickQuantizer::quantizeUp($target, $precision);
-
-                    $isMoreConservative = ($req->side === Side::Long && $adjusted < $stopPivot)
-                        || ($req->side === Side::Short && $adjusted > $stopPivot);
-
-                    if ($isMoreConservative) {
-                        $previousStop = $stopPivot;
-                        $stopPivot = $adjusted;
-                        $sizingDistance = max(abs($entry - $stopPivot), $tick);
-
-                        $this->flowLogger->info('order_plan.pivot_stop_min_keep_ratio_adjust', [
-                            'symbol' => $req->symbol,
-                            'side' => $req->side->value,
-                            'entry' => $entry,
-                            'pivot_stop_before' => $previousStop,
-                            'pivot_stop_after' => $stopPivot,
-                            'pivot_distance' => $pivotDistance,
-                            'min_distance' => $minDistance,
-                            'atr_reference_stop' => $pivotGuardAtr,
-                            'pivot_sl_min_keep_ratio' => $req->pivotSlMinKeepRatio,
-                            'decision_key' => $decisionKey,
-                        ]);
-                        $this->journeyLogger->info('order_journey.plan_builder.pivot_stop_adjusted', [
-                            'symbol' => $req->symbol,
-                            'decision_key' => $decisionKey,
-                            'entry' => $entry,
-                            'pivot_stop_before' => $previousStop,
-                            'pivot_stop_after' => $stopPivot,
-                            'pivot_distance' => $pivotDistance,
-                            'min_distance' => $minDistance,
-                            'reason' => 'pivot_stop_upheld_by_min_keep_ratio',
-                        ]);
-                    }
-                }
-            }
-        }
-
-        // CRITICAL GUARD: Appliquer la garde minimale absolue de 0.5% aussi pour les SL pivot
-        // Cette garde doit être appliquée AVANT la sélection du stop final pour garantir
-        // que tous les SL respectent le minimum absolu, indépendamment de la méthode de calcul
+        // Garde 0.5% pour le stop pivot
         if ($stopPivot !== null) {
-            $MIN_STOP_DISTANCE_PCT = 0.005; // 0.5% minimum absolu
             $pivotStopDistancePct = abs($entry - $stopPivot) / max($entry, 1e-9);
-            
-            if ($pivotStopDistancePct < $MIN_STOP_DISTANCE_PCT) {
-                $minAbsoluteDistance = max($tick, $MIN_STOP_DISTANCE_PCT * $entry);
-                $target = $req->side === Side::Long
-                    ? max($entry - $minAbsoluteDistance, $tick)
-                    : $entry + $minAbsoluteDistance;
-                $target = $req->side === Side::Long
-                    ? TickQuantizer::quantize(max($target, $tick), $precision)
+            if ($pivotStopDistancePct < self::MIN_STOP_DISTANCE_PCT) {
+                $minAbs = max($tick, self::MIN_STOP_DISTANCE_PCT * $entry);
+                $target = $req->side === Side::Long ? max($entry - $minAbs, $tick) : $entry + $minAbs;
+                $stopPivot = $req->side === Side::Long
+                    ? TickQuantizer::quantize($target, $precision)
                     : TickQuantizer::quantizeUp($target, $precision);
-                
-                if (\is_finite($target) && $target > 0.0 && $target !== $entry) {
-                    $previousPivotStop = $stopPivot;
-                    $stopPivot = $target;
-                    $sizingDistance = max(abs($entry - $stopPivot), $tick);
-                    
-                    $this->flowLogger->info('order_plan.pivot_stop_min_absolute_distance_enforced', [
-                        'symbol' => $req->symbol,
-                        'side' => $req->side->value,
-                        'entry' => $entry,
-                        'pivot_stop_before' => $previousPivotStop,
-                        'pivot_stop_after' => $stopPivot,
-                        'distance_pct_before' => round($pivotStopDistancePct * 100, 4),
-                        'distance_pct_after' => round($MIN_STOP_DISTANCE_PCT * 100, 2),
-                        'min_absolute_distance_pct' => $MIN_STOP_DISTANCE_PCT * 100,
-                        'decision_key' => $decisionKey,
-                    ]);
-                    $this->journeyLogger->info('order_journey.plan_builder.pivot_stop_min_absolute_distance_enforced', [
-                        'symbol' => $req->symbol,
-                        'decision_key' => $decisionKey,
-                        'entry' => $entry,
-                        'pivot_stop_before' => $previousPivotStop,
-                        'pivot_stop_after' => $stopPivot,
-                        'distance_pct_before' => round($pivotStopDistancePct * 100, 4),
-                        'distance_pct_after' => round($MIN_STOP_DISTANCE_PCT * 100, 2),
-                        'reason' => 'pivot_stop_min_absolute_distance_0_5_pct_enforced',
-                    ]);
-                }
+                $sizingDistance = max(abs($entry - $stopPivot), $tick);
             }
         }
 
+        // --- Sizing initial, choix final du stop conservateur ---
         $size = $this->positionSizer->fromRiskAndDistance($riskUsdt, $sizingDistance, $contractSize, $minVolume);
 
         $stopRisk = $this->slc->fromRisk($entry, $req->side, $riskUsdt, $size, $contractSize, $precision);
         $stop = match (true) {
             $stopPivot !== null => $stopPivot,
-            $stopAtr !== null => $this->slc->conservative($req->side, $stopAtr, $stopRisk),
-            default => $stopRisk,
+            $stopAtr   !== null => $this->slc->conservative($req->side, $stopAtr, $stopRisk),
+            default              => $stopRisk,
         };
 
+        // Si le stop final diffère, re-sizer
         $finalDistance = max(abs($entry - $stop), $tick);
         if (abs($finalDistance - $sizingDistance) > 1e-12) {
             $size = $this->positionSizer->fromRiskAndDistance($riskUsdt, $finalDistance, $contractSize, $minVolume);
         }
 
-        $this->flowLogger->debug('order_plan.sizing', [
-            'symbol' => $req->symbol,
-            'risk_usdt' => $riskUsdt,
-            'initial_distance' => $sizingDistance,
-            'final_distance' => $finalDistance,
-            'contract_size' => $contractSize,
-            'min_volume' => $minVolume,
-            'size_prequant' => $size,
-            'decision_key' => $decisionKey,
-        ]);
-        $this->journeyLogger->debug('order_journey.plan_builder.sizing', [
-            'symbol' => $req->symbol,
-            'decision_key' => $decisionKey,
-            'risk_usdt' => $riskUsdt,
-            'size_prequant' => $size,
-            'reason' => 'position_size_computed',
-        ]);
-
+        // Garde absolue (>= 1 tick) + garde globale 0.5% pour tout SL
         $minTick = TickQuantizer::tick($precision);
         if ($stop <= 0.0 || abs($stop - $entry) < $minTick) {
-            if ($req->side === Side::Long) {
-                $stop = TickQuantizer::quantize(max($entry - $minTick, $minTick), $precision);
-            } else {
-                $stop = TickQuantizer::quantizeUp($entry + $minTick, $precision);
-            }
+            $stop = $req->side === Side::Long
+                ? TickQuantizer::quantize(max($entry - $minTick, $minTick), $precision)
+                : TickQuantizer::quantizeUp($entry + $minTick, $precision);
         }
         if ($stop <= 0.0 || $stop === $entry) {
             throw new \RuntimeException('Stop loss invalide');
         }
-
-        // CRITICAL GUARD: Minimum stop-loss distance (protection against stops that are too tight)
-        $MIN_STOP_DISTANCE_PCT = 0.005; // 0.5% minimum
         $stopDistancePct = abs($stop - $entry) / max($entry, 1e-9);
-
-        if ($stopDistancePct < $MIN_STOP_DISTANCE_PCT) {
-            $minAbsoluteDistance = max($tick, $MIN_STOP_DISTANCE_PCT * $entry);
-            $target = $req->side === Side::Long
-                ? max($entry - $minAbsoluteDistance, $tick)
-                : $entry + $minAbsoluteDistance;
-            $target = $req->side === Side::Long
+        if ($stopDistancePct < self::MIN_STOP_DISTANCE_PCT) {
+            $minAbs = max($tick, self::MIN_STOP_DISTANCE_PCT * $entry);
+            $target = $req->side === Side::Long ? max($entry - $minAbs, $minTick) : $entry + $minAbs;
+            $stop = $req->side === Side::Long
                 ? TickQuantizer::quantize($target, $precision)
                 : TickQuantizer::quantizeUp($target, $precision);
 
-            if (!\is_finite($target) || $target <= 0.0 || $target === $entry) {
-                throw new \RuntimeException('Impossible d\'appliquer la distance minimale sur le stop');
-            }
-
-            $previousStop = $stop;
-            $previousSize = $size;
-
-            $stop = $target;
-            if ($stopPivot !== null) {
-                $stopPivot = $stop;
-            }
-            if ($stopAtr !== null) {
-                $stopAtr = $stop;
-            }
-
-            $sizingDistance = max(abs($entry - $stop), $tick);
-            $size = $this->positionSizer->fromRiskAndDistance($riskUsdt, $sizingDistance, $contractSize, $minVolume);
+            $finalDistance = max(abs($entry - $stop), $tick);
+            $size = $this->positionSizer->fromRiskAndDistance($riskUsdt, $finalDistance, $contractSize, $minVolume);
             $stopRisk = $this->slc->fromRisk($entry, $req->side, $riskUsdt, (int)$size, $contractSize, $precision);
 
-            $logContext = [
+            $this->flowLogger->info('order_plan.stop_min_distance_adjusted', [
                 'symbol' => $req->symbol,
                 'side' => $req->side->value,
                 'entry' => $entry,
-                'stop_before' => $previousStop,
+                'stop_before' => $stopRisk,
                 'stop_after' => $stop,
-                'size_before' => $previousSize,
-                'size_after' => $size,
-                'min_distance_pct' => $MIN_STOP_DISTANCE_PCT,
+                'min_distance_pct' => self::MIN_STOP_DISTANCE_PCT,
                 'decision_key' => $decisionKey,
-            ];
-
-            if ($stopPivot !== null) {
-                $this->flowLogger->notice('order_plan.stop_min_distance_adjusted_pivot', $logContext + [
-                    'reason' => 'pivot_stop_adjusted',
-                ]);
-                $this->journeyLogger->notice('order_journey.plan_builder.stop_min_distance_adjusted_pivot', [
-                    'symbol' => $req->symbol,
-                    'decision_key' => $decisionKey,
-                    'entry' => $entry,
-                    'stop_before' => $previousStop,
-                    'stop_after' => $stop,
-                    'reason' => 'pivot_stop_min_distance_enforced',
-                ]);
-            } elseif ($stopAtr !== null) {
-                $this->flowLogger->notice('order_plan.stop_min_distance_adjusted_atr', $logContext + [
-                    'reason' => 'atr_stop_adjusted',
-                ]);
-                $this->journeyLogger->notice('order_journey.plan_builder.stop_min_distance_adjusted_atr', [
-                    'symbol' => $req->symbol,
-                    'decision_key' => $decisionKey,
-                    'entry' => $entry,
-                    'stop_before' => $previousStop,
-                    'stop_after' => $stop,
-                    'reason' => 'atr_stop_min_distance_enforced',
-                ]);
-            } else {
-                $this->flowLogger->notice('order_plan.stop_min_distance_adjusted', $logContext + [
-                    'reason' => 'risk_stop_adjusted',
-                ]);
-                $this->journeyLogger->notice('order_journey.plan_builder.stop_min_distance_adjusted', [
-                    'symbol' => $req->symbol,
-                    'decision_key' => $decisionKey,
-                    'entry' => $entry,
-                    'stop_before' => $previousStop,
-                    'stop_after' => $stop,
-                    'reason' => 'risk_stop_min_distance_enforced',
-                ]);
-            }
-
-            $stopDistancePct = abs($stop - $entry) / max($entry, 1e-9);
+            ]);
         }
 
+        // --- Quantisation / clamps taille ---
         if ($volPrecision === 0) {
             $size = (float)floor($size);
         } else {
@@ -517,29 +260,45 @@ final class OrderPlanBuilder
         } elseif ($maxVolume !== null && $maxVolume > 0.0) {
             $size = min($size, $maxVolume);
         }
-
         $sizeContracts = (int)max($minVolume, floor($size));
         if ($sizeContracts <= 0) {
-            throw new \RuntimeException(sprintf(
-                'Taille calculée invalide: sizeContracts=%d, minVolume=%s, symbol=%s',
-                $sizeContracts,
-                $minVolume,
-                $req->symbol
-            ));
+            throw new \RuntimeException('Taille calculée invalide (<=0)');
         }
 
+        $this->flowLogger->debug('order_plan.sizing', [
+            'symbol' => $req->symbol,
+            'risk_usdt' => $riskUsdt,
+            'final_distance' => $finalDistance,
+            'size' => $sizeContracts,
+            'decision_key' => $decisionKey,
+        ]);
 
-        $takeProfit = $this->tpc->fromRMultiple($entry, $stop, $req->side, (float)$req->rMultiple, $precision);
+        // --- TAKE PROFIT : R-multiple puis « snap » sur pivot avec garde en R ---
+        $tpTheoretical = $this->tpc->fromRMultiple($entry, $stop, $req->side, (float)$req->rMultiple, $precision);
 
-        if (is_array($pre->pivotLevels) && !empty($pre->pivotLevels) && $req->rMultiple > 0.0) {
+        // 1) pivots déjà fournis ? sinon, récupérer calcul pivot (15m) via provider
+        $pivotLevels = \is_array($pre->pivotLevels) && !empty($pre->pivotLevels) ? $pre->pivotLevels : null;
+        if ($pivotLevels === null) {
+            $list15 = $this->indicatorProvider->getListPivot(key: 'pivot', symbol: $req->symbol, tf: '15m');
+            if ($list15 !== null) {
+                $indicators = $list15->indicators;
+                if (\is_array($indicators['pivot_levels'] ?? null) && !empty($indicators['pivot_levels'])) {
+                    $pivotLevels = $indicators['pivot_levels'];
+                }
+            }
+        }
+
+        $takeProfit = $tpTheoretical;
+        $pickedFromPivot = false;
+        if (\is_array($pivotLevels) && !empty($pivotLevels) && $req->rMultiple > 0.0) {
             $takeProfit = $this->tpc->alignTakeProfitWithPivot(
                 symbol: $req->symbol,
                 side: $req->side,
                 entry: $entry,
                 stop: $stop,
-                baseTakeProfit: $takeProfit,
+                baseTakeProfit: $tpTheoretical,
                 rMultiple: (float)$req->rMultiple,
-                pivotLevels: $pre->pivotLevels,
+                pivotLevels: $pivotLevels,
                 policy: $req->tpPolicy,
                 bufferPct: $req->tpBufferPct,
                 bufferTicks: $req->tpBufferTicks,
@@ -549,44 +308,42 @@ final class OrderPlanBuilder
                 maxExtraR: $req->tpMaxExtraR,
                 decisionKey: $decisionKey,
             );
+            $pickedFromPivot = true;
         }
 
-        // Calculer stopPct pour le calcul dynamique du levier
+        $riskUnit = abs($entry - $stop);
+        $rTheoretical = (float)($req->rMultiple ?? 0.0);
+        $rEffective = $riskUnit > 0.0
+            ? (($req->side === Side::Long ? ($takeProfit - $entry) : ($entry - $takeProfit)) / $riskUnit)
+            : 0.0;
+
+        $this->flowLogger->debug('order_plan.take_profit_selected', [
+            'symbol' => $req->symbol,
+            'side' => $req->side->value,
+            'entry' => $entry,
+            'stop' => $stop,
+            'tp_theoretical' => $tpTheoretical,
+            'tp_final' => $takeProfit,
+            'r_theoretical' => $rTheoretical,
+            'r_effective' => round($rEffective, 3),
+            'aligned_on_pivot' => $pickedFromPivot,
+            'decision_key' => $decisionKey,
+        ]);
+        $this->journeyLogger->debug('order_journey.plan_builder.take_profit_selected', [
+            'symbol' => $req->symbol,
+            'decision_key' => $decisionKey,
+            'entry' => $entry,
+            'stop' => $stop,
+            'take_profit' => $takeProfit,
+            'r_theoretical' => $rTheoretical,
+            'r_effective' => round($rEffective, 3),
+            'aligned_on_pivot' => $pickedFromPivot,
+        ]);
+
+        // --- Levier dynamique (stopPct + ATR 15m pour volatilité) ---
         $stopPct = abs($stop - $entry) / max($entry, 1e-9);
 
-        $this->flowLogger->debug('order_plan.stop_and_tp', [
-            'symbol' => $req->symbol,
-            'entry' => $entry,
-            'stop_from' => $req->stopFrom,
-            'stop_pivot' => $stopPivot,
-            'atr_value' => $req->atrValue,
-            'atr_k' => $req->atrK,
-            'stop_atr' => $stopAtr,
-            'stop_risk' => $stopRisk,
-            'stop' => $stop,
-            'stop_pct' => $stopPct,
-            'tp' => $takeProfit,
-            'r_multiple' => $req->rMultiple,
-            'pivot_sl_policy' => $req->pivotSlPolicy,
-            'pivot_sl_buffer_pct' => $req->pivotSlBufferPct,
-            'pivot_sl_min_keep_ratio' => $req->pivotSlMinKeepRatio,
-            'pivot_guard_atr' => $pivotGuardAtr,
-            'decision_key' => $decisionKey,
-        ]);
-        $this->journeyLogger->debug('order_journey.plan_builder.stop_tp', [
-            'symbol' => $req->symbol,
-            'decision_key' => $decisionKey,
-            'entry' => $entry,
-            'stop' => $stop,
-            'stop_pct' => $stopPct,
-            'take_profit' => $takeProfit,
-            'stop_pivot' => $stopPivot,
-            'pivot_sl_policy' => $req->pivotSlPolicy,
-            'pivot_sl_buffer_pct' => $req->pivotSlBufferPct,
-            'pivot_sl_min_keep_ratio' => $req->pivotSlMinKeepRatio,
-            'reason' => 'risk_targets_calculated',
-        ]);
-
+        $atr15m = $this->indicatorProvider->getAtr(symbol: $req->symbol, tf: '15m');
         $leverage = $this->leverageService->computeLeverage(
             $req->symbol,
             $entry,
@@ -596,24 +353,35 @@ final class OrderPlanBuilder
             $pre->availableUsdt,
             $pre->minLeverage,
             $pre->maxLeverage,
-            $stopPct
+            $stopPct,
+            $atr15m,
         );
 
+        $this->flowLogger->debug('order_plan.leverage.dynamic', [
+            'symbol' => $req->symbol,
+            'stop_pct' => $stopPct,
+            'atr_15m' => $atr15m,
+            'leverage' => $leverage,
+            'decision_key' => $decisionKey,
+        ]);
+
+        // --- Budget check (marge) et ajustements éventuels de taille ---
         $notional = $entry * $contractSize * $sizeContracts;
         $initialMargin = $notional / max(1.0, (float)$leverage);
         if ($initialMargin > $availableBudget) {
-            $requiredLeverage = max(1.0, $notional / max($availableBudget, 1e-8));
-            $adjustedLeverage = min(max($requiredLeverage, (float)$pre->minLeverage), (float)$pre->maxLeverage);
-            if ($adjustedLeverage > (float)$leverage) {
-                $leverage = $adjustedLeverage;
+            $requiredLev = max(1.0, $notional / max($availableBudget, 1e-8));
+            $adjLev = min(max($requiredLev, (float)$pre->minLeverage), (float)$pre->maxLeverage);
+            if ($adjLev > (float)$leverage) {
+                $leverage = (int)ceil($adjLev);
                 $initialMargin = $notional / $leverage;
             }
             if ($initialMargin > $availableBudget) {
                 $maxNotional = $availableBudget * $leverage;
-                $size = max($minVolume, floor(($maxNotional / max($entry * $contractSize, 1e-8)) / $sizeStep) * $sizeStep);
-                if ($maxVolume !== null && $maxVolume > 0.0) {
-                    $size = min($size, $maxVolume);
-                }
+                $size = max(
+                    $minVolume,
+                    floor((($maxNotional) / max($entry * $contractSize, 1e-8)) / $sizeStep) * $sizeStep
+                );
+                if ($maxVolume !== null && $maxVolume > 0.0) { $size = min($size, $maxVolume); }
                 if ($req->orderType === 'market' && $marketMaxVolume !== null && $marketMaxVolume > 0.0) {
                     $size = min($size, $marketMaxVolume);
                 }
@@ -633,7 +401,6 @@ final class OrderPlanBuilder
             'size' => $sizeContracts,
             'contract_size' => $contractSize,
             'notional_usdt' => $notional,
-            'initial_margin_budget' => $req->initialMarginUsdt,
             'initial_margin_usdt' => $initialMargin,
             'available_usdt' => $pre->availableUsdt,
             'leverage' => $leverage,
@@ -645,9 +412,9 @@ final class OrderPlanBuilder
             'leverage' => $leverage,
             'notional_usdt' => $notional,
             'initial_margin_usdt' => $initialMargin,
-            'reason' => 'leverage_and_margin_computed',
         ]);
 
+        // --- Build du modèle final ---
         $orderMode = $req->orderType === 'market' ? 1 : $req->orderMode;
 
         $model = new OrderPlanModel(
@@ -660,7 +427,7 @@ final class OrderPlanBuilder
             stop: $stop,
             takeProfit: $takeProfit,
             size: $sizeContracts,
-            leverage: $leverage,
+            leverage: (int)$leverage,
             pricePrecision: $precision,
             contractSize: $contractSize,
         );
@@ -690,7 +457,6 @@ final class OrderPlanBuilder
             'size' => $model->size,
             'leverage' => $model->leverage,
             'order_mode' => $model->orderMode,
-            'reason' => 'order_plan_ready_for_execution',
         ]);
 
         return $model;
@@ -699,10 +465,96 @@ final class OrderPlanBuilder
     private function normalizePercent(float $value): float
     {
         $value = max(0.0, $value);
-        if ($value > 1.0) {
-            $value *= 0.01;
+        if ($value > 1.0) { $value *= 0.01; }
+        return min($value, 1.0);
+    }
+
+    // ====== Helpers dépréciés (compatibilité) ======
+
+    /**
+     * @deprecated Utilisé uniquement pour compatibilité. Le nouveau flux linéaire calcule directement.
+     * Choisit une distance provisoire raisonnable pour calculer un stop-risk cohérent.
+     */
+    private function pickProvisionalDistance(float $entry, float $tick, ?float $stopAtr, ?float $stopPivot): float
+    {
+        if (!self::$deprecationWarningLogged) {
+            $this->flowLogger->warning('order_plan.helper_deprecated', [
+                'helper' => 'pickProvisionalDistance',
+                'message' => 'Helper déprécié, le nouveau flux linéaire calcule directement',
+            ]);
+            self::$deprecationWarningLogged = true;
         }
 
-        return min($value, 1.0);
+        $cands = [];
+        if ($stopAtr   !== null) { $cands[] = abs($entry - $stopAtr); }
+        if ($stopPivot !== null) { $cands[] = abs($entry - $stopPivot); }
+        $cands[] = $tick * 10;
+        return max($tick, max($cands));
+    }
+
+    /**
+     * @deprecated Utilisé uniquement pour compatibilité. Le nouveau flux linéaire quantifie directement.
+     * Quantifie une taille flottante en nombre de contrats entier, bornée par min/max/market.
+     */
+    private function quantizeContracts(
+        float $sizeFloat,
+        float $sizeStep,
+        float $minVolume,
+        ?float $maxVolume,
+        ?float $marketMaxVolume
+    ): int {
+        if (!self::$deprecationWarningLogged) {
+            $this->flowLogger->warning('order_plan.helper_deprecated', [
+                'helper' => 'quantizeContracts',
+                'message' => 'Helper déprécié, le nouveau flux linéaire quantifie directement',
+            ]);
+            self::$deprecationWarningLogged = true;
+        }
+
+        $s = floor($sizeFloat / $sizeStep) * $sizeStep;
+        $s = max($s, $minVolume);
+        if ($maxVolume !== null && $maxVolume > 0.0) {
+            $s = min($s, $maxVolume);
+        }
+        if ($marketMaxVolume !== null && $marketMaxVolume > 0.0) {
+            $s = min($s, $marketMaxVolume);
+        }
+        return (int)max($minVolume, floor($s));
+    }
+
+    /**
+     * @deprecated Utilisé uniquement pour compatibilité. Le nouveau flux linéaire applique la garde directement.
+     * Applique une unique garde minimale (% du prix d'entrée) et quantize le stop selon la direction.
+     */
+    private function enforceMinDistanceAndQuantize(
+        float $entry,
+        float $stop,
+        Side $side,
+        int $precision,
+        float $tick,
+        float $minPct
+    ): float {
+        if (!self::$deprecationWarningLogged) {
+            $this->flowLogger->warning('order_plan.helper_deprecated', [
+                'helper' => 'enforceMinDistanceAndQuantize',
+                'message' => 'Helper déprécié, le nouveau flux linéaire applique la garde directement',
+            ]);
+            self::$deprecationWarningLogged = true;
+        }
+
+        $minAbs = max($tick, $minPct * $entry);
+        $want   = ($side === Side::Long)
+            ? max($entry - $minAbs, $tick)
+            : $entry + $minAbs;
+
+        // On choisit le stop le plus conservateur entre $stop et $want
+        if ($side === Side::Long) {
+            $stop = min($stop, $want);
+            $stop = TickQuantizer::quantize(max($stop, $tick), $precision);
+        } else {
+            $stop = max($stop, $want);
+            $stop = TickQuantizer::quantizeUp($stop, $precision);
+        }
+        return $stop;
     }
 }

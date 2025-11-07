@@ -70,7 +70,7 @@ final class TpSlTwoTargetsService
                 try {
                     $openPositions = $accountProvider->getOpenPositions($symbol);
                     $targetSideValue = $req->side->value; // 'long' ou 'short'
-                    
+
                     foreach ($openPositions as $posDto) {
                         if ($posDto->symbol === $symbol && strtolower($posDto->side->value) === $targetSideValue) {
                             if ($entryPrice === null) {
@@ -97,7 +97,7 @@ final class TpSlTwoTargetsService
                     ]);
                 }
             }
-            
+
             // Fallback sur la base de données locale si toujours pas trouvé
             if ($entryPrice === null || $size === null) {
                 $pos = $this->resolvePosition($symbol, $req->side);
@@ -168,7 +168,7 @@ final class TpSlTwoTargetsService
 
         // Prix actuel pour validation
         $currentPrice = (float)($pre->markPrice ?? $pre->bestAsk ?? $pre->bestBid ?? $entryPrice);
-        
+
         // TP1 = mécanique actuelle (R multiple aligné pivots si dispo)
         $tp1Base = $this->tpc->fromRMultiple($entryPrice, $stop, $req->side, $rMultiple, $precision);
         $tp1 = $tp1Base;
@@ -191,10 +191,10 @@ final class TpSlTwoTargetsService
                 decisionKey: $decisionKey,
             );
         }
-        
+
         // Vérifier TP1 par rapport au prix actuel et chercher niveau suivant si nécessaire
         $tp1Original = $tp1; // Sauvegarder pour les logs
-        
+
         // CRITIQUE: Garantir que TP1 est toujours au-dessus du prix actuel (long) ou en dessous (short)
         // Si TP1 est invalide, monter directement au prochain R (long) ou descendre au prochain S (short)
         // Pour TP1, chercher jusqu'à r5 (long) ou s5 (short) maximum
@@ -203,17 +203,17 @@ final class TpSlTwoTargetsService
             $keys = ['r1', 'r2', 'r3', 'r4', 'r5'];
             $nextTp1 = null;
             $foundKey = null;
-            
+
             foreach ($keys as $key) {
                 if (!isset($pivotLevels[$key])) {
                     continue;
                 }
-                
+
                 $level = (float)$pivotLevels[$key];
                 if (!is_finite($level) || $level <= 0.0) {
                     continue;
                 }
-                
+
                 // Chercher le premier R strictement au-dessus du prix actuel
                 if ($level > $currentPrice) {
                     $quantized = \App\TradeEntry\Pricing\TickQuantizer::quantizeUp($level, $precision);
@@ -226,7 +226,7 @@ final class TpSlTwoTargetsService
                     break; // Prendre le premier R trouvé
                 }
             }
-            
+
             if ($nextTp1 !== null && $nextTp1 > $currentPrice) {
                 // Utiliser directement ce niveau R comme TP1
                 $tp1 = $nextTp1;
@@ -254,17 +254,17 @@ final class TpSlTwoTargetsService
             $keys = ['s1', 's2', 's3', 's4', 's5'];
             $nextTp1 = null;
             $foundKey = null;
-            
+
             foreach ($keys as $key) {
                 if (!isset($pivotLevels[$key])) {
                     continue;
                 }
-                
+
                 $level = (float)$pivotLevels[$key];
                 if (!is_finite($level) || $level <= 0.0) {
                     continue;
                 }
-                
+
                 // Chercher le premier S strictement en dessous du prix actuel
                 if ($level < $currentPrice) {
                     $quantized = \App\TradeEntry\Pricing\TickQuantizer::quantize($level, $precision);
@@ -277,7 +277,7 @@ final class TpSlTwoTargetsService
                     break; // Prendre le premier S trouvé
                 }
             }
-            
+
             if ($nextTp1 !== null && $nextTp1 < $currentPrice) {
                 // Utiliser directement ce niveau S comme TP1
                 $tp1 = $nextTp1;
@@ -301,7 +301,7 @@ final class TpSlTwoTargetsService
                 $tp1 = \App\TradeEntry\Pricing\TickQuantizer::quantize($currentPrice - $tick * 10, $precision);
             }
         }
-        
+
         // Vérification finale absolue pour garantir la cohérence
         if ($req->side === EntrySide::Long && $tp1 <= $currentPrice) {
             $this->journeyLogger->warning('order_journey.tp2sl.tp1_validation_failed', [
@@ -348,10 +348,10 @@ final class TpSlTwoTargetsService
         // TP2 = R2/S2 ou niveau suivant si TP1 utilise déjà R2/S2
         // TP2 doit être vraiment différent de TP1 (niveau pivot suivant significatif, pas juste 1 tick)
         $tp2 = null;
-        
+
         // Identifier quel pivot TP1 utilise (si disponible)
         $tp1PivotKey = $this->identifyPivotKeyUsed($tp1, $pivotLevels, $req->side, $tick);
-        
+
         // Déterminer le niveau de départ pour TP2
         // Si TP1 utilise R1, TP2 commence à R2. Si TP1 utilise R2, TP2 commence à R3, etc.
         $keys = $req->side === EntrySide::Long ? ['r1', 'r2', 'r3', 'r4', 'r5', 'r6'] : ['s1', 's2', 's3', 's4', 's5', 's6'];
@@ -366,17 +366,17 @@ final class TpSlTwoTargetsService
                 $startKey = $keys[min($tp1Index ?? 1, count($keys) - 1)];
             }
         }
-        
+
         // Chercher le premier niveau pivot valide au-dessus du prix actuel (long) ou en dessous (short)
         // et qui est significativement supérieur à TP1 (long) ou inférieur (short)
         // Distance minimale = au moins 0.5% du prix d'entrée ou 50 ticks, ou 20% de la distance SL
         $minDiffFromTp1 = max(
-            $tick * 50, 
+            $tick * 50,
             $entryPrice * 0.005, // 0.5% du prix
             abs($entryPrice - $stop) * 0.2 // 20% de la distance SL
         );
         $tp2Found = false;
-        
+
         // Trouver l'index de départ
         $startIndex = 0;
         if ($startKey !== null) {
@@ -385,17 +385,17 @@ final class TpSlTwoTargetsService
                 $startIndex = $startKeyIndex;
             }
         }
-        
+
         // Parcourir depuis startKey
         for ($i = $startIndex; $i < count($keys); $i++) {
             $key = $keys[$i];
-            
+
             if (!isset($pivotLevels[$key]) || !is_finite((float)$pivotLevels[$key]) || (float)$pivotLevels[$key] <= 0.0) {
                 continue;
             }
-            
+
             $rawLevel = (float)$pivotLevels[$key];
-            
+
             // Vérifier que le niveau est valide par rapport au prix actuel
             if ($req->side === EntrySide::Long && $rawLevel <= $currentPrice + $tick) {
                 continue; // Trop proche ou en dessous du prix actuel
@@ -403,20 +403,20 @@ final class TpSlTwoTargetsService
             if ($req->side === EntrySide::Short && $rawLevel >= $currentPrice - $tick) {
                 continue; // Trop proche ou au-dessus du prix actuel
             }
-            
+
             // Appliquer buffer
             $levelWithBuffer = $rawLevel;
             if ($tpBufferPct !== null && $tpBufferPct > 0.0) {
-                $levelWithBuffer = $req->side === EntrySide::Long 
-                    ? $levelWithBuffer * (1.0 - $tpBufferPct) 
+                $levelWithBuffer = $req->side === EntrySide::Long
+                    ? $levelWithBuffer * (1.0 - $tpBufferPct)
                     : $levelWithBuffer * (1.0 + $tpBufferPct);
             }
             if ($tpBufferTicks !== null && $tpBufferTicks > 0) {
-                $levelWithBuffer = $req->side === EntrySide::Long 
-                    ? $levelWithBuffer - $tpBufferTicks * $tick 
+                $levelWithBuffer = $req->side === EntrySide::Long
+                    ? $levelWithBuffer - $tpBufferTicks * $tick
                     : $levelWithBuffer + $tpBufferTicks * $tick;
             }
-            
+
             // Quantifier
             if ($req->side === EntrySide::Long) {
                 $levelWithBuffer = max($levelWithBuffer, $entryPrice + $tick);
@@ -425,7 +425,7 @@ final class TpSlTwoTargetsService
                 $levelWithBuffer = min($levelWithBuffer, $entryPrice - $tick);
                 $levelWithBuffer = \App\TradeEntry\Pricing\TickQuantizer::quantize($levelWithBuffer, $precision);
             }
-            
+
             // Vérifier que TP2 est significativement différent de TP1
             if ($req->side === EntrySide::Long) {
                 if ($levelWithBuffer > $tp1 + $minDiffFromTp1) {
@@ -459,7 +459,7 @@ final class TpSlTwoTargetsService
                 }
             }
         }
-        
+
         // Fallback: 2R depuis SL si aucun pivot valide trouvé
         if ($tp2 === null || !$tp2Found) {
             $tp2 = $this->tpc->fromRMultiple($entryPrice, $stop, $req->side, 2.0, $precision);
@@ -495,7 +495,7 @@ final class TpSlTwoTargetsService
         $cancelled = [];
         $orderProvider = $this->providers->getOrderProvider();
         $isDryRun = $req->dryRun ?? false;
-        
+
         if ($isDryRun) {
             $this->journeyLogger->info('order_journey.tp2sl.dry_run', [
                 'symbol' => $symbol,
@@ -607,7 +607,7 @@ final class TpSlTwoTargetsService
             if ($this->indicatorProvider !== null) {
                 try {
                     $tf = $this->resolveAtrTimeframe();
-                    $atrAbs = $this->indicatorProvider->getAtr($symbol, $tf);
+                    $atrAbs = $this->indicatorProvider->getAtr(symbol: $symbol, tf: $tf);
                 } catch (\Throwable) {
                     $atrAbs = null;
                 }
@@ -625,7 +625,7 @@ final class TpSlTwoTargetsService
             $ratio = $this->tpSplitResolver->resolve($ctx);
         }
         if ($ratio === null) { $ratio = 0.5; }
-        
+
 
         $ratio = max(0.0, min(1.0, $ratio));
         $size1 = (int)floor($size * $ratio);
@@ -862,7 +862,7 @@ final class TpSlTwoTargetsService
             // Déterminer la base TF depuis la config (list_tf ou context) sinon fallback 3 TF usuelles
             $cfg = $this->mtfConfig->getConfig();
             $mtfConfig = $cfg['signal']['mtf'] ?? $cfg['mtf'] ?? [];
-            
+
             // Nouveau format: list_tf avec context_count
             if (isset($mtfConfig['list_tf']) && is_array($mtfConfig['list_tf'])) {
                 $listTf = array_map('strtolower', $mtfConfig['list_tf']);
@@ -872,7 +872,7 @@ final class TpSlTwoTargetsService
                 // Ancien format: context séparé
                 $contextTfs = array_map('strtolower', (array)($cfg['validation']['context'] ?? ($mtfConfig['context'] ?? [])));
             }
-            
+
             if (empty($contextTfs)) {
                 $contextTfs = ['1h','15m','5m'];
             }
@@ -903,7 +903,7 @@ final class TpSlTwoTargetsService
 
     /**
      * Identifie quelle clé pivot a été utilisée pour calculer TP1
-     * 
+     *
      * @param float $tp1
      * @param array<string,float> $pivotLevels
      * @param EntrySide $side
@@ -916,7 +916,7 @@ final class TpSlTwoTargetsService
             return null;
         }
 
-        $keys = $side === EntrySide::Long 
+        $keys = $side === EntrySide::Long
             ? ['r1', 'r2', 'r3', 'r4', 'r5', 'r6']
             : ['s1', 's2', 's3', 's4', 's5', 's6'];
 
@@ -929,7 +929,7 @@ final class TpSlTwoTargetsService
             if (!isset($pivotLevels[$key])) {
                 continue;
             }
-            
+
             $level = (float)$pivotLevels[$key];
             if (!is_finite($level) || $level <= 0.0) {
                 continue;
@@ -947,7 +947,7 @@ final class TpSlTwoTargetsService
 
     /**
      * Trouve le prochain niveau pivot valide au-dessus du prix actuel (long) ou en dessous (short)
-     * 
+     *
      * @param array<string,float> $pivotLevels
      * @param float $currentPrice
      * @param EntrySide $side
@@ -969,7 +969,7 @@ final class TpSlTwoTargetsService
         }
 
         // Déterminer les clés à parcourir selon le side
-        $keys = $side === EntrySide::Long 
+        $keys = $side === EntrySide::Long
             ? ['r1', 'r2', 'r3', 'r4', 'r5', 'r6']
             : ['s1', 's2', 's3', 's4', 's5', 's6'];
 
@@ -987,7 +987,7 @@ final class TpSlTwoTargetsService
             if (!isset($pivotLevels[$key])) {
                 continue;
             }
-            
+
             $level = (float)$pivotLevels[$key];
             if (!is_finite($level) || $level <= 0.0) {
                 continue;

@@ -24,13 +24,16 @@ final class DynamicLeverageService implements LeverageServiceInterface
         float $availableUsdt,
         int $minLeverage,
         int $maxLeverage,
-        ?float $stopPct = null
+        ?float $stopPct = null,
+        ?float $atr5mValue = null // peut recevoir ATR 15m, le nom du param n’a pas d’incidence
     ): int {
+        // Budget effectif borné
         $effectiveBudget = min(max($budgetUsdt, 0.0), max($availableUsdt, 0.0));
         if ($effectiveBudget <= 0.0) {
             throw new \RuntimeException('Budget indisponible pour calculer le levier');
         }
 
+        // Notional
         $notional = $entryPrice * $contractSize * $positionSize;
         if ($notional <= 0.0) {
             return max(1, $minLeverage);
@@ -38,107 +41,131 @@ final class DynamicLeverageService implements LeverageServiceInterface
 
         if ($stopPct === null || $stopPct <= 0.0 || !\is_finite($stopPct)) {
             $this->flowLogger->error('order_plan.leverage.missing_stop_pct', [
-                'symbol' => $symbol,
-                'stop_pct' => $stopPct,
-                'reason' => 'stop_pct_invalid_or_missing',
+                'symbol' => $symbol, 'stop_pct' => $stopPct,
             ]);
-            throw new \RuntimeException(
-                sprintf('stopPct requis pour calcul dynamique du levier (symbol: %s, stopPct: %s)', $symbol, $stopPct ?? 'null')
-            );
+            throw new \RuntimeException('stopPct requis pour calcul dynamique du levier');
         }
 
-        // === 1) Defaults (risk_pct, k_dynamic) ===
-        $defaults       = $this->tradeEntryConfig->getDefaults();
-        $kDynamic       = (float)($defaults['k_dynamic'] ?? 10.0);
+        // --- Lecture config ---
+        $defaults  = $this->tradeEntryConfig->getDefaults();
+        $levConfig = $this->tradeEntryConfig->getLeverage();
+
         $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 5.0);
-        $riskPct        = $riskPctPercent > 1.0 ? $riskPctPercent / 100.0 : $riskPctPercent;
+        $riskPct = $riskPctPercent > 1.0 ? $riskPctPercent / 100.0 : $riskPctPercent;
 
-        $riskUsdt = $effectiveBudget * $riskPct;
-        if ($riskUsdt <= 0.0) {
-            throw new \RuntimeException('Risk USDT nul, impossible de calculer le levier');
-        }
+        $kDynamic = (float)($defaults['k_dynamic'] ?? 10.0);
 
-        // === 2) Base: risk_pct / stop_pct ===
-        // leverage_base ≈ riskPct / stopPct (indépendant du budget)
-        $leverageBase = $riskUsdt / max(1e-9, ($stopPct * max(1e-9, $effectiveBudget)));
+        $floorConfig    = (float)($levConfig['floor'] ?? 1.0);
+        $exchangeCapCfg = (float)($levConfig['exchange_cap'] ?? $maxLeverage);
+        $tfMultipliers  = (array)($levConfig['timeframe_multipliers'] ?? []);
+        $perSymbolCaps  = (array)($levConfig['per_symbol_caps'] ?? []);
+        $roundingCfg    = (array)($levConfig['rounding'] ?? []);
 
-        // === 3) Config levier ===
-        $levConfig          = $this->tradeEntryConfig->getLeverage();
-        $floorCfg           = (float)($levConfig['floor'] ?? 1.0);
-        $exchangeCap        = (float)($levConfig['exchange_cap'] ?? $maxLeverage);
-        $perSymbolCaps      = $levConfig['per_symbol_caps'] ?? [];
-        $tfMultipliers      = $levConfig['timeframe_multipliers'] ?? [];
-        $tfMult1m           = (float)($tfMultipliers['1m'] ?? 1.0); // tu exécutes en 1m
+        // Exécution 1m → multiplicateur 1m ; sinon fallback 1.0
+        $tfMult = (float)($tfMultipliers['1m'] ?? 1.0);
+
+        // --- Base leverage : riskPct / stopPct
+        $leverageBase = $riskPct / max($stopPct, 1e-9);
+
+        // Cap dynamique lié à la distance de stop
+        $dynCap = $kDynamic > 0.0
+            ? min((float)$maxLeverage, $kDynamic / max($stopPct, 1e-9))
+            : (float)$maxLeverage;
+
+        // Modulateur de volatilité à partir de l’ATR/Price (réduit le levier si vol élevée)
+        $volMult = $this->computeVolatilityMultiplier($atr5mValue, $entryPrice);
+
+        // Application TF + Vol
+        $leveragePreCaps = $leverageBase * $tfMult * $volMult;
+
+        // Cap exchange global
+        $leveragePreCaps = min($leveragePreCaps, $exchangeCapCfg);
 
         // Cap par symbole (regex)
-        $perSymbolCap = $this->resolvePerSymbolCap($symbol, $perSymbolCaps, $exchangeCap);
+        $symbolCap = $this->resolveSymbolCap($symbol, $perSymbolCaps, $exchangeCapCfg);
+        $leveragePreCaps = min($leveragePreCaps, $symbolCap);
 
-        // Cap dynamique k_dynamic/stop_pct
-        $dynCap = $kDynamic / max(1e-9, $stopPct);
+        // Cap dynamique
+        $leveragePreCaps = min($leveragePreCaps, $dynCap);
 
-        // Cap global
-        $globalCap = min(
-            (float)$maxLeverage,   // fourni par l'exchange / appelant
-            $exchangeCap,          // config globale
-            $perSymbolCap,         // cap par symbole (BTC/ETH vs le reste)
-            $dynCap                // cap dynamique lié à stop_pct
-        );
+        // Clamp min/max exchange
+        $leverageFinal = max((float)$minLeverage, min((float)$maxLeverage, $leveragePreCaps));
 
-        // === 4) Application multiplicateur TF (1m) ===
-        $leverageFinal = $leverageBase * $tfMult1m;
+        // Respect du floor
+        $leverageFinal = max($floorConfig, $leverageFinal);
 
-        // === 5) Floor & clamp ===
-        $leverageFinal = max($floorCfg, (float)$minLeverage, $leverageFinal);
-        $leverageFinal = min($globalCap, $leverageFinal);
+        // Arrondi
+        $roundMode = strtolower((string)($roundingCfg['mode'] ?? 'ceil'));
+        $leverageRounded = match ($roundMode) {
+            'floor' => (int)floor($leverageFinal),
+            'round' => (int)round($leverageFinal),
+            default => (int)ceil($leverageFinal),
+        };
 
-        // Arrondi & clamps finaux
-        $leverage = (int)\ceil($leverageFinal);
-        $leverage = max(1, max($minLeverage, $leverage));
-        $leverage = min($maxLeverage, $leverage);
+        // Clamps finaux
+        $leverageRounded = max(1, $leverageRounded);
+        $leverageRounded = max($minLeverage, $leverageRounded);
+        $leverageRounded = min($maxLeverage, $leverageRounded);
 
         $this->flowLogger->debug('order_plan.leverage.dynamic', [
-            'symbol'         => $symbol,
-            'entry_price'    => $entryPrice,
-            'position_size'  => $positionSize,
-            'notional'       => $notional,
-            'budget_usdt'    => $effectiveBudget,
-            'risk_pct'       => $riskPct,
-            'risk_usdt'      => $riskUsdt,
-            'stop_pct'       => $stopPct,
-            'k_dynamic'      => $kDynamic,
-            'leverage_base'  => $leverageBase,
-            'tf_mult_1m'     => $tfMult1m,
-            'dyn_cap'        => $dynCap,
-            'exchange_cap'   => $exchangeCap,
-            'per_symbol_cap' => $perSymbolCap,
-            'global_cap'     => $globalCap,
-            'leverage_final' => $leverageFinal,
-            'leverage'       => $leverage,
-            'min_leverage'   => $minLeverage,
-            'max_leverage'   => $maxLeverage,
+            'symbol'            => $symbol,
+            'entry_price'       => $entryPrice,
+            'contract_size'     => $contractSize,
+            'position_size'     => $positionSize,
+            'notional'          => $notional,
+            'budget_usdt'       => $budgetUsdt,
+            'available_usdt'    => $availableUsdt,
+            'effective_budget'  => $effectiveBudget,
+            'risk_pct'          => $riskPct,
+            'risk_pct_percent'  => $riskPctPercent,
+            'stop_pct'          => $stopPct,
+            'k_dynamic'         => $kDynamic,
+            'leverage_base'     => $leverageBase,
+            'tf_mult_1m'        => $tfMult,
+            'atr_value'         => $atr5mValue,
+            'vol_mult'          => $volMult,
+            'exchange_cap_cfg'  => $exchangeCapCfg,
+            'symbol_cap'        => $symbolCap,
+            'dyn_cap'           => $dynCap,
+            'floor_config'      => $floorConfig,
+            'leverage_precaps'  => $leveragePreCaps,
+            'leverage_final'    => $leverageFinal,
+            'leverage_rounded'  => $leverageRounded,
+            'min_leverage'      => $minLeverage,
+            'max_leverage'      => $maxLeverage,
         ]);
 
-        return $leverage;
+        return $leverageRounded;
     }
 
     /**
-     * Cap par symbole via regex (^(BTC|ETH).* => cap différent, etc.)
+     * Réduit progressivement le levier quand ATR/Price augmente.
+     * Mappe ~[0%, 1%] -> multiplicateur ~[1.25, 0.5].
      */
-    private function resolvePerSymbolCap(string $symbol, array $perSymbolCaps, float $defaultCap): float
+    private function computeVolatilityMultiplier(?float $atr, float $price): float
     {
-        $cap = $defaultCap;
+        if ($atr === null || $atr <= 0.0 || $price <= 0.0) {
+            return 1.0;
+        }
+        $volPct = $atr / $price;           // ex: 0.002 = 0.2%
+        $m      = 1.25 - 75.0 * $volPct;   // vol 0% -> 1.25 ; vol 1% -> 0.5
+        return max(0.5, min(1.25, $m));
+    }
+
+    /**
+     * Applique les caps par regex de symbole, sinon fallback à exchangeCap.
+     * Format attendu: [ { symbol_regex: "...", cap: float }, ... ]
+     */
+    private function resolveSymbolCap(string $symbol, array $perSymbolCaps, float $fallback): float
+    {
+        $cap = $fallback;
         foreach ($perSymbolCaps as $rule) {
-            $regex = $rule['symbol_regex'] ?? null;
-            $ruleCap = $rule['cap'] ?? null;
-            if (!$regex || $ruleCap === null) {
-                continue;
-            }
-            if (\preg_match('#' . $regex . '#', $symbol) === 1) {
-                $cap = (float)$ruleCap;
-                break;
+            $re  = (string)($rule['symbol_regex'] ?? '');
+            $val = (float)($rule['cap'] ?? 0.0);
+            if ($re !== '' && @preg_match('/' . $re . '/i', $symbol) === 1 && $val > 0.0) {
+                $cap = min($cap, $val);
             }
         }
         return $cap;
     }
 }
-
