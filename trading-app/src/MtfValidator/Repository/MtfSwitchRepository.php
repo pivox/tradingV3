@@ -2,10 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App\Repository;
+namespace App\MtfValidator\Repository;
 
 use App\Common\Enum\Timeframe;
-use App\Entity\MtfSwitch;
+use App\MtfValidator\Entity\MtfSwitch;
+use App\Provider\Repository\KlineRepository;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 use Psr\Clock\ClockInterface;

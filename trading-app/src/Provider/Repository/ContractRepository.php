@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Repository;
+namespace App\Provider\Repository;
 
 use App\Config\MtfContractsConfig;
-use App\Entity\Contract;
+use App\Provider\Entity\Contract;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\ParameterType;
@@ -131,7 +131,7 @@ class ContractRepository extends ServiceEntityRepository
         $contract = $this->findBySymbol($symbol);
 
         if (!$contract) {
-            $contract = new Contract();
+            $contract = new \App\Provider\Entity\Contract();
             $contract->setSymbol($symbol);
         }
 
@@ -266,17 +266,98 @@ class ContractRepository extends ServiceEntityRepository
      * Retourne la liste des symboles des contrats actifs, en excluant les blacklists.
      * Critères appliqués selon les colonnes disponibles: status=Trading, quote=USDT,
      * volume_24h >= seuil, et non expiré (expire_timestamp NULL, 0 ou > maintenant).
+     *
+     * @param array $symbols Si fourni, filtre les résultats pour ne garder que ces symboles
+     * @param bool $ignoreLimits Si true, ignore les limites top_n/mid_n et retourne tous les symboles actifs
      * @return string[]
      */
-    public function allActiveSymbolNames(array $symbols = []): array
+    public function allActiveSymbolNames(array $symbols = [], bool $ignoreLimits = false): array
     {
-        $all = $this->findSymbolsMixedLiquidity();           // liste ordonnée (TOP + MID)
+        $all = $ignoreLimits
+            ? $this->findAllActiveSymbolsWithoutLimits()
+            : $this->findSymbolsMixedLiquidity();           // liste ordonnée (TOP + MID)
         if ($symbols === []) {
             return $all;
         }
         // Restreindre en conservant l'ordre initial
         $filter = array_flip($symbols);
         return array_values(array_filter($all, static fn(string $s) => isset($filter[$s])));
+    }
+
+    /**
+     * Retourne TOUS les symboles actifs sans limite (top_n/mid_n).
+     * Utile pour récupérer tous les contrats éligibles sans restriction de nombre.
+     * @return string[]
+     */
+    public function findAllActiveSymbolsWithoutLimits(): array
+    {
+        // --- Config YAML ---
+        $status            = (string) $this->config->getFilter('status', 'Trading');
+        $quoteCurrency     = (string) $this->config->getFilter('quote_currency', 'USDT');
+        $minTurnover       = (float)  $this->config->getFilter('min_turnover', 500000);
+        $requireNotExpired = (bool)   $this->config->getFilter('require_not_expired', true);
+        $expireUnit        = (string) $this->config->getFilter('expire_unit', false); // 's' | 'ms'
+        $maxAgeHours       = (int)    $this->config->getFilter('max_age_hours', 880);
+
+        // --- Horloge & unités ---
+        $now    = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+        $nowSec = (int) $now->format('U');             // epoch seconds
+        $nowMs  = (int) round(microtime(true) * 1000); // epoch millis
+        $nowForExpire = ($expireUnit === 'ms') ? $nowMs : $nowSec;
+
+        $openTsMinSec = $maxAgeHours > 0
+            ? $now->sub(new \DateInterval('PT'.$maxAgeHours.'H'))->getTimestamp()
+            : null;
+        $openTsMin = $openTsMinSec;
+        $openTsMinSet = !is_null($openTsMin);
+
+        // --- Expression turnover ---
+        $turnoverExpr = 'turnover_24h';
+
+        // --- SQL sans LIMIT ---
+        $sql = "
+SELECT c.symbol
+FROM contracts c
+WHERE c.status = :status
+  AND c.quote_currency = :quoteCurrency
+  AND {$turnoverExpr} >= :minTurnover
+  AND (
+        :requireNotExpired = FALSE
+     OR c.expire_timestamp IS NULL
+     OR c.expire_timestamp = 0
+     OR c.expire_timestamp > :nowForExpire
+  )
+  AND ( :openTsMinSet = FALSE OR c.open_timestamp > :openTsMin )
+  AND NOT EXISTS (
+      SELECT 1 FROM blacklisted_contract b
+      WHERE b.symbol = c.symbol
+        AND (b.expires_at IS NULL OR b.expires_at > :dtnow)
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM mtf_switch m
+      WHERE m.switch_key LIKE :symbolPattern
+        AND SUBSTRING(m.switch_key FROM 8) = c.symbol
+        AND m.is_on = :isOff
+        AND (m.expires_at IS NULL OR m.expires_at > :dtnow)
+  )
+ORDER BY {$turnoverExpr} DESC
+";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindValue('status', $status);
+        $stmt->bindValue('quoteCurrency', $quoteCurrency);
+        $stmt->bindValue('minTurnover', $minTurnover);
+        $stmt->bindValue('requireNotExpired', $requireNotExpired, ParameterType::BOOLEAN);
+        $stmt->bindValue('nowForExpire', $nowForExpire, ParameterType::INTEGER);
+        $stmt->bindValue('openTsMin', $openTsMin, $openTsMin === null ? ParameterType::NULL : ParameterType::INTEGER);
+        $stmt->bindValue('dtnow', $now, Types::DATETIME_IMMUTABLE);
+        $stmt->bindValue('symbolPattern', 'SYMBOL:%');
+        $stmt->bindValue('isOff', false, ParameterType::BOOLEAN);
+        $stmt->bindValue('openTsMinSet', $openTsMinSet, ParameterType::BOOLEAN);
+
+        $symbols = $stmt->executeQuery()->fetchFirstColumn();
+
+        return array_values(array_unique($symbols));
     }
     public function findWithFilters(?string $status = null, ?string $symbol = null): array
     {
@@ -304,58 +385,44 @@ class ContractRepository extends ServiceEntityRepository
         $minTurnover       = (float)  $this->config->getFilter('min_turnover', 500000);
         $midMaxTurnover    = (float)  $this->config->getFilter('mid_max_turnover', 2000000);
         $requireNotExpired = (bool)   $this->config->getFilter('require_not_expired', true);
-        $expireUnit        = (string) $this->config->getFilter('expire_unit', false); // 's' | 'ms'
+        $expireUnit        = (string) $this->config->getFilter('expire_unit', 's');   // 's' | 'ms'
         $maxAgeHours       = (int)    $this->config->getFilter('max_age_hours', 880);
-        $openUnit          = (string) $this->config->getFilter('open_unit', 's');   // ✅ seconds
+        $openUnit          = (string) $this->config->getFilter('open_unit', 's');     // 's' | 'ms'
 
-        $topN   = (int) $this->config->getLimit('top_n', 210);
-        $midN   = (int) $this->config->getLimit('mid_n', 120);
+        $topN   = (int) $this->config->getLimit('top_n', 0);
+        $midN   = (int) $this->config->getLimit('mid_n', 0);
+
         $orderTop = strtoupper($this->config->getOrder('top', 'DESC'));
         $orderMid = strtoupper($this->config->getOrder('mid', 'ASC'));
         $validOrder = ['ASC', 'DESC'];
-        if (!in_array($orderTop, $validOrder, true)) $orderTop = 'DESC';
-        if (!in_array($orderMid, $validOrder, true)) $orderMid = 'ASC';
-
+        if (!in_array($orderTop, $validOrder, true)) {
+            $orderTop = 'DESC';
+        }
+        if (!in_array($orderMid, $validOrder, true)) {
+            $orderMid = 'ASC';
+        }
 
         // --- Horloge & unités ---
-        $now    = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+
         $nowSec = (int) $now->format('U');             // epoch seconds
         $nowMs  = (int) round(microtime(true) * 1000); // epoch millis
+
         $nowForExpire = ($expireUnit === 'ms') ? $nowMs : $nowSec;
 
-        $openTsMinSec = $maxAgeHours > 0
-            ? $now->sub(new \DateInterval('PT'.$maxAgeHours.'H'))->getTimestamp()
-            : null;
-        // ✅ ta colonne open_timestamp est en secondes
-        $openTsMin = $openTsMinSec; // pas de *1000
-        $openTsMinSet = !is_null($openTsMin);
-
-
+        // borne min pour open_timestamp
+        $openTsMin = null;
+        if ($maxAgeHours > 0) {
+            $boundarySec = $now->sub(new \DateInterval('PT'.$maxAgeHours.'H'))->getTimestamp();
+            $openTsMin   = ($openUnit === 'ms') ? $boundarySec * 1000 : $boundarySec;
+        }
+        $openTsMinSet = ($openTsMin !== null);
 
         // --- Expression turnover (caster si stocké en texte) ---
-        $turnoverExpr = 'turnover_24h'; // si TEXT: "CAST(turnover_24h AS DECIMAL(38,10))"
+        $turnoverExpr = 'turnover_24h'; // ou CAST(...) si besoin
 
-        // --- Branches dynamiques (éviter UNION ALL avec LIMIT 0) ---
-        $parts = [];
-        if ($topN > 0) {
-            $parts[] = "
-                SELECT symbol
-                FROM base
-                WHERE t24 > :minTurnover
-                ORDER BY t24 {$orderTop}
-                LIMIT :topN
-            ";
-        }
-        if ($midN > 0) {
-            $parts[] = "
-                SELECT symbol
-                FROM base
-                WHERE t24 BETWEEN :minTurnover AND :midMaxTurnover
-                ORDER BY t24 {$orderMid}
-                LIMIT :midN
-            ";
-        }
-        if ($parts === []) {
+        // --- Pas de requête si aucun bucket demandé ---
+        if ($topN <= 0 && $midN <= 0) {
             return [];
         }
 
@@ -373,7 +440,7 @@ WITH base AS (
        OR c.expire_timestamp = 0
        OR c.expire_timestamp > :nowForExpire
     )
-    AND ( :openTsMinSet = FALSE OR c.open_timestamp > :openTsMin )
+    AND ( :openTsMinSet = FALSE OR c.open_timestamp < :openTsMin )
     AND NOT EXISTS (
         SELECT 1 FROM blacklisted_contract b
         WHERE b.symbol = c.symbol
@@ -387,18 +454,29 @@ WITH base AS (
           AND (m.expires_at IS NULL OR m.expires_at > :dtnow)
     )
 )
-" .
-            ($topN > 0 ? "
+";
+
+        // TOP : t24 > midMaxTurnover
+        if ($topN > 0) {
+            $sql .= "
 SELECT symbol FROM (
   SELECT symbol
   FROM base
-  WHERE t24 > :minTurnover
+  WHERE t24 > :midMaxTurnover
   ORDER BY t24 {$orderTop}
   LIMIT :topN
 ) t_top
-" : "") .
-            ($topN > 0 && $midN > 0 ? "UNION ALL\n" : "") .
-            ($midN > 0 ? "
+";
+        }
+
+        // UNION ALL si TOP + MID
+        if ($topN > 0 && $midN > 0) {
+            $sql .= "UNION ALL\n";
+        }
+
+        // MID : entre minTurnover et midMaxTurnover
+        if ($midN > 0) {
+            $sql .= "
 SELECT symbol FROM (
   SELECT symbol
   FROM base
@@ -406,23 +484,37 @@ SELECT symbol FROM (
   ORDER BY t24 {$orderMid}
   LIMIT :midN
 ) t_mid
-" : "");
+";
+        }
 
         $stmt = $this->conn->prepare($sql);
-        $stmt->bindValue('status', $status);
-        $stmt->bindValue('quoteCurrency', $quoteCurrency);
-        $stmt->bindValue('minTurnover', $minTurnover);
-        $stmt->bindValue('midMaxTurnover', $midMaxTurnover);
+
+        // --- Bind communs ---
+        $stmt->bindValue('status',         $status);
+        $stmt->bindValue('quoteCurrency',  $quoteCurrency);
+        $stmt->bindValue('minTurnover',    $minTurnover);
         $stmt->bindValue('requireNotExpired', $requireNotExpired, ParameterType::BOOLEAN);
-        $stmt->bindValue('nowForExpire', $nowForExpire, ParameterType::INTEGER);
-        $stmt->bindValue('openTsMin', $openTsMin, $openTsMin === null ? ParameterType::NULL : ParameterType::INTEGER);
-        $stmt->bindValue('dtnow', $now, Types::DATETIME_IMMUTABLE);
-        $stmt->bindValue('symbolPattern', 'SYMBOL:%');
-        $stmt->bindValue('isOff', false, ParameterType::BOOLEAN);
-        $stmt->bindValue('openTsMinSet', $openTsMinSet, ParameterType::BOOLEAN);
-        $stmt->bindValue('openTsMin',    $openTsMin,    ParameterType::INTEGER);
-        if ($topN > 0) $stmt->bindValue('topN', $topN, ParameterType::INTEGER);
-        if ($midN > 0) $stmt->bindValue('midN', $midN, ParameterType::INTEGER);
+        $stmt->bindValue('nowForExpire',   $nowForExpire, ParameterType::INTEGER);
+        $stmt->bindValue('dtnow',          $now, Types::DATETIME_IMMUTABLE);
+        $stmt->bindValue('symbolPattern',  'SYMBOL:%');
+        $stmt->bindValue('isOff',          false, ParameterType::BOOLEAN);
+        $stmt->bindValue('openTsMinSet',   $openTsMinSet, ParameterType::BOOLEAN);
+
+        if ($openTsMin !== null) {
+            $stmt->bindValue('openTsMin', $openTsMin, ParameterType::INTEGER);
+        } else {
+            $stmt->bindValue('openTsMin', null, ParameterType::NULL);
+        }
+
+        if ($topN > 0) {
+            $stmt->bindValue('midMaxTurnover', $midMaxTurnover);
+            $stmt->bindValue('topN', $topN, ParameterType::INTEGER);
+        }
+
+        if ($midN > 0) {
+            $stmt->bindValue('midMaxTurnover', $midMaxTurnover);
+            $stmt->bindValue('midN', $midN, ParameterType::INTEGER);
+        }
 
         $symbols = $stmt->executeQuery()->fetchFirstColumn();
 

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Entity;
+namespace App\Provider\Entity;
 
-use App\Repository\ContractRepository;
+use App\Provider\Repository\ContractRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 

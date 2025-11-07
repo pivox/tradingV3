@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Repository;
+namespace App\MtfValidator\Repository;
 
-use App\Entity\MtfLock;
+use App\MtfValidator\Entity\MtfLock;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 

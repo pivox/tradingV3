@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Repository;
+namespace App\Provider\Repository;
 
 use App\Common\Enum\Timeframe;
-use App\Entity\Kline;
+use App\Provider\Entity\Kline;
 use App\Provider\Bitmart\Dto\KlineDto;
 use App\Provider\Bitmart\Dto\ListKlinesDto;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
@@ -224,7 +224,7 @@ class KlineRepository extends ServiceEntityRepository
         $i = 0;
 
         foreach ($listKlinesDto as $klineDto) {
-            $kline = new Kline();
+            $kline = new \App\Provider\Entity\Kline();
             $kline->setSymbol($symbol);
             $kline->setTimeframe($timeframe);
             $kline->setOpenTime($klineDto->openTime);
@@ -382,7 +382,7 @@ class KlineRepository extends ServiceEntityRepository
                     $this->getEntityManager()->persist($existingKline);
                 } else {
                     // Créer une nouvelle kline
-                    $kline = new Kline();
+                    $kline = new \App\Provider\Entity\Kline();
                     $kline->setSymbol($klineDto->symbol);
                     $kline->setTimeframe($klineDto->timeframe);
                     $kline->setOpenTime($klineDto->openTime);

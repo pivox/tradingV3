@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Repository;
+namespace App\MtfValidator\Repository;
 
-use App\Entity\MtfAudit;
+use App\MtfValidator\Entity\MtfAudit;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\ParameterType;
