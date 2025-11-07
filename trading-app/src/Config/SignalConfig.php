@@ -13,6 +13,9 @@ class SignalConfig
     {
         // Chemin par défaut: config/app/signal.yaml
         $this->path = $path ?? \dirname(__DIR__, 2) . '/config/app/signal.yaml';
+        if (!is_file($this->path)) {
+            throw new \RuntimeException(sprintf('Configuration file not found: %s', $this->path));
+        }
         $parsed = Yaml::parseFile($this->path) ?? [];
         $this->config = $parsed['signal'] ?? [];
     }

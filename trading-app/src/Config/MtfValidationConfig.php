@@ -13,6 +13,9 @@ class MtfValidationConfig
     {
         // Nouveau chemin par défaut: src/MtfValidator/config/validations.yaml
         $this->path = $path ?? \dirname(__DIR__, 2) . '/src/MtfValidator/config/validations.yaml';
+        if (!is_file($this->path)) {
+            throw new \RuntimeException(sprintf('Configuration file not found: %s', $this->path));
+        }
         $parsed = Yaml::parseFile($this->path) ?? [];
         $this->config = $parsed['mtf_validation'] ?? [];
     }

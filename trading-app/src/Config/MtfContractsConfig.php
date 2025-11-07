@@ -18,6 +18,9 @@ final class MtfContractsConfig
 
     private array $config;
     public function __construct(private readonly string $path) {
+        if (!is_file($this->path)) {
+            throw new \RuntimeException(sprintf('Configuration file not found: %s', $this->path));
+        }
         $parsed = Yaml::parseFile($this->path) ?? [];
         // Support ancien format (mtf_contracts) et nouveau (contracts)
         if (isset($parsed['contracts'])) {
