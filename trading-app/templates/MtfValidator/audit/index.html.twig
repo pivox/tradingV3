@@ -1,0 +1,704 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Audits MTF - Trading{% endblock %}
+
+{% block body %}
+<style>
+.mtf-summary-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    align-items: flex-end;
+}
+.mtf-summary-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.85rem;
+    color: #475569;
+}
+.mtf-summary-counts {
+    display: flex;
+    gap: 0.75rem;
+    font-size: 0.85rem;
+    color: #475569;
+}
+.mtf-summary-ready {
+    font-size: 0.8rem;
+    color: #0f172a;
+    font-weight: 500;
+}
+td.table-success-subtle {
+    background-color: #d1fae5 !important;
+    color: #065f46 !important;
+}
+td.table-danger-subtle {
+    background-color: #fee2e2 !important;
+    color: #991b1b !important;
+}
+/* Mise en évidence de la dernière bougie fermée (tous statuts) */
+td.kline-current {
+    background-color: #bbf7d0 !important; /* vert clair */
+    color: #065f46 !important;           /* texte vert foncé lisible */
+}
+</style>
+
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="bi bi-clipboard-data"></i> Audits MTF
+            </h1>
+            <div class="btn-group" role="group">
+                <button class="btn btn-outline-secondary" onclick="openSummaryTab()">
+                    <i class="bi bi-graph-up-arrow"></i> Synthèse
+                </button>
+                <button class="btn btn-primary" onclick="refreshTable()">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<ul class="nav nav-tabs mb-4" id="mtfAuditTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tab-journal" data-bs-toggle="tab" data-bs-target="#panel-journal" type="button" role="tab" aria-controls="panel-journal" aria-selected="true">
+            Journal détaillé
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-summary" data-bs-toggle="tab" data-bs-target="#panel-summary" type="button" role="tab" aria-controls="panel-summary" aria-selected="false">
+            Synthèse validations
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content" id="mtfAuditTabsContent">
+    <div class="tab-pane fade show active" id="panel-journal" role="tabpanel" aria-labelledby="tab-journal">
+        <!-- Filtres -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">
+                            <i class="bi bi-funnel"></i> Filtres
+                        </h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-2">
+                                <label for="filterSymbol" class="form-label">Symbole</label>
+                                <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
+                            </div>
+                            <div class="col-md-3">
+                                <label for="filterStep" class="form-label">Étape (contient)</label>
+                                <input type="text" class="form-control" id="filterStep" placeholder="Ex: validation, alignment, ...">
+                            </div>
+                            <input type="hidden" id="filterRunId" value="{{ runId ?? '' }}">
+                            <div class="col-md-2">
+                                <label for="filterDateFrom" class="form-label">Date Début</label>
+                                <input type="date" class="form-control" id="filterDateFrom">
+                            </div>
+                            <div class="col-md-2">
+                                <label for="filterDateTo" class="form-label">Date Fin</label>
+                                <input type="date" class="form-control" id="filterDateTo">
+                            </div>
+                            <div class="col-md-2 d-flex align-items-end">
+                                <button class="btn btn-outline-secondary w-100" onclick="clearFilters()">
+                                    <i class="bi bi-x-circle"></i> Effacer
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Table des audits -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">
+                            <i class="bi bi-table"></i> Liste des Audits MTF ({{ audits|length }})
+                        </h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table id="auditsTable" class="table table-striped table-hover">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Symbole</th>
+                                        <th>Étape</th>
+                                        <th>TF</th>
+                                        <th>Cause</th>
+                                        <th>Détails</th>
+                                        <th>Créé le</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="panel-summary" role="tabpanel" aria-labelledby="tab-summary">
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0">
+                            <i class="bi bi-layers"></i> Synthèse des dernières validations
+                        </h6>
+                        <button class="btn btn-outline-primary btn-sm" onclick="refreshSummary(true)">
+                            <i class="bi bi-arrow-clockwise"></i> Rafraîchir
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="mtf-summary-toolbar mb-3">
+                            <div class="flex-grow-1">
+                                <label for="summarySearch" class="form-label">Filtrer par symbole</label>
+                                <input type="text" class="form-control" id="summarySearch" placeholder="Ex: BTCUSDT">
+                            </div>
+                            <div class="mtf-summary-meta" id="summaryMeta">
+                                <span>Total symboles: <strong id="summaryCount">0</strong></span>
+                                <span>Dernière génération: <strong id="summaryUpdated">-</strong></span>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="table table-hover" id="summaryTable">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th scope="col">Symbole</th>
+                                        <th scope="col">Validation 4H</th>
+                                        <th scope="col">Validation 1H</th>
+                                        <th scope="col">Validation 15M</th>
+                                        <th scope="col">Validation 5M</th>
+                                        <th scope="col">Validation 1M</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td colspan="6" class="text-center text-muted py-4">
+                                            <i class="bi bi-hourglass-split me-2"></i>Chargement des données...
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="summaryEmpty" class="alert alert-info d-none">
+                            Aucun symbole ne correspond aux critères.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal pour les détails -->
+<div class="modal fade" id="detailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Détails de l'Audit</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <pre id="detailsContent" class="bg-light p-3"></pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+const SUMMARY_TIMEFRAMES = ['4h', '1h', '15m', '5m', '1m'];
+const SUMMARY_DURATIONS_MS = {
+    '4h': 4 * 60 * 60 * 1000,
+    '1h': 60 * 60 * 1000,
+    '15m': 15 * 60 * 1000,
+    '5m': 5 * 60 * 1000,
+    '1m': 60 * 1000,
+};
+
+/**
+ * Calcule l'openTime de la dernière bougie fermée pour un timeframe donné.
+ * Logique équivalente à expectedLastOpenTime() en PHP.
+ */
+function getLastOpenTimestamp(now, timeframe) {
+    const stepMs = SUMMARY_DURATIONS_MS[timeframe] || 0;
+    if (stepMs === 0) return 0;
+    const aligned = Math.floor(now / stepMs) * stepMs; // borne inférieure courante
+    return aligned - stepMs; // openTime de la dernière bougie fermée
+}
+
+/**
+ * Calcule le closeTime (horaire de clôture) de la dernière bougie fermée pour un timeframe donné.
+ * C'est l'horaire du kline "en cours" (la dernière bougie qui s'est fermée).
+ */
+function getCurrentKlineCloseTime(now, timeframe) {
+    const stepMs = SUMMARY_DURATIONS_MS[timeframe] || 0;
+    if (stepMs === 0) return 0;
+    // Aligner sur la borne inférieure
+    const aligned = Math.floor(now / stepMs) * stepMs;
+    // Le closeTime de la dernière bougie fermée est simplement la borne alignée
+    return aligned;
+}
+
+let summaryData = [];
+let summaryLoaded = false;
+let summaryLoading = false;
+let summaryRefTimeMs = null; // référence temporelle = payload.generated_at
+
+$(document).ready(function() {
+    // Initialisation de DataTables
+    $('#auditsTable').DataTable({
+        processing: true,
+        serverSide: true,
+        pageLength: 25,
+        order: [[6, 'desc']],
+        ajax: {
+            url: '{{ path('mtf_audit_data') }}',
+            data: function(d) {
+                d.symbol = $('#filterSymbol').val();
+                d.step = $('#filterStep').val();
+                d.date_from = $('#filterDateFrom').val();
+                d.date_to = $('#filterDateTo').val();
+                const rid = $('#filterRunId').val();
+                if (rid) d.run_id = rid;
+            }
+        },
+        columns: [
+            { data: 'id', render: function(data){ return `<code>${data}</code>`; } },
+            { data: 'symbol', render: function(data){ return `<strong>${data}</strong>`; } },
+            { data: 'step', render: function(data){ return `<span class="badge bg-secondary">${data||''}</span>`; } },
+            { data: 'timeframe', render: function(data){ return data ? `<span class="badge bg-primary">${data}</span>` : '<span class="text-muted">-</span>'; } },
+            { data: 'cause', defaultContent: '-', render: function(data){ return data || '-'; } },
+            { data: 'has_details', orderable: false, searchable: false, render: function(val, type, row){
+                if (val) {
+                    return `<button class="btn btn-sm btn-outline-info" onclick="viewDetails(${row.id})"><i class=\"bi bi-eye\"></i> Voir</button>`;
+                }
+                return '<span class="text-muted">-</span>';
+            } },
+            { data: 'created_at' },
+            { data: null, orderable: false, searchable: false, render: function(row){
+                const graphUrl = '{{ path('graph_index') }}' + '?symbol=' + encodeURIComponent(row.symbol);
+                return `
+                    <div class="btn-group btn-group-sm" role="group">
+                        <a class="btn btn-outline-primary" href="${graphUrl}" title="Voir graphique"><i class="bi bi-graph-up"></i></a>
+                        <button class="btn btn-outline-info" onclick="viewDetails(${row.id})" title="Voir détails"><i class="bi bi-eye"></i></button>
+                    </div>`;
+            }},
+        ],
+        columnDefs: [
+            { orderable: false, targets: [5, 7] }
+        ]
+    });
+
+    // Filtres
+    $('#filterSymbol, #filterStep, #filterDateFrom, #filterDateTo').on('change keyup', function() {
+        $('#auditsTable').DataTable().ajax.reload();
+    });
+
+    // Synthèse : chargement lazy lors du passage sur l'onglet
+    const summaryTabEl = document.getElementById('tab-summary');
+    summaryTabEl.addEventListener('shown.bs.tab', function () {
+        if (!summaryLoaded) {
+            refreshSummary(false);
+        }
+    });
+
+    $('#summarySearch').on('input', function() {
+        renderSummaryTable();
+    });
+});
+
+function applyFilters() { $('#auditsTable').DataTable().ajax.reload(); }
+
+function clearFilters() {
+    $('#filterSymbol').val('');
+    $('#filterStep').val('');
+    $('#filterDateFrom').val('');
+    $('#filterDateTo').val('');
+    $('#auditsTable').DataTable().search('').columns().search('').draw();
+}
+
+function refreshTable() {
+    $('#auditsTable').DataTable().ajax.reload(null, false);
+}
+
+function viewChart(symbol) {
+    window.location.href = '{{ path('graph_index') }}?symbol=' + symbol;
+}
+
+async function viewDetails(id) {
+    const detailsContent = document.getElementById('detailsContent');
+    detailsContent.textContent = 'Chargement...';
+
+    try {
+        const resp = await fetch(`{{ path('mtf_audit_details', {id: 0}) | replace({'0':'__ID__'}) }}`.replace('__ID__', id));
+        if (!resp.ok) {
+            throw new Error('Erreur de chargement');
+        }
+        const data = await resp.json();
+        detailsContent.textContent = JSON.stringify(data, null, 2);
+    } catch (e) {
+        detailsContent.textContent = 'Impossible de charger les détails.';
+    }
+
+    const modal = new bootstrap.Modal(document.getElementById('detailsModal'));
+    modal.show();
+}
+
+function refreshSummary(forceReload) {
+    if (summaryLoading) {
+        return;
+    }
+    if (summaryLoaded && !forceReload) {
+        return;
+    }
+
+    summaryLoading = true;
+    const tbody = document.querySelector('#summaryTable tbody');
+    tbody.innerHTML = `
+        <tr>
+            <td colspan="6" class="text-center text-muted py-4">
+                <i class="bi bi-arrow-repeat me-2"></i>Actualisation de la synthèse...
+            </td>
+        </tr>
+    `;
+    document.getElementById('summaryEmpty').classList.add('d-none');
+
+    fetch('{{ path('api_mtf_audits_summary') }}')
+        .then((resp) => {
+            if (!resp.ok) {
+                throw new Error('Réponse invalide');
+            }
+            return resp.json();
+        })
+        .then((payload) => {
+            summaryLoaded = true;
+            summaryData = Array.isArray(payload.data) ? payload.data : [];
+            const count = typeof payload.count === 'number' ? payload.count : summaryData.length;
+            document.getElementById('summaryCount').textContent = count.toString();
+            document.getElementById('summaryUpdated').textContent = formatDateUtc(payload.generated_at || payload.generatedAt || null);
+            // Ancrer les calculs "kline courant" à l'instant de génération serveur pour éviter la dérive avec Date.now()
+            const ref = payload.generated_at || payload.generatedAt || null;
+            const parsed = ref ? Date.parse(ref) : NaN;
+            summaryRefTimeMs = Number.isNaN(parsed) ? null : parsed;
+            renderSummaryTable();
+        })
+        .catch((err) => {
+            console.error('Erreur synthèse MTF:', err);
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="6" class="text-center text-danger py-4">
+                        <i class="bi bi-exclamation-triangle me-2"></i>Impossible de charger la synthèse.
+                    </td>
+                </tr>
+            `;
+        })
+        .finally(() => {
+            summaryLoading = false;
+        });
+}
+
+function renderSummaryTable() {
+    const tbody = document.querySelector('#summaryTable tbody');
+    const emptyAlert = document.getElementById('summaryEmpty');
+    const filterValue = ($('#summarySearch').val() || '').toString().trim().toUpperCase();
+    const now = summaryRefTimeMs || Date.now();
+
+    if (!Array.isArray(summaryData) || summaryData.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="text-center text-muted py-4">
+                    <i class="bi bi-database-exclamation me-2"></i>Aucune donnée disponible.
+                </td>
+            </tr>
+        `;
+        emptyAlert.classList.remove('d-none');
+        return;
+    }
+
+    const prepared = summaryData
+        .map((row) => enrichSummaryRow(row, now))
+        .filter((row) => {
+            if (!filterValue) {
+                return true;
+            }
+            return (row.symbol || '').toUpperCase().includes(filterValue);
+        });
+
+    if (prepared.length === 0) {
+        tbody.innerHTML = '';
+        emptyAlert.classList.remove('d-none');
+        return;
+    }
+
+    emptyAlert.classList.add('d-none');
+
+    prepared.sort((a, b) => {
+        // 1) Plus de cellules "vertes" (kline courante)
+        if (b.computed.currentKlineCount !== a.computed.currentKlineCount) {
+            return b.computed.currentKlineCount - a.computed.currentKlineCount;
+        }
+        // 2) Plus de TF à jour (fresh)
+        if (b.computed.freshCount !== a.computed.freshCount) {
+            return b.computed.freshCount - a.computed.freshCount;
+        }
+        // 3) Plus de validations success
+        if (b.computed.validationCount !== a.computed.validationCount) {
+            return b.computed.validationCount - a.computed.validationCount;
+        }
+        // 4) Plus récent
+        return (b.computed.maxTimestamp || 0) - (a.computed.maxTimestamp || 0);
+    });
+
+    const rowsHtml = prepared.map((row) => {
+        const symbolLabel = escapeHtml(row.symbol || '');
+        const counts = `
+            <div class="mtf-summary-counts">
+                <span><i class="bi bi-square-fill text-success me-1"></i>${row.computed.currentKlineCount} verts</span>
+                <span><i class="bi bi-brightness-high text-success me-1"></i>${row.computed.freshCount} à jour</span>
+                <span><i class="bi bi-check2-circle text-success me-1"></i>${row.computed.validationCount} validations</span>
+            </div>
+        `;
+        const cells = SUMMARY_TIMEFRAMES.map((tf) => {
+            const tfData = row.timeframes[tf] || null;
+            const status = tfData?.status || 'none';
+            const primaryTs = tfData ? (tfData.event_ts || tfData.created_at) : null;
+            const displayValue = formatDateUtc(primaryTs);
+            const eventValue = formatDateUtc(tfData ? tfData.event_ts : null);
+            const isFresh = status === 'success' && row.computed.freshMap[tf] === true;
+            const isFailed = status === 'failed';
+            const isCurrentKline = row.computed.klineCurrentMap[tf] === true;
+            const baseClass = isFailed ? 'table-danger-subtle' : (isFresh ? 'table-success-subtle' : '');
+            const cellClass = `${baseClass} ${isCurrentKline ? 'kline-current' : ''}`.trim();
+            const stepMs = SUMMARY_DURATIONS_MS[tf] || 0;
+            const eventTsMs = parseTimestamp(tfData ? tfData.event_ts : null);
+            let rangeMarkup = '';
+            if (eventTsMs > 0 && stepMs > 0) {
+                const openMs = eventTsMs - stepMs;
+                rangeMarkup = `<div><strong>${formatTimeUtcShort(openMs)} → ${formatTimeUtcShort(eventTsMs)} UTC</strong></div>`;
+            }
+            const detailsMarkup = displayValue !== '-' ? `<div class="small text-muted">${displayValue}</div>` : '';
+
+            const showReady = status === 'success' && tf === '1m' && row.computed.readyDisplay;
+            const readyIdRaw = row.ready && row.ready.audit_id ? row.ready.audit_id : null;
+            const readyId = readyIdRaw ? ` (ID: <a href="#" onclick="viewDetails(${readyIdRaw}); return false;">${readyIdRaw}</a>)` : '';
+            const readyMarkup = showReady
+                ? `<div class="mtf-summary-ready"><i class="bi bi-lightning-charge text-warning me-1"></i>Ready: ${row.computed.readyDisplay}${readyId}</div>`
+                : '';
+            const causeMarkup = tfData?.cause
+                ? `<div class="mt-1 small ${isFailed ? 'text-danger' : 'text-muted'}">${escapeHtml(tfData.cause)}</div>`
+                : '';
+            const idMarkup = (tfData && tfData.audit_id)
+                ? `<div class="small text-muted">ID: <a href="#" onclick="viewDetails(${tfData.audit_id}); return false;">${tfData.audit_id}</a></div>`
+                : '';
+            
+            // Indicateur de présence de la bougie dans la base
+            let klineIndicator = '';
+            if (status === 'success' && tfData?.kline_exists !== undefined) {
+                if (tfData.kline_exists === true) {
+                    klineIndicator = '<span class="badge bg-success bg-opacity-25 ms-1" title="Bougie existe dans hot_kline"><i class="bi bi-check-circle text-success"></i></span>';
+                } else if (tfData.kline_exists === false) {
+                    klineIndicator = '<span class="badge bg-warning bg-opacity-25 ms-1" title="Bougie absente ou non close dans hot_kline"><i class="bi bi-exclamation-triangle text-warning"></i></span>';
+                } else {
+                    klineIndicator = '<span class="badge bg-secondary bg-opacity-25 ms-1" title="Vérification impossible"><i class="bi bi-question-circle text-secondary"></i></span>';
+                }
+            }
+
+            // Calculer l'horaire du kline en cours (closeTime de la dernière bougie fermée)
+            const now = Date.now();
+            const currentKlineCloseTime = getCurrentKlineCloseTime(now, tf);
+            const currentKlineMarkup = currentKlineCloseTime > 0 
+                ? `<div class="small text-info mb-1"><i class="bi bi-clock me-1"></i>Kline attendu: ${formatTimeUtcShort(currentKlineCloseTime)} UTC</div>`
+                : '';
+            
+            let label;
+            if (isFailed) {
+                const baseLabel = eventValue !== '-' ? eventValue : displayValue;
+                label = `<div><strong>Échec</strong>${baseLabel !== '-' ? ` • ${baseLabel}` : ''}</div>${rangeMarkup}${idMarkup}${detailsMarkup}`;
+            } else if (status === 'success') {
+                // Affiche la plage open → close, puis l'horodatage d'origine en petit
+                label = `<div>${rangeMarkup}${klineIndicator}${idMarkup}${detailsMarkup}</div>`;
+            } else {
+                label = '-';
+            }
+
+            return `<td class="${cellClass}">${currentKlineMarkup}${label}${readyMarkup}${causeMarkup}</td>`;
+        }).join('');
+
+        return `
+            <tr>
+                <td>
+                    <strong>${symbolLabel}</strong>
+                    ${counts}
+                </td>
+                ${cells}
+            </tr>
+        `;
+    }).join('');
+
+    tbody.innerHTML = rowsHtml;
+}
+
+function enrichSummaryRow(row, now) {
+    const result = {
+        symbol: row.symbol || '',
+        timeframes: row.timeframes || {},
+        ready: row.ready || null,
+        computed: {
+            validationCount: 0,
+            freshCount: 0,
+            maxTimestamp: 0,
+            freshMap: {},
+            klineCurrentMap: {},
+            currentKlineCount: 0,
+            readyDisplay: null,
+        },
+    };
+
+    const readyTsString = result.ready ? (result.ready.event_ts || result.ready.created_at) : null;
+    const readyValue = parseTimestamp(readyTsString);
+    const ttl1m = SUMMARY_DURATIONS_MS['1m'] || 60000;
+
+    SUMMARY_TIMEFRAMES.forEach((tf) => {
+        const tfData = result.timeframes[tf] || null;
+        const status = tfData?.status || 'none';
+        const eventTs = parseTimestamp(tfData ? tfData.event_ts : null);
+        const createdTs = parseTimestamp(tfData ? tfData.created_at : null);
+        const baseTs = Math.max(eventTs, createdTs);
+        const stepMs = SUMMARY_DURATIONS_MS[tf] || 0;
+        const lastOpenTs = getLastOpenTimestamp(now, tf);
+
+        // Tolérance de 5 secondes pour éviter les dérives d'arrondis
+        const tolerance = 5000;
+
+        // Détecte si la cellule correspond à la dernière bougie fermée (comparaison sur open_time uniquement)
+        let isCurrentKline = false;
+        if (lastOpenTs > 0 && stepMs > 0) {
+            const eventOpenCandidate = eventTs > 0 ? (eventTs - stepMs) : 0;
+            if (eventOpenCandidate > 0 && Math.abs(eventOpenCandidate - lastOpenTs) <= tolerance) {
+                isCurrentKline = true;
+            }
+        }
+        result.computed.klineCurrentMap[tf] = isCurrentKline;
+        if (isCurrentKline) {
+            result.computed.currentKlineCount += 1;
+        }
+
+        if (status === 'success' && baseTs > 0) {
+            result.computed.validationCount += 1;
+            result.computed.maxTimestamp = Math.max(result.computed.maxTimestamp, baseTs);
+            // Est "à jour" si l'open_time de l'event colle au dernier open_time
+            let isFresh = false;
+            if (lastOpenTs > 0 && stepMs > 0) {
+                const eventOpenCandidate = eventTs > 0 ? (eventTs - stepMs) : 0;
+                if (eventOpenCandidate > 0 && Math.abs(eventOpenCandidate - lastOpenTs) <= tolerance) {
+                    isFresh = true;
+                }
+            }
+
+            result.computed.freshMap[tf] = isFresh;
+            if (isFresh) {
+                result.computed.freshCount += 1;
+            }
+        } else {
+            result.computed.freshMap[tf] = false;
+            if (baseTs > 0) {
+                result.computed.maxTimestamp = Math.max(result.computed.maxTimestamp, baseTs);
+            }
+        }
+    });
+
+    if (readyValue > 0) {
+        // Pour le 1m, on peut aussi utiliser le ready si disponible (comparaison sur open_time)
+        const lastOpen1m = getLastOpenTimestamp(now, '1m');
+        const tolerance = 5000;
+        const isReadyFresh = lastOpen1m > 0 && Math.abs((readyValue - (SUMMARY_DURATIONS_MS['1m'] || 60000)) - lastOpen1m) <= tolerance;
+        
+        if (isReadyFresh) {
+            result.computed.readyDisplay = formatDateUtc(readyTsString);
+            result.computed.maxTimestamp = Math.max(result.computed.maxTimestamp, readyValue);
+            const tf1m = result.timeframes['1m'] || null;
+            if (tf1m?.status === 'success' && !result.computed.freshMap['1m']) {
+                result.computed.freshMap['1m'] = true;
+                result.computed.freshCount += 1;
+            }
+        } else {
+            result.computed.readyDisplay = formatDateUtc(readyTsString);
+        }
+    }
+
+    return result;
+}
+
+function parseTimestamp(value) {
+    if (!value) {
+        return 0;
+    }
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function formatDateUtc(value) {
+    if (!value) {
+        return '-';
+    }
+    const parsed = Date.parse(value);
+    if (Number.isNaN(parsed)) {
+        return '-';
+    }
+    return new Date(parsed).toLocaleString('fr-FR', {
+        timeZone: 'UTC',
+        hour12: false,
+    });
+}
+
+function formatTimeUtcShort(ms) {
+    if (!ms || Number.isNaN(ms)) {
+        return '-';
+    }
+    const d = new Date(ms);
+    return d.toLocaleTimeString('fr-FR', {
+        timeZone: 'UTC',
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+    });
+}
+
+function openSummaryTab() {
+    const summaryTab = document.getElementById('tab-summary');
+    if (!summaryTab) {
+        return;
+    }
+    const tabInstance = bootstrap.Tab.getOrCreateInstance(summaryTab);
+    tabInstance.show();
+    refreshSummary(true);
+}
+
+function escapeHtml(value) {
+    if (typeof value !== 'string') {
+        return '';
+    }
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+</script>
+{% endblock %}

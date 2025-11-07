@@ -1,0 +1,251 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Stats MTF - Trading{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12 d-flex justify-content-between align-items-center mb-4">
+        <h1 class="mb-0"><i class="bi bi-bar-chart"></i> Stats MTF</h1>
+        <div>
+            <a class="btn btn-outline-secondary" href="{{ path('mtf_stats_index') }}">
+                <i class="bi bi-arrow-clockwise"></i> Actualiser
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- KPIs -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card bg-primary text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ kpis.total_audits }}</h4>
+                        <p class="card-text">Total Audits</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-clipboard-data fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-success text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ kpis.total_passed }}</h4>
+                        <p class="card-text">Passés</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-check2-circle fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-info text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ kpis.avg_pass_rate }}%</h4>
+                        <p class="card-text">Pass-rate moyen</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-graph-up fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ kpis.avg_severity ?? 'N/A' }}</h4>
+                        <p class="card-text">Sévérité moyenne</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-thermometer-half fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filtres -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-funnel"></i> Filtres</h6>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label for="filterSymbol" class="form-label">Symbole</label>
+                        <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
+                    </div>
+                    <div class="col-md-3">
+                        <label for="filterTf" class="form-label">Timeframe</label>
+                        <input type="text" class="form-control" id="filterTf" placeholder="Ex: 4h, 1h, 15m...">
+                    </div>
+                    <div class="col-md-3 d-flex align-items-end">
+                        <button class="btn btn-outline-secondary" onclick="clearFilters()">
+                            <i class="bi bi-x-circle"></i> Effacer
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+</div>
+
+<!-- Tableau -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-table"></i> Résumé par symbole/timeframe</h6>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table id="mtfStatsTable" class="table table-striped table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Symbole</th>
+                                <th>TF</th>
+                                <th>Total</th>
+                                <th>Passés</th>
+                                <th>Pass %</th>
+                                <th>Avg ATR rel</th>
+                                <th>Avg Spread (bps)</th>
+                                <th>Avg Sévérité</th>
+                                <th>Last Candle Close</th>
+                                <th>Dernier Audit</th>
+                                <th>Align. Fail</th>
+                                <th>Val. Fail 4h</th>
+                                <th>Val. Fail 1h</th>
+                                <th>Val. Fail 15m</th>
+                                <th>Val. Fail 5m</th>
+                                <th>Val. Fail 1m</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Graphique Pass-rate (Top 10 par total) -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-bar-chart-line"></i> Top 10 Pass-rate</h6>
+            </div>
+            <div class="card-body">
+                <canvas id="passRateChart" height="120"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+$(document).ready(function() {
+    const table = $('#mtfStatsTable').DataTable({
+        processing: true,
+        serverSide: true,
+        pageLength: 25,
+        order: [[2, 'desc']],
+        ajax: {
+            url: '{{ path('mtf_stats_data') }}',
+            data: function(d){
+                d.symbol = $('#filterSymbol').val();
+                d.tf = $('#filterTf').val();
+            }
+        },
+        columns: [
+            { data: 'symbol', render: function(d){ return `<strong>${d}</strong>`; } },
+            { data: 'timeframe' },
+            { data: 'total' },
+            { data: 'nb_passed' },
+            { data: 'pass_rate', render: function(d){ return d !== null ? (d + '%') : '-'; } },
+            { data: 'avg_atr_rel', render: function(d){ return d !== null ? Number(d).toFixed(4) : '-'; } },
+            { data: 'avg_spread_bps', render: function(d){ return d !== null ? Number(d).toFixed(2) : '-'; } },
+            { data: 'avg_severity', render: function(d){ return d !== null ? Number(d).toFixed(2) : '-'; } },
+            { data: 'last_candle_open_ts', defaultContent: '-' },
+            { data: 'last_created_at', defaultContent: '-' },
+            { data: 'nb_alignment_failed', defaultContent: 0 },
+            { data: 'nb_validation_failed_4h', defaultContent: 0 },
+            { data: 'nb_validation_failed_1h', defaultContent: 0 },
+            { data: 'nb_validation_failed_15m', defaultContent: 0 },
+            { data: 'nb_validation_failed_5m', defaultContent: 0 },
+            { data: 'nb_validation_failed_1m', defaultContent: 0 },
+        ]
+    });
+
+    $('#filterSymbol, #filterTf').on('change keyup', function() {
+        applyFilters();
+        // Re-render chart on filter changes
+        document.getElementById('passRateChart').replaceWith(Object.assign(document.createElement('canvas'), {id:'passRateChart', height:120}));
+        renderPassRateChart();
+    });
+
+    renderPassRateChart();
+});
+
+function applyFilters() {
+    const table = $('#mtfStatsTable').DataTable();
+    const symbol = $('#filterSymbol').val();
+    const tf = $('#filterTf').val();
+
+    table.search('').columns().search('');
+    if (symbol) {
+        table.column(0).search(symbol, false, false);
+    }
+    if (tf) {
+        table.column(1).search(tf, false, false);
+    }
+    table.draw();
+}
+
+function clearFilters() {
+    $('#filterSymbol').val('');
+    $('#filterTf').val('');
+    $('#mtfStatsTable').DataTable().search('').columns().search('').draw();
+}
+
+async function renderPassRateChart() {
+    try {
+        const params = new URLSearchParams();
+        const symbol = $('#filterSymbol').val();
+        const tf = $('#filterTf').val();
+        if (symbol) params.set('symbol', symbol);
+        if (tf) params.set('tf', tf);
+        const resp = await fetch('{{ path('mtf_stats_top10') }}' + (params.toString() ? ('?' + params.toString()) : ''));
+        const payload = await resp.json();
+        const top = payload.data || [];
+        const labels = top.map(r => `${r.symbol} ${r.timeframe}`);
+        const data = top.map(r => r.pass_rate ?? 0);
+        const ctx = document.getElementById('passRateChart');
+        new Chart(ctx, {
+            type: 'bar',
+            data: { labels, datasets: [{ label: 'Pass %', data, backgroundColor: 'rgba(13,110,253,0.6)' }] },
+            options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, max: 100 } } }
+        });
+    } catch (e) { /* noop */ }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,283 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Contrats Blacklistés - Trading{% endblock %}
+
+{% block body %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="bi bi-shield-exclamation"></i> Contrats Blacklistés
+            </h1>
+            <div>
+                <button class="btn btn-primary" onclick="refreshTable()">
+                    <i class="bi bi-arrow-clockwise"></i> Actualiser
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filtres -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-funnel"></i> Filtres
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-2">
+                        <label for="filterSymbol" class="form-label">Symbole</label>
+                        <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterReason" class="form-label">Raison</label>
+                        <select class="form-select" id="filterReason">
+                            <option value="">Toutes</option>
+                            <option value="low_volume">Volume faible</option>
+                            <option value="high_spread">Spread élevé</option>
+                            <option value="manipulation">Manipulation</option>
+                            <option value="maintenance">Maintenance</option>
+                            <option value="delisting">Délitement</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterDateFrom" class="form-label">Date Début</label>
+                        <input type="date" class="form-control" id="filterDateFrom">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="filterDateTo" class="form-label">Date Fin</label>
+                        <input type="date" class="form-control" id="filterDateTo">
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button class="btn btn-outline-secondary" onclick="clearFilters()">
+                            <i class="bi bi-x-circle"></i> Effacer
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Statistiques -->
+<div class="row mb-4">
+    <div class="col-md-2">
+        <div class="card bg-primary text-white">
+            <div class="card-body text-center">
+                <h5>{{ blacklistedContracts|length }}</h5>
+                <small>Total Blacklistés</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-warning text-white">
+            <div class="card-body text-center">
+                <h5>{{ blacklistedContracts|filter(c => c.reason == 'low_volume')|length }}</h5>
+                <small>Volume Faible</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-danger text-white">
+            <div class="card-body text-center">
+                <h5>{{ blacklistedContracts|filter(c => c.reason == 'high_spread')|length }}</h5>
+                <small>Spread Élevé</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-danger text-white">
+            <div class="card-body text-center">
+                <h5>{{ blacklistedContracts|filter(c => c.reason == 'manipulation')|length }}</h5>
+                <small>Manipulation</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-info text-white">
+            <div class="card-body text-center">
+                <h5>{{ blacklistedContracts|filter(c => c.reason == 'maintenance')|length }}</h5>
+                <small>Maintenance</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card bg-secondary text-white">
+            <div class="card-body text-center">
+                <h5>{{ blacklistedContracts|filter(c => c.reason == 'delisting')|length }}</h5>
+                <small>Délitement</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Table des contrats blacklistés -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-table"></i> Liste des Contrats Blacklistés ({{ blacklistedContracts|length }})
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table id="blacklistedTable" class="table table-striped table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>ID</th>
+                                <th>Symbole</th>
+                                <th>Raison</th>
+                                <th>Détails</th>
+                                <th>Blacklisté le</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for contract in blacklistedContracts %}
+                            <tr>
+                                <td>
+                                    <code>{{ contract.id }}</code>
+                                </td>
+                                <td>
+                                    <span class="symbol-badge blacklisted">{{ contract.symbol }}</span>
+                                </td>
+                                <td>
+                                    {% if contract.reason == 'low_volume' %}
+                                        <span class="badge bg-warning">Volume faible</span>
+                                    {% elseif contract.reason == 'high_spread' %}
+                                        <span class="badge bg-danger">Spread élevé</span>
+                                    {% elseif contract.reason == 'manipulation' %}
+                                        <span class="badge bg-danger">Manipulation</span>
+                                    {% elseif contract.reason == 'maintenance' %}
+                                        <span class="badge bg-info">Maintenance</span>
+                                    {% elseif contract.reason == 'delisting' %}
+                                        <span class="badge bg-secondary">Délitement</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ contract.reason }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if contract.details and contract.details|length > 0 %}
+                                        <button class="btn btn-sm btn-outline-info" onclick="viewDetails({{ contract.id }})">
+                                            <i class="bi bi-eye"></i> Voir
+                                        </button>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {{ contract.createdAt|date('d/m/Y H:i:s') }}
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-primary" onclick="viewChart('{{ contract.symbol }}')" title="Voir graphique">
+                                            <i class="bi bi-graph-up"></i>
+                                        </button>
+                                        <button class="btn btn-outline-info" onclick="viewDetails({{ contract.id }})" title="Voir détails">
+                                            <i class="bi bi-eye"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal pour les détails -->
+<div class="modal fade" id="detailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Détails du Contrat Blacklisté</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <pre id="detailsContent" class="bg-light p-3"></pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+$(document).ready(function() {
+    // Initialisation de DataTables
+    $('#blacklistedTable').DataTable({
+        pageLength: 25,
+        order: [[4, 'desc']], // Trier par date de blacklist
+        columnDefs: [
+            { orderable: false, targets: [3, 5] } // Détails et Actions columns
+        ]
+    });
+
+    // Filtres
+    $('#filterSymbol, #filterReason, #filterDateFrom, #filterDateTo').on('change keyup', function() {
+        applyFilters();
+    });
+});
+
+function applyFilters() {
+    const table = $('#blacklistedTable').DataTable();
+    const symbol = $('#filterSymbol').val();
+    const reason = $('#filterReason').val();
+
+    // Réinitialiser les filtres
+    table.search('').columns().search('').draw();
+
+    // Appliquer les filtres
+    if (symbol) {
+        table.column(1).search(symbol, false, false);
+    }
+    if (reason) {
+        table.column(2).search(reason, false, false);
+    }
+
+    table.draw();
+}
+
+function clearFilters() {
+    $('#filterSymbol, #filterReason, #filterDateFrom, #filterDateTo').val('');
+    $('#blacklistedTable').DataTable().search('').columns().search('').draw();
+}
+
+function refreshTable() {
+    location.reload();
+}
+
+function viewChart(symbol) {
+    // Rediriger vers les graphiques avec le symbole
+    window.location.href = '{{ path('graph_index') }}?symbol=' + symbol;
+}
+
+function viewDetails(id) {
+    // Récupérer les détails du contrat blacklisté (à implémenter côté serveur)
+    const detailsContent = document.getElementById('detailsContent');
+    detailsContent.textContent = 'Détails du contrat blacklisté ' + id + '\n\n' + 
+        'Cette fonctionnalité sera implémentée pour afficher les détails du contrat blacklisté.';
+    
+    const modal = new bootstrap.Modal(document.getElementById('detailsModal'));
+    modal.show();
+}
+</script>
+
+<style>
+.symbol-badge.blacklisted {
+    background-color: #dc3545;
+    color: white;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+}
+</style>
+{% endblock %}

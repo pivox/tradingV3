@@ -1,0 +1,50 @@
+{% if rows is empty %}
+    <div class="alert alert-info">
+        <i class="bi bi-info-circle"></i>
+        Aucun signal 4h récent trouvé pour les contrats actifs.
+    </div>
+{% else %}
+    <div class="table-responsive">
+        <table id="mtfOverviewTable" class="table table-striped table-hover">
+            <thead class="table-dark">
+                <tr>
+                    <th>Symbole</th>
+                    <th>Dernier H4</th>
+                    <th class="text-center">H1 (4)</th>
+                    <th class="text-center">M15 (16)</th>
+                    <th class="text-center">M5 (48)</th>
+                    <th class="text-center">M1 (240)</th>
+                    <th class="text-end">Total branches</th>
+                    <th class="text-center">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                    <tr>
+                        <td><strong>{{ row.symbol }}</strong></td>
+                        <td>
+                            <span class="badge {% if row.h4.side.value == 'LONG' %}bg-success{% elseif row.h4.side.value == 'SHORT' %}bg-danger{% else %}bg-secondary{% endif %}">
+                                {{ row.h4.side.value }}
+                            </span>
+                            <small class="text-muted ms-2">{{ row.h4.klineTime|date('d/m H:i') }}</small>
+                        </td>
+                        <td class="text-center">{{ row.counts['1h'] }}</td>
+                        <td class="text-center">{{ row.counts['15m'] }}</td>
+                        <td class="text-center">{{ row.counts['5m'] }}</td>
+                        <td class="text-center">{{ row.counts['1m'] }}</td>
+                        <td class="text-end"><strong>{{ row.total }}</strong></td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-primary" onclick="showSignalDetails({{ row.h4.id }})" title="Voir détails">
+                                    <i class="bi bi-eye"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endif %}
+
+
