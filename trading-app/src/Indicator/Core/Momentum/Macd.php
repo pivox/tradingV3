@@ -69,27 +69,77 @@ final class Macd implements IndicatorInterface
     /**
      * Séries MACD complètes.
      * @param float[] $closes
-     * @return array{macd: float[], signal: float[], hist: float[]}
+     * @return array{macd: float[]|null[], signal: float[]|null[], hist: float[]|null[]}
      */
     public function calculateFull(array $closes, int $fast = 12, int $slow = 26, int $signal = 9): array
     {
+        // Sécurité : il faut assez de données
+        if (count($closes) < max($fast, $slow, $signal) + 5) {
+            return [
+                'macd'   => array_fill(0, count($closes), null),
+                'signal' => array_fill(0, count($closes), null),
+                'hist'   => array_fill(0, count($closes), null),
+            ];
+        }
+
         // Prefer TRADER extension if available
         if (function_exists('trader_macd')) {
-            $res = \trader_macd($closes, $fast, $slow, $signal);
-            if (is_array($res) && isset($res[0], $res[1], $res[2])) {
-                // trader_macd returns [macd, macdsignal, macdhist]
-                $macdArr   = array_values(array_map('floatval', (array)$res[0]));
-                $signalArr = array_values(array_map('floatval', (array)$res[1]));
-                $histArr   = array_values(array_map('floatval', (array)$res[2]));
-                return ['macd' => $macdArr, 'signal' => $signalArr, 'hist' => $histArr];
+            try {
+                /** @phpstan-ignore-next-line */
+                $res = \trader_macd($closes, $fast, $slow, $signal);
+                if (is_array($res) && isset($res[0], $res[1], $res[2])) {
+                    // trader_macd returns [macd, macdsignal, macdhist]
+                    $macdArr   = array_values(array_map('floatval', (array)$res[0]));
+                    $signalArr = array_values(array_map('floatval', (array)$res[1]));
+                    $histArr   = array_values(array_map('floatval', (array)$res[2]));
+
+                    // Vérifier si les séries contiennent des valeurs valides (non-NaN, non-Inf)
+                    $macdValid   = array_filter($macdArr, static fn($v) => is_finite($v));
+                    $signalValid = array_filter($signalArr, static fn($v) => is_finite($v));
+
+                    // Si au moins une série a des valeurs valides, utiliser le résultat
+                    if ((!empty($macdValid) || !empty($signalValid)) && (!empty($macdArr) || !empty($signalArr))) {
+                        return ['macd' => $macdArr, 'signal' => $signalArr, 'hist' => $histArr];
+                    }
+
+                    // Si toutes les valeurs sont invalides (NaN/Inf), fallback vers PHP
+                    if (empty($macdValid) && empty($signalValid) && (!empty($macdArr) || !empty($signalArr))) {
+                        error_log(sprintf(
+                            '[MACD] trader_macd returned invalid values (NaN/Inf), falling back to PHP calculation. Fast=%d, Slow=%d, Signal=%d, Closes=%d',
+                            $fast, $slow, $signal, count($closes)
+                        ));
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Fallback vers calcul PHP en cas d'exception
+                error_log(sprintf(
+                    '[MACD] trader_macd threw exception, falling back to PHP calculation: %s',
+                    $e->getMessage()
+                ));
             }
         }
 
+        // Fallback : implémentation MACD full PHP (EMA)
+        return $this->calculateFullPhp($closes, $fast, $slow, $signal);
+    }
+
+    /**
+     * Calcul complet du MACD en PHP pur :
+     * - MACD = EMA(fast) - EMA(slow)
+     * - Signal = EMA(MACD, period = $signal)
+     * - Hist = MACD - Signal
+     * 
+     * @param float[] $closes
+     * @return array{macd: float[], signal: float[], hist: float[]}
+     */
+    private function calculateFullPhp(array $closes, int $fast, int $slow, int $signal): array
+    {
         $n = count($closes);
         if ($n < max($fast, $slow) + $signal) {
             return ['macd' => [], 'signal' => [], 'hist' => []];
         }
 
+        // Utiliser la méthode emaSeries existante pour calculer les EMA
         $emaFast = $this->emaSeries($closes, $fast);
         $emaSlow = $this->emaSeries($closes, $slow);
         $len = min(count($emaFast), count($emaSlow));

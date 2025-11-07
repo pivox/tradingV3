@@ -249,25 +249,7 @@ class IndicatorContextBuilder
      */
     private function computeMacdSeries(array $closes, int $fast = 12, int $slow = 26, int $signal = 9): array
     {
-        if ($this->traderAvailable && count($closes) >= $slow) {
-            try {
-                $result = \trader_macd($closes, $fast, $slow, $signal);
-                if (is_array($result)) {
-                    $macd = isset($result[0]) && is_array($result[0]) ? array_map('floatval', array_values($result[0])) : [];
-                    $signalSeries = isset($result[1]) && is_array($result[1]) ? array_map('floatval', array_values($result[1])) : [];
-                    $hist = isset($result[2]) && is_array($result[2]) ? array_map('floatval', array_values($result[2])) : [];
-
-                    return [
-                        'macd' => $macd,
-                        'signal' => $signalSeries,
-                        'hist' => $hist,
-                    ];
-                }
-            } catch (\Throwable) {
-                // fallback to pure PHP implementation below
-            }
-        }
-
+        // Utiliser Macd::calculateFull() qui gère déjà le fallback trader → PHP
         return $this->macd->calculateFull($closes, $fast, $slow, $signal);
     }
 
@@ -395,25 +377,7 @@ class IndicatorContextBuilder
         ?array $ohlc,
         int $period = 14
     ): ?float {
-        if (
-            $this->traderAvailable
-            && count($highs) >= $period
-            && count($lows) >= $period
-            && count($closes) >= $period
-        ) {
-            try {
-                $result = \trader_atr($highs, $lows, $closes, $period);
-                if ($result !== false) {
-                    $series = array_values($result);
-                    if ($series !== []) {
-                        return (float) end($series);
-                    }
-                }
-            } catch (\Throwable) {
-                // fallback to ATR calculator below
-            }
-        }
-
+        // Utiliser AtrCalculator qui gère déjà le fallback trader → PHP
         if ($ohlc !== null) {
             try {
                 return $this->atrCalc->compute($ohlc, $period);

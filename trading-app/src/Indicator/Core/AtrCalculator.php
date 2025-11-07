@@ -55,49 +55,98 @@ final class AtrCalculator implements IndicatorInterface
      */
     public function compute(array $ohlc, int $period = 14, string $method = 'wilder'): float
     {
-        // Prefer TRADER extension if available and method agnostic
-        if (function_exists('trader_atr')) {
-            $high = array_column($ohlc, 'high');
-            $low  = array_column($ohlc, 'low');
-            $close= array_column($ohlc, 'close');
-            $arr = \trader_atr($high, $low, $close, $period);
-            if (is_array($arr) && !empty($arr)) {
-                return (float) end($arr);
-            }
-        }
         if ($period <= 0) {
             throw new \InvalidArgumentException('ATR period must be > 0');
         }
         $n = count($ohlc);
-        if ($n <= $period) {
-            throw new \InvalidArgumentException('Not enough candles to compute ATR');
+        // On a n bougies → n-1 TR. Pour Wilder on veut au moins $period TR → n-1 >= $period
+        if ($n < $period + 1) {
+            throw new \InvalidArgumentException(sprintf(
+                'Not enough candles to compute ATR (have=%d, need>=%d)',
+                $n,
+                $period + 1
+            ));
         }
 
+        $method = strtolower($method);
+        if (!\in_array($method, ['wilder', 'simple'], true)) {
+            throw new \InvalidArgumentException(sprintf(
+                'Unsupported ATR method "%s", expected "wilder" or "simple"',
+                $method
+            ));
+        }
 
-// True Range series
+        // 1) TRADER extension si dispo
+        if (\function_exists('trader_atr')) {
+            $high  = \array_column($ohlc, 'high');
+            $low   = \array_column($ohlc, 'low');
+            $close = \array_column($ohlc, 'close');
+
+            try {
+                /** @phpstan-ignore-next-line */
+                $arr = \trader_atr($high, $low, $close, $period);
+                if (\is_array($arr) && !empty($arr)) {
+                    $last = \end($arr);
+                    $atrValue = (float) $last;
+
+                    // On accepte > 0 et fini ; 0.0 est considéré comme invalide ici (marché mort / bug)
+                    if (\is_finite($atrValue) && $atrValue > 0.0) {
+                        return $atrValue;
+                    }
+
+                    $this->log('warning', '[ATR] trader_atr returned invalid value, falling back to PHP calculation', [
+                        'trader_value' => $atrValue,
+                        'period'       => $period,
+                        'method'       => $method,
+                        'ohlc_count'   => $n,
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                $this->log('warning', '[ATR] trader_atr threw exception, falling back to PHP calculation', [
+                    'error'  => $e->getMessage(),
+                    'period' => $period,
+                    'method' => $method,
+                ]);
+            }
+        }
+
+        // 2) Fallback PHP : TR + ATR (Wilder ou simple)
+        // True Range series
         $trs = [];
         for ($i = 1; $i < $n; $i++) {
-            $h = (float)$ohlc[$i]['high'];
-            $l = (float)$ohlc[$i]['low'];
-            $pc = (float)$ohlc[$i - 1]['close'];
-            $tr = max($h - $l, abs($h - $pc), abs($l - $pc));
+            if (!isset($ohlc[$i]['high'], $ohlc[$i]['low'], $ohlc[$i - 1]['close'])) {
+                throw new \InvalidArgumentException('Missing OHLC keys (high/low/close) in input data');
+            }
+
+            $h  = (float) $ohlc[$i]['high'];
+            $l  = (float) $ohlc[$i]['low'];
+            $pc = (float) $ohlc[$i - 1]['close'];
+
+            // True Range (Wilder) : max(high-low, |high-prevClose|, |low-prevClose|)
+            $tr = \max($h - $l, \abs($h - $pc), \abs($l - $pc));
             $trs[] = $tr;
         }
 
+        // On a $n-1 TR, il faut au moins $period TR
+        if (count($trs) < $period) {
+            throw new \RuntimeException('Not enough True Range values to compute ATR');
+        }
 
         if ($method === 'simple') {
-// Simple moving average of last $period TRs
-            $slice = array_slice($trs, -$period);
-            return array_sum($slice) / $period;
+            // SMA des $period derniers TR
+            $slice = \array_slice($trs, -$period);
+            return \array_sum($slice) / $period;
         }
 
-
-// Wilder: seed with SMA of first $period TRs, then recursive smoothing
-        $seed = array_slice($trs, 0, $period);
-        $atr = array_sum($seed) / $period;
-        for ($i = $period; $i < count($trs); $i++) {
+        // Wilder: seed = SMA des $period premiers TR, puis lissage récursif
+        $seed = \array_slice($trs, 0, $period);
+        $atr  = \array_sum($seed) / $period;
+        $countTrs = count($trs);
+        for ($i = $period; $i < $countTrs; $i++) {
+            // ATR_t = ((ATR_{t-1} * (n - 1)) + TR_t) / n
             $atr = (($atr * ($period - 1)) + $trs[$i]) / $period;
         }
+
         return $atr;
     }
 
@@ -139,6 +188,7 @@ final class AtrCalculator implements IndicatorInterface
                 }
             }
             
+            /** @phpstan-ignore-next-line */
             $arr = \trader_atr($high, $low, $close, $period);
             
             if (is_array($arr)) {
