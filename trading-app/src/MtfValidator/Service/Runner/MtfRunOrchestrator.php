@@ -16,7 +16,7 @@ use App\MtfValidator\Service\Dto\RunSummaryDto;
 use App\MtfValidator\Service\SymbolProcessor;
 use App\MtfValidator\Service\TradingDecisionHandler;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
-use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;

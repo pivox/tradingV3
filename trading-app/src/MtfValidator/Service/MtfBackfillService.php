@@ -6,9 +6,9 @@ namespace App\MtfValidator\Service;
 
 use App\Provider\Bitmart\Dto\KlineDto;
 use App\Common\Enum\Timeframe;
-use App\Entity\Kline;
+use App\Provider\Entity\Kline;
 use App\Contract\Provider\KlineProviderInterface;
-use App\Repository\KlineRepository;
+use App\Provider\Repository\KlineRepository;
 use Brick\Math\BigDecimal;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
