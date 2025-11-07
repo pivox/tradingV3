@@ -144,4 +144,28 @@ final class StopLossCalculator
         return TickQuantizer::quantizeUp($stop, $pricePrecision);
     }
 
+    private function enforceMinStopDistance(
+        float $entry,
+        float $stop,
+        Side $side,
+        float $minPct,
+        float $tick,
+        int $precision
+    ): float
+    {
+        $distancePct = abs($stop - $entry) / max($entry, 1e-9);
+        if ($distancePct >= $minPct) {
+            return $stop;
+        }
+
+        $minAbs = max($tick, $minPct * $entry);
+        $target = $side === Side::Long
+            ? max($entry - $minAbs, $tick)
+            : $entry + $minAbs;
+
+        return $side === Side::Long
+            ? TickQuantizer::quantize($target, $precision)
+            : TickQuantizer::quantizeUp($target, $precision);
+    }
+
 }

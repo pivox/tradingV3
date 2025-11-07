@@ -58,10 +58,8 @@ final class EntryZoneCalculator
         $quantize = isset($ez['quantize_to_exchange_step']) ? (bool)$ez['quantize_to_exchange_step'] : true;
 
         // 1) Récupère ATR et liste pivot (vwap/sma...)
-        $atr = $this->indicators->getAtr('entry_zone', $symbol, $tf);
-        $list = $this->indicators->getListPivot('entry_zone', $symbol, $tf);
-        $atr = $this->indicators->getAtr($symbol, $tf);
-        $list = $this->indicators->getListPivot($symbol, $tf);
+        $atr = $this->indicators->getAtr(symbol: $symbol, tf: $tf);
+        $list = $this->indicators->getListPivot(symbol: $symbol, tf: $tf);
 
         $ind = $list?->toArray() ?? [];
         $pivot = null;
