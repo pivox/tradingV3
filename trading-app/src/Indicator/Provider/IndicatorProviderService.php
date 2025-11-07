@@ -420,47 +420,47 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             }
         }
 
-        public function getListPivot(?string $key = null, ?string $symbol = null, ?string $tf = null): ?ListIndicatorDto
-        {
-            $cacheKey = sprintf('%s|%s|%s', $key ?? '*', $symbol ?? '*', $tf ?? '*');
-            if ($symbol === null || $tf === null) {
-                return null;
-            }
-
-            try {
-                $tfEnum = Timeframe::from((string)$tf);
-            } catch (\ValueError) {
-                return null;
-            }
-
-            if (isset($this->listPivot[$cacheKey])) {
-                $cached = $this->listPivot[$cacheKey];
-                if ($this->isPivotCacheFresh($cached, $tfEnum)) {
-                    return $cached['dto'];
-                }
-            }
-
-            try {
-                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 200);
-                if (empty($klines)) {
+            public function getListPivot(?string $key = null, ?string $symbol = null, ?string $tf = null): ?ListIndicatorDto
+            {
+                $cacheKey = sprintf('%s|%s|%s', $key ?? '*', $symbol ?? '*', $tf ?? '*');
+                if ($symbol === null || $tf === null) {
                     return null;
                 }
 
-                $dto = $this->getListFromKlines($klines);
-                $lastKline = end($klines);
-                $lastTime = $this->extractKlineOpenTime($lastKline)
-                    ?? new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+                try {
+                    $tfEnum = Timeframe::from((string)$tf);
+                } catch (\ValueError) {
+                    return null;
+                }
 
-                $this->listPivot[$cacheKey] = [
-                    'dto' => $dto,
-                    'last_kline_time' => $lastTime,
-                ];
+                if (isset($this->listPivot[$cacheKey])) {
+                    $cached = $this->listPivot[$cacheKey];
+                    if ($this->isPivotCacheFresh($cached, $tfEnum)) {
+                        return $cached['dto'];
+                    }
+                }
 
-                return $dto;
-            } catch (\Throwable $e) {
-                return null;
+                try {
+                    $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 200);
+                    if (empty($klines)) {
+                        return null;
+                    }
+
+                    $dto = $this->getListFromKlines($klines);
+                    $lastKline = end($klines);
+                    $lastTime = $this->extractKlineOpenTime($lastKline)
+                        ?? new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+
+                    $this->listPivot[$cacheKey] = [
+                        'dto' => $dto,
+                        'last_kline_time' => $lastTime,
+                    ];
+
+                    return $dto;
+                } catch (\Throwable $e) {
+                    return null;
+                }
             }
-        }
 
         public function listAvailableIndicators(): array
         {

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command\Audit;
 
-use App\Repository\MtfAuditRepository;
+use App\MtfValidator\Repository\MtfAuditRepository;
 use Doctrine\DBAL\Connection;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
