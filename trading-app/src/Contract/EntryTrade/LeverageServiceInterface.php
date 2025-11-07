@@ -14,6 +14,7 @@ interface LeverageServiceInterface
         float $availableUsdt,
         int $minLeverage,
         int $maxLeverage,
-        ?float $stopPct = null
+        ?float $stopPct = null,
+        ?float $atr5mValue = null
     ): int;
 }
