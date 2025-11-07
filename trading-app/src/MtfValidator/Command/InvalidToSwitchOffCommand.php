@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Command;
 
-use App\Entity\MtfSwitch;
-use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Entity\MtfSwitch;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;

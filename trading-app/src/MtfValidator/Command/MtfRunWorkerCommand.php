@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Command\Mtf;
+namespace App\MtfValidator\Command;
 
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;

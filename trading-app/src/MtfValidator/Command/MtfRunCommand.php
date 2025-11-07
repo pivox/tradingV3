@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace App\Command\Mtf;
+namespace App\MtfValidator\Command;
 
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\MtfValidator\Service\Runner\MtfRunOrchestrator;
 use App\Contract\MtfValidator\MtfValidatorInterface;
-use App\Entity\MtfSwitch;
+use App\MtfValidator\Entity\MtfSwitch;
 use App\Contract\Provider\MainProviderInterface;
 use App\Contract\Provider\Dto\ContractDto as ProviderContractDto;
 use App\Provider\Bitmart\Dto\ContractDto as BitmartContractDto;
-use App\Repository\ContractRepository;
-use App\Repository\MtfSwitchRepository;
+use App\Provider\Repository\ContractRepository;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use Brick\Math\BigDecimal;
 use Doctrine\ORM\EntityManagerInterface;
 use JsonException;
@@ -105,44 +105,37 @@ class MtfRunCommand extends Command
         try {
             $shouldSyncContracts = $syncContractsOpt || empty($symbols);
 
-            if ($shouldSyncContracts) {
-                $io->section('Synchronisation des contrats (provider)');
-                try {
-                    $contractProvider = $this->mainProvider->getContractProvider();
-                    $result = $contractProvider->syncContracts($symbols);
-
-                    if (!empty($result['errors'])) {
-                        foreach ($result['errors'] as $error) {
-                            $formattedError = $this->formatErrorForDisplay($error);
-                            if ($formattedError !== null) {
-                                $io->warning($formattedError);
-                            }
-                        }
-                    }
-
-                    if ($result['upserted'] > 0) {
-                        $io->success(sprintf(
-                            '%d contrat(s) synchronisé(s) (upsert) sur %d récupéré(s)',
-                            $result['upserted'],
-                            $result['total_fetched']
-                        ));
-                    } else {
-                        $io->warning('Aucun contrat récupéré depuis le provider principal');
-                    }
-
-                    if (empty($symbols)) {
-                        $symbols = $this->contractRepository->allActiveSymbolNames();
-                    }
-                } catch (\Throwable $e) {
-                    $io->warning('Synchronisation des contrats échouée: ' . $e->getMessage());
-                }
-            } else {
-                $io->section('Synchronisation des contrats (provider)');
-                $io->writeln('Ignorée (liste de symboles fournie sans --sync-contracts).');
-            }
+            // Cette section gère la synchronisation des contrats selon l'option fournie
+//            if (false) {
+//                $io->section('Synchronisation des contrats (provider)');
+//                try {
+//                    $symbolsBefore = count($symbols);
+//                    // Utiliser ignoreLimits=true pour récupérer TOUS les symboles actifs sans limite top_n/mid_n
+//                    $symbols = $this->contractRepository->allActiveSymbolNames($symbols, true);
+//                    $count = count($symbols);
+//                    if ($count > 0) {
+//                        $io->success(sprintf(
+//                            '%d symbole(s) actif(s) récupéré(s) depuis la base de données (avant filtrage: %d)',
+//                            $count,
+//                            $symbolsBefore
+//                        ));
+//                        if ($output->isVerbose()) {
+//                            $io->writeln(sprintf('Symboles récupérés: %s', implode(', ', array_slice($symbols, 0, 20)) . ($count > 20 ? '...' : '')));
+//                        }
+//                    } else {
+//                        $io->warning('Aucun symbole actif trouvé dans la base de données');
+//                    }
+//                } catch (\Throwable $e) {
+//                    $io->warning('Récupération des symboles actifs échouée: ' . $e->getMessage());
+//                }
+//            } else {
+//                $io->section('Synchronisation des contrats (provider)');
+//                $io->writeln('Ignorée (liste de symboles fournie sans --sync-contracts).');
+//            }
 
             if (empty($symbols)) {
-                $symbols = $this->contractRepository->allActiveSymbolNames();
+                // Utiliser ignoreLimits=true pour récupérer TOUS les symboles actifs sans limite top_n/mid_n
+                $symbols = $this->contractRepository->allActiveSymbolNames([], false);
                 if ($limit > 0) {
                     $symbols = array_slice($symbols, 0, $limit);
                 }
@@ -154,11 +147,20 @@ class MtfRunCommand extends Command
                 return Command::SUCCESS;
             }
 
+            $symbolsCountBeforeFilter = count($symbols);
             // Pré-filtrer les symboles avec ordres/positions ouverts une seule fois côté parent,
             // puis indiquer aux workers de ne pas refaire le filtrage (évite des appels 429)
             try {
                 $prefilterRunId = Uuid::uuid4()->toString();
                 $symbols = $this->orchestrator->filterSymbolsWithOpenOrdersOrPositions($symbols, 'cli:' . $prefilterRunId);
+                $symbolsCountAfterFilter = count($symbols);
+                if ($symbolsCountAfterFilter < $symbolsCountBeforeFilter) {
+                    $io->note(sprintf(
+                        'Pré-filtrage: %d symbole(s) exclu(s) (ordres/positions ouverts), %d restant(s)',
+                        $symbolsCountBeforeFilter - $symbolsCountAfterFilter,
+                        $symbolsCountAfterFilter
+                    ));
+                }
             } catch (\Throwable $e) {
                 $io->warning('Pré-filtrage des symboles échoué: ' . $e->getMessage());
             }

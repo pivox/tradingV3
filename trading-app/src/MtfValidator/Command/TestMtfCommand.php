@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace App\Command\Mtf;
+namespace App\MtfValidator\Command;
 
 use App\MtfValidator\Service\MtfService;
 use App\MtfValidator\Service\MtfTimeService;
 use App\Repository\MtfStateRepository;
-use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;

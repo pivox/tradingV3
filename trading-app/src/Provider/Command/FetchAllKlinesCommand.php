@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Command\Provider;
+namespace App\Provider\Command;
 
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\MainProviderInterface;

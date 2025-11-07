@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Command;
 
-use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;

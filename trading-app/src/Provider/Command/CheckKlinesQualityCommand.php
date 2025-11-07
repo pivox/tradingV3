@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App\Command\Provider;
+namespace App\Provider\Command;
 
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\KlineProviderInterface;
-use App\Repository\KlineRepository;
+use App\Provider\Repository\KlineRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -249,7 +249,7 @@ class CheckKlinesQualityCommand extends Command
     {
         // Récupérer les symboles actifs depuis la base de données
         $query = $this->entityManager->createQuery(
-            'SELECT DISTINCT k.symbol FROM App\Entity\Kline k ORDER BY k.symbol'
+            'SELECT DISTINCT k.symbol FROM App\Provider\Entity\Kline k ORDER BY k.symbol'
         );
 
         $results = $query->getResult();
