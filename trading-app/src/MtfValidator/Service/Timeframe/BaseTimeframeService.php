@@ -12,9 +12,9 @@ use App\Contract\MtfValidator\Dto\TimeframeResultDto;
 use App\Contract\MtfValidator\Dto\ValidationContextDto;
 use App\Contract\Provider\MainProviderInterface;
 use App\Provider\Bitmart\Service\KlineJsonIngestionService;
-use App\Repository\KlineRepository;
-use App\Repository\MtfAuditRepository;
-use App\Repository\MtfSwitchRepository;
+use App\Provider\Repository\KlineRepository;
+use App\MtfValidator\Repository\MtfAuditRepository;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\Repository\MtfStateRepository;
 use App\Contract\Signal\SignalValidationServiceInterface;
 use App\MtfValidator\Service\MtfTimeService;
@@ -124,7 +124,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
             usort($klines, fn($a, $b) => $a->openTime <=> $b->openTime);
 
             // Construire Contract avec symbole (requis par AbstractSignal->buildIndicatorContext)
-            $contract = (new \App\Entity\Contract())->setSymbol($symbol);
+            $contract = (new \App\Provider\Entity\Contract())->setSymbol($symbol);
 
             // Construire knownSignals minimal depuis le collector courant
             $known = [];
@@ -301,7 +301,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
         string $message,
         array $context = []
     ): void {
-        $audit = new \App\Entity\MtfAudit();
+        $audit = new \App\MtfValidator\Entity\MtfAudit();
         $audit->setRunId(\Ramsey\Uuid\Uuid::fromString($runId));
         $audit->setSymbol($symbol);
         $audit->setStep($step);

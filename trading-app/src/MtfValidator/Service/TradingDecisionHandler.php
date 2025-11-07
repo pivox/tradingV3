@@ -7,7 +7,7 @@ namespace App\MtfValidator\Service;
 use App\Config\{TradeEntryConfig, MtfValidationConfig};
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
-use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\TradeEntry\Builder\TradeEntryRequestBuilder;
 use App\TradeEntry\Hook\MtfPostExecutionHook;
