@@ -19,6 +19,11 @@ BITMART_BASE_URL="https://api-cloud-v2.bitmart.com"
 
 # WebSocket configuration
 BITMART_WS_URL="wss://ws-manager-compress.bitmart.com/api?protocol=1.1"
+ 
+# Optional: Rate-limit overrides per endpoint bucket (limit/windowSec)
+# Example: slow down private positions and open-orders to reduce 429
+# BITMART_RATE_PRIVATE_POSITION="3/2"
+# BITMART_RATE_PRIVATE_GET_OPEN_ORDERS="20/2"
 ```
 
 ### 2. Démarrage avec Docker
