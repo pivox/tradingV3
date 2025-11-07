@@ -28,25 +28,44 @@ ws_assignments:
 
 # Explicit web controllers to ensure route discovery
 mtf_web_audit:
-  resource: '../src/Controller/Web/MtfAuditController.php'
+  resource: '../src/MtfValidator/Controller/Web/MtfAuditController.php'
   type: attribute
 
 mtf_web_stats:
-  resource: '../src/Controller/Web/MtfStatsController.php'
+  resource: '../src/MtfValidator/Controller/Web/MtfStatsController.php'
   type: attribute
 
 mtf_web_order_plans:
-  resource: '../src/Controller/Web/MtfOrderPlanController.php'
+  resource: '../src/MtfValidator/Controller/Web/MtfOrderPlanController.php'
   type: attribute
 
 mtf_web_states:
-  resource: '../src/Controller/Web/MtfStateController.php'
+  resource: '../src/MtfValidator/Controller/Web/MtfStateController.php'
   type: attribute
 
 mtf_web_switches:
-  resource: '../src/Controller/Web/MtfSwitchWebController.php'
+  resource: '../src/MtfValidator/Controller/Web/MtfSwitchWebController.php'
   type: attribute
 
 mtf_web_locks:
-  resource: '../src/Controller/Web/MtfLockWebController.php'
+  resource: '../src/MtfValidator/Controller/Web/MtfLockWebController.php'
+  type: attribute
+
+# MTF API controllers
+mtf_api_audit:
+  resource: '../src/MtfValidator/Controller/Api/MtfAuditController.php'
+  type: attribute
+
+# Indicator controllers
+indicator_web:
+  resource: '../src/Indicator/Controller/IndicatorTestController.php'
+  type: attribute
+
+indicator_api:
+  resource: '../src/Indicator/Controller/IndicatorApiController.php'
+  type: attribute
+
+# TradeEntry controllers
+trade_entry_web:
+  resource: '../src/TradeEntry/Controller/'
   type: attribute

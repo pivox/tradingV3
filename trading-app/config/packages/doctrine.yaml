@@ -23,3 +23,13 @@ doctrine:
                 dir: '%kernel.project_dir%/src/Entity'
                 prefix: 'App\Entity'
                 alias: App
+            MtfValidator:
+                is_bundle: false
+                dir: '%kernel.project_dir%/src/MtfValidator/Entity'
+                prefix: 'App\MtfValidator\Entity'
+                alias: MtfValidator
+            Provider:
+                is_bundle: false
+                dir: '%kernel.project_dir%/src/Provider/Entity'
+                prefix: 'App\Provider\Entity'
+                alias: Provider

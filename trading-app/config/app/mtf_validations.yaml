@@ -155,23 +155,21 @@ mtf_validation:
             decreasing: { field: 'macd_hist', n: 2 }
 
     validation:
-        start_from_timeframe: '15m'
-
+        start_from_timeframe: '4h'
         timeframe:
-
             '4h':  # Contexte / structure (durci : structure de base requise)
                 long:
                     - all_of:     # structure : exiger la structure de base OU tolérance + confirmation
                           - any_of:
                               - all_of: [ ema_50_gt_200, close_above_ema_200 ]  # structure stricte
                               - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]  # tolérance + confirmation
-                    - price_regime_ok_long
+                          - price_regime_ok_long
                 short:
                     - all_of:     # structure : exiger la structure de base OU tolérance + confirmation
                           - any_of:
                               - all_of: [ ema_50_lt_200, close_below_ema_200 ]  # structure stricte
                               - all_of: [ ema_below_200_with_tolerance, ema_50_lt_200 ]  # tolérance + confirmation
-                    - price_regime_ok_short
+                          - price_regime_ok_short
 
             '1h':  # Biais + momentum (durci : structure + momentum requis)
                 long:
