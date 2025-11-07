@@ -9,7 +9,7 @@ use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\MtfValidator\Service\TradingDecisionHandler;
-use App\Config\{TradingDecisionConfig, MtfValidationConfig};
+use App\Config\{TradeEntryConfig, MtfValidationConfig};
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Service\TradeEntryService;
@@ -49,14 +49,54 @@ class TradingDecisionHandlerTest extends TestCase
             ],
         ];
 
+        $tradeEntryConfig = $this->createMock(TradeEntryConfig::class);
+        $tradeEntryConfig->method('getDecision')->willReturn([
+            'allowed_execution_timeframes' => ['1m', '5m', '15m'],
+            'require_price_or_atr' => true,
+        ]);
+        $tradeEntryConfig->method('getDefaults')->willReturn($defaults);
+
+        $requestBuilder = $this->createMock(\App\TradeEntry\Builder\TradeEntryRequestBuilder::class);
+        $requestBuilder->method('fromMtfSignal')->willReturn(
+            new TradeEntryRequest(
+                symbol: 'BTCUSDT',
+                side: \App\TradeEntry\Types\Side::Long,
+                orderType: 'limit',
+                openType: 'isolated',
+                orderMode: 4,
+                initialMarginUsdt: 100.0,
+                riskPct: 0.02,
+                rMultiple: 2.0,
+                entryLimitHint: 50250.0,
+                stopFrom: 'atr',
+                pivotSlPolicy: 'nearest_below',
+                pivotSlBufferPct: null,
+                pivotSlMinKeepRatio: null,
+                atrValue: 35.0,
+                atrK: 1.5,
+                marketMaxSpreadPct: 0.001,
+                insideTicks: 1,
+                maxDeviationPct: null,
+                implausiblePct: null,
+                zoneMaxDeviationPct: null,
+                tpPolicy: 'pivot_conservative',
+                tpBufferPct: null,
+                tpBufferTicks: null,
+                tpMinKeepRatio: 0.95,
+                tpMaxExtraR: null,
+            )
+        );
+
         $this->handler = new TradingDecisionHandler(
             tradeEntryService: $this->tradeEntryService,
-            decisionConfig: new TradingDecisionConfig(),
-            mtfConfig: new MtfValidationConfig(),
-            auditLogger: $this->auditLogger,
+            requestBuilder: $requestBuilder,
             logger: $this->logger,
             positionsFlowLogger: $this->positionsFlowLogger,
-            tradeEntryDefaults: $defaults,
+            orderJourneyLogger: $this->createMock(LoggerInterface::class),
+            tradeEntryConfig: $tradeEntryConfig,
+            mtfConfig: new MtfValidationConfig(),
+            mtfSwitchRepository: $this->createMock(\App\Repository\MtfSwitchRepository::class),
+            auditLogger: $this->auditLogger,
         );
     }
 
