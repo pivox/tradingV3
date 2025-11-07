@@ -607,7 +607,7 @@ final class TpSlTwoTargetsService
             if ($this->indicatorProvider !== null) {
                 try {
                     $tf = $this->resolveAtrTimeframe();
-                    $atrAbs = $this->indicatorProvider->getAtr('tp_split', $symbol, $tf);
+                    $atrAbs = $this->indicatorProvider->getAtr($symbol, $tf);
                 } catch (\Throwable) {
                     $atrAbs = null;
                 }

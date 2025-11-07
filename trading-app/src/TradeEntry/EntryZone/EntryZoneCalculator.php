@@ -60,6 +60,8 @@ final class EntryZoneCalculator
         // 1) Récupère ATR et liste pivot (vwap/sma...)
         $atr = $this->indicators->getAtr('entry_zone', $symbol, $tf);
         $list = $this->indicators->getListPivot('entry_zone', $symbol, $tf);
+        $atr = $this->indicators->getAtr($symbol, $tf);
+        $list = $this->indicators->getListPivot($symbol, $tf);
 
         $ind = $list?->toArray() ?? [];
         $pivot = null;
