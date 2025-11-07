@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace App\Signal;
 
-use App\Entity\Contract;
-use App\Entity\Kline;
+use App\Provider\Entity\Contract;
+use App\Provider\Entity\Kline;
 use App\Config\TradingParameters;
 use App\Contract\Indicator\IndicatorMainProviderInterface;
-use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 

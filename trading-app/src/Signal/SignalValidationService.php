@@ -12,14 +12,16 @@ use App\Contract\Signal\Dto\SignalValidationContextDto;
 use App\Contract\Signal\Dto\SignalValidationResultDto;
 use App\Contract\Signal\SignalServiceInterface;
 use App\Contract\Signal\SignalValidationServiceInterface;
-use App\Entity\Contract;
-use App\Entity\Kline;
-use App\Repository\ContractRepository;
+use App\Provider\Entity\Contract;
+use App\Provider\Entity\Kline;
+use App\Provider\Repository\ContractRepository;
 use DateTimeImmutable;
 use DateTimeZone;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 use Symfony\Component\DependencyInjection\Attribute\TaggedIterator;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\Yaml\Yaml;
 
 /**
  * Validation unique d'un timeframe + encapsulation du statut MTF attendu par le contrôleur.
@@ -40,6 +42,8 @@ final class SignalValidationService implements SignalValidationServiceInterface
         private readonly MtfConfigProviderInterface $tradingParameters,
         private readonly SignalPersistenceService $signalPersistenceService,
         private readonly ContractRepository $contractRepository,
+        #[Autowire('%kernel.project_dir%')]
+        private readonly string $projectDir,
     ) {
         foreach ($timeframeServices as $svc) {
             if ($svc instanceof SignalServiceInterface) {
@@ -52,7 +56,8 @@ final class SignalValidationService implements SignalValidationServiceInterface
     public function buildContextSummary(array $knownSignals, string $currentTf, string $currentSignal): array
     {
         $cfg = $this->tradingParameters->getConfig();
-        $contextTfs = array_map('strtolower', (array)($cfg[self::VALIDATION_KEY]['context'] ?? ($cfg['mtf']['context'] ?? [])));
+        $timeframes = $this->extractTimeframes($cfg);
+        $contextTfs = $timeframes['context'];
         $contextSignals = [];
         foreach ($contextTfs as $ctxTf) {
             if ($ctxTf === $currentTf) {
@@ -118,8 +123,10 @@ final class SignalValidationService implements SignalValidationServiceInterface
         $currentSignal = SignalSide::from($currentSignalValue);
 
         $config = $this->tradingParameters->getConfig();
-        $contextTfs = array_map('strtolower', (array)($config[self::VALIDATION_KEY]['context'] ?? ($config['mtf']['context'] ?? [])));
-        $executionTfs = array_map('strtolower', (array)($config[self::VALIDATION_KEY]['execution'] ?? ($config['mtf']['execution'] ?? [])));
+        // Extraire context et execution depuis list_tf (nouveau) ou context/execution (ancien)
+        $timeframes = $this->extractTimeframes($config);
+        $contextTfs = $timeframes['context'];
+        $executionTfs = $timeframes['execution'];
 
         $summary = $this->buildContextSummary($knownSignals, $tfLower, $currentSignalValue);
         $contextSignals = $summary['context_signals'];
@@ -131,6 +138,7 @@ final class SignalValidationService implements SignalValidationServiceInterface
         if ($isContextTf) {
             $idx = array_search($tfLower, $contextTfs, true);
             if ($idx === 0) {
+                // Pour le premier timeframe de contexte, accepter PENDING si signal valide
                 $status = $currentSignal->isNone() ? 'FAILED' : 'PENDING';
             } else {
                 $partial = array_slice($contextTfs, 0, $idx + 1);
@@ -333,6 +341,75 @@ final class SignalValidationService implements SignalValidationServiceInterface
             $result->context->signals,
             $result->toArray()
         );
+    }
+
+    /**
+     * Charge la configuration depuis signal.yaml si elle n'est pas dans TradingParameters
+     */
+    private function loadSignalConfig(): array
+    {
+        static $cache = null;
+        if ($cache !== null) {
+            return $cache;
+        }
+
+        $signalPath = $this->projectDir . '/config/app/signal.yaml';
+        if (!is_file($signalPath)) {
+            $cache = [];
+            return $cache;
+        }
+
+        try {
+            $parsed = Yaml::parseFile($signalPath);
+            $cache = $parsed['signal'] ?? [];
+        } catch (\Throwable) {
+            $cache = [];
+        }
+
+        return $cache;
+    }
+
+    /**
+     * Extrait les timeframes de contexte et d'exécution depuis la configuration
+     * Supporte list_tf (nouveau format) ou context/execution (ancien format)
+     * 
+     * @return array{context: string[], execution: string[]}
+     */
+    private function extractTimeframes(array $config): array
+    {
+        $signalConfig = $this->loadSignalConfig();
+        $mtfConfig = $config['signal']['mtf'] ?? $signalConfig['mtf'] ?? $config['mtf'] ?? [];
+        
+        // Nouveau format: list_tf avec context_count
+        if (isset($mtfConfig['list_tf']) && is_array($mtfConfig['list_tf'])) {
+            $listTf = array_map('strtolower', $mtfConfig['list_tf']);
+            $contextCount = (int)($mtfConfig['context_count'] ?? 2);
+            
+            $contextTfs = array_slice($listTf, 0, $contextCount);
+            $executionTfs = array_slice($listTf, $contextCount);
+            
+            return [
+                'context' => $contextTfs,
+                'execution' => $executionTfs,
+            ];
+        }
+        
+        // Ancien format: context et execution séparés
+        $contextTfs = array_map('strtolower', (array)(
+            $config[self::VALIDATION_KEY]['context'] 
+            ?? $mtfConfig['context'] 
+            ?? []
+        ));
+        $executionTfs = array_map('strtolower', (array)(
+            $config[self::VALIDATION_KEY]['execution'] 
+            ?? $mtfConfig['execution'] 
+            ?? []
+        ));
+        
+        return [
+            'context' => $contextTfs,
+            'execution' => $executionTfs,
+        ];
     }
 
     /**
