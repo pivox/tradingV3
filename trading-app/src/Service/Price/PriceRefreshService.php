@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Service\Price;
 
-use App\Repository\ContractRepository;
+use App\Provider\Repository\ContractRepository;
 use Psr\Log\LoggerInterface;
 
 final class PriceRefreshService

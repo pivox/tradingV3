@@ -6,7 +6,7 @@ namespace App\Runtime\Concurrency;
 
 use App\Contract\Runtime\FeatureSwitchInterface;
 use App\Contract\Runtime\Dto\SwitchStateDto;
-use App\Runtime\Concurrency\Dto\SwitchConfigDto;
+use App\MtfValidator\Runtime\Concurrency\Dto\SwitchConfigDto;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 
