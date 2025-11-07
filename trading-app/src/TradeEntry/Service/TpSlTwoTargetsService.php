@@ -859,9 +859,20 @@ final class TpSlTwoTargetsService
             $details = $latest->details ?? [];
             $collector = $details['mtf_collector'] ?? [];
 
-            // Déterminer la base TF depuis la config (context) sinon fallback 3 TF usuelles
+            // Déterminer la base TF depuis la config (list_tf ou context) sinon fallback 3 TF usuelles
             $cfg = $this->mtfConfig->getConfig();
-            $contextTfs = array_map('strtolower', (array)($cfg['validation']['context'] ?? ($cfg['mtf']['context'] ?? [])));
+            $mtfConfig = $cfg['signal']['mtf'] ?? $cfg['mtf'] ?? [];
+            
+            // Nouveau format: list_tf avec context_count
+            if (isset($mtfConfig['list_tf']) && is_array($mtfConfig['list_tf'])) {
+                $listTf = array_map('strtolower', $mtfConfig['list_tf']);
+                $contextCount = (int)($mtfConfig['context_count'] ?? 2);
+                $contextTfs = array_slice($listTf, 0, $contextCount);
+            } else {
+                // Ancien format: context séparé
+                $contextTfs = array_map('strtolower', (array)($cfg['validation']['context'] ?? ($mtfConfig['context'] ?? [])));
+            }
+            
             if (empty($contextTfs)) {
                 $contextTfs = ['1h','15m','5m'];
             }
