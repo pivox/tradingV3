@@ -1,12 +1,12 @@
 <?php
 
-namespace App\Controller\Web;
+namespace App\Indicator\Controller;
 
 use App\Common\Enum\Timeframe;
 use App\Contract\Indicator\IndicatorMainProviderInterface;
 use App\Contract\Provider\MainProviderInterface;
-use App\Repository\ContractRepository;
-use App\Repository\KlineRepository;
+use App\Provider\Repository\ContractRepository;
+use App\Provider\Repository\KlineRepository;
 use App\Service\KlineDataService;
 use App\Service\TradingConfigService;
 use App\Config\SignalConfig;
@@ -69,7 +69,7 @@ class IndicatorTestController extends AbstractController
         // Récupérer les contrats actifs depuis la base de données
         $activeContracts = $this->contractRepository->allActiveSymbolNames();
 
-        return $this->render('indicators/test.html.twig', [
+        return $this->render('Indicator/indicators/test.html.twig', [
             'title' => 'Test des Indicateurs',
             'available_symbols' => $activeContracts,
             'available_timeframes' => $timeframesWithRules,

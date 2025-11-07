@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Controller\Web;
+namespace App\MtfValidator\Controller\Web;
 
-use App\Repository\MtfAuditStatsRepository;
+use App\MtfValidator\Repository\MtfAuditStatsRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -23,7 +23,7 @@ class MtfStatsController extends AbstractController
         // KPIs globaux basés sur la vue matérialisée
         $kpis = $this->statsRepository->getGlobalKpis();
 
-        return $this->render('mtf_stats/index.html.twig', [
+        return $this->render('MtfValidator/stats/index.html.twig', [
             'kpis' => $kpis,
         ]);
     }

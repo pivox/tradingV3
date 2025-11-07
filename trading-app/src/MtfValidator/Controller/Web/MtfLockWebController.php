@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Controller\Web;
+namespace App\MtfValidator\Controller\Web;
 
-use App\Repository\MtfLockRepository;
+use App\MtfValidator\Repository\MtfLockRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -21,7 +21,7 @@ class MtfLockWebController extends AbstractController
     #[Route('/mtf/locks', name: 'mtf_locks_index', methods: ['GET'])]
     public function index(): Response
     {
-        return $this->render('mtf_lock/index.html.twig', [
+        return $this->render('MtfValidator/lock/index.html.twig', [
             'locks' => [],
         ]);
     }

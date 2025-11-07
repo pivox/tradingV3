@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-namespace App\Controller;
+namespace App\TradeEntry\Controller;
 
 use App\Config\MtfValidationConfig;
 use App\TradeEntry\Dto\TpSlTwoTargetsRequest;

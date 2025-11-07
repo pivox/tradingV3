@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-namespace App\Controller;
+namespace App\TradeEntry\Controller;
 
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Service\TradeEntryService;

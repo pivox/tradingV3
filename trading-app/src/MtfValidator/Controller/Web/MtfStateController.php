@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Controller\Web;
+namespace App\MtfValidator\Controller\Web;
 
 use App\Repository\MtfStateRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -21,7 +21,7 @@ class MtfStateController extends AbstractController
     #[Route('/mtf/states', name: 'mtf_states_index', methods: ['GET'])]
     public function index(): Response
     {
-        return $this->render('mtf_state/index.html.twig', [
+        return $this->render('MtfValidator/state/index.html.twig', [
             'mtfStates' => [],
         ]);
     }
