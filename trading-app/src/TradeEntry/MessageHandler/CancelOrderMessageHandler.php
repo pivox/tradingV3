@@ -6,7 +6,7 @@ namespace App\TradeEntry\MessageHandler;
 
 use App\Common\Enum\OrderStatus;
 use App\Contract\Provider\MainProviderInterface;
-use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\TradeEntry\Message\CancelOrderMessage;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;

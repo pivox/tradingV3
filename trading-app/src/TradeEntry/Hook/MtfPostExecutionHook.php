@@ -4,7 +4,7 @@ declare(strict_types=1);
 namespace App\TradeEntry\Hook;
 
 use App\Contract\Runtime\AuditLoggerInterface;
-use App\Repository\MtfSwitchRepository;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\TradeEntry\Dto\{ExecutionResult, TradeEntryRequest};
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
