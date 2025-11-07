@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Contract\Signal;
 
-use App\Entity\Contract;
+use App\Provider\Entity\Contract;
 
 /**
  * Contrat commun aux services de génération de signaux par timeframe.

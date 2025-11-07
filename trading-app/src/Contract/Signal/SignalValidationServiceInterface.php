@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Contract\Signal;
 
 use App\Contract\Signal\Dto\SignalValidationResultDto;
-use App\Entity\Contract;
+use App\Provider\Entity\Contract;
 
 /**
  * Contrat du service de validation multi-timeframes.
