@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Entity;
+namespace App\MtfValidator\Entity;
 
-use App\Repository\MtfAuditRepository;
+use App\MtfValidator\Repository\MtfAuditRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 use Ramsey\Uuid\UuidInterface;

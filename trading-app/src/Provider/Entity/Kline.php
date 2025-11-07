@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Entity;
+namespace App\Provider\Entity;
 
-use App\Repository\KlineRepository;
+use App\Provider\Repository\KlineRepository;
 use Brick\Math\BigDecimal;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Repository;
+namespace App\MtfValidator\Repository;
 
 use Doctrine\DBAL\Connection;
 use Psr\Log\LoggerInterface;
