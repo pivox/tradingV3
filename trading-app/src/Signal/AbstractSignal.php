@@ -5,8 +5,8 @@ namespace App\Signal;
 use App\Config\TradingParameters;
 use App\Contract\Indicator\IndicatorMainProviderInterface;
 use App\Contract\Signal\SignalServiceInterface;
-use App\Entity\Contract;
-use App\Repository\MtfSwitchRepository;
+use App\Provider\Entity\Contract;
+use App\MtfValidator\Repository\MtfSwitchRepository;
 use Psr\Log\LoggerInterface;
 
 abstract class AbstractSignal implements SignalServiceInterface

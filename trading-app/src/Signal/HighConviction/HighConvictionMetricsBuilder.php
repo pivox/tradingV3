@@ -2,7 +2,7 @@
 
 namespace App\Signal\HighConviction;
 
-use App\Repository\KlineRepository;
+use App\Provider\Repository\KlineRepository;
 use App\Service\Indicator\AtrCalculator;
 use App\Service\Indicator\Volume\Vwap;
 use App\Service\Strategy\MacroCalendarService;
