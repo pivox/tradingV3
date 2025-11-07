@@ -11,7 +11,7 @@ use App\Contract\Provider\Dto\SymbolBidAskDto;
 use App\Contract\Provider\OrderProviderInterface;
 use App\Provider\Bitmart\Http\BitmartHttpClientPrivate;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
-use App\Repository\ContractRepository;
+use App\Provider\Repository\ContractRepository;
 use App\Service\FuturesOrderSyncService;
 use App\Service\OrderIntentManager;
 use App\Entity\OrderIntent;
@@ -535,10 +535,25 @@ final class BitmartOrderProvider implements OrderProviderInterface
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
             try {
                 $response = $this->bitmartClient->getOrderHistory($symbol, $limit);
-                if (isset($response['data']['orders'])) {
+                
+                // BitMart peut retourner soit data.orders soit data directement comme tableau
+                $orders = null;
+                if (isset($response['data']['orders']) && is_array($response['data']['orders'])) {
+                    $orders = $response['data']['orders'];
+                } elseif (isset($response['data']) && is_array($response['data'])) {
+                    // Si data est directement un tableau (peut être vide ou contenir des ordres)
+                    if (!empty($response['data']) && isset($response['data'][0]) && is_array($response['data'][0])) {
+                        // Vérifier si c'est un tableau d'ordres (premier élément a order_id)
+                        if (isset($response['data'][0]['order_id'])) {
+                            $orders = $response['data'];
+                        }
+                    }
+                }
+                
+                if ($orders !== null) {
                     // Synchroniser tous les ordres de l'historique
                     if ($this->syncService) {
-                        foreach ($response['data']['orders'] as $orderData) {
+                        foreach ($orders as $orderData) {
                             try {
                                 $this->syncService->syncOrderFromApi($orderData);
                             } catch (\Throwable $e) {
@@ -550,9 +565,10 @@ final class BitmartOrderProvider implements OrderProviderInterface
                             }
                         }
                     }
-                    return array_map(fn($order) => OrderDto::fromArray($order), $response['data']['orders']);
+                    return array_map(fn($order) => OrderDto::fromArray($order), $orders);
                 }
-                $lastError = new \RuntimeException('Invalid order history response structure.');
+                
+                $lastError = new \RuntimeException('Invalid order history response structure. Expected data.orders or data as array.');
             } catch (\Throwable $e) {
                 $lastError = $e;
             }
