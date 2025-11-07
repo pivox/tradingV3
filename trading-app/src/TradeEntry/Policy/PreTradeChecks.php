@@ -223,7 +223,7 @@ final readonly class PreTradeChecks
     private function fetchPivotLevels(string $symbol): ?array
     {
         try {
-            $dto = $this->indicatorProvider->getListPivot('tp_daily', $symbol, Timeframe::TF_1D->value);
+            $dto = $this->indicatorProvider->getListPivot($symbol, Timeframe::TF_1D->value);
             if (!$dto instanceof \App\Contract\Indicator\Dto\ListIndicatorDto) {
                 return null;
             }
