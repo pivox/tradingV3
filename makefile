@@ -82,7 +82,8 @@ show-pipeline: ## Affiche en continu le pipeline des contrats
 .PHONY: mtf-audit-help mtf-audit-full mtf-audit-calibration mtf-audit-summary \
         mtf-health-check mtf-audit-export mtf-audit-by-timeframe \
         mtf-audit-all-sides mtf-audit-by-side mtf-audit-weights \
-        mtf-audit-rollup mtf-audit-success
+        mtf-audit-rollup mtf-audit-success \
+        calibrate-atr validate-contracts
 
 mtf-audit-help: ## Affiche l'aide pour les commandes d'audit MTF
 	@echo "════════════════════════════════════════════════════════════════"
@@ -123,6 +124,8 @@ TF ?=
 SYMBOLS ?=
 LIMIT ?= 100
 OUTPUT_DIR ?= /tmp/mtf-audit
+SINCE ?= 7 days
+ATR_TFS ?= 15m,5m,1m
 
 # Helpers pour construire les options
 TF_OPT := $(if $(TF),-t $(TF),)
@@ -218,6 +221,21 @@ mtf-audit-export: ## 💾 Export tous les rapports en JSON (OUTPUT_DIR=/tmp/mtf-
 	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=rollup $(TF_OPT) $(SYMBOLS_OPT) --format=json --output=$(OUTPUT_DIR)/rollup.json
 	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=by-timeframe $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT) --format=json --output=$(OUTPUT_DIR)/by-timeframe.json
 	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=success $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT) --format=json --output=$(OUTPUT_DIR)/success.json
+
+# ===================================
+# Calibration ATR & Validation Helpers
+# ===================================
+
+calibrate-atr: ## 🎯 Calibre les seuils ATR/close par TF via DB et affiche un patch YAML
+	@echo "Calibration ATR/close — SINCE=$(SINCE) TFS=$(ATR_TFS)"
+	$(DC) exec -T $(TA_SVC) bin/console audit:atr:calibrate --since="$(SINCE)" -t $(ATR_TFS) --output-dir=var
+
+validate-contracts: ## 🔎 Valide les contrats actifs pour un TF (TF=15m,5m,1m,1h,4h) LIMIT=100
+	@if [ -z "$(TF)" ]; then \
+		echo "❌ Spécifiez le TF: make validate-contracts TF=15m [LIMIT=100]"; \
+		exit 1; \
+	fi
+	$(DC) exec -T $(TA_SVC) bin/console app:indicator:contracts:validate $(TF) --limit=$(LIMIT) -vv
 	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=calibration $(TF_OPT) $(SYMBOLS_OPT) --format=json --output=$(OUTPUT_DIR)/calibration.json
 	@$(DC) exec -T $(TA_SVC) bin/console mtf:health-check --period=$(PERIOD) $(TF_OPT) $(SYMBOLS_OPT) --format=json --output=$(OUTPUT_DIR)/health-check.json
 	@echo

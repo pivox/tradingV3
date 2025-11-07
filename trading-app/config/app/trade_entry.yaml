@@ -42,8 +42,8 @@ trade_entry:
         tp_policy: 'pivot_conservative'            # Politique de Take Profit
         tp_buffer_pct: 0.001                       # Buffer TP en %
         tp_buffer_ticks: 0                         # Buffer TP en ticks
-        tp_min_keep_ratio: 0.95                    # Ratio min à conserver pour TP
-        tp_max_extra_r: 0.5                        # R supplémentaire max pour TP
+        tp_min_keep_ratio: 0.90                    # Ratio min à conserver pour TP
+        tp_max_extra_r: 0.3                        # R supplémentaire max pour TP
 
         # --- Order Configuration ---
         order_type: 'limit'                        # Type d'ordre ('limit' ou 'market')
