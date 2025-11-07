@@ -2,8 +2,8 @@
 
 namespace App\Controller\Web;
 
-use App\Entity\Contract;
-use App\Repository\ContractRepository;
+use App\Provider\Entity\Contract;
+use App\Provider\Repository\ContractRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -24,7 +24,7 @@ class ContractsController extends AbstractController
 
         $contracts = $this->contractRepository->findWithFilters($status, $symbol);
 
-        return $this->render('contracts/index.html.twig', [
+        return $this->render('Provider/contracts/index.html.twig', [
             'contracts' => $contracts,
         ]);
     }
@@ -38,7 +38,7 @@ class ContractsController extends AbstractController
             throw $this->createNotFoundException('Contrat non trouvé');
         }
 
-        return $this->render('contracts/show.html.twig', [
+        return $this->render('Provider/contracts/show.html.twig', [
             'contract' => $contract,
         ]);
     }

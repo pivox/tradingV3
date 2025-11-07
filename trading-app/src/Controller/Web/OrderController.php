@@ -5,7 +5,7 @@ namespace App\Controller\Web;
 use App\Common\Enum\OrderSide;
 use App\Common\Enum\OrderType;
 use App\Contract\Provider\OrderProviderInterface;
-use App\Repository\ContractRepository;
+use App\Provider\Repository\ContractRepository;
 use App\TradeEntry\Pricing\TickQuantizer;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -289,7 +289,7 @@ class OrderController extends AbstractController
             }
         }
 
-        return $this->render('order/submit.html.twig', [
+        return $this->render('TradeEntry/submit.html.twig', [
             'contracts' => $contractSymbols,
             'order_id' => $orderId,
             'error' => $error,
