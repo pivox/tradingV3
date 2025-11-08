@@ -2,7 +2,7 @@
 
 namespace App\Indicator\ConditionLoader;
 
-use App\Config\MtfValidationConfig;
+use App\Config\IndicatorConfig;
 use App\Indicator\Condition\ConditionInterface;
 use App\Indicator\ConditionLoader\Cards\Rule\Rule;
 use App\Indicator\ConditionLoader\Cards\Rule\Rules;
@@ -151,18 +151,41 @@ class ConditionRegistry
         return $this->has($name) || isset(self::$rules[$name]);
     }
 
-    public function load(array|MtfValidationConfig $config): void
+    public function load(array|IndicatorConfig $config): void
     {
-        if ($config instanceof MtfValidationConfig) {
-            $config = $config->getConfig();
+        $rulesData = [];
+        $validation = $config->getValidation();
+
+        if ($config instanceof IndicatorConfig) {
+            // Nouveau format: règles depuis IndicatorConfig
+            $rulesData = $config->getRules();
+        } elseif (is_array($config)) {
+            // Format array (pour tests/compatibilité)
+            $root = $config['mtf_validation'] ?? $config;
+            $rulesData = $root['rules'] ?? [];
+            // Si validation n'est pas fournie séparément, essayer de la récupérer depuis le config
+            if ($validation === null) {
+                $validation = $root['validation'] ?? null;
+            }
         }
 
-        $root = $config['mtf_validation'] ?? $config;
-
-        $this->rulesCard = (new Rules($this))->fill($root);
+        // Charger les règles
+        $this->rulesCard = (new Rules($this))->fill(['rules' => $rulesData]);
         self::$rules = $this->rulesCard->getRules();
 
-        $this->validationCard = (new Validation($this->rulesCard, $this))->fill($root);
+        // Charger la validation si disponible
+        if (!empty($validation)) {
+            $this->validationCard = (new Validation($this->rulesCard, $this))->fill(['validation' => $validation]);
+        }
+    }
+
+    /**
+     * Charge les règles depuis IndicatorConfig et la validation depuis un array.
+     * Méthode helper pour services.yaml qui ne peut pas passer deux arguments.
+     */
+    public function loadFromConfigs(IndicatorConfig $indicatorConfig): void
+    {
+        $this->load($indicatorConfig);
     }
 
     public function getValidation(): ?Validation

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command\Audit;
 
-use App\Config\MtfValidationConfig;
+use App\Config\IndicatorConfig;
 use Doctrine\DBAL\Connection;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -16,13 +16,13 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
     name: 'audit:atr:calibrate',
-    description: 'Calibre les seuils ATR/close par timeframe via percentiles DB et produit un rapport d’impact.'
+    description: 'Calibre les seuils ATR/close par timeframe via percentiles DB et produit un rapport d\'impact.'
 )]
 final class AtrCalibrateCommand extends Command
 {
     public function __construct(
         private readonly Connection $conn,
-        private readonly MtfValidationConfig $mtfConfig,
+        private readonly IndicatorConfig $indicatorConfig,
     ) {
         parent::__construct();
     }
@@ -50,7 +50,7 @@ final class AtrCalibrateCommand extends Command
             return Command::INVALID;
         }
 
-        $current = (array) ($this->mtfConfig->getDefault('atr_pct_thresholds', []));
+        $current = $this->indicatorConfig->getAtrPctThresholds();
         $io->title('Calibration ATR/close par timeframe');
         $io->writeln(sprintf('Fenêtre: %s | Quantiles: [%.2f, %.2f]', $since, $qLow, $qHigh));
         $outDir = (string) $input->getOption('output-dir');
@@ -115,7 +115,7 @@ final class AtrCalibrateCommand extends Command
             $io->writeln(sprintf('- seuils recommandés: [%.4f, %.4f]  | hors-plage: %d (%.1f%%)', $recommendMin, $recommendMax, $impactRecom['out'], $impactRecom['out_pct']));
 
             $io->writeln('Patch YAML suggéré:');
-            $io->block(sprintf("defaults:\n    atr_pct_thresholds:\n        '%s': { min: %.4f, max: %.4f }", $tf, $recommendMin, $recommendMax), style: 'info');
+            $io->block(sprintf("atr:\n    pct_thresholds:\n        '%s': { min: %.4f, max: %.4f }", $tf, $recommendMin, $recommendMax), style: 'info');
 
             // Écriture JSON par timeframe
             $payload = [
@@ -137,7 +137,7 @@ final class AtrCalibrateCommand extends Command
                 ],
                 'impact_current' => $impactCurrent,
                 'impact_recommended' => $impactRecom,
-                'patch_yaml' => sprintf("defaults:\n    atr_pct_thresholds:\n        '%s': { min: %.4f, max: %.4f }", $tf, $recommendMin, $recommendMax),
+                'patch_yaml' => sprintf("atr:\n    pct_thresholds:\n        '%s': { min: %.4f, max: %.4f }", $tf, $recommendMin, $recommendMax),
             ];
             $this->writeTfJson($outDir, $tf, $payload);
             $summary['timeframes'][$tf] = $payload;

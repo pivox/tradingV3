@@ -8,8 +8,6 @@
 # See https://symfony.com/doc/current/configuration.html#importing-the-routing-configuration
 
 imports:
-    - { resource: 'services_logging.yaml' }
-    - { resource: 'services_trade_entry.yaml' }
 
 parameters:
     app.mtf_log_level: 'info'
@@ -189,7 +187,7 @@ services:
         arguments:
             $logger: '@logger'
         calls:
-            - [ load, ['@App\Config\MtfValidationConfig'] ]
+            - [ loadFromConfigs, ['@App\Config\IndicatorConfig'] ]
 
     # Nouveau registre des conditions avec AutowireLocator/AutowireIterator
     App\Indicator\Registry\ConditionRegistry:
@@ -306,3 +304,9 @@ services:
             - ws_agent
         tags:
             - { name: monolog.logger, channel: ws_agent }
+
+    # WebSocket Dispatcher (configuration explicite pour résoudre l'injection)
+    App\WebSocket\Service\WsDispatcher:
+        arguments:
+            $wsPublicKlinesService: '@App\WebSocket\Service\WsPublicKlinesService'
+            $logger: '@logger'

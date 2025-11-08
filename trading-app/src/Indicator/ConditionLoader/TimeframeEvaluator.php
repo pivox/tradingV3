@@ -2,7 +2,6 @@
 
 namespace App\Indicator\ConditionLoader;
 
-use App\Config\MtfValidationConfig;
 use App\Indicator\ConditionLoader\Cards\Validation\Side;
 use App\Indicator\ConditionLoader\Cards\Validation\TimeframeValidation;
 
@@ -95,11 +94,9 @@ class TimeframeEvaluator
     {
         $validation = $this->registry->getValidation();
         if (!$validation) {
-            $this->registry->load(new MtfValidationConfig());
-            $validation = $this->registry->getValidation();
-        }
-        if (!$validation) {
-            throw new \RuntimeException('MTF validation configuration not loaded');
+            // La validation doit être chargée depuis l'extérieur du module Indicator
+            // via services.yaml ou par le code appelant
+            throw new \RuntimeException('MTF validation configuration not loaded. Ensure ConditionRegistry::load() is called with validation data.');
         }
 
         $timeframes = $validation->getTimeframes();

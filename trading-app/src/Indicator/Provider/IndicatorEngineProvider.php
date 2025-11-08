@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Indicator\Provider;
 
+use App\Config\IndicatorConfig;
 use App\Contract\Indicator\IndicatorEngineInterface;
 use App\Indicator\Context\IndicatorContextBuilder;
 use App\Indicator\Registry\ConditionRegistry as CompiledRegistry;
@@ -21,7 +22,7 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
         private readonly TimeframeEvaluator $timeframeEvaluator,
         private readonly CompiledRegistry $compiledRegistry,
         private readonly AtrCalculator $atrCalc,
-        private readonly \App\Config\MtfValidationConfig $mtfValidationConfig,
+        private readonly IndicatorConfig $indicatorConfig,
         #[Autowire(service: 'monolog.logger.indicators')] private readonly LoggerInterface $validationLogger,
     ) {}
 
@@ -71,15 +72,15 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
             ->volumes($vols)
             ->ohlc($ohlc);
 
-        // Inject per-timeframe ATR volatility thresholds from mtf_validations.yaml if available
+        // Inject per-timeframe ATR volatility thresholds from indicator.yaml if available
         $minApplied = null; $maxApplied = null; $source = 'defaults';
         try {
-            $atrPct = $this->mtfValidationConfig->getDefault('atr_pct_thresholds', []);
+            $atrPct = $this->indicatorConfig->getAtrPctThresholds();
             if (\is_array($atrPct) && isset($atrPct[$timeframe]) && \is_array($atrPct[$timeframe])) {
                 $min = $atrPct[$timeframe]['min'] ?? null;
                 $max = $atrPct[$timeframe]['max'] ?? null;
-                if (\is_numeric($min)) { $builder->minAtrPct($minApplied = (float)$min); $source = 'mtf_validations.defaults'; }
-                if (\is_numeric($max)) { $builder->maxAtrPct($maxApplied = (float)$max); $source = 'mtf_validations.defaults'; }
+                if (\is_numeric($min)) { $builder->minAtrPct($minApplied = (float)$min); $source = 'indicator.yaml'; }
+                if (\is_numeric($max)) { $builder->maxAtrPct($maxApplied = (float)$max); $source = 'indicator.yaml'; }
             }
         } catch (\Throwable) {
             // best effort; fallback to defaults from builder

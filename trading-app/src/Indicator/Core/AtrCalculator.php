@@ -10,21 +10,21 @@ use Psr\Log\LoggerInterface;
  * Each candle must include: high, low, close (floats).
  */
 
- 
+
 final class AtrCalculator implements IndicatorInterface
 {
     public function __construct(
         private readonly ?LoggerInterface $logger = null
     ) {
     }
-    
+
     private function log(string $level, string $message, array $context = []): void
     {
         if ($this->logger === null) {
             error_log($message . (empty($context) ? '' : ' ' . json_encode($context)));
             return;
         }
-        
+
         match ($level) {
             'debug' => $this->logger->debug($message, $context),
             'info' => $this->logger->info($message, $context),
@@ -165,7 +165,7 @@ final class AtrCalculator implements IndicatorInterface
             $high = array_column($ohlc, 'high');
             $low  = array_column($ohlc, 'low');
             $close= array_column($ohlc, 'close');
-            
+
             // DEBUG: Check input data
             $hasInvalid = false;
             for ($i = 0; $i < min(count($high), 5); $i++) {
@@ -187,10 +187,10 @@ final class AtrCalculator implements IndicatorInterface
                     $hasInvalid = true;
                 }
             }
-            
+
             /** @phpstan-ignore-next-line */
             $arr = \trader_atr($high, $low, $close, $period);
-            
+
             if (is_array($arr)) {
                 // DEBUG: Check the output of trader_atr
                 $nanCount = 0;

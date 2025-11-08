@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Service;
 
+use App\Config\IndicatorConfig;
+use App\Config\SignalConfig;
 use App\Config\TradeEntryConfig;
 use App\Contract\Provider\MainProviderInterface;
 use App\Entity\Position;
@@ -31,6 +33,8 @@ final class TpSlTwoTargetsService
         private readonly MainProviderInterface $providers,
         private readonly PositionRepository $positions,
         private readonly TradeEntryConfig $tradeEntryConfig,
+        private readonly IndicatorConfig $indicatorConfig,
+        private readonly SignalConfig $signalConfig,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         private readonly ?TpSplitResolver $tpSplitResolver = null,
@@ -815,15 +819,8 @@ final class TpSlTwoTargetsService
 
     private function resolveAtrTimeframe(): string
     {
-        try {
-            $cfg = $this->mtfConfig->getConfig();
-            // optional override in mtf_validations.yaml: defaults.atr_tf
-            $tf = $cfg['defaults']['atr_tf'] ?? null;
-            if (is_string($tf) && $tf !== '') {
-                return $tf;
-            }
-        } catch (\Throwable) {}
-        return '5m';
+        // Utiliser le timeframe ATR depuis IndicatorConfig
+        return $this->indicatorConfig->getAtrTimeframe();
     }
 
     /**
@@ -859,9 +856,8 @@ final class TpSlTwoTargetsService
             $details = $latest->details ?? [];
             $collector = $details['mtf_collector'] ?? [];
 
-            // Déterminer la base TF depuis la config (list_tf ou context) sinon fallback 3 TF usuelles
-            $cfg = $this->mtfConfig->getConfig();
-            $mtfConfig = $cfg['signal']['mtf'] ?? $cfg['mtf'] ?? [];
+            // Déterminer la base TF depuis SignalConfig
+            $mtfConfig = $this->signalConfig->getMtf();
 
             // Nouveau format: list_tf avec context_count
             if (isset($mtfConfig['list_tf']) && is_array($mtfConfig['list_tf'])) {
@@ -870,7 +866,7 @@ final class TpSlTwoTargetsService
                 $contextTfs = array_slice($listTf, 0, $contextCount);
             } else {
                 // Ancien format: context séparé
-                $contextTfs = array_map('strtolower', (array)($cfg['validation']['context'] ?? ($mtfConfig['context'] ?? [])));
+                $contextTfs = array_map('strtolower', (array)($mtfConfig['context'] ?? []));
             }
 
             if (empty($contextTfs)) {
