@@ -11,7 +11,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class TpSlAttacher
 {
     public function __construct(
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
     ) {}
 
     public function presetInSubmitPayload(OrderPlanModel $plan, string $clientOrderId): array

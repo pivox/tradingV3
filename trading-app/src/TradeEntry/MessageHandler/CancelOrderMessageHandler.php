@@ -20,7 +20,7 @@ final class CancelOrderMessageHandler
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         #[Autowire(service: 'monolog.logger.positions')]
         private readonly LoggerInterface $positionsLogger,
-        #[Autowire(service: 'monolog.logger.order_journey')]
+        #[Autowire(service: 'monolog.logger.positions')]
         private readonly LoggerInterface $journeyLogger,
         #[Autowire(env: 'ORDER_TIMEOUT_SWITCH_DURATION')]
         private readonly string $switchDuration = '15m',

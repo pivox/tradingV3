@@ -21,7 +21,7 @@ final class SymbolProcessor
         private readonly MtfService $mtfService,
         private readonly LoggerInterface $logger,
         private readonly ClockInterface $clock,
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $orderJourneyLogger,
+        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
     /**

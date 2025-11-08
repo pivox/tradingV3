@@ -12,7 +12,7 @@ final class DynamicLeverageService implements LeverageServiceInterface
 {
     public function __construct(
         private readonly TradeEntryConfig $tradeEntryConfig,
-        #[Autowire(service: 'monolog.logger.positions_flow')] private readonly LoggerInterface $flowLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $flowLogger,
     ) {}
 
     public function computeLeverage(

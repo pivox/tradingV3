@@ -12,7 +12,7 @@ final class OrderPlanBox
 {
     public function __construct(
         private readonly OrderPlanBuilder $builder,
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
     ) {}
 
     public function create(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null, ?EntryZone $zone = null): OrderPlanModel

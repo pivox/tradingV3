@@ -20,7 +20,7 @@ trade_entry:
     defaults:
         # --- Sizing & Risk ---
         risk_pct_percent: 5.0                    # % risque par défaut (converti en décimal)
-        initial_margin_usdt: 20.0                 # Marge initiale en USDT
+        initial_margin_usdt: 50.0                 # Marge initiale en USDT
         fallback_account_balance: 0.0             # Solde de fallback si marge invalide
         timeframe_multipliers:                    # Multiplicateurs par timeframe pour ajuster sizing
             '1m': 1.0

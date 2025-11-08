@@ -16,7 +16,7 @@ final class TradeEntryService
         private readonly BuildOrderPlan $planner,
         private readonly ExecuteOrderPlan $executor,
         private readonly TradeEntryMetricsService $metrics,
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $orderJourneyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
     public function buildAndExecute(

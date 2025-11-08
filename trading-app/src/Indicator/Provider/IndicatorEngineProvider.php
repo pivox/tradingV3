@@ -22,7 +22,7 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
         private readonly CompiledRegistry $compiledRegistry,
         private readonly AtrCalculator $atrCalc,
         private readonly \App\Config\MtfValidationConfig $mtfValidationConfig,
-        #[Autowire(service: 'monolog.logger.validation')] private readonly LoggerInterface $validationLogger,
+        #[Autowire(service: 'monolog.logger.indicators')] private readonly LoggerInterface $validationLogger,
     ) {}
 
     public function buildContext(string $symbol, string $timeframe, array $klines, array $options = []): array

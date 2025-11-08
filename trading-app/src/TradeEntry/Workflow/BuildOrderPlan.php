@@ -19,9 +19,9 @@ final class BuildOrderPlan
         private readonly EntryZoneCalculator $zones,
         private readonly EntryZoneFilters $filters,
         private readonly LiquidationGuard $liquidation,
-        #[Autowire(service: 'monolog.logger.positions_flow')] private readonly LoggerInterface $flowLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $flowLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
     ) {}
 
     public function __invoke(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null): OrderPlanModel

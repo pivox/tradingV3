@@ -37,7 +37,7 @@ final class MtfRunOrchestrator
         private readonly LoggerInterface $logger,
         private readonly ClockInterface $clock,
         private readonly MtfValidationConfig $mtfConfig,
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $orderJourneyLogger,
+        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $orderJourneyLogger,
         private readonly ?AccountProviderInterface $accountProvider = null,
         private readonly ?OrderProviderInterface $orderProvider = null,
         private readonly ?MtfSwitchRepository $mtfSwitchRepository = null,

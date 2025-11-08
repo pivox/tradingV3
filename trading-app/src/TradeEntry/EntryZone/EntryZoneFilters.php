@@ -10,7 +10,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class EntryZoneFilters
 {
     public function __construct(
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
     ) {}
 
     /** @param array{request:mixed, preflight:mixed, plan:mixed, zone:EntryZone} $context */
