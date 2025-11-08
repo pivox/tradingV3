@@ -25,6 +25,28 @@ final class WsSubscribeCommand extends Command
         $tfs = $in->getArgument('tfs');
         $this->ws->subscribe($symbol, $tfs);
         $out->writeln("<info>OK</info> $symbol → ".implode(',', $tfs));
+        $out->writeln("<comment>Listening for messages... (Press Ctrl+C to stop)</comment>");
+        
+        // Continuer à faire tourner la boucle pour recevoir les messages
+        $loop = \React\EventLoop\Loop::get();
+        
+        // Gérer l'arrêt propre avec Ctrl+C
+        if (function_exists('pcntl_signal')) {
+            $loop->addSignal(SIGINT, function () use ($loop, $out) {
+                $out->writeln("\n<comment>Stopping...</comment>");
+                $this->ws->disconnect();
+                $loop->stop();
+            });
+            $loop->addSignal(SIGTERM, function () use ($loop, $out) {
+                $out->writeln("\n<comment>Stopping...</comment>");
+                $this->ws->disconnect();
+                $loop->stop();
+            });
+        }
+        
+        // Faire tourner la boucle pour recevoir les messages
+        $loop->run();
+        
         return Command::SUCCESS;
     }
 }
