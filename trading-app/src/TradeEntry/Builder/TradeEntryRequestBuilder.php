@@ -18,8 +18,8 @@ final class TradeEntryRequestBuilder
 {
     public function __construct(
         private readonly TradeEntryConfig $tradeEntryConfig,
-        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $logger,
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $orderJourneyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $logger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
     /**

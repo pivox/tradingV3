@@ -19,7 +19,7 @@ final readonly class PreTradeChecks
     public function __construct(
         private MainProviderInterface $providers,
         private IndicatorProviderInterface $indicatorProvider,
-        #[Autowire(service: 'monolog.logger.order_journey')] private LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private LoggerInterface $journeyLogger,
     ) {}
 
     /**

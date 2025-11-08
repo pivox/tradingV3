@@ -12,8 +12,8 @@ final class BuildPreOrder
 {
     public function __construct(
         private readonly PreTradeChecks $checks,
-        #[Autowire(service: 'monolog.logger.positions_flow')] private readonly LoggerInterface $flowLogger,
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $flowLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
     ) {}
 
     public function __invoke(TradeEntryRequest $req, ?string $decisionKey = null): PreflightReport

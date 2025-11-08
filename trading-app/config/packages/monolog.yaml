@@ -1,5 +1,5 @@
 monolog:
-  channels: ['mtf', 'validation', 'signals', 'positions', 'positions_flow', 'order', 'order_journey', 'bitmart', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity', 'ws_agent']
+  channels: ['mtf', 'signals', 'positions', 'bitmart', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity', 'ws_agent']
   handlers:
     # =====================
     # --- Handler Temporal (Asynchrone) ---
@@ -11,22 +11,13 @@ monolog:
     # --- Fallback Handlers (Synchrones) ---
     # =====================
 
-    # Canal MTF - Système Multi-Timeframe (fallback)
+    # Canal MTF - Système Multi-Timeframe et validation des règles MTF/conditions YAML
     mtf_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/mtf.log'
       max_files: 5
       level: '%env(MTF_LOG_LEVEL)%'
       channels: ['mtf']
-      formatter: App\Logging\CustomLineFormatter
-
-    # Canal Validation - Règles MTF et conditions YAML
-    validation_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/validation.log'
-      max_files: 5
-      level: 'info'
-      channels: ['validation']
       formatter: App\Logging\CustomLineFormatter
 
     # Canal Signals - Signaux longs/shorts
@@ -38,204 +29,13 @@ monolog:
       channels: ['signals']
       formatter: App\Logging\CustomLineFormatter
 
-    # Canal Positions - Suivi des positions ouvertes/SL/TP
+    # Canal Positions - Suivi des positions ouvertes/SL/TP, flux 1m → placement d'ordre, et traçage détaillé de bout en bout
     positions_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/positions.log'
       max_files: 30
       level: '%env(LOG_LEVEL_POSITIONS)%'
       channels: ['positions']
-      formatter: App\Logging\CustomLineFormatter
-
-    # Canal Positions Flow - Traçage du flux 1m → placement d'ordre
-    positions_flow_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/positions-flow.log'
-      max_files: 30
-      level: 'info'
-      channels: ['positions_flow']
-      formatter: App\Logging\CustomLineFormatter
-
-    # Canal Order - Traçage dédié du placement d'ordre
-    order_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/order.log'
-      max_files: 30
-      level: info
-      channels: ['order']
-      formatter: App\Logging\CustomLineFormatter
-
-    # Canal Order Journey - Traçage détaillé de bout en bout du placement d'ordre
-    order_journey_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/order-journey.log'
-      max_files: 30
-      level: info
-      channels: ['order_journey']
-      formatter: App\Logging\CustomLineFormatter
-
-    # =====================
-    # --- Duplicates by level for full tracing ---
-    # =====================
-
-    # Positions channel — split per level
-    positions_debug_only:
-      type: filter
-      handler: positions_debug_only_rotating
-      accepted_levels: ['debug']
-      channels: ['positions']
-    positions_debug_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/positions-debug.log'
-      max_files: 30
-      level: debug
-      channels: ['positions']
-      formatter: App\Logging\CustomLineFormatter
-
-    positions_info_only:
-      type: filter
-      handler: positions_info_only_rotating
-      accepted_levels: ['info']
-      channels: ['positions']
-    positions_info_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/positions-info.log'
-      max_files: 30
-      level: info
-      channels: ['positions']
-      formatter: App\Logging\CustomLineFormatter
-
-    positions_error_only:
-      type: filter
-      handler: positions_error_only_rotating
-      accepted_levels: ['error']
-      channels: ['positions']
-    positions_error_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/positions-error.log'
-      max_files: 30
-      level: error
-      channels: ['positions']
-      formatter: App\Logging\CustomLineFormatter
-
-    # Positions Flow channel — split per level
-    positions_flow_debug_only:
-      type: filter
-      handler: positions_flow_debug_only_rotating
-      accepted_levels: ['debug']
-      channels: ['positions_flow']
-    positions_flow_debug_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/positions-flow-debug.log'
-      max_files: 30
-      level: debug
-      channels: ['positions_flow']
-      formatter: App\Logging\CustomLineFormatter
-
-    positions_flow_info_only:
-      type: filter
-      handler: positions_flow_info_only_rotating
-      accepted_levels: ['info']
-      channels: ['positions_flow']
-    positions_flow_info_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/positions-flow-info.log'
-      max_files: 30
-      level: info
-      channels: ['positions_flow']
-      formatter: App\Logging\CustomLineFormatter
-
-    positions_flow_error_only:
-      type: filter
-      handler: positions_flow_error_only_rotating
-      accepted_levels: ['error']
-      channels: ['positions_flow']
-    positions_flow_error_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/positions-flow-error.log'
-      max_files: 30
-      level: error
-      channels: ['positions_flow']
-      formatter: App\Logging\CustomLineFormatter
-
-    # Order channel — split per level
-    order_debug_only:
-      type: filter
-      handler: order_debug_only_rotating
-      accepted_levels: ['debug']
-      channels: ['order']
-    order_debug_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/order-debug.log'
-      max_files: 30
-      level: debug
-      channels: ['order']
-      formatter: App\Logging\CustomLineFormatter
-
-    order_info_only:
-      type: filter
-      handler: order_info_only_rotating
-      accepted_levels: ['info']
-      channels: ['order']
-    order_info_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/order-info.log'
-      max_files: 30
-      level: info
-      channels: ['order']
-      formatter: App\Logging\CustomLineFormatter
-
-    order_error_only:
-      type: filter
-      handler: order_error_only_rotating
-      accepted_levels: ['error']
-      channels: ['order']
-    order_error_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/order-error.log'
-      max_files: 30
-      level: error
-      channels: ['order']
-      formatter: App\Logging\CustomLineFormatter
-
-    # Order Journey channel — split per level
-    order_journey_debug_only:
-      type: filter
-      handler: order_journey_debug_only_rotating
-      accepted_levels: ['debug']
-      channels: ['order_journey']
-    order_journey_debug_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/order-journey-debug.log'
-      max_files: 30
-      level: debug
-      channels: ['order_journey']
-      formatter: App\Logging\CustomLineFormatter
-
-    order_journey_info_only:
-      type: filter
-      handler: order_journey_info_only_rotating
-      accepted_levels: ['info']
-      channels: ['order_journey']
-    order_journey_info_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/order-journey-info.log'
-      max_files: 30
-      level: info
-      channels: ['order_journey']
-      formatter: App\Logging\CustomLineFormatter
-
-    order_journey_error_only:
-      type: filter
-      handler: order_journey_error_only_rotating
-      accepted_levels: ['error']
-      channels: ['order_journey']
-    order_journey_error_only_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/order-journey-error.log'
-      max_files: 30
-      level: error
-      channels: ['order_journey']
       formatter: App\Logging\CustomLineFormatter
 
     # Canal Indicators - Calculs d'indicateurs techniques

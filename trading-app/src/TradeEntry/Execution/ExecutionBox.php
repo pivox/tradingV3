@@ -20,8 +20,8 @@ final class ExecutionBox
         private readonly OrderModePolicyInterface $orderModePolicy,
         private readonly IdempotencyPolicy $idempotency,
         private readonly ExecutionLogger $logger,
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
-        #[Autowire(service: 'monolog.logger.order')] private readonly LoggerInterface $orderLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $orderLogger,
     ) {}
 
     public function execute(OrderPlanModel $plan, ?string $decisionKey = null): ExecutionResult

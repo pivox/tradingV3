@@ -11,7 +11,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class TakeProfitCalculator
 {
     public function __construct(
-        #[Autowire(service: 'monolog.logger.positions_flow')] private readonly LoggerInterface $log
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $log
     ) {}
 
     /**

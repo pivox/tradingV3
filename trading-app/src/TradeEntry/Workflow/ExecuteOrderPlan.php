@@ -13,9 +13,9 @@ final class ExecuteOrderPlan
 {
     public function __construct(
         private readonly ExecutionBox $execution,
-        #[Autowire(service: 'monolog.logger.positions_flow')] private readonly LoggerInterface $flowLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $flowLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
     ) {}
 
     public function __invoke(OrderPlanModel $plan, ?string $decisionKey = null): ExecutionResult

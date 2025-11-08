@@ -31,7 +31,7 @@ final class TpSlTwoTargetsService
         private readonly MainProviderInterface $providers,
         private readonly PositionRepository $positions,
         private readonly TradeEntryConfig $tradeEntryConfig,
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         private readonly ?TpSplitResolver $tpSplitResolver = null,
         private readonly ?IndicatorProviderInterface $indicatorProvider = null,

@@ -71,7 +71,7 @@ services:
 #            $mtfLockRepository: '@App\Repository\MtfLockRepository'
 #            $contractRepository: '@App\Repository\ContractRepository'
 #            $logger: '@monolog.logger.mtf'
-#            $positionsFlowLogger: '@monolog.logger.positions_flow'
+#            $positionsFlowLogger: '@monolog.logger.positions'
 #            $clock: '@Psr\Clock\ClockInterface'
 #            $tradingDecisionService: '@App\EntryPosition\Service\TradingDecisionService'
 #            $tradeContext: '@App\EntryPosition\Service\TradeContextService'

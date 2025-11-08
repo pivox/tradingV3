@@ -27,8 +27,8 @@ final class EntryZoneCalculator
         private readonly ?float $wMinOverride = null,
         private readonly ?float $wMaxOverride = null,
         private readonly ?float $asymBiasOverride = null,
-        #[Autowire(service: 'monolog.logger.positions_flow')] private readonly ?LoggerInterface $flowLogger = null,
-        #[Autowire(service: 'monolog.logger.order_journey')] private readonly ?LoggerInterface $journeyLogger = null,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly ?LoggerInterface $flowLogger = null,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly ?LoggerInterface $journeyLogger = null,
     ) {}
 
     public function compute(string $symbol, ?Side $side = null, ?int $pricePrecision = null, ?string $decisionKey = null): EntryZone
