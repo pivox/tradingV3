@@ -8,11 +8,12 @@ use Psr\Log\LoggerInterface;
 
 /**
  * Dispatcher WebSocket
- * Implémentation temporaire pour permettre au système de fonctionner
+ * Délègue les opérations de souscription au service WebSocket public
  */
 class WsDispatcher
 {
     public function __construct(
+        private readonly WsPublicKlinesService $wsPublicKlinesService,
         private readonly LoggerInterface $logger
     ) {
     }
@@ -30,6 +31,8 @@ class WsDispatcher
             'symbol' => $symbol,
             'timeframes' => $timeframes,
         ]);
+
+        $this->wsPublicKlinesService->subscribe($symbol, $timeframes);
     }
 
     public function unsubscribe(string $symbol, array $timeframes): void
@@ -38,5 +41,12 @@ class WsDispatcher
             'symbol' => $symbol,
             'timeframes' => $timeframes,
         ]);
+
+        $this->wsPublicKlinesService->unsubscribe($symbol, $timeframes);
+    }
+
+    public function disconnect(): void
+    {
+        $this->wsPublicKlinesService->disconnect();
     }
 }
