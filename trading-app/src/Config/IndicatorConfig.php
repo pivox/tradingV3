@@ -65,6 +65,12 @@ class IndicatorConfig
         return (float)($atr['r_multiple'] ?? 2.0);
     }
 
+    public function getAtrPctThresholds(): array
+    {
+        $atr = $this->getAtr();
+        return (array)($atr['pct_thresholds'] ?? []);
+    }
+
     public function getCalculation(): array
     {
         return $this->config['calculation'] ?? [];
@@ -86,6 +92,16 @@ class IndicatorConfig
     {
         $calc = $this->getCalculation();
         return (int)($calc['performance_threshold_ms'] ?? 10);
+    }
+
+    public function getRules(): array
+    {
+        return $this->config['rules'] ?? [];
+    }
+
+    public function getValidation(): array
+    {
+        return $this->config['validation'] ?? [];
     }
 }
 

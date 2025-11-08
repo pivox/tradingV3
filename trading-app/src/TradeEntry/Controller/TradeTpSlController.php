@@ -3,7 +3,6 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Controller;
 
-use App\Config\MtfValidationConfig;
 use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
 use App\TradeEntry\Service\TpSlTwoTargetsService;
 use App\TradeEntry\Types\Side;
@@ -17,7 +16,6 @@ final class TradeTpSlController extends AbstractController
 {
     public function __construct(
         private readonly TpSlTwoTargetsService $service,
-        private readonly MtfValidationConfig $mtfConfig,
     ) {}
 
     #[Route('/two-targets', name: 'two_targets', methods: ['POST'])]

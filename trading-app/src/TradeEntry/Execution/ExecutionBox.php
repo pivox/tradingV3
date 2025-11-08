@@ -38,7 +38,7 @@ final class ExecutionBox
             'decision_key' => $decisionKey,
         ]);
 
-        if ($plan->leverage < 5) {
+        if ($plan->leverage < 3) {
             $clientOrderId = $this->idempotency->newClientOrderId();
             $this->logger->warning('execution.leverage_below_min', [
                 'symbol' => $plan->symbol,

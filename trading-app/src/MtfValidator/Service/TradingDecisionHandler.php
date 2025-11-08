@@ -206,7 +206,7 @@ final class TradingDecisionHandler
         $decision = $this->tradeEntryConfig->getDecision();
         $dryRunValidateAllTfs = (bool)($this->mtfConfig->getDefault('dry_run_validate_all_timeframes', false));
         $allTimeframes = ['1m', '5m', '15m', '1h', '4h'];
-        
+
         if ($mtfRunDto->dryRun && $dryRunValidateAllTfs) {
             // En dry-run avec flag activé, accepter tous les timeframes
             if (!in_array(strtolower($symbolResult->executionTf), array_map('strtolower', $allTimeframes), true)) {
@@ -228,11 +228,10 @@ final class TradingDecisionHandler
             $this->logger->debug('[Trading Decision] Dry-run mode: accepting all timeframes', [
                 'symbol' => $symbolResult->symbol,
                 'execution_tf' => $symbolResult->executionTf,
-                'dry_run_validate_all_timeframes' => true,
             ]);
         } else {
-            // Mode normal : utiliser allowed_execution_timeframes
-            $allowedTfs = (array)($decision['allowed_execution_timeframes'] ?? $this->mtfConfig->getDefault('allowed_execution_timeframes', ['1m','5m','15m']));
+            // Mode normal : utiliser allowed_execution_timeframes depuis TradeEntryConfig
+            $allowedTfs = (array)($decision['allowed_execution_timeframes'] ?? ['1m','5m','15m']);
             if (!in_array(strtolower($symbolResult->executionTf), array_map('strtolower', $allowedTfs), true)) {
                 $this->logger->info('[Trading Decision] Skipping (unsupported execution TF)', [
                     'symbol' => $symbolResult->symbol,
@@ -258,8 +257,7 @@ final class TradingDecisionHandler
             return false;
         }
 
-        $requirePriceOrAtr = (bool)($decision['require_price_or_atr'] ?? $this->mtfConfig->getDefault('require_price_or_atr', true));
-        if ($requirePriceOrAtr && $symbolResult->currentPrice === null && $symbolResult->atr === null) {
+        if ($symbolResult->currentPrice === null && $symbolResult->atr === null) {
             $this->logger->debug('[Trading Decision] Missing price and ATR', [
                 'symbol' => $symbolResult->symbol,
             ]);

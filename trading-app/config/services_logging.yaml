@@ -1,5 +1,0 @@
-services:
-    # Configuration de logging pour les services
-    _defaults:
-        autowire: true
-        autoconfigure: true

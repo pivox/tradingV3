@@ -18,9 +18,10 @@ trade_entry:
     # ======== DEFAULTS (Paramètres par défaut pour TradeEntry) ========
     # Clés déplacées depuis mtf_validations.yaml (section defaults)
     defaults:
+        # Clés déplacées depuis src/MtfValidator/config/validations.yaml (section defaults)
         # --- Sizing & Risk ---
         risk_pct_percent: 5.0                    # % risque par défaut (converti en décimal)
-        initial_margin_usdt: 50.0                 # Marge initiale en USDT
+        initial_margin_usdt: 20.0                 # Marge initiale en USDT
         fallback_account_balance: 0.0             # Solde de fallback si marge invalide
         timeframe_multipliers:                    # Multiplicateurs par timeframe pour ajuster sizing
             '1m': 1.0
@@ -29,6 +30,7 @@ trade_entry:
             '1h': 0.35
             '4h': 0.25
         r_multiple: 2.0                           # Multiple R pour TP
+        tp1_r: 2.0                                # Multiple R pour TP1 (alias de r_multiple)
 
         # --- Stop Loss ---
         stop_from: 'atr'                          # Source du stop ('atr' ou 'risk')
@@ -42,8 +44,8 @@ trade_entry:
         tp_policy: 'pivot_conservative'            # Politique de Take Profit
         tp_buffer_pct: 0.001                       # Buffer TP en %
         tp_buffer_ticks: 0                         # Buffer TP en ticks
-        tp_min_keep_ratio: 0.90                    # Ratio min à conserver pour TP
-        tp_max_extra_r: 0.3                        # R supplémentaire max pour TP
+        tp_min_keep_ratio: 0.95                    # Ratio min à conserver pour TP
+        tp_max_extra_r: 0.5                        # R supplémentaire max pour TP
 
         # --- Order Configuration ---
         order_type: 'limit'                        # Type d'ordre ('limit' ou 'market')
