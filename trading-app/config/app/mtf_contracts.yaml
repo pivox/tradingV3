@@ -1,6 +1,6 @@
 # config/packages/mtf_contracts.yaml
 # Version: incrémenter ce numéro pour forcer le rechargement de la configuration (format: '0.0.01')
-version: '0.0.01'
+version: '0.0.02'
 
 mtf_contracts:
     selection:
@@ -24,5 +24,5 @@ mtf_contracts:
 
         limits:
             # Objectif : ~40–50 contrats max exploités par l’algo
-            top_n: 300       # les 190 plus gros turnovers (>= mid_max_turnover)
+            top_n: 360       # les 190 plus gros turnovers (>= mid_max_turnover)
             mid_n: 10       # 10 contrats supplémentaires dans la zone 1M–5M
