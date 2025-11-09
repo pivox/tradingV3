@@ -745,7 +745,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'severity' => 2,
                     'from_cache' => (bool)($result15m['from_cache'] ?? false),
                 ]);
-                return $result15m + ['failed_timeframe' => '15m'];
+                // Option de contournement: si autorisé par config, on descend en 5m au lieu d'arrêter la chaîne
+                $cfg = $this->mtfValidationConfig->getConfig();
+                $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
+                if (!($allowSkip && ($include5m ?? false))) {
+                    return $result15m + ['failed_timeframe' => '15m'];
+                }
+                $this->logger->info('[MTF] 15m invalid but allow_skip_lower_tf=true, continue with 5m', ['symbol' => $symbol]);
             }
             // Règle: 15m doit matcher 1h si 1h est inclus
             if ($include1h && is_array($result1h)) {
@@ -829,7 +835,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'severity' => 2,
                     'from_cache' => (bool)($result5m['from_cache'] ?? false),
                 ]);
-                return $result5m + ['failed_timeframe' => '5m'];
+                $cfg = $this->mtfValidationConfig->getConfig();
+                $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
+                if (!($allowSkip && ($include1m ?? false))) {
+                    return $result5m + ['failed_timeframe' => '5m'];
+                }
+                $this->logger->info('[MTF] 5m invalid but allow_skip_lower_tf=true, continue with 1m', ['symbol' => $symbol]);
             }
             // Règle: 5m doit matcher 15m si 15m est inclus
             if ($include15m && is_array($result15m)) {

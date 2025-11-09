@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace App\Tests\Indicator\ConditionLoader\Rule;
 
 use App\Indicator\Condition\ConditionResult;
-use App\Indicator\ConditionLoader\Cards\Rule\Rule;
-use App\Indicator\ConditionLoader\Cards\Rule\RuleElementTrend;
-use App\Indicator\ConditionLoader\ConditionRegistry;
+use App\MtfValidator\ConditionLoader\Cards\Rule\Rule;
+use App\MtfValidator\ConditionLoader\Cards\Rule\RuleElementTrend;
+use App\MtfValidator\ConditionLoader\ConditionRegistry;
 use App\Indicator\Condition\ConditionInterface;
 use PHPUnit\Framework\TestCase;
 

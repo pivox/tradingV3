@@ -8,7 +8,7 @@ use App\Config\IndicatorConfig;
 use App\Contract\Indicator\IndicatorEngineInterface;
 use App\Indicator\Context\IndicatorContextBuilder;
 use App\Indicator\Registry\ConditionRegistry as CompiledRegistry;
-use App\Indicator\ConditionLoader\TimeframeEvaluator;
+use App\MtfValidator\ConditionLoader\TimeframeEvaluator;
 use App\Indicator\Core\AtrCalculator;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;

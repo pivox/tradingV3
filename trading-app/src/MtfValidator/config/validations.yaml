@@ -1,13 +1,256 @@
 # Configuration des validations MTF pour le module MtfValidator
 # Fichier déplacé depuis config/app/mtf_validations.yaml
 mtf_validation:
+    # --- Config globale MTF / Execution Selector ---
+    mode: 'pragmatic'                      # pas d'unanimité requise sur tous les TF
+    context_timeframes: ['4h','1h']
+    execution_timeframe_default: '15m'
+    allow_skip_lower_tf: true
+
     defaults:
         # ✅ UTILISÉES par MtfValidator uniquement (pas TradeEntry)
-        # Les clés TradeEntry ont été déplacées vers config/app/trade_entry.yaml
-        # allowed_execution_timeframes et require_price_or_atr sont maintenant dans trade_entry.yaml (section decision)
-        # Les règles (rules) ont été déplacées vers config/app/indicator.yaml
-        dry_run_validate_all_timeframes: true             # TradingDecisionHandler.php
+        dry_run_validate_all_timeframes: true   # TradingDecisionHandler.php
 
+    rules:
+        # --- MACD / RSI / EMA de base ---
+        macd_hist_gt_eps:
+            op: '>'
+            left: 'macd_hist'
+            right: 0.0
+            eps: 1.0e-6
+
+        ema20_over_50_with_tolerance:
+            any_of:
+                - ema_20_gt_50
+                - ema_20_minus_ema_50_gt: -0.0012
+                - ema_20_slope_pos
+
+        ema_above_200_with_tolerance:
+            any_of:
+                - close_above_ema_200
+                - close_minus_ema_200_gt: -0.0030
+                - ema200_slope_pos
+
+        ema_below_200_with_tolerance:
+            any_of:
+                - close_below_ema_200
+                - close_minus_ema_200_lt: -0.0025
+                - ema200_slope_neg
+
+        rsi_lt_softcap: { lt: 78 }
+        rsi_gt_softfloor: { gt: 30 }
+        rsi_lt_70: { lt: 70 }
+
+        close_above_vwap_or_ma9:
+            any_of: [ close_above_vwap, close_above_ma_9 ]
+
+        price_below_ma21_plus_2atr:
+            lt_fields: [ 'close', 'ma_21_plus_2atr' ]
+            allow_touch: true
+
+        pullback_confirmed:
+            any_of:
+                - ma9_cross_up_ma21
+                - near_vwap: true
+            validity_bars: 3
+
+        # --- Anti-bruit MACD ---
+        macd_line_cross_up_with_hysteresis:
+            require_prev_below: true
+            min_gap: 0.0008
+            cool_down_bars: 2
+
+        macd_line_cross_down_with_hysteresis:
+            require_prev_above: true
+            min_gap: 0.0015
+            cool_down_bars: 4
+
+        macd_hist_slope_pos:
+            derivative_gt: 0.0
+            persist_n: 2
+
+        macd_hist_slope_neg:
+            derivative_lt: 0.0
+            persist_n: 2
+
+        # --- Slope EMA200 ---
+        ema200_slope_pos:
+            slope_left: 'ema_200'
+            slope_lookback: 13
+            op: '>'
+            right: 0.0
+            eps: 1.0e-12
+
+        ema200_slope_neg:
+            slope_left: 'ema_200'
+            slope_lookback: 21
+            op: '<'
+            right: 0.0
+            eps: 1.0e-12
+
+        # --- ATR adaptatif (15m/5m) ---
+        atr_rel_in_range_15m:
+            use_atr_tf: [ '1m', '5m' ]
+            min: 0.0015
+            max: 0.035
+            adapt_with_vol_bucket: true
+
+        atr_rel_in_range_5m:
+            use_atr_tf: [ '1m' ]
+            min: 0.0010
+            max: 0.040
+            adapt_with_vol_bucket: true
+
+        # --- Compat / options ---
+        macd_line_below_signal:
+            lt_fields: [ 'macd', 'macd_signal' ]
+
+        ema20_over_50_with_tolerance_moderate:
+            any_of:
+                - ema_20_gt_50
+                - ema_20_minus_ema_50_gt: -0.0012
+                - ema_20_slope_pos
+
+        ema_above_200_with_tolerance_moderate:
+            any_of:
+                - close_above_ema_200
+                - close_minus_ema_200_gt: -0.0020
+                - ema200_slope_pos
+
+        macd_line_above_signal:
+            gt_fields: [ 'macd', 'macd_signal' ]
+
+        macd_hist_increasing_n:
+            increasing: { field: 'macd_hist', n: 2 }
+
+        macd_hist_decreasing_n:
+            decreasing: { field: 'macd_hist', n: 2 }
+
+    # --- Execution Selector (décide 15m / 5m / 1m) ---
+    execution_selector:
+        stay_on_15m_if:
+            - expected_r_multiple_gte: 2.0
+            - entry_zone_width_pct_lte: 1.2
+            - atr_pct_15m_lte_bps: 120
+
+        drop_to_5m_if_any:
+            - expected_r_multiple_lt: 2.0
+            - atr_pct_15m_gt_bps: 120
+            - entry_zone_width_pct_gt: 1.2
+
+        forbid_drop_to_5m_if_any:
+            - adx_5m_lt: 20
+            - spread_bps_gt: 8
+
+        allow_1m_only_for:
+            - scalping: true
+            - trailing_after_tp1: true
+            - end_of_zone_fallback: true
+
+    # --- Filtres globaux obligatoires ---
+    filters_mandatory:
+        - rsi_lt_70
+        - price_lte_ma21_plus_k_atr
+        - pullback_confirmed_ma9_21
+        - pullback_confirmed_vwap
+        - adx_min_for_trend_1h
+        - lev_bounds
+
+    # --- Validations par timeframe ---
     validation:
-        # ⚠️ UTILISÉES INDIRECTEMENT: Utilisées via MtfValidationConfig::getValidation()
         start_from_timeframe: '4h'
+        timeframe:
+            '4h':
+                long:
+                    - all_of:
+                          - any_of:
+                                - all_of: [ ema_50_gt_200, close_above_ema_200 ]
+                                - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]
+                          - price_regime_ok_long
+                short:
+                    - all_of:
+                          - any_of:
+                                - all_of: [ ema_50_lt_200, close_below_ema_200 ]
+                                - all_of: [ ema_below_200_with_tolerance, ema_50_lt_200 ]
+                          - price_regime_ok_short
+
+            '1h':
+                long:
+                    - all_of:
+                          - any_of:
+                                - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]
+                                - all_of: [ ema200_slope_pos, ema_50_gt_200 ]
+                          - any_of:
+                                - all_of: [ macd_hist_gt_eps ]
+                                - all_of: [ macd_line_cross_up_with_hysteresis ]
+                                - all_of: [ macd_hist_slope_pos ]
+                    - price_regime_ok_long
+
+                short:
+                    - all_of:
+                          - any_of:
+                                - all_of: [ ema_below_200_with_tolerance, ema_50_lt_200 ]
+                                - all_of: [ ema200_slope_neg, ema_50_lt_200 ]
+                          - any_of:
+                                - all_of: [ macd_line_cross_down_with_hysteresis ]
+                                - all_of: [ macd_hist_decreasing_n ]
+                                - all_of: [ macd_hist_slope_neg ]
+                    - price_regime_ok_short
+
+            '15m':
+                long:
+                    - all_of:
+                          - any_of:
+                                - all_of: [ macd_hist_gt_eps, ema20_over_50_with_tolerance ]
+                                - all_of: [ macd_line_cross_up_with_hysteresis, close_above_vwap_or_ma9 ]
+                          - ema20_over_50_with_tolerance
+                          - rsi_lt_70
+                          - close_above_vwap_or_ma9
+                          - atr_volatility_ok
+                short:
+                    - all_of:
+                          - any_of:
+                                - all_of: [ macd_line_cross_down_with_hysteresis ]
+                                - all_of: [ macd_hist_decreasing_n, ema_20_lt_50 ]
+                          - ema_20_lt_50
+                          - rsi_gt_softfloor
+                          - close_below_vwap
+                          - atr_volatility_ok
+
+            '5m':
+                long:
+                    - all_of:
+                          - any_of:
+                                - all_of: [ macd_hist_gt_eps, ema20_over_50_with_tolerance ]
+                                - all_of: [ macd_line_cross_up_with_hysteresis, close_above_vwap_or_ma9 ]
+                          - ema20_over_50_with_tolerance
+                          - close_above_vwap_or_ma9
+                          - rsi_lt_70
+                          - atr_volatility_ok
+                short:
+                    - all_of:
+                          - any_of:
+                                - all_of: [ macd_line_cross_down_with_hysteresis ]
+                                - all_of: [ macd_hist_decreasing_n, ema_20_lt_50 ]
+                          - ema_20_lt_50
+                          - rsi_gt_softfloor
+                          - close_below_vwap
+                          - atr_volatility_ok
+
+            '1m':
+                long:
+                    - all_of:
+                          - macd_hist_gt_eps
+                          - ema20_over_50_with_tolerance
+                          - close_above_vwap_or_ma9
+                          - rsi_lt_70
+                          - macd_hist_slope_pos
+                          - atr_volatility_ok
+                short:
+                    - all_of:
+                          - macd_hist_decreasing_n
+                          - ema_20_lt_50
+                          - rsi_gt_softfloor
+                          - close_below_vwap
+                          - macd_hist_slope_neg
+                          - atr_volatility_ok

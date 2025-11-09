@@ -2,8 +2,8 @@
 
 namespace App\Command\Audit;
 
-use App\Config\IndicatorConfig;
-use App\Indicator\ConditionLoader\ConditionRegistry;
+use App\Config\MtfValidationConfig;
+use App\MtfValidator\ConditionLoader\ConditionRegistry;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -18,7 +18,7 @@ class TestCondCommand extends Command
 {
     public function __construct(
         private ConditionRegistry $conditionRegistry,
-        private IndicatorConfig $indicatorConfig
+        private MtfValidationConfig $validationConfig
     )
     {
         parent::__construct();
@@ -29,8 +29,8 @@ class TestCondCommand extends Command
     {
         $io = new SymfonyStyle($input, $output);
 
-        // Charger depuis IndicatorConfig (règles)
-        $this->conditionRegistry->load($this->indicatorConfig);
+        // Charger depuis la configuration MTF (règles + validations)
+        $this->conditionRegistry->load($this->validationConfig);
 
         $validation = $this->conditionRegistry->getValidation();
         if (!$validation) {

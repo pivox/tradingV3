@@ -1,0 +1,72 @@
+[
+    {
+        "symbol": "BTCUSDT",
+        "result": {
+            "symbol": "BTCUSDT",
+            "status": "INVALID",
+            "execution_tf": null,
+            "failed_timeframe": "1m",
+            "signal_side": "NONE",
+            "trading_decision": null,
+            "error": null,
+            "context": null,
+            "current_price": null,
+            "atr": 36.802
+        },
+        "progress": {
+            "current": 1,
+            "total": 2,
+            "percentage": 50,
+            "symbol": "BTCUSDT",
+            "status": "INVALID"
+        }
+    },
+    {
+        "symbol": "ETHUSDT",
+        "result": {
+            "symbol": "ETHUSDT",
+            "status": "INVALID",
+            "execution_tf": null,
+            "failed_timeframe": "1m",
+            "signal_side": "NONE",
+            "trading_decision": null,
+            "error": null,
+            "context": null,
+            "current_price": null,
+            "atr": 2.13
+        },
+        "progress": {
+            "current": 2,
+            "total": 2,
+            "percentage": 100,
+            "symbol": "ETHUSDT",
+            "status": "INVALID"
+        }
+    },
+    {
+        "symbol": "FINAL",
+        "result": {
+            "run_id": "982bd4e3-4630-4369-8a20-a5c360f2b8da",
+            "execution_time_seconds": 0.893,
+            "symbols_requested": 2,
+            "symbols_processed": 2,
+            "symbols_successful": 0,
+            "symbols_failed": 0,
+            "symbols_skipped": 0,
+            "success_rate": 0,
+            "dry_run": true,
+            "force_run": false,
+            "current_tf": null,
+            "timestamp": "2025-11-09 01:28:08",
+            "status": "completed"
+        },
+        "progress": {
+            "current": 2,
+            "total": 2,
+            "percentage": 100,
+            "symbol": "FINAL",
+            "status": "completed",
+            "execution_time": 0.893
+        }
+    }
+]

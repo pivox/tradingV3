@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Indicator\ConditionLoader\Rule;
 
 use App\Indicator\Condition\ConditionResult;
-use App\Indicator\ConditionLoader\Cards\Rule\Rule;
+use App\MtfValidator\ConditionLoader\Cards\Rule\Rule;
 use PHPUnit\Framework\TestCase;
 
 final class RuleMacdHysteresisTest extends TestCase

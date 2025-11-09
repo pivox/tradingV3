@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Indicator\ConditionLoader;
 
-use App\Indicator\ConditionLoader\ConditionRegistry;
+use App\MtfValidator\ConditionLoader\ConditionRegistry;
 use PHPUnit\Framework\TestCase;
 
 final class ConditionRegistryTrendIntegrationTest extends TestCase
