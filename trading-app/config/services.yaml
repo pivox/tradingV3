@@ -61,6 +61,11 @@ services:
         class: App\Runtime\Concurrency\MockRedis
         public: true
 
+    App\MtfValidator\Runtime\Concurrency\LockManager:
+        arguments:
+            $redis: '@Redis'
+            $logger: '@monolog.logger.mtf'
+
 
 #    App\MtfValidator\Service\MtfRunService:
 #        arguments:
@@ -183,19 +188,25 @@ services:
         autowire: false
 
     # Registre des conditions: injection automatique via AutowireLocator/AutowireIterator
-    App\Indicator\ConditionLoader\ConditionRegistry:
+    App\MtfValidator\ConditionLoader\ConditionRegistry:
         arguments:
             $logger: '@logger'
         calls:
-            - [ loadFromConfigs, ['@App\Config\IndicatorConfig'] ]
+            - [ loadFromConfigs, ['@App\Config\MtfValidationConfig'] ]
 
     # Nouveau registre des conditions avec AutowireLocator/AutowireIterator
     App\Indicator\Registry\ConditionRegistry:
         arguments:
             $logger: '@logger'
-    App\Indicator\ConditionLoader\TimeframeEvaluator:
+    App\MtfValidator\ConditionLoader\TimeframeEvaluator:
         arguments:
-            $registry: '@App\Indicator\ConditionLoader\ConditionRegistry'
+            $registry: '@App\MtfValidator\ConditionLoader\ConditionRegistry'
+
+    # Execution selector (decide 15m/5m/1m)
+    App\MtfValidator\Execution\ExecutionSelector:
+        arguments:
+            $mtfConfig: '@App\Config\MtfValidationConfig'
+            $registry: '@App\MtfValidator\ConditionLoader\ConditionRegistry'
 
     # Builder de contexte pour les indicateurs
     App\Indicator\Context\IndicatorContextBuilder:

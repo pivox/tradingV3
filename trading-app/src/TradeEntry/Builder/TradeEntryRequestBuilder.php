@@ -33,7 +33,8 @@ final class TradeEntryRequestBuilder
     public function fromMtfSignal(
         SymbolResultDto $symbolResult,
         ?float $price = null,
-        ?float $atr = null
+        ?float $atr = null,
+        ?string $executionTfOverride = null
     ): ?TradeEntryRequest {
         $side = strtoupper((string)$symbolResult->signalSide);
         if (!in_array($side, ['LONG', 'SHORT'], true)) {
@@ -41,9 +42,9 @@ final class TradeEntryRequestBuilder
         }
 
         $price = $price ?? $symbolResult->currentPrice;
-        $atr = $atr ?? $symbolResult->atr;
+        $atr = $atr ?? null;
 
-        $executionTf = strtolower($symbolResult->executionTf ?? '1m');
+        $executionTf = strtolower($executionTfOverride ?? ($symbolResult->executionTf ?? '1m'));
         $defaults = $this->tradeEntryConfig->getDefaults();
         $multipliers = $defaults['timeframe_multipliers'] ?? [];
         $tfMultiplier = (float)($multipliers[$executionTf] ?? 1.0);
@@ -160,4 +161,3 @@ final class TradeEntryRequestBuilder
         );
     }
 }
-

@@ -94,14 +94,4 @@ class IndicatorConfig
         return (int)($calc['performance_threshold_ms'] ?? 10);
     }
 
-    public function getRules(): array
-    {
-        return $this->config['rules'] ?? [];
-    }
-
-    public function getValidation(): array
-    {
-        return $this->config['validation'] ?? [];
-    }
 }
-

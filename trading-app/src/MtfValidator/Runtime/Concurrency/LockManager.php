@@ -20,8 +20,9 @@ class LockManager implements LockManagerInterface
     private const DEFAULT_TIMEOUT = 30; // 30 secondes
     private const DEFAULT_RETRY_DELAY = 100; // 100ms
 
+    /** @param \Redis|\App\Runtime\Concurrency\MockRedis $redis */
     public function __construct(
-        private readonly \Redis $redis,
+        private readonly object $redis,
         private readonly LoggerInterface $logger
     ) {}
 
