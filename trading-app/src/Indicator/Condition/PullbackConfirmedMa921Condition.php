@@ -14,6 +14,7 @@ use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 final class PullbackConfirmedMa921Condition extends AbstractCondition
 {
     public const NAME = 'pullback_confirmed_ma9_21';
+    private const RATIO_EPS = 0.0005; // 0.05% de tolérance
 
     public function getName(): string
     {
@@ -32,8 +33,8 @@ final class PullbackConfirmedMa921Condition extends AbstractCondition
             ]));
         }
 
-        $aboveMa21 = $close > $ma21;
-        $ma9Above  = $ma9 > $ma21;
+        $aboveMa21 = $close >= $ma21 * (1.0 - self::RATIO_EPS);
+        $ma9Above  = $ma9 >= $ma21 * (1.0 - self::RATIO_EPS);
 
         $passed = $aboveMa21 && $ma9Above;
         $value  = $ma9 - $ma21;
@@ -44,6 +45,7 @@ final class PullbackConfirmedMa921Condition extends AbstractCondition
             'ma21'       => $ma21,
             'above_ma21' => $aboveMa21,
             'ma9_above'  => $ma9Above,
+            'tolerance'  => self::RATIO_EPS,
         ]));
     }
 }

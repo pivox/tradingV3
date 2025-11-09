@@ -126,6 +126,56 @@ mtf_validation:
         macd_hist_decreasing_n:
             decreasing: { field: 'macd_hist', n: 2 }
 
+        # --- Atomes manquants (appelés ailleurs) ---
+        ema_20_lt_50:
+            lt_fields: [ 'ema_20', 'ema_50' ]
+
+        ema_50_gt_200:
+            gt_fields: [ 'ema_50', 'ema_200' ]
+
+        ema_50_lt_200:
+            lt_fields: [ 'ema_50', 'ema_200' ]
+
+        close_above_ema_200:
+            gt_fields: [ 'close', 'ema_200' ]
+
+        close_below_ema_200:
+            lt_fields: [ 'close', 'ema_200' ]
+
+        close_below_vwap:
+            lt_fields: [ 'close', 'vwap' ]
+
+        # --- Filtres globaux manquants / alias pratiques ---
+        # Pour les filtres du selector, nous avons aussi des conditions PHP
+        # (AdxMinForTrend1hCondition, PullbackConfirmedMa921Condition, PullbackConfirmedVwapCondition,
+        #  PriceLteMa21PlusKAtrCondition). Ces entrées harmonisent le YAML.
+        adx_min_for_trend_1h:
+            op: '>='
+            left: 'adx_1h'
+            right: 25
+
+        pullback_confirmed_ma9_21:
+            all_of: [ ma9_cross_up_ma21 ]
+
+        pullback_confirmed_vwap:
+            all_of: [ near_vwap ]
+
+        # Alias vers la règle existante (k=2)
+        # Si l'engine ne gère pas d'alias, remplace les usages par price_below_ma21_plus_2atr
+        price_lte_ma21_plus_k_atr:
+            lt_fields: [ 'close', 'ma_21_plus_2atr' ]
+
+        # --- Regime prix (utilisé sur 4h/1h) ---
+        price_regime_ok_long:
+            any_of:
+                - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]
+                - all_of: [ close_above_ema_200, ema200_slope_pos ]
+
+        price_regime_ok_short:
+            any_of:
+                - all_of: [ ema_below_200_with_tolerance, ema_50_lt_200 ]
+                - all_of: [ close_below_ema_200, ema200_slope_neg ]
+
     # --- Execution Selector (décide 15m / 5m / 1m) ---
     execution_selector:
         stay_on_15m_if:
@@ -148,17 +198,17 @@ mtf_validation:
             - end_of_zone_fallback: true
 
     # --- Filtres globaux obligatoires ---
+    # Allégé temporairement: retrait de `lev_bounds` (manque de données de levier au stade selector).
     filters_mandatory:
         - rsi_lt_70
-        - price_lte_ma21_plus_k_atr
+        - adx_min_for_trend_1h
         - pullback_confirmed_ma9_21
         - pullback_confirmed_vwap
-        - adx_min_for_trend_1h
-        - lev_bounds
+        - price_lte_ma21_plus_k_atr
 
     # --- Validations par timeframe ---
     validation:
-        start_from_timeframe: '4h'
+        start_from_timeframe: '15m'
         timeframe:
             '4h':
                 long:
@@ -206,7 +256,7 @@ mtf_validation:
                           - ema20_over_50_with_tolerance
                           - rsi_lt_70
                           - close_above_vwap_or_ma9
-                          - atr_volatility_ok
+                          - atr_rel_in_range_15m
                 short:
                     - all_of:
                           - any_of:
@@ -215,7 +265,7 @@ mtf_validation:
                           - ema_20_lt_50
                           - rsi_gt_softfloor
                           - close_below_vwap
-                          - atr_volatility_ok
+                          - atr_rel_in_range_15m
 
             '5m':
                 long:
@@ -226,7 +276,7 @@ mtf_validation:
                           - ema20_over_50_with_tolerance
                           - close_above_vwap_or_ma9
                           - rsi_lt_70
-                          - atr_volatility_ok
+                          - atr_rel_in_range_5m
                 short:
                     - all_of:
                           - any_of:
@@ -235,7 +285,7 @@ mtf_validation:
                           - ema_20_lt_50
                           - rsi_gt_softfloor
                           - close_below_vwap
-                          - atr_volatility_ok
+                          - atr_rel_in_range_5m
 
             '1m':
                 long:
@@ -245,7 +295,7 @@ mtf_validation:
                           - close_above_vwap_or_ma9
                           - rsi_lt_70
                           - macd_hist_slope_pos
-                          - atr_volatility_ok
+                          - atr_rel_in_range_5m
                 short:
                     - all_of:
                           - macd_hist_decreasing_n
@@ -253,4 +303,4 @@ mtf_validation:
                           - rsi_gt_softfloor
                           - close_below_vwap
                           - macd_hist_slope_neg
-                          - atr_volatility_ok
+                          - atr_rel_in_range_5m
