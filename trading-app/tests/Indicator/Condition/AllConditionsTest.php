@@ -12,6 +12,8 @@ use App\Indicator\Core\Trend\Ema;
 use App\Indicator\Core\Volume\Vwap;
 use App\Indicator\Registry\ConditionRegistry;
 use PHPUnit\Framework\TestCase;
+use Psr\Container\ContainerInterface;
+use Symfony\Contracts\Service\ServiceProviderInterface;
 
 class AllConditionsTest extends TestCase
 {
@@ -31,6 +33,7 @@ class AllConditionsTest extends TestCase
         $this->contextBuilder = new IndicatorContextBuilder($rsi, $macd, $ema, $adx, $vwap, $atrCalc);
 
         $conditions = [];
+        $conditionsByName = [];
         $projectRoot = dirname(dirname(dirname(__DIR__)));
         $conditionDir = $projectRoot . '/src/Indicator/Condition';
         foreach (glob($conditionDir . '/*Condition.php') ?: [] as $file) {
@@ -42,10 +45,26 @@ class AllConditionsTest extends TestCase
             if ($reflection->isAbstract()) {
                 continue;
             }
-            $conditions[] = $reflection->newInstance();
+            $condition = $reflection->newInstance();
+            $conditions[] = $condition;
+            // Créer un index par nom pour le locator
+            $name = $condition->getName();
+            $conditionsByName[$name] = $condition;
         }
 
-        $this->conditionRegistry = new ConditionRegistry($conditions);
+        // Créer un mock du ContainerInterface qui implémente ServiceProviderInterface
+        $locator = $this->createMock(ContainerInterface::class);
+        if ($locator instanceof ServiceProviderInterface || method_exists($locator, 'getProvidedServices')) {
+            $locator->method('getProvidedServices')->willReturn(array_fill_keys(array_keys($conditionsByName), 'App\\Indicator\\Condition\\ConditionInterface'));
+        }
+        $locator->method('has')->willReturnCallback(function ($name) use ($conditionsByName) {
+            return isset($conditionsByName[$name]);
+        });
+        $locator->method('get')->willReturnCallback(function ($name) use ($conditionsByName) {
+            return $conditionsByName[$name] ?? null;
+        });
+
+        $this->conditionRegistry = new ConditionRegistry($conditionsByName, $locator);
     }
 
     public function testAllConditionsWithValidData(): void
