@@ -28,7 +28,8 @@ class AtrRelInRange15mConditionTest extends TestCase
 
     public function testAboveRangeFails(): void
     {
-        $context = ['atr' => 1.0, 'close' => 100.0];
+        // ratio = 3.0 / 100.0 = 0.03 > 0.0250 (MAX), doit échouer
+        $context = ['atr' => 3.0, 'close' => 100.0];
         $this->assertFalse($this->condition->evaluate($context)->passed);
     }
 }

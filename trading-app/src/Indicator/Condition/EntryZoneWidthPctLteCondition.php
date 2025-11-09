@@ -28,14 +28,19 @@ final class EntryZoneWidthPctLteCondition extends AbstractCondition
     {
         $value = $context['entry_zone_width_pct'] ?? null;
 
+        // Utiliser le seuil depuis le contexte si disponible, sinon le défaut
+        $threshold = isset($context['entry_zone_width_pct_lte_threshold']) && \is_numeric($context['entry_zone_width_pct_lte_threshold'])
+            ? (float)$context['entry_zone_width_pct_lte_threshold']
+            : $this->threshold;
+
         if (!\is_float($value)) {
-            return $this->result(self::NAME, false, null, $this->threshold, $this->baseMeta($context, [
+            return $this->result(self::NAME, false, null, $threshold, $this->baseMeta($context, [
                 'missing_data' => true,
             ]));
         }
 
-        $passed = $value <= $this->threshold;
+        $passed = $value <= $threshold;
 
-        return $this->result(self::NAME, $passed, $value, $this->threshold, $this->baseMeta($context));
+        return $this->result(self::NAME, $passed, $value, $threshold, $this->baseMeta($context));
     }
 }

@@ -5,14 +5,19 @@ declare(strict_types=1);
 namespace App\Tests\MtfValidator\Service;
 
 use App\Common\Enum\SignalSide;
+use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
+use App\MtfValidator\Execution\ExecutionSelector;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\MtfValidator\Service\TradingDecisionHandler;
 use App\Config\{TradeEntryConfig, MtfValidationConfig};
+use App\TradeEntry\Dto\EntryZone;
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Dto\ExecutionResult;
+use App\TradeEntry\EntryZone\EntryZoneCalculator;
 use App\TradeEntry\Service\TradeEntryService;
+use App\TradeEntry\Types\Side;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
@@ -25,6 +30,12 @@ class TradingDecisionHandlerTest extends TestCase
     private AuditLoggerInterface $auditLogger;
     private LoggerInterface $logger;
     private LoggerInterface $positionsFlowLogger;
+    /** @var IndicatorProviderInterface&MockObject */
+    private IndicatorProviderInterface $indicatorProvider;
+    /** @var EntryZoneCalculator&MockObject */
+    private EntryZoneCalculator $entryZoneCalculator;
+    /** @var ExecutionSelector&MockObject */
+    private ExecutionSelector $executionSelector;
 
     protected function setUp(): void
     {
@@ -87,9 +98,15 @@ class TradingDecisionHandlerTest extends TestCase
             )
         );
 
+        $this->indicatorProvider = $this->createMock(IndicatorProviderInterface::class);
+        $this->entryZoneCalculator = $this->createMock(EntryZoneCalculator::class);
+        $this->executionSelector = $this->createMock(ExecutionSelector::class);
+
         $this->handler = new TradingDecisionHandler(
             tradeEntryService: $this->tradeEntryService,
             requestBuilder: $requestBuilder,
+            executionSelector: $this->executionSelector,
+            indicatorProvider: $this->indicatorProvider,
             logger: $this->logger,
             positionsFlowLogger: $this->positionsFlowLogger,
             orderJourneyLogger: $this->createMock(LoggerInterface::class),
@@ -97,6 +114,7 @@ class TradingDecisionHandlerTest extends TestCase
             mtfConfig: new MtfValidationConfig(),
             mtfSwitchRepository: $this->createMock(\App\Repository\MtfSwitchRepository::class),
             auditLogger: $this->auditLogger,
+            entryZoneCalculator: $this->entryZoneCalculator,
         );
     }
 
@@ -227,5 +245,139 @@ class TradingDecisionHandlerTest extends TestCase
         $this->assertEquals('READY', $result->status);
         $this->assertEquals('error', $result->tradingDecision['status']);
         $this->assertEquals('exchange failure', $result->tradingDecision['error']);
+    }
+
+    public function testBuildSelectorContextCalculatesEntryZoneWidthPct(): void
+    {
+        $symbolResult = new SymbolResultDto(
+            'BTCUSDT',
+            'READY',
+            '15m',
+            SignalSide::LONG->value,
+            null,
+            null,
+            null,
+            50000.0,
+            null
+        );
+
+        // Mock ATR 15m
+        $this->indicatorProvider
+            ->expects($this->once())
+            ->method('getAtr')
+            ->with('BTCUSDT', '15m')
+            ->willReturn(50.0);
+
+        // Mock EntryZoneCalculator pour retourner une zone valide
+        $entryZone = new EntryZone(
+            min: 49900.0,
+            max: 50100.0,
+            rationale: 'test zone'
+        );
+
+        $this->entryZoneCalculator
+            ->expects($this->once())
+            ->method('compute')
+            ->with('BTCUSDT', Side::Long, null, $this->anything())
+            ->willReturn($entryZone);
+
+        // Utiliser la réflexion pour accéder à buildSelectorContext (méthode privée)
+        $reflection = new \ReflectionClass($this->handler);
+        $method = $reflection->getMethod('buildSelectorContext');
+        $method->setAccessible(true);
+
+        $context = $method->invoke($this->handler, $symbolResult);
+
+        // Vérifier que entry_zone_width_pct est calculé
+        // (max - min) / pivot * 100 = (50100 - 49900) / 50000 * 100 = 0.4%
+        $this->assertArrayHasKey('entry_zone_width_pct', $context);
+        $this->assertIsFloat($context['entry_zone_width_pct']);
+        $expectedWidth = (50100.0 - 49900.0) / 50000.0 * 100.0;
+        $this->assertEqualsWithDelta($expectedWidth, $context['entry_zone_width_pct'], 0.01);
+    }
+
+    public function testBuildSelectorContextThrowsErrorWhenEntryZoneCalculatorFails(): void
+    {
+        $symbolResult = new SymbolResultDto(
+            'BTCUSDT',
+            'READY',
+            '15m',
+            SignalSide::LONG->value,
+            null,
+            null,
+            null,
+            50000.0,
+            null
+        );
+
+        // Mock ATR 15m
+        $this->indicatorProvider
+            ->expects($this->once())
+            ->method('getAtr')
+            ->with('BTCUSDT', '15m')
+            ->willReturn(50.0);
+
+        // Mock EntryZoneCalculator pour throw une exception
+        $this->entryZoneCalculator
+            ->expects($this->once())
+            ->method('compute')
+            ->with('BTCUSDT', Side::Long, null, $this->anything())
+            ->willThrowException(new \RuntimeException('Entry zone calculation failed'));
+
+        // Utiliser la réflexion pour accéder à buildSelectorContext
+        $reflection = new \ReflectionClass($this->handler);
+        $method = $reflection->getMethod('buildSelectorContext');
+        $method->setAccessible(true);
+
+        // Vérifier que l'exception est propagée
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Entry zone calculation failed');
+
+        $method->invoke($this->handler, $symbolResult);
+    }
+
+    public function testBuildSelectorContextIncludesEntryZoneWidthPctInContext(): void
+    {
+        $symbolResult = new SymbolResultDto(
+            'ETHUSDT',
+            'READY',
+            '15m',
+            SignalSide::SHORT->value,
+            null,
+            null,
+            null,
+            3000.0,
+            null
+        );
+
+        $this->indicatorProvider
+            ->expects($this->once())
+            ->method('getAtr')
+            ->with('ETHUSDT', '15m')
+            ->willReturn(30.0);
+
+        $entryZone = new EntryZone(
+            min: 2985.0,
+            max: 3015.0,
+            rationale: 'test zone'
+        );
+
+        $this->entryZoneCalculator
+            ->expects($this->once())
+            ->method('compute')
+            ->with('ETHUSDT', Side::Short, null, $this->anything())
+            ->willReturn($entryZone);
+
+        $reflection = new \ReflectionClass($this->handler);
+        $method = $reflection->getMethod('buildSelectorContext');
+        $method->setAccessible(true);
+
+        $context = $method->invoke($this->handler, $symbolResult);
+
+        // Vérifier que entry_zone_width_pct est présent et calculé correctement
+        $this->assertArrayHasKey('entry_zone_width_pct', $context);
+        $this->assertIsFloat($context['entry_zone_width_pct']);
+        $expectedWidth = (3015.0 - 2985.0) / 3000.0 * 100.0; // 1.0%
+        $this->assertEqualsWithDelta($expectedWidth, $context['entry_zone_width_pct'], 0.01);
     }
 }

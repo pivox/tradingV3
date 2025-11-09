@@ -28,14 +28,19 @@ final class AtrPct15mGtBpsCondition extends AbstractCondition
     {
         $valueBps = $context['atr_pct_15m_bps'] ?? null;
 
+        // Utiliser le seuil depuis le contexte si disponible, sinon le défaut
+        $threshold = isset($context['atr_pct_15m_gt_bps_threshold']) && \is_numeric($context['atr_pct_15m_gt_bps_threshold'])
+            ? (float)$context['atr_pct_15m_gt_bps_threshold']
+            : $this->thresholdBps;
+
         if (!\is_float($valueBps)) {
-            return $this->result(self::NAME, false, null, $this->thresholdBps, $this->baseMeta($context, [
+            return $this->result(self::NAME, false, null, $threshold, $this->baseMeta($context, [
                 'missing_data' => true,
             ]));
         }
 
-        $passed = $valueBps > $this->thresholdBps;
+        $passed = $valueBps > $threshold;
 
-        return $this->result(self::NAME, $passed, $valueBps, $this->thresholdBps, $this->baseMeta($context));
+        return $this->result(self::NAME, $passed, $valueBps, $threshold, $this->baseMeta($context));
     }
 }

@@ -184,7 +184,7 @@ mtf_validation:
     execution_selector:
         stay_on_15m_if:
             - expected_r_multiple_gte: 2.0
-            - entry_zone_width_pct_lte: 1.2
+            - entry_zone_width_pct_lte: 1.3
             - atr_pct_15m_lte_bps: 120
 
         drop_to_5m_if_any:

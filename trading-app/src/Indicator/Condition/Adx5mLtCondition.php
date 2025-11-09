@@ -28,14 +28,19 @@ final class Adx5mLtCondition extends AbstractCondition
     {
         $adx5m = $context['adx_5m'] ?? null;
 
+        // Utiliser le seuil depuis le contexte si disponible, sinon le défaut
+        $threshold = isset($context['adx_5m_lt_threshold']) && \is_numeric($context['adx_5m_lt_threshold'])
+            ? (float)$context['adx_5m_lt_threshold']
+            : $this->threshold;
+
         if (!\is_float($adx5m)) {
-            return $this->result(self::NAME, false, null, $this->threshold, $this->baseMeta($context, [
+            return $this->result(self::NAME, false, null, $threshold, $this->baseMeta($context, [
                 'missing_data' => true,
             ]));
         }
 
-        $passed = $adx5m < $this->threshold;
+        $passed = $adx5m < $threshold;
 
-        return $this->result(self::NAME, $passed, $adx5m, $this->threshold, $this->baseMeta($context));
+        return $this->result(self::NAME, $passed, $adx5m, $threshold, $this->baseMeta($context));
     }
 }
