@@ -20,8 +20,6 @@ final class ExecutionBox
         private readonly OrderModePolicyInterface $orderModePolicy,
         private readonly IdempotencyPolicy $idempotency,
         private readonly ExecutionLogger $logger,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $orderLogger,
     ) {}
 
     public function execute(OrderPlanModel $plan, ?string $decisionKey = null): ExecutionResult
@@ -38,7 +36,7 @@ final class ExecutionBox
             'decision_key' => $decisionKey,
         ]);
 
-        if ($plan->leverage < 3) {
+        if ($plan->leverage < 2) {
             $clientOrderId = $this->idempotency->newClientOrderId();
             $this->logger->warning('execution.leverage_below_min', [
                 'symbol' => $plan->symbol,
@@ -47,21 +45,7 @@ final class ExecutionBox
                 'decision_key' => $decisionKey,
                 'client_order_id' => $clientOrderId,
             ]);
-            $this->journeyLogger->warning('order_journey.execution.skipped', [
-                'symbol' => $plan->symbol,
-                'decision_key' => $decisionKey,
-                'client_order_id' => $clientOrderId,
-                'reason' => 'leverage_below_min',
-                'leverage' => $plan->leverage,
-                'min_required' => 5,
-            ]);
-            $this->orderLogger->warning('order.leverage.skip', [
-                'symbol' => $plan->symbol,
-                'decision_key' => $decisionKey,
-                'client_order_id' => $clientOrderId,
-                'leverage' => $plan->leverage,
-                'min_required' => 5,
-            ]);
+            // Single-channel logging only
 
             return new ExecutionResult(
                 clientOrderId: $clientOrderId,
@@ -83,27 +67,13 @@ final class ExecutionBox
             'open_type' => $plan->openType,
             'decision_key' => $decisionKey,
         ]);
-        $this->orderLogger->info('order.leverage.submit', [
-            'symbol' => $plan->symbol,
-            'leverage' => $plan->leverage,
-            'open_type' => $plan->openType,
-            'decision_key' => $decisionKey,
-            'client_order_id' => $clientOrderId,
-        ]);
         $leverageResult = $this->providers->getOrderProvider()->submitLeverage($plan->symbol, $plan->leverage, $plan->openType);
         $this->logger->debug('execution.leverage_response', [
             'symbol' => $plan->symbol,
             'result' => $leverageResult,
             'decision_key' => $decisionKey,
         ]);
-        $this->orderLogger->info('order.leverage.result', [
-            'symbol' => $plan->symbol,
-            'leverage' => $plan->leverage,
-            'open_type' => $plan->openType,
-            'decision_key' => $decisionKey,
-            'client_order_id' => $clientOrderId,
-            'success' => $leverageResult,
-        ]);
+        // Single-channel logging only
 
         $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
 
@@ -135,25 +105,7 @@ final class ExecutionBox
         $orderPayload['type'] = OrderType::LIMIT->value;
         $orderPayload['mode'] = 1;
 
-        $this->orderLogger->debug('order.submit.payload_prepared', [
-            'symbol' => $plan->symbol,
-            'decision_key' => $decisionKey,
-            'client_order_id' => $clientOrderId,
-            'side_numeric' => $payload['side'],
-            'order_type' => $orderPayload['type'],
-            'size' => (int) $payload['size'],
-            'price' => $orderPayload['price'] ?? null,
-            'mode' => $orderPayload['mode'] ?? null,
-            'open_type' => $payload['open_type'],
-        ]);
-        $this->journeyLogger->info('order_journey.execution.presubmit', [
-            'symbol' => $plan->symbol,
-            'decision_key' => $decisionKey,
-            'client_order_id' => $clientOrderId,
-            'side_numeric' => $payload['side'],
-            'order_type' => $orderPayload['type'],
-            'reason' => 'payload_prepared_for_submission',
-        ]);
+        // Single-channel logging only
 
         $attemptLabel = 'limit-mode-1';
         $attemptIndex = 1;
@@ -170,30 +122,7 @@ final class ExecutionBox
         ];
 
         $this->logger->debug('execution.order_submit', $attemptPayload);
-        $this->orderLogger->info('order.submit.attempt', [
-            'symbol' => $plan->symbol,
-            'decision_key' => $decisionKey,
-            'client_order_id' => $clientOrderId,
-            'attempt' => $attemptLabel,
-            'attempt_index' => $attemptIndex,
-            'attempt_total' => $attemptTotal,
-            'side_numeric' => $orderPayload['side'],
-            'order_type' => $enforcedOrderType->value,
-            'mode' => $orderOptions['mode'] ?? null,
-            'size' => (float) $orderPayload['size'],
-            'price' => isset($orderPayload['price']) ? (float) $orderPayload['price'] : null,
-        ]);
-
-        $this->journeyLogger->info('order_journey.execution.attempt', [
-            'symbol' => $plan->symbol,
-            'decision_key' => $decisionKey,
-            'attempt' => $attemptLabel,
-            'attempt_index' => $attemptIndex,
-            'attempt_total' => $attemptTotal,
-            'mode' => $orderOptions['mode'] ?? null,
-            'order_type' => $enforcedOrderType->value,
-            'reason' => 'submit_exchange_order',
-        ]);
+        // Single-channel logging only
 
         $orderResult = $this->providers->getOrderProvider()->placeOrder(
             symbol: $orderPayload['symbol'],
@@ -223,20 +152,7 @@ final class ExecutionBox
                 'attempt_total' => $attemptTotal,
                 'order_id' => $orderResult->orderId,
             ]);
-            $this->orderLogger->info('order.submit.success', [
-                'symbol' => $plan->symbol,
-                'decision_key' => $decisionKey,
-                'client_order_id' => $clientOrderId,
-                'attempt' => $attemptLabel,
-                'order_id' => $orderResult->orderId,
-            ]);
-            $this->journeyLogger->info('order_journey.execution.order_ack', [
-                'symbol' => $plan->symbol,
-                'decision_key' => $decisionKey,
-                'attempt' => $attemptLabel,
-                'order_id' => $orderResult->orderId,
-                'reason' => 'exchange_returned_order_id',
-            ]);
+            // Single-channel logging only
         } else {
             $this->logger->warning('execution.order_attempt_failed', [
                 'symbol' => $plan->symbol,
@@ -256,22 +172,7 @@ final class ExecutionBox
                 'order_type' => $enforcedOrderType->value,
                 'mode' => $orderOptions['mode'] ?? null,
             ]);
-            $this->orderLogger->warning('order.submit.attempt_failed', [
-                'symbol' => $plan->symbol,
-                'decision_key' => $decisionKey,
-                'client_order_id' => $clientOrderId,
-                'attempt' => $attemptLabel,
-                'order_type' => $enforcedOrderType->value,
-                'mode' => $orderOptions['mode'] ?? null,
-                'reason' => 'exchange_returned_null',
-            ]);
-            $this->journeyLogger->warning('order_journey.execution.attempt_failed', [
-                'symbol' => $plan->symbol,
-                'decision_key' => $decisionKey,
-                'attempt' => $attemptLabel,
-                'mode' => $orderOptions['mode'] ?? null,
-                'reason' => 'exchange_returned_null',
-            ]);
+            // Single-channel logging only
         }
 
         $this->logger->info('trade_entry.order_submitted', [
@@ -280,21 +181,7 @@ final class ExecutionBox
             'order' => $orderResult ? $orderResult->toArray() : null,
             'attempt' => $orderResult !== null ? $attemptLabel : null,
         ]);
-        $this->journeyLogger->info('order_journey.execution.summary', [
-            'symbol' => $plan->symbol,
-            'decision_key' => $decisionKey,
-            'attempt' => $orderResult !== null ? $attemptLabel : null,
-            'order_id' => $orderResult?->orderId,
-            'reason' => 'execution_attempts_concluded',
-        ]);
-        $this->orderLogger->info('order.submit.summary', [
-            'symbol' => $plan->symbol,
-            'decision_key' => $decisionKey,
-            'client_order_id' => $clientOrderId,
-            'attempt' => $attemptLabel,
-            'order_id' => $orderResult?->orderId,
-            'status' => $orderResult !== null ? 'submitted' : 'failed',
-        ]);
+        // Single-channel logging only
 
         $orderId = $orderResult?->orderId;
         $isOk = $orderResult !== null;
@@ -315,18 +202,7 @@ final class ExecutionBox
                 'order_id' => $orderResult?->orderId,
                 'reason' => 'all_attempts_failed',
             ]);
-            $this->orderLogger->error('order.submit.error', [
-                'symbol' => $plan->symbol,
-                'decision_key' => $decisionKey,
-                'client_order_id' => $clientOrderId,
-                'attempt' => $attemptLabel,
-                'reason' => 'all_attempts_failed',
-            ]);
-            $this->journeyLogger->error('order_journey.execution.failed', [
-                'symbol' => $plan->symbol,
-                'decision_key' => $decisionKey,
-                'reason' => 'all_attempts_failed',
-            ]);
+            // Single-channel logging only
         }
 
         return new ExecutionResult(
