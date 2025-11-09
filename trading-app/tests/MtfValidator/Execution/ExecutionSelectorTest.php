@@ -26,22 +26,22 @@ class ExecutionSelectorTest extends TestCase
     {
         $this->logger = $this->createMock(LoggerInterface::class);
         
-        // Créer un config mock avec execution_selector
+        // Créer un config mock avec execution_selector (format YAML réel : array de maps)
         $configData = [
             'execution_selector' => [
                 'stay_on_15m_if' => [
-                    'expected_r_multiple_gte' => 2.0,
-                    'entry_zone_width_pct_lte' => 1.3,
-                    'atr_pct_15m_lte_bps' => 120,
+                    ['expected_r_multiple_gte' => 2.0],
+                    ['entry_zone_width_pct_lte' => 1.3],
+                    ['atr_pct_15m_lte_bps' => 120],
                 ],
                 'drop_to_5m_if_any' => [
-                    'expected_r_multiple_lt' => 2.0,
-                    'atr_pct_15m_gt_bps' => 120,
-                    'entry_zone_width_pct_gt' => 1.2,
+                    ['expected_r_multiple_lt' => 2.0],
+                    ['atr_pct_15m_gt_bps' => 120],
+                    ['entry_zone_width_pct_gt' => 1.2],
                 ],
                 'forbid_drop_to_5m_if_any' => [
-                    'adx_5m_lt' => 20,
-                    'spread_bps_gt' => 8,
+                    ['adx_5m_lt' => 20],
+                    ['spread_bps_gt' => 8],
                 ],
             ],
             'filters_mandatory' => [],
@@ -78,7 +78,7 @@ class ExecutionSelectorTest extends TestCase
                         'name' => $name,
                         'passed' => true,
                         'value' => $ctx['expected_r_multiple'] ?? $ctx['entry_zone_width_pct'] ?? $ctx['atr_pct_15m_bps'] ?? null,
-                        'threshold' => null,
+                        'threshold' => $ctx[$name . '_threshold'] ?? null,
                         'meta' => [],
                     ];
                 }
@@ -108,14 +108,30 @@ class ExecutionSelectorTest extends TestCase
                 $results = [];
                 foreach ($names as $name) {
                     $passed = false;
-                    if ($name === 'expected_r_multiple_lt' && ($ctx['expected_r_multiple'] ?? 999) < 2.0) {
-                        $passed = true;
+                    
+                    // stay_on_15m_if : toutes doivent passer (ici elles échouent)
+                    if (in_array($name, ['expected_r_multiple_gte', 'entry_zone_width_pct_lte', 'atr_pct_15m_lte_bps'], true)) {
+                        $passed = false; // stay_on_15m_if échoue
                     }
+                    // drop_to_5m_if_any : au moins une doit passer
+                    elseif (in_array($name, ['expected_r_multiple_lt', 'atr_pct_15m_gt_bps', 'entry_zone_width_pct_gt'], true)) {
+                        if ($name === 'expected_r_multiple_lt') {
+                            $threshold = $ctx['expected_r_multiple_lt_threshold'] ?? 2.0;
+                            $passed = ($ctx['expected_r_multiple'] ?? 999) < $threshold; // 1.5 < 2.0 = true
+                        } else {
+                            $passed = false; // Les autres conditions de drop échouent
+                        }
+                    }
+                    // forbid_drop_to_5m_if_any : aucune ne doit passer
+                    elseif (in_array($name, ['adx_5m_lt', 'spread_bps_gt'], true)) {
+                        $passed = false; // forbid conditions échouent (permettent le drop)
+                    }
+                    
                     $results[$name] = [
                         'name' => $name,
                         'passed' => $passed,
-                        'value' => $ctx['expected_r_multiple'] ?? null,
-                        'threshold' => null,
+                        'value' => $ctx['expected_r_multiple'] ?? $ctx['entry_zone_width_pct'] ?? $ctx['atr_pct_15m_bps'] ?? null,
+                        'threshold' => $ctx[$name . '_threshold'] ?? null,
                         'meta' => [],
                     ];
                 }
@@ -137,14 +153,25 @@ class ExecutionSelectorTest extends TestCase
             'filters_mandatory' => ['rsi_lt_70'],
         ];
 
-        $this->mtfConfig->method('getConfig')->willReturn($configData);
+        // Créer un nouveau selector avec la nouvelle config
+        $newMtfConfig = $this->createMock(MtfValidationConfig::class);
+        $newMtfConfig->method('getConfig')->willReturn($configData);
+        
+        $newSelector = new ExecutionSelector(
+            $newMtfConfig,
+            $this->registry,
+            $this->logger
+        );
 
         $context = ['rsi' => 75.0]; // RSI > 70, filtre échoue
 
         $this->registry
             ->expects($this->once())
             ->method('evaluate')
-            ->with($context, ['rsi_lt_70'])
+            ->with($this->callback(function ($ctx) {
+                // Le contexte peut être modifié par injectThresholds, mais rsi doit être présent
+                return isset($ctx['rsi']) && $ctx['rsi'] === 75.0;
+            }), ['rsi_lt_70'])
             ->willReturn([
                 'rsi_lt_70' => [
                     'name' => 'rsi_lt_70',
@@ -160,7 +187,7 @@ class ExecutionSelectorTest extends TestCase
             ->method('info')
             ->with('[ExecSelector] filters_mandatory failed', $this->anything());
 
-        $decision = $this->selector->decide($context);
+        $decision = $newSelector->decide($context);
 
         $this->assertInstanceOf(ExecutionDecision::class, $decision);
         $this->assertEquals('NONE', $decision->executionTimeframe);
@@ -174,18 +201,28 @@ class ExecutionSelectorTest extends TestCase
             'atr_pct_15m_bps' => 110.0,
         ];
 
+        $thresholdsFound = [];
         // Vérifier que les seuils du YAML sont injectés dans le contexte
         $this->registry
             ->expects($this->atLeastOnce())
             ->method('evaluate')
-            ->willReturnCallback(function ($ctx, $names) {
-                // Vérifier que les seuils sont présents dans le contexte
-                $this->assertArrayHasKey('expected_r_multiple_gte_threshold', $ctx);
-                $this->assertEquals(2.0, $ctx['expected_r_multiple_gte_threshold']);
-                $this->assertArrayHasKey('entry_zone_width_pct_lte_threshold', $ctx);
-                $this->assertEquals(1.3, $ctx['entry_zone_width_pct_lte_threshold']);
-                $this->assertArrayHasKey('atr_pct_15m_lte_bps_threshold', $ctx);
-                $this->assertEquals(120, $ctx['atr_pct_15m_lte_bps_threshold']);
+            ->willReturnCallback(function ($ctx, $names) use (&$thresholdsFound) {
+                // Vérifier que les seuils sont présents dans le contexte (seulement pour stay_on_15m_if)
+                if (in_array('expected_r_multiple_gte', $names, true)) {
+                    if (isset($ctx['expected_r_multiple_gte_threshold'])) {
+                        $thresholdsFound['expected_r_multiple_gte'] = $ctx['expected_r_multiple_gte_threshold'];
+                    }
+                }
+                if (in_array('entry_zone_width_pct_lte', $names, true)) {
+                    if (isset($ctx['entry_zone_width_pct_lte_threshold'])) {
+                        $thresholdsFound['entry_zone_width_pct_lte'] = $ctx['entry_zone_width_pct_lte_threshold'];
+                    }
+                }
+                if (in_array('atr_pct_15m_lte_bps', $names, true)) {
+                    if (isset($ctx['atr_pct_15m_lte_bps_threshold'])) {
+                        $thresholdsFound['atr_pct_15m_lte_bps'] = $ctx['atr_pct_15m_lte_bps_threshold'];
+                    }
+                }
 
                 $results = [];
                 foreach ($names as $name) {
@@ -193,7 +230,7 @@ class ExecutionSelectorTest extends TestCase
                         'name' => $name,
                         'passed' => true,
                         'value' => $ctx['expected_r_multiple'] ?? $ctx['entry_zone_width_pct'] ?? $ctx['atr_pct_15m_bps'] ?? null,
-                        'threshold' => null,
+                        'threshold' => $ctx[$name . '_threshold'] ?? null,
                         'meta' => [],
                     ];
                 }
@@ -204,6 +241,14 @@ class ExecutionSelectorTest extends TestCase
 
         $this->assertInstanceOf(ExecutionDecision::class, $decision);
         $this->assertEquals('15m', $decision->executionTimeframe);
+        
+        // Vérifier que les seuils ont été trouvés dans le contexte
+        $this->assertArrayHasKey('expected_r_multiple_gte', $thresholdsFound);
+        $this->assertEquals(2.0, $thresholdsFound['expected_r_multiple_gte']);
+        $this->assertArrayHasKey('entry_zone_width_pct_lte', $thresholdsFound);
+        $this->assertEquals(1.3, $thresholdsFound['entry_zone_width_pct_lte']);
+        $this->assertArrayHasKey('atr_pct_15m_lte_bps', $thresholdsFound);
+        $this->assertEquals(120, $thresholdsFound['atr_pct_15m_lte_bps']);
     }
 
     public function testDecideFallsBackTo15mWhenNoConditionsMatch(): void
@@ -225,8 +270,8 @@ class ExecutionSelectorTest extends TestCase
                     $results[$name] = [
                         'name' => $name,
                         'passed' => false,
-                        'value' => null,
-                        'threshold' => null,
+                        'value' => $ctx['expected_r_multiple'] ?? $ctx['entry_zone_width_pct'] ?? $ctx['atr_pct_15m_bps'] ?? null,
+                        'threshold' => $ctx[$name . '_threshold'] ?? null,
                         'meta' => [],
                     ];
                 }

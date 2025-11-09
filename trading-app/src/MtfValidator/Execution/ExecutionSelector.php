@@ -25,15 +25,27 @@ final class ExecutionSelector
         $cfg = $this->mtfConfig->getConfig();
         $selector = (array)($cfg['execution_selector'] ?? []);
 
-        $stayOn15m = $this->namesFromSpec((array)($selector['stay_on_15m_if'] ?? []));
-        $dropTo5mAny = $this->namesFromSpec((array)($selector['drop_to_5m_if_any'] ?? []));
-        $forbidDropAny = $this->namesFromSpec((array)($selector['forbid_drop_to_5m_if_any'] ?? []));
-        $allow1mOnlyFor = $this->namesFromSpec((array)($selector['allow_1m_only_for'] ?? []));
+        // Extraire les noms et seuils depuis le YAML
+        $stayOn15mSpec = $this->parseSpec((array)($selector['stay_on_15m_if'] ?? []));
+        $dropTo5mAnySpec = $this->parseSpec((array)($selector['drop_to_5m_if_any'] ?? []));
+        $forbidDropAnySpec = $this->parseSpec((array)($selector['forbid_drop_to_5m_if_any'] ?? []));
+        $allow1mOnlyForSpec = $this->parseSpec((array)($selector['allow_1m_only_for'] ?? []));
+
+        $stayOn15m = array_keys($stayOn15mSpec);
+        $dropTo5mAny = array_keys($dropTo5mAnySpec);
+        $forbidDropAny = array_keys($forbidDropAnySpec);
+        $allow1mOnlyFor = array_keys($allow1mOnlyForSpec);
 
         $filtersMandatory = $this->namesFromSpec((array)($cfg['filters_mandatory'] ?? []));
 
+        // Injecter les seuils depuis le YAML dans le contexte (niveau debug)
+        $context = $this->injectThresholds($context, $stayOn15mSpec, 'stay_on_15m_if');
+        $context = $this->injectThresholds($context, $dropTo5mAnySpec, 'drop_to_5m_if_any');
+        $context = $this->injectThresholds($context, $forbidDropAnySpec, 'forbid_drop_to_5m_if_any');
+        // Note: allow_1m_only_for contient des booléens, pas des seuils numériques
+
         // Mandatory filters gate
-        $filtersRes = $filtersMandatory ? $this->registry->evaluate($context, $filtersMandatory) : [];
+        $filtersRes = !empty($filtersMandatory) ? $this->registry->evaluate($context, $filtersMandatory) : [];
         $filtersPassed = true;
         foreach ($filtersRes as $r) { if (!(bool)($r['passed'] ?? false)) { $filtersPassed = false; break; } }
         if (!$filtersPassed) {
@@ -41,7 +53,8 @@ final class ExecutionSelector
             return new ExecutionDecision('NONE', meta: [ 'filters' => $filtersRes ]);
         }
 
-        $stayRes = $stayOn15m ? $this->registry->evaluate($context, $stayOn15m) : [];
+        $stayRes = !empty($stayOn15m) ? $this->registry->evaluate($context, $stayOn15m) : [];
+        $this->logEvaluationResults('stay_on_15m_if', $stayRes, $stayOn15mSpec);
         $stayAll = $this->allPassed($stayRes);
         if ($stayAll) {
             return $this->decision('15m', $context, [
@@ -50,10 +63,12 @@ final class ExecutionSelector
             ]);
         }
 
-        $forbidRes = $forbidDropAny ? $this->registry->evaluate($context, $forbidDropAny) : [];
+        $forbidRes = !empty($forbidDropAny) ? $this->registry->evaluate($context, $forbidDropAny) : [];
+        $this->logEvaluationResults('forbid_drop_to_5m_if_any', $forbidRes, $forbidDropAnySpec);
         $forbidAny = $this->anyPassed($forbidRes);
 
-        $dropRes = $dropTo5mAny ? $this->registry->evaluate($context, $dropTo5mAny) : [];
+        $dropRes = !empty($dropTo5mAny) ? $this->registry->evaluate($context, $dropTo5mAny) : [];
+        $this->logEvaluationResults('drop_to_5m_if_any', $dropRes, $dropTo5mAnySpec);
         $dropAny = $this->anyPassed($dropRes);
 
         if ($dropAny && !$forbidAny) {
@@ -65,7 +80,7 @@ final class ExecutionSelector
             ]);
         }
 
-        $allow1mRes = $allow1mOnlyFor ? $this->registry->evaluate($context, $allow1mOnlyFor) : [];
+        $allow1mRes = !empty($allow1mOnlyFor) ? $this->registry->evaluate($context, $allow1mOnlyFor) : [];
         $allow1mAny = $this->anyPassed($allow1mRes);
         if ($allow1mAny) {
             return $this->decision('1m', $context, [
@@ -109,6 +124,100 @@ final class ExecutionSelector
             }
         }
         return array_values(array_unique($out));
+    }
+
+    /**
+     * Parse une spécification YAML et retourne un array associatif [condition_name => threshold_value]
+     * @param array<int,mixed> $spec
+     * @return array<string,float|int|bool|null> Map condition name => threshold value (ou null si pas de seuil)
+     */
+    private function parseSpec(array $spec): array
+    {
+        $out = [];
+        foreach ($spec as $item) {
+            if (\is_string($item) && $item !== '') {
+                $out[$item] = null; // Pas de seuil, utilise le défaut PHP
+                continue;
+            }
+            if (\is_array($item) && $item !== []) {
+                $k = array_key_first($item);
+                if (\is_string($k) && $k !== '') {
+                    $v = $item[$k];
+                    // Extraire la valeur si c'est numérique (seuil) ou booléen
+                    if (\is_numeric($v)) {
+                        $out[$k] = \is_float($v) ? (float)$v : (int)$v;
+                    } elseif (\is_bool($v)) {
+                        $out[$k] = $v;
+                    } else {
+                        $out[$k] = null;
+                    }
+                }
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Injecte les seuils depuis le YAML dans le contexte pour les conditions qui les acceptent.
+     * @param array<string,mixed> $context
+     * @param array<string,float|int|bool|null> $spec Map condition name => threshold
+     * @param string $groupName Nom du groupe pour le logging
+     * @return array<string,mixed> Contexte enrichi avec les seuils
+     */
+    private function injectThresholds(array $context, array $spec, string $groupName): array
+    {
+        $injected = [];
+        foreach ($spec as $conditionName => $threshold) {
+            if ($threshold === null || \is_bool($threshold)) {
+                continue; // Pas de seuil numérique ou booléen (géré ailleurs)
+            }
+
+            // Construire la clé de contexte pour le seuil : {condition_name}_threshold
+            $thresholdKey = $conditionName . '_threshold';
+            $context[$thresholdKey] = $threshold;
+            $injected[$conditionName] = $threshold;
+        }
+
+        if (!empty($injected)) {
+            $this->logger->debug('[ExecSelector] Thresholds injected from YAML', [
+                'group' => $groupName,
+                'thresholds' => $injected,
+            ]);
+        }
+
+        return $context;
+    }
+
+    /**
+     * Log les résultats d'évaluation avec les seuils utilisés (niveau debug).
+     * @param string $groupName
+     * @param array<string,array> $results
+     * @param array<string,float|int|bool|null> $spec
+     */
+    private function logEvaluationResults(string $groupName, array $results, array $spec): void
+    {
+        if (empty($results)) {
+            return;
+        }
+
+        $summary = [];
+        foreach ($results as $name => $result) {
+            $thresholdUsed = $result['threshold'] ?? null;
+            $yamlThreshold = $spec[$name] ?? null;
+            $usedDefault = ($yamlThreshold === null && $thresholdUsed !== null);
+
+            $summary[$name] = [
+                'passed' => $result['passed'] ?? false,
+                'value' => $result['value'] ?? null,
+                'threshold_used' => $thresholdUsed,
+                'threshold_source' => $usedDefault ? 'default_php' : 'yaml',
+            ];
+        }
+
+        $this->logger->debug('[ExecSelector] Evaluation results', [
+            'group' => $groupName,
+            'results' => $summary,
+        ]);
     }
 
     /** @param array<string,array> $results */
