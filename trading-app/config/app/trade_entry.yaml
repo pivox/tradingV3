@@ -21,7 +21,7 @@ trade_entry:
         # Clés déplacées depuis src/MtfValidator/config/validations.yaml (section defaults)
         # --- Sizing & Risk ---
         risk_pct_percent: 5.0                    # % risque par défaut (converti en décimal)
-        initial_margin_usdt: 20.0                 # Marge initiale en USDT
+        initial_margin_usdt: 25.0                 # Marge initiale en USDT
         fallback_account_balance: 0.0             # Solde de fallback si marge invalide
         timeframe_multipliers:                    # Multiplicateurs par timeframe pour ajuster sizing
             '1m': 1.0
@@ -66,7 +66,9 @@ trade_entry:
     # ✅ UTILISÉES: TradingConfigService::getRiskConfig(), TradingParameters::riskPct()
     risk:
         fixed_risk_pct: 5.0                        # % du capital risqué par trade (base)
-        daily_max_loss_pct: 6.0                     # Coupe-circuit journalier
+        daily_max_loss_pct: 6.0                     # Coupe-circuit journalier (pourcentage - non utilisé par ce guard)
+        daily_max_loss_usdt: 10.0                   # Coupe-circuit journalier absolu (USDT). Si > 0, bloque les nouvelles entrées après -X USDT.
+        daily_loss_count_unrealized: true           # Utiliser l'equity (incl. non réalisé) si disponible pour le calcul journalier
         max_concurrent_positions: 4                  # Limite de positions simultanées
         meta: >
             Risque fixe par trade, coupe-circuit journalier et limite de positions simultanées.
@@ -148,4 +150,3 @@ trade_entry:
             Transforme un signal validé (MTF) en plans d'exécution sûrs, traçables et idempotents.
             Sélection dynamique 1m vs 5m, calcul du dernier prix (WS->REST->K-line),
             sizing, levier, orchestration, état, tests, observabilité.
-

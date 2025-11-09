@@ -16,6 +16,7 @@ final class TradeEntryService
         private readonly BuildOrderPlan $planner,
         private readonly ExecuteOrderPlan $executor,
         private readonly TradeEntryMetricsService $metrics,
+        private readonly \App\TradeEntry\Policy\DailyLossGuard $dailyLossGuard,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
@@ -24,6 +25,43 @@ final class TradeEntryService
         ?string $decisionKey = null,
         ?PostExecutionHookInterface $hook = null
     ): ExecutionResult {
+        // Daily loss guard: block trading when limit is reached
+        try {
+            $state = $this->dailyLossGuard->checkAndMaybeLock();
+            if ($state['locked'] === true) {
+                $cid = sprintf('SKIP-DAILY-LOCK-%s', substr(sha1(($decisionKey ?? '') . microtime(true)), 0, 12));
+                $this->orderJourneyLogger->warning('order_journey.trade_entry.blocked', [
+                    'symbol' => $request->symbol,
+                    'decision_key' => $decisionKey,
+                    'reason' => 'daily_loss_limit_reached',
+                    'limit_usdt' => $state['limit_usdt'] ?? null,
+                    'pnl_today' => $state['pnl_today'] ?? null,
+                    'measure' => $state['measure'] ?? null,
+                    'measure_value' => $state['measure_value'] ?? null,
+                    'start_measure' => $state['start_measure'] ?? null,
+                ]);
+                return new ExecutionResult(
+                    clientOrderId: $cid,
+                    exchangeOrderId: null,
+                    status: 'skipped',
+                    raw: [
+                        'reason' => 'daily_loss_limit_reached',
+                        'limit_usdt' => $state['limit_usdt'] ?? null,
+                        'pnl_today' => $state['pnl_today'] ?? null,
+                        'measure' => $state['measure'] ?? null,
+                        'measure_value' => $state['measure_value'] ?? null,
+                        'start_measure' => $state['start_measure'] ?? null,
+                    ],
+                );
+            }
+        } catch (\Throwable $e) {
+            // If guard fails unexpectedly, do not block, just log and continue
+            $this->orderJourneyLogger->error('order_journey.trade_entry.guard_error', [
+                'symbol' => $request->symbol,
+                'decision_key' => $decisionKey,
+                'error' => $e->getMessage(),
+            ]);
+        }
         // Correlation key for logs across steps (allow external propagation)
         if ($decisionKey === null) {
             try {

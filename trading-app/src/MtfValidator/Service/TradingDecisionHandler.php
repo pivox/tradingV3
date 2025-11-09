@@ -58,7 +58,7 @@ final class TradingDecisionHandler
         ]);
 
         // 1. Validation MTF spécifique
-        if (!$this->canExecuteMtfTrading($symbolResult, $mtfRunDto, $forcedAtr5m, $decisionKey, $effectiveTf)) {
+        if (!$this->canExecuteMtfTrading($symbolResult, $mtfRunDto, $forcedAtr5m, $decisionKey, null)) {
             return $this->createSkippedResult($symbolResult, 'trading_conditions_not_met', $forcedAtr5m, $decisionKey);
         }
 
@@ -85,12 +85,13 @@ final class TradingDecisionHandler
             'entry_zone_width_pct' => $execDecision->entryZoneWidthPct,
         ] + ['meta' => $execDecision->meta]);
 
-        // 3. Construction via Builder (délégation)
+        // 3. Construction via Builder (délégation) avec champs minimaux
         $tradeRequest = $this->requestBuilder->fromMtfSignal(
-            $symbolResult,
+            $symbolResult->symbol,
+            (string)$symbolResult->signalSide,
+            $effectiveTf,
             $symbolResult->currentPrice,
             (\is_float($atrForTf) && $atrForTf > 0.0) ? $atrForTf : $forcedAtr5m,
-            $effectiveTf
         );
 
         if ($tradeRequest === null) {
