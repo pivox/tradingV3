@@ -4,14 +4,13 @@ declare(strict_types=1);
 namespace App\TradeEntry\Builder;
 
 use App\Config\TradeEntryConfig;
-use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Types\Side;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
- * Builder pour créer un TradeEntryRequest depuis un signal MTF (SymbolResultDto).
+ * Builder pour créer un TradeEntryRequest depuis des champs MTF minimaux.
  * Délègue la logique de construction depuis TradingDecisionHandler.
  */
 final class TradeEntryRequestBuilder
@@ -23,28 +22,32 @@ final class TradeEntryRequestBuilder
     ) {}
 
     /**
-     * Construit un TradeEntryRequest depuis un SymbolResultDto MTF.
-     * 
-     * @param SymbolResultDto $symbolResult Résultat de validation MTF
-     * @param float|null $price Prix courant (optionnel, peut venir de $symbolResult)
-     * @param float|null $atr Valeur ATR (optionnel, peut venir de $symbolResult)
-     * @return TradeEntryRequest|null null si construction impossible
+     * Construit un TradeEntryRequest depuis des champs minimaux (MTF → TradeEntry).
+     * On réduit la dépendance à SymbolResultDto pour ne garder que le nécessaire.
+     *
+     * @param string      $symbol       Symbole
+     * @param string      $signalSide   'LONG' ou 'SHORT'
+     * @param string|null $executionTf  TF d'exécution effectif (ex: '1m','5m','15m')
+     * @param float|null  $price        Prix courant (optionnel)
+     * @param float|null  $atr          Valeur ATR du TF d'exécution (optionnel si stop_from ≠ 'atr')
+     * @return TradeEntryRequest|null
      */
     public function fromMtfSignal(
-        SymbolResultDto $symbolResult,
+        string $symbol,
+        string $signalSide,
+        ?string $executionTf = null,
         ?float $price = null,
-        ?float $atr = null,
-        ?string $executionTfOverride = null
+        ?float $atr = null
     ): ?TradeEntryRequest {
-        $side = strtoupper((string)$symbolResult->signalSide);
+        $side = strtoupper((string)$signalSide);
         if (!in_array($side, ['LONG', 'SHORT'], true)) {
             return null;
         }
 
-        $price = $price ?? $symbolResult->currentPrice;
+        $price = $price ?? null;
         $atr = $atr ?? null;
 
-        $executionTf = strtolower($executionTfOverride ?? ($symbolResult->executionTf ?? '1m'));
+        $executionTf = strtolower($executionTf ?? '1m');
         $defaults = $this->tradeEntryConfig->getDefaults();
         $multipliers = $defaults['timeframe_multipliers'] ?? [];
         $tfMultiplier = (float)($multipliers[$executionTf] ?? 1.0);
@@ -72,23 +75,18 @@ final class TradeEntryRequestBuilder
         // GARDE CRITIQUE : Si stop_from='atr' est configuré mais ATR invalide/manquant, REJETER l'ordre
         if ($stopFrom === 'atr' && ($atrValue === null || $atrValue <= 0.0)) {
             $this->logger->warning('[TradeEntryRequestBuilder] ATR required but invalid/missing', [
-                'symbol' => $symbolResult->symbol,
+                'symbol' => $symbol,
                 'stop_from' => $stopFrom,
                 'atr' => $atr,
                 'atr_value' => $atrValue,
             ]);
             $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
-                'symbol' => $symbolResult->symbol,
+                'symbol' => $symbol,
                 'reason' => 'atr_required_but_invalid',
                 'stop_from' => $stopFrom,
                 'atr' => $atr,
             ]);
             return null;  // BLOQUER l'ordre au lieu de basculer silencieusement sur 'risk'
-        }
-        
-        // Fallback vers 'risk' SEULEMENT si stop_from n'était PAS configuré sur 'atr' à la base
-        if ($atrValue === null && $stopFrom === 'atr') {
-            $stopFrom = 'risk';
         }
 
         $orderType = $defaults['order_type'] ?? 'limit';
@@ -133,7 +131,7 @@ final class TradeEntryRequestBuilder
         $sideEnum = $side === 'LONG' ? Side::Long : Side::Short;
 
         return new TradeEntryRequest(
-            symbol: $symbolResult->symbol,
+            symbol: $symbol,
             side: $sideEnum,
             orderType: $orderType,
             openType: $defaults['open_type'] ?? 'isolated',
