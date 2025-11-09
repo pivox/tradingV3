@@ -7,6 +7,7 @@ namespace App\MtfValidator\Controller;
 use App\Contract\Provider\MainProviderInterface;
 use App\MtfValidator\Service\MtfService;
 use App\MtfValidator\Service\MtfRunService;
+use App\MtfValidator\Service\PerformanceProfiler;
 use App\Provider\Repository\ContractRepository;
 use App\Provider\Repository\KlineRepository;
 use App\MtfValidator\Repository\MtfAuditRepository;
@@ -603,6 +604,9 @@ class MtfController extends AbstractController
     #[Route('/run', name: 'run', methods: ['POST', 'GET'])]
     public function runMtfCycle(Request $request): JsonResponse
     {
+        $profiler = new PerformanceProfiler();
+        $apiStartTime = microtime(true);
+        
         // Parse JSON request body for POST or query parameters for GET
         $data = [];
         if ($request->getMethod() === 'POST') {
@@ -620,7 +624,16 @@ class MtfController extends AbstractController
         $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
         $workers = max(1, (int)($data['workers'] ?? 1));
 
+        $resolveStart = microtime(true);
         $symbols = $this->resolveSymbols($symbolsInput);
+        $profiler->increment('controller', 'resolve_symbols', microtime(true) - $resolveStart);
+
+        // Filtrer les symboles avec ordres/positions ouverts AVANT de lancer les workers
+        $filterStart = microtime(true);
+        $runIdString = Uuid::uuid4()->toString();
+        $excludedSymbols = [];
+        $symbols = $this->filterSymbolsWithOpenOrdersOrPositions($symbols, $runIdString, $excludedSymbols);
+        $profiler->increment('controller', 'filter_symbols', microtime(true) - $filterStart);
 
         try {
             if ($workers > 1) {
@@ -630,10 +643,26 @@ class MtfController extends AbstractController
                     $forceRun,
                     $currentTf,
                     $forceTimeframeCheck,
-                    $workers
+                    $workers,
+                    $profiler
                 );
             } else {
                 $result = $this->runSequential($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck);
+            }
+            
+            // Après le traitement, mettre à jour les switches pour les symboles exclus
+            if (!empty($excludedSymbols)) {
+                $this->updateSwitchesForExcludedSymbols($excludedSymbols, $runIdString);
+            }
+
+            // Appeler processTpSlRecalculation une seule fois après tous les workers
+            // (au lieu de l'appeler dans chaque worker pour éviter les erreurs 429)
+            try {
+                $this->mtfRunService->processTpSlRecalculation($dryRun);
+            } catch (\Throwable $e) {
+                $this->logger->warning('[MTF Controller] TP/SL recalculation failed', [
+                    'error' => $e->getMessage(),
+                ]);
             }
 
             $status = empty($result['errors']) ? 'success' : 'partial_success';
@@ -685,6 +714,16 @@ class MtfController extends AbstractController
                 return strcmp($a['symbol'] ?? '', $b['symbol'] ?? '');
             });
 
+            $apiTotalTime = microtime(true) - $apiStartTime;
+            $performanceReport = $profiler->getReport();
+            
+            $this->logger->info('[MTF Controller] Performance Analysis', [
+                'total_api_time' => round($apiTotalTime, 3),
+                'symbols_count' => count($symbols),
+                'workers' => $workers,
+                'performance_report' => $performanceReport,
+            ]);
+
             return $this->json([
                 'status' => $status,
                 'message' => 'MTF run completed',
@@ -696,6 +735,7 @@ class MtfController extends AbstractController
                     'summary_by_tf' => $summaryByTf,
                     'rejected_by' => $rejectedBy,
                     'last_validated' => $lastValidated,
+                    'performance' => $performanceReport,
                 ],
             ]);
         } catch (\Throwable $e) {
@@ -819,7 +859,8 @@ class MtfController extends AbstractController
         bool $forceRun,
         ?string $currentTf,
         bool $forceTimeframeCheck,
-        int $workers
+        int $workers,
+        PerformanceProfiler $profiler
     ): array {
         $queue = new \SplQueue();
         foreach ($symbols as $symbol) {
@@ -830,6 +871,9 @@ class MtfController extends AbstractController
         $results = [];
         $errors = [];
         $startedAt = microtime(true);
+        $workerStartTimes = [];
+        $pollingTime = 0;
+        $pollingCount = 0;
 
         $options = [
             'dry_run' => $dryRun,
@@ -839,8 +883,11 @@ class MtfController extends AbstractController
         ];
 
         while (!$queue->isEmpty() || $active !== []) {
+            $pollStart = microtime(true);
+            
             while (count($active) < $workers && !$queue->isEmpty()) {
                 $symbol = $queue->dequeue();
+                $workerStart = microtime(true);
                 $process = new Process(
                     $this->buildWorkerCommand($symbol, $options),
                     $this->projectDir,
@@ -848,17 +895,22 @@ class MtfController extends AbstractController
                     ['APP_DEBUG' => '1']
                 );
                 $process->start();
+                $workerStartTimes[$symbol] = $workerStart;
                 $active[] = ['symbol' => $symbol, 'process' => $process];
+                $profiler->increment('controller', 'worker_start', microtime(true) - $workerStart, $symbol);
             }
 
+            $hasRunning = false;
             foreach ($active as $index => $worker) {
                 $process = $worker['process'];
                 if ($process->isRunning()) {
+                    $hasRunning = true;
                     continue;
                 }
 
                 $symbol = $worker['symbol'];
-                unset($active[$index]);
+                $workerDuration = microtime(true) - ($workerStartTimes[$symbol] ?? microtime(true));
+                unset($active[$index], $workerStartTimes[$symbol]);
                 $active = array_values($active);
 
                 if ($process->isSuccessful()) {
@@ -887,25 +939,38 @@ class MtfController extends AbstractController
                             $results[$resultSymbol] = $info;
                         }
                     }
+                    
+                    $profiler->increment('controller', 'worker_complete', $workerDuration, $symbol);
                 } else {
                     $stderr = trim($process->getErrorOutput());
                     $stdout = trim($process->getOutput());
                     $msg = $stderr !== '' ? $stderr : ($stdout !== '' ? $stdout : 'unknown error');
                     $errors[] = sprintf('Worker %s: %s', $symbol, $msg);
+                    $profiler->increment('controller', 'worker_error', $workerDuration, $symbol);
                 }
             }
 
-            usleep(100_000);
+            $pollDuration = microtime(true) - $pollStart;
+            $pollingTime += $pollDuration;
+            $pollingCount++;
+            
+            if ($hasRunning) {
+                usleep(100_000);
+            }
         }
+        
+        $profiler->increment('controller', 'polling_total', $pollingTime);
+        $profiler->increment('controller', 'polling_count', 0, null, null, ['count' => $pollingCount]);
 
         $processed = count($results);
         $successCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'SUCCESS'));
         $failedCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'ERROR'));
         $skippedCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'SKIPPED'));
 
+        $totalExecutionTime = microtime(true) - $startedAt;
         $summary = [
             'run_id' => Uuid::uuid4()->toString(),
-            'execution_time_seconds' => round(microtime(true) - $startedAt, 3),
+            'execution_time_seconds' => round($totalExecutionTime, 3),
             'symbols_requested' => count($symbols),
             'symbols_processed' => $processed,
             'symbols_successful' => $successCount,
@@ -917,7 +982,11 @@ class MtfController extends AbstractController
             'current_tf' => $currentTf,
             'timestamp' => $this->clock->now()->format('Y-m-d H:i:s'),
             'status' => empty($errors) ? 'completed' : 'completed_with_errors',
+            'polling_time_seconds' => round($pollingTime, 3),
+            'polling_count' => $pollingCount,
         ];
+        
+        $profiler->increment('controller', 'parallel_execution_total', $totalExecutionTime);
 
         return [
             'summary' => $summary,
@@ -976,6 +1045,7 @@ class MtfController extends AbstractController
             'mtf:run-worker',
             '--symbols=' . $symbol,
             '--dry-run=' . ($options['dry_run'] ? '1' : '0'),
+            '--skip-open-filter', // Le filtrage est fait dans le contrôleur, pas dans les workers
         ];
 
         if ($options['force_run']) {
@@ -1007,5 +1077,140 @@ class MtfController extends AbstractController
             return $bin;
         }
         return 'php';
+    }
+
+    /**
+     * Filtre les symboles ayant des ordres ou positions ouverts
+     * Cette méthode est appelée AVANT le traitement des workers pour exclure ces symboles
+     * 
+     * @param array<string> $symbols Liste des symboles à filtrer
+     * @param string $runIdString ID du run pour les logs
+     * @param array<string> $excludedSymbols Référence pour retourner les symboles exclus
+     * @return array<string> Liste des symboles à traiter (sans ceux exclus)
+     */
+    private function filterSymbolsWithOpenOrdersOrPositions(array $symbols, string $runIdString, array &$excludedSymbols = []): array
+    {
+        $excludedSymbols = [];
+        
+        if (empty($symbols) || (!$this->mainProvider->getAccountProvider() && !$this->mainProvider->getOrderProvider())) {
+            return $symbols;
+        }
+
+        $symbolsToProcess = [];
+
+        // Récupérer les symboles avec positions ouvertes depuis l'exchange
+        $openPositionSymbols = [];
+        $accountProvider = $this->mainProvider->getAccountProvider();
+        if ($accountProvider) {
+            try {
+                $openPositions = $accountProvider->getOpenPositions();
+                $this->logger->info('[MTF Controller] Fetched open positions', [
+                    'run_id' => $runIdString,
+                    'count' => count($openPositions),
+                ]);
+                
+                foreach ($openPositions as $position) {
+                    $positionSymbol = strtoupper($position->symbol ?? '');
+                    if ($positionSymbol !== '' && !in_array($positionSymbol, $openPositionSymbols, true)) {
+                        $openPositionSymbols[] = $positionSymbol;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('[MTF Controller] Failed to fetch open positions from exchange', [
+                    'run_id' => $runIdString,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        // Récupérer les symboles avec ordres ouverts depuis l'exchange
+        $openOrderSymbols = [];
+        $orderProvider = $this->mainProvider->getOrderProvider();
+        if ($orderProvider) {
+            try {
+                $openOrders = $orderProvider->getOpenOrders();
+                $this->logger->info('[MTF Controller] Fetched open orders', [
+                    'run_id' => $runIdString,
+                    'count' => count($openOrders),
+                ]);
+                
+                foreach ($openOrders as $order) {
+                    $orderSymbol = strtoupper($order->symbol ?? '');
+                    if ($orderSymbol !== '' && !in_array($orderSymbol, $openOrderSymbols, true)) {
+                        $openOrderSymbols[] = $orderSymbol;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('[MTF Controller] Failed to fetch open orders from exchange', [
+                    'run_id' => $runIdString,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        // Combiner les symboles à exclure
+        $symbolsWithActivity = array_unique(array_merge($openPositionSymbols, $openOrderSymbols));
+
+        // Filtrer les symboles
+        foreach ($symbols as $symbol) {
+            $symbolUpper = strtoupper($symbol);
+            
+            if (in_array($symbolUpper, $symbolsWithActivity, true)) {
+                $excludedSymbols[] = $symbolUpper;
+            } else {
+                $symbolsToProcess[] = $symbol;
+            }
+        }
+
+        if (!empty($excludedSymbols)) {
+            $this->logger->info('[MTF Controller] Filtered symbols with open orders/positions', [
+                'run_id' => $runIdString,
+                'excluded_count' => count($excludedSymbols),
+                'excluded_symbols' => array_slice($excludedSymbols, 0, 10),
+                'remaining_count' => count($symbolsToProcess),
+            ]);
+        }
+
+        return $symbolsToProcess;
+    }
+
+    /**
+     * Met à jour les switches pour les symboles exclus (appelé APRÈS le traitement)
+     * 
+     * @param array<string> $excludedSymbols Liste des symboles exclus (avec ordres/positions ouverts)
+     * @param string $runIdString ID du run pour les logs
+     */
+    private function updateSwitchesForExcludedSymbols(array $excludedSymbols, string $runIdString): void
+    {
+        // Mettre à jour les switches pour les symboles exclus
+        foreach ($excludedSymbols as $symbolUpper) {
+            try {
+                $isSwitchOff = !$this->mtfSwitchRepository->isSymbolSwitchOn($symbolUpper);
+                
+                if ($isSwitchOff) {
+                    $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, '1m');
+                    $this->logger->info('[MTF Controller] Symbol switch extended (was OFF)', [
+                        'run_id' => $runIdString,
+                        'symbol' => $symbolUpper,
+                        'duration' => '1 minute',
+                        'reason' => 'has_open_orders_or_positions',
+                    ]);
+                } else {
+                    $this->mtfSwitchRepository->turnOffSymbolFor15Minutes($symbolUpper);
+                    $this->logger->info('[MTF Controller] Symbol switch disabled', [
+                        'run_id' => $runIdString,
+                        'symbol' => $symbolUpper,
+                        'duration' => '15 minutes',
+                        'reason' => 'has_open_orders_or_positions',
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                $this->logger->error('[MTF Controller] Failed to update symbol switch', [
+                    'run_id' => $runIdString,
+                    'symbol' => $symbolUpper,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
     }
 }

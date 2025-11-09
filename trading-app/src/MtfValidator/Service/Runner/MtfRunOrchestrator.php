@@ -87,22 +87,10 @@ final class MtfRunOrchestrator
 
         try {
             // Utiliser la liste de symboles fournie par le DTO
+            // Note: Le filtrage des symboles avec ordres/positions ouverts est maintenant fait
+            // dans le contrôleur AVANT d'envoyer les symboles aux workers
             $symbols = $mtfRunDto->symbols;
             if (empty($symbols)) {
-                yield from $this->yieldEmptyResult($mtfRunDto, $runId, $startTime);
-                return;
-            }
-
-            // Filtrer les symboles avec ordres/positions ouverts et désactiver le switch,
-            // sauf si déjà filtrés en amont (workers/contrôleur)
-            if (!$mtfRunDto->skipOpenStateFilter) {
-                $symbols = $this->filterSymbolsWithOpenOrdersOrPositions($symbols, $runIdString);
-            }
-
-            if (empty($symbols)) {
-                $this->logger->info('[MTF Orchestrator] All symbols filtered out (have open orders/positions)', [
-                    'run_id' => $runIdString,
-                ]);
                 yield from $this->yieldEmptyResult($mtfRunDto, $runId, $startTime);
                 return;
             }

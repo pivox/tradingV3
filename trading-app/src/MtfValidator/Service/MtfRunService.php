@@ -110,10 +110,9 @@ class MtfRunService implements MtfValidatorInterface
             $totalProcessed = $symbolsSuccessful + $symbolsFailed + $symbolsSkipped;
             $successRate = $totalProcessed > 0 ? ($symbolsSuccessful / $totalProcessed) * 100 : 0;
 
-            // Calcul et mise à jour des TP/SL pour les positions avec exactement 1 ordre TP
-            if ($this->tpSlService !== null && $this->mainProvider !== null) {
-                $this->processTpSlRecalculation($request->dryRun);
-            }
+            // Note: processTpSlRecalculation n'est plus appelé ici pour éviter les appels multiples
+            // dans les workers parallèles. Il doit être appelé une seule fois après tous les workers
+            // dans le contrôleur ou la commande.
 
             return new MtfRunResponseDto(
                 runId: $runId,
@@ -160,8 +159,10 @@ class MtfRunService implements MtfValidatorInterface
 
     /**
      * Traite le recalcul des TP/SL pour les positions avec exactement 1 ordre TP
+     * Cette méthode doit être appelée une seule fois après tous les workers pour éviter
+     * les appels API multiples qui causent des erreurs 429.
      */
-    private function processTpSlRecalculation(bool $dryRun): void
+    public function processTpSlRecalculation(bool $dryRun): void
     {
         try {
             $accountProvider = $this->mainProvider->getAccountProvider();

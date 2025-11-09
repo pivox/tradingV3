@@ -48,6 +48,8 @@ final class SymbolProcessor
         ]);
 
         try {
+            $symbolStartTime = microtime(true);
+            
             $mtfGenerator = $this->mtfService->runForSymbol(
                 $runId,
                 $symbol,
@@ -67,6 +69,13 @@ final class SymbolProcessor
             // Récupérer le résultat final
             $finalResult = $mtfGenerator->getReturn();
             $symbolResult = $finalResult ?? $result;
+            
+            $symbolDuration = microtime(true) - $symbolStartTime;
+            $this->logger->info('[Symbol Processor] Performance', [
+                'symbol' => $symbol,
+                'duration_seconds' => round($symbolDuration, 3),
+                'status' => $symbolResult['status'] ?? 'UNKNOWN',
+            ]);
 
             if ($symbolResult === null) {
                 $this->orderJourneyLogger->error('order_journey.symbol_processor.no_result', [

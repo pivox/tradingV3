@@ -575,9 +575,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         $result4h = null;
         if ($include4h) {
+            $tf4hStart = microtime(true);
             $this->logger->debug('[MTF] Start TF 4h', ['symbol' => $symbol]);
             $hadCache4h = null;
+            $cacheStart = microtime(true);
             $cached = $this->getCachedTfResult($symbol, '4h', $hadCache4h);
+            $cacheDuration = microtime(true) - $cacheStart;
             if ($hadCache4h === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '4h';
@@ -588,6 +591,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result4h = $cached;
+                $this->logger->info('[MTF] Performance 4h', [
+                    'symbol' => $symbol,
+                    'timeframe' => '4h',
+                    'duration_seconds' => round(microtime(true) - $tf4hStart, 3),
+                    'cache_duration' => round($cacheDuration, 3),
+                    'cache_hit' => true,
+                ]);
             } else {
                 $result4h = $this->runTimeframeProcessor(
                 $this->timeframe4hService,
@@ -600,6 +610,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '4h', $result4h);
+                $this->logger->info('[MTF] Performance 4h', [
+                    'symbol' => $symbol,
+                    'timeframe' => '4h',
+                    'duration_seconds' => round(microtime(true) - $tf4hStart, 3),
+                    'cache_duration' => round($cacheDuration, 3),
+                    'cache_hit' => false,
+                ]);
             }
             // Persister systématiquement un snapshot 4h (même en INVALID)
             $this->persistIndicatorSnapshot($symbol, '4h', $result4h);
@@ -628,8 +645,11 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         $result1h = null;
         if ($include1h) {
+            $tf1hStart = microtime(true);
             $hadCache1h = null;
+            $cacheStart = microtime(true);
             $cached = $this->getCachedTfResult($symbol, '1h', $hadCache1h);
+            $cacheDuration = microtime(true) - $cacheStart;
             if ($hadCache1h === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '1h';
@@ -640,6 +660,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result1h = $cached;
+                $this->logger->info('[MTF] Performance 1h', [
+                    'symbol' => $symbol,
+                    'timeframe' => '1h',
+                    'duration_seconds' => round(microtime(true) - $tf1hStart, 3),
+                    'cache_duration' => round($cacheDuration, 3),
+                    'cache_hit' => true,
+                ]);
             } else {
                 $result1h = $this->runTimeframeProcessor(
                 $this->timeframe1hService,
@@ -652,6 +679,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '1h', $result1h);
+                $this->logger->info('[MTF] Performance 1h', [
+                    'symbol' => $symbol,
+                    'timeframe' => '1h',
+                    'duration_seconds' => round(microtime(true) - $tf1hStart, 3),
+                    'cache_duration' => round($cacheDuration, 3),
+                    'cache_hit' => false,
+                ]);
             }
             // Persister systématiquement un snapshot 1h
             $this->persistIndicatorSnapshot($symbol, '1h', $result1h);
@@ -699,9 +733,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         // Étape 15m (seulement si incluse)
         $result15m = null;
         if ($include15m) {
+            $tf15mStart = microtime(true);
             $this->logger->debug('[MTF] Start TF 15m', ['symbol' => $symbol]);
             $hadCache15m = null;
+            $cacheStart = microtime(true);
             $cached = $this->getCachedTfResult($symbol, '15m', $hadCache15m);
+            $cacheDuration = microtime(true) - $cacheStart;
             if ($hadCache15m === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '15m';
@@ -712,6 +749,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result15m = $cached;
+                $this->logger->info('[MTF] Performance 15m', [
+                    'symbol' => $symbol,
+                    'timeframe' => '15m',
+                    'duration_seconds' => round(microtime(true) - $tf15mStart, 3),
+                    'cache_duration' => round($cacheDuration, 3),
+                    'cache_hit' => true,
+                ]);
             } else {
                 $result15m = $this->runTimeframeProcessor(
                 $this->timeframe15mService,
@@ -724,6 +768,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '15m', $result15m);
+                $this->logger->info('[MTF] Performance 15m', [
+                    'symbol' => $symbol,
+                    'timeframe' => '15m',
+                    'duration_seconds' => round(microtime(true) - $tf15mStart, 3),
+                    'cache_duration' => round($cacheDuration, 3),
+                    'cache_hit' => false,
+                ]);
             }
             // Persister systématiquement un snapshot 15m
             $this->persistIndicatorSnapshot($symbol, '15m', $result15m);
@@ -776,9 +827,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         // Étape 5m (seulement si incluse)
         $result5m = null;
         if ($include5m) {
+            $tf5mStart = microtime(true);
             $this->logger->debug('[MTF] Start TF 5m', ['symbol' => $symbol]);
             $hadCache5m = null;
+            $cacheStart = microtime(true);
             $cached = $this->getCachedTfResult($symbol, '5m', $hadCache5m);
+            $cacheDuration = microtime(true) - $cacheStart;
             if ($hadCache5m === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '5m';
@@ -789,6 +843,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result5m = $cached;
+                $this->logger->info('[MTF] Performance 5m', [
+                    'symbol' => $symbol,
+                    'timeframe' => '5m',
+                    'duration_seconds' => round(microtime(true) - $tf5mStart, 3),
+                    'cache_duration' => round($cacheDuration, 3),
+                    'cache_hit' => true,
+                ]);
             } else {
                 $result5m = $this->runTimeframeProcessor(
                 $this->timeframe5mService,
@@ -801,6 +862,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '5m', $result5m);
+                $this->logger->info('[MTF] Performance 5m', [
+                    'symbol' => $symbol,
+                    'timeframe' => '5m',
+                    'duration_seconds' => round(microtime(true) - $tf5mStart, 3),
+                    'cache_duration' => round($cacheDuration, 3),
+                    'cache_hit' => false,
+                ]);
             }
             // Calculer ATR 5m (toujours)
             try {
@@ -865,9 +933,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         // Étape 1m (seulement si incluse)
         $result1m = null;
         if ($include1m) {
+            $tf1mStart = microtime(true);
             $this->logger->debug('[MTF] Start TF 1m', ['symbol' => $symbol]);
             $hadCache1m = null;
+            $cacheStart = microtime(true);
             $cached = $this->getCachedTfResult($symbol, '1m', $hadCache1m);
+            $cacheDuration = microtime(true) - $cacheStart;
             if ($hadCache1m === false) {
                 $cacheWarmup = true;
                 $cacheWarmupTfs[] = '1m';
@@ -878,6 +949,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result1m = $cached;
+                $this->logger->info('[MTF] Performance 1m', [
+                    'symbol' => $symbol,
+                    'timeframe' => '1m',
+                    'duration_seconds' => round(microtime(true) - $tf1mStart, 3),
+                    'cache_duration' => round($cacheDuration, 3),
+                    'cache_hit' => true,
+                ]);
             } else {
                 $result1m = $this->runTimeframeProcessor(
                 $this->timeframe1mService,
@@ -890,6 +968,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '1m', $result1m);
+                $this->logger->info('[MTF] Performance 1m', [
+                    'symbol' => $symbol,
+                    'timeframe' => '1m',
+                    'duration_seconds' => round(microtime(true) - $tf1mStart, 3),
+                    'cache_duration' => round($cacheDuration, 3),
+                    'cache_hit' => false,
+                ]);
             }
             // Calculer ATR 1m (toujours)
             try {

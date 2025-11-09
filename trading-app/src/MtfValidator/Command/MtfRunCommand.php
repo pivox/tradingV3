@@ -150,9 +150,10 @@ class MtfRunCommand extends Command
             $symbolsCountBeforeFilter = count($symbols);
             // Pré-filtrer les symboles avec ordres/positions ouverts une seule fois côté parent,
             // puis indiquer aux workers de ne pas refaire le filtrage (évite des appels 429)
+            $excludedSymbols = [];
+            $prefilterRunId = 'cli:' . Uuid::uuid4()->toString();
             try {
-                $prefilterRunId = Uuid::uuid4()->toString();
-                $symbols = $this->orchestrator->filterSymbolsWithOpenOrdersOrPositions($symbols, 'cli:' . $prefilterRunId);
+                $symbols = $this->filterSymbolsWithOpenOrdersOrPositions($symbols, $prefilterRunId, $excludedSymbols);
                 $symbolsCountAfterFilter = count($symbols);
                 if ($symbolsCountAfterFilter < $symbolsCountBeforeFilter) {
                     $io->note(sprintf(
@@ -189,6 +190,23 @@ class MtfRunCommand extends Command
             $errors = $result['errors'] ?? [];
 
             $this->renderFinalReport($io, $summary, $details, $commandStart);
+
+            // Mettre à jour les switches pour les symboles exclus (après le traitement)
+            if (!empty($excludedSymbols)) {
+                try {
+                    $this->updateSwitchesForExcludedSymbols($excludedSymbols, $prefilterRunId);
+                } catch (\Throwable $e) {
+                    $io->warning('Mise à jour des switches pour symboles exclus échouée: ' . $e->getMessage());
+                }
+            }
+
+            // Appeler processTpSlRecalculation une seule fois après tous les workers
+            // (au lieu de l'appeler dans chaque worker pour éviter les erreurs 429)
+            try {
+                $this->mtfValidator->processTpSlRecalculation($dryRun);
+            } catch (\Throwable $e) {
+                $io->warning('TP/SL recalculation failed: ' . $e->getMessage());
+            }
 
             if ($autoSwitchInvalid && !$dryRun) {
                 $this->processInvalidSymbols($io, $details, $switchDuration);
@@ -938,5 +956,101 @@ class MtfRunCommand extends Command
         }
 
         return (string) $error;
+    }
+
+    /**
+     * Filtre les symboles ayant des ordres ou positions ouverts
+     * Cette méthode est appelée AVANT le traitement des workers pour exclure ces symboles
+     * 
+     * @param array<string> $symbols Liste des symboles à filtrer
+     * @param string $runIdString ID du run pour les logs
+     * @param array<string> $excludedSymbols Référence pour retourner les symboles exclus
+     * @return array<string> Liste des symboles à traiter (sans ceux exclus)
+     */
+    private function filterSymbolsWithOpenOrdersOrPositions(array $symbols, string $runIdString, array &$excludedSymbols = []): array
+    {
+        $excludedSymbols = [];
+        
+        if (empty($symbols) || (!$this->mainProvider->getAccountProvider() && !$this->mainProvider->getOrderProvider())) {
+            return $symbols;
+        }
+
+        $symbolsToProcess = [];
+
+        // Récupérer les symboles avec positions ouvertes depuis l'exchange
+        $openPositionSymbols = [];
+        $accountProvider = $this->mainProvider->getAccountProvider();
+        if ($accountProvider) {
+            try {
+                $openPositions = $accountProvider->getOpenPositions();
+                
+                foreach ($openPositions as $position) {
+                    $positionSymbol = strtoupper($position->symbol ?? '');
+                    if ($positionSymbol !== '' && !in_array($positionSymbol, $openPositionSymbols, true)) {
+                        $openPositionSymbols[] = $positionSymbol;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Log silencieux en CLI, on continue avec les symboles disponibles
+            }
+        }
+
+        // Récupérer les symboles avec ordres ouverts depuis l'exchange
+        $openOrderSymbols = [];
+        $orderProvider = $this->mainProvider->getOrderProvider();
+        if ($orderProvider) {
+            try {
+                $openOrders = $orderProvider->getOpenOrders();
+                
+                foreach ($openOrders as $order) {
+                    $orderSymbol = strtoupper($order->symbol ?? '');
+                    if ($orderSymbol !== '' && !in_array($orderSymbol, $openOrderSymbols, true)) {
+                        $openOrderSymbols[] = $orderSymbol;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Log silencieux en CLI, on continue avec les symboles disponibles
+            }
+        }
+
+        // Combiner les symboles à exclure
+        $symbolsWithActivity = array_unique(array_merge($openPositionSymbols, $openOrderSymbols));
+
+        // Filtrer les symboles
+        foreach ($symbols as $symbol) {
+            $symbolUpper = strtoupper($symbol);
+            
+            if (in_array($symbolUpper, $symbolsWithActivity, true)) {
+                $excludedSymbols[] = $symbolUpper;
+            } else {
+                $symbolsToProcess[] = $symbol;
+            }
+        }
+
+        return $symbolsToProcess;
+    }
+
+    /**
+     * Met à jour les switches pour les symboles exclus (appelé APRÈS le traitement)
+     * 
+     * @param array<string> $excludedSymbols Liste des symboles exclus (avec ordres/positions ouverts)
+     * @param string $runIdString ID du run pour les logs
+     */
+    private function updateSwitchesForExcludedSymbols(array $excludedSymbols, string $runIdString): void
+    {
+        // Mettre à jour les switches pour les symboles exclus
+        foreach ($excludedSymbols as $symbolUpper) {
+            try {
+                $isSwitchOff = !$this->mtfSwitchRepository->isSymbolSwitchOn($symbolUpper);
+                
+                if ($isSwitchOff) {
+                    $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, '1m');
+                } else {
+                    $this->mtfSwitchRepository->turnOffSymbolFor15Minutes($symbolUpper);
+                }
+            } catch (\Throwable $e) {
+                // Log silencieux en CLI pour les erreurs de switch
+            }
+        }
     }
 }
