@@ -15,7 +15,7 @@ final class PullbackConfirmedVwapCondition extends AbstractCondition
 {
     public const NAME = 'pullback_confirmed_vwap';
 
-    private const MAX_DIST_RATIO = 0.002; // 0.2 %
+    private const MAX_DIST_RATIO = 0.003; // 0.3 % (assoupli)
 
     public function getName(): string
     {

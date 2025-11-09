@@ -42,10 +42,18 @@ final class AdxMinForTrend1hCondition extends AbstractCondition
             ]));
         }
 
-        $passed = $adx1h >= $this->minAdx;
+        // Threshold override from context if provided
+        $threshold = $this->minAdx;
+        $ctxThreshold = $context['adx_1h_min_threshold'] ?? null;
+        if (is_numeric($ctxThreshold)) {
+            $threshold = (float) $ctxThreshold;
+        }
 
-        return $this->result(self::NAME, $passed, $adx1h, $this->minAdx, $this->baseMeta($context, [
+        $passed = $adx1h >= $threshold;
+
+        return $this->result(self::NAME, $passed, $adx1h, $threshold, $this->baseMeta($context, [
             'adx_1h' => $adx1h,
+            'threshold_source' => isset($ctxThreshold) ? 'context' : 'default',
         ]));
     }
 }
