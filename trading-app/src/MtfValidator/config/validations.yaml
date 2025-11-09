@@ -152,8 +152,12 @@ mtf_validation:
         adx_min_for_trend_1h:
             op: '>='
             left: 'adx_1h'
+            period: 14
             right: 25
-
+        lev_bounds:
+            field: 'leverage' # ou 'lev' selon ton DTO
+            min: 2.0
+            max: 20.0
         pullback_confirmed_ma9_21:
             all_of: [ ma9_cross_up_ma21 ]
 
@@ -198,17 +202,18 @@ mtf_validation:
             - end_of_zone_fallback: true
 
     # --- Filtres globaux obligatoires ---
-    # Allégé temporairement: retrait de `lev_bounds` (manque de données de levier au stade selector).
+    # Réactivé: `lev_bounds` (le contexte selector fournit désormais `leverage`).
     filters_mandatory:
         - rsi_lt_70
         - adx_min_for_trend_1h
         - pullback_confirmed_ma9_21
         - pullback_confirmed_vwap
         - price_lte_ma21_plus_k_atr
+        - lev_bounds
 
     # --- Validations par timeframe ---
     validation:
-        start_from_timeframe: '15m'
+        start_from_timeframe: '4h'
         timeframe:
             '4h':
                 long:

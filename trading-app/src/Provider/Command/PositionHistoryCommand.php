@@ -402,6 +402,8 @@ Exemples:
             'take_profit' => $takeProfit !== null ? number_format($takeProfit, 8, '.', '') : null,
             'leverage' => number_format($leverage, 2, '.', ''),
             'margin' => number_format($margin, 2, '.', ''),
+            // Expose realized PnL when available for analytics (nullable / may be 0 for OPEN)
+            'realized_pnl' => isset($position->realizedPnl) ? number_format($position->realizedPnl->toScale(8, RoundingMode::DOWN)->toFloat(), 8, '.', '') : null,
             'size' => number_format($size, 4, '.', ''),
             'opened_at' => $position->openedAt->format('Y-m-d H:i:s'),
             'closed_at' => $position->closedAt?->format('Y-m-d H:i:s'),
@@ -786,4 +788,3 @@ Exemples:
         }
     }
 }
-

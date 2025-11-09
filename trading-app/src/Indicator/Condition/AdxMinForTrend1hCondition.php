@@ -15,12 +15,7 @@ final class AdxMinForTrend1hCondition extends AbstractCondition
 {
     public const NAME = 'adx_min_for_trend_1h';
 
-    private float $minAdx;
-
-    public function __construct(float $minAdx = 25.0)
-    {
-        $this->minAdx = $minAdx;
-    }
+    public function __construct(private readonly float $minAdx = 25.0) {}
 
     public function getName(): string
     {
@@ -31,29 +26,75 @@ final class AdxMinForTrend1hCondition extends AbstractCondition
     {
         $tf = $context['timeframe'] ?? null;
 
-        $adx1h = $context['adx_1h'] ?? null;
-        if (!is_float($adx1h) && $tf === '1h') {
-            $adx1h = $context['adx'] ?? null;
+        // 1) Récupération ADX(1h) souple: accepte float|int|string numériques
+        $adx1hRaw = $context['adx_1h'] ?? null;
+        if ($adx1hRaw === null && $tf === '1h') {
+            $adx1hRaw = $context['adx'] ?? null; // fallback sur 1h
+        }
+        $adx1h = $this->toFloatOrNull($adx1hRaw);
+
+        if ($adx1h === null) {
+            return $this->result(
+                self::NAME,
+                false,
+                null,
+                $this->minAdx,
+                $this->baseMeta($context, [
+                    'missing_data' => true,
+                    'timeframe'    => $tf,
+                ]),
+            );
         }
 
-        if (!is_float($adx1h)) {
-            return $this->result(self::NAME, false, null, $this->minAdx, $this->baseMeta($context, [
-                'missing_data' => true,
-            ]));
+        // 2) Nettoyage de la valeur (plage ADX: 0..100)
+        if (!is_finite($adx1h)) {
+            return $this->result(
+                self::NAME,
+                false,
+                null,
+                $this->minAdx,
+                $this->baseMeta($context, [
+                    'invalid_numeric' => true,
+                    'timeframe'       => $tf,
+                ]),
+            );
         }
+        $adx1h = max(0.0, min(100.0, $adx1h));
 
-        // Threshold override from context if provided
+        // 3) Seuil (context override → sinon défaut)
         $threshold = $this->minAdx;
-        $ctxThreshold = $context['adx_1h_min_threshold'] ?? null;
-        if (is_numeric($ctxThreshold)) {
-            $threshold = (float) $ctxThreshold;
+        $source = 'default';
+        if (array_key_exists('adx_1h_min_threshold', $context) && is_numeric($context['adx_1h_min_threshold'])) {
+            $threshold = (float) $context['adx_1h_min_threshold'];
+            $source = 'context';
         }
 
         $passed = $adx1h >= $threshold;
 
-        return $this->result(self::NAME, $passed, $adx1h, $threshold, $this->baseMeta($context, [
-            'adx_1h' => $adx1h,
-            'threshold_source' => isset($ctxThreshold) ? 'context' : 'default',
-        ]));
+        return $this->result(
+            self::NAME,
+            $passed,
+            $adx1h,
+            $threshold,
+            $this->baseMeta($context, [
+                'adx_1h'           => $adx1h,
+                'threshold_source' => $source,
+                'timeframe'        => $tf,
+            ]),
+        );
+    }
+
+    /**
+     * @param mixed $v
+     */
+    private function toFloatOrNull(mixed $v): ?float
+    {
+        if (is_float($v) || is_int($v)) {
+            return (float) $v;
+        }
+        if (is_string($v) && $v !== '' && is_numeric($v)) {
+            return (float) $v;
+        }
+        return null;
     }
 }

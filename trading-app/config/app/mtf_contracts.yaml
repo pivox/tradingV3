@@ -21,5 +21,5 @@ mtf_contracts:
 
         limits:
             # Objectif : ~40–50 contrats max exploités par l’algo
-            top_n: 70       # les 70 plus gros turnovers (>= mid_max_turnover)
-            mid_n: 10       # 20 contrats supplémentaires dans la zone 1M–5M
+            top_n: 70       # les 190 plus gros turnovers (>= mid_max_turnover)
+            mid_n: 10       # 10 contrats supplémentaires dans la zone 1M–5M
