@@ -7,6 +7,7 @@ namespace App\MtfValidator\Command;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\MtfValidator\Service\Runner\MtfRunOrchestrator;
 use App\Contract\MtfValidator\MtfValidatorInterface;
+use App\MtfValidator\Service\Helper\OrdersExtractor;
 use App\MtfValidator\Entity\MtfSwitch;
 use App\Contract\Provider\MainProviderInterface;
 use App\Contract\Provider\Dto\ContractDto as ProviderContractDto;
@@ -565,6 +566,9 @@ class MtfRunCommand extends Command
             $this->displaySummaryByRejectedTimeframe($io, $details);
             $this->displaySummaryByLastValidTimeframe($io, $details);
             $this->displaySummaryByLastTimeframe($io, $details);
+            
+            // Afficher les ordres placés
+            $this->displayPlacedOrders($io, $details);
         }
     }
 
@@ -781,6 +785,66 @@ class MtfRunCommand extends Command
             return '1m';
         }
         return null;
+    }
+
+    /**
+     * Affiche une section dédiée pour les ordres placés
+     */
+    private function displayPlacedOrders(SymfonyStyle $io, array $details): void
+    {
+        $ordersPlaced = OrdersExtractor::extractPlacedOrders($details);
+        $ordersCount = OrdersExtractor::countOrdersByStatus($details);
+
+        if (empty($ordersPlaced)) {
+            $io->section('Ordres placés');
+            $io->text('Aucun ordre placé lors de cette exécution.');
+            $io->newLine();
+            return;
+        }
+
+        $io->section('Ordres placés');
+        $io->definitionList(
+            ['Total' => (string) $ordersCount['total']],
+            ['Soumis (réels)' => (string) $ordersCount['submitted']],
+            ['Simulés (dry-run)' => (string) $ordersCount['simulated']],
+        );
+
+        $io->writeln('<comment>Détails des ordres:</comment>');
+        foreach ($ordersPlaced as $order) {
+            $statusLabel = $order['status'] === 'submitted' ? '<fg=green>SOUMIS</>' : '<fg=yellow>SIMULÉ</>';
+            $io->writeln(sprintf(
+                '  <info>%s</info> - %s',
+                $order['symbol'],
+                $statusLabel
+            ));
+
+            if ($order['client_order_id'] !== null) {
+                $io->writeln(sprintf('    Client Order ID: %s', $order['client_order_id']));
+            }
+
+            if ($order['exchange_order_id'] !== null) {
+                $io->writeln(sprintf('    Exchange Order ID: %s', $order['exchange_order_id']));
+            }
+
+            if ($order['decision_key'] !== null) {
+                $io->writeln(sprintf('    Decision Key: %s', $order['decision_key']));
+            }
+
+            if (!empty($order['raw'])) {
+                $io->writeln('    Détails bruts (raw):');
+                foreach ($order['raw'] as $key => $value) {
+                    if (is_scalar($value)) {
+                        $io->writeln(sprintf('      %s: %s', $key, (string) $value));
+                    } elseif (is_array($value)) {
+                        $io->writeln(sprintf('      %s: %s', $key, json_encode($value, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)));
+                    } else {
+                        $io->writeln(sprintf('      %s: %s', $key, gettype($value)));
+                    }
+                }
+            }
+
+            $io->newLine();
+        }
     }
 
     /**

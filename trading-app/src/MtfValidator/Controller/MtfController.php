@@ -8,6 +8,7 @@ use App\Contract\Provider\MainProviderInterface;
 use App\MtfValidator\Service\MtfService;
 use App\MtfValidator\Service\MtfRunService;
 use App\MtfValidator\Service\PerformanceProfiler;
+use App\MtfValidator\Service\Helper\OrdersExtractor;
 use App\Provider\Repository\ContractRepository;
 use App\Provider\Repository\KlineRepository;
 use App\MtfValidator\Repository\MtfAuditRepository;
@@ -717,11 +718,16 @@ class MtfController extends AbstractController
             $apiTotalTime = microtime(true) - $apiStartTime;
             $performanceReport = $profiler->getReport();
             
+            // Extraire les ordres placés depuis les résultats
+            $ordersPlaced = OrdersExtractor::extractPlacedOrders($results);
+            $ordersCount = OrdersExtractor::countOrdersByStatus($results);
+            
             $this->logger->info('[MTF Controller] Performance Analysis', [
                 'total_api_time' => round($apiTotalTime, 3),
                 'symbols_count' => count($symbols),
                 'workers' => $workers,
                 'performance_report' => $performanceReport,
+                'orders_placed_count' => $ordersCount,
             ]);
 
             return $this->json([
@@ -736,6 +742,10 @@ class MtfController extends AbstractController
                     'rejected_by' => $rejectedBy,
                     'last_validated' => $lastValidated,
                     'performance' => $performanceReport,
+                    'orders_placed' => [
+                        'count' => $ordersCount,
+                        'orders' => $ordersPlaced,
+                    ],
                 ],
             ]);
         } catch (\Throwable $e) {

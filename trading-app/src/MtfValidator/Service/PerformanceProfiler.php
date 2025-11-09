@@ -81,6 +81,10 @@ final class PerformanceProfiler
         $byOperation = [];
         $symbolStats = [];
         $timeframeStats = [];
+        
+        // Opérations qui doivent être regroupées par symbole
+        $operationsWithSymbols = ['worker_start', 'worker_complete', 'worker_error'];
+        $operationSymbols = []; // [category::operation => [symbol => stats]]
 
         foreach ($this->metrics as $key => $metric) {
             $category = $metric['category'];
@@ -107,6 +111,19 @@ final class PerformanceProfiler
             }
             if ($duration > $byOperation[$opKey]['max']) {
                 $byOperation[$opKey]['max'] = $duration;
+            }
+            
+            // Regrouper par symbole pour les opérations spécifiques
+            if ($category === 'controller' && in_array($operation, $operationsWithSymbols, true) && $metric['symbol'] !== null) {
+                $symbol = $metric['symbol'];
+                if (!isset($operationSymbols[$opKey])) {
+                    $operationSymbols[$opKey] = [];
+                }
+                if (!isset($operationSymbols[$opKey][$symbol])) {
+                    $operationSymbols[$opKey][$symbol] = ['total' => 0, 'count' => 0, 'avg' => 0];
+                }
+                $operationSymbols[$opKey][$symbol]['total'] += $duration;
+                $operationSymbols[$opKey][$symbol]['count'] += $count;
             }
 
             // Par symbole
@@ -142,6 +159,21 @@ final class PerformanceProfiler
         }
         foreach ($timeframeStats as &$stat) {
             $stat['avg'] = $stat['count'] > 0 ? $stat['total'] / $stat['count'] : 0;
+        }
+        
+        // Calculer les moyennes pour les symboles dans les opérations spécifiques
+        foreach ($operationSymbols as $opKey => $symbols) {
+            foreach ($symbols as $symbol => &$stat) {
+                $stat['avg'] = $stat['count'] > 0 ? $stat['total'] / $stat['count'] : 0;
+            }
+            unset($stat);
+        }
+        
+        // Ajouter le tableau symbols aux opérations concernées
+        foreach ($operationSymbols as $opKey => $symbols) {
+            if (isset($byOperation[$opKey])) {
+                $byOperation[$opKey]['symbols'] = $symbols;
+            }
         }
 
         // Trier les symboles par temps total
