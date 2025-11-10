@@ -177,7 +177,8 @@ final class ExecutionBox
 
         $this->logger->info('trade_entry.order_submitted', [
             'payload' => $orderPayload,
-            'leverage' => $leverageResult,
+            'leverage' => $plan->leverage,
+            'leverage_submit_success' => $leverageResult,
             'order' => $orderResult ? $orderResult->toArray() : null,
             'attempt' => $orderResult !== null ? $attemptLabel : null,
         ]);
@@ -210,7 +211,8 @@ final class ExecutionBox
             exchangeOrderId: $orderId,
             status: $isOk ? 'submitted' : 'error',
             raw: [
-                'leverage' => $leverageResult,
+                'leverage' => $plan->leverage,
+                'leverage_submit_success' => $leverageResult,
                 'order' => $orderResult ? $orderResult->toArray() : null,
                 'attempt' => $orderResult !== null ? $attemptLabel : null,
             ],
