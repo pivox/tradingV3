@@ -120,18 +120,20 @@ HELP
         // Si plusieurs modes, afficher un résumé
         if (count($configsToValidate) > 1 && !$jsonOutput) {
             $io->section('Résumé global');
+            $rows = [];
+            foreach ($allResults as $modeName => $result) {
+                $rows[] = [
+                    $modeName,
+                    $result->getTotalRulesTested(),
+                    $result->getTotalRulesPassed(),
+                    $result->getTotalScenariosTested(),
+                    $result->getTotalScenariosPassed(),
+                    ($result->getTotalRulesTested() > 0 && $result->getTotalRulesPassed() === $result->getTotalRulesTested() && !$result->hasConsistencyIssues()) ? '✅ Valide' : '❌ Invalide',
+                ];
+            }
             $io->table(
                 ['Mode', 'Règles testées', 'Règles réussies', 'Scénarios testés', 'Scénarios réussis', 'Statut'],
-                array_map(function ($modeName, $result) {
-                    return [
-                        $modeName,
-                        $result->getTotalRulesTested(),
-                        $result->getTotalRulesPassed(),
-                        $result->getTotalScenariosTested(),
-                        $result->getTotalScenariosPassed(),
-                        ($result->getTotalRulesTested() > 0 && $result->getTotalRulesPassed() === $result->getTotalRulesTested() && !$result->hasConsistencyIssues()) ? '✅ Valide' : '❌ Invalide',
-                    ];
-                }, array_keys($allResults), $allResults)
+                $rows
             );
         }
 
