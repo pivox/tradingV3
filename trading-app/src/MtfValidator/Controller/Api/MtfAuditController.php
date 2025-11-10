@@ -6,6 +6,7 @@ namespace App\MtfValidator\Controller\Api;
 
 use App\MtfValidator\Entity\MtfAudit;
 use App\MtfValidator\Repository\MtfAuditRepository;
+use App\Provider\Repository\ContractRepository;
 use Ramsey\Uuid\Uuid;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -17,6 +18,7 @@ class MtfAuditController extends AbstractController
 {
     public function __construct(
         private readonly MtfAuditRepository $mtfAuditRepository,
+        private readonly ContractRepository $contractRepository,
     ) {
     }
 
@@ -173,6 +175,71 @@ class MtfAuditController extends AbstractController
             'count' => count($results),
             'generated_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format(\DateTimeInterface::ATOM),
             'data' => $results,
+        ]);
+    }
+
+    #[Route('/contract/{symbol}', name: 'contract', methods: ['GET'])]
+    public function contractDetails(string $symbol): JsonResponse
+    {
+        $contract = $this->contractRepository->findBySymbol(strtoupper($symbol));
+        
+        if (!$contract) {
+            return $this->json(['error' => 'Contrat non trouvé'], 404);
+        }
+
+        $formatTimestamp = static function (?int $ts): ?string {
+            if (!$ts) {
+                return null;
+            }
+            // Convertir millisecondes en secondes si nécessaire
+            $seconds = $ts > 1000000000000 ? $ts / 1000 : $ts;
+            return (new \DateTimeImmutable('@' . (int)$seconds, new \DateTimeZone('UTC')))
+                ->format(\DateTimeInterface::ATOM);
+        };
+
+        return $this->json([
+            'id' => $contract->getId(),
+            'symbol' => $contract->getSymbol(),
+            'name' => $contract->getName(),
+            'status' => $contract->getStatus(),
+            'product_type' => $contract->getProductType(),
+            'base_currency' => $contract->getBaseCurrency(),
+            'quote_currency' => $contract->getQuoteCurrency(),
+            'open_timestamp' => $contract->getOpenTimestamp(),
+            'open_date' => $formatTimestamp($contract->getOpenTimestamp()),
+            'expire_timestamp' => $contract->getExpireTimestamp(),
+            'expire_date' => $formatTimestamp($contract->getExpireTimestamp()),
+            'settle_timestamp' => $contract->getSettleTimestamp(),
+            'settle_date' => $formatTimestamp($contract->getSettleTimestamp()),
+            'last_price' => $contract->getLastPrice(),
+            'index_price' => $contract->getIndexPrice(),
+            'index_name' => $contract->getIndexName(),
+            'volume_24h' => $contract->getVolume24h(),
+            'turnover_24h' => $contract->getTurnover24h(),
+            'high_24h' => $contract->getHigh24h(),
+            'low_24h' => $contract->getLow24h(),
+            'change_24h' => $contract->getChange24h(),
+            'contract_size' => $contract->getContractSize(),
+            'min_leverage' => $contract->getMinLeverage(),
+            'max_leverage' => $contract->getMaxLeverage(),
+            'price_precision' => $contract->getPricePrecision(),
+            'vol_precision' => $contract->getVolPrecision(),
+            'min_size' => $contract->getMinSize(),
+            'max_size' => $contract->getMaxSize(),
+            'tick_size' => $contract->getTickSize(),
+            'multiplier' => $contract->getMultiplier(),
+            'min_volume' => $contract->getMinVolume(),
+            'max_volume' => $contract->getMaxVolume(),
+            'market_max_volume' => $contract->getMarketMaxVolume(),
+            'funding_rate' => $contract->getFundingRate(),
+            'expected_funding_rate' => $contract->getExpectedFundingRate(),
+            'funding_interval_hours' => $contract->getFundingIntervalHours(),
+            'open_interest' => $contract->getOpenInterest(),
+            'open_interest_value' => $contract->getOpenInterestValue(),
+            'delist_time' => $contract->getDelistTime(),
+            'delist_date' => $formatTimestamp($contract->getDelistTime()),
+            'inserted_at' => $contract->getInsertedAt()->format(\DateTimeInterface::ATOM),
+            'updated_at' => $contract->getUpdatedAt()->format(\DateTimeInterface::ATOM),
         ]);
     }
 

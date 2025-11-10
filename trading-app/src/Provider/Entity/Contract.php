@@ -408,11 +408,22 @@ class Contract
         $this->contractSize = $contractSize;
         return $this;
     }
+    public function getMinLeverage(): ?string
+    {
+        return $this->minLeverage;
+    }
+
     public function setMinLeverage(?string $minLeverage): static
     {
         $this->minLeverage = $minLeverage;
         return $this;
     }
+
+    public function getMaxLeverage(): ?string
+    {
+        return $this->maxLeverage;
+    }
+
     public function setMaxLeverage(?string $maxLeverage): static
     {
         $this->maxLeverage = $maxLeverage;
@@ -428,6 +439,11 @@ class Contract
         $this->pricePrecision = $pricePrecision;
         return $this;
     }
+    public function getVolPrecision(): ?string
+    {
+        return $this->volPrecision;
+    }
+
     public function setVolPrecision(?string $volPrecision): static
     {
         $this->volPrecision = $volPrecision;
@@ -465,46 +481,99 @@ class Contract
     {
         return $this->minVolume;
     }
+    public function getFundingRate(): ?string
+    {
+        return $this->fundingRate;
+    }
+
     public function setFundingRate(?string $fundingRate): static
     {
         $this->fundingRate = $fundingRate;
         return $this;
     }
+
+    public function getExpectedFundingRate(): ?string
+    {
+        return $this->expectedFundingRate;
+    }
+
     public function setExpectedFundingRate(?string $expectedFundingRate): static
     {
         $this->expectedFundingRate = $expectedFundingRate;
         return $this;
     }
+
+    public function getOpenInterest(): ?string
+    {
+        return $this->openInterest;
+    }
+
     public function setOpenInterest(?string $openInterest): static
     {
         $this->openInterest = $openInterest;
         return $this;
     }
+
+    public function getOpenInterestValue(): ?string
+    {
+        return $this->openInterestValue;
+    }
+
     public function setOpenInterestValue(?string $openInterestValue): static
     {
         $this->openInterestValue = $openInterestValue;
         return $this;
     }
+
+    public function getHigh24h(): ?string
+    {
+        return $this->high24h;
+    }
+
     public function setHigh24h(?string $high24h): static
     {
         $this->high24h = $high24h;
         return $this;
     }
+
+    public function getLow24h(): ?string
+    {
+        return $this->low24h;
+    }
+
     public function setLow24h(?string $low24h): static
     {
         $this->low24h = $low24h;
         return $this;
     }
+
+    public function getChange24h(): ?string
+    {
+        return $this->change24h;
+    }
+
     public function setChange24h(?string $change24h): static
     {
         $this->change24h = $change24h;
         return $this;
     }
+
+    public function getFundingIntervalHours(): ?int
+    {
+        return $this->fundingIntervalHours;
+    }
+
     public function setFundingIntervalHours(?int $fundingIntervalHours): static
     {
         $this->fundingIntervalHours = $fundingIntervalHours;
         return $this;
     }
+
+    public function getDelistTime(): ?int
+    {
+        return $this->delistTime;
+    }
+
     public function setDelistTime(?int $delistTime): static
     {
         $this->delistTime = $delistTime;

@@ -217,6 +217,25 @@ td.kline-current {
         </div>
     </div>
 </div>
+
+<!-- Modal pour les détails du contrat -->
+<div class="modal fade" id="contractDetailsModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Détails du Contrat <span id="contractModalSymbol"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="contractDetailsContent">
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Chargement...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block javascripts %}
@@ -536,13 +555,22 @@ function renderSummaryTable() {
                 label = '-';
             }
 
-            return `<td class="${cellClass}">${currentKlineMarkup}${label}${readyMarkup}${causeMarkup}</td>`;
+            // Bouton pour afficher les détails du contrat
+            const contractButton = `<button class="btn btn-sm btn-link p-0 text-secondary" onclick="viewContractDetails('${escapeHtml(row.symbol)}'); return false;" title="Voir détails du contrat"><i class="bi bi-info-circle"></i></button>`;
+
+            return `<td class="${cellClass}" style="position: relative;">
+                <div style="position: absolute; top: 2px; right: 2px;">${contractButton}</div>
+                <div style="padding-right: 20px;">${currentKlineMarkup}${label}${readyMarkup}${causeMarkup}</div>
+            </td>`;
         }).join('');
+
+        // Bouton pour afficher les détails du contrat dans la cellule du symbole
+        const symbolContractButton = `<button class="btn btn-sm btn-link p-0 text-secondary ms-2" onclick="viewContractDetails('${escapeHtml(row.symbol)}'); return false;" title="Voir détails du contrat"><i class="bi bi-info-circle"></i></button>`;
 
         return `
             <tr>
                 <td>
-                    <strong>${symbolLabel}</strong>
+                    <strong>${symbolLabel}</strong>${symbolContractButton}
                     ${counts}
                 </td>
                 ${cells}
@@ -699,6 +727,165 @@ function escapeHtml(value) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+async function viewContractDetails(symbol) {
+    const modal = new bootstrap.Modal(document.getElementById('contractDetailsModal'));
+    const contentEl = document.getElementById('contractDetailsContent');
+    const symbolEl = document.getElementById('contractModalSymbol');
+    
+    symbolEl.textContent = symbol;
+    contentEl.innerHTML = `
+        <div class="text-center py-4">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Chargement...</span>
+            </div>
+        </div>
+    `;
+    modal.show();
+
+    try {
+        const symbolEncoded = encodeURIComponent(symbol);
+        const apiUrl = '{{ path('api_mtf_audits_contract', {symbol: 'SYMBOL_PLACEHOLDER'}) }}'.replace('SYMBOL_PLACEHOLDER', symbolEncoded);
+        const resp = await fetch(apiUrl);
+        if (!resp.ok) {
+            throw new Error('Erreur de chargement');
+        }
+        const data = await resp.json();
+        
+        // Format structuré avec sections
+        const formatValue = (val) => val !== null && val !== undefined ? escapeHtml(String(val)) : '<span class="text-muted">-</span>';
+        const formatDate = (dateStr) => dateStr ? new Date(dateStr).toLocaleString('fr-FR', { timeZone: 'UTC' }) : '-';
+        const formatNumber = (val) => val ? parseFloat(val).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 12 }) : '-';
+        const hasValue = (val) => val !== null && val !== undefined && val !== '' && String(val).trim() !== '';
+        
+        contentEl.innerHTML = `
+            <div class="row">
+                <!-- Section Général -->
+                <div class="col-md-6 mb-4">
+                    <div class="card">
+                        <div class="card-header bg-primary text-white">
+                            <h6 class="mb-0"><i class="bi bi-info-circle me-2"></i>Informations Générales</h6>
+                        </div>
+                        <div class="card-body">
+                            <table class="table table-sm table-borderless mb-0">
+                                <tr><td><strong>ID:</strong></td><td>${formatValue(data.id)}</td></tr>
+                                <tr><td><strong>Symbole:</strong></td><td><strong>${formatValue(data.symbol)}</strong></td></tr>
+                                <tr><td><strong>Nom:</strong></td><td>${formatValue(data.name)}</td></tr>
+                                <tr><td><strong>Statut:</strong></td><td><span class="badge bg-${data.status === 'Trading' ? 'success' : 'secondary'}">${formatValue(data.status)}</span></td></tr>
+                                <tr><td><strong>Type produit:</strong></td><td>${formatValue(data.product_type)}</td></tr>
+                                <tr><td><strong>Base:</strong></td><td>${formatValue(data.base_currency)}</td></tr>
+                                <tr><td><strong>Quote:</strong></td><td>${formatValue(data.quote_currency)}</td></tr>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section Dates -->
+                <div class="col-md-6 mb-4">
+                    <div class="card">
+                        <div class="card-header bg-info text-white">
+                            <h6 class="mb-0"><i class="bi bi-calendar me-2"></i>Dates</h6>
+                        </div>
+                        <div class="card-body">
+                            <table class="table table-sm table-borderless mb-0">
+                                <tr><td><strong>Ouverture:</strong></td><td>${formatDate(data.open_date)}</td></tr>
+                                <tr><td><strong>Expiration:</strong></td><td>${formatDate(data.expire_date)}</td></tr>
+                                <tr><td><strong>Settlement:</strong></td><td>${formatDate(data.settle_date)}</td></tr>
+                                <tr><td><strong>Delist:</strong></td><td>${formatDate(data.delist_date)}</td></tr>
+                                <tr><td><strong>Créé:</strong></td><td>${formatDate(data.inserted_at)}</td></tr>
+                                <tr><td><strong>Modifié:</strong></td><td>${formatDate(data.updated_at)}</td></tr>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section Prix -->
+                <div class="col-md-6 mb-4">
+                    <div class="card">
+                        <div class="card-header bg-success text-white">
+                            <h6 class="mb-0"><i class="bi bi-currency-dollar me-2"></i>Prix</h6>
+                        </div>
+                        <div class="card-body">
+                            <table class="table table-sm table-borderless mb-0">
+                                <tr><td><strong>Dernier prix:</strong></td><td><strong class="text-success">${formatNumber(data.last_price)}</strong></td></tr>
+                                <tr><td><strong>Prix index:</strong></td><td>${formatNumber(data.index_price)}</td></tr>
+                                <tr><td><strong>Nom index:</strong></td><td>${formatValue(data.index_name)}</td></tr>
+                                <tr><td><strong>High 24h:</strong></td><td>${formatNumber(data.high_24h)}</td></tr>
+                                <tr><td><strong>Low 24h:</strong></td><td>${formatNumber(data.low_24h)}</td></tr>
+                                <tr><td><strong>Change 24h:</strong></td><td><span class="${parseFloat(data.change_24h || 0) >= 0 ? 'text-success' : 'text-danger'}">${formatNumber(data.change_24h)}%</span></td></tr>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section Volumes -->
+                <div class="col-md-6 mb-4">
+                    <div class="card">
+                        <div class="card-header bg-warning text-dark">
+                            <h6 class="mb-0"><i class="bi bi-graph-up me-2"></i>Volumes</h6>
+                        </div>
+                        <div class="card-body">
+                            <table class="table table-sm table-borderless mb-0">
+                                <tr><td><strong>Volume 24h:</strong></td><td>${formatNumber(data.volume_24h)}</td></tr>
+                                <tr><td><strong>Turnover 24h:</strong></td><td>${formatNumber(data.turnover_24h)}</td></tr>
+                                <tr><td><strong>Min volume:</strong></td><td>${formatNumber(data.min_volume)}</td></tr>
+                                <tr><td><strong>Max volume:</strong></td><td>${formatNumber(data.max_volume)}</td></tr>
+                                <tr><td><strong>Market max volume:</strong></td><td>${formatNumber(data.market_max_volume)}</td></tr>
+                                <tr><td><strong>Open Interest:</strong></td><td>${formatNumber(data.open_interest)}</td></tr>
+                                <tr><td><strong>Open Interest Value:</strong></td><td>${formatNumber(data.open_interest_value)}</td></tr>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section Leverage & Taille -->
+                <div class="col-md-6 mb-4">
+                    <div class="card">
+                        <div class="card-header bg-danger text-white">
+                            <h6 class="mb-0"><i class="bi bi-speedometer2 me-2"></i>Leverage & Taille</h6>
+                        </div>
+                        <div class="card-body">
+                            <table class="table table-sm table-borderless mb-0">
+                                <tr><td><strong>Min leverage:</strong></td><td>${formatValue(data.min_leverage)}x</td></tr>
+                                <tr><td><strong>Max leverage:</strong></td><td>${formatValue(data.max_leverage)}x</td></tr>
+                                <tr><td><strong>Taille contrat:</strong></td><td>${formatNumber(data.contract_size)}</td></tr>
+                                ${hasValue(data.min_size) ? `<tr><td><strong>Min size:</strong></td><td>${formatNumber(data.min_size)}</td></tr>` : ''}
+                                ${hasValue(data.max_size) ? `<tr><td><strong>Max size:</strong></td><td>${formatNumber(data.max_size)}</td></tr>` : ''}
+                                ${hasValue(data.tick_size) ? `<tr><td><strong>Tick size:</strong></td><td>${formatNumber(data.tick_size)}</td></tr>` : ''}
+                                ${hasValue(data.multiplier) ? `<tr><td><strong>Multiplier:</strong></td><td>${formatValue(data.multiplier)}</td></tr>` : ''}
+                            </table>
+                            ${!hasValue(data.min_size) && !hasValue(data.max_size) && !hasValue(data.tick_size) && !hasValue(data.multiplier) ? '<div class="text-muted small mt-2"><i class="bi bi-info-circle me-1"></i>Ces champs ne sont pas fournis par l\'API Bitmart</div>' : ''}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section Précision & Funding -->
+                <div class="col-md-6 mb-4">
+                    <div class="card">
+                        <div class="card-header bg-secondary text-white">
+                            <h6 class="mb-0"><i class="bi bi-sliders me-2"></i>Précision & Funding</h6>
+                        </div>
+                        <div class="card-body">
+                            <table class="table table-sm table-borderless mb-0">
+                                <tr><td><strong>Précision prix:</strong></td><td>${formatValue(data.price_precision)}</td></tr>
+                                <tr><td><strong>Précision volume:</strong></td><td>${formatValue(data.vol_precision)}</td></tr>
+                                <tr><td><strong>Funding rate:</strong></td><td>${formatNumber(data.funding_rate)}</td></tr>
+                                <tr><td><strong>Expected funding rate:</strong></td><td>${formatNumber(data.expected_funding_rate)}</td></tr>
+                                <tr><td><strong>Funding interval:</strong></td><td>${formatValue(data.funding_interval_hours)}h</td></tr>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    } catch (e) {
+        contentEl.innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle me-2"></i>Impossible de charger les détails du contrat: ${escapeHtml(e.message)}
+            </div>
+        `;
+    }
 }
 </script>
 {% endblock %}
