@@ -10,17 +10,25 @@ use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Pricing\TickQuantizer;
 use App\TradeEntry\Dto\{ExecutionResult};
 use App\TradeEntry\Policy\{IdempotencyPolicy, MakerTakerSwitchPolicy, OrderModePolicyInterface};
+use App\TradeEntry\Service\TpSlTwoTargetsService;
+use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
+use App\Common\Enum\OrderStatus;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Psr\Log\LoggerInterface;
 
 final class ExecutionBox
 {
+    private const MARKET_FILL_TIMEOUT_WS_STRICT = 3; // 3s pour WS strict
+    private const MARKET_FILL_TIMEOUT_TOTAL = 10; // 10s total avec REST fallback
+    private const CANCEL_ALL_AFTER_SECONDS = 12; // 12s (entre 10-15s)
+
     public function __construct(
         private readonly MainProviderInterface $providers,
         private readonly TpSlAttacher $tpSl,
         private readonly OrderModePolicyInterface $orderModePolicy,
         private readonly IdempotencyPolicy $idempotency,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
+        private readonly ?TpSlTwoTargetsService $tpSlService = null,
     ) {}
 
     public function execute(OrderPlanModel $plan, ?string $decisionKey = null): ExecutionResult
@@ -75,6 +83,11 @@ final class ExecutionBox
             'decision_key' => $decisionKey,
         ]);
         // Single-channel logging only
+
+        // Router vers le flux market si nécessaire
+        if ($plan->orderType === 'market') {
+            return $this->executeMarketOrder($plan, $clientOrderId, $decisionKey, $leverageResult);
+        }
 
         $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
 
@@ -268,6 +281,373 @@ final class ExecutionBox
             $options,
             static fn($value) => $value !== null && $value !== ''
         );
+    }
+
+    /**
+     * Exécute un ordre market avec soumission séparée de TP/SL après récupération du prix d'entrée réel.
+     */
+    private function executeMarketOrder(
+        OrderPlanModel $plan,
+        string $clientOrderId,
+        ?string $decisionKey,
+        bool $leverageResult
+    ): ExecutionResult {
+        $this->positionsLogger->info('execution.market_order.start', [
+            'symbol' => $plan->symbol,
+            'side' => $plan->side->value,
+            'size' => $plan->size,
+            'client_order_id' => $clientOrderId,
+            'decision_key' => $decisionKey,
+        ]);
+
+        // 1) Soumettre l'ordre market sans TP/SL
+        $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
+        $side = match($payload['side']) {
+            1 => OrderSide::BUY,
+            2 => OrderSide::SELL,
+            3 => OrderSide::BUY,
+            4 => OrderSide::SELL,
+        };
+
+        $orderOptions = $this->extractOrderOptions($payload);
+        // Retirer TP/SL du payload pour market
+        unset($orderOptions['preset_take_profit_price'], $orderOptions['preset_take_profit_price_type']);
+        unset($orderOptions['preset_stop_loss_price'], $orderOptions['preset_stop_loss_price_type']);
+
+        $this->positionsLogger->debug('execution.market_order.submit', [
+            'symbol' => $plan->symbol,
+            'size' => $plan->size,
+            'client_order_id' => $clientOrderId,
+            'decision_key' => $decisionKey,
+        ]);
+
+        $orderResult = $this->providers->getOrderProvider()->placeOrder(
+            symbol: $plan->symbol,
+            side: $side,
+            type: OrderType::MARKET,
+            quantity: (float)$plan->size,
+            price: null,
+            stopPrice: null,
+            options: $orderOptions
+        );
+
+        if ($orderResult === null) {
+            $this->positionsLogger->error('execution.market_order.submit_failed', [
+                'symbol' => $plan->symbol,
+                'client_order_id' => $clientOrderId,
+                'decision_key' => $decisionKey,
+            ]);
+            return new ExecutionResult(
+                clientOrderId: $clientOrderId,
+                exchangeOrderId: null,
+                status: 'error',
+                raw: ['reason' => 'market_order_submit_failed'],
+            );
+        }
+
+        $orderId = $orderResult->orderId;
+        $this->positionsLogger->info('execution.market_order.submitted', [
+            'symbol' => $plan->symbol,
+            'order_id' => $orderId,
+            'client_order_id' => $clientOrderId,
+            'decision_key' => $decisionKey,
+        ]);
+
+        // 2) Attendre l'exécution (3s WS strict, 10s total avec REST fallback)
+        $filled = $this->waitForMarketOrderFill($orderId, $clientOrderId, $plan->symbol, $decisionKey);
+        if (!$filled) {
+            $this->positionsLogger->error('execution.market_order.fill_timeout', [
+                'symbol' => $plan->symbol,
+                'order_id' => $orderId,
+                'client_order_id' => $clientOrderId,
+                'decision_key' => $decisionKey,
+            ]);
+            // Activer cancel-all-after pour nettoyer
+            $this->scheduleCancelAllAfter($plan->symbol);
+            return new ExecutionResult(
+                clientOrderId: $clientOrderId,
+                exchangeOrderId: $orderId,
+                status: 'error',
+                raw: ['reason' => 'market_order_fill_timeout'],
+            );
+        }
+
+        // 3) Récupérer le prix d'entrée exact depuis la position
+        $entryPrice = $this->getPositionEntryPrice($plan->symbol, $plan->side, $decisionKey);
+        if ($entryPrice === null) {
+            $this->positionsLogger->error('execution.market_order.entry_price_not_found', [
+                'symbol' => $plan->symbol,
+                'order_id' => $orderId,
+                'decision_key' => $decisionKey,
+            ]);
+            return new ExecutionResult(
+                clientOrderId: $clientOrderId,
+                exchangeOrderId: $orderId,
+                status: 'error',
+                raw: ['reason' => 'entry_price_not_found'],
+            );
+        }
+
+        $this->positionsLogger->info('execution.market_order.entry_price_retrieved', [
+            'symbol' => $plan->symbol,
+            'entry_price' => $entryPrice,
+            'order_id' => $orderId,
+            'decision_key' => $decisionKey,
+        ]);
+
+        // 4) Calculer et soumettre TP1, TP2, SL via TpSlTwoTargetsService
+        if ($this->tpSlService === null) {
+            $this->positionsLogger->error('execution.market_order.tp_sl_service_unavailable', [
+                'symbol' => $plan->symbol,
+                'decision_key' => $decisionKey,
+            ]);
+            return new ExecutionResult(
+                clientOrderId: $clientOrderId,
+                exchangeOrderId: $orderId,
+                status: 'error',
+                raw: ['reason' => 'tp_sl_service_unavailable'],
+            );
+        }
+
+        $tpSlRequest = new TpSlTwoTargetsRequest(
+            symbol: $plan->symbol,
+            side: $plan->side,
+            entryPrice: $entryPrice,
+            size: $plan->size,
+            rMultiple: null, // Utiliser les defaults du service
+            splitPct: null, // Utiliser le resolver automatique
+            cancelExistingStopLossIfDifferent: true,
+            cancelExistingTakeProfits: true,
+            slFullSize: true,
+            momentum: null,
+            mtfValidCount: null,
+            pullbackClear: null,
+            lateEntry: null,
+            dryRun: false,
+        );
+
+        $tpSlResult = null;
+        try {
+            $tpSlResult = ($this->tpSlService)($tpSlRequest, $decisionKey);
+            $this->positionsLogger->info('execution.market_order.tp_sl_submitted', [
+                'symbol' => $plan->symbol,
+                'sl' => $tpSlResult['sl'],
+                'tp1' => $tpSlResult['tp1'],
+                'tp2' => $tpSlResult['tp2'],
+                'submitted_count' => count($tpSlResult['submitted']),
+                'decision_key' => $decisionKey,
+            ]);
+
+            // 5) Vérifier les plans TP/SL
+            $this->verifyPlanOrders($plan->symbol, $tpSlResult['submitted'], $decisionKey);
+
+            // 6) Activer cancel-all-after
+            $this->scheduleCancelAllAfter($plan->symbol);
+        } catch (\Throwable $e) {
+            $this->positionsLogger->error('execution.market_order.tp_sl_submit_failed', [
+                'symbol' => $plan->symbol,
+                'error' => $e->getMessage(),
+                'decision_key' => $decisionKey,
+            ]);
+            // Activer cancel-all-after même en cas d'erreur
+            $this->scheduleCancelAllAfter($plan->symbol);
+        }
+
+        return new ExecutionResult(
+            clientOrderId: $clientOrderId,
+            exchangeOrderId: $orderId,
+            status: 'submitted',
+            raw: [
+                'leverage' => $plan->leverage,
+                'leverage_submit_success' => $leverageResult,
+                'order' => $orderResult->toArray(),
+                'entry_price' => $entryPrice,
+                'tp_sl_submitted' => $tpSlResult['submitted'] ?? [],
+            ],
+        );
+    }
+
+    /**
+     * Attend l'exécution d'un ordre market (3s WS strict, 10s total avec REST fallback).
+     */
+    private function waitForMarketOrderFill(string $orderId, string $clientOrderId, string $symbol, ?string $decisionKey): bool
+    {
+        $startTime = time();
+        $wsDeadline = $startTime + self::MARKET_FILL_TIMEOUT_WS_STRICT;
+        $totalDeadline = $startTime + self::MARKET_FILL_TIMEOUT_TOTAL;
+
+        $this->positionsLogger->debug('execution.market_order.waiting_fill', [
+            'symbol' => $symbol,
+            'order_id' => $orderId,
+            'client_order_id' => $clientOrderId,
+            'ws_deadline' => $wsDeadline,
+            'total_deadline' => $totalDeadline,
+            'decision_key' => $decisionKey,
+        ]);
+
+        // Polling REST avec backoff
+        $pollInterval = 0.2; // 200ms initial
+        $maxPollInterval = 1.0; // 1s max
+
+        while (time() < $totalDeadline) {
+            $order = $this->providers->getOrderProvider()->getOrder($orderId);
+            if ($order !== null) {
+                $status = $order->status;
+                if ($status === OrderStatus::FILLED || $status === OrderStatus::PARTIALLY_FILLED) {
+                    $this->positionsLogger->info('execution.market_order.filled', [
+                        'symbol' => $symbol,
+                        'order_id' => $orderId,
+                        'status' => $status->value,
+                        'filled_qty' => $order->filledQuantity->toFloat(),
+                        'avg_price' => $order->averagePrice?->toFloat(),
+                        'elapsed' => time() - $startTime,
+                        'decision_key' => $decisionKey,
+                    ]);
+                    return true;
+                }
+                if ($status === OrderStatus::CANCELLED || $status === OrderStatus::REJECTED) {
+                    $this->positionsLogger->warning('execution.market_order.cancelled_or_rejected', [
+                        'symbol' => $symbol,
+                        'order_id' => $orderId,
+                        'status' => $status->value,
+                        'decision_key' => $decisionKey,
+                    ]);
+                    return false;
+                }
+            }
+
+            // Backoff exponentiel
+            usleep((int)($pollInterval * 1_000_000));
+            $pollInterval = min($pollInterval * 1.5, $maxPollInterval);
+        }
+
+        return false;
+    }
+
+    /**
+     * Récupère le prix d'entrée exact depuis la position.
+     */
+    private function getPositionEntryPrice(string $symbol, \App\TradeEntry\Types\Side $side, ?string $decisionKey): ?float
+    {
+        $accountProvider = $this->providers->getAccountProvider();
+        if ($accountProvider === null) {
+            return null;
+        }
+
+        try {
+            $positions = $accountProvider->getOpenPositions($symbol);
+            $targetSideValue = $side->value; // 'long' ou 'short'
+
+            foreach ($positions as $pos) {
+                if ($pos->symbol === $symbol && strtolower($pos->side->value) === $targetSideValue) {
+                    $entryPrice = $pos->entryPrice->toFloat();
+                    $this->positionsLogger->debug('execution.market_order.position_found', [
+                        'symbol' => $symbol,
+                        'side' => $targetSideValue,
+                        'entry_price' => $entryPrice,
+                        'size' => $pos->size->toFloat(),
+                        'decision_key' => $decisionKey,
+                    ]);
+                    return $entryPrice;
+                }
+            }
+
+            $this->positionsLogger->warning('execution.market_order.position_not_found', [
+                'symbol' => $symbol,
+                'side' => $targetSideValue,
+                'decision_key' => $decisionKey,
+            ]);
+            return null;
+        } catch (\Throwable $e) {
+            $this->positionsLogger->error('execution.market_order.position_fetch_error', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+                'decision_key' => $decisionKey,
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Vérifie que les plans TP/SL sont bien actifs.
+     */
+    private function verifyPlanOrders(string $symbol, array $submitted, ?string $decisionKey): void
+    {
+        $orderProvider = $this->providers->getOrderProvider();
+        // Vérifier si le provider supporte getPlanOrders (spécifique BitMart)
+        if (!$orderProvider instanceof \App\Provider\Bitmart\BitmartOrderProvider) {
+            $this->positionsLogger->debug('execution.market_order.verify_skip', [
+                'symbol' => $symbol,
+                'reason' => 'getPlanOrders_not_available',
+                'decision_key' => $decisionKey,
+            ]);
+            return;
+        }
+
+        try {
+            $planOrders = $orderProvider->getPlanOrders($symbol);
+            $submittedIds = array_column($submitted, 'order_id');
+            $foundIds = [];
+
+            foreach ($planOrders as $planOrder) {
+                $planOrderId = $planOrder['plan_order_id'] ?? $planOrder['order_id'] ?? null;
+                if ($planOrderId !== null && in_array($planOrderId, $submittedIds, true)) {
+                    $foundIds[] = $planOrderId;
+                }
+            }
+
+            $missing = array_diff($submittedIds, $foundIds);
+            if (!empty($missing)) {
+                $this->positionsLogger->warning('execution.market_order.verify_missing', [
+                    'symbol' => $symbol,
+                    'missing_order_ids' => $missing,
+                    'found_count' => count($foundIds),
+                    'submitted_count' => count($submittedIds),
+                    'decision_key' => $decisionKey,
+                ]);
+            } else {
+                $this->positionsLogger->info('execution.market_order.verify_success', [
+                    'symbol' => $symbol,
+                    'verified_count' => count($foundIds),
+                    'decision_key' => $decisionKey,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->positionsLogger->warning('execution.market_order.verify_error', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+                'decision_key' => $decisionKey,
+            ]);
+        }
+    }
+
+    /**
+     * Programme l'annulation automatique des ordres après un délai (cancel-all-after).
+     */
+    private function scheduleCancelAllAfter(string $symbol): void
+    {
+        try {
+            $orderProvider = $this->providers->getOrderProvider();
+            // Vérifier si le provider supporte cancelAllAfter (spécifique BitMart)
+            if ($orderProvider instanceof \App\Provider\Bitmart\BitmartOrderProvider) {
+                $success = $orderProvider->cancelAllAfter($symbol, self::CANCEL_ALL_AFTER_SECONDS);
+                $this->positionsLogger->info('execution.market_order.cancel_all_after_scheduled', [
+                    'symbol' => $symbol,
+                    'timeout' => self::CANCEL_ALL_AFTER_SECONDS,
+                    'success' => $success,
+                ]);
+            } else {
+                $this->positionsLogger->debug('execution.market_order.cancel_all_after_skip', [
+                    'symbol' => $symbol,
+                    'reason' => 'cancelAllAfter_not_available',
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->positionsLogger->warning('execution.market_order.cancel_all_after_failed', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     private function applyMakerTakerSwitch(

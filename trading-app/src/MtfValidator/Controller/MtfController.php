@@ -933,8 +933,28 @@ class MtfController extends AbstractController
                     try {
                         $payload = json_decode($rawOutput, true, 512, JSON_THROW_ON_ERROR);
                     } catch (\JsonException $exception) {
-                        $errors[] = sprintf('Worker %s: invalid JSON output (%s)', $symbol, $exception->getMessage());
-                        continue;
+                        // Extraire le JSON même s'il y a des warnings PHP avant
+                        $jsonStart = strpos($rawOutput, '{');
+                        if ($jsonStart === false) {
+                            $errors[] = sprintf('Worker %s: invalid JSON output (%s)', $symbol, $exception->getMessage());
+                            continue;
+                        }
+
+                        $candidate = substr($rawOutput, $jsonStart);
+                        $jsonEnd = strrpos($candidate, '}');
+                        if ($jsonEnd === false) {
+                            $errors[] = sprintf('Worker %s: invalid JSON output (%s)', $symbol, $exception->getMessage());
+                            continue;
+                        }
+
+                        $candidate = substr($candidate, 0, $jsonEnd + 1);
+
+                        try {
+                            $payload = json_decode($candidate, true, 512, JSON_THROW_ON_ERROR);
+                        } catch (\JsonException $exception2) {
+                            $errors[] = sprintf('Worker %s: invalid JSON output (%s)', $symbol, $exception2->getMessage());
+                            continue;
+                        }
                     }
 
                     $final = $payload['final'] ?? null;
