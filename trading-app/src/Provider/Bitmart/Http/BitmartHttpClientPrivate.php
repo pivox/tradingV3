@@ -32,7 +32,7 @@ final class BitmartHttpClientPrivate
     private const PATH_CANCEL_ALL_AFTER = '/contract/private/cancel-all-after';
     private const PATH_FEE_RATE = '/contract/private/fee-rate';
     private const PATH_SUBMIT_LEVERAGE = '/contract/private/submit-leverage';
-    private const DEFAULT_CANCEL_AFTER_SECONDS = 40;
+    private const DEFAULT_CANCEL_AFTER_SECONDS = 55;
 
     public function __construct(
         #[Autowire(service: 'http_client.bitmart_futures_v2_private')]
