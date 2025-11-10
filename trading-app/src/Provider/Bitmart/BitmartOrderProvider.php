@@ -601,6 +601,36 @@ final class BitmartOrderProvider implements OrderProviderInterface
         }
     }
 
+    /**
+     * Schedule the Bitmart auto-cancel mechanism (cancel-all-after) for all open orders on a symbol.
+     *
+     * Bitmart expects the timeout in seconds and returns a payload containing a numeric `code` field. A
+     * value of 1000 indicates the request was accepted; any other value represents a failure that should be
+     * logged for further investigation.
+     *
+     * @param string $symbol         The trading pair identifier (e.g. BTC_USDT) for which open orders must be
+     *                               cancelled after the timeout elapses.
+     * @param int    $timeoutSeconds Number of seconds before Bitmart automatically cancels all outstanding
+     *                               orders for the provided symbol.
+     *
+     * @return bool Returns true when Bitmart acknowledges the scheduling request (response code 1000), false
+     *              otherwise.
+     */
+    public function cancelAllAfter(string $symbol, int $timeoutSeconds): bool
+    {
+        try {
+            $response = $this->bitmartClient->cancelAllAfter($symbol, $timeoutSeconds);
+            return isset($response['code']) && (int)$response['code'] === 1000;
+        } catch (\Exception $e) {
+            $this->logger->error("Erreur lors de la programmation de l'annulation automatique", [
+                'symbol' => $symbol,
+                'timeout' => $timeoutSeconds,
+                'error' => $e->getMessage()
+            ]);
+            return false;
+        }
+    }
+
     public function healthCheck(): bool
     {
         try {

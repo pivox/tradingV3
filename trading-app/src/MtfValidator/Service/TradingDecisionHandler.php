@@ -30,6 +30,7 @@ final class TradingDecisionHandler
         private readonly IndicatorProviderInterface $indicatorProvider,
         #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $mtfLogger,
         #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $positionsFlowLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         private readonly TradeEntryConfig $tradeEntryConfig,
         private readonly MtfValidationConfig $mtfConfig,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
@@ -113,6 +114,8 @@ final class TradingDecisionHandler
             'risk_pct' => $tradeRequest->riskPct,
             'initial_margin_usdt' => $tradeRequest->initialMarginUsdt,
             'stop_from' => $tradeRequest->stopFrom,
+            'validation_mode_used' => $symbolResult->validationModeUsed,
+            'trade_entry_mode_used' => $symbolResult->tradeEntryModeUsed,
             'reason' => 'mtf_defaults_applied',
         ]);
 
@@ -122,12 +125,16 @@ final class TradingDecisionHandler
                 'execution_tf' => $symbolResult->executionTf,
                 'side' => $symbolResult->signalSide,
                 'decision_key' => $decisionKey,
+                'validation_mode_used' => $symbolResult->validationModeUsed,
+                'trade_entry_mode_used' => $symbolResult->tradeEntryModeUsed,
             ]);
 
             $this->mtfLogger->info('order_journey.trade_entry.dispatch', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
                 'dry_run' => $mtfRunDto->dryRun,
+                'validation_mode_used' => $symbolResult->validationModeUsed,
+                'trade_entry_mode_used' => $symbolResult->tradeEntryModeUsed,
                 'reason' => $mtfRunDto->dryRun ? 'dry_run_simulation' : 'live_execution',
             ]);
 
@@ -136,6 +143,7 @@ final class TradingDecisionHandler
                 $this->mtfSwitchRepository,
                 $this->auditLogger,
                 $mtfRunDto->dryRun,
+                $this->positionsLogger
             );
 
             $execution = $mtfRunDto->dryRun
@@ -156,6 +164,8 @@ final class TradingDecisionHandler
                 'status' => $execution->status,
                 'client_order_id' => $execution->clientOrderId,
                 'exchange_order_id' => $execution->exchangeOrderId,
+                'validation_mode_used' => $symbolResult->validationModeUsed,
+                'trade_entry_mode_used' => $symbolResult->tradeEntryModeUsed,
                 'reason' => 'trade_entry_service_completed',
             ]);
 
@@ -170,7 +180,9 @@ final class TradingDecisionHandler
                 error: $symbolResult->error,
                 context: $symbolResult->context,
                 currentPrice: $symbolResult->currentPrice,
-                atr: $forcedAtr5m
+                atr: $forcedAtr5m,
+                validationModeUsed: $symbolResult->validationModeUsed,
+                tradeEntryModeUsed: $symbolResult->tradeEntryModeUsed
             );
         } catch (\Throwable $e) {
             $this->mtfLogger->error('[Trading Decision] Trade entry execution failed', [
@@ -212,7 +224,9 @@ final class TradingDecisionHandler
                 error: $symbolResult->error,
                 context: $symbolResult->context,
                 currentPrice: $symbolResult->currentPrice,
-                atr: $forcedAtr5m
+                atr: $forcedAtr5m,
+                validationModeUsed: $symbolResult->validationModeUsed,
+                tradeEntryModeUsed: $symbolResult->tradeEntryModeUsed
             );
         }
     }
@@ -452,7 +466,9 @@ final class TradingDecisionHandler
             error: $symbolResult->error,
             context: $symbolResult->context,
             currentPrice: $symbolResult->currentPrice,
-            atr: $forcedAtr5m
+            atr: $forcedAtr5m,
+            validationModeUsed: $symbolResult->validationModeUsed,
+            tradeEntryModeUsed: $symbolResult->tradeEntryModeUsed
         );
     }
 

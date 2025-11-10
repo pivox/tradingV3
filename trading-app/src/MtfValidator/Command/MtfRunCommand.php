@@ -180,7 +180,6 @@ class MtfRunCommand extends Command
                 'ip_address' => $ipAddress,
                 'skip_open_filter' => true,
             ];
-
             $io->section($workers > 1 ? sprintf('Exécution MTF en parallèle (%d workers)', $workers) : 'Exécution MTF en cours...');
             $result = $workers > 1
                 ? $this->runInParallel($io, $symbols, $workers, $executionOptions)
@@ -566,7 +565,7 @@ class MtfRunCommand extends Command
             $this->displaySummaryByRejectedTimeframe($io, $details);
             $this->displaySummaryByLastValidTimeframe($io, $details);
             $this->displaySummaryByLastTimeframe($io, $details);
-            
+
             // Afficher les ordres placés
             $this->displayPlacedOrders($io, $details);
         }
@@ -1025,7 +1024,7 @@ class MtfRunCommand extends Command
     /**
      * Filtre les symboles ayant des ordres ou positions ouverts
      * Cette méthode est appelée AVANT le traitement des workers pour exclure ces symboles
-     * 
+     *
      * @param array<string> $symbols Liste des symboles à filtrer
      * @param string $runIdString ID du run pour les logs
      * @param array<string> $excludedSymbols Référence pour retourner les symboles exclus
@@ -1034,7 +1033,7 @@ class MtfRunCommand extends Command
     private function filterSymbolsWithOpenOrdersOrPositions(array $symbols, string $runIdString, array &$excludedSymbols = []): array
     {
         $excludedSymbols = [];
-        
+
         if (empty($symbols) || (!$this->mainProvider->getAccountProvider() && !$this->mainProvider->getOrderProvider())) {
             return $symbols;
         }
@@ -1047,7 +1046,7 @@ class MtfRunCommand extends Command
         if ($accountProvider) {
             try {
                 $openPositions = $accountProvider->getOpenPositions();
-                
+
                 foreach ($openPositions as $position) {
                     $positionSymbol = strtoupper($position->symbol ?? '');
                     if ($positionSymbol !== '' && !in_array($positionSymbol, $openPositionSymbols, true)) {
@@ -1065,7 +1064,7 @@ class MtfRunCommand extends Command
         if ($orderProvider) {
             try {
                 $openOrders = $orderProvider->getOpenOrders();
-                
+
                 foreach ($openOrders as $order) {
                     $orderSymbol = strtoupper($order->symbol ?? '');
                     if ($orderSymbol !== '' && !in_array($orderSymbol, $openOrderSymbols, true)) {
@@ -1083,7 +1082,7 @@ class MtfRunCommand extends Command
         // Filtrer les symboles
         foreach ($symbols as $symbol) {
             $symbolUpper = strtoupper($symbol);
-            
+
             if (in_array($symbolUpper, $symbolsWithActivity, true)) {
                 $excludedSymbols[] = $symbolUpper;
             } else {
@@ -1096,7 +1095,7 @@ class MtfRunCommand extends Command
 
     /**
      * Met à jour les switches pour les symboles exclus (appelé APRÈS le traitement)
-     * 
+     *
      * @param array<string> $excludedSymbols Liste des symboles exclus (avec ordres/positions ouverts)
      * @param string $runIdString ID du run pour les logs
      */
@@ -1106,7 +1105,7 @@ class MtfRunCommand extends Command
         foreach ($excludedSymbols as $symbolUpper) {
             try {
                 $isSwitchOff = !$this->mtfSwitchRepository->isSymbolSwitchOn($symbolUpper);
-                
+
                 if ($isSwitchOff) {
                     $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, '1m');
                 } else {

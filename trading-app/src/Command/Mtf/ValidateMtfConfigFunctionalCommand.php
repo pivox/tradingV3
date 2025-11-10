@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Command\Mtf;
 
 use App\Config\MtfValidationConfig;
+use App\Config\MtfValidationConfigProvider;
 use App\Contract\Indicator\IndicatorEngineInterface;
 use App\MtfValidator\ConditionLoader\ConditionRegistry;
 use App\MtfValidator\Execution\ExecutionSelector;
@@ -31,7 +32,8 @@ final class ValidateMtfConfigFunctionalCommand extends Command
         private readonly IndicatorEngineInterface $indicatorEngine,
         private readonly ExecutionSelector $executionSelector,
         private readonly TestContextBuilder $contextBuilder,
-        private readonly LogicalConsistencyChecker $consistencyChecker
+        private readonly LogicalConsistencyChecker $consistencyChecker,
+        private readonly ?MtfValidationConfigProvider $configProvider = null
     ) {
         parent::__construct();
     }
@@ -41,6 +43,7 @@ final class ValidateMtfConfigFunctionalCommand extends Command
         $this
             ->addOption('json', null, InputOption::VALUE_NONE, 'Sortie au format JSON')
             ->addOption('detailed', null, InputOption::VALUE_NONE, 'Afficher les détails de chaque test')
+            ->addOption('mode', 'm', InputOption::VALUE_OPTIONAL, 'Mode à valider (regular, scalping, ou "all" pour tous les modes activés)', 'default')
             ->setHelp(<<<'HELP'
 Cette commande valide fonctionnellement le fichier validations.yaml en :
 - Testant les règles avec des données simulées réalistes
@@ -53,6 +56,8 @@ Exemples:
   <info>php bin/console app:validate:mtf-config-functional</info>
   <info>php bin/console app:validate:mtf-config-functional --json</info>
   <info>php bin/console app:validate:mtf-config-functional --detailed</info>
+  <info>php bin/console app:validate:mtf-config-functional --mode=regular</info>
+  <info>php bin/console app:validate:mtf-config-functional --mode=all</info>
 HELP
             );
     }
@@ -62,29 +67,144 @@ HELP
         $io = new SymfonyStyle($input, $output);
         $jsonOutput = $input->getOption('json');
         $detailed = $input->getOption('detailed');
+        $modeOption = $input->getOption('mode');
 
-        $io->title('Validation fonctionnelle du fichier validations.yaml');
+        // Déterminer quel(s) config(s) valider
+        $configsToValidate = $this->getConfigsToValidate($modeOption, $io);
 
-        $runner = new FunctionalValidationRunner(
-            $this->config,
-            $this->conditionRegistry,
-            $this->indicatorEngine,
-            $this->executionSelector,
-            $this->contextBuilder,
-            $this->consistencyChecker
-        );
-
-        $io->section('Exécution des tests...');
-        $result = $runner->run();
-
-        if ($jsonOutput) {
-            $output->writeln(json_encode($result->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
-            return $this->determineExitCode($result);
+        if (empty($configsToValidate)) {
+            $io->error('Aucun config à valider');
+            return Command::FAILURE;
         }
 
-        $this->displayResults($io, $result, $detailed);
+        $allResults = [];
+        $hasErrors = false;
 
-        return $this->determineExitCode($result);
+        foreach ($configsToValidate as $modeName => $config) {
+            if (count($configsToValidate) > 1) {
+                $io->section(sprintf('Validation fonctionnelle du mode: %s', $modeName));
+            } else {
+                $io->title(sprintf('Validation fonctionnelle du fichier validations.yaml%s', $modeName !== 'default' ? " (mode: {$modeName})" : ''));
+            }
+
+            // Recharger le registry avec le config du mode
+            $this->conditionRegistry->load($config);
+
+            $runner = new FunctionalValidationRunner(
+                $config,
+                $this->conditionRegistry,
+                $this->indicatorEngine,
+                $this->executionSelector,
+                $this->contextBuilder,
+                $this->consistencyChecker
+            );
+
+            $io->section('Exécution des tests...');
+            $result = $runner->run();
+            $allResults[$modeName] = $result;
+
+            // Vérifier si le résultat est valide (tous les tests passés et pas de problèmes de cohérence)
+            $isValid = $result->getTotalRulesTested() > 0 
+                && $result->getTotalRulesPassed() === $result->getTotalRulesTested()
+                && !$result->hasConsistencyIssues();
+            
+            if (!$isValid) {
+                $hasErrors = true;
+            }
+
+            if (!$jsonOutput && count($configsToValidate) > 1) {
+                $this->displayResults($io, $result, $detailed);
+            }
+        }
+
+        // Si plusieurs modes, afficher un résumé
+        if (count($configsToValidate) > 1 && !$jsonOutput) {
+            $io->section('Résumé global');
+            $rows = [];
+            foreach ($allResults as $modeName => $result) {
+                $rows[] = [
+                    $modeName,
+                    $result->getTotalRulesTested(),
+                    $result->getTotalRulesPassed(),
+                    $result->getTotalScenariosTested(),
+                    $result->getTotalScenariosPassed(),
+                    ($result->getTotalRulesTested() > 0 && $result->getTotalRulesPassed() === $result->getTotalRulesTested() && !$result->hasConsistencyIssues()) ? '✅ Valide' : '❌ Invalide',
+                ];
+            }
+            $io->table(
+                ['Mode', 'Règles testées', 'Règles réussies', 'Scénarios testés', 'Scénarios réussis', 'Statut'],
+                $rows
+            );
+        }
+
+        $finalExitCode = $this->determineOverallExitCode($allResults);
+
+        // Pour JSON, retourner tous les résultats
+        if ($jsonOutput) {
+            $outputData = [];
+            foreach ($allResults as $modeName => $result) {
+                $outputData[$modeName] = $result->toArray();
+            }
+            $output->writeln(json_encode($outputData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+            return $finalExitCode;
+        }
+
+        // Pour un seul mode, afficher les détails
+        if (count($configsToValidate) === 1) {
+            $result = reset($allResults);
+            $this->displayResults($io, $result, $detailed);
+        }
+
+        return $finalExitCode;
+    }
+
+    /**
+     * Détermine quels configs valider selon l'option --mode
+     * @return array<string, MtfValidationConfig>
+     */
+    private function getConfigsToValidate(string $modeOption, SymfonyStyle $io): array
+    {
+        $configs = [];
+
+        // Si le provider n'est pas disponible, utiliser le config par défaut
+        if ($this->configProvider === null) {
+            $io->note('Provider de configs non disponible, utilisation du config par défaut');
+            return ['default' => $this->config];
+        }
+
+        // Mode "all" : valider tous les modes activés
+        if ($modeOption === 'all') {
+            $enabledModes = $this->configProvider->getEnabledModes();
+            if (empty($enabledModes)) {
+                $io->warning('Aucun mode activé trouvé, utilisation du config par défaut');
+                return ['default' => $this->config];
+            }
+
+            foreach ($enabledModes as $mode) {
+                $modeName = $mode['name'] ?? 'unknown';
+                try {
+                    $configs[$modeName] = $this->configProvider->getConfigForMode($modeName);
+                } catch (\Throwable $e) {
+                    $io->error(sprintf('Impossible de charger le config pour le mode "%s": %s', $modeName, $e->getMessage()));
+                }
+            }
+            return $configs;
+        }
+
+        // Mode spécifique
+        if ($modeOption !== 'default' && $modeOption !== null) {
+            try {
+                $configs[$modeOption] = $this->configProvider->getConfigForMode($modeOption);
+                return $configs;
+            } catch (\Throwable $e) {
+                $io->error(sprintf('Impossible de charger le config pour le mode "%s": %s', $modeOption, $e->getMessage()));
+                $io->note('Utilisation du config par défaut');
+                return ['default' => $this->config];
+            }
+        }
+
+        // Par défaut : utiliser le config par défaut
+        return ['default' => $this->config];
     }
 
     private function displayResults(SymfonyStyle $io, FunctionalValidationResult $result, bool $detailed): void
@@ -215,7 +335,21 @@ HELP
         if ($result->getTotalScenariosTested() > 0 && $result->getTotalScenariosPassed() === 0) {
             return Command::FAILURE;
         }
-        
+
+        return Command::SUCCESS;
+    }
+
+    /**
+     * @param array<string, FunctionalValidationResult> $results
+     */
+    private function determineOverallExitCode(array $results): int
+    {
+        foreach ($results as $result) {
+            if ($this->determineExitCode($result) === Command::FAILURE) {
+                return Command::FAILURE;
+            }
+        }
+
         return Command::SUCCESS;
     }
 }

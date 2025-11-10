@@ -1,9 +1,10 @@
-version: '0.0.13'
+# Profil SCALPER - validations MTF
+version: '0.0.90'
 
 mtf_validation:
     mode: 'pragmatic'
-    context_timeframes: ['4h','1h']
-    execution_timeframe_default: '15m'
+    context_timeframes: ['1h']
+    execution_timeframe_default: '5m'
     allow_skip_lower_tf: true
 
     defaults:
@@ -19,24 +20,24 @@ mtf_validation:
         ema20_over_50_with_tolerance:
             any_of:
                 - ema_20_gt_50
-                - ema_20_minus_ema_50_gt: -0.0012
+                - ema_20_minus_ema_50_gt: -0.0015
                 - ema_20_slope_pos
 
         ema_above_200_with_tolerance:
             any_of:
                 - close_above_ema_200
-                - close_minus_ema_200_gt: -0.0030
+                - close_minus_ema_200_gt: -0.0035
                 - ema200_slope_pos
 
         ema_below_200_with_tolerance:
             any_of:
                 - close_below_ema_200
-                - close_minus_ema_200_lt: -0.0025
+                - close_minus_ema_200_lt: -0.0030
                 - ema200_slope_neg
 
-        rsi_lt_softcap: { lt: 78 }
-        rsi_gt_softfloor: { gt: 30 }
-        rsi_lt_70: { lt: 70 }
+        rsi_lt_softcap: { lt: 82 }
+        rsi_gt_softfloor: { gt: 20 }
+        rsi_lt_70: { lt: 80 }
 
         close_above_vwap_or_ma9:
             any_of: [ close_above_vwap, close_above_ma_9 ]
@@ -56,21 +57,21 @@ mtf_validation:
 
         macd_line_cross_up_with_hysteresis:
             require_prev_below: true
-            min_gap: 0.0008
+            min_gap: 0.0006
             cool_down_bars: 2
 
         macd_line_cross_down_with_hysteresis:
             require_prev_above: true
-            min_gap: 0.0015
-            cool_down_bars: 4
+            min_gap: 0.0012
+            cool_down_bars: 3
 
         macd_hist_slope_pos:
             derivative_gt: 0.0
-            persist_n: 2
+            persist_n: 1
 
         macd_hist_slope_neg:
             derivative_lt: 0.0
-            persist_n: 2
+            persist_n: 1
 
         ema200_slope_pos:
             slope_left: 'ema_200'
@@ -86,16 +87,17 @@ mtf_validation:
             right: 0.0
             eps: 1.0e-12
 
+        # ATR plus large = accepte plus de contextes pour scalping
         atr_rel_in_range_15m:
             use_atr_tf: [ '1m', '5m' ]
             min: 0.0005
-            max: 0.080
+            max: 0.100
             adapt_with_vol_bucket: true
 
         atr_rel_in_range_5m:
             use_atr_tf: [ '1m' ]
             min: 0.0005
-            max: 0.080
+            max: 0.100
             adapt_with_vol_bucket: true
 
         macd_line_below_signal:
@@ -104,13 +106,13 @@ mtf_validation:
         ema20_over_50_with_tolerance_moderate:
             any_of:
                 - ema_20_gt_50
-                - ema_20_minus_ema_50_gt: -0.0012
+                - ema_20_minus_ema_50_gt: -0.0015
                 - ema_20_slope_pos
 
         ema_above_200_with_tolerance_moderate:
             any_of:
                 - close_above_ema_200
-                - close_minus_ema_200_gt: -0.0020
+                - close_minus_ema_200_gt: -0.0025
                 - ema200_slope_pos
 
         macd_line_above_signal:
@@ -144,12 +146,12 @@ mtf_validation:
             op: '>='
             left: 'adx_1h'
             period: 14
-            right: 18
+            right: 15
 
         lev_bounds:
             field: 'leverage'
             min: 2.0
-            max: 20.0
+            max: 25.0
 
         pullback_confirmed_ma9_21:
             all_of: [ ma9_cross_up_ma21 ]
@@ -172,28 +174,27 @@ mtf_validation:
 
     execution_selector:
         stay_on_15m_if:
-            - expected_r_multiple_gte: 2.0
-            - entry_zone_width_pct_lte: 1.3
-            - atr_pct_15m_lte_bps: 130
+            - expected_r_multiple_gte: 1.5
+            - entry_zone_width_pct_lte: 1.8
+            - atr_pct_15m_lte_bps: 180
 
         drop_to_5m_if_any:
-            - expected_r_multiple_lt: 2.0
-            - atr_pct_15m_gt_bps: 120
-            - entry_zone_width_pct_gt: 1.2
+            - expected_r_multiple_lt: 1.5
+            - atr_pct_15m_gt_bps: 180
+            - entry_zone_width_pct_gt: 1.8
 
         forbid_drop_to_5m_if_any:
-            - adx_5m_lt: 20
-            - spread_bps_gt: 8
+            - adx_5m_lt: 12
+            - spread_bps_gt: 10
 
         allow_1m_only_for:
             - scalping: true
             - trailing_after_tp1: true
             - end_of_zone_fallback: true
 
+    # Filtres globaux allégés pour augmenter le flux de signaux
     filters_mandatory:
-        - rsi_lt_70: { rsi_lt_70_threshold: 76 }
-        - adx_min_for_trend_1h
-        - pullback_confirmed_ma9_21
+        - rsi_lt_70: { rsi_lt_70_threshold: 80 }
         - lev_bounds
 
     validation:
@@ -204,7 +205,7 @@ mtf_validation:
                     - all_of:
                           - any_of:
                                 - all_of: [ ema_50_gt_200, close_above_ema_200 ]
-                                - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]
+                                - all_of: [ ema_above_200_with_tolerance_moderate, ema_50_gt_200 ]
                           - price_regime_ok_long
                 short:
                     - all_of:
@@ -217,12 +218,10 @@ mtf_validation:
                 long:
                     - all_of:
                           - any_of:
-                                - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]
+                                - all_of: [ ema_above_200_with_tolerance_moderate, ema_50_gt_200 ]
                                 - all_of: [ ema200_slope_pos, ema_50_gt_200 ]
                           - any_of:
                                 - all_of: [ macd_hist_gt_eps ]
-                                - all_of:
-                                      - macd_line_cross_up_with_hysteresis: { min_gap: 0.0012, cool_down_bars: 3, require_prev_below: true }
                                 - all_of: [ macd_hist_slope_pos ]
                     - price_regime_ok_long
 
@@ -232,8 +231,6 @@ mtf_validation:
                                 - all_of: [ ema_below_200_with_tolerance, ema_50_lt_200 ]
                                 - all_of: [ ema200_slope_neg, ema_50_lt_200 ]
                           - any_of:
-                                - all_of:
-                                      - macd_line_cross_down_with_hysteresis: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }
                                 - all_of: [ macd_hist_decreasing_n ]
                                 - all_of: [ macd_hist_slope_neg ]
                     - price_regime_ok_short
@@ -242,22 +239,21 @@ mtf_validation:
                 long:
                     - all_of:
                           - any_of:
-                                - all_of: [ macd_hist_gt_eps, ema20_over_50_with_tolerance ]
-                                - all_of:
-                                      - macd_line_cross_up_with_hysteresis: { min_gap: 0.0012, cool_down_bars: 3, require_prev_below: true }
-                                      - close_above_vwap_or_ma9
-                          - ema20_over_50_with_tolerance
-                          - rsi_lt_70: { rsi_lt_70_threshold: 76 }
+                                - macd_hist_gt_eps
+                                - macd_hist_slope_pos
+                                - macd_line_above_signal
+                          - ema20_over_50_with_tolerance_moderate
                           - close_above_vwap_or_ma9
+                          - rsi_lt_70: { rsi_lt_70_threshold: 80 }
                           - atr_rel_in_range_15m
                 short:
                     - all_of:
                           - any_of:
-                                - all_of:
-                                      - macd_line_cross_down_with_hysteresis: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }
-                                - all_of: [ macd_hist_decreasing_n, ema_20_lt_50 ]
+                                - macd_hist_decreasing_n
+                                - macd_hist_slope_neg
+                                - macd_line_below_signal
                           - ema_20_lt_50
-                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 26 }
+                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 20 }
                           - close_below_vwap
                           - atr_rel_in_range_15m
 
@@ -265,39 +261,30 @@ mtf_validation:
                 long:
                     - all_of:
                           - any_of:
-                                - all_of: [ macd_hist_gt_eps, ema20_over_50_with_tolerance ]
-                                - all_of:
-                                      - macd_line_cross_up_with_hysteresis: { min_gap: 0.0012, cool_down_bars: 3, require_prev_below: true }
-                                      - close_above_vwap_or_ma9
-                          - ema20_over_50_with_tolerance
+                                - macd_hist_gt_eps
+                                - macd_line_cross_up_with_hysteresis
                           - close_above_vwap_or_ma9
-                          - rsi_lt_70: { rsi_lt_70_threshold: 76 }
+                          - rsi_lt_70: { rsi_lt_70_threshold: 82 }
                           - atr_rel_in_range_5m
                 short:
                     - all_of:
                           - any_of:
-                                - all_of:
-                                      - macd_line_cross_down_with_hysteresis: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }
-                                - all_of: [ macd_hist_decreasing_n, ema_20_lt_50 ]
-                          - ema_20_lt_50
-                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 26 }
+                                - macd_hist_decreasing_n
+                                - macd_line_cross_down_with_hysteresis
                           - close_below_vwap
+                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 18 }
                           - atr_rel_in_range_5m
 
             '1m':
                 long:
                     - all_of:
                           - macd_hist_gt_eps
-                          - ema20_over_50_with_tolerance
                           - close_above_vwap_or_ma9
-                          - rsi_lt_70: { rsi_lt_70_threshold: 76 }
-                          - macd_hist_slope_pos
+                          - rsi_lt_70: { rsi_lt_70_threshold: 82 }
                           - atr_rel_in_range_5m
                 short:
                     - all_of:
                           - macd_hist_decreasing_n
-                          - ema_20_lt_50
-                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 26 }
                           - close_below_vwap
-                          - macd_hist_slope_neg
+                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 18 }
                           - atr_rel_in_range_5m

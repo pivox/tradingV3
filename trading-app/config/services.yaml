@@ -18,6 +18,9 @@ parameters:
     trade_entry.order_timeout_seconds: 120
     # Durée de réactivation du MtfSwitch après annulation d'ordre (au lieu de 4h)
     env(ORDER_TIMEOUT_SWITCH_DURATION): '15m'
+    mode:
+        - [name: 'regular', enabled: true, priority: 1]
+        - [name: 'scalping', enabled: true, priority: 2]
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
 
@@ -166,12 +169,19 @@ services:
             $config: '@App\Config\MtfContractsConfig'
             $clock: '@Psr\Clock\ClockInterface'
 
-    # Alias pour l’interface de configuration MTF -> implémentation TradingParameters
+    # Alias pour l'interface de configuration MTF -> implémentation TradingParameters
     App\Config\MtfConfigProviderInterface: '@App\Config\TradingParameters'
+    
+    # Config par défaut (compatibilité)
     App\Config\MtfValidationConfig:
         arguments:
             $path: '%kernel.project_dir%/src/MtfValidator/config/validations.yaml'
 
+    # Providers pour gérer les modes (regular/scalping)
+    App\Config\MtfValidationConfigProvider: ~
+    App\Config\TradeEntryConfigProvider: ~
+
+    # Config par défaut (compatibilité)
     App\Config\TradeEntryConfig:
         arguments:
             $path: '%kernel.project_dir%/config/app/trade_entry.yaml'

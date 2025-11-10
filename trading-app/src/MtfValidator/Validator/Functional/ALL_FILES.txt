@@ -1,0 +1,1715 @@
+================================================================================
+VALIDATION FONCTIONNELLE MTF - TOUS LES FICHIERS
+================================================================================
+Date: 2025-01-XX
+Description: Tous les fichiers du système de validation fonctionnelle pour validations.yaml
+================================================================================
+
+================================================================================
+FICHIER 1/10: TestScenario.php
+================================================================================
+Chemin: trading-app/src/MtfValidator/Validator/Functional/TestScenario.php
+================================================================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace App\MtfValidator\Validator\Functional;
+
+/**
+ * DTO représentant un scénario de test fonctionnel
+ */
+final class TestScenario
+{
+    public function __construct(
+        private readonly string $name,
+        private readonly string $description,
+        private readonly string $timeframe,
+        private readonly string $side,
+        private readonly array $context,
+        private readonly array $expectedResults = [],
+        private readonly ?string $expectedExecutionTf = null
+    ) {
+    }
+
+    public function getName(): string
+    {
+        return $this->name;
+    }
+
+    public function getDescription(): string
+    {
+        return $this->description;
+    }
+
+    public function getTimeframe(): string
+    {
+        return $this->timeframe;
+    }
+
+    public function getSide(): string
+    {
+        return $this->side;
+    }
+
+    public function getContext(): array
+    {
+        return $this->context;
+    }
+
+    public function getExpectedResults(): array
+    {
+        return $this->expectedResults;
+    }
+
+    public function getExpectedExecutionTf(): ?string
+    {
+        return $this->expectedExecutionTf;
+    }
+
+    public function toArray(): array
+    {
+        return [
+            'name' => $this->name,
+            'description' => $this->description,
+            'timeframe' => $this->timeframe,
+            'side' => $this->side,
+            'expected_results' => $this->expectedResults,
+            'expected_execution_tf' => $this->expectedExecutionTf,
+        ];
+    }
+}
+
+
+================================================================================
+FICHIER 2/10: FunctionalValidationResult.php
+================================================================================
+Chemin: trading-app/src/MtfValidator/Validator/Functional/FunctionalValidationResult.php
+================================================================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace App\MtfValidator\Validator\Functional;
+
+/**
+ * DTO représentant le résultat complet de la validation fonctionnelle
+ */
+final class FunctionalValidationResult
+{
+    /** @var RuleTestResult[] */
+    private array $ruleResults = [];
+
+    /** @var ScenarioTestResult[] */
+    private array $scenarioResults = [];
+
+    /** @var ExecutionSelectorTestResult[] */
+    private array $executionSelectorResults = [];
+
+    /** @var LogicalConsistencyIssue[] */
+    private array $consistencyIssues = [];
+
+    private int $totalRulesTested = 0;
+    private int $totalRulesPassed = 0;
+    private int $totalScenariosTested = 0;
+    private int $totalScenariosPassed = 0;
+
+    public function addRuleResult(RuleTestResult $result): void
+    {
+        $this->ruleResults[] = $result;
+        $this->totalRulesTested++;
+        if ($result->isPassed()) {
+            $this->totalRulesPassed++;
+        }
+    }
+
+    public function addScenarioResult(ScenarioTestResult $result): void
+    {
+        $this->scenarioResults[] = $result;
+        $this->totalScenariosTested++;
+        if ($result->isPassed()) {
+            $this->totalScenariosPassed++;
+        }
+    }
+
+    public function addExecutionSelectorResult(ExecutionSelectorTestResult $result): void
+    {
+        $this->executionSelectorResults[] = $result;
+    }
+
+    public function addConsistencyIssue(LogicalConsistencyIssue $issue): void
+    {
+        $this->consistencyIssues[] = $issue;
+    }
+
+    /**
+     * @return RuleTestResult[]
+     */
+    public function getRuleResults(): array
+    {
+        return $this->ruleResults;
+    }
+
+    /**
+     * @return ScenarioTestResult[]
+     */
+    public function getScenarioResults(): array
+    {
+        return $this->scenarioResults;
+    }
+
+    /**
+     * @return ExecutionSelectorTestResult[]
+     */
+    public function getExecutionSelectorResults(): array
+    {
+        return $this->executionSelectorResults;
+    }
+
+    /**
+     * @return LogicalConsistencyIssue[]
+     */
+    public function getConsistencyIssues(): array
+    {
+        return $this->consistencyIssues;
+    }
+
+    public function getTotalRulesTested(): int
+    {
+        return $this->totalRulesTested;
+    }
+
+    public function getTotalRulesPassed(): int
+    {
+        return $this->totalRulesPassed;
+    }
+
+    public function getTotalScenariosTested(): int
+    {
+        return $this->totalScenariosTested;
+    }
+
+    public function getTotalScenariosPassed(): int
+    {
+        return $this->totalScenariosPassed;
+    }
+
+    public function hasConsistencyIssues(): bool
+    {
+        return !empty($this->consistencyIssues);
+    }
+
+    public function getSuccessRate(): float
+    {
+        if ($this->totalRulesTested === 0) {
+            return 0.0;
+        }
+        return ($this->totalRulesPassed / $this->totalRulesTested) * 100.0;
+    }
+
+    public function getScenarioSuccessRate(): float
+    {
+        if ($this->totalScenariosTested === 0) {
+            return 0.0;
+        }
+        return ($this->totalScenariosPassed / $this->totalScenariosTested) * 100.0;
+    }
+
+    public function toArray(): array
+    {
+        return [
+            'summary' => [
+                'rules' => [
+                    'tested' => $this->totalRulesTested,
+                    'passed' => $this->totalRulesPassed,
+                    'failed' => $this->totalRulesTested - $this->totalRulesPassed,
+                    'success_rate' => round($this->getSuccessRate(), 2),
+                ],
+                'scenarios' => [
+                    'tested' => $this->totalScenariosTested,
+                    'passed' => $this->totalScenariosPassed,
+                    'failed' => $this->totalScenariosTested - $this->totalScenariosPassed,
+                    'success_rate' => round($this->getScenarioSuccessRate(), 2),
+                ],
+                'consistency_issues' => count($this->consistencyIssues),
+            ],
+            'rule_results' => array_map(fn($r) => $r->toArray(), $this->ruleResults),
+            'scenario_results' => array_map(fn($r) => $r->toArray(), $this->scenarioResults),
+            'execution_selector_results' => array_map(fn($r) => $r->toArray(), $this->executionSelectorResults),
+            'consistency_issues' => array_map(fn($i) => $i->toArray(), $this->consistencyIssues),
+        ];
+    }
+}
+
+
+================================================================================
+FICHIER 3/10: RuleTestResult.php
+================================================================================
+Chemin: trading-app/src/MtfValidator/Validator/Functional/RuleTestResult.php
+================================================================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace App\MtfValidator\Validator\Functional;
+
+/**
+ * DTO représentant le résultat d'un test de règle
+ */
+final class RuleTestResult
+{
+    public function __construct(
+        private readonly string $ruleName,
+        private readonly bool $passed,
+        private readonly mixed $actualValue,
+        private readonly mixed $expectedValue,
+        private readonly string $contextDescription,
+        private readonly array $metadata = []
+    ) {
+    }
+
+    public function getRuleName(): string
+    {
+        return $this->ruleName;
+    }
+
+    public function isPassed(): bool
+    {
+        return $this->passed;
+    }
+
+    public function getActualValue(): mixed
+    {
+        return $this->actualValue;
+    }
+
+    public function getExpectedValue(): mixed
+    {
+        return $this->expectedValue;
+    }
+
+    public function getContextDescription(): string
+    {
+        return $this->contextDescription;
+    }
+
+    public function getMetadata(): array
+    {
+        return $this->metadata;
+    }
+
+    public function toArray(): array
+    {
+        return [
+            'rule' => $this->ruleName,
+            'passed' => $this->passed,
+            'actual_value' => $this->actualValue,
+            'expected_value' => $this->expectedValue,
+            'context' => $this->contextDescription,
+            'metadata' => $this->metadata,
+        ];
+    }
+}
+
+
+================================================================================
+FICHIER 4/10: ScenarioTestResult.php
+================================================================================
+Chemin: trading-app/src/MtfValidator/Validator/Functional/ScenarioTestResult.php
+================================================================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace App\MtfValidator\Validator\Functional;
+
+/**
+ * DTO représentant le résultat d'un test de scénario
+ */
+final class ScenarioTestResult
+{
+    /** @var RuleTestResult[] */
+    private array $ruleResults = [];
+
+    public function __construct(
+        private readonly string $scenarioName,
+        private readonly bool $passed,
+        private readonly string $timeframe,
+        private readonly string $side,
+        private readonly ?string $executionTf = null,
+        private readonly ?string $expectedExecutionTf = null,
+        private readonly string $message = ''
+    ) {
+    }
+
+    public function addRuleResult(RuleTestResult $result): void
+    {
+        $this->ruleResults[] = $result;
+    }
+
+    public function getScenarioName(): string
+    {
+        return $this->scenarioName;
+    }
+
+    public function isPassed(): bool
+    {
+        return $this->passed;
+    }
+
+    public function getTimeframe(): string
+    {
+        return $this->timeframe;
+    }
+
+    public function getSide(): string
+    {
+        return $this->side;
+    }
+
+    public function getExecutionTf(): ?string
+    {
+        return $this->executionTf;
+    }
+
+    public function getExpectedExecutionTf(): ?string
+    {
+        return $this->expectedExecutionTf;
+    }
+
+    public function getMessage(): string
+    {
+        return $this->message;
+    }
+
+    /**
+     * @return RuleTestResult[]
+     */
+    public function getRuleResults(): array
+    {
+        return $this->ruleResults;
+    }
+
+    public function toArray(): array
+    {
+        return [
+            'scenario' => $this->scenarioName,
+            'passed' => $this->passed,
+            'timeframe' => $this->timeframe,
+            'side' => $this->side,
+            'execution_tf' => $this->executionTf,
+            'expected_execution_tf' => $this->expectedExecutionTf,
+            'message' => $this->message,
+            'rule_results' => array_map(fn($r) => $r->toArray(), $this->ruleResults),
+        ];
+    }
+}
+
+
+================================================================================
+FICHIER 5/10: ExecutionSelectorTestResult.php
+================================================================================
+Chemin: trading-app/src/MtfValidator/Validator/Functional/ExecutionSelectorTestResult.php
+================================================================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace App\MtfValidator\Validator\Functional;
+
+/**
+ * DTO représentant le résultat d'un test du sélecteur d'exécution
+ */
+final class ExecutionSelectorTestResult
+{
+    public function __construct(
+        private readonly string $testName,
+        private readonly bool $passed,
+        private readonly string $expectedTf,
+        private readonly string $actualTf,
+        private readonly array $context,
+        private readonly array $evaluationDetails = [],
+        private readonly string $message = ''
+    ) {
+    }
+
+    public function getTestName(): string
+    {
+        return $this->testName;
+    }
+
+    public function isPassed(): bool
+    {
+        return $this->passed;
+    }
+
+    public function getExpectedTf(): string
+    {
+        return $this->expectedTf;
+    }
+
+    public function getActualTf(): string
+    {
+        return $this->actualTf;
+    }
+
+    public function getContext(): array
+    {
+        return $this->context;
+    }
+
+    public function getEvaluationDetails(): array
+    {
+        return $this->evaluationDetails;
+    }
+
+    public function getMessage(): string
+    {
+        return $this->message;
+    }
+
+    public function toArray(): array
+    {
+        return [
+            'test' => $this->testName,
+            'passed' => $this->passed,
+            'expected_tf' => $this->expectedTf,
+            'actual_tf' => $this->actualTf,
+            'context' => $this->context,
+            'evaluation_details' => $this->evaluationDetails,
+            'message' => $this->message,
+        ];
+    }
+}
+
+
+================================================================================
+FICHIER 6/10: LogicalConsistencyIssue.php
+================================================================================
+Chemin: trading-app/src/MtfValidator/Validator/Functional/LogicalConsistencyIssue.php
+================================================================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace App\MtfValidator\Validator\Functional;
+
+/**
+ * DTO représentant un problème de cohérence logique
+ */
+final class LogicalConsistencyIssue
+{
+    public function __construct(
+        private readonly string $type,
+        private readonly string $severity,
+        private readonly string $message,
+        private readonly array $affectedRules = [],
+        private readonly array $details = []
+    ) {
+    }
+
+    public function getType(): string
+    {
+        return $this->type;
+    }
+
+    public function getSeverity(): string
+    {
+        return $this->severity;
+    }
+
+    public function getMessage(): string
+    {
+        return $this->message;
+    }
+
+    public function getAffectedRules(): array
+    {
+        return $this->affectedRules;
+    }
+
+    public function getDetails(): array
+    {
+        return $this->details;
+    }
+
+    public function toArray(): array
+    {
+        return [
+            'type' => $this->type,
+            'severity' => $this->severity,
+            'message' => $this->message,
+            'affected_rules' => $this->affectedRules,
+            'details' => $this->details,
+        ];
+    }
+}
+
+
+================================================================================
+FICHIER 7/10: TestContextBuilder.php
+================================================================================
+Chemin: trading-app/src/MtfValidator/Validator/Functional/TestContextBuilder.php
+================================================================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace App\MtfValidator\Validator\Functional;
+
+use App\Indicator\Context\IndicatorContextBuilder;
+
+/**
+ * Générateur de contextes de test réalistes pour la validation fonctionnelle
+ */
+final class TestContextBuilder
+{
+    public function __construct(
+        private readonly IndicatorContextBuilder $contextBuilder
+    ) {
+    }
+
+    /**
+     * Crée un contexte pour une tendance haussière (long)
+     */
+    public function buildBullishContext(string $symbol = 'BTCUSDT', string $timeframe = '15m'): array
+    {
+        $basePrice = 50000.0;
+        $n = 220; // Suffisamment de données pour les indicateurs
+        
+        $closes = [];
+        $highs = [];
+        $lows = [];
+        $volumes = [];
+        
+        // Tendance haussière avec volatilité réaliste
+        for ($i = 0; $i < $n; $i++) {
+            $trend = $i * 2.0; // Tendance haussière
+            $volatility = sin($i / 10.0) * 50.0; // Volatilité cyclique
+            $close = $basePrice + $trend + $volatility;
+            
+            $closes[] = $close;
+            $highs[] = $close + 100.0 + rand(0, 50);
+            $lows[] = $close - 100.0 - rand(0, 50);
+            $volumes[] = 1000.0 + ($i * 10) + rand(0, 200);
+        }
+        
+        return $this->contextBuilder
+            ->symbol($symbol)
+            ->timeframe($timeframe)
+            ->closes($closes)
+            ->highs($highs)
+            ->lows($lows)
+            ->volumes($volumes)
+            ->withDefaults()
+            ->build();
+    }
+
+    /**
+     * Crée un contexte pour une tendance baissière (short)
+     */
+    public function buildBearishContext(string $symbol = 'BTCUSDT', string $timeframe = '15m'): array
+    {
+        $basePrice = 50000.0;
+        $n = 220;
+        
+        $closes = [];
+        $highs = [];
+        $lows = [];
+        $volumes = [];
+        
+        // Tendance baissière avec volatilité réaliste
+        for ($i = 0; $i < $n; $i++) {
+            $trend = -$i * 2.0; // Tendance baissière
+            $volatility = sin($i / 10.0) * 50.0;
+            $close = $basePrice + $trend + $volatility;
+            
+            $closes[] = $close;
+            $highs[] = $close + 100.0 + rand(0, 50);
+            $lows[] = $close - 100.0 - rand(0, 50);
+            $volumes[] = 1000.0 + ($i * 10) + rand(0, 200);
+        }
+        
+        return $this->contextBuilder
+            ->symbol($symbol)
+            ->timeframe($timeframe)
+            ->closes($closes)
+            ->highs($highs)
+            ->lows($lows)
+            ->volumes($volumes)
+            ->withDefaults()
+            ->build();
+    }
+
+    /**
+     * Crée un contexte pour un marché latéral (sideways)
+     */
+    public function buildSidewaysContext(string $symbol = 'BTCUSDT', string $timeframe = '15m'): array
+    {
+        $basePrice = 50000.0;
+        $n = 220;
+        
+        $closes = [];
+        $highs = [];
+        $lows = [];
+        $volumes = [];
+        
+        // Marché latéral avec oscillation autour d'un prix moyen
+        for ($i = 0; $i < $n; $i++) {
+            $oscillation = sin($i / 5.0) * 200.0; // Oscillation
+            $noise = (rand(-50, 50) / 1.0);
+            $close = $basePrice + $oscillation + $noise;
+            
+            $closes[] = $close;
+            $highs[] = $close + 80.0 + rand(0, 40);
+            $lows[] = $close - 80.0 - rand(0, 40);
+            $volumes[] = 1000.0 + rand(0, 300);
+        }
+        
+        return $this->contextBuilder
+            ->symbol($symbol)
+            ->timeframe($timeframe)
+            ->closes($closes)
+            ->highs($highs)
+            ->lows($lows)
+            ->volumes($volumes)
+            ->withDefaults()
+            ->build();
+    }
+
+    /**
+     * Crée un contexte avec RSI élevé (>70) pour tester les filtres
+     */
+    public function buildHighRsiContext(string $symbol = 'BTCUSDT', string $timeframe = '15m'): array
+    {
+        $basePrice = 50000.0;
+        $n = 220;
+        
+        $closes = [];
+        $highs = [];
+        $lows = [];
+        $volumes = [];
+        
+        // Tendance haussière très forte (RSI élevé)
+        for ($i = 0; $i < $n; $i++) {
+            $trend = $i * 5.0; // Tendance très forte
+            $close = $basePrice + $trend;
+            
+            $closes[] = $close;
+            $highs[] = $close + 50.0;
+            $lows[] = $close - 20.0; // Faibles corrections
+            $volumes[] = 1000.0 + ($i * 10);
+        }
+        
+        return $this->contextBuilder
+            ->symbol($symbol)
+            ->timeframe($timeframe)
+            ->closes($closes)
+            ->highs($highs)
+            ->lows($lows)
+            ->volumes($volumes)
+            ->withDefaults()
+            ->build();
+    }
+
+    /**
+     * Crée un contexte avec ATR élevé pour tester les conditions ATR
+     */
+    public function buildHighAtrContext(string $symbol = 'BTCUSDT', string $timeframe = '15m'): array
+    {
+        $basePrice = 50000.0;
+        $n = 220;
+        
+        $closes = [];
+        $highs = [];
+        $lows = [];
+        $volumes = [];
+        
+        // Volatilité élevée (ATR élevé)
+        for ($i = 0; $i < $n; $i++) {
+            $volatility = (rand(-500, 500) / 1.0); // Grande volatilité
+            $close = $basePrice + $volatility;
+            
+            $closes[] = $close;
+            $highs[] = $close + 300.0 + rand(0, 200);
+            $lows[] = $close - 300.0 - rand(0, 200);
+            $volumes[] = 2000.0 + rand(0, 1000);
+        }
+        
+        return $this->contextBuilder
+            ->symbol($symbol)
+            ->timeframe($timeframe)
+            ->closes($closes)
+            ->highs($highs)
+            ->lows($lows)
+            ->volumes($volumes)
+            ->withDefaults()
+            ->build();
+    }
+
+    /**
+     * Crée un contexte personnalisé avec des paramètres spécifiques
+     */
+    public function buildCustomContext(
+        string $symbol,
+        string $timeframe,
+        array $closes,
+        array $highs = [],
+        array $lows = [],
+        array $volumes = [],
+        array $additionalData = []
+    ): array {
+        $context = $this->contextBuilder
+            ->symbol($symbol)
+            ->timeframe($timeframe)
+            ->closes($closes)
+            ->withDefaults();
+        
+        if (!empty($highs)) {
+            $context->highs($highs);
+        }
+        if (!empty($lows)) {
+            $context->lows($lows);
+        }
+        if (!empty($volumes)) {
+            $context->volumes($volumes);
+        }
+        
+        $built = $context->build();
+        
+        // Fusionner les données additionnelles
+        return array_merge($built, $additionalData);
+    }
+
+    /**
+     * Enrichit un contexte avec des données pour l'execution selector
+     */
+    public function enrichForExecutionSelector(array $context, array $selectorData = []): array
+    {
+        $defaults = [
+            'expected_r_multiple' => 2.0,
+            'entry_zone_width_pct' => 1.0,
+            'atr_pct_15m_bps' => 100.0,
+            'adx_5m' => 25.0,
+            'spread_bps' => 5.0,
+            'leverage' => 10.0,
+            'scalping' => false,
+            'trailing_after_tp1' => false,
+            'end_of_zone_fallback' => false,
+        ];
+        
+        return array_merge($context, $defaults, $selectorData);
+    }
+}
+
+
+================================================================================
+FICHIER 8/10: LogicalConsistencyChecker.php
+================================================================================
+Chemin: trading-app/src/MtfValidator/Validator/Functional/LogicalConsistencyChecker.php
+================================================================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace App\MtfValidator\Validator\Functional;
+
+use App\Config\MtfValidationConfig;
+
+/**
+ * Vérifie la cohérence logique entre les règles
+ */
+final class LogicalConsistencyChecker
+{
+    private array $rules = [];
+    private array $ruleDependencies = [];
+
+    public function __construct(
+        private readonly MtfValidationConfig $config
+    ) {
+        $this->rules = $this->config->getRules();
+        $this->buildDependencyGraph();
+    }
+
+    /**
+     * @return LogicalConsistencyIssue[]
+     */
+    public function check(): array
+    {
+        $issues = [];
+
+        $issues = array_merge($issues, $this->checkContradictions());
+        $issues = array_merge($issues, $this->checkRedundancies());
+        $issues = array_merge($issues, $this->checkCircularDependencies());
+        $issues = array_merge($issues, $this->checkUnreachableRules());
+        $issues = array_merge($issues, $this->checkConflictingThresholds());
+
+        return $issues;
+    }
+
+    /**
+     * Construit le graphe de dépendances entre les règles
+     */
+    private function buildDependencyGraph(): void
+    {
+        foreach ($this->rules as $ruleName => $ruleSpec) {
+            $this->ruleDependencies[$ruleName] = $this->extractDependencies($ruleSpec);
+        }
+    }
+
+    /**
+     * Extrait les dépendances d'une règle
+     */
+    private function extractDependencies(mixed $spec): array
+    {
+        $deps = [];
+
+        if (is_string($spec)) {
+            $deps[] = $spec;
+        } elseif (is_array($spec)) {
+            if (isset($spec['any_of']) || isset($spec['all_of'])) {
+                $type = isset($spec['any_of']) ? 'any_of' : 'all_of';
+                foreach ($spec[$type] as $item) {
+                    $deps = array_merge($deps, $this->extractDependencies($item));
+                }
+            } elseif (count($spec) === 1) {
+                $key = array_key_first($spec);
+                if (is_string($key)) {
+                    $deps[] = $key;
+                }
+            }
+        }
+
+        return array_unique($deps);
+    }
+
+    /**
+     * Vérifie les contradictions (règles qui s'excluent mutuellement)
+     */
+    private function checkContradictions(): array
+    {
+        $issues = [];
+
+        // Exemple: rsi_lt_70 et rsi_gt_70 ne peuvent pas être vraies en même temps
+        $contradictoryPairs = [
+            ['rsi_lt_70', 'rsi_gt_softfloor'], // Si RSI < 70 et RSI > 30, pas de contradiction directe
+            ['ema_20_gt_50', 'ema_20_lt_50'],
+            ['close_above_ema_200', 'close_below_ema_200'],
+        ];
+
+        foreach ($contradictoryPairs as [$rule1, $rule2]) {
+            if (isset($this->rules[$rule1]) && isset($this->rules[$rule2])) {
+                // Vérifier si elles sont utilisées dans le même all_of
+                if ($this->areUsedTogether($rule1, $rule2, 'all_of')) {
+                    $issues[] = new LogicalConsistencyIssue(
+                        'contradiction',
+                        'high',
+                        "Règles contradictoires utilisées ensemble dans all_of: {$rule1} et {$rule2}",
+                        [$rule1, $rule2],
+                        ['type' => 'mutually_exclusive_in_all_of']
+                    );
+                }
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Vérifie les redondances (règles équivalentes ou qui se chevauchent)
+     */
+    private function checkRedundancies(): array
+    {
+        $issues = [];
+
+        // Exemple: ema20_over_50_with_tolerance inclut déjà ema_20_gt_50
+        $redundantPairs = [
+            ['ema20_over_50_with_tolerance', 'ema_20_gt_50'],
+            ['ema_above_200_with_tolerance', 'close_above_ema_200'],
+        ];
+
+        foreach ($redundantPairs as [$rule1, $rule2]) {
+            if (isset($this->rules[$rule1]) && isset($this->rules[$rule2])) {
+                $deps1 = $this->ruleDependencies[$rule1] ?? [];
+                if (in_array($rule2, $deps1, true)) {
+                    // Vérifier si elles sont utilisées ensemble dans all_of
+                    if ($this->areUsedTogether($rule1, $rule2, 'all_of')) {
+                        $issues[] = new LogicalConsistencyIssue(
+                            'redundancy',
+                            'medium',
+                            "Règle redondante: {$rule1} inclut déjà {$rule2}",
+                            [$rule1, $rule2],
+                            ['type' => 'redundant_in_all_of']
+                        );
+                    }
+                }
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Vérifie les dépendances circulaires (déjà fait dans le validateur technique, mais on peut vérifier la logique)
+     */
+    private function checkCircularDependencies(): array
+    {
+        $issues = [];
+
+        foreach ($this->ruleDependencies as $ruleName => $deps) {
+            foreach ($deps as $dep) {
+                if (isset($this->ruleDependencies[$dep]) && in_array($ruleName, $this->ruleDependencies[$dep], true)) {
+                    $issues[] = new LogicalConsistencyIssue(
+                        'circular_dependency',
+                        'high',
+                        "Dépendance circulaire détectée: {$ruleName} <-> {$dep}",
+                        [$ruleName, $dep],
+                        ['type' => 'mutual_dependency']
+                    );
+                }
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Vérifie les règles inaccessibles (définies mais jamais utilisées)
+     */
+    private function checkUnreachableRules(): array
+    {
+        $issues = [];
+        $validation = $this->config->getValidation();
+        $executionSelector = $this->config->getConfig()['execution_selector'] ?? [];
+        $filtersMandatory = $this->config->getConfig()['filters_mandatory'] ?? [];
+
+        $usedRules = [];
+
+        // Collecter les règles utilisées dans la validation
+        if (isset($validation['timeframe'])) {
+            foreach ($validation['timeframe'] as $tfConfig) {
+                foreach (['long', 'short'] as $side) {
+                    if (isset($tfConfig[$side])) {
+                        $usedRules = array_merge($usedRules, $this->extractUsedRules($tfConfig[$side]));
+                    }
+                }
+            }
+        }
+
+        // Collecter les règles utilisées dans execution_selector
+        foreach ($executionSelector as $group) {
+            if (is_array($group)) {
+                foreach ($group as $item) {
+                    if (is_string($item)) {
+                        $usedRules[] = $item;
+                    } elseif (is_array($item)) {
+                        $key = array_key_first($item);
+                        if (is_string($key)) {
+                            $usedRules[] = $key;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Collecter les règles utilisées dans filters_mandatory
+        foreach ($filtersMandatory as $filter) {
+            if (is_string($filter)) {
+                $usedRules[] = $filter;
+            } elseif (is_array($filter)) {
+                $key = array_key_first($filter);
+                if (is_string($key)) {
+                    $usedRules[] = $key;
+                }
+            }
+        }
+
+        $usedRules = array_unique($usedRules);
+
+        // Trouver les règles définies mais non utilisées
+        foreach ($this->rules as $ruleName => $ruleSpec) {
+            if (!in_array($ruleName, $usedRules, true)) {
+                // Vérifier si la règle est utilisée indirectement (via dépendances)
+                $isUsedIndirectly = false;
+                foreach ($usedRules as $usedRule) {
+                    if (isset($this->ruleDependencies[$usedRule]) && in_array($ruleName, $this->ruleDependencies[$usedRule], true)) {
+                        $isUsedIndirectly = true;
+                        break;
+                    }
+                }
+
+                if (!$isUsedIndirectly) {
+                    $issues[] = new LogicalConsistencyIssue(
+                        'unreachable_rule',
+                        'low',
+                        "Règle définie mais jamais utilisée: {$ruleName}",
+                        [$ruleName],
+                        ['type' => 'unused_rule']
+                    );
+                }
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Extrait les règles utilisées dans une structure de validation
+     */
+    private function extractUsedRules(mixed $config): array
+    {
+        $rules = [];
+
+        if (is_string($config)) {
+            $rules[] = $config;
+        } elseif (is_array($config)) {
+            foreach ($config as $item) {
+                if (is_string($item)) {
+                    $rules[] = $item;
+                } elseif (is_array($item)) {
+                    if (isset($item['all_of']) || isset($item['any_of'])) {
+                        $type = isset($item['all_of']) ? 'all_of' : 'any_of';
+                        foreach ($item[$type] as $subItem) {
+                            $rules = array_merge($rules, $this->extractUsedRules($subItem));
+                        }
+                    } else {
+                        $key = array_key_first($item);
+                        if (is_string($key)) {
+                            $rules[] = $key;
+                        }
+                    }
+                }
+            }
+        }
+
+        return $rules;
+    }
+
+    /**
+     * Vérifie les seuils conflictuels (ex: min > max)
+     */
+    private function checkConflictingThresholds(): array
+    {
+        $issues = [];
+
+        // Vérifier les règles avec min/max
+        foreach ($this->rules as $ruleName => $ruleSpec) {
+            if (is_array($ruleSpec)) {
+                if (isset($ruleSpec['min']) && isset($ruleSpec['max'])) {
+                    if (is_numeric($ruleSpec['min']) && is_numeric($ruleSpec['max']) && $ruleSpec['min'] > $ruleSpec['max']) {
+                        $issues[] = new LogicalConsistencyIssue(
+                            'conflicting_threshold',
+                            'high',
+                            "Seuils conflictuels dans {$ruleName}: min ({$ruleSpec['min']}) > max ({$ruleSpec['max']})",
+                            [$ruleName],
+                            ['min' => $ruleSpec['min'], 'max' => $ruleSpec['max']]
+                        );
+                    }
+                }
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Vérifie si deux règles sont utilisées ensemble dans un all_of
+     */
+    private function areUsedTogether(string $rule1, string $rule2, string $type): bool
+    {
+        $validation = $this->config->getValidation();
+
+        if (!isset($validation['timeframe'])) {
+            return false;
+        }
+
+        foreach ($validation['timeframe'] as $tfConfig) {
+            foreach (['long', 'short'] as $side) {
+                if (isset($tfConfig[$side])) {
+                    if ($this->areRulesTogetherInStructure($tfConfig[$side], $rule1, $rule2, $type)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Vérifie récursivement si deux règles sont ensemble dans une structure
+     */
+    private function areRulesTogetherInStructure(mixed $structure, string $rule1, string $rule2, string $type): bool
+    {
+        if (!is_array($structure)) {
+            return false;
+        }
+
+        foreach ($structure as $item) {
+            if (is_array($item) && isset($item[$type])) {
+                $items = $item[$type];
+                $hasRule1 = false;
+                $hasRule2 = false;
+
+                foreach ($items as $subItem) {
+                    $rules = $this->extractUsedRules($subItem);
+                    if (in_array($rule1, $rules, true)) {
+                        $hasRule1 = true;
+                    }
+                    if (in_array($rule2, $rules, true)) {
+                        $hasRule2 = true;
+                    }
+                }
+
+                if ($hasRule1 && $hasRule2) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+}
+
+
+================================================================================
+FICHIER 9/10: FunctionalValidationRunner.php
+================================================================================
+Chemin: trading-app/src/MtfValidator/Validator/Functional/FunctionalValidationRunner.php
+================================================================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace App\MtfValidator\Validator\Functional;
+
+use App\Config\MtfValidationConfig;
+use App\Contract\Indicator\IndicatorEngineInterface;
+use App\MtfValidator\ConditionLoader\ConditionRegistry;
+use App\MtfValidator\Execution\ExecutionSelector;
+
+/**
+ * Service principal de validation fonctionnelle
+ * Teste les règles avec des données simulées et vérifie la cohérence logique
+ */
+final class FunctionalValidationRunner
+{
+    public function __construct(
+        private readonly MtfValidationConfig $config,
+        private readonly ConditionRegistry $conditionRegistry,
+        private readonly IndicatorEngineInterface $indicatorEngine,
+        private readonly ExecutionSelector $executionSelector,
+        private readonly TestContextBuilder $contextBuilder,
+        private readonly LogicalConsistencyChecker $consistencyChecker
+    ) {
+    }
+
+    public function run(): FunctionalValidationResult
+    {
+        $result = new FunctionalValidationResult();
+        
+        // 1. Vérifier la cohérence logique
+        $consistencyIssues = $this->consistencyChecker->check();
+        foreach ($consistencyIssues as $issue) {
+            $result->addConsistencyIssue($issue);
+        }
+        
+        // 2. Charger les règles dans le registry
+        $this->conditionRegistry->load($this->config);
+        
+        // 3. Tester les règles individuelles
+        $this->testRules($result);
+        
+        // 4. Tester les scénarios
+        $this->testScenarios($result);
+        
+        // 5. Tester l'execution selector
+        $this->testExecutionSelector($result);
+        
+        return $result;
+    }
+
+    private function testRules(FunctionalValidationResult $result): void
+    {
+        $rules = $this->config->getRules();
+        $testContexts = [
+            'bullish' => $this->contextBuilder->buildBullishContext(),
+            'bearish' => $this->contextBuilder->buildBearishContext(),
+            'sideways' => $this->contextBuilder->buildSidewaysContext(),
+        ];
+        
+        foreach ($rules as $ruleName => $ruleSpec) {
+            // Tester la règle avec différents contextes
+            foreach ($testContexts as $contextType => $context) {
+                try {
+                    // Vérifier si c'est une règle ou une condition PHP
+                    $rulesCard = $this->conditionRegistry->getRules();
+                    $rule = $rulesCard?->get($ruleName);
+                    
+                    if ($rule) {
+                        $ruleResult = $rule->evaluate($context);
+                        $passed = $ruleResult->passed;
+                    } else {
+                        // C'est peut-être une condition PHP
+                        $condition = $this->conditionRegistry->get($ruleName);
+                        if (!$condition) {
+                            continue; // Ni règle ni condition
+                        }
+                        $ruleResult = $condition->evaluate($context);
+                        $passed = $ruleResult->passed;
+                    }
+                    
+                    $result->addRuleResult(new RuleTestResult(
+                        $ruleName,
+                        $passed,
+                        $ruleResult->value,
+                        null, // Pas d'attente spécifique pour les tests génériques
+                        "Contexte {$contextType}",
+                        ['context_type' => $contextType, 'meta' => $ruleResult->meta ?? []]
+                    ));
+                } catch (\Throwable $e) {
+                    $result->addRuleResult(new RuleTestResult(
+                        $ruleName,
+                        false,
+                        null,
+                        null,
+                        "Contexte {$contextType}",
+                        ['error' => $e->getMessage(), 'context_type' => $contextType]
+                    ));
+                }
+            }
+        }
+    }
+
+    private function testScenarios(FunctionalValidationResult $result): void
+    {
+        $scenarios = $this->buildTestScenarios();
+        $validation = $this->config->getValidation();
+        
+        foreach ($scenarios as $scenario) {
+            $timeframe = $scenario->getTimeframe();
+            $side = $scenario->getSide();
+            $context = $scenario->getContext();
+            
+            try {
+                // Évaluer la validation pour ce timeframe et side
+                $evalResult = $this->indicatorEngine->evaluateYaml($timeframe, $context);
+                
+                $passed = false;
+                $executionTf = null;
+                
+                if (isset($evalResult['passed'][$side])) {
+                    $passed = (bool)$evalResult['passed'][$side];
+                }
+                
+                // Tester l'execution selector si applicable
+                if ($passed && $timeframe === '15m') {
+                    $selectorContext = $this->contextBuilder->enrichForExecutionSelector($context);
+                    $execDecision = $this->executionSelector->decide($selectorContext);
+                    $executionTf = $execDecision->executionTimeframe;
+                }
+                
+                $scenarioResult = new ScenarioTestResult(
+                    $scenario->getName(),
+                    $passed,
+                    $timeframe,
+                    $side,
+                    $executionTf,
+                    $scenario->getExpectedExecutionTf(),
+                    $passed ? 'Scénario passé' : 'Scénario échoué'
+                );
+                
+                // Ajouter les résultats des règles individuelles
+                if (isset($evalResult[$side])) {
+                    foreach ($evalResult[$side]['conditions'] ?? [] as $ruleName => $ruleData) {
+                        $scenarioResult->addRuleResult(new RuleTestResult(
+                            $ruleName,
+                            (bool)($ruleData['passed'] ?? false),
+                            $ruleData['value'] ?? null,
+                            null,
+                            "Scénario {$scenario->getName()}",
+                            $ruleData['meta'] ?? []
+                        ));
+                    }
+                }
+                
+                $result->addScenarioResult($scenarioResult);
+            } catch (\Throwable $e) {
+                $result->addScenarioResult(new ScenarioTestResult(
+                    $scenario->getName(),
+                    false,
+                    $timeframe,
+                    $side,
+                    null,
+                    $scenario->getExpectedExecutionTf(),
+                    "Erreur: {$e->getMessage()}"
+                ));
+            }
+        }
+    }
+
+    private function testExecutionSelector(FunctionalValidationResult $result): void
+    {
+        $testCases = [
+            [
+                'name' => 'Stay on 15m - High R multiple',
+                'context' => $this->contextBuilder->enrichForExecutionSelector(
+                    $this->contextBuilder->buildBullishContext(),
+                    ['expected_r_multiple' => 2.5, 'entry_zone_width_pct' => 1.0, 'atr_pct_15m_bps' => 100.0]
+                ),
+                'expected' => '15m',
+            ],
+            [
+                'name' => 'Drop to 5m - Low R multiple',
+                'context' => $this->contextBuilder->enrichForExecutionSelector(
+                    $this->contextBuilder->buildBullishContext(),
+                    ['expected_r_multiple' => 1.5, 'entry_zone_width_pct' => 1.5, 'atr_pct_15m_bps' => 150.0]
+                ),
+                'expected' => '5m',
+            ],
+            [
+                'name' => 'Forbid drop - Low ADX',
+                'context' => $this->contextBuilder->enrichForExecutionSelector(
+                    $this->contextBuilder->buildBullishContext(),
+                    ['expected_r_multiple' => 1.5, 'adx_5m' => 15.0, 'spread_bps' => 5.0]
+                ),
+                'expected' => '15m', // Devrait rester sur 15m car ADX trop bas
+            ],
+            [
+                'name' => 'Filters mandatory failed',
+                'context' => $this->contextBuilder->enrichForExecutionSelector(
+                    $this->contextBuilder->buildHighRsiContext(),
+                    ['expected_r_multiple' => 2.5] // RSI > 70 devrait bloquer
+                ),
+                'expected' => 'NONE',
+            ],
+        ];
+        
+        foreach ($testCases as $testCase) {
+            try {
+                $decision = $this->executionSelector->decide($testCase['context']);
+                $actualTf = $decision->executionTimeframe;
+                $expectedTf = $testCase['expected'];
+                $passed = $actualTf === $expectedTf;
+                
+                $result->addExecutionSelectorResult(new ExecutionSelectorTestResult(
+                    $testCase['name'],
+                    $passed,
+                    $expectedTf,
+                    $actualTf,
+                    $testCase['context'],
+                    $decision->meta ?? [],
+                    $passed ? 'Décision correcte' : "Attendu {$expectedTf}, obtenu {$actualTf}"
+                ));
+            } catch (\Throwable $e) {
+                $result->addExecutionSelectorResult(new ExecutionSelectorTestResult(
+                    $testCase['name'],
+                    false,
+                    $testCase['expected'],
+                    'ERROR',
+                    $testCase['context'],
+                    [],
+                    "Erreur: {$e->getMessage()}"
+                ));
+            }
+        }
+    }
+
+    /**
+     * Construit les scénarios de test prédéfinis
+     * @return TestScenario[]
+     */
+    private function buildTestScenarios(): array
+    {
+        return [
+            new TestScenario(
+                'Bullish 15m Long',
+                'Tendance haussière sur 15m, validation long',
+                '15m',
+                'long',
+                $this->contextBuilder->buildBullishContext('BTCUSDT', '15m'),
+                [],
+                '15m'
+            ),
+            new TestScenario(
+                'Bearish 15m Short',
+                'Tendance baissière sur 15m, validation short',
+                '15m',
+                'short',
+                $this->contextBuilder->buildBearishContext('BTCUSDT', '15m'),
+                [],
+                '15m'
+            ),
+            new TestScenario(
+                'Bullish 1h Long',
+                'Tendance haussière sur 1h, validation long',
+                '1h',
+                'long',
+                $this->contextBuilder->buildBullishContext('BTCUSDT', '1h'),
+                [],
+                null
+            ),
+            new TestScenario(
+                'High RSI Block',
+                'RSI élevé devrait bloquer la validation',
+                '15m',
+                'long',
+                $this->contextBuilder->buildHighRsiContext('BTCUSDT', '15m'),
+                [],
+                null
+            ),
+        ];
+    }
+}
+
+
+================================================================================
+FICHIER 10/10: ValidateMtfConfigFunctionalCommand.php
+================================================================================
+Chemin: trading-app/src/Command/Mtf/ValidateMtfConfigFunctionalCommand.php
+================================================================================
+
+<?php
+
+declare(strict_types=1);
+
+namespace App\Command\Mtf;
+
+use App\Config\MtfValidationConfig;
+use App\Contract\Indicator\IndicatorEngineInterface;
+use App\MtfValidator\ConditionLoader\ConditionRegistry;
+use App\MtfValidator\Execution\ExecutionSelector;
+use App\MtfValidator\Validator\Functional\FunctionalValidationResult;
+use App\MtfValidator\Validator\Functional\FunctionalValidationRunner;
+use App\MtfValidator\Validator\Functional\LogicalConsistencyChecker;
+use App\MtfValidator\Validator\Functional\TestContextBuilder;
+use Symfony\Component\Console\Attribute\AsCommand;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Style\SymfonyStyle;
+
+#[AsCommand(
+    name: 'app:validate:mtf-config-functional',
+    description: 'Valide fonctionnellement le fichier validations.yaml avec des données simulées'
+)]
+final class ValidateMtfConfigFunctionalCommand extends Command
+{
+    public function __construct(
+        private readonly MtfValidationConfig $config,
+        private readonly ConditionRegistry $conditionRegistry,
+        private readonly IndicatorEngineInterface $indicatorEngine,
+        private readonly ExecutionSelector $executionSelector,
+        private readonly TestContextBuilder $contextBuilder,
+        private readonly LogicalConsistencyChecker $consistencyChecker
+    ) {
+        parent::__construct();
+    }
+
+    protected function configure(): void
+    {
+        $this
+            ->addOption('json', null, InputOption::VALUE_NONE, 'Sortie au format JSON')
+            ->addOption('detailed', null, InputOption::VALUE_NONE, 'Afficher les détails de chaque test')
+            ->setHelp(<<<'HELP'
+Cette commande valide fonctionnellement le fichier validations.yaml en :
+- Testant les règles avec des données simulées réalistes
+- Vérifiant la cohérence logique entre les règles
+- Testant les scénarios de validation MTF
+- Testant l'execution selector avec différents contextes
+- Générant un rapport détaillé
+
+Exemples:
+  <info>php bin/console app:validate:mtf-config-functional</info>
+  <info>php bin/console app:validate:mtf-config-functional --json</info>
+  <info>php bin/console app:validate:mtf-config-functional --detailed</info>
+HELP
+            );
+    }
+
+    protected function execute(InputInterface $input, OutputInterface $output): int
+    {
+        $io = new SymfonyStyle($input, $output);
+        $jsonOutput = $input->getOption('json');
+        $detailed = $input->getOption('detailed');
+
+        $io->title('Validation fonctionnelle du fichier validations.yaml');
+
+        $runner = new FunctionalValidationRunner(
+            $this->config,
+            $this->conditionRegistry,
+            $this->indicatorEngine,
+            $this->executionSelector,
+            $this->contextBuilder,
+            $this->consistencyChecker
+        );
+
+        $io->section('Exécution des tests...');
+        $result = $runner->run();
+
+        if ($jsonOutput) {
+            $output->writeln(json_encode($result->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+            return $this->determineExitCode($result);
+        }
+
+        $this->displayResults($io, $result, $detailed);
+
+        return $this->determineExitCode($result);
+    }
+
+    private function displayResults(SymfonyStyle $io, FunctionalValidationResult $result, bool $detailed): void
+    {
+        // Résumé général
+        $io->section('Résumé');
+        $io->table(
+            ['Catégorie', 'Testé', 'Réussi', 'Échoué', 'Taux de succès'],
+            [
+                [
+                    'Règles',
+                    $result->getTotalRulesTested(),
+                    $result->getTotalRulesPassed(),
+                    $result->getTotalRulesTested() - $result->getTotalRulesPassed(),
+                    round($result->getSuccessRate(), 2) . '%',
+                ],
+                [
+                    'Scénarios',
+                    $result->getTotalScenariosTested(),
+                    $result->getTotalScenariosPassed(),
+                    $result->getTotalScenariosTested() - $result->getTotalScenariosPassed(),
+                    round($result->getScenarioSuccessRate(), 2) . '%',
+                ],
+                [
+                    'Cohérence logique',
+                    count($result->getConsistencyIssues()),
+                    count($result->getConsistencyIssues()) === 0 ? '0' : '0',
+                    count($result->getConsistencyIssues()),
+                    count($result->getConsistencyIssues()) === 0 ? '100%' : '0%',
+                ],
+            ]
+        );
+
+        // Problèmes de cohérence logique
+        if ($result->hasConsistencyIssues()) {
+            $io->section('Problèmes de cohérence logique');
+            foreach ($result->getConsistencyIssues() as $issue) {
+                $severityIcon = match($issue->getSeverity()) {
+                    'high' => '🔴',
+                    'medium' => '🟡',
+                    'low' => '🟢',
+                    default => '⚪',
+                };
+                $io->writeln(sprintf(
+                    '%s [%s] %s',
+                    $severityIcon,
+                    $issue->getType(),
+                    $issue->getMessage()
+                ));
+                if ($detailed && !empty($issue->getAffectedRules())) {
+                    $io->writeln(sprintf('  Règles affectées: %s', implode(', ', $issue->getAffectedRules())));
+                }
+            }
+        }
+
+        // Résultats des scénarios
+        if ($detailed && !empty($result->getScenarioResults())) {
+            $io->section('Résultats des scénarios');
+            foreach ($result->getScenarioResults() as $scenarioResult) {
+                $icon = $scenarioResult->isPassed() ? '✅' : '❌';
+                $io->writeln(sprintf(
+                    '%s %s (%s/%s)',
+                    $icon,
+                    $scenarioResult->getScenarioName(),
+                    $scenarioResult->getTimeframe(),
+                    $scenarioResult->getSide()
+                ));
+                if (!$scenarioResult->isPassed() && $scenarioResult->getMessage()) {
+                    $io->writeln(sprintf('  → %s', $scenarioResult->getMessage()));
+                }
+            }
+        }
+
+        // Résultats de l'execution selector
+        if ($detailed && !empty($result->getExecutionSelectorResults())) {
+            $io->section('Résultats Execution Selector');
+            foreach ($result->getExecutionSelectorResults() as $selectorResult) {
+                $icon = $selectorResult->isPassed() ? '✅' : '❌';
+                $io->writeln(sprintf(
+                    '%s %s: %s (attendu: %s)',
+                    $icon,
+                    $selectorResult->getTestName(),
+                    $selectorResult->getActualTf(),
+                    $selectorResult->getExpectedTf()
+                ));
+                if (!$selectorResult->isPassed() && $selectorResult->getMessage()) {
+                    $io->writeln(sprintf('  → %s', $selectorResult->getMessage()));
+                }
+            }
+        }
+
+        // Statut final
+        $io->section('Statut final');
+        $allPassed = $result->getTotalRulesTested() > 0 
+            && $result->getTotalRulesPassed() === $result->getTotalRulesTested()
+            && !$result->hasConsistencyIssues();
+        
+        if ($allPassed) {
+            $io->success('✅ Tous les tests sont passés');
+        } else {
+            $io->warning('⚠️  Certains tests ont échoué ou des problèmes de cohérence ont été détectés');
+        }
+    }
+
+    private function determineExitCode(FunctionalValidationResult $result): int
+    {
+        // Échoue si :
+        // - Des problèmes de cohérence logique de sévérité high
+        // - Tous les tests de règles ont échoué
+        // - Tous les scénarios ont échoué
+        
+        $hasHighSeverityIssues = false;
+        foreach ($result->getConsistencyIssues() as $issue) {
+            if ($issue->getSeverity() === 'high') {
+                $hasHighSeverityIssues = true;
+                break;
+            }
+        }
+        
+        if ($hasHighSeverityIssues) {
+            return Command::FAILURE;
+        }
+        
+        if ($result->getTotalRulesTested() > 0 && $result->getTotalRulesPassed() === 0) {
+            return Command::FAILURE;
+        }
+        
+        if ($result->getTotalScenariosTested() > 0 && $result->getTotalScenariosPassed() === 0) {
+            return Command::FAILURE;
+        }
+        
+        return Command::SUCCESS;
+    }
+}
+
+
+================================================================================
+FIN DU FICHIER
+================================================================================
+
+
+
+
+
+
+
+
+

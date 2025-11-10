@@ -20,6 +20,7 @@ class ConditionRegistry
 
     private ?Rules $rulesCard = null;
     private ?Validation $validationCard = null;
+    private ?MtfValidationConfig $currentConfig = null;
 
     /**
      * @param iterable<string,ConditionInterface> $allConditions  Iterable indexé par la clé (lazy)
@@ -159,6 +160,8 @@ class ConditionRegistry
         if ($config instanceof MtfValidationConfig) {
             // Nouveau format: règles depuis le fichier validations MTF
             $rulesData = $config->getRules();
+            // Stocker le config actuel
+            $this->currentConfig = $config;
         } elseif (is_array($config)) {
             // Format array (pour tests/compatibilité)
             $root = $config['mtf_validation'] ?? $config;
@@ -167,6 +170,8 @@ class ConditionRegistry
             if ($validation === null) {
                 $validation = $root['validation'] ?? null;
             }
+            // Pas de config pour les arrays
+            $this->currentConfig = null;
         }
 
         // Charger les règles
@@ -188,6 +193,16 @@ class ConditionRegistry
         $this->load($validationConfig);
     }
 
+    /**
+     * Recharge le registry avec un nouveau config (pour changement de mode dynamique)
+     * Met en cache les règles et la validation pour éviter de recharger inutilement
+     * @param MtfValidationConfig $config Nouveau config à charger
+     */
+    public function reload(MtfValidationConfig $config): void
+    {
+        $this->load($config);
+    }
+
     public function getValidation(): ?Validation
     {
         return $this->validationCard;
@@ -205,5 +220,14 @@ class ConditionRegistry
         }
 
         return $this->validationCard->evaluate($contextsByTimeframe);
+    }
+
+    /**
+     * Retourne le config actuel (si chargé via MtfValidationConfig)
+     * @return MtfValidationConfig|null
+     */
+    public function getCurrentConfig(): ?MtfValidationConfig
+    {
+        return $this->currentConfig;
     }
 }
