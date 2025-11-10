@@ -22,7 +22,9 @@ final class ExecutionSelector
      */
     public function decide(array $context): ExecutionDecision
     {
-        $cfg = $this->mtfConfig->getConfig();
+        // Utiliser le config dynamique depuis ConditionRegistry si disponible, sinon fallback sur le config statique
+        $activeConfig = $this->registry->getCurrentConfig() ?? $this->mtfConfig;
+        $cfg = $activeConfig->getConfig();
         $selector = (array)($cfg['execution_selector'] ?? []);
 
         // Extraire les noms et seuils depuis le YAML

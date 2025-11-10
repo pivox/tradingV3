@@ -97,6 +97,8 @@ final class SymbolProcessor
                 'status' => $symbolResult['status'] ?? 'UNKNOWN',
                 'execution_tf' => $symbolResult['execution_tf'] ?? null,
                 'signal_side' => $symbolResult['signal_side'] ?? null,
+                'validation_mode_used' => $symbolResult['validation_mode_used'] ?? null,
+                'trade_entry_mode_used' => $symbolResult['trade_entry_mode_used'] ?? null,
                 'reason' => 'mtf_symbol_processing_end',
             ]);
 
@@ -110,7 +112,9 @@ final class SymbolProcessor
                 error: $symbolResult['error'] ?? null,
                 context: $symbolResult['context'] ?? null,
                 currentPrice: $symbolResult['current_price'] ?? null,
-                atr: $symbolResult['atr'] ?? null
+                atr: $symbolResult['atr'] ?? null,
+                validationModeUsed: $symbolResult['validation_mode_used'] ?? null,
+                tradeEntryModeUsed: $symbolResult['trade_entry_mode_used'] ?? null
             );
 
         } catch (\Throwable $e) {

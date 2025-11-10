@@ -19,7 +19,9 @@ final class SymbolResultDto
         public readonly ?array $error = null,
         public readonly ?array $context = null,
         public readonly ?float $currentPrice = null,
-        public readonly ?float $atr = null
+        public readonly ?float $atr = null,
+        public readonly ?string $validationModeUsed = null,
+        public readonly ?string $tradeEntryModeUsed = null
     ) {}
 
     public function isSuccess(): bool
@@ -54,7 +56,9 @@ final class SymbolResultDto
             'error' => $this->error,
             'context' => $this->context,
             'current_price' => $this->currentPrice,
-            'atr' => $this->atr
+            'atr' => $this->atr,
+            'validation_mode_used' => $this->validationModeUsed,
+            'trade_entry_mode_used' => $this->tradeEntryModeUsed
         ];
     }
 }

@@ -1,4 +1,4 @@
-version: '0.0.13'
+version: '0.0.10'
 
 mtf_validation:
     mode: 'pragmatic'
@@ -88,14 +88,14 @@ mtf_validation:
 
         atr_rel_in_range_15m:
             use_atr_tf: [ '1m', '5m' ]
-            min: 0.0005
-            max: 0.080
+            min: 0.0012
+            max: 0.045
             adapt_with_vol_bucket: true
 
         atr_rel_in_range_5m:
             use_atr_tf: [ '1m' ]
-            min: 0.0005
-            max: 0.080
+            min: 0.0008
+            max: 0.045
             adapt_with_vol_bucket: true
 
         macd_line_below_signal:
@@ -144,7 +144,7 @@ mtf_validation:
             op: '>='
             left: 'adx_1h'
             period: 14
-            right: 18
+            right: 25
 
         lev_bounds:
             field: 'leverage'
@@ -191,9 +191,11 @@ mtf_validation:
             - end_of_zone_fallback: true
 
     filters_mandatory:
-        - rsi_lt_70: { rsi_lt_70_threshold: 76 }
+        - rsi_lt_70: { rsi_lt_70_threshold: 70 }
         - adx_min_for_trend_1h
         - pullback_confirmed_ma9_21
+        - pullback_confirmed_vwap
+        - price_lte_ma21_plus_k_atr
         - lev_bounds
 
     validation:
@@ -247,7 +249,7 @@ mtf_validation:
                                       - macd_line_cross_up_with_hysteresis: { min_gap: 0.0012, cool_down_bars: 3, require_prev_below: true }
                                       - close_above_vwap_or_ma9
                           - ema20_over_50_with_tolerance
-                          - rsi_lt_70: { rsi_lt_70_threshold: 76 }
+                          - rsi_lt_70: { rsi_lt_70_threshold: 70 }
                           - close_above_vwap_or_ma9
                           - atr_rel_in_range_15m
                 short:
@@ -257,7 +259,7 @@ mtf_validation:
                                       - macd_line_cross_down_with_hysteresis: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }
                                 - all_of: [ macd_hist_decreasing_n, ema_20_lt_50 ]
                           - ema_20_lt_50
-                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 26 }
+                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 31 }
                           - close_below_vwap
                           - atr_rel_in_range_15m
 
@@ -271,7 +273,7 @@ mtf_validation:
                                       - close_above_vwap_or_ma9
                           - ema20_over_50_with_tolerance
                           - close_above_vwap_or_ma9
-                          - rsi_lt_70: { rsi_lt_70_threshold: 76 }
+                          - rsi_lt_70: { rsi_lt_70_threshold: 70 }
                           - atr_rel_in_range_5m
                 short:
                     - all_of:
@@ -280,7 +282,7 @@ mtf_validation:
                                       - macd_line_cross_down_with_hysteresis: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }
                                 - all_of: [ macd_hist_decreasing_n, ema_20_lt_50 ]
                           - ema_20_lt_50
-                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 26 }
+                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 31 }
                           - close_below_vwap
                           - atr_rel_in_range_5m
 
@@ -290,14 +292,14 @@ mtf_validation:
                           - macd_hist_gt_eps
                           - ema20_over_50_with_tolerance
                           - close_above_vwap_or_ma9
-                          - rsi_lt_70: { rsi_lt_70_threshold: 76 }
+                          - rsi_lt_70: { rsi_lt_70_threshold: 70 }
                           - macd_hist_slope_pos
                           - atr_rel_in_range_5m
                 short:
                     - all_of:
                           - macd_hist_decreasing_n
                           - ema_20_lt_50
-                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 26 }
+                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 31 }
                           - close_below_vwap
                           - macd_hist_slope_neg
                           - atr_rel_in_range_5m

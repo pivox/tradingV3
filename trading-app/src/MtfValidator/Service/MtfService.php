@@ -7,6 +7,9 @@ namespace App\MtfValidator\Service;
 use App\Common\Enum\Timeframe;
 use App\Config\MtfConfigProviderInterface;
 use App\Config\MtfValidationConfig;
+use App\Config\MtfValidationConfigProvider;
+use App\Config\TradeEntryConfigProvider;
+use App\MtfValidator\ConditionLoader\ConditionRegistry;
 use App\Contract\MtfValidator\Dto\ValidationContextDto;
 use App\Contract\MtfValidator\TimeframeProcessorInterface;
 use App\MtfValidator\Entity\MtfAudit;
@@ -61,6 +64,9 @@ final class MtfService
         private readonly Timeframe1mService $timeframe1mService,
         private readonly ?DbValidationCache $validationCache = null,
         private readonly ?KlineJsonIngestionService $klineJsonIngestion = null,
+        private readonly ?MtfValidationConfigProvider $mtfValidationConfigProvider = null,
+        private readonly ?TradeEntryConfigProvider $tradeEntryConfigProvider = null,
+        private readonly ?ConditionRegistry $conditionRegistry = null,
     ) {
     }
 
@@ -490,8 +496,9 @@ final class MtfService
 
     /**
      * Traite un symbole spécifique selon la logique MTF
+     * @param MtfValidationConfig|null $config Config à utiliser (si null, utilise le config par défaut)
      */
-private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false, bool $skipContextValidation = false): array
+private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false, bool $skipContextValidation = false, ?MtfValidationConfig $config = null): array
     {
         $this->logger->debug('[MTF] Processing symbol', ['symbol' => $symbol]);
 
@@ -561,7 +568,8 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         }
 
         // Logique MTF selon start_from_timeframe (depuis mtf_validations.yaml)
-        $cfg = $this->mtfValidationConfig->getConfig();
+        $activeConfig = $config ?? $this->mtfValidationConfig;
+        $cfg = $activeConfig->getConfig();
         $startFrom = strtolower((string)($cfg['validation']['start_from_timeframe'] ?? '4h'));
         // Inclure uniquement les TF à partir de start_from_timeframe vers le bas (aucun TF supérieur)
         $include4h  = in_array($startFrom, ['4h'], true);
@@ -797,7 +805,8 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'from_cache' => (bool)($result15m['from_cache'] ?? false),
                 ]);
                 // Option de contournement: si autorisé par config, on descend en 5m au lieu d'arrêter la chaîne
-                $cfg = $this->mtfValidationConfig->getConfig();
+                $activeConfig = $config ?? $this->mtfValidationConfig;
+                $cfg = $activeConfig->getConfig();
                 $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
                 if (!($allowSkip && ($include5m ?? false))) {
                     return $result15m + ['failed_timeframe' => '15m'];
@@ -903,7 +912,8 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'severity' => 2,
                     'from_cache' => (bool)($result5m['from_cache'] ?? false),
                 ]);
-                $cfg = $this->mtfValidationConfig->getConfig();
+                $activeConfig = $config ?? $this->mtfValidationConfig;
+                $cfg = $activeConfig->getConfig();
                 $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
                 if (!($allowSkip && ($include1m ?? false))) {
                     return $result5m + ['failed_timeframe' => '5m'];
@@ -1577,7 +1587,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
      */
     public function runForSymbol(\Ramsey\Uuid\UuidInterface $runId, string $symbol, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false, bool $skipContextValidation = false): \Generator
     {
-        $result = $this->processSymbol($symbol, $runId, $now, $currentTf, $forceTimeframeCheck, $forceRun, $skipContextValidation);
+        // Si les providers sont disponibles, essayer chaque mode activé en cascade
+        if ($this->mtfValidationConfigProvider !== null && $this->conditionRegistry !== null) {
+            $result = $this->processSymbolWithModeFallback($symbol, $runId, $now, $currentTf, $forceTimeframeCheck, $forceRun, $skipContextValidation);
+        } else {
+            // Fallback vers l'ancien comportement (compatibilité)
+            $result = $this->processSymbol($symbol, $runId, $now, $currentTf, $forceTimeframeCheck, $forceRun, $skipContextValidation);
+        }
 
         // Yield progress information for single symbol
         $progress = [
@@ -1596,4 +1612,123 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         return $result;
     }
+
+    /**
+     * Traite un symbole en essayant chaque mode activé jusqu'à ce qu'un passe
+     * @return array Résultat avec validation_mode_used et trade_entry_mode_used
+     */
+    private function processSymbolWithModeFallback(
+        string $symbol,
+        UuidInterface $runId,
+        \DateTimeImmutable $now,
+        ?string $currentTf = null,
+        bool $forceTimeframeCheck = false,
+        bool $forceRun = false,
+        bool $skipContextValidation = false
+    ): array {
+        $enabledModes = $this->mtfValidationConfigProvider->getEnabledModes();
+        
+        if (empty($enabledModes)) {
+            $this->logger->warning('[MTF] No enabled modes found, using default config', ['symbol' => $symbol]);
+            return $this->processSymbol($symbol, $runId, $now, $currentTf, $forceTimeframeCheck, $forceRun, $skipContextValidation);
+        }
+
+        $lastError = null;
+        $lastResult = null;
+
+        foreach ($enabledModes as $mode) {
+            $modeName = $mode['name'] ?? 'unknown';
+            $this->logger->info('[MTF] Trying mode for symbol', [
+                'symbol' => $symbol,
+                'mode' => $modeName,
+                'priority' => $mode['priority'] ?? 999,
+            ]);
+
+            try {
+                // Charger les configs pour ce mode
+                $mtfConfig = $this->mtfValidationConfigProvider->getConfigForMode($modeName);
+                
+                // Recharger le ConditionRegistry avec le nouveau config
+                $this->conditionRegistry->reload($mtfConfig);
+
+                // Traiter le symbole avec ce config
+                $result = $this->processSymbol(
+                    $symbol,
+                    $runId,
+                    $now,
+                    $currentTf,
+                    $forceTimeframeCheck,
+                    $forceRun,
+                    $skipContextValidation,
+                    $mtfConfig
+                );
+
+                // Vérifier si le résultat est valide (READY, SUCCESS, ou VALID selon le contexte)
+                $status = strtoupper((string)($result['status'] ?? 'UNKNOWN'));
+                if (in_array($status, ['READY', 'SUCCESS', 'VALID'], true)) {
+                    $this->logger->info('[MTF] Mode succeeded for symbol', [
+                        'symbol' => $symbol,
+                        'mode' => $modeName,
+                        'status' => $status,
+                    ]);
+
+                    // Ajouter les informations de mode utilisées
+                    $result['validation_mode_used'] = $modeName;
+                    if ($this->tradeEntryConfigProvider !== null) {
+                        try {
+                            $tradeEntryConfig = $this->tradeEntryConfigProvider->getConfigForMode($modeName);
+                            $result['trade_entry_mode_used'] = $modeName;
+                        } catch (\Throwable $e) {
+                            $this->logger->warning('[MTF] Failed to load TradeEntry config for mode', [
+                                'symbol' => $symbol,
+                                'mode' => $modeName,
+                                'error' => $e->getMessage(),
+                            ]);
+                        }
+                    }
+
+                    return $result;
+                }
+
+                // Le mode a échoué, continuer avec le suivant
+                $this->logger->debug('[MTF] Mode failed for symbol, trying next', [
+                    'symbol' => $symbol,
+                    'mode' => $modeName,
+                    'status' => $status,
+                    'reason' => $result['reason'] ?? 'unknown',
+                ]);
+
+                $lastError = $result;
+                $lastResult = $result;
+
+            } catch (\Throwable $e) {
+                $this->logger->error('[MTF] Error processing symbol with mode', [
+                    'symbol' => $symbol,
+                    'mode' => $modeName,
+                    'error' => $e->getMessage(),
+                ]);
+                $lastError = [
+                    'status' => 'ERROR',
+                    'error' => $e->getMessage(),
+                    'mode' => $modeName,
+                ];
+            }
+        }
+
+        // Aucun mode n'a réussi, retourner le dernier résultat ou une erreur
+        $this->logger->warning('[MTF] All modes failed for symbol', [
+            'symbol' => $symbol,
+            'modes_tried' => count($enabledModes),
+        ]);
+
+        $finalResult = $lastResult ?? $lastError ?? [
+            'status' => 'INVALID',
+            'reason' => 'All modes failed',
+        ];
+        $finalResult['validation_mode_used'] = null;
+        $finalResult['trade_entry_mode_used'] = null;
+
+        return $finalResult;
+    }
+
 }

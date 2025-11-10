@@ -10,12 +10,12 @@ mtf_contracts:
             # On ne garde que les contrats avec >= 1M USDT de turnover 24h
             min_turnover: 1000000          # seuil "MID" (>= 1M)
             # Jusqu'à 5M = MID, au-dessus = TOP
-            mid_max_turnover: 5000000      # 1M–5M = mid caps, >5M = top
+            mid_max_turnover: 5000000      # 1M–5M = mid caps, >va5M = top
             # --- Validité contrat ---
             require_not_expired: false      # tu laisses BitMart gérer l'expiration
             max_age_hours: 880              # filtre sur open_timestamp
             expire_unit: 'ms'               # à adapter à ton schéma
             open_unit: 'ms'
         limits:
-            top_n: 360
+            top_n: 120
             mid_n: 10

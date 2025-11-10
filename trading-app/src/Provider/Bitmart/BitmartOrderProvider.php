@@ -601,6 +601,24 @@ final class BitmartOrderProvider implements OrderProviderInterface
         }
     }
 
+    /**
+     * Programme l'annulation automatique des ordres après un délai (cancel-all-after).
+     */
+    public function cancelAllAfter(string $symbol, int $timeoutSeconds): bool
+    {
+        try {
+            $response = $this->bitmartClient->cancelAllAfter($symbol, $timeoutSeconds);
+            return isset($response['code']) && (int)$response['code'] === 1000;
+        } catch (\Exception $e) {
+            $this->logger->error("Erreur lors de la programmation de l'annulation automatique", [
+                'symbol' => $symbol,
+                'timeout' => $timeoutSeconds,
+                'error' => $e->getMessage()
+            ]);
+            return false;
+        }
+    }
+
     public function healthCheck(): bool
     {
         try {

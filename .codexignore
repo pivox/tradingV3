@@ -1,0 +1,8 @@
+*/vendor/
+*/var/
+*/node_modules/
+*/public/bundles/
+*/docker/
+/.git/
+/.idea/
+
