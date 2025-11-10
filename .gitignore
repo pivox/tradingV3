@@ -25,3 +25,12 @@ mysql-data/
 # IDE
 .idea/
 .cursor/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+**/.env.*.local
+!**/.env.example
