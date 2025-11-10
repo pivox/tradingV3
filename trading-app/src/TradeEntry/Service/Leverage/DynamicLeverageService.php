@@ -25,7 +25,8 @@ final class DynamicLeverageService implements LeverageServiceInterface
         int $minLeverage,
         int $maxLeverage,
         ?float $stopPct = null,
-        ?float $atr5mValue = null // peut recevoir ATR 15m, le nom du param n’a pas d’incidence
+        ?float $atr5mValue = null, // peut recevoir ATR 15m, le nom du param n’a pas d’incidence
+        ?string $executionTf = null
     ): int {
         // Budget effectif borné
         $effectiveBudget = min(max($budgetUsdt, 0.0), max($availableUsdt, 0.0));
@@ -61,8 +62,9 @@ final class DynamicLeverageService implements LeverageServiceInterface
         $perSymbolCaps  = (array)($levConfig['per_symbol_caps'] ?? []);
         $roundingCfg    = (array)($levConfig['rounding'] ?? []);
 
-        // Exécution 1m → multiplicateur 1m ; sinon fallback 1.0
-        $tfMult = (float)($tfMultipliers['1m'] ?? 1.0);
+        // Multiplicateur par timeframe d'exécution
+        $tfKey = is_string($executionTf) && $executionTf !== '' ? strtolower($executionTf) : '1m';
+        $tfMult = (float)($tfMultipliers[$tfKey] ?? 1.0);
 
         // --- Base leverage : riskPct / stopPct
         $leverageBase = $riskPct / max($stopPct, 1e-9);
