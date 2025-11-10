@@ -102,16 +102,18 @@ HELP
         // Si plusieurs modes, afficher un résumé
         if (count($configsToValidate) > 1 && !$jsonOutput) {
             $io->section('Résumé global');
+            $rows = [];
+            foreach ($allResults as $modeName => $result) {
+                $rows[] = [
+                    $modeName,
+                    $result->getErrorCount(),
+                    $result->getWarningCount(),
+                    $result->isValid() ? '✅ Valide' : '❌ Invalide',
+                ];
+            }
             $io->table(
                 ['Mode', 'Erreurs', 'Avertissements', 'Statut'],
-                array_map(function ($modeName, $result) {
-                    return [
-                        $modeName,
-                        $result->getErrorCount(),
-                        $result->getWarningCount(),
-                        $result->isValid() ? '✅ Valide' : '❌ Invalide',
-                    ];
-                }, array_keys($allResults), $allResults)
+                $rows
             );
         }
 
