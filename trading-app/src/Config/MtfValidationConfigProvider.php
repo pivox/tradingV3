@@ -12,6 +12,8 @@ use Symfony\Component\DependencyInjection\ParameterBag\ParameterBagInterface;
  */
 final class MtfValidationConfigProvider
 {
+    private const MINIMUM_MODE_PARTS = 3;
+
     /** @var array<string, MtfValidationConfig> Cache des configs par mode */
     private array $configCache = [];
 
@@ -34,6 +36,7 @@ final class MtfValidationConfigProvider
      * Charge les modes activés triés par priority
      * Le format YAML [name: 'x', enabled: true, priority: 1] est parsé comme:
      * [[['name' => 'x']], [['enabled' => true]], [['priority' => 1]]]
+     * La constante MINIMUM_MODE_PARTS reflète ce format où les trois blocs sont attendus.
      * @param array<int, array> $modes
      * @return array<int, array{name: string, enabled: bool, priority: int}>
      */
@@ -41,7 +44,15 @@ final class MtfValidationConfigProvider
     {
         $enabled = [];
         foreach ($modes as $mode) {
-            if (!is_array($mode) || count($mode) < 3) {
+            if (!is_array($mode) || count($mode) < self::MINIMUM_MODE_PARTS) {
+                trigger_error(
+                    sprintf(
+                        '[MtfValidationConfigProvider] Skipping invalid mode configuration: %s',
+                        var_export($mode, true)
+                    ),
+                    E_USER_WARNING
+                );
+
                 continue;
             }
             
