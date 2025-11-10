@@ -7,6 +7,7 @@ namespace App\Indicator\Registry;
 use App\Indicator\Condition\ConditionInterface;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\DependencyInjection\Attribute\AutowireIterator;
 use Symfony\Component\DependencyInjection\Attribute\AutowireLocator;
 use Symfony\Contracts\Service\ServiceProviderInterface;
@@ -32,7 +33,7 @@ final class ConditionRegistry
         #[AutowireLocator('app.indicator.condition')]
         private readonly ContainerInterface $locator,
 
-        private readonly ?LoggerInterface $logger = null,
+        #[Autowire(service: 'monolog.logger.indicators')] private readonly ?LoggerInterface $indicatorLogger = null,
         /** @var array<string,ContainerInterface&ServiceProviderInterface> */
         private readonly array $locatorsByTimeframe = [],
         /** @var array<string,ContainerInterface&ServiceProviderInterface> */
@@ -165,8 +166,8 @@ final class ConditionRegistry
     /** Payload d’erreur homogène pour le logging/audit. */
     private function errorPayload(string $name, \Throwable $e): array
     {
-        if ($this->logger) {
-            $this->logger->error('Condition evaluation failed', [
+        if ($this->indicatorLogger) {
+            $this->indicatorLogger->error('Condition evaluation failed', [
                 'name' => $name,
                 'exception' => get_class($e),
                 'message' => $e->getMessage(),

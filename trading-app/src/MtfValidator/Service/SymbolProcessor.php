@@ -19,9 +19,8 @@ final class SymbolProcessor
 {
     public function __construct(
         private readonly MtfService $mtfService,
-        private readonly LoggerInterface $logger,
+        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $mtfLogger,
         private readonly ClockInterface $clock,
-        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
     /**
@@ -33,14 +32,14 @@ final class SymbolProcessor
         MtfRunDto $mtfRunDto,
         \DateTimeImmutable $now
     ): SymbolResultDto {
-        $this->logger->debug('[Symbol Processor] Processing symbol', [
+        $this->mtfLogger->debug('[Symbol Processor] Processing symbol', [
             'symbol' => $symbol,
             'run_id' => $runId->toString(),
             'force_run' => $mtfRunDto->forceRun,
             'force_timeframe_check' => $mtfRunDto->forceTimeframeCheck
         ]);
         $decisionKey = sprintf('symbol:%s:%s', strtoupper($symbol), $runId->toString());
-        $this->orderJourneyLogger->info('order_journey.symbol_processor.start', [
+        $this->mtfLogger->info('order_journey.symbol_processor.start', [
             'symbol' => $symbol,
             'run_id' => $runId->toString(),
             'decision_key' => $decisionKey,
@@ -71,14 +70,14 @@ final class SymbolProcessor
             $symbolResult = $finalResult ?? $result;
             
             $symbolDuration = microtime(true) - $symbolStartTime;
-            $this->logger->info('[Symbol Processor] Performance', [
+            $this->mtfLogger->info('[Symbol Processor] Performance', [
                 'symbol' => $symbol,
                 'duration_seconds' => round($symbolDuration, 3),
                 'status' => $symbolResult['status'] ?? 'UNKNOWN',
             ]);
 
             if ($symbolResult === null) {
-                $this->orderJourneyLogger->error('order_journey.symbol_processor.no_result', [
+                $this->mtfLogger->error('order_journey.symbol_processor.no_result', [
                     'symbol' => $symbol,
                     'run_id' => $runId->toString(),
                     'decision_key' => $decisionKey,
@@ -91,7 +90,7 @@ final class SymbolProcessor
                 );
             }
 
-            $this->orderJourneyLogger->info('order_journey.symbol_processor.completed', [
+            $this->mtfLogger->info('order_journey.symbol_processor.completed', [
                 'symbol' => $symbol,
                 'run_id' => $runId->toString(),
                 'decision_key' => $decisionKey,
@@ -115,12 +114,12 @@ final class SymbolProcessor
             );
 
         } catch (\Throwable $e) {
-            $this->logger->error('[Symbol Processor] Error processing symbol', [
+            $this->mtfLogger->error('[Symbol Processor] Error processing symbol', [
                 'symbol' => $symbol,
                 'run_id' => $runId->toString(),
                 'error' => $e->getMessage()
             ]);
-            $this->orderJourneyLogger->error('order_journey.symbol_processor.failed', [
+            $this->mtfLogger->error('order_journey.symbol_processor.failed', [
                 'symbol' => $symbol,
                 'run_id' => $runId->toString(),
                 'decision_key' => $decisionKey,

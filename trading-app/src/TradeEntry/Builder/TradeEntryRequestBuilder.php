@@ -18,7 +18,6 @@ final class TradeEntryRequestBuilder
     public function __construct(
         private readonly TradeEntryConfig $tradeEntryConfig,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
     /**
@@ -80,7 +79,7 @@ final class TradeEntryRequestBuilder
                 'atr' => $atr,
                 'atr_value' => $atrValue,
             ]);
-            $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+            $this->positionsLogger->info('order_journey.preconditions.blocked', [
                 'symbol' => $symbol,
                 'reason' => 'atr_required_but_invalid',
                 'stop_from' => $stopFrom,

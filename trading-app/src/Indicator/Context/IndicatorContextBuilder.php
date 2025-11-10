@@ -9,6 +9,7 @@ use App\Indicator\Core\Trend\Adx;
 use App\Indicator\Core\Trend\Ema;
 use App\Indicator\Core\Volume\Vwap;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
  * Construit un tableau de contexte unifié pour les conditions.
@@ -43,7 +44,7 @@ class IndicatorContextBuilder
         private readonly Adx $adx,
         private readonly Vwap $vwap,
         private readonly AtrCalculator $atrCalc,
-        private readonly ?LoggerInterface $logger = null,
+        #[Autowire(service: 'monolog.logger.indicators')] private readonly ?LoggerInterface $indicatorLogger = null,
     ) {
         $this->traderAvailable = \extension_loaded('trader');
     }
@@ -132,8 +133,8 @@ class IndicatorContextBuilder
         }
 
         // Warn if EMA9 ~ 0 while close > 0 (suspect data)
-        if ($this->logger && isset($emaMap[9]) && is_float($emaMap[9]) && abs($emaMap[9]) < 1.0e-12 && is_float($close) && $close > 0.0) {
-            $this->logger->warning('EMA9 is approximately zero with positive close; data may be invalid', [
+        if ($this->indicatorLogger && isset($emaMap[9]) && is_float($emaMap[9]) && abs($emaMap[9]) < 1.0e-12 && is_float($close) && $close > 0.0) {
+            $this->indicatorLogger->warning('EMA9 is approximately zero with positive close; data may be invalid', [
                 'symbol' => $this->symbol,
                 'timeframe' => $this->timeframe,
                 'close' => $close,

@@ -197,7 +197,7 @@ services:
     # Nouveau registre des conditions avec AutowireLocator/AutowireIterator
     App\Indicator\Registry\ConditionRegistry:
         arguments:
-            $logger: '@logger'
+            $indicatorLogger: '@monolog.logger.indicators'
     App\MtfValidator\ConditionLoader\TimeframeEvaluator:
         arguments:
             $registry: '@App\MtfValidator\ConditionLoader\ConditionRegistry'

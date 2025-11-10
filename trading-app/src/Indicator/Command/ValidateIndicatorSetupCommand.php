@@ -6,6 +6,7 @@ namespace App\Indicator\Command;
 
 use App\Contract\Indicator\IndicatorProviderInterface;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -23,7 +24,7 @@ class ValidateIndicatorSetupCommand extends Command
     public function __construct(
         private readonly IndicatorProviderInterface $indicatorProvider,
         private readonly \App\Indicator\Registry\ConditionRegistry $conditionRegistry,
-        private readonly ?LoggerInterface $logger = null
+        #[Autowire(service: 'monolog.logger.indicators')] private readonly ?LoggerInterface $indicatorLogger = null
     ) {
         parent::__construct();
     }
@@ -79,8 +80,8 @@ class ValidateIndicatorSetupCommand extends Command
         } catch (\Exception $e) {
             $io->error("Erreur lors de la validation: " . $e->getMessage());
 
-            if ($this->logger) {
-                $this->logger->error("Erreur validation indicateurs", [
+            if ($this->indicatorLogger) {
+                $this->indicatorLogger->error("Erreur validation indicateurs", [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe,
                     'error' => $e->getMessage(),
@@ -102,8 +103,8 @@ class ValidateIndicatorSetupCommand extends Command
 
             foreach ($results as $name => $result) {
                 if (!$result->ok) {
-                    if ($this->logger) {
-                        $this->logger->warning("Condition échouée", [
+                    if ($this->indicatorLogger) {
+                        $this->indicatorLogger->warning("Condition échouée", [
                             'condition' => $name,
                             'symbol' => $symbol,
                             'timeframe' => $timeframe,
@@ -117,8 +118,8 @@ class ValidateIndicatorSetupCommand extends Command
             return true;
 
         } catch (\Exception $e) {
-            if ($this->logger) {
-                $this->logger->error("Erreur lors de l'évaluation des conditions", [
+            if ($this->indicatorLogger) {
+                $this->indicatorLogger->error("Erreur lors de l'évaluation des conditions", [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe,
                     'error' => $e->getMessage()

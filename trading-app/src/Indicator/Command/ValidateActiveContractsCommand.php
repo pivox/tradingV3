@@ -18,6 +18,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Component\Stopwatch\Stopwatch;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 #[AsCommand(
     name: 'app:indicator:contracts:validate',
@@ -30,7 +31,7 @@ final class ValidateActiveContractsCommand extends Command
         private readonly MainProviderInterface $mainProvider,
         private readonly IndicatorMainProviderInterface $indicatorMain,
         private readonly Stopwatch $stopwatch,
-        private readonly ?LoggerInterface $logger = null,
+        #[Autowire(service: 'monolog.logger.indicators')] private readonly ?LoggerInterface $indicatorLogger = null,
     ) {
         parent::__construct();
     }
@@ -100,7 +101,7 @@ final class ValidateActiveContractsCommand extends Command
 
             // Log klines if EMA9 ~ 0 and close > 0 (data sanity check)
             if (isset($context['ema'][9]) && is_float($context['ema'][9]) && abs($context['ema'][9]) < 1.0e-12 && isset($context['close']) && is_float($context['close']) && $context['close'] > 0.0) {
-                if ($this->logger) {
+                if ($this->indicatorLogger) {
                     $sample = [];
                     $n = count($klines);
                     $start = max(0, $n - 20);
@@ -115,7 +116,7 @@ final class ValidateActiveContractsCommand extends Command
                             'volume' => (float)$k->volume->toFloat(),
                         ];
                     }
-                    $this->logger->warning('EMA9 approx zero with positive close; logging recent klines', [
+                    $this->indicatorLogger->warning('EMA9 approx zero with positive close; logging recent klines', [
                         'symbol' => $symbol,
                         'timeframe' => $tfEnum->value,
                         'ema9' => $context['ema'][9],
