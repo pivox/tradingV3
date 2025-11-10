@@ -20,7 +20,6 @@ final class MtfPostExecutionHook implements PostExecutionHookInterface
         private readonly AuditLoggerInterface $auditLogger,
         private readonly bool $isDryRun,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
-        private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
     public function onSubmitted(

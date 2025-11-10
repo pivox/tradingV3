@@ -8,6 +8,7 @@ use App\Common\Dto\SignalDto;
 use App\Entity\Signal;
 use App\Repository\SignalRepository;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
  * Service de persistance des signaux de trading
@@ -19,7 +20,7 @@ final class SignalPersistenceService
 {
     public function __construct(
         private readonly SignalRepository $signalRepository,
-        private readonly LoggerInterface $logger
+        #[Autowire(service: 'monolog.logger.signals')] private readonly LoggerInterface $signalLogger
     ) {
     }
 
@@ -32,7 +33,7 @@ final class SignalPersistenceService
             $entity = $this->createSignalEntity($signalDto);
             $this->signalRepository->upsert($entity);
 
-            $this->logger->info('Signal persisted', [
+            $this->signalLogger->info('Signal persisted', [
                 'symbol' => $signalDto->symbol,
                 'timeframe' => $signalDto->timeframe->value,
                 'side' => $signalDto->side->value,
@@ -40,7 +41,7 @@ final class SignalPersistenceService
                 'kline_time' => $signalDto->klineTime->format('Y-m-d H:i:s')
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('Failed to persist signal', [
+            $this->signalLogger->error('Failed to persist signal', [
                 'symbol' => $signalDto->symbol,
                 'timeframe' => $signalDto->timeframe->value,
                 'error' => $e->getMessage()
@@ -58,13 +59,13 @@ final class SignalPersistenceService
             return;
         }
 
-        $this->logger->info('Persisting signals batch', [
+        $this->signalLogger->info('Persisting signals batch', [
             'count' => count($signalDtos)
         ]);
 
         foreach ($signalDtos as $signalDto) {
             if (!$signalDto instanceof SignalDto) {
-                $this->logger->warning('Invalid signal DTO in batch', [
+                $this->signalLogger->warning('Invalid signal DTO in batch', [
                     'type' => gettype($signalDto)
                 ]);
                 continue;
@@ -163,7 +164,7 @@ final class SignalPersistenceService
 
         // Cette méthode devrait être implémentée dans le repository
         // Pour l'instant, on retourne 0
-        $this->logger->info('Signal cleanup requested', [
+        $this->signalLogger->info('Signal cleanup requested', [
             'cutoff_date' => $cutoffDate->format('Y-m-d H:i:s'),
             'days_to_keep' => $daysToKeep
         ]);

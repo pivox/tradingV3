@@ -34,10 +34,9 @@ final class MtfRunOrchestrator
         private readonly LockManagerInterface $lockManager,
         private readonly AuditLoggerInterface $auditLogger,
         private readonly FeatureSwitchInterface $featureSwitch,
-        private readonly LoggerInterface $logger,
+        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $mtfLogger,
         private readonly ClockInterface $clock,
         private readonly MtfValidationConfig $mtfConfig,
-        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $orderJourneyLogger,
         private readonly ?AccountProviderInterface $accountProvider = null,
         private readonly ?OrderProviderInterface $orderProvider = null,
         private readonly ?MtfSwitchRepository $mtfSwitchRepository = null,
@@ -51,12 +50,12 @@ final class MtfRunOrchestrator
         $startTime = microtime(true);
         $runIdString = $runId->toString();
 
-        $this->logger->info('[MTF Orchestrator] Starting execution', [
+        $this->mtfLogger->info('[MTF Orchestrator] Starting execution', [
             'run_id' => $runIdString,
             'symbols_count' => count($mtfRunDto->symbols),
             'dry_run' => $mtfRunDto->dryRun
         ]);
-        $this->orderJourneyLogger->info('order_journey.orchestrator.run_start', [
+        $this->mtfLogger->info('order_journey.orchestrator.run_start', [
             'run_id' => $runIdString,
             'symbols_count' => count($mtfRunDto->symbols),
             'dry_run' => $mtfRunDto->dryRun,
@@ -65,7 +64,7 @@ final class MtfRunOrchestrator
 
         // Vérifier les commutateurs globaux
         if (!$this->checkGlobalSwitches($mtfRunDto, $runIdString)) {
-            $this->orderJourneyLogger->info('order_journey.orchestrator.run_blocked', [
+            $this->mtfLogger->info('order_journey.orchestrator.run_blocked', [
                 'run_id' => $runIdString,
                 'reason' => 'global_switch_off',
             ]);
@@ -76,7 +75,7 @@ final class MtfRunOrchestrator
         // Acquérir le verrou
         $lockKey = $this->determineLockKey($mtfRunDto);
         if (!$this->acquireExecutionLock($lockKey, $runIdString)) {
-            $this->orderJourneyLogger->warning('order_journey.orchestrator.run_blocked', [
+            $this->mtfLogger->warning('order_journey.orchestrator.run_blocked', [
                 'run_id' => $runIdString,
                 'lock_key' => $lockKey,
                 'reason' => 'lock_acquisition_failed',
@@ -100,13 +99,13 @@ final class MtfRunOrchestrator
             $totalSymbols = count($symbols);
 
             foreach ($symbols as $index => $symbol) {
-                $this->logger->debug('[MTF Orchestrator] Processing symbol', [
+                $this->mtfLogger->debug('[MTF Orchestrator] Processing symbol', [
                     'run_id' => $runIdString,
                     'symbol' => $symbol,
                     'position' => $index + 1,
                     'total' => $totalSymbols
                 ]);
-                $this->orderJourneyLogger->info('order_journey.orchestrator.symbol_start', [
+                $this->mtfLogger->info('order_journey.orchestrator.symbol_start', [
                     'run_id' => $runIdString,
                     'symbol' => $symbol,
                     'position' => $index + 1,
@@ -121,7 +120,7 @@ final class MtfRunOrchestrator
                     $this->clock->now()
                 );
 
-                $this->orderJourneyLogger->info('order_journey.orchestrator.symbol_mtf_result', [
+                $this->mtfLogger->info('order_journey.orchestrator.symbol_mtf_result', [
                     'run_id' => $runIdString,
                     'symbol' => $symbol,
                     'status' => $symbolResult->status,
@@ -133,7 +132,7 @@ final class MtfRunOrchestrator
                 // Gérer la décision de trading uniquement pour READY ou SUCCESS
                 $effective = $symbolResult;
                 if ($effective->isSuccess() || strtoupper($effective->status) === 'READY') {
-                    $this->orderJourneyLogger->info('order_journey.orchestrator.symbol_decision_start', [
+                    $this->mtfLogger->info('order_journey.orchestrator.symbol_decision_start', [
                         'run_id' => $runIdString,
                         'symbol' => $symbol,
                         'status' => $effective->status,
@@ -144,7 +143,7 @@ final class MtfRunOrchestrator
                         $mtfRunDto
                     );
                     $symbolResult = $effective; // reflect decision changes
-                    $this->orderJourneyLogger->info('order_journey.orchestrator.symbol_decision_done', [
+                    $this->mtfLogger->info('order_journey.orchestrator.symbol_decision_done', [
                         'run_id' => $runIdString,
                         'symbol' => $symbol,
                         'status' => $effective->status,
@@ -179,7 +178,7 @@ final class MtfRunOrchestrator
                 $summary->toArray()
             );
 
-            $this->orderJourneyLogger->info('order_journey.orchestrator.run_completed', [
+            $this->mtfLogger->info('order_journey.orchestrator.run_completed', [
                 'run_id' => $runIdString,
                 'symbols_processed' => count($results),
                 'duration_seconds' => round(microtime(true) - $startTime, 3),
@@ -203,7 +202,7 @@ final class MtfRunOrchestrator
             if ($symbol) {
                 $logContext['symbol'] = $symbol;
             }
-            $this->orderJourneyLogger->debug('order_journey.orchestrator.lock_released', $logContext);
+            $this->mtfLogger->debug('order_journey.orchestrator.lock_released', $logContext);
         }
     }
 
@@ -219,19 +218,19 @@ final class MtfRunOrchestrator
         $this->featureSwitch->setDefaultState('mtf_global_switch', true);
 
         if (!$this->featureSwitch->isEnabled('mtf_global_switch')) {
-            $this->logger->debug('[MTF Orchestrator] Global switch OFF', [
+            $this->mtfLogger->debug('[MTF Orchestrator] Global switch OFF', [
                 'run_id' => $runIdString
             ]);
-            $this->orderJourneyLogger->debug('order_journey.orchestrator.global_switch_off', [
+            $this->mtfLogger->debug('order_journey.orchestrator.global_switch_off', [
                 'run_id' => $runIdString,
             ]);
             return false;
         }
 
-        $this->logger->debug('[MTF Orchestrator] Global switch ON', [
+        $this->mtfLogger->debug('[MTF Orchestrator] Global switch ON', [
             'run_id' => $runIdString
         ]);
-        $this->orderJourneyLogger->debug('order_journey.orchestrator.global_switch_on', [
+        $this->mtfLogger->debug('order_journey.orchestrator.global_switch_on', [
             'run_id' => $runIdString,
         ]);
 
@@ -362,7 +361,7 @@ final class MtfRunOrchestrator
         if ($this->accountProvider) {
             try {
                 $openPositions = $this->accountProvider->getOpenPositions();
-                $this->logger->debug('[MTF Orchestrator] Fetched open positions', [
+                $this->mtfLogger->debug('[MTF Orchestrator] Fetched open positions', [
                     'run_id' => $runIdString,
                     'count' => count($openPositions),
                 ]);
@@ -372,7 +371,7 @@ final class MtfRunOrchestrator
                     $positionSymbol = strtoupper($position->symbol ?? '');
                     if ($positionSymbol !== '' && !in_array($positionSymbol, $openPositionSymbols, true)) {
                         $openPositionSymbols[] = $positionSymbol;
-                        $this->logger->debug('[MTF Orchestrator] Found open position', [
+                        $this->mtfLogger->debug('[MTF Orchestrator] Found open position', [
                             'run_id' => $runIdString,
                             'symbol' => $positionSymbol,
                             'size' => $position->size->toFloat(),
@@ -380,7 +379,7 @@ final class MtfRunOrchestrator
                     }
                 }
             } catch (\Throwable $e) {
-                $this->logger->warning('[MTF Orchestrator] Failed to fetch open positions from exchange', [
+                $this->mtfLogger->warning('[MTF Orchestrator] Failed to fetch open positions from exchange', [
                     'run_id' => $runIdString,
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
@@ -394,7 +393,7 @@ final class MtfRunOrchestrator
             try {
                 // getOpenOrders() récupère uniquement les ordres normaux, pas les TP/SL (plan orders)
                 $openOrders = $this->orderProvider->getOpenOrders();
-                $this->logger->debug('[MTF Orchestrator] Fetched open orders', [
+                $this->mtfLogger->debug('[MTF Orchestrator] Fetched open orders', [
                     'run_id' => $runIdString,
                     'count' => count($openOrders),
                 ]);
@@ -404,7 +403,7 @@ final class MtfRunOrchestrator
                     $orderSymbol = strtoupper($order->symbol ?? '');
                     if ($orderSymbol !== '' && !in_array($orderSymbol, $openOrderSymbols, true)) {
                         $openOrderSymbols[] = $orderSymbol;
-                        $this->logger->debug('[MTF Orchestrator] Found open order', [
+                        $this->mtfLogger->debug('[MTF Orchestrator] Found open order', [
                             'run_id' => $runIdString,
                             'symbol' => $orderSymbol,
                             'order_id' => $order->orderId ?? 'N/A',
@@ -413,7 +412,7 @@ final class MtfRunOrchestrator
                     }
                 }
             } catch (\Throwable $e) {
-                $this->logger->warning('[MTF Orchestrator] Failed to fetch open orders from exchange', [
+                $this->mtfLogger->warning('[MTF Orchestrator] Failed to fetch open orders from exchange', [
                     'run_id' => $runIdString,
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
@@ -440,7 +439,7 @@ final class MtfRunOrchestrator
                         if ($isSwitchOff) {
                             // Switch déjà OFF → désactiver pour 1 minute
                             $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, '1m');
-                            $this->logger->info('[MTF Orchestrator] Symbol switch extended (was OFF)', [
+                            $this->mtfLogger->info('[MTF Orchestrator] Symbol switch extended (was OFF)', [
                                 'run_id' => $runIdString,
                                 'symbol' => $symbolUpper,
                                 'duration' => '1 minute',
@@ -449,7 +448,7 @@ final class MtfRunOrchestrator
                         } else {
                             // Switch ON → désactiver pour 5 minutes
                             $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, duration: '5m');
-                            $this->logger->info('[MTF Orchestrator] Symbol switch disabled', [
+                            $this->mtfLogger->info('[MTF Orchestrator] Symbol switch disabled', [
                                 'run_id' => $runIdString,
                                 'symbol' => $symbolUpper,
                                 'duration' => '5 minutes',
@@ -457,7 +456,7 @@ final class MtfRunOrchestrator
                             ]);
                         }
                     } catch (\Throwable $e) {
-                        $this->logger->error('[MTF Orchestrator] Failed to disable symbol switch', [
+                        $this->mtfLogger->error('[MTF Orchestrator] Failed to disable symbol switch', [
                             'run_id' => $runIdString,
                             'symbol' => $symbolUpper,
                             'error' => $e->getMessage(),
@@ -471,13 +470,13 @@ final class MtfRunOrchestrator
         }
 
         if (!empty($symbolsToExclude)) {
-            $this->logger->info('[MTF Orchestrator] Filtered symbols with open orders/positions', [
+            $this->mtfLogger->info('[MTF Orchestrator] Filtered symbols with open orders/positions', [
                 'run_id' => $runIdString,
                 'excluded_count' => count($symbolsToExclude),
                 'excluded_symbols' => array_slice($symbolsToExclude, 0, 10), // Log first 10
                 'remaining_count' => count($symbolsToProcess),
             ]);
-            $this->orderJourneyLogger->info('order_journey.orchestrator.symbols_filtered', [
+            $this->mtfLogger->info('order_journey.orchestrator.symbols_filtered', [
                 'run_id' => $runIdString,
                 'excluded_count' => count($symbolsToExclude),
                 'remaining_count' => count($symbolsToProcess),

@@ -17,7 +17,7 @@ final class TradeEntryService
         private readonly ExecuteOrderPlan $executor,
         private readonly TradeEntryMetricsService $metrics,
         private readonly \App\TradeEntry\Policy\DailyLossGuard $dailyLossGuard,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $orderJourneyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
     public function buildAndExecute(
@@ -30,7 +30,7 @@ final class TradeEntryService
             $state = $this->dailyLossGuard->checkAndMaybeLock();
             if ($state['locked'] === true) {
                 $cid = sprintf('SKIP-DAILY-LOCK-%s', substr(sha1(($decisionKey ?? '') . microtime(true)), 0, 12));
-                $this->orderJourneyLogger->warning('order_journey.trade_entry.blocked', [
+                $this->positionsLogger->warning('order_journey.trade_entry.blocked', [
                     'symbol' => $request->symbol,
                     'decision_key' => $decisionKey,
                     'reason' => 'daily_loss_limit_reached',
@@ -56,7 +56,7 @@ final class TradeEntryService
             }
         } catch (\Throwable $e) {
             // If guard fails unexpectedly, do not block, just log and continue
-            $this->orderJourneyLogger->error('order_journey.trade_entry.guard_error', [
+            $this->positionsLogger->error('order_journey.trade_entry.guard_error', [
                 'symbol' => $request->symbol,
                 'decision_key' => $decisionKey,
                 'error' => $e->getMessage(),
@@ -71,7 +71,7 @@ final class TradeEntryService
             }
         }
 
-        $this->orderJourneyLogger->info('order_journey.trade_entry.preflight_start', [
+        $this->positionsLogger->info('order_journey.trade_entry.preflight_start', [
             'symbol' => $request->symbol,
             'decision_key' => $decisionKey,
             'reason' => 'pretrade_checks_begin',
@@ -81,7 +81,7 @@ final class TradeEntryService
 
         $preflight = ($this->preflight)($request, $decisionKey);
 
-        $this->orderJourneyLogger->debug('order_journey.trade_entry.preflight_snapshot', [
+        $this->positionsLogger->debug('order_journey.trade_entry.preflight_snapshot', [
             'symbol' => $preflight->symbol,
             'decision_key' => $decisionKey,
             'best_bid' => $preflight->bestBid,
@@ -93,7 +93,7 @@ final class TradeEntryService
 
         $plan = ($this->planner)($request, $preflight, $decisionKey);
 
-        $this->orderJourneyLogger->info('order_journey.trade_entry.plan_ready', [
+        $this->positionsLogger->info('order_journey.trade_entry.plan_ready', [
             'symbol' => $plan->symbol,
             'decision_key' => $decisionKey,
             'entry' => $plan->entry,
@@ -105,7 +105,7 @@ final class TradeEntryService
 
         $result = ($this->executor)($plan, $decisionKey);
 
-        $this->orderJourneyLogger->info('order_journey.trade_entry.execution_complete', [
+        $this->positionsLogger->info('order_journey.trade_entry.execution_complete', [
             'symbol' => $plan->symbol,
             'decision_key' => $decisionKey,
             'status' => $result->status,
@@ -142,7 +142,7 @@ final class TradeEntryService
             }
         }
 
-        $this->orderJourneyLogger->info('order_journey.trade_entry.simulation_start', [
+        $this->positionsLogger->info('order_journey.trade_entry.simulation_start', [
             'symbol' => $request->symbol,
             'decision_key' => $decisionKey,
             'reason' => 'simulate_trade_entry',

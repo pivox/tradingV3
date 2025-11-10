@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Indicator\Core;
 
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
  * ATR calculator (Wilder or Simple) for OHLCV arrays.
@@ -14,23 +15,23 @@ use Psr\Log\LoggerInterface;
 final class AtrCalculator implements IndicatorInterface
 {
     public function __construct(
-        private readonly ?LoggerInterface $logger = null
+        #[Autowire(service: 'monolog.logger.indicators')] private readonly ?LoggerInterface $indicatorLogger = null
     ) {
     }
 
     private function log(string $level, string $message, array $context = []): void
     {
-        if ($this->logger === null) {
+        if ($this->indicatorLogger === null) {
             error_log($message . (empty($context) ? '' : ' ' . json_encode($context)));
             return;
         }
 
         match ($level) {
-            'debug' => $this->logger->debug($message, $context),
-            'info' => $this->logger->info($message, $context),
-            'warning' => $this->logger->warning($message, $context),
-            'error' => $this->logger->error($message, $context),
-            default => $this->logger->warning($message, $context),
+            'debug' => $this->indicatorLogger->debug($message, $context),
+            'info' => $this->indicatorLogger->info($message, $context),
+            'warning' => $this->indicatorLogger->warning($message, $context),
+            'error' => $this->indicatorLogger->error($message, $context),
+            default => $this->indicatorLogger->warning($message, $context),
         };
     }
     /**

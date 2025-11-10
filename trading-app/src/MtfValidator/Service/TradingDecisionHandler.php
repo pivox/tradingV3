@@ -28,9 +28,8 @@ final class TradingDecisionHandler
         private readonly TradeEntryRequestBuilder $requestBuilder,
         private readonly \App\MtfValidator\Execution\ExecutionSelector $executionSelector,
         private readonly IndicatorProviderInterface $indicatorProvider,
-        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $logger,
+        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $mtfLogger,
         #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $positionsFlowLogger,
-        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $orderJourneyLogger,
         private readonly TradeEntryConfig $tradeEntryConfig,
         private readonly MtfValidationConfig $mtfConfig,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
@@ -52,7 +51,7 @@ final class TradingDecisionHandler
         // Force ATR to the 5m timeframe so downstream sizing/guards stay consistent across execution TFs.
         $forcedAtr5m = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '5m');
 
-        $this->orderJourneyLogger->info('order_journey.signal_ready', [
+        $this->mtfLogger->info('order_journey.signal_ready', [
             'symbol' => $symbolResult->symbol,
             'execution_tf' => $symbolResult->executionTf,
             'side' => $symbolResult->signalSide,
@@ -80,7 +79,7 @@ final class TradingDecisionHandler
             }
         }
 
-        $this->orderJourneyLogger->info('order_journey.execution_selector.decision', [
+        $this->mtfLogger->info('order_journey.execution_selector.decision', [
             'symbol' => $symbolResult->symbol,
             'decision_key' => $decisionKey,
             'execution_tf' => $effectiveTf,
@@ -98,7 +97,7 @@ final class TradingDecisionHandler
         );
 
         if ($tradeRequest === null) {
-            $this->orderJourneyLogger->warning('order_journey.trade_request.unable_to_build', [
+            $this->mtfLogger->warning('order_journey.trade_request.unable_to_build', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
                 'reason' => 'builder_returned_null',
@@ -106,7 +105,7 @@ final class TradingDecisionHandler
             return $this->createSkippedResult($symbolResult, 'unable_to_build_request', $forcedAtr5m, $decisionKey);
         }
 
-        $this->orderJourneyLogger->info('order_journey.trade_request.built', [
+        $this->mtfLogger->info('order_journey.trade_request.built', [
             'symbol' => $tradeRequest->symbol,
             'decision_key' => $decisionKey,
             'order_type' => $tradeRequest->orderType,
@@ -125,7 +124,7 @@ final class TradingDecisionHandler
                 'decision_key' => $decisionKey,
             ]);
 
-            $this->orderJourneyLogger->info('order_journey.trade_entry.dispatch', [
+            $this->mtfLogger->info('order_journey.trade_entry.dispatch', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
                 'dry_run' => $mtfRunDto->dryRun,
@@ -137,8 +136,6 @@ final class TradingDecisionHandler
                 $this->mtfSwitchRepository,
                 $this->auditLogger,
                 $mtfRunDto->dryRun,
-                $this->logger,
-                $this->orderJourneyLogger,
             );
 
             $execution = $mtfRunDto->dryRun
@@ -153,7 +150,7 @@ final class TradingDecisionHandler
                 'decision_key' => $decisionKey,
             ];
 
-            $this->orderJourneyLogger->info('order_journey.trade_entry.result', [
+            $this->mtfLogger->info('order_journey.trade_entry.result', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
                 'status' => $execution->status,
@@ -176,7 +173,7 @@ final class TradingDecisionHandler
                 atr: $forcedAtr5m
             );
         } catch (\Throwable $e) {
-            $this->logger->error('[Trading Decision] Trade entry execution failed', [
+            $this->mtfLogger->error('[Trading Decision] Trade entry execution failed', [
                 'symbol' => $symbolResult->symbol,
                 'error' => $e->getMessage(),
             ]);
@@ -186,7 +183,7 @@ final class TradingDecisionHandler
                 'error' => $e->getMessage(),
             ]);
 
-            $this->orderJourneyLogger->error('order_journey.trade_entry.failed', [
+            $this->mtfLogger->error('order_journey.trade_entry.failed', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
                 'reason' => 'exception_during_trade_entry',
@@ -227,7 +224,7 @@ final class TradingDecisionHandler
     private function canExecuteMtfTrading(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto, ?float $forcedAtr5m = null, ?string $decisionKey = null, ?string $executionTfOverride = null): bool
     {
         if ($symbolResult->executionTf === null) {
-            $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+            $this->mtfLogger->info('order_journey.preconditions.blocked', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
                 'reason' => 'missing_execution_tf',
@@ -244,12 +241,12 @@ final class TradingDecisionHandler
         if ($mtfRunDto->dryRun && $dryRunValidateAllTfs) {
             // En dry-run avec flag activé, accepter tous les timeframes
             if (!in_array($effectiveTf, array_map('strtolower', $allTimeframes), true)) {
-                $this->logger->info('[Trading Decision] Skipping (unsupported execution TF even in dry-run)', [
+                $this->mtfLogger->info('[Trading Decision] Skipping (unsupported execution TF even in dry-run)', [
                     'symbol' => $symbolResult->symbol,
                     'execution_tf' => $effectiveTf,
                     'dry_run' => true,
                 ]);
-                $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+                $this->mtfLogger->info('order_journey.preconditions.blocked', [
                     'symbol' => $symbolResult->symbol,
                     'decision_key' => $decisionKey,
                     'reason' => 'unsupported_execution_tf',
@@ -259,7 +256,7 @@ final class TradingDecisionHandler
                 return false;
             }
             // Log que tous les TF sont acceptés en dry-run
-            $this->logger->debug('[Trading Decision] Dry-run mode: accepting all timeframes', [
+            $this->mtfLogger->debug('[Trading Decision] Dry-run mode: accepting all timeframes', [
                 'symbol' => $symbolResult->symbol,
                 'execution_tf' => $symbolResult->executionTf,
             ]);
@@ -267,12 +264,12 @@ final class TradingDecisionHandler
             // Mode normal : utiliser allowed_execution_timeframes depuis TradeEntryConfig
             $allowedTfs = (array)($decision['allowed_execution_timeframes'] ?? ['1m','5m','15m']);
             if (!in_array($effectiveTf, array_map('strtolower', $allowedTfs), true)) {
-                $this->logger->info('[Trading Decision] Skipping (unsupported execution TF)', [
+                $this->mtfLogger->info('[Trading Decision] Skipping (unsupported execution TF)', [
                     'symbol' => $symbolResult->symbol,
                     'execution_tf' => $effectiveTf,
                     'allowed_tfs' => $allowedTfs,
                 ]);
-                $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+                $this->mtfLogger->info('order_journey.preconditions.blocked', [
                     'symbol' => $symbolResult->symbol,
                     'decision_key' => $decisionKey,
                     'reason' => 'unsupported_execution_tf',
@@ -283,7 +280,7 @@ final class TradingDecisionHandler
         }
 
         if ($symbolResult->signalSide === null) {
-            $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+            $this->mtfLogger->info('order_journey.preconditions.blocked', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
                 'reason' => 'missing_signal_side',
@@ -292,10 +289,10 @@ final class TradingDecisionHandler
         }
 
         if ($symbolResult->currentPrice === null && ($forcedAtr5m === null || $forcedAtr5m <= 0.0)) {
-            $this->logger->debug('[Trading Decision] Missing price and ATR', [
+            $this->mtfLogger->debug('[Trading Decision] Missing price and ATR', [
                 'symbol' => $symbolResult->symbol,
             ]);
-            $this->orderJourneyLogger->info('order_journey.preconditions.blocked', [
+            $this->mtfLogger->info('order_journey.preconditions.blocked', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
                 'reason' => 'missing_price_and_atr',
@@ -303,7 +300,7 @@ final class TradingDecisionHandler
             return false;
         }
 
-        $this->orderJourneyLogger->debug('order_journey.preconditions.passed', [
+        $this->mtfLogger->debug('order_journey.preconditions.passed', [
             'symbol' => $symbolResult->symbol,
             'decision_key' => $decisionKey,
             'execution_tf' => $effectiveTf,
@@ -436,7 +433,7 @@ final class TradingDecisionHandler
     private function createSkippedResult(SymbolResultDto $symbolResult, string $reason, ?float $forcedAtr5m = null, ?string $decisionKey = null): SymbolResultDto
     {
         if ($decisionKey !== null) {
-            $this->orderJourneyLogger->info('order_journey.trade_request.skipped', [
+            $this->mtfLogger->info('order_journey.trade_request.skipped', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
                 'reason' => $reason,
@@ -469,7 +466,7 @@ final class TradingDecisionHandler
                 'exchange_order_id' => $decision['exchange_order_id'] ?? null,
             ]);
 
-            $this->orderJourneyLogger->info('order_journey.trade_entry.submitted', [
+            $this->mtfLogger->info('order_journey.trade_entry.submitted', [
                 'symbol' => $symbol,
                 'decision_key' => $decision['decision_key'] ?? null,
                 'status' => $decision['status'] ?? null,
@@ -478,7 +475,7 @@ final class TradingDecisionHandler
                 'reason' => 'order_sent_to_exchange',
             ]);
         } catch (\Throwable $e) {
-            $this->logger->error('[Trading Decision] Failed to log trade entry', [
+            $this->mtfLogger->error('[Trading Decision] Failed to log trade entry', [
                 'symbol' => $symbol,
                 'error' => $e->getMessage(),
             ]);
