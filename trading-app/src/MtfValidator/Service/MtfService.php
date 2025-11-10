@@ -1629,8 +1629,10 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $enabledModes = $this->mtfValidationConfigProvider->getEnabledModes();
         
         if (empty($enabledModes)) {
-            $this->logger->warning('[MTF] No enabled modes found, using default config', ['symbol' => $symbol]);
-            return $this->processSymbol($symbol, $runId, $now, $currentTf, $forceTimeframeCheck, $forceRun, $skipContextValidation);
+            throw new \RuntimeException(sprintf(
+                '[MTF] No enabled modes found for symbol "%s". This is likely a configuration error.',
+                $symbol
+            ));
         }
 
         $lastError = null;
