@@ -22,7 +22,8 @@ final class ExecutionSelector
      */
     public function decide(array $context): ExecutionDecision
     {
-        // Utiliser le config dynamique depuis ConditionRegistry si disponible, sinon fallback sur le config statique
+        // Use the dynamic config from ConditionRegistry if available; otherwise, fall back to the static config provided
+        // at construction. This fallback is intentional and applies in all cases, not just during initialization.
         $activeConfig = $this->registry->getCurrentConfig() ?? $this->mtfConfig;
         $cfg = $activeConfig->getConfig();
         $selector = (array)($cfg['execution_selector'] ?? []);
