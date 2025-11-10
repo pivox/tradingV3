@@ -180,8 +180,6 @@ class MtfRunCommand extends Command
                 'ip_address' => $ipAddress,
                 'skip_open_filter' => true,
             ];
-         //   dd(count($symbols));
-
             $io->section($workers > 1 ? sprintf('Exécution MTF en parallèle (%d workers)', $workers) : 'Exécution MTF en cours...');
             $result = $workers > 1
                 ? $this->runInParallel($io, $symbols, $workers, $executionOptions)
