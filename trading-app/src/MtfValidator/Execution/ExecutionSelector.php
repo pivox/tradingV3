@@ -36,9 +36,14 @@ final class ExecutionSelector
         $forbidDropAny = array_keys($forbidDropAnySpec);
         $allow1mOnlyFor = array_keys($allow1mOnlyForSpec);
 
-        $filtersMandatory = $this->namesFromSpec((array)($cfg['filters_mandatory'] ?? []));
+        // Filtres obligatoires avec éventuels seuils personnalisés
+        $filtersMandatorySpec = $this->parseSpec((array)($cfg['filters_mandatory'] ?? []));
+        $filtersMandatory = array_keys($filtersMandatorySpec);
 
         // Injecter les seuils depuis le YAML dans le contexte (niveau debug)
+        // 1) Filtres globaux obligatoires
+        $context = $this->injectThresholds($context, $filtersMandatorySpec, 'filters_mandatory');
+        // 2) Groupes d'exec selector
         $context = $this->injectThresholds($context, $stayOn15mSpec, 'stay_on_15m_if');
         $context = $this->injectThresholds($context, $dropTo5mAnySpec, 'drop_to_5m_if_any');
         $context = $this->injectThresholds($context, $forbidDropAnySpec, 'forbid_drop_to_5m_if_any');
