@@ -1,6 +1,4 @@
-# config/packages/mtf_contracts.yaml
-# Version: incrémenter ce numéro pour forcer le rechargement de la configuration (format: '0.0.01')
-version: '0.0.02'
+version: '0.0.06'
 
 mtf_contracts:
     selection:
@@ -8,21 +6,16 @@ mtf_contracts:
         filters:
             quote_currency: 'USDT'
             status: 'Trading'
-
             # --- Liquidité / turnover 24h ---
             # On ne garde que les contrats avec >= 1M USDT de turnover 24h
             min_turnover: 1000000          # seuil "MID" (>= 1M)
-
             # Jusqu'à 5M = MID, au-dessus = TOP
             mid_max_turnover: 5000000      # 1M–5M = mid caps, >5M = top
-
             # --- Validité contrat ---
             require_not_expired: false      # tu laisses BitMart gérer l'expiration
             max_age_hours: 880              # filtre sur open_timestamp
             expire_unit: 'ms'               # à adapter à ton schéma
             open_unit: 'ms'
-
         limits:
-            # Objectif : ~40–50 contrats max exploités par l’algo
-            top_n: 360       # les 190 plus gros turnovers (>= mid_max_turnover)
-            mid_n: 10       # 10 contrats supplémentaires dans la zone 1M–5M
+            top_n: 360
+            mid_n: 10

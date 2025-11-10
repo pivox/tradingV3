@@ -23,12 +23,7 @@ trade_entry:
         risk_pct_percent: 5.0                    # % risque par défaut (converti en décimal)
         initial_margin_usdt: 25.0                 # Marge initiale en USDT
         fallback_account_balance: 0.0             # Solde de fallback si marge invalide
-        timeframe_multipliers:                    # Multiplicateurs par timeframe pour ajuster sizing
-            '1m': 1.0
-            '5m': 0.75
-            '15m': 0.5
-            '1h': 0.35
-            '4h': 0.25
+        # NOTE: timeframe_multipliers déplacé côté leverage; ici retiré pour éviter double modulation sizing/budget
         r_multiple: 2.0                           # Multiple R pour TP
         tp1_r: 2.0                                # Multiple R pour TP1 (alias de r_multiple)
 
@@ -57,7 +52,7 @@ trade_entry:
         inside_ticks: 1                            # Nombre de ticks à l'intérieur
         max_deviation_pct: 0.005                    # Déviation max (optionnel)
         implausible_pct: 0.02                      # Seuil d'implausibilité (optionnel)
-        zone_max_deviation_pct: 0.007              # Déviation max de zone (optionnel)
+        zone_max_deviation_pct: 0.015              # Déviation max de zone (optionnel, assoupli)
 
         # --- Leverage ---
         k_dynamic: 10.0                            # Multiplicateur dynamique pour cap du levier
@@ -77,8 +72,8 @@ trade_entry:
     # ✅ UTILISÉES: TradingConfigService::getLeverageConfig(), TradingParameters::getTimeframeMultipliers()
     leverage:
         mode: dynamic_from_risk                     # base = risk_pct / stop_pct (puis clamps)
-        floor: 1.0                                   # Levier minimum
-        exchange_cap: 20.0                          # Levier maximum de l'exchange
+        floor: 2.0                                   # Levier minimum (assuré >= 5)
+        exchange_cap: 100.0                          # Levier maximum de l'exchange (acceptation de leviers élevés)
         per_symbol_caps:                            # Caps par symbole
             - { symbol_regex: "^(BTC|ETH|BNB).*", cap: 10.0 }
             - { symbol_regex: "^NVDAXUSDT$", cap: 5.0 }
