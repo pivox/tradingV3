@@ -431,6 +431,9 @@ final class OrderPlanBuilder
             leverage: (int)$leverage,
             pricePrecision: $precision,
             contractSize: $contractSize,
+            entryZoneLow: $zone?->min,
+            entryZoneHigh: $zone?->max,
+            zoneExpiresAt: null,
         );
 
         $this->positionsLogger->info('order_plan.model_ready', [

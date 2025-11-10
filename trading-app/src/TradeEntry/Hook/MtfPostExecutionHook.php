@@ -19,7 +19,7 @@ final class MtfPostExecutionHook implements PostExecutionHookInterface
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly AuditLoggerInterface $auditLogger,
         private readonly bool $isDryRun,
-        private readonly LoggerInterface $logger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
@@ -36,15 +36,15 @@ final class MtfPostExecutionHook implements PostExecutionHookInterface
         // Désactiver le symbole après soumission pour éviter les ré-entrées immédiates
         try {
         
-            $this->mtfSwitchRepository->turnOffSymbolForDuration($$request->symbol, duration: '5m');
-            $this->logger->info('[MtfPostExecutionHook] Symbol switched OFF for 15 minutes after order', [
+            $this->mtfSwitchRepository->turnOffSymbolForDuration($request->symbol, duration: '5m');
+            $this->positionsLogger->info('[MtfPostExecutionHook] Symbol switched OFF for 15 minutes after order', [
                 'symbol' => $request->symbol,
                 'duration' => '15 minutes',
                 'reason' => 'order_submitted',
                 'decision_key' => $decisionKey,
             ]);
         } catch (\Throwable $e) {
-            $this->logger->error('[MtfPostExecutionHook] Failed to switch OFF symbol', [
+            $this->positionsLogger->error('[MtfPostExecutionHook] Failed to switch OFF symbol', [
                 'symbol' => $request->symbol,
                 'error' => $e->getMessage(),
                 'decision_key' => $decisionKey,
