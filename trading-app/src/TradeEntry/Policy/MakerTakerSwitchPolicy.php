@@ -6,10 +6,10 @@ namespace App\TradeEntry\Policy;
 final class MakerTakerSwitchPolicy
 {
     public function __construct(
-        public readonly int  $ttlThresholdSec = 25, // bascule quand TTL zone ≤ 25s
-        public readonly int  $maxSpreadBps    = 8,  // spread admissible pour "taker de fin de zone"
-        public readonly int  $maxSlippageBps  = 10, // cap de slippage pour IOC limit
-        public readonly bool $onlyIfWithinZone = true // n’autorise le switch que si le prix est encore dans la zone
+        public readonly int  $ttlThresholdSec = 25, // switch when zone TTL ≤ 25s
+        public readonly int  $maxSpreadBps    = 8,  // allowable spread for end-of-zone taker order
+        public readonly int  $maxSlippageBps  = 10, // maximum slippage for IOC limit
+        public readonly bool $onlyIfWithinZone = true // only switch if the price remains within the zone
     ) {}
 
     public function shouldSwitch(
