@@ -244,9 +244,13 @@ final class BitmartContractProvider implements ContractProviderInterface
         return null;
     }
 
-    private function prepareContractPayload(mixed $contract): array|BitmartContractDto
+    private function prepareContractPayload(mixed $contract): array|BitmartContractDto|ContractDto
     {
         if ($contract instanceof BitmartContractDto) {
+            return $contract;
+        }
+
+        if ($contract instanceof ContractDto) {
             return $contract;
         }
 
@@ -254,6 +258,6 @@ final class BitmartContractProvider implements ContractProviderInterface
             return $contract;
         }
 
-        throw new \InvalidArgumentException('Unsupported contract payload type.');
+        throw new \InvalidArgumentException('Unsupported contract payload type: ' . get_debug_type($contract));
     }
 }

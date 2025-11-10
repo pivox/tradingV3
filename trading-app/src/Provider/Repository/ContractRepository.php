@@ -182,6 +182,20 @@ class ContractRepository extends ServiceEntityRepository
     }
 
     /**
+     * Convertit un BigDecimal en string en préservant la précision maximale
+     * Si c'est un entier, on le garde tel quel, sinon on garde jusqu'à 12 décimales
+     */
+    private function bigDecimalToString(\Brick\Math\BigDecimal $value): string
+    {
+        try {
+            return (string) $value->toInt();
+        } catch (\Brick\Math\Exception\MathException) {
+            // Si ce n'est pas un entier, on garde jusqu'à 12 décimales pour préserver la précision
+            return $value->toScale(12, \Brick\Math\RoundingMode::HALF_UP)->__toString();
+        }
+    }
+
+    /**
      * Convertit un ContractDto en tableau pour upsertContract
      */
     private function contractDtoToArray($contractDto): array
@@ -199,26 +213,26 @@ class ContractRepository extends ServiceEntityRepository
             'settle_timestamp' => $contractDto->settleTimestamp->getTimestamp(),
             'base_currency' => $contractDto->baseCurrency,
             'quote_currency' => $contractDto->quoteCurrency,
-            'last_price' => $contractDto->lastPrice->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'volume_24h' => $contractDto->volume24h->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'turnover_24h' => $contractDto->turnover24h->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'index_price' => $contractDto->indexPrice->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'last_price' => $this->bigDecimalToString($contractDto->lastPrice),
+            'volume_24h' => $this->bigDecimalToString($contractDto->volume24h),
+            'turnover_24h' => $this->bigDecimalToString($contractDto->turnover24h),
+            'index_price' => $this->bigDecimalToString($contractDto->indexPrice),
             'index_name' => $contractDto->indexName,
-            'contract_size' => $contractDto->contractSize->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'min_leverage' => $contractDto->minLeverage->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'max_leverage' => $contractDto->maxLeverage->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'price_precision' => $contractDto->pricePrecision->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'vol_precision' => $contractDto->volPrecision->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'max_volume' => $contractDto->maxVolume->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'min_volume' => $contractDto->minVolume->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'funding_rate' => $contractDto->fundingRate->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'expected_funding_rate' => $contractDto->expectedFundingRate->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'open_interest' => $contractDto->openInterest->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'open_interest_value' => $contractDto->openInterestValue->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'high_24h' => $contractDto->high24h->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'low_24h' => $contractDto->low24h->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'change_24h' => $contractDto->change24h->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
-            'market_max_volume' => $contractDto->marketMaxVolume->toScale(8, \Brick\Math\RoundingMode::HALF_UP)->__toString(),
+            'contract_size' => $this->bigDecimalToString($contractDto->contractSize),
+            'min_leverage' => $this->bigDecimalToString($contractDto->minLeverage),
+            'max_leverage' => $this->bigDecimalToString($contractDto->maxLeverage),
+            'price_precision' => $this->bigDecimalToString($contractDto->pricePrecision),
+            'vol_precision' => $this->bigDecimalToString($contractDto->volPrecision),
+            'max_volume' => $this->bigDecimalToString($contractDto->maxVolume),
+            'min_volume' => $this->bigDecimalToString($contractDto->minVolume),
+            'funding_rate' => $this->bigDecimalToString($contractDto->fundingRate),
+            'expected_funding_rate' => $this->bigDecimalToString($contractDto->expectedFundingRate),
+            'open_interest' => $this->bigDecimalToString($contractDto->openInterest),
+            'open_interest_value' => $this->bigDecimalToString($contractDto->openInterestValue),
+            'high_24h' => $this->bigDecimalToString($contractDto->high24h),
+            'low_24h' => $this->bigDecimalToString($contractDto->low24h),
+            'change_24h' => $this->bigDecimalToString($contractDto->change24h),
+            'market_max_volume' => $this->bigDecimalToString($contractDto->marketMaxVolume),
             'funding_interval_hours' => $contractDto->fundingIntervalHours,
             'status' => $contractDto->status,
             'delist_time' => $contractDto->delistTime->getTimestamp(),
@@ -227,6 +241,43 @@ class ContractRepository extends ServiceEntityRepository
             'tick_size' => null, // Non disponible dans le DTO
             'multiplier' => null, // Non disponible dans le DTO
         ];
+    }
+
+    /**
+     * Normalise un tableau de données de contrat en convertissant tous les BigDecimal en strings
+     */
+    private function normalizeContractDataArray(array $contractData): array
+    {
+        // Liste de tous les champs qui peuvent être des BigDecimal
+        $bigDecimalFields = [
+            'last_price',
+            'volume_24h',
+            'turnover_24h',
+            'index_price',
+            'contract_size',
+            'min_leverage',
+            'max_leverage',
+            'price_precision',
+            'vol_precision',
+            'max_volume',
+            'min_volume',
+            'funding_rate',
+            'expected_funding_rate',
+            'open_interest',
+            'open_interest_value',
+            'high_24h',
+            'low_24h',
+            'change_24h',
+            'market_max_volume',
+        ];
+
+        foreach ($bigDecimalFields as $field) {
+            if (isset($contractData[$field]) && $contractData[$field] instanceof \Brick\Math\BigDecimal) {
+                $contractData[$field] = $this->bigDecimalToString($contractData[$field]);
+            }
+        }
+
+        return $contractData;
     }
 
     /**
@@ -243,6 +294,9 @@ class ContractRepository extends ServiceEntityRepository
                     // Convertir ContractDto en tableau si nécessaire
                     if ($contractData instanceof \App\Provider\Bitmart\Dto\ContractDto) {
                         $contractData = $this->contractDtoToArray($contractData);
+                    } elseif (is_array($contractData)) {
+                        // Normaliser tous les champs BigDecimal dans le tableau
+                        $contractData = $this->normalizeContractDataArray($contractData);
                     }
 
                     $this->upsertContract($contractData);
