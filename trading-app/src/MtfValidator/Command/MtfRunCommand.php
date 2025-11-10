@@ -1110,7 +1110,7 @@ class MtfRunCommand extends Command
                 if ($isSwitchOff) {
                     $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, '1m');
                 } else {
-                    $this->mtfSwitchRepository->turnOffSymbolFor15Minutes($symbolUpper);
+                    $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, duration: '5m');
                 }
             } catch (\Throwable $e) {
                 // Log silencieux en CLI pour les erreurs de switch

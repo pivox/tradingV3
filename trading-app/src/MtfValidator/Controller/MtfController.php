@@ -1206,7 +1206,7 @@ class MtfController extends AbstractController
                         'reason' => 'has_open_orders_or_positions',
                     ]);
                 } else {
-                    $this->mtfSwitchRepository->turnOffSymbolFor15Minutes($symbolUpper);
+                    $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, duration: '5m');
                     $this->logger->info('[MTF Controller] Symbol switch disabled', [
                         'run_id' => $runIdString,
                         'symbol' => $symbolUpper,
