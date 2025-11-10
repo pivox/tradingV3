@@ -137,6 +137,8 @@ HELP
             );
         }
 
+        $finalExitCode = $this->determineOverallExitCode($allResults);
+
         // Pour JSON, retourner tous les résultats
         if ($jsonOutput) {
             $outputData = [];
@@ -144,7 +146,7 @@ HELP
                 $outputData[$modeName] = $result->toArray();
             }
             $output->writeln(json_encode($outputData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
-            return $this->determineExitCode(reset($allResults));
+            return $finalExitCode;
         }
 
         // Pour un seul mode, afficher les détails
@@ -153,7 +155,7 @@ HELP
             $this->displayResults($io, $result, $detailed);
         }
 
-        return $this->determineExitCode(reset($allResults));
+        return $finalExitCode;
     }
 
     /**
@@ -333,7 +335,21 @@ HELP
         if ($result->getTotalScenariosTested() > 0 && $result->getTotalScenariosPassed() === 0) {
             return Command::FAILURE;
         }
-        
+
+        return Command::SUCCESS;
+    }
+
+    /**
+     * @param array<string, FunctionalValidationResult> $results
+     */
+    private function determineOverallExitCode(array $results): int
+    {
+        foreach ($results as $result) {
+            if ($this->determineExitCode($result) === Command::FAILURE) {
+                return Command::FAILURE;
+            }
+        }
+
         return Command::SUCCESS;
     }
 }
