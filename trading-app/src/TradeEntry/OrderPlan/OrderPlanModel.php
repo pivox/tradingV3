@@ -10,15 +10,42 @@ final class OrderPlanModel
     public function __construct(
         public readonly string $symbol,
         public readonly Side $side,
-        public readonly string $orderType,
-        public readonly string $openType,
-        public readonly int $orderMode,
-        public readonly float $entry,
-        public readonly float $stop,
-        public readonly float $takeProfit,
-        public readonly int $size,
-        public readonly int $leverage,
-        public readonly int $pricePrecision,
-        public readonly float $contractSize
+        public readonly string $orderType,   // 'limit' | 'market'
+        public readonly string $openType,    // 'isolated' | 'cross'
+        public readonly int    $orderMode,   // 1=GTC,2=FOK,3=IOC,4=MakerOnly
+        public readonly float  $entry,
+        public readonly float  $stop,
+        public readonly float  $takeProfit,
+        public readonly int    $size,
+        public readonly int    $leverage,
+        public readonly int    $pricePrecision,
+        public readonly float  $contractSize,
+        public readonly ?float $entryZoneLow = null,
+        public readonly ?float $entryZoneHigh = null,
+        public readonly ?\DateTimeImmutable $zoneExpiresAt = null,
     ) {}
+
+    public function copyWith(
+        ?string $orderType = null,
+        ?int    $orderMode = null,
+        ?float  $entry     = null
+    ): self {
+        return new self(
+            $this->symbol,
+            $this->side,
+            $orderType   ?? $this->orderType,
+            $this->openType,
+            $orderMode   ?? $this->orderMode,
+            $entry       ?? $this->entry,
+            $this->stop,
+            $this->takeProfit,
+            $this->size,
+            $this->leverage,
+            $this->pricePrecision,
+            $this->contractSize,
+            $this->entryZoneLow,
+            $this->entryZoneHigh,
+            $this->zoneExpiresAt,
+        );
+    }
 }
