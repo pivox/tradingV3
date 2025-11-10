@@ -7,8 +7,9 @@ use App\Common\Enum\OrderSide;
 use App\Common\Enum\OrderType;
 use App\Contract\Provider\MainProviderInterface;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
+use App\TradeEntry\Pricing\TickQuantizer;
 use App\TradeEntry\Dto\{ExecutionResult};
-use App\TradeEntry\Policy\{IdempotencyPolicy, OrderModePolicyInterface};
+use App\TradeEntry\Policy\{IdempotencyPolicy, MakerTakerSwitchPolicy, OrderModePolicyInterface};
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Psr\Log\LoggerInterface;
 
@@ -19,13 +20,13 @@ final class ExecutionBox
         private readonly TpSlAttacher $tpSl,
         private readonly OrderModePolicyInterface $orderModePolicy,
         private readonly IdempotencyPolicy $idempotency,
-        private readonly ExecutionLogger $logger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
     public function execute(OrderPlanModel $plan, ?string $decisionKey = null): ExecutionResult
     {
         $this->orderModePolicy->enforce($plan);
-        $this->logger->debug('execution.start', [
+        $this->positionsLogger->debug('execution.start', [
             'symbol' => $plan->symbol,
             'side' => $plan->side->value,
             'entry' => $plan->entry,
@@ -36,9 +37,9 @@ final class ExecutionBox
             'decision_key' => $decisionKey,
         ]);
 
-        if ($plan->leverage < 2) {
+        if ($plan->leverage < 1) {
             $clientOrderId = $this->idempotency->newClientOrderId();
-            $this->logger->warning('execution.leverage_below_min', [
+            $this->positionsLogger->warning('execution.leverage_below_min', [
                 'symbol' => $plan->symbol,
                 'leverage' => $plan->leverage,
                 'min_required' => 5,
@@ -61,14 +62,14 @@ final class ExecutionBox
 
         $clientOrderId = $this->idempotency->newClientOrderId();
 
-        $this->logger->debug('execution.leverage_submit', [
+        $this->positionsLogger->debug('execution.leverage_submit', [
             'symbol' => $plan->symbol,
             'leverage' => $plan->leverage,
             'open_type' => $plan->openType,
             'decision_key' => $decisionKey,
         ]);
         $leverageResult = $this->providers->getOrderProvider()->submitLeverage($plan->symbol, $plan->leverage, $plan->openType);
-        $this->logger->debug('execution.leverage_response', [
+        $this->positionsLogger->debug('execution.leverage_response', [
             'symbol' => $plan->symbol,
             'result' => $leverageResult,
             'decision_key' => $decisionKey,
@@ -86,7 +87,10 @@ final class ExecutionBox
         };
 
         // Extra visibility before submit
-        $this->logger->debug('execution.presubmit_check', [
+        // Convertir le type du plan en enum OrderType pour le provider
+        $enforcedOrderType = ($plan->orderType === 'market') ? OrderType::MARKET : OrderType::LIMIT;
+        
+        $this->positionsLogger->debug('execution.presubmit_check', [
             'symbol' => $plan->symbol,
             'side_enum' => $side->value,
             'side_numeric' => $payload['side'],
@@ -97,20 +101,33 @@ final class ExecutionBox
             'open_type' => $payload['open_type'],
             'client_order_id' => $payload['client_order_id'],
             'decision_key' => $decisionKey,
-            'enforced_type' => OrderType::LIMIT->value,
-            'enforced_mode' => 1,
+            'plan_order_type' => $plan->orderType,
+            'plan_order_mode' => $plan->orderMode,
+            'enforced_type' => $enforcedOrderType->value,
+            'enforced_mode' => (int)$plan->orderMode,
         ]);
 
         $orderPayload = $payload;
-        $orderPayload['type'] = OrderType::LIMIT->value;
-        $orderPayload['mode'] = 1;
+        // Utiliser le type du plan (déjà dans payload via TpSlAttacher, mais s'assurer de la cohérence)
+        $orderPayload['type'] = ($plan->orderType === 'market') ? OrderType::MARKET->value : OrderType::LIMIT->value;
+        $orderPayload['mode'] = (int)$plan->orderMode;
 
         // Single-channel logging only
 
-        $attemptLabel = 'limit-mode-1';
+        $attemptLabel = sprintf('%s-mode-%d', $orderPayload['type'], (int)$orderPayload['mode']);
         $attemptIndex = 1;
         $attemptTotal = 1;
-        $enforcedOrderType = OrderType::LIMIT;
+        
+        $this->positionsLogger->info('execution.order_type_mode_selected', [
+            'symbol' => $plan->symbol,
+            'plan_order_type' => $plan->orderType,
+            'plan_order_mode' => $plan->orderMode,
+            'final_type' => $orderPayload['type'],
+            'final_mode' => $orderPayload['mode'],
+            'enforced_order_type_enum' => $enforcedOrderType->value,
+            'attempt_label' => $attemptLabel,
+            'decision_key' => $decisionKey,
+        ]);
         $orderOptions = $this->extractOrderOptions($orderPayload);
         $orderResult = null;
 
@@ -121,7 +138,7 @@ final class ExecutionBox
             'attempt_total' => $attemptTotal,
         ];
 
-        $this->logger->debug('execution.order_submit', $attemptPayload);
+        $this->positionsLogger->debug('execution.order_submit', $attemptPayload);
         // Single-channel logging only
 
         $orderResult = $this->providers->getOrderProvider()->placeOrder(
@@ -134,7 +151,7 @@ final class ExecutionBox
             options: $orderOptions
         );
 
-        $this->logger->debug('execution.order_response', [
+        $this->positionsLogger->debug('execution.order_response', [
             'symbol' => $plan->symbol,
             'result' => $orderResult ? $orderResult->toArray() : null,
             'decision_key' => $decisionKey,
@@ -142,7 +159,7 @@ final class ExecutionBox
         ]);
 
         if ($orderResult !== null) {
-            $this->logger->info('positions.order_submit.success', [
+            $this->positionsLogger->info('positions.order_submit.success', [
                 'result' => 'success',
                 'symbol' => $plan->symbol,
                 'decision_key' => $decisionKey,
@@ -154,14 +171,14 @@ final class ExecutionBox
             ]);
             // Single-channel logging only
         } else {
-            $this->logger->warning('execution.order_attempt_failed', [
+            $this->positionsLogger->warning('execution.order_attempt_failed', [
                 'symbol' => $plan->symbol,
                 'attempt' => $attemptLabel,
                 'order_type' => $enforcedOrderType->value,
                 'mode' => $orderOptions['mode'] ?? null,
                 'decision_key' => $decisionKey,
             ]);
-            $this->logger->warning('positions.order_submit.fail', [
+            $this->positionsLogger->warning('positions.order_submit.fail', [
                 'result' => 'fail',
                 'symbol' => $plan->symbol,
                 'decision_key' => $decisionKey,
@@ -175,7 +192,7 @@ final class ExecutionBox
             // Single-channel logging only
         }
 
-        $this->logger->info('trade_entry.order_submitted', [
+        $this->positionsLogger->info('trade_entry.order_submitted', [
             'payload' => $orderPayload,
             'leverage' => $plan->leverage,
             'leverage_submit_success' => $leverageResult,
@@ -188,13 +205,13 @@ final class ExecutionBox
         $isOk = $orderResult !== null;
 
         if (!$isOk) {
-            $this->logger->error('execution.order_error', [
+            $this->positionsLogger->error('execution.order_error', [
                 'symbol' => $plan->symbol,
                 'code' => 0,
                 'result' => null,
                 'decision_key' => $decisionKey,
             ]);
-            $this->logger->error('positions.order_submit.error', [
+            $this->positionsLogger->error('positions.order_submit.error', [
                 'result' => 'error',
                 'symbol' => $plan->symbol,
                 'decision_key' => $decisionKey,
@@ -251,5 +268,52 @@ final class ExecutionBox
             $options,
             static fn($value) => $value !== null && $value !== ''
         );
+    }
+
+    private function applyMakerTakerSwitch(
+        OrderPlanModel $plan,
+        float $bid1,
+        float $ask1,
+        float $last,
+        \DateTimeImmutable $now,
+        MakerTakerSwitchPolicy $policy
+    ): OrderPlanModel {
+        $mid = max(($bid1 + $ask1) / 2.0, 1e-12);
+        $spreadBps = 10_000.0 * ($ask1 - $bid1) / $mid;
+
+        $withinZone = true;
+        if ($plan->entryZoneLow !== null && $plan->entryZoneHigh !== null) {
+            $withinZone = ($last >= $plan->entryZoneLow && $last <= $plan->entryZoneHigh);
+        }
+
+        if (!$policy->shouldSwitch($now, $plan->zoneExpiresAt, $spreadBps, $withinZone)) {
+            return $plan; // rester Maker-Only
+        }
+
+        // IOC limit "capée" (prix plafond/plancher) pour contrôler le slippage
+        if ($plan->side->name === 'Long') {
+            $cap = $ask1 * (1.0 + $policy->maxSlippageBps / 10_000.0);
+            if ($plan->entryZoneHigh !== null) {
+                $cap = min($cap, $plan->entryZoneHigh);
+            }
+            $cap = TickQuantizer::quantizeUp($cap, $plan->pricePrecision);
+        } else { // Short
+            $cap = $bid1 * (1.0 - $policy->maxSlippageBps / 10_000.0);
+            if ($plan->entryZoneLow !== null) {
+                $cap = max($cap, $plan->entryZoneLow);
+            }
+            $cap = TickQuantizer::quantize($cap, $plan->pricePrecision);
+        }
+
+        $this->positionsLogger->debug('order_journey.execution.switch_to_taker', [
+            'symbol' => $plan->symbol,
+            'spread_bps' => $spreadBps,
+            'cap' => $cap,
+            'ttl_left' => $plan->zoneExpiresAt?->getTimestamp() - $now->getTimestamp(),
+            'reason' => 'end_of_zone_fallback',
+        ]);
+
+        // BitMart Futures V2: IOC = mode=3 ; MakerOnly = mode=4 ; type reste 'limit'
+        return $plan->copyWith(orderType: 'limit', orderMode: 3, entry: $cap);
     }
 }

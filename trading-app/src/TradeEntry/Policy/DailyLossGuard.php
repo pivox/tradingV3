@@ -24,7 +24,7 @@ final class DailyLossGuard
     public function __construct(
         private readonly MainProviderInterface $providers,
         private readonly TradeEntryConfig $config,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $logger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {
         // Default settings
         $risk = $this->config->getRisk();
@@ -101,7 +101,7 @@ final class DailyLossGuard
         if (!$state['locked'] && $loss >= $this->limitUsdt) {
             $state['locked'] = true;
             $state['locked_at'] = gmdate('c');
-            $this->logger->warning('daily_loss_guard.locked', [
+            $this->positionsLogger->warning('daily_loss_guard.locked', [
                 'date' => $today,
                 'measure' => $measureName,
                 'start' => (float)$state['start_measure'],

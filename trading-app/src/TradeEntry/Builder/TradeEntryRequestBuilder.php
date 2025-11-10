@@ -17,7 +17,7 @@ final class TradeEntryRequestBuilder
 {
     public function __construct(
         private readonly TradeEntryConfig $tradeEntryConfig,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $logger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $orderJourneyLogger,
     ) {}
 
@@ -74,7 +74,7 @@ final class TradeEntryRequestBuilder
         
         // GARDE CRITIQUE : Si stop_from='atr' est configuré mais ATR invalide/manquant, REJETER l'ordre
         if ($stopFrom === 'atr' && ($atrValue === null || $atrValue <= 0.0)) {
-            $this->logger->warning('[TradeEntryRequestBuilder] ATR required but invalid/missing', [
+            $this->positionsLogger->warning('[TradeEntryRequestBuilder] ATR required but invalid/missing', [
                 'symbol' => $symbol,
                 'stop_from' => $stopFrom,
                 'atr' => $atr,
