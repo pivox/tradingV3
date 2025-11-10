@@ -447,12 +447,12 @@ final class MtfRunOrchestrator
                                 'reason' => 'has_open_orders_or_positions',
                             ]);
                         } else {
-                            // Switch ON → désactiver pour 15 minutes
-                            $this->mtfSwitchRepository->turnOffSymbolFor15Minutes($symbolUpper);
+                            // Switch ON → désactiver pour 5 minutes
+                            $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, duration: '5m');
                             $this->logger->info('[MTF Orchestrator] Symbol switch disabled', [
                                 'run_id' => $runIdString,
                                 'symbol' => $symbolUpper,
-                                'duration' => '15 minutes',
+                                'duration' => '5 minutes',
                                 'reason' => 'has_open_orders_or_positions',
                             ]);
                         }
