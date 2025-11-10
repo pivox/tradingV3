@@ -10,6 +10,7 @@ final class TradeEntryRequest
     public function __construct(
         public readonly string $symbol,
         public readonly Side $side,
+        public readonly ?string $executionTf = null,
         public readonly string $orderType = 'limit',
         public readonly string $openType = 'isolated',
         public readonly int $orderMode = 4,

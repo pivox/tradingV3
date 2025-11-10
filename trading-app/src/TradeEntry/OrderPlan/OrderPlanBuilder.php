@@ -355,6 +355,7 @@ final class OrderPlanBuilder
             $pre->maxLeverage,
             $stopPct,
             $atr15m,
+            $req->executionTf,
         );
 
         $this->flowLogger->debug('order_plan.leverage.dynamic', [

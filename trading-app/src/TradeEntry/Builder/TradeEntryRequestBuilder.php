@@ -133,6 +133,7 @@ final class TradeEntryRequestBuilder
         return new TradeEntryRequest(
             symbol: $symbol,
             side: $sideEnum,
+            executionTf: $executionTf,
             orderType: $orderType,
             openType: $defaults['open_type'] ?? 'isolated',
             orderMode: (int)($defaults['order_mode'] ?? 1),
