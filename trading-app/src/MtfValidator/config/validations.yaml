@@ -186,9 +186,11 @@ mtf_validation:
             - spread_bps_gt: 8
 
         allow_1m_only_for:
-            - scalping: true
-            - trailing_after_tp1: true
-            - end_of_zone_fallback: true
+            enabled: false
+            conditions:
+                - scalping: true
+                - trailing_after_tp1: true
+                - end_of_zone_fallback: true
 
     filters_mandatory:
         - rsi_lt_70: { rsi_lt_70_threshold: 76 }
@@ -280,7 +282,7 @@ mtf_validation:
                                       - macd_line_cross_down_with_hysteresis: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }
                                 - all_of: [ macd_hist_decreasing_n, ema_20_lt_50 ]
                           - ema_20_lt_50
-                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 26 }
+                          - rsi_gt_softufloor: { rsi_softfloor_threshold: 26 }
                           - close_below_vwap
                           - atr_rel_in_range_5m
 

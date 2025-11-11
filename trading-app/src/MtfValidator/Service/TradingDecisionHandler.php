@@ -80,12 +80,25 @@ final class TradingDecisionHandler
             }
         }
 
-        $this->mtfLogger->info('order_journey.execution_selector.decision', [
+        // Extraire la configuration execution_selector du YAML pour le log
+        $cfg = $this->mtfConfig->getConfig();
+        $execSelectorConfig = (array)($cfg['execution_selector'] ?? []);
+        $execSelectorForLog = [];
+        if (isset($execSelectorConfig['stay_on_15m_if'])) {
+            $execSelectorForLog['stay_on_15m_if'] = $execSelectorConfig['stay_on_15m_if'];
+        }
+        if (isset($execSelectorConfig['drop_to_5m_if_any'])) {
+            $execSelectorForLog['drop_to_5m_if_any'] = $execSelectorConfig['drop_to_5m_if_any'];
+        }
+
+        $this->mtfLogger->info('[ExecutionSelector] decision='.$effectiveTf, [
             'symbol' => $symbolResult->symbol,
             'decision_key' => $decisionKey,
             'execution_tf' => $effectiveTf,
             'expected_r_multiple' => $execDecision->expectedRMultiple,
             'entry_zone_width_pct' => $execDecision->entryZoneWidthPct,
+            'atr_pct_15m_bps' => $selectorContext['atr_pct_15m_bps'] ?? null,
+            'execution_selector_config' => $execSelectorForLog,
         ] + ['meta' => $execDecision->meta]);
 
         // 3. Construction via Builder (délégation) avec champs minimaux

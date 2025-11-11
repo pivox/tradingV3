@@ -32,7 +32,15 @@ final class ExecutionSelector
         $stayOn15mSpec = $this->parseSpec((array)($selector['stay_on_15m_if'] ?? []));
         $dropTo5mAnySpec = $this->parseSpec((array)($selector['drop_to_5m_if_any'] ?? []));
         $forbidDropAnySpec = $this->parseSpec((array)($selector['forbid_drop_to_5m_if_any'] ?? []));
-        $allow1mOnlyForSpec = $this->parseSpec((array)($selector['allow_1m_only_for'] ?? []));
+        
+        // Extraire enabled avant de parser allow_1m_only_for
+        $allow1mConfig = (array)($selector['allow_1m_only_for'] ?? []);
+        $allow1mEnabled = (bool)($allow1mConfig['enabled'] ?? true);
+        // Extraire les conditions (support ancien format sans 'conditions' pour compatibilité)
+        $allow1mConditions = $allow1mConfig['conditions'] ?? $allow1mConfig;
+        // Retirer 'enabled' et 'conditions' de la config avant de parser
+        unset($allow1mConditions['enabled']);
+        $allow1mOnlyForSpec = $this->parseSpec((array)$allow1mConditions);
 
         $stayOn15m = array_keys($stayOn15mSpec);
         $dropTo5mAny = array_keys($dropTo5mAnySpec);
@@ -88,8 +96,14 @@ final class ExecutionSelector
             ]);
         }
 
-        $allow1mRes = !empty($allow1mOnlyFor) ? $this->registry->evaluate($context, $allow1mOnlyFor) : [];
-        $allow1mAny = $this->anyPassed($allow1mRes);
+        // Si enabled = false, considérer que allow_1m_only_for retourne toujours true
+        if (!$allow1mEnabled) {
+            $allow1mAny = true;
+            $allow1mRes = ['enabled_override' => ['passed' => true, 'value' => 'disabled', 'meta' => ['reason' => 'allow_1m_only_for.enabled=false']]];
+        } else {
+            $allow1mRes = !empty($allow1mOnlyFor) ? $this->registry->evaluate($context, $allow1mOnlyFor) : [];
+            $allow1mAny = $this->anyPassed($allow1mRes);
+        }
         if ($allow1mAny) {
             return $this->decision('1m', $context, [
                 'stay_on_15m_if' => $stayRes,

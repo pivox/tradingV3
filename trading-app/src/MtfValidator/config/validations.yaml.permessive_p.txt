@@ -186,9 +186,11 @@ mtf_validation:
             - spread_bps_gt: 8
 
         allow_1m_only_for:
-            - scalping: true
-            - trailing_after_tp1: true
-            - end_of_zone_fallback: true
+            enabled: false
+            conditions:
+                - scalping: true
+                - trailing_after_tp1: true
+                - end_of_zone_fallback: true
 
     filters_mandatory:
         - rsi_lt_70: { rsi_lt_70_threshold: 72 }

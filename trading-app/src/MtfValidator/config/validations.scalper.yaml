@@ -188,9 +188,11 @@ mtf_validation:
             - spread_bps_gt: 10
 
         allow_1m_only_for:
-            - scalping: true
-            - trailing_after_tp1: true
-            - end_of_zone_fallback: true
+            enabled: false
+            conditions:
+                - scalping: true
+                - trailing_after_tp1: true
+                - end_of_zone_fallback: true
 
     # Filtres globaux allégés pour augmenter le flux de signaux
     filters_mandatory:
