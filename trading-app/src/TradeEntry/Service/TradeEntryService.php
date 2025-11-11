@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\TradeEntry\Service;
 
 use App\TradeEntry\Dto\{TradeEntryRequest, ExecutionResult};
+use App\TradeEntry\Exception\EntryZoneOutOfBoundsException;
 use App\TradeEntry\Hook\PostExecutionHookInterface;
 use App\TradeEntry\Workflow\{BuildPreOrder, BuildOrderPlan, ExecuteOrderPlan};
 use Psr\Log\LoggerInterface;
@@ -23,11 +24,12 @@ final class TradeEntryService
     public function buildAndExecute(
         TradeEntryRequest $request,
         ?string $decisionKey = null,
-        ?PostExecutionHookInterface $hook = null
+        ?PostExecutionHookInterface $hook = null,
+        ?string $mode = null // Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
     ): ExecutionResult {
         // Daily loss guard: block trading when limit is reached
         try {
-            $state = $this->dailyLossGuard->checkAndMaybeLock();
+            $state = $this->dailyLossGuard->checkAndMaybeLock($mode);
             if ($state['locked'] === true) {
                 $cid = sprintf('SKIP-DAILY-LOCK-%s', substr(sha1(($decisionKey ?? '') . microtime(true)), 0, 12));
                 $this->positionsLogger->warning('order_journey.trade_entry.blocked', [
@@ -91,7 +93,29 @@ final class TradeEntryService
             'reason' => 'snapshot_after_checks',
         ]);
 
-        $plan = ($this->planner)($request, $preflight, $decisionKey);
+        try {
+            $plan = ($this->planner)($request, $preflight, $decisionKey);
+        } catch (EntryZoneOutOfBoundsException $e) {
+            $cid = sprintf('SKIP-ZONE-%s', substr(sha1(($decisionKey ?? '') . microtime(true)), 0, 12));
+
+            $this->positionsLogger->warning('order_journey.trade_entry.skipped', [
+                'symbol' => $request->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => $e->getReason(),
+                'context' => $e->getContext(),
+            ]);
+
+            return new ExecutionResult(
+                clientOrderId: $cid,
+                exchangeOrderId: null,
+                status: 'skipped',
+                raw: [
+                    'reason' => $e->getReason(),
+                    'message' => $e->getMessage(),
+                    'context' => $e->getContext(),
+                ],
+            );
+        }
 
         $this->positionsLogger->info('order_journey.trade_entry.plan_ready', [
             'symbol' => $plan->symbol,
@@ -132,7 +156,8 @@ final class TradeEntryService
     public function buildAndSimulate(
         TradeEntryRequest $request,
         ?string $decisionKey = null,
-        ?PostExecutionHookInterface $hook = null
+        ?PostExecutionHookInterface $hook = null,
+        ?string $mode = null // Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
     ): ExecutionResult {
         if ($decisionKey === null) {
             try {
@@ -151,7 +176,30 @@ final class TradeEntryService
         // Run preflight and planning only (no execution)
         // Propagate decision key for consistent logging across steps
         $preflight = ($this->preflight)($request, $decisionKey);
-        $plan = ($this->planner)($request, $preflight, $decisionKey);
+
+        try {
+            $plan = ($this->planner)($request, $preflight, $decisionKey);
+        } catch (EntryZoneOutOfBoundsException $e) {
+            $cid = 'SIM-SKIP-ZONE-' . substr(sha1($decisionKey), 0, 12);
+
+            $this->positionsLogger->info('order_journey.trade_entry.simulation_skipped', [
+                'symbol' => $request->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => $e->getReason(),
+                'context' => $e->getContext(),
+            ]);
+
+            return new ExecutionResult(
+                clientOrderId: $cid,
+                exchangeOrderId: null,
+                status: 'skipped',
+                raw: [
+                    'reason' => $e->getReason(),
+                    'message' => $e->getMessage(),
+                    'context' => $e->getContext(),
+                ],
+            );
+        }
 
         $cid = 'SIM-' . substr(sha1($decisionKey), 0, 12);
         $result = new ExecutionResult(

@@ -6,6 +6,7 @@ namespace App\TradeEntry\Workflow;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Dto\{TradeEntryRequest, PreflightReport};
 use App\TradeEntry\EntryZone\{EntryZoneCalculator, EntryZoneFilters, EntryZone};
+use App\TradeEntry\Exception\EntryZoneOutOfBoundsException;
 use App\TradeEntry\OrderPlan\OrderPlanBox;
 use App\TradeEntry\Policy\LiquidationGuard;
 use App\TradeEntry\Types\Side;
@@ -63,7 +64,7 @@ final class BuildOrderPlan
             'reason' => 'zone_evaluated',
         ]);
 
-        // After clamping inside builder, entry should be within zone. If not, decide whether to fail fast.
+        // After clamping inside builder, entry should be within zone. If not, decide whether to skip or fail fast.
         if (!$zone->contains($candidate)) {
             $mark = (float)($pre->markPrice ?? $pre->bestAsk ?? $pre->bestBid ?? 0.0);
             $zoneDeviation = $mark > 0.0
@@ -72,7 +73,8 @@ final class BuildOrderPlan
             $zoneMaxDeviationPct = $this->normalizePercent($req->zoneMaxDeviationPct ?? 0.007);
 
             if ($zoneDeviation !== null && $zoneDeviation > $zoneMaxDeviationPct) {
-                $this->flowLogger->warning('build_order_plan.zone_skipped_for_execution', [
+                // Cas nominal : la zone est trop éloignée du marché, on skippe proprement
+                $context = [
                     'symbol' => $req->symbol,
                     'decision_key' => $decisionKey,
                     'candidate' => $candidate,
@@ -80,39 +82,44 @@ final class BuildOrderPlan
                     'zone_max' => $zone->max,
                     'zone_dev_pct' => $zoneDeviation,
                     'zone_max_dev_pct' => $zoneMaxDeviationPct,
-                ]);
-                $this->journeyLogger->info('order_journey.plan.zone_skipped_for_execution', [
-                    'symbol' => $req->symbol,
-                    'decision_key' => $decisionKey,
+                ];
+
+                $this->flowLogger->warning('build_order_plan.zone_skipped_for_execution', $context);
+
+                $this->journeyLogger->info('order_journey.plan.zone_skipped_for_execution', $context + [
                     'entry_candidate' => $candidate,
-                    'zone_min' => $zone->min,
-                    'zone_max' => $zone->max,
-                    'zone_dev_pct' => $zoneDeviation,
-                    'zone_max_dev_pct' => $zoneMaxDeviationPct,
                     'reason' => 'zone_far_from_market',
                 ]);
-            } else {
-                $this->flowLogger->error('build_order_plan.entry_out_of_zone_after_clamp', [
-                    'symbol' => $req->symbol,
-                    'decision_key' => $decisionKey,
-                    'candidate' => $candidate,
-                    'zone_min' => $zone->min,
-                    'zone_max' => $zone->max,
-                    'zone_dev_pct' => $zoneDeviation,
-                    'zone_max_dev_pct' => $zoneMaxDeviationPct,
-                ]);
-                $this->journeyLogger->error('order_journey.plan.entry_out_of_zone', [
-                    'symbol' => $req->symbol,
-                    'decision_key' => $decisionKey,
-                    'entry_candidate' => $candidate,
-                    'zone_min' => $zone->min,
-                    'zone_max' => $zone->max,
-                    'zone_dev_pct' => $zoneDeviation,
-                    'zone_max_dev_pct' => $zoneMaxDeviationPct,
-                    'reason' => 'entry_not_within_zone',
-                ]);
-                throw new \RuntimeException('Prix d\'entrée hors zone calculée');
+
+                throw new EntryZoneOutOfBoundsException(
+                    message: 'Entry zone out of bounds (skipped_out_of_zone)',
+                    context: $context
+                );
             }
+
+            // Cas anormal : le marché est proche de la zone mais le candidat est hors zone → bug logique
+            $this->flowLogger->error('build_order_plan.entry_out_of_zone_after_clamp', [
+                'symbol' => $req->symbol,
+                'decision_key' => $decisionKey,
+                'candidate' => $candidate,
+                'zone_min' => $zone->min,
+                'zone_max' => $zone->max,
+                'zone_dev_pct' => $zoneDeviation,
+                'zone_max_dev_pct' => $zoneMaxDeviationPct,
+            ]);
+
+            $this->journeyLogger->error('order_journey.plan.entry_out_of_zone', [
+                'symbol' => $req->symbol,
+                'decision_key' => $decisionKey,
+                'entry_candidate' => $candidate,
+                'zone_min' => $zone->min,
+                'zone_max' => $zone->max,
+                'zone_dev_pct' => $zoneDeviation,
+                'zone_max_dev_pct' => $zoneMaxDeviationPct,
+                'reason' => 'entry_not_within_zone',
+            ]);
+
+            throw new \RuntimeException('Prix d\'entrée hors zone calculée');
         }
 
         $context = [
