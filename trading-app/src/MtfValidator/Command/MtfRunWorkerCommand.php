@@ -6,6 +6,8 @@ namespace App\MtfValidator\Command;
 
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -34,7 +36,9 @@ final class MtfRunWorkerCommand extends Command
             ->addOption('switch-duration', null, InputOption::VALUE_OPTIONAL, 'Durée de désactivation pour les INVALID', '1d')
             ->addOption('lock-per-symbol', null, InputOption::VALUE_NONE, 'Forcer l\'utilisation d\'un verrou par symbole (activé par défaut)')
             ->addOption('user-id', null, InputOption::VALUE_OPTIONAL, 'Identifiant utilisateur propagé au pipeline MTF')
-            ->addOption('ip-address', null, InputOption::VALUE_OPTIONAL, 'Adresse IP associée à la requête');
+            ->addOption('ip-address', null, InputOption::VALUE_OPTIONAL, 'Adresse IP associée à la requête')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -64,20 +68,25 @@ final class MtfRunWorkerCommand extends Command
         $ipAddress = $input->getOption('ip-address');
         $ipAddress = is_string($ipAddress) && $ipAddress !== '' ? $ipAddress : null;
 
+        $exchangeOpt = $input->getOption('exchange');
+        $marketTypeOpt = $input->getOption('market-type');
+
         try {
             // En mode worker, activer le verrou par symbole pour éviter le blocage global
-            $request = new MtfRunRequestDto(
-                symbols: $symbols,
-                dryRun: $dryRun,
-                forceRun: $forceRun,
-                currentTf: $currentTf,
-                forceTimeframeCheck: $forceTimeframeCheck,
-                skipContextValidation: $skipContext,
-                lockPerSymbol: $lockPerSymbol,
-                skipOpenStateFilter: $skipOpenFilter,
-                userId: $userId,
-                ipAddress: $ipAddress
-            );
+            $request = MtfRunRequestDto::fromArray([
+                'symbols' => $symbols,
+                'dry_run' => $dryRun,
+                'force_run' => $forceRun,
+                'current_tf' => $currentTf,
+                'force_timeframe_check' => $forceTimeframeCheck,
+                'skip_context' => $skipContext,
+                'lock_per_symbol' => $lockPerSymbol,
+                'skip_open_state_filter' => $skipOpenFilter,
+                'user_id' => $userId,
+                'ip_address' => $ipAddress,
+                'exchange' => $exchangeOpt !== null && $exchangeOpt !== '' ? $exchangeOpt : Exchange::BITMART->value,
+                'market_type' => $marketTypeOpt !== null && $marketTypeOpt !== '' ? $marketTypeOpt : MarketType::PERPETUAL->value,
+            ]);
             $response = $this->mtfValidator->run($request);
 
             // Convertir les résultats en map symbol => result
@@ -105,6 +114,8 @@ final class MtfRunWorkerCommand extends Command
                     'skip_context' => $skipContext,
                     'user_id' => $userId,
                     'ip_address' => $ipAddress,
+                    'exchange' => $request->exchange?->value,
+                    'market_type' => $request->marketType?->value,
                 ],
             ];
 

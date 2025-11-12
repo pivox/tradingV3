@@ -6,6 +6,10 @@ namespace App\MtfValidator\Command;
 
 use App\Contract\Provider\AccountProviderInterface;
 use App\Contract\Provider\OrderProviderInterface;
+use App\Contract\Provider\MainProviderInterface;
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
+use App\Provider\Context\ExchangeContext;
 use Brick\Math\RoundingMode;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -25,6 +29,7 @@ class ListOpenPositionsOrdersCommand extends Command
         private readonly ?AccountProviderInterface $accountProvider = null,
         private readonly ?OrderProviderInterface $orderProvider = null,
         private readonly ?LoggerInterface $logger = null,
+        private readonly ?MainProviderInterface $mainProvider = null,
     ) {
         parent::__construct();
     }
@@ -34,6 +39,8 @@ class ListOpenPositionsOrdersCommand extends Command
         $this
             ->addOption('symbol', 's', InputOption::VALUE_OPTIONAL, 'Filtrer par symbole (optionnel)')
             ->addOption('format', 'f', InputOption::VALUE_REQUIRED, 'Format de sortie (table|json)', 'table')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)')
             ->setHelp('
 Cette commande liste les positions ouvertes et les ordres ouverts en utilisant les mêmes méthodes
 que MtfRunOrchestrator (accountProvider->getOpenPositions() et orderProvider->getOpenOrders()).
@@ -146,10 +153,14 @@ Exemples:
             }
 
             // 2. Récupération des ordres ouverts (ordres normaux)
-            if ($this->orderProvider) {
+            $orderProvider = $this->orderProvider;
+            if ($this->mainProvider) {
+                $orderProvider = $this->mainProvider->forContext($context)->getOrderProvider();
+            }
+            if ($orderProvider) {
                 $io->section('Récupération des ordres ouverts...');
                 try {
-                    $openOrders = $this->orderProvider->getOpenOrders($symbol);
+                    $openOrders = $orderProvider->getOpenOrders($symbol);
 
                     if (empty($openOrders)) {
                         $io->note('Aucun ordre ouvert' . ($symbol ? " pour $symbol" : ''));
@@ -238,9 +249,9 @@ Exemples:
                 try {
                     $planOrders = [];
                     // Vérifier si le provider supporte getPlanOrders (méthode spécifique BitMart)
-                    if ($this->orderProvider instanceof \App\Provider\Bitmart\BitmartOrderProvider) {
+                    if ($orderProvider instanceof \App\Provider\Bitmart\BitmartOrderProvider) {
                         /** @var \App\Provider\Bitmart\BitmartOrderProvider $orderProvider */
-                        $orderProvider = $this->orderProvider;
+                        $orderProvider = $orderProvider;
                         $planOrders = $orderProvider->getPlanOrders($symbol);
                     } else {
                         $io->note('Le provider ne supporte pas la récupération des ordres planifiés (TP/SL)');

@@ -16,6 +16,7 @@ use App\Contract\Provider\MainProviderInterface;
 use App\Contract\Provider\Dto\OrderDto;
 use App\Common\Enum\OrderSide;
 use App\Common\Enum\PositionSide;
+use App\Provider\Context\ExchangeContext;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\Uuid;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
@@ -40,11 +41,18 @@ class MtfRunService implements MtfValidatorInterface
         $runId = Uuid::uuid4()->toString();
         $startTime = microtime(true);
 
+        $context = null;
+        if ($request->exchange !== null && $request->marketType !== null) {
+            $context = new ExchangeContext($request->exchange, $request->marketType);
+        }
+
         $this->logger->info('[MTF Run] Starting execution', [
             'run_id' => $runId,
             'symbols_count' => count($request->symbols),
             'dry_run' => $request->dryRun,
-            'force_run' => $request->forceRun
+            'force_run' => $request->forceRun,
+            'exchange' => $context?->exchange->value,
+            'market_type' => $context?->marketType->value,
         ]);
 
         try {
@@ -84,20 +92,23 @@ class MtfRunService implements MtfValidatorInterface
             $errors = [];
 
             foreach ($results as $result) {
-                if (isset($result['result']['status'])) {
-                    switch ($result['result']['status']) {
-                        case 'SUCCESS':
-                            $symbolsSuccessful++;
-                            break;
-                        case 'ERROR':
-                            $symbolsFailed++;
-                            $errors[] = $result['result'];
-                            break;
-                        case 'SKIPPED':
-                        case 'GRACE_WINDOW':
-                            $symbolsSkipped++;
-                            break;
-                    }
+                $res = $result['result'] ?? [];
+                $state = strtoupper((string)($res['status'] ?? ''));
+                // Succès: accepter SUCCESS (legacy), COMPLETED, READY
+                if (in_array($state, ['SUCCESS', 'COMPLETED', 'READY'], true)) {
+                    $symbolsSuccessful++;
+                    continue;
+                }
+                // Échecs: ERROR, INVALID
+                if (in_array($state, ['ERROR', 'INVALID'], true)) {
+                    $symbolsFailed++;
+                    $errors[] = $res;
+                    continue;
+                }
+                // Skipped: statut explicite SKIPPED/GRACE_WINDOW ou trading_decision.status=skipped
+                $td = $res['trading_decision']['status'] ?? null;
+                if (in_array($state, ['SKIPPED', 'GRACE_WINDOW'], true) || (is_string($td) && strtolower($td) === 'skipped')) {
+                    $symbolsSkipped++;
                 }
             }
 
@@ -162,11 +173,16 @@ class MtfRunService implements MtfValidatorInterface
      * Cette méthode doit être appelée une seule fois après tous les workers pour éviter
      * les appels API multiples qui causent des erreurs 429.
      */
-    public function processTpSlRecalculation(bool $dryRun): void
+    public function processTpSlRecalculation(bool $dryRun, ?ExchangeContext $context = null): void
     {
         try {
-            $accountProvider = $this->mainProvider->getAccountProvider();
-            $orderProvider = $this->mainProvider->getOrderProvider();
+            $provider = $this->mainProvider;
+            if ($provider !== null && $context !== null) {
+                $provider = $provider->forContext($context);
+            }
+
+            $accountProvider = $provider?->getAccountProvider();
+            $orderProvider = $provider?->getOrderProvider();
 
             if ($accountProvider === null || $orderProvider === null) {
                 $this->logger->warning('[MTF Run] TP/SL recalculation skipped: missing providers');

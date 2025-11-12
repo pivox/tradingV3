@@ -43,6 +43,20 @@ Ce projet est une plateforme complète de détection de signaux de trading basé
 - API Symfony : http://localhost:8080
 - API Python (indicateurs) : http://localhost:8888
 
+## 🧹 Maintenance Docker
+
+### Nettoyage du cache buildx
+
+Docker buildx accumule des couches d'images et du cache lors des builds successifs, ce qui peut rapidement consommer plusieurs dizaines de Go d'espace disque. Cette contrainte de consommation mémoire est réelle et peut bloquer les builds si l'espace disque est saturé.
+
+Pour limiter l'utilisation d'espace disque à 7 Go maximum, exécutez régulièrement :
+
+```bash
+docker buildx prune --max-used-space 7GB --force
+```
+
+Cette commande supprime automatiquement les caches et métadonnées buildx les plus anciens lorsque l'espace utilisé dépasse 7 Go, garantissant que les builds restent fonctionnels même sur des machines avec un espace disque limité.
+
 ## 🔧 Services & Ports
 
 | Service      | URL                   | Port local |
@@ -52,6 +66,38 @@ Ce projet est une plateforme complète de détection de signaux de trading basé
 | API Python  | http://localhost:8888  | 8888       |
 | Bitmart Position Sync | http://localhost:9000  | 9000       |
 | MySQL       | localhost              | 3306       |
+
+## 🔀 Exchange Context & Registry (Symfony)
+
+Le backend Symfony supporte un contexte `exchange/market` avec des valeurs par défaut:
+
+- Exchange par défaut: `bitmart`
+- Market type par défaut: `perpetual`
+
+Vous pouvez surcharger ce contexte via HTTP, CLI ou Temporal.
+
+Documentation détaillée: `trading-app/docs/EXCHANGE_REGISTRY.md`
+
+Exemples rapides:
+
+```
+# HTTP (défaut: bitmart/perpetual si omis)
+curl -s "http://localhost:8082/api/mtf/run?symbols=BTCUSDT&dry_run=1&exchange=bitmart&market_type=perpetual"
+
+# CLI
+php bin/console mtf:run --symbols=BTCUSDT --dry-run=1 --exchange=bitmart --market-type=perpetual
+php bin/console mtf:run-worker --symbols=BTCUSDT --dry-run=1 --exchange=bitmart --market-type=perpetual
+php bin/console mtf:list-open-positions-orders --symbol=BTCUSDT --exchange=bitmart --market-type=perpetual
+
+# Temporal (payload du job)
+{
+  "url": "http://trading-app-nginx:80/api/mtf/run",
+  "workers": 5,
+  "dry_run": true,
+  "exchange": "bitmart",
+  "market_type": "perpetual"
+}
+```
 
 ## 🧩 Indicateurs disponibles (Python FastAPI)
 - RSI

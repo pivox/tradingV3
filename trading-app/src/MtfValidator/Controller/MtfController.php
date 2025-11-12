@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\MtfValidator\Controller;
 
 use App\Contract\Provider\MainProviderInterface;
+use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\MtfValidator\Service\MtfService;
 use App\MtfValidator\Service\MtfRunService;
 use App\MtfValidator\Service\PerformanceProfiler;
@@ -17,6 +18,9 @@ use App\Repository\MtfStateRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\Repository\OrderPlanRepository;
 use Ramsey\Uuid\Uuid;
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
+use App\Provider\Context\ExchangeContext;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -569,13 +573,24 @@ class MtfController extends AbstractController
                 }
             }
 
+            try {
+                $context = $this->resolveExchangeContext($data);
+            } catch (\InvalidArgumentException $e) {
+                return $this->json([
+                    'status' => 'error',
+                    'message' => $e->getMessage(),
+                ], Response::HTTP_BAD_REQUEST);
+            }
+
             $this->logger->info('[MTF Controller] Contract synchronization started', [
                 'symbols' => $symbols,
                 'timestamp' => $this->clock->now()->format('Y-m-d H:i:s'),
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
             ]);
 
             // Call the provider sync method
-            $provider = $this->mainProvider->getContractProvider();
+            $provider = $this->mainProvider->forContext($context)->getContractProvider();
             $result = $provider->syncContracts($symbols);
 
             $status = empty($result['errors']) ? 'success' : 'partial_success';
@@ -617,7 +632,17 @@ class MtfController extends AbstractController
             // For GET requests, get parameters from query string
             $data = $request->query->all();
         }
-        
+        try {
+            $context = $this->resolveExchangeContext($data);
+        } catch (\InvalidArgumentException $exception) {
+            return $this->json([
+                'status' => 'error',
+                'message' => $exception->getMessage(),
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $contextualProvider = $this->mainProvider->forContext($context);
+
         $symbolsInput = $data['symbols'] ?? [];
         $dryRun = filter_var($data['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN);
         $forceRun = filter_var($data['force_run'] ?? false, FILTER_VALIDATE_BOOLEAN);
@@ -634,7 +659,7 @@ class MtfController extends AbstractController
         $filterStart = microtime(true);
         $runIdString = Uuid::uuid4()->toString();
         $excludedSymbols = [];
-        $symbols = $this->filterSymbolsWithOpenOrdersOrPositions($symbols, $runIdString, $excludedSymbols);
+        $symbols = $this->filterSymbolsWithOpenOrdersOrPositions($symbols, $runIdString, $excludedSymbols, $contextualProvider);
         $profiler->increment('controller', 'filter_symbols', microtime(true) - $filterStart);
 
         try {
@@ -646,10 +671,11 @@ class MtfController extends AbstractController
                     $currentTf,
                     $forceTimeframeCheck,
                     $workers,
-                    $profiler
+                    $profiler,
+                    $context,
                 );
             } else {
-                $result = $this->runSequential($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck);
+                $result = $this->runSequential($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck, $context);
             }
             
             // Après le traitement, mettre à jour les switches pour les symboles exclus
@@ -660,7 +686,7 @@ class MtfController extends AbstractController
             // Appeler processTpSlRecalculation une seule fois après tous les workers
             // (au lieu de l'appeler dans chaque worker pour éviter les erreurs 429)
             try {
-                $this->mtfRunService->processTpSlRecalculation($dryRun);
+                $this->mtfRunService->processTpSlRecalculation($dryRun, $context);
             } catch (\Throwable $e) {
                 $this->logger->warning('[MTF Controller] TP/SL recalculation failed', [
                     'error' => $e->getMessage(),
@@ -836,39 +862,48 @@ class MtfController extends AbstractController
     /**
      * @return array{summary: array, results: array, errors: array}
      */
-    private function runSequential(array $symbols, bool $dryRun, bool $forceRun, ?string $currentTf, bool $forceTimeframeCheck): array
-    {
-        $generator = $this->mtfRunService->run($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck);
+    private function runSequential(
+        array $symbols,
+        bool $dryRun,
+        bool $forceRun,
+        ?string $currentTf,
+        bool $forceTimeframeCheck,
+        ExchangeContext $context
+    ): array {
+        $request = new MtfRunRequestDto(
+            symbols: $symbols,
+            dryRun: $dryRun,
+            forceRun: $forceRun,
+            currentTf: $currentTf,
+            forceTimeframeCheck: $forceTimeframeCheck,
+            lockPerSymbol: true,
+            skipOpenStateFilter: true,
+            exchange: $context->exchange,
+            marketType: $context->marketType,
+        );
 
-        if (!$generator instanceof \Generator) {
-            return [
-                'summary' => is_array($generator) ? ($generator['summary'] ?? []) : [],
-                'results' => is_array($generator) ? ($generator['results'] ?? []) : [],
-                'errors' => [],
-            ];
-        }
+        $response = $this->mtfRunService->run($request);
 
-        $summary = [];
-        $results = [];
-
-        foreach ($generator as $yielded) {
-            $symbol = $yielded['symbol'] ?? null;
-            $result = $yielded['result'] ?? null;
-            if (is_string($symbol) && $symbol !== 'FINAL' && is_array($result)) {
-                $results[$symbol] = $result;
+        $resultsMap = [];
+        foreach ($response->results as $entry) {
+            if (!is_array($entry)) {
+                continue;
             }
-        }
 
-        $final = $generator->getReturn();
-        if (is_array($final)) {
-            $summary = $final['summary'] ?? $summary;
-            $results = $final['results'] ?? $results;
+            $symbol = $entry['symbol'] ?? null;
+            $result = $entry['result'] ?? null;
+
+            if (!is_string($symbol) || $symbol === '' || !is_array($result)) {
+                continue;
+            }
+
+            $resultsMap[$symbol] = $result;
         }
 
         return [
-            'summary' => $summary,
-            'results' => $results,
-            'errors' => [],
+            'summary' => $response->toArray(),
+            'results' => $resultsMap,
+            'errors' => $response->errors,
         ];
     }
 
@@ -882,7 +917,8 @@ class MtfController extends AbstractController
         ?string $currentTf,
         bool $forceTimeframeCheck,
         int $workers,
-        PerformanceProfiler $profiler
+        PerformanceProfiler $profiler,
+        ExchangeContext $context
     ): array {
         $queue = new \SplQueue();
         foreach ($symbols as $symbol) {
@@ -902,6 +938,8 @@ class MtfController extends AbstractController
             'force_run' => $forceRun,
             'current_tf' => $currentTf,
             'force_timeframe_check' => $forceTimeframeCheck,
+            'exchange' => $context->exchange->value,
+            'market_type' => $context->marketType->value,
         ];
 
         while (!$queue->isEmpty() || $active !== []) {
@@ -1086,6 +1124,8 @@ class MtfController extends AbstractController
      *     force_run: bool,
      *     current_tf: ?string,
      *     force_timeframe_check: bool,
+     *     exchange: string,
+     *     market_type: string,
      * } $options
      * @return string[]
      */
@@ -1109,6 +1149,12 @@ class MtfController extends AbstractController
         }
         if ($options['force_timeframe_check']) {
             $command[] = '--force-timeframe-check';
+        }
+        if (!empty($options['exchange'])) {
+            $command[] = '--exchange=' . $options['exchange'];
+        }
+        if (!empty($options['market_type'])) {
+            $command[] = '--market-type=' . $options['market_type'];
         }
 
         return $command;
@@ -1141,11 +1187,17 @@ class MtfController extends AbstractController
      * @param array<string> $excludedSymbols Référence pour retourner les symboles exclus
      * @return array<string> Liste des symboles à traiter (sans ceux exclus)
      */
-    private function filterSymbolsWithOpenOrdersOrPositions(array $symbols, string $runIdString, array &$excludedSymbols = []): array
+    private function filterSymbolsWithOpenOrdersOrPositions(
+        array $symbols,
+        string $runIdString,
+        array &$excludedSymbols = [],
+        ?MainProviderInterface $provider = null
+    ): array
     {
         $excludedSymbols = [];
-        
-        if (empty($symbols) || (!$this->mainProvider->getAccountProvider() && !$this->mainProvider->getOrderProvider())) {
+        $provider ??= $this->mainProvider;
+
+        if (empty($symbols) || (!$provider?->getAccountProvider() && !$provider?->getOrderProvider())) {
             return $symbols;
         }
 
@@ -1153,7 +1205,7 @@ class MtfController extends AbstractController
 
         // Récupérer les symboles avec positions ouvertes depuis l'exchange
         $openPositionSymbols = [];
-        $accountProvider = $this->mainProvider->getAccountProvider();
+        $accountProvider = $provider?->getAccountProvider();
         if ($accountProvider) {
             try {
                 $openPositions = $accountProvider->getOpenPositions();
@@ -1178,7 +1230,7 @@ class MtfController extends AbstractController
 
         // Récupérer les symboles avec ordres ouverts depuis l'exchange
         $openOrderSymbols = [];
-        $orderProvider = $this->mainProvider->getOrderProvider();
+        $orderProvider = $provider?->getOrderProvider();
         if ($orderProvider) {
             try {
                 $openOrders = $orderProvider->getOpenOrders();
@@ -1282,5 +1334,38 @@ class MtfController extends AbstractController
                 ]);
             }
         }
+    }
+
+    private function resolveExchangeContext(array $data): ExchangeContext
+    {
+        $exchangeInput = $data['exchange'] ?? $data['cex'] ?? null;
+        $marketInput = $data['market_type'] ?? $data['type_contract'] ?? null;
+
+        $exchange = Exchange::BITMART;
+        if ($exchangeInput !== null) {
+            if (!is_string($exchangeInput) || $exchangeInput === '') {
+                throw new \InvalidArgumentException('Invalid exchange parameter.');
+            }
+
+            $exchange = match (strtolower(trim($exchangeInput))) {
+                'bitmart' => Exchange::BITMART,
+                default => throw new \InvalidArgumentException(sprintf('Unsupported exchange "%s".', $exchangeInput)),
+            };
+        }
+
+        $marketType = MarketType::PERPETUAL;
+        if ($marketInput !== null) {
+            if (!is_string($marketInput) || $marketInput === '') {
+                throw new \InvalidArgumentException('Invalid market_type parameter.');
+            }
+
+            $marketType = match (strtolower(trim($marketInput))) {
+                'perpetual', 'perp', 'future', 'futures' => MarketType::PERPETUAL,
+                'spot' => MarketType::SPOT,
+                default => throw new \InvalidArgumentException(sprintf('Unsupported market type "%s".', $marketInput)),
+            };
+        }
+
+        return new ExchangeContext($exchange, $marketType);
     }
 }

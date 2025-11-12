@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Contract\Provider;
 
+use App\Provider\Context\ExchangeContext;
+
 /**
  * Interface pour les services de coordination des providers
  */
@@ -30,6 +32,7 @@ interface MainProviderInterface
     public function getAccountProvider(): AccountProviderInterface;
 
     public function getSystemProvider(): SystemProviderInterface;
-}
 
+    public function forContext(?ExchangeContext $context = null): self;
+}
 

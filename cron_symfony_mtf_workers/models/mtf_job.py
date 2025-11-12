@@ -40,6 +40,8 @@ class MtfJob:
     force_timeframe_check: bool = False
     current_tf: Optional[str] = None
     symbols: Optional[List[str]] = field(default_factory=list)
+    exchange: Optional[str] = None
+    market_type: Optional[str] = None
     timeout_minutes: int = 15
 
     @classmethod
@@ -53,6 +55,8 @@ class MtfJob:
         current_tf = str(current_tf_raw) if current_tf_raw else None
         symbols = _normalize_symbols(data.get("symbols")) or []
         timeout_minutes = int(data.get("timeout_minutes", 15))
+        exchange = data.get("exchange")
+        market_type = data.get("market_type")
 
         return cls(
             url=url,
@@ -63,6 +67,8 @@ class MtfJob:
             current_tf=current_tf,
             symbols=symbols,
             timeout_minutes=max(1, timeout_minutes),
+            exchange=str(exchange) if exchange else None,
+            market_type=str(market_type) if market_type else None,
         )
 
     def payload(self) -> Dict[str, Any]:
@@ -77,5 +83,9 @@ class MtfJob:
             payload["current_tf"] = self.current_tf
         if self.symbols:
             payload["symbols"] = self.symbols
+        if self.exchange:
+            payload["exchange"] = self.exchange
+        if self.market_type:
+            payload["market_type"] = self.market_type
 
         return payload

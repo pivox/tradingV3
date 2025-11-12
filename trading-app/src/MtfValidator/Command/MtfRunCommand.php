@@ -27,6 +27,9 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Process\Process;
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
+use App\Provider\Context\ExchangeContext;
 
 #[AsCommand(name: 'mtf:run', description: 'Exécute un cycle MTF pour une liste de symboles (dry-run par défaut) avec un output détaillé')]
 class MtfRunCommand extends Command
@@ -59,7 +62,9 @@ class MtfRunCommand extends Command
             ->addOption('auto-switch-invalid', null, InputOption::VALUE_NONE, 'Ajoute automatiquement les symboles INVALID à mtf_switch après l\'exécution')
             ->addOption('switch-duration', null, InputOption::VALUE_OPTIONAL, 'Durée de désactivation pour les symboles INVALID (ex: 4h, 1d, 1w)', '1d')
             ->addOption('limit', null, InputOption::VALUE_OPTIONAL, 'Nombre maximum de symboles à traiter quand --symbols est absent (0 = illimité)', '0')
-            ->addOption('workers', null, InputOption::VALUE_OPTIONAL, 'Nombre de workers parallèles (1 = mode séquentiel)', '1');
+            ->addOption('workers', null, InputOption::VALUE_OPTIONAL, 'Nombre de workers parallèles (1 = mode séquentiel)', '1')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -86,6 +91,26 @@ class MtfRunCommand extends Command
         $userId = is_string($userId) && $userId !== '' ? $userId : null;
         $ipAddress = $input->getOption('ip-address');
         $ipAddress = is_string($ipAddress) && $ipAddress !== '' ? $ipAddress : null;
+
+        // Context options (default Bitmart/Perpetual)
+        $exchangeOpt = $input->getOption('exchange');
+        $marketTypeOpt = $input->getOption('market-type');
+        $exchange = Exchange::BITMART;
+        if (is_string($exchangeOpt) && $exchangeOpt !== '') {
+            $exchange = match (strtolower(trim($exchangeOpt))) {
+                'bitmart' => Exchange::BITMART,
+                default => Exchange::BITMART,
+            };
+        }
+        $marketType = MarketType::PERPETUAL;
+        if (is_string($marketTypeOpt) && $marketTypeOpt !== '') {
+            $marketType = match (strtolower(trim($marketTypeOpt))) {
+                'perpetual', 'perp', 'future', 'futures' => MarketType::PERPETUAL,
+                'spot' => MarketType::SPOT,
+                default => MarketType::PERPETUAL,
+            };
+        }
+        $context = new ExchangeContext($exchange, $marketType);
 
         $io->title('MTF Run');
         $io->text([
@@ -154,7 +179,7 @@ class MtfRunCommand extends Command
             $excludedSymbols = [];
             $prefilterRunId = 'cli:' . Uuid::uuid4()->toString();
             try {
-                $symbols = $this->filterSymbolsWithOpenOrdersOrPositions($symbols, $prefilterRunId, $excludedSymbols);
+                $symbols = $this->filterSymbolsWithOpenOrdersOrPositions($symbols, $prefilterRunId, $excludedSymbols, $this->mainProvider->forContext($context));
                 $symbolsCountAfterFilter = count($symbols);
                 if ($symbolsCountAfterFilter < $symbolsCountBeforeFilter) {
                     $io->note(sprintf(
@@ -179,6 +204,8 @@ class MtfRunCommand extends Command
                 'user_id' => $userId,
                 'ip_address' => $ipAddress,
                 'skip_open_filter' => true,
+                'exchange' => $exchange->value,
+                'market_type' => $marketType->value,
             ];
             $io->section($workers > 1 ? sprintf('Exécution MTF en parallèle (%d workers)', $workers) : 'Exécution MTF en cours...');
             $result = $workers > 1
@@ -203,7 +230,7 @@ class MtfRunCommand extends Command
             // Appeler processTpSlRecalculation une seule fois après tous les workers
             // (au lieu de l'appeler dans chaque worker pour éviter les erreurs 429)
             try {
-                $this->mtfValidator->processTpSlRecalculation($dryRun);
+                $this->mtfValidator->processTpSlRecalculation($dryRun, $context);
             } catch (\Throwable $e) {
                 $io->warning('TP/SL recalculation failed: ' . $e->getMessage());
             }
@@ -242,18 +269,20 @@ class MtfRunCommand extends Command
      */
     private function runSequential(SymfonyStyle $io, array $symbols, array $options): array
     {
-        $mtfRunRequestDto = new MtfRunRequestDto(
-            symbols: $symbols,
-            dryRun: $options['dry_run'],
-            forceRun: $options['force_run'],
-            currentTf: $options['current_tf'],
-            forceTimeframeCheck: $options['force_timeframe_check'],
-            skipContextValidation: (bool)($options['skip_context'] ?? false),
-            lockPerSymbol: (bool)($options['lock_per_symbol'] ?? false),
-            skipOpenStateFilter: (bool)($options['skip_open_filter'] ?? false),
-            userId: $options['user_id'] ?? null,
-            ipAddress: $options['ip_address'] ?? null
-        );
+        $mtfRunRequestDto = MtfRunRequestDto::fromArray([
+            'symbols' => $symbols,
+            'dry_run' => $options['dry_run'],
+            'force_run' => $options['force_run'],
+            'current_tf' => $options['current_tf'],
+            'force_timeframe_check' => $options['force_timeframe_check'],
+            'skip_context' => (bool)($options['skip_context'] ?? false),
+            'lock_per_symbol' => (bool)($options['lock_per_symbol'] ?? false),
+            'skip_open_state_filter' => (bool)($options['skip_open_filter'] ?? false),
+            'user_id' => $options['user_id'] ?? null,
+            'ip_address' => $options['ip_address'] ?? null,
+            'exchange' => $options['exchange'] ?? \App\Common\Enum\Exchange::BITMART->value,
+            'market_type' => $options['market_type'] ?? \App\Common\Enum\MarketType::PERPETUAL->value,
+        ]);
         $response = $this->mtfValidator->run($mtfRunRequestDto);
 
         // Construire les détails à partir de la réponse
@@ -411,9 +440,20 @@ class MtfRunCommand extends Command
         }
 
         $processed = count($results);
-        $successCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'SUCCESS'));
-        $failedCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'ERROR'));
-        $skippedCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'SKIPPED'));
+        $successCount = count(array_filter($results, function ($r) {
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['SUCCESS', 'COMPLETED', 'READY'], true);
+        }));
+        $failedCount = count(array_filter($results, function ($r) {
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['ERROR', 'INVALID'], true);
+        }));
+        $skippedCount = count(array_filter($results, function ($r) {
+            $td = $r['trading_decision']['status'] ?? null;
+            if (is_string($td) && strtolower($td) === 'skipped') { return true; }
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['SKIPPED', 'GRACE_WINDOW'], true);
+        }));
 
         $summary = [
             'run_id' => Uuid::uuid4()->toString(),
@@ -476,8 +516,8 @@ class MtfRunCommand extends Command
                     $io->writeln(sprintf('  Raison: %s', (string) $info['reason']));
                 }
 
-                if (isset($info['failed_timeframe'])) {
-                    $io->writeln(sprintf('  Rejeté sur TF: %s', (string) $info['failed_timeframe']));
+                if (isset($info['blocking_tf'])) {
+                    $io->writeln(sprintf('  Rejeté sur TF: %s', (string) $info['blocking_tf']));
                 }
 
                 $failedLong = (array)($info['failed_conditions_long'] ?? []);
@@ -506,8 +546,8 @@ class MtfRunCommand extends Command
 
                 // Afficher le dernier TF atteint (arrêt)
                 $lastTf = null;
-                if (isset($info['failed_timeframe']) && is_string($info['failed_timeframe'])) {
-                    $lastTf = (string)$info['failed_timeframe'];
+                if (isset($info['blocking_tf']) && is_string($info['blocking_tf'])) {
+                    $lastTf = (string)$info['blocking_tf'];
                 } elseif (isset($info['execution_tf']) && is_string($info['execution_tf'])) {
                     $lastTf = (string)$info['execution_tf'];
                 } elseif (isset($info['steps']) && is_array($info['steps'])) {
@@ -572,7 +612,7 @@ class MtfRunCommand extends Command
     }
 
     /**
-     * @param array{dry_run: bool, force_run: bool, current_tf: ?string, force_timeframe_check: bool, auto_switch_invalid: bool, switch_duration: string} $options
+     * @param array{dry_run: bool, force_run: bool, current_tf: ?string, force_timeframe_check: bool, auto_switch_invalid: bool, switch_duration: string, exchange?: string, market_type?: string} $options
      */
     private function buildWorkerCommand(string $symbol, array $options): array
     {
@@ -613,6 +653,13 @@ class MtfRunCommand extends Command
 
         if (!empty($options['skip_open_filter'])) {
             $command[] = '--skip-open-filter';
+        }
+
+        if (!empty($options['exchange'])) {
+            $command[] = '--exchange=' . $options['exchange'];
+        }
+        if (!empty($options['market_type'])) {
+            $command[] = '--market-type=' . $options['market_type'];
         }
 
         return $command;
@@ -674,7 +721,7 @@ class MtfRunCommand extends Command
         $rejectedTfGroups = [];
 
         foreach ($details as $symbol => $info) {
-            $rejectedTf = $info['failed_timeframe'] ?? null;
+            $rejectedTf = $info['blocking_tf'] ?? null;
             if ($rejectedTf) {
                 if (!isset($rejectedTfGroups[$rejectedTf])) {
                     $rejectedTfGroups[$rejectedTf] = [];
@@ -756,9 +803,9 @@ class MtfRunCommand extends Command
 
     private function determineLastTimeframe(array $info): ?string
     {
-        // Priorité: failed_timeframe si présent (indique l'arrêt)
-        if (isset($info['failed_timeframe']) && is_string($info['failed_timeframe'])) {
-            return (string) $info['failed_timeframe'];
+        // Priorité: blocking_tf si présent (indique l'arrêt)
+        if (isset($info['blocking_tf']) && is_string($info['blocking_tf'])) {
+            return (string) $info['blocking_tf'];
         }
         // Sinon, essayer d'inférer via les steps connues, du plus bas au plus haut atteint
         if (isset($info['steps']) && is_array($info['steps'])) {
@@ -1030,11 +1077,12 @@ class MtfRunCommand extends Command
      * @param array<string> $excludedSymbols Référence pour retourner les symboles exclus
      * @return array<string> Liste des symboles à traiter (sans ceux exclus)
      */
-    private function filterSymbolsWithOpenOrdersOrPositions(array $symbols, string $runIdString, array &$excludedSymbols = []): array
+    private function filterSymbolsWithOpenOrdersOrPositions(array $symbols, string $runIdString, array &$excludedSymbols = [], ?MainProviderInterface $provider = null): array
     {
         $excludedSymbols = [];
+        $provider ??= $this->mainProvider;
 
-        if (empty($symbols) || (!$this->mainProvider->getAccountProvider() && !$this->mainProvider->getOrderProvider())) {
+        if (empty($symbols) || (!$provider?->getAccountProvider() && !$provider?->getOrderProvider())) {
             return $symbols;
         }
 
@@ -1042,7 +1090,7 @@ class MtfRunCommand extends Command
 
         // Récupérer les symboles avec positions ouvertes depuis l'exchange
         $openPositionSymbols = [];
-        $accountProvider = $this->mainProvider->getAccountProvider();
+        $accountProvider = $provider?->getAccountProvider();
         if ($accountProvider) {
             try {
                 $openPositions = $accountProvider->getOpenPositions();
@@ -1060,7 +1108,7 @@ class MtfRunCommand extends Command
 
         // Récupérer les symboles avec ordres ouverts depuis l'exchange
         $openOrderSymbols = [];
-        $orderProvider = $this->mainProvider->getOrderProvider();
+        $orderProvider = $provider?->getOrderProvider();
         if ($orderProvider) {
             try {
                 $openOrders = $orderProvider->getOpenOrders();

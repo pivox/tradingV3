@@ -20,7 +20,7 @@ parameters:
     env(ORDER_TIMEOUT_SWITCH_DURATION): '15m'
     mode:
         - [name: 'regular', enabled: true, priority: 1]
-        - [name: 'scalping', enabled: true, priority: 2]
+        - [name: 'scalper', enabled: true, priority: 2]
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
 
@@ -117,6 +117,58 @@ services:
         public: true
 
     App\Domain\Ports\Out\TradingProviderPort: '@App\Infrastructure\Trading\BitmartTradingProvider'
+
+    # --- Exchange provider registry ---
+
+    App\Provider\Context\ExchangeContext.bitmart_perpetual:
+        class: App\Provider\Context\ExchangeContext
+        arguments:
+            $exchange: !php/const App\Common\Enum\Exchange::BITMART
+            $marketType: !php/const App\Common\Enum\MarketType::PERPETUAL
+        public: false
+
+    App\Provider\Context\ExchangeContext.bitmart_spot:
+        class: App\Provider\Context\ExchangeContext
+        arguments:
+            $exchange: !php/const App\Common\Enum\Exchange::BITMART
+            $marketType: !php/const App\Common\Enum\MarketType::SPOT
+        public: false
+
+    App\Provider\Registry\ExchangeProviderBundle.bitmart_perpetual:
+        class: App\Provider\Registry\ExchangeProviderBundle
+        arguments:
+            $context: '@App\Provider\Context\ExchangeContext.bitmart_perpetual'
+            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
+            $contractProvider: '@App\Provider\Bitmart\BitmartContractProvider'
+            $orderProvider: '@App\Provider\Bitmart\BitmartOrderProvider'
+            $accountProvider: '@App\Provider\Bitmart\BitmartAccountProvider'
+            $systemProvider: '@App\Provider\Bitmart\SystemProvider'
+        public: false
+
+    # Note: Spot currently reuses the same provider classes. Adjust when spot-specific providers exist.
+    App\Provider\Registry\ExchangeProviderBundle.bitmart_spot:
+        class: App\Provider\Registry\ExchangeProviderBundle
+        arguments:
+            $context: '@App\Provider\Context\ExchangeContext.bitmart_spot'
+            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
+            $contractProvider: '@App\Provider\Bitmart\BitmartContractProvider'
+            $orderProvider: '@App\Provider\Bitmart\BitmartOrderProvider'
+            $accountProvider: '@App\Provider\Bitmart\BitmartAccountProvider'
+            $systemProvider: '@App\Provider\Bitmart\SystemProvider'
+        public: false
+
+    App\Provider\Registry\ExchangeProviderRegistry:
+        arguments:
+            $bundles:
+                - '@App\Provider\Registry\ExchangeProviderBundle.bitmart_perpetual'
+                - '@App\Provider\Registry\ExchangeProviderBundle.bitmart_spot'
+            $defaultExchange: !php/const App\Common\Enum\Exchange::BITMART
+            $defaultMarketType: !php/const App\Common\Enum\MarketType::PERPETUAL
+
+    App\Contract\Provider\ExchangeProviderRegistryInterface: '@App\Provider\Registry\ExchangeProviderRegistry'
+
+    # Provide a default context alias so autowiring of ExchangeContext resolves
+    App\Provider\Context\ExchangeContext: '@App\Provider\Context\ExchangeContext.bitmart_perpetual'
 
     # Kline Provider
 
