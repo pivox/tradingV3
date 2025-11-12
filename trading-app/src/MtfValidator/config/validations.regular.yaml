@@ -1,4 +1,4 @@
-version: '0.0.12pp'
+version: '0.0.12'
 
 mtf_validation:
     mode: 'pragmatic'
@@ -193,7 +193,7 @@ mtf_validation:
                 - end_of_zone_fallback: true
 
     filters_mandatory:
-        - rsi_lt_70: { rsi_lt_70_threshold: 74 }
+        - rsi_lt_70: { rsi_lt_70_threshold: 73 }
         - adx_min_for_trend_1h
         - pullback_confirmed_ma9_21
         - pullback_confirmed_vwap
@@ -251,7 +251,7 @@ mtf_validation:
                                       - macd_line_cross_up_with_hysteresis: { min_gap: 0.0012, cool_down_bars: 3, require_prev_below: true }
                                       - close_above_vwap_or_ma9
                           - ema20_over_50_with_tolerance
-                          - rsi_lt_70: { rsi_lt_70_threshold: 74 }
+                          - rsi_lt_70: { rsi_lt_70_threshold: 73 }
                           - close_above_vwap_or_ma9
                           - atr_rel_in_range_15m
                 short:
@@ -275,7 +275,7 @@ mtf_validation:
                                       - close_above_vwap_or_ma9
                           - ema20_over_50_with_tolerance
                           - close_above_vwap_or_ma9
-                          - rsi_lt_70: { rsi_lt_70_threshold: 74 }
+                          - rsi_lt_70: { rsi_lt_70_threshold: 73 }
                           - atr_rel_in_range_5m
                 short:
                     - all_of:
@@ -294,7 +294,7 @@ mtf_validation:
                           - macd_hist_gt_eps
                           - ema20_over_50_with_tolerance
                           - close_above_vwap_or_ma9
-                          - rsi_lt_70: { rsi_lt_70_threshold: 74 }
+                          - rsi_lt_70: { rsi_lt_70_threshold: 73 }
                           - macd_hist_slope_pos
                           - atr_rel_in_range_5m
                 short:
