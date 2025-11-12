@@ -425,9 +425,7 @@ class MtfSwitchRepository extends ServiceEntityRepository
 
             // Si le symbole n'est pas dans la liste des symboles avec activité, réactiver le switch
             if (!in_array($symbolUpper, $symbolsWithActivityUpper, true)) {
-                $switch->turnOn();
-                $switch->setExpiresAt(null);
-                $switch->setDescription(null);
+                $this->getEntityManager()->remove($switch);
                 $reactivatedCount++;
             }
         }
@@ -439,5 +437,4 @@ class MtfSwitchRepository extends ServiceEntityRepository
         return $reactivatedCount;
     }
 }
-
 
