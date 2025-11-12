@@ -109,6 +109,15 @@ trade_entry:
         # Exiger au moins un prix courant ou un ATR pour tenter une exécution
         require_price_or_atr: true
 
+    # ======== END-OF-ZONE FALLBACK ========
+    fallback_end_of_zone:
+        enabled: true
+        ttl_threshold_sec: 25
+        max_spread_bps: 8
+        only_if_within_zone: true
+        taker_order_type: 'market'
+        max_slippage_bps: 10
+
     # MARKET ENTRY (capé) — profil régulier, conditions plus strictes
     market_entry:
         enabled: true
@@ -142,6 +151,7 @@ trade_entry:
             w_min: 0.0005                  # largeur minimale (0.05%)
             w_max: 0.0100                  # largeur maximale (1.00%)
             quantize_to_exchange_step: true # quantification aux pas exchange
+            ttl_sec: 240                    # durée de validité de la zone en secondes
 
         # ✅ UTILISÉES: TradingDecisionHandler.php
         idempotency:

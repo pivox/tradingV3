@@ -4,6 +4,10 @@ declare(strict_types=1);
 namespace App\TradeEntry\Service;
 
 use App\TradeEntry\Dto\{TradeEntryRequest, ExecutionResult};
+use App\TradeEntry\Dto\EntryZone;
+use App\TradeEntry\Dto\FallbackEndOfZoneConfig;
+use App\TradeEntry\Execution\ExecutionBox;
+use App\Config\TradeEntryConfig;
 use App\TradeEntry\Exception\EntryZoneOutOfBoundsException;
 use App\TradeEntry\Hook\PostExecutionHookInterface;
 use App\TradeEntry\Workflow\{BuildPreOrder, BuildOrderPlan, ExecuteOrderPlan};
@@ -18,6 +22,8 @@ final class TradeEntryService
         private readonly ExecuteOrderPlan $executor,
         private readonly TradeEntryMetricsService $metrics,
         private readonly \App\TradeEntry\Policy\DailyLossGuard $dailyLossGuard,
+        private readonly TradeEntryConfig $tradeEntryConfig,
+        private readonly ExecutionBox $executionBox,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
@@ -117,6 +123,37 @@ final class TradeEntryService
             );
         }
 
+        // End-of-zone fallback decision (taker switch) if configured
+        try {
+            $fallbackCfg = $this->tradeEntryConfig->getFallbackEndOfZoneConfig();
+            if ($fallbackCfg->enabled) {
+                $zone = new EntryZone(
+                    min: $plan->entryZoneLow ?? PHP_FLOAT_MIN,
+                    max: $plan->entryZoneHigh ?? PHP_FLOAT_MAX,
+                    rationale: 'plan_zone'
+                );
+                $currentPrice = (float)($preflight->markPrice ?? ($request->side->name === 'Long' ? $preflight->bestAsk : $preflight->bestBid));
+                $nowTs = (new \DateTimeImmutable())->getTimestamp();
+                $ttlRemaining = $plan->zoneExpiresAt ? max(0, $plan->zoneExpiresAt->getTimestamp() - $nowTs) : PHP_INT_MAX;
+
+                $fallbackDecision = $this->executionBox->applyEndOfZoneFallback(
+                    $fallbackCfg,
+                    $zone,
+                    $request->symbol,
+                    $currentPrice,
+                    $ttlRemaining
+                );
+
+                if (is_array($fallbackDecision)) {
+                    $newOrderType = (string)($fallbackDecision['order_type'] ?? $plan->orderType);
+                    $newOrderMode = $newOrderType === 'market' ? 1 : $plan->orderMode;
+                    $plan = $plan->copyWith(orderType: $newOrderType, orderMode: $newOrderMode);
+                }
+            }
+        } catch (\Throwable) {
+            // non-blocking
+        }
+
         $this->positionsLogger->info('order_journey.trade_entry.plan_ready', [
             'symbol' => $plan->symbol,
             'decision_key' => $decisionKey,
@@ -199,6 +236,37 @@ final class TradeEntryService
                     'context' => $e->getContext(),
                 ],
             );
+        }
+
+        // End-of-zone fallback decision also applied in simulation to mirror logs
+        try {
+            $fallbackCfg = $this->tradeEntryConfig->getFallbackEndOfZoneConfig();
+            if ($fallbackCfg->enabled) {
+                $zone = new EntryZone(
+                    min: $plan->entryZoneLow ?? PHP_FLOAT_MIN,
+                    max: $plan->entryZoneHigh ?? PHP_FLOAT_MAX,
+                    rationale: 'plan_zone'
+                );
+                $currentPrice = (float)($preflight->markPrice ?? ($request->side->name === 'Long' ? $preflight->bestAsk : $preflight->bestBid));
+                $nowTs = (new \DateTimeImmutable())->getTimestamp();
+                $ttlRemaining = $plan->zoneExpiresAt ? max(0, $plan->zoneExpiresAt->getTimestamp() - $nowTs) : PHP_INT_MAX;
+
+                $fallbackDecision = $this->executionBox->applyEndOfZoneFallback(
+                    $fallbackCfg,
+                    $zone,
+                    $request->symbol,
+                    $currentPrice,
+                    $ttlRemaining
+                );
+
+                if (is_array($fallbackDecision)) {
+                    $newOrderType = (string)($fallbackDecision['order_type'] ?? $plan->orderType);
+                    $newOrderMode = $newOrderType === 'market' ? 1 : $plan->orderMode;
+                    $plan = $plan->copyWith(orderType: $newOrderType, orderMode: $newOrderMode);
+                }
+            }
+        } catch (\Throwable) {
+            // ignore during simulation
         }
 
         $cid = 'SIM-' . substr(sha1($decisionKey), 0, 12);

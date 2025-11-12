@@ -400,6 +400,15 @@ final class OrderPlanBuilder
         // --- Build du modèle final ---
         $orderMode = $req->orderType === 'market' ? 1 : $req->orderMode;
 
+        $zoneExpiresAt = null;
+        if ($zone instanceof EntryZone && $zone->getTtlSec() !== null && $zone->getCreatedAt() !== null) {
+            try {
+                $zoneExpiresAt = $zone->getCreatedAt()->modify(sprintf('+%d seconds', (int)$zone->getTtlSec()));
+            } catch (\Throwable) {
+                $zoneExpiresAt = null;
+            }
+        }
+
         $model = new OrderPlanModel(
             symbol: $req->symbol,
             side: $req->side,
@@ -415,7 +424,7 @@ final class OrderPlanBuilder
             contractSize: $contractSize,
             entryZoneLow: $zone?->min,
             entryZoneHigh: $zone?->max,
-            zoneExpiresAt: null,
+            zoneExpiresAt: $zoneExpiresAt,
         );
 
         $this->positionsLogger->info('order_plan.model_ready', [

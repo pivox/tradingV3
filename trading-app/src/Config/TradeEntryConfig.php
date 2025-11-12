@@ -66,6 +66,31 @@ class TradeEntryConfig
         return $this->config['market_entry'] ?? [];
     }
 
+    public function getFallbackEndOfZoneConfig(): \App\TradeEntry\Dto\FallbackEndOfZoneConfig
+    {
+        $block = (array)($this->config['fallback_end_of_zone'] ?? []);
+
+        $enabled = isset($block['enabled']) ? (bool)$block['enabled'] : true;
+        $ttl = isset($block['ttl_threshold_sec']) && is_numeric($block['ttl_threshold_sec'])
+            ? (int)$block['ttl_threshold_sec'] : 25;
+        $maxSpreadBps = isset($block['max_spread_bps']) && is_numeric($block['max_spread_bps'])
+            ? (float)$block['max_spread_bps'] : 8.0;
+        $onlyIfWithinZone = isset($block['only_if_within_zone']) ? (bool)$block['only_if_within_zone'] : true;
+        $takerOrderType = \is_string($block['taker_order_type'] ?? null) && $block['taker_order_type'] !== ''
+            ? (string)$block['taker_order_type'] : 'market';
+        $maxSlippageBps = isset($block['max_slippage_bps']) && is_numeric($block['max_slippage_bps'])
+            ? (float)$block['max_slippage_bps'] : 10.0;
+
+        return new \App\TradeEntry\Dto\FallbackEndOfZoneConfig(
+            enabled: $enabled,
+            ttlThresholdSec: $ttl,
+            maxSpreadBps: $maxSpreadBps,
+            onlyIfWithinZone: $onlyIfWithinZone,
+            takerOrderType: $takerOrderType,
+            maxSlippageBps: $maxSlippageBps,
+        );
+    }
+
     public function getVersion(): string
     {
         $parsed = \Symfony\Component\Yaml\Yaml::parseFile($this->path) ?? [];

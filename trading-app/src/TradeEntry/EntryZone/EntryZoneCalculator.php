@@ -56,6 +56,7 @@ final class EntryZoneCalculator
         $preferVwap = isset($ez['vwap_anchor']) ? (bool)$ez['vwap_anchor'] : true;
         $bias = $this->asymBiasOverride ?? (isset($ez['asym_bias']) && \is_numeric($ez['asym_bias']) ? max(0.0, min(0.95, (float)$ez['asym_bias'])) : self::ASYM_BIAS);
         $quantize = isset($ez['quantize_to_exchange_step']) ? (bool)$ez['quantize_to_exchange_step'] : true;
+        $ttlSec = isset($ez['ttl_sec']) && is_numeric($ez['ttl_sec']) ? max(0, (int)$ez['ttl_sec']) : 240;
 
         // 1) Récupère ATR et liste pivot (vwap/sma...)
         $atr = $this->indicators->getAtr(symbol: $symbol, tf: $tf);
@@ -177,7 +178,7 @@ final class EntryZoneCalculator
             'reason' => 'entry_zone_calculated',
         ]);
 
-        return new EntryZone(min: $low, max: $high, rationale: $rationale);
+        return new EntryZone(min: $low, max: $high, rationale: $rationale, createdAt: new \DateTimeImmutable(), ttlSec: $ttlSec);
     }
 
     /**

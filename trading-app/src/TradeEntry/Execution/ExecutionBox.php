@@ -9,6 +9,8 @@ use App\Contract\Provider\MainProviderInterface;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Pricing\TickQuantizer;
 use App\TradeEntry\Dto\{ExecutionResult};
+use App\TradeEntry\Dto\{EntryZone, FallbackEndOfZoneConfig};
+use App\TradeEntry\Helper\SpreadHelper;
 use App\TradeEntry\Policy\{IdempotencyPolicy, MakerTakerSwitchPolicy, OrderModePolicyInterface};
 use App\TradeEntry\Service\TpSlTwoTargetsService;
 use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
@@ -658,5 +660,53 @@ final class ExecutionBox
 
         // BitMart Futures V2: IOC = mode=3 ; MakerOnly = mode=4 ; type reste 'limit'
         return $plan->copyWith(orderType: 'limit', orderMode: 3, entry: $cap);
+    }
+
+    /**
+     * Fallback "fin de zone": si la zone expire sous peu et que les garde-fous sont OK,
+     * décider d'un passage en taker (market ou limit selon config).
+     * Retourne une petite décision structurelle pour que l'appelant adapte le plan.
+     *
+     * @return array{mode:string,order_type:string,reason:string}|null
+     */
+    public function applyEndOfZoneFallback(
+        FallbackEndOfZoneConfig $cfg,
+        EntryZone $zone,
+        string $symbol,
+        float $currentPrice,
+        int $ttlRemainingSec
+    ): ?array {
+        if (!$cfg->enabled || $ttlRemainingSec > $cfg->ttlThresholdSec) {
+            return null;
+        }
+
+        $orderBook = $this->providers->getOrderProvider()->getOrderBookTop($symbol);
+        $spreadBps = SpreadHelper::calculateSpreadBps($orderBook);
+
+        if ($spreadBps > $cfg->maxSpreadBps) {
+            $this->positionsLogger->info("Skip fallback: spread too high ({$spreadBps} bps)");
+            return null;
+        }
+
+        if ($cfg->onlyIfWithinZone && !$zone->contains($currentPrice)) {
+            $this->positionsLogger->info('Skip fallback: price outside zone');
+            return null;
+        }
+
+        // Approximated anchor: mid of the zone when not explicitly provided
+        $anchor = max(1e-12, 0.5 * ($zone->min + $zone->max));
+        $slippageBps = abs(($currentPrice - $anchor) / $anchor) * 10_000.0;
+        if ($slippageBps > $cfg->maxSlippageBps) {
+            $this->positionsLogger->info("Skip fallback: slippage too large ({$slippageBps} bps)");
+            return null;
+        }
+
+        $this->positionsLogger->notice("Applying end-of-zone fallback taker for {$symbol}");
+
+        return [
+            'mode' => 'taker',
+            'order_type' => $cfg->takerOrderType,
+            'reason' => 'end_of_zone_fallback',
+        ];
     }
 }
