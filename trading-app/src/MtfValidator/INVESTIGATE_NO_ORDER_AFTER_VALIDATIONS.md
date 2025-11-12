@@ -164,3 +164,45 @@ psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME" -At -c "$SQL"
 Notes:
 - The query aligns “now” to the previous closed candle per TF and checks audits for `VALIDATION_SUCCESS` with matching `timeframe` and `kline_time`.
 - Steps may be upper/lower‑case; filtering uses `ILIKE '%VALIDATION_SUCCESS'` and relies on `details->>'timeframe'` for TF.
+
+Updated (recommended) UTC‑aligned query equivalent to the UI “green cells” logic
+
+```sh
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+DB_HOST="${DB_HOST:-localhost}"
+DB_PORT="${DB_PORT:-5433}"
+DB_USER="${DB_USER:-postgres}"
+DB_NAME="${DB_NAME:-trading_app}"
+export PGPASSWORD="${PGPASSWORD:-password}"
+
+SQL='WITH latest_validations AS (
+  SELECT symbol, timeframe, step, candle_open_ts, created_at,
+         ROW_NUMBER() OVER (PARTITION BY symbol, timeframe ORDER BY candle_open_ts DESC, created_at DESC) rn
+  FROM mtf_audit
+  WHERE candle_open_ts IS NOT NULL
+    AND ((timeframe=''4h'' AND UPPER(step)=''4H_VALIDATION_SUCCESS'')
+      OR (timeframe=''1h'' AND UPPER(step)=''1H_VALIDATION_SUCCESS'')
+      OR (timeframe=''15m'' AND UPPER(step)=''15M_VALIDATION_SUCCESS'')
+      OR (timeframe=''5m'' AND UPPER(step)=''5M_VALIDATION_SUCCESS'')
+      OR (timeframe=''1m'' AND UPPER(step)=''1M_VALIDATION_SUCCESS''))
+), agg AS (
+  SELECT symbol,
+    MAX(CASE WHEN timeframe=''4h'' AND rn=1 THEN CASE WHEN candle_open_ts=(to_timestamp(floor(extract(epoch from timezone(''UTC'', now()))/14400)*14400-14400) AT TIME ZONE ''UTC'') THEN 1 ELSE 0 END ELSE 0 END) AS in_window_4h,
+    MAX(CASE WHEN timeframe=''1h'' AND rn=1 THEN CASE WHEN candle_open_ts=(to_timestamp(floor(extract(epoch from timezone(''UTC'', now()))/3600)*3600-3600) AT TIME ZONE ''UTC'') THEN 1 ELSE 0 END ELSE 0 END) AS in_window_1h,
+    MAX(CASE WHEN timeframe=''15m'' AND rn=1 THEN CASE WHEN candle_open_ts=(to_timestamp(floor(extract(epoch from timezone(''UTC'', now()))/900)*900-900) AT TIME ZONE ''UTC'') THEN 1 ELSE 0 END ELSE 0 END) AS in_window_15m,
+    MAX(CASE WHEN timeframe=''5m'' AND rn=1 THEN CASE WHEN candle_open_ts=(to_timestamp(floor(extract(epoch from timezone(''UTC'', now()))/300)*300-300) AT TIME ZONE ''UTC'') THEN 1 ELSE 0 END ELSE 0 END) AS in_window_5m,
+    MAX(CASE WHEN timeframe=''1m'' AND rn=1 THEN CASE WHEN candle_open_ts=(to_timestamp(floor(extract(epoch from timezone(''UTC'', now()))/60)*60-60) AT TIME ZONE ''UTC'') THEN 1 ELSE 0 END ELSE 0 END) AS in_window_1m
+  FROM latest_validations
+  GROUP BY symbol
+)
+SELECT symbol FROM agg
+WHERE in_window_4h=1 AND in_window_1h=1 AND in_window_15m=1 AND in_window_5m=1 AND in_window_1m=1
+ORDER BY symbol;'
+
+psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME" -At -c "$SQL"
+```
+
+This matches what the UI highlights in green: candle_open_ts equals the expected last open time for each TF (UTC), and only the latest success per TF per symbol is considered.
