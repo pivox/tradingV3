@@ -25,6 +25,7 @@ final class InvestigateNoOrderWebController extends AbstractController
         $sinceMinutes = max(1, (int)$request->query->get('since_minutes', 10));
         $maxLogFiles = max(1, (int)$request->query->get('max_log_files', 2));
         $autoRefresh = (int)$request->query->get('auto_refresh', 0);
+        $timeout = min(120, max(5, (int)$request->query->get('timeout', 30)));
 
         $results = null;
         $error = null;
@@ -48,7 +49,7 @@ final class InvestigateNoOrderWebController extends AbstractController
                     // Réduire bruit dans la sortie pour fiabiliser le JSON
                     'SHELL_VERBOSITY' => '0',
                 ]);
-                $process->setTimeout(20);
+                $process->setTimeout($timeout);
                 $process->mustRun();
 
                 $output = $process->getOutput();
@@ -100,6 +101,7 @@ final class InvestigateNoOrderWebController extends AbstractController
                 'since_minutes' => $sinceMinutes,
                 'max_log_files' => $maxLogFiles,
                 'auto_refresh' => $autoRefresh,
+                'timeout' => $timeout,
             ],
             'error' => $error,
             'results' => $results,
