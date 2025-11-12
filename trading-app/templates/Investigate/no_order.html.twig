@@ -137,7 +137,8 @@
         $(function() {
           const selector = '#investigateTable';
           if ($.fn.DataTable && $.fn.DataTable.isDataTable(selector)) {
-            $(selector).DataTable().clear().destroy();
+            // Ne pas appeler clear() avant destroy(), cela peut vider le DOM
+            $(selector).DataTable().destroy();
           }
           $(selector).DataTable({
             pageLength: 25,
