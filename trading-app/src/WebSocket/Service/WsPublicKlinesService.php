@@ -162,7 +162,7 @@ final class WsPublicKlinesService
     /**
      * Souscrit à des klines pour un symbole et des timeframes
      */
-    public function subscribe(string $symbol, array $timeframes): void
+    public function subscribe(string $symbol, array $timeframes, ?\App\Provider\Context\ExchangeContext $context = null): void
     {
         $this->ensureConnected();
 
@@ -172,6 +172,7 @@ final class WsPublicKlinesService
         }
 
         // Construire le payload de souscription
+        // Note: Spot WS topics non implémentés—fallback futures en attendant
         $payload = $this->wsBuilder->buildSubscribeKlines($symbol, $timeframes);
         $topics = $payload['args'] ?? [];
 
@@ -189,13 +190,15 @@ final class WsPublicKlinesService
             'symbol' => $symbol,
             'timeframes' => $timeframes,
             'topics' => $topics,
+            'exchange' => $context?->exchange->value ?? 'bitmart',
+            'market_type' => $context?->marketType->value ?? 'perpetual',
         ]);
     }
 
     /**
      * Désabonne des klines pour un symbole et des timeframes
      */
-    public function unsubscribe(string $symbol, array $timeframes): void
+    public function unsubscribe(string $symbol, array $timeframes, ?\App\Provider\Context\ExchangeContext $context = null): void
     {
         if ($this->wsConnection === null) {
             $this->logger->warning('[WsPublicKlines] Cannot unsubscribe: not connected');
@@ -222,6 +225,8 @@ final class WsPublicKlinesService
             'symbol' => $symbol,
             'timeframes' => $timeframes,
             'topics' => $topics,
+            'exchange' => $context?->exchange->value ?? 'bitmart',
+            'market_type' => $context?->marketType->value ?? 'perpetual',
         ]);
     }
 
@@ -357,4 +362,3 @@ final class WsPublicKlinesService
         return $this->wsConnection !== null;
     }
 }
-

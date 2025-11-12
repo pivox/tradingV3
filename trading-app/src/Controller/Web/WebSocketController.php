@@ -43,13 +43,23 @@ final class WebSocketController extends AbstractController
         }
 
         try {
-            $this->wsDispatcher->subscribe($symbol, $tfs);
+            // Optional context
+            $exchange = isset($data['exchange']) && is_string($data['exchange']) ? strtolower(trim($data['exchange'])) : 'bitmart';
+            $market = isset($data['market_type']) && is_string($data['market_type']) ? strtolower(trim($data['market_type'])) : 'perpetual';
+            $ctx = new \App\Provider\Context\ExchangeContext(
+                match ($exchange) { 'bitmart' => \App\Common\Enum\Exchange::BITMART, default => \App\Common\Enum\Exchange::BITMART, },
+                match ($market) { 'spot' => \App\Common\Enum\MarketType::SPOT, default => \App\Common\Enum\MarketType::PERPETUAL, }
+            );
+
+            $this->wsDispatcher->subscribe($symbol, $tfs, $ctx);
 
             return new JsonResponse([
                 'success' => true,
                 'message' => "Subscribed to $symbol for timeframes: " . implode(', ', $tfs),
                 'symbol' => $symbol,
                 'timeframes' => $tfs,
+                'exchange' => $ctx->exchange->value,
+                'market_type' => $ctx->marketType->value,
             ]);
         } catch (\Throwable $e) {
             return new JsonResponse([
@@ -82,13 +92,22 @@ final class WebSocketController extends AbstractController
         }
 
         try {
-            $this->wsDispatcher->unsubscribe($symbol, $tfs);
+            $exchange = isset($data['exchange']) && is_string($data['exchange']) ? strtolower(trim($data['exchange'])) : 'bitmart';
+            $market = isset($data['market_type']) && is_string($data['market_type']) ? strtolower(trim($data['market_type'])) : 'perpetual';
+            $ctx = new \App\Provider\Context\ExchangeContext(
+                match ($exchange) { 'bitmart' => \App\Common\Enum\Exchange::BITMART, default => \App\Common\Enum\Exchange::BITMART, },
+                match ($market) { 'spot' => \App\Common\Enum\MarketType::SPOT, default => \App\Common\Enum\MarketType::PERPETUAL, }
+            );
+
+            $this->wsDispatcher->unsubscribe($symbol, $tfs, $ctx);
 
             return new JsonResponse([
                 'success' => true,
                 'message' => "Unsubscribed from $symbol for timeframes: " . implode(', ', $tfs),
                 'symbol' => $symbol,
                 'timeframes' => $tfs,
+                'exchange' => $ctx->exchange->value,
+                'market_type' => $ctx->marketType->value,
             ]);
         } catch (\Throwable $e) {
             return new JsonResponse([
@@ -98,7 +117,6 @@ final class WebSocketController extends AbstractController
         }
     }
 }
-
 
 
 

@@ -25,24 +25,28 @@ class WsDispatcher
         ]);
     }
 
-    public function subscribe(string $symbol, array $timeframes): void
+    public function subscribe(string $symbol, array $timeframes, ?\App\Provider\Context\ExchangeContext $context = null): void
     {
         $this->logger->info('[WsDispatcher] Subscribing to symbol', [
             'symbol' => $symbol,
             'timeframes' => $timeframes,
+            'exchange' => $context?->exchange->value ?? 'bitmart',
+            'market_type' => $context?->marketType->value ?? 'perpetual',
         ]);
 
-        $this->wsPublicKlinesService->subscribe($symbol, $timeframes);
+        $this->wsPublicKlinesService->subscribe($symbol, $timeframes, $context);
     }
 
-    public function unsubscribe(string $symbol, array $timeframes): void
+    public function unsubscribe(string $symbol, array $timeframes, ?\App\Provider\Context\ExchangeContext $context = null): void
     {
         $this->logger->info('[WsDispatcher] Unsubscribing from symbol', [
             'symbol' => $symbol,
             'timeframes' => $timeframes,
+            'exchange' => $context?->exchange->value ?? 'bitmart',
+            'market_type' => $context?->marketType->value ?? 'perpetual',
         ]);
 
-        $this->wsPublicKlinesService->unsubscribe($symbol, $timeframes);
+        $this->wsPublicKlinesService->unsubscribe($symbol, $timeframes, $context);
     }
 
     public function disconnect(): void
