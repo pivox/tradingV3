@@ -14,7 +14,8 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
     name: 'investigate:no-order',
-    description: 'Diagnostique pourquoi un ou plusieurs symboles n\'ont pas abouti à un ordre exécuté (soumission, skip, MTF non READY).'
+    description: 'Diagnostique pourquoi un ou plusieurs symboles n\'ont pas abouti à un ordre exécuté (soumission, skip, MTF non READY).',
+    aliases: ['investigate:no', 'ino']
 )]
 class InvestigateNoOrderCommand extends Command
 {
@@ -84,21 +85,35 @@ class InvestigateNoOrderCommand extends Command
             return Command::SUCCESS;
         }
 
-        // Affichage table
+        // Affichage table avec détails zone et proposition en cas de skipped_out_of_zone
         $rows = [];
         foreach ($results as $symbol => $r) {
+            $details = is_array($r['details'] ?? null) ? $r['details'] : [];
+            $reason  = (string)($r['reason'] ?? ($details['cause'] ?? ''));
+
+            $zoneDev = isset($details['zone_dev_pct']) && is_numeric($details['zone_dev_pct']) ? (float)$details['zone_dev_pct'] : null;
+            $zoneMax = isset($details['zone_max_dev_pct']) && is_numeric($details['zone_max_dev_pct']) ? (float)$details['zone_max_dev_pct'] : null;
+
+            $proposal = '';
+            if ($r['status'] === 'skipped' && ($reason === 'skipped_out_of_zone' || $reason === 'zone_far_from_market')) {
+                $proposal = $this->buildZoneSkipProposal($zoneDev, $zoneMax);
+            }
+
             $rows[] = [
                 $symbol,
                 $r['status'] ?? 'unknown',
-                $r['reason'] ?? ($r['details']['cause'] ?? ''),
-                $r['details']['order_id'] ?? '',
-                $r['details']['decision_key'] ?? '',
-                $r['details']['timeframe'] ?? '',
-                $r['details']['kline_time'] ?? '',
+                $reason,
+                $details['order_id'] ?? '',
+                $details['decision_key'] ?? '',
+                $details['timeframe'] ?? '',
+                $details['kline_time'] ?? '',
+                $this->fmtPct($zoneDev),
+                $this->fmtPct($zoneMax),
+                $proposal,
             ];
         }
         $io->table(
-            ['Symbol', 'Status', 'Reason/Cause', 'Order ID', 'Decision Key', 'TF', 'Kline Time'],
+            ['Symbol', 'Status', 'Reason/Cause', 'Order ID', 'Decision Key', 'TF', 'Kline Time', 'Zone Dev %', 'Max Dev %', 'Proposal'],
             $rows
         );
 
@@ -272,6 +287,36 @@ class InvestigateNoOrderCommand extends Command
             return $val;
         }
         return null;
+    }
+
+    private function fmtPct(?float $v): string
+    {
+        if ($v === null || !is_finite($v)) { return ''; }
+        return number_format($v * 100.0, 2) . '%';
+    }
+
+    private function buildZoneSkipProposal(?float $zoneDev, ?float $zoneMax): string
+    {
+        if ($zoneDev === null || $zoneMax === null || $zoneDev <= 0.0 || $zoneMax <= 0.0) {
+            return 'Check logs: zone_dev_pct/max missing';
+        }
+
+        $ratio = $zoneDev / max(1e-9, $zoneMax);
+
+        // Close to threshold: small relaxation or market-entry with cap
+        if ($ratio <= 1.05) {
+            $needed = max($zoneDev, $zoneMax * 1.02); // minimal safe bump
+            return sprintf('Near threshold: raise zone_max_deviation_pct to ~%.2f%% or allow market-entry with slippage cap (e.g. 20–25 bps); also consider 5m fallback.', $needed * 100.0);
+        }
+
+        // Moderately outside: consider fallback TF or temporary relaxation
+        if ($ratio <= 1.5) {
+            $needed = $zoneDev;
+            return sprintf('Moderate gap: test 5m execution fallback; if acceptable, temporarily set zone_max_deviation_pct to ~%.2f%%; else wait for price to re-enter zone.', $needed * 100.0);
+        }
+
+        // Far outside: do nothing risky
+        return 'Far outside zone: avoid relaxing; wait for price or review zone width/logic.';
     }
 
     /**

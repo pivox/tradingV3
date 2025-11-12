@@ -231,6 +231,14 @@ docker-compose exec trading-app-php php bin/console investigate:no-order --symbo
 
 # Fenêtre courte (30 minutes, prioritaire sur --since-hours)
 docker-compose exec trading-app-php php bin/console investigate:no-order --symbols=GLMUSDT --since-minutes=30
+
+# Alias et mode "watch" toutes les 2 minutes
+# Alias console: investigate:no et ino
+docker-compose exec trading-app-php php bin/console investigate:no --symbols=GLMUSDT --since-minutes=30
+docker-compose exec trading-app-php php bin/console ino --symbols=GLMUSDT --since-minutes=30
+
+# Script watch (boucle avec intervalle configurable, défaut 120s)
+docker-compose exec trading-app-php bash bin/investigate_no_order_watch.sh --symbols=GLMUSDT,VELODROMEUSDT --since-minutes=30 --interval=120
 ```
 
 La commande scanne les `var/log/positions-*.log` récents pour détecter:
