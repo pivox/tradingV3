@@ -40,6 +40,7 @@ final class MtfRunOrchestrator
         private readonly ?AccountProviderInterface $accountProvider = null,
         private readonly ?OrderProviderInterface $orderProvider = null,
         private readonly ?MtfSwitchRepository $mtfSwitchRepository = null,
+        private readonly ?\App\MtfValidator\Service\Persistence\RunSinkInterface $runSink = null,
     ) {}
 
     /**
@@ -60,6 +61,18 @@ final class MtfRunOrchestrator
             'symbols_count' => count($mtfRunDto->symbols),
             'dry_run' => $mtfRunDto->dryRun,
             'reason' => 'mtf_cycle_begin',
+        ]);
+
+        // Persist run start if sink available
+        $this->runSink?->onRunStart($runIdString, [
+            'dry_run' => $mtfRunDto->dryRun,
+            'force_run' => $mtfRunDto->forceRun,
+            'current_tf' => $mtfRunDto->currentTf,
+            'options' => [
+                'force_timeframe_check' => $mtfRunDto->forceTimeframeCheck,
+                'lock_per_symbol' => $mtfRunDto->lockPerSymbol,
+                'skip_context_validation' => $mtfRunDto->skipContextValidation,
+            ],
         ]);
 
         // Vérifier les commutateurs globaux
@@ -151,7 +164,11 @@ final class MtfRunOrchestrator
                     ]);
                 }
 
-                $results[$symbol] = $symbolResult->toArray();
+                $resultArray = $symbolResult->toArray();
+                $results[$symbol] = $resultArray;
+
+                // Persist per-symbol result
+                $this->runSink?->onSymbolResult($runIdString, $resultArray);
 
                 // Yield progress
                 yield [
@@ -185,6 +202,9 @@ final class MtfRunOrchestrator
                 'reason' => 'mtf_cycle_completed',
             ]);
 
+            // Ne plus yield FINAL dans results, mais le retourner séparément
+            // Persist final summary
+            $this->runSink?->onRunCompleted($runIdString, $summary->toArray(), $results);
             yield from $this->yieldFinalResult($summary, $results, $startTime, $runId);
 
         } finally {
@@ -260,9 +280,25 @@ final class MtfRunOrchestrator
         MtfRunDto $mtfRunDto
     ): RunSummaryDto {
         $executionTime = microtime(true) - $startTime;
-        $successful = count(array_filter($results, fn($r) => strtoupper($r['status'] ?? '') === 'SUCCESS'));
-        $failed = count(array_filter($results, fn($r) => strtoupper($r['status'] ?? '') === 'ERROR'));
-        $skipped = count(array_filter($results, fn($r) => strtoupper($r['status'] ?? '') === 'SKIPPED'));
+        // Comptages adaptés au schéma normalisé (COMPLETED/READY) tout en gardant compatibilité
+        $successful = count(array_filter($results, function ($r) {
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['COMPLETED', 'READY', 'SUCCESS'], true);
+        }));
+        $failed = count(array_filter($results, function ($r) {
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['ERROR', 'INVALID'], true);
+        }));
+        $skipped = count(array_filter($results, function ($r) {
+            // Nouveau: prendre en compte trading_decision.status=skipped
+            $td = $r['trading_decision']['status'] ?? null;
+            if (is_string($td) && strtolower($td) === 'skipped') {
+                return true;
+            }
+            // Compatibilité: anciens statuts
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['SKIPPED', 'GRACE_WINDOW'], true);
+        }));
 
         return new RunSummaryDto(
             runId: $runId->toString(),
@@ -325,20 +361,7 @@ final class MtfRunOrchestrator
 
     private function yieldFinalResult(RunSummaryDto $summary, array $results, float $startTime, UuidInterface $runId): \Generator
     {
-        yield [
-            'symbol' => 'FINAL',
-            'result' => $summary->toArray(),
-            'progress' => [
-                'current' => count($results),
-                'total' => count($results),
-                'percentage' => 100.0,
-                'symbol' => 'FINAL',
-                'status' => 'completed',
-                'execution_time' => round(microtime(true) - $startTime, 3),
-            ],
-        ];
-
-        // Yield le summary pour qu'il soit accessible via foreach
+        // Yield le summary pour qu'il soit accessible via foreach (sans FINAL dans results)
         yield ['summary' => $summary->toArray(), 'results' => $results];
     }
 
