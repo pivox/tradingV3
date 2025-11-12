@@ -19,7 +19,7 @@ RUN chmod +x /entrypoint.sh
 
 RUN chmod +x script.py
 
-ENV TEMPORAL_ADDRESS=temporal-grpc:7233 \
+ENV TEMPORAL_ADDRESS=temporal:7233 \
     TASK_QUEUE_NAME=cron_symfony_mtf_workers
 
 ENTRYPOINT ["/entrypoint.sh"]

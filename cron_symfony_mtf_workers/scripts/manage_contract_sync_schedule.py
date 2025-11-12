@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover - backward compatibility
     )
 
 
-TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal-grpc:7233")
+TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
 TEMPORAL_NAMESPACE = os.getenv("TEMPORAL_NAMESPACE", "default")
 TASK_QUEUE = os.getenv("TASK_QUEUE_NAME", "cron_symfony_mtf_workers")
 TIME_ZONE = os.getenv("TZ", "UTC")
@@ -153,4 +153,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

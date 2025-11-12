@@ -11,7 +11,7 @@ from activities.mtf_http import mtf_api_call
 from workflows.mtf_workers import CronSymfonyMtfWorkersWorkflow
 
 
-TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal-grpc:7233")
+TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
 TASK_QUEUE = os.getenv("TASK_QUEUE_NAME", "cron_symfony_mtf_workers")
 
 
