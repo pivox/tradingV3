@@ -103,6 +103,7 @@ services:
       - POSTGRES_SEEDS=postgresql
       - TEMPORAL_CLI_SHOW_STACKS=1
       - ENABLE_HTTP_API=true
+      - BIND_ON_IP=0.0.0.0
       - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/config/dynamicconfig/development.yaml
     expose:
       - "8080" # HTTP Gateway pour temporal-ui
@@ -132,7 +133,7 @@ services:
       temporal:
         condition: service_healthy
     environment:
-      - TEMPORAL_ADDRESS=temporal-grpc:7233
+      - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_UI_PORT=8080
       - TEMPORAL_UI_AUTH_ENABLED=false
       - TEMPORAL_CSRF_COOKIE_INSECURE=true
@@ -151,7 +152,7 @@ services:
     build: ./cron_symfony_mtf_workers
     container_name: cron_symfony_mtf_workers
     environment:
-      - TEMPORAL_ADDRESS=temporal-grpc:7233
+      - TEMPORAL_ADDRESS=temporal:7233
       - TASK_QUEUE_NAME=cron_symfony_mtf_workers
       - MTF_WORKERS_URL=http://trading-app-nginx:80/api/mtf/run
       - MTF_WORKERS_COUNT=8  # Ajusté pour 370 symboles (220 top + 150 mid) avec limites BitMart 12 req/2s
