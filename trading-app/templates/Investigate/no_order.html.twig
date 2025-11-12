@@ -112,7 +112,11 @@
       {{ parent() }}
       <script>
         $(function() {
-          $('#investigateTable').DataTable({
+          const selector = '#investigateTable';
+          if ($.fn.DataTable && $.fn.DataTable.isDataTable(selector)) {
+            $(selector).DataTable().clear().destroy();
+          }
+          $(selector).DataTable({
             pageLength: 25,
             order: [],
           });
@@ -123,4 +127,3 @@
     <div class="alert alert-info">Aucun résultat.</div>
   {% endif %}
 {% endblock %}
-
