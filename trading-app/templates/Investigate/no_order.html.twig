@@ -62,6 +62,25 @@
     <div class="alert alert-danger"><i class="bi bi-exclamation-triangle"></i> {{ error }}</div>
   {% endif %}
 
+  {% if debug.enabled %}
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-bug"></i> Debug</div>
+      <div class="card-body">
+        <div class="mb-2"><strong>Cmd:</strong> <code>{{ debug.cmd }}</code></div>
+        <div class="row">
+          <div class="col-md-6">
+            <label class="form-label">STDOUT</label>
+            <textarea class="form-control" rows="8" readonly>{{ debug.stdout }}</textarea>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">STDERR</label>
+            <textarea class="form-control" rows="8" readonly>{{ debug.stderr }}</textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
   {% if rows is defined and rows is iterable and rows|length > 0 %}
     <div class="card">
       <div class="card-body">

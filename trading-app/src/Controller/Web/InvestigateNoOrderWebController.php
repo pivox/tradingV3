@@ -29,6 +29,8 @@ final class InvestigateNoOrderWebController extends AbstractController
 
         $results = null;
         $error = null;
+        $stdout = null;
+        $stderr = null;
         $rows = [];
 
         if ($symbols !== '') {
@@ -50,19 +52,22 @@ final class InvestigateNoOrderWebController extends AbstractController
                     'SHELL_VERBOSITY' => '0',
                 ]);
                 $process->setTimeout($timeout);
-                $process->mustRun();
+                $process->run();
 
-                $output = $process->getOutput();
-                if ($output === '' && $process->getErrorOutput() !== '') {
-                    // Rien sur STDOUT mais STDERR non vide: exposer l'erreur
-                    throw new \RuntimeException(trim($process->getErrorOutput()));
+                $stdout = $process->getOutput();
+                $stderr = $process->getErrorOutput();
+                if (!$process->isSuccessful()) {
+                    $error = trim($stderr) !== '' ? trim($stderr) : sprintf('Commande échouée (code %d)', $process->getExitCode() ?? -1);
                 }
                 // Tolérer du bruit autour du JSON (ANSI, logs accidentels)
-                $jsonPayload = $this->extractJsonObject($output);
+                $jsonPayload = $this->extractJsonObject($stdout ?? '');
                 /** @var array<string, mixed>|null $decoded */
-                $decoded = json_decode($jsonPayload ?? $output, true);
+                $decoded = json_decode($jsonPayload ?? ($stdout ?? ''), true);
                 if (!is_array($decoded)) {
-                    throw new \RuntimeException('Sortie JSON invalide depuis la commande CLI');
+                    if ($error === null) {
+                        $error = 'Sortie JSON invalide depuis la commande CLI';
+                    }
+                    $decoded = [];
                 }
                 $results = $decoded;
 
@@ -124,6 +129,12 @@ final class InvestigateNoOrderWebController extends AbstractController
                 'timeout' => $timeout,
             ],
             'error' => $error,
+            'debug' => [
+                'enabled' => (bool)$request->query->get('debug', false),
+                'cmd' => isset($cmd) ? implode(' ', $cmd) : null,
+                'stdout' => $stdout,
+                'stderr' => $stderr,
+            ],
             'results' => $results,
             'rows' => $rows,
         ]);
