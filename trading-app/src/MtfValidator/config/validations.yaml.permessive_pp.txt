@@ -198,7 +198,6 @@ mtf_validation:
         - pullback_confirmed_ma9_21
         - pullback_confirmed_vwap
         - price_lte_ma21_plus_k_atr
-        - lev_bounds
 
     validation:
         start_from_timeframe: '4h'

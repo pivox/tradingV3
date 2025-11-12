@@ -197,7 +197,6 @@ mtf_validation:
     # Filtres globaux allégés pour augmenter le flux de signaux
     filters_mandatory:
         - rsi_lt_70: { rsi_lt_70_threshold: 80 }
-        - lev_bounds
 
     validation:
         start_from_timeframe: '4h'

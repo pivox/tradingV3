@@ -196,7 +196,6 @@ mtf_validation:
         - rsi_lt_70: { rsi_lt_70_threshold: 76 }
         - adx_min_for_trend_1h
         - pullback_confirmed_ma9_21
-        - lev_bounds
 
     validation:
         start_from_timeframe: '4h'
