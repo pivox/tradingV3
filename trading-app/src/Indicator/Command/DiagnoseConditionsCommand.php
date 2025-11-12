@@ -8,6 +8,9 @@ use App\Common\Enum\Timeframe as TimeframeEnum;
 use App\Contract\Indicator\IndicatorMainProviderInterface;
 use App\Indicator\Registry\ConditionRegistry;
 use App\Contract\Provider\MainProviderInterface;
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
+use App\Provider\Context\ExchangeContext;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -40,7 +43,9 @@ final class DiagnoseConditionsCommand extends Command
             ->addOption('side', null, InputOption::VALUE_OPTIONAL, 'long|short (optionnel)')
             ->addOption('limit', 'l', InputOption::VALUE_OPTIONAL, 'Nombre de klines à charger', 150)
             ->addOption('no-json', null, InputOption::VALUE_NONE, 'Ne pas afficher les klines au format JSON')
-            ->addOption('json-results', null, InputOption::VALUE_NONE, 'Afficher les résultats d\'évaluation au format JSON');
+            ->addOption('json-results', null, InputOption::VALUE_NONE, 'Afficher les résultats d\'évaluation au format JSON')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -72,8 +77,26 @@ final class DiagnoseConditionsCommand extends Command
             $io->listing($namesSide ?: ['<aucune>']);
         }
 
-        // Charge des klines et construit le contexte
-        $klineProvider = $this->mainProvider->getKlineProvider();
+        // Resolve context (default Bitmart/Perpetual) + charge des klines
+        $exchangeOpt = $input->getOption('exchange');
+        $marketTypeOpt = $input->getOption('market-type');
+        $exchange = Exchange::BITMART;
+        if (is_string($exchangeOpt) && $exchangeOpt !== '') {
+            $exchange = match (strtolower(trim($exchangeOpt))) {
+                'bitmart' => Exchange::BITMART,
+                default => Exchange::BITMART,
+            };
+        }
+        $marketType = MarketType::PERPETUAL;
+        if (is_string($marketTypeOpt) && $marketTypeOpt !== '') {
+            $marketType = match (strtolower(trim($marketTypeOpt))) {
+                'perpetual', 'perp', 'future', 'futures' => MarketType::PERPETUAL,
+                'spot' => MarketType::SPOT,
+                default => MarketType::PERPETUAL,
+            };
+        }
+        $context = new ExchangeContext($exchange, $marketType);
+        $klineProvider = $this->mainProvider->forContext($context)->getKlineProvider();
         $klines = $klineProvider->getKlines($symbol, $tfEnum, $limit);
         if (empty($klines)) {
             $io->warning('Aucune kline retournée pour ce couple.');

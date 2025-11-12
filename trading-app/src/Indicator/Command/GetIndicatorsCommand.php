@@ -6,6 +6,9 @@ namespace App\Indicator\Command;
 
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\MainProviderInterface;
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
+use App\Provider\Context\ExchangeContext;
 use App\Contract\Indicator\IndicatorMainProviderInterface;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -39,6 +42,8 @@ final class GetIndicatorsCommand extends Command
             ->addOption('conditions', 'c', InputOption::VALUE_OPTIONAL, 'Évaluer des conditions spécifiques (séparées par des virgules)')
             ->addOption('all-conditions', 'a', InputOption::VALUE_NONE, 'Évaluer toutes les conditions disponibles')
             ->addOption('format', 'f', InputOption::VALUE_OPTIONAL, 'Format de sortie (json, table)', 'table')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)')
         ;
     }
 
@@ -62,8 +67,26 @@ final class GetIndicatorsCommand extends Command
         $io->info("Récupération des klines pour {$symbol} sur {$timeframe->value}...");
 
         try {
-            // Récupération des klines via MainProvider
-            $klineProvider = $this->mainProvider->getKlineProvider();
+            // Résoudre le contexte (défaut Bitmart/Perpetual) et récupérer les klines
+            $exchangeOpt = $input->getOption('exchange');
+            $marketTypeOpt = $input->getOption('market-type');
+            $exchange = Exchange::BITMART;
+            if (is_string($exchangeOpt) && $exchangeOpt !== '') {
+                $exchange = match (strtolower(trim($exchangeOpt))) {
+                    'bitmart' => Exchange::BITMART,
+                    default => Exchange::BITMART,
+                };
+            }
+            $marketType = MarketType::PERPETUAL;
+            if (is_string($marketTypeOpt) && $marketTypeOpt !== '') {
+                $marketType = match (strtolower(trim($marketTypeOpt))) {
+                    'perpetual', 'perp', 'future', 'futures' => MarketType::PERPETUAL,
+                    'spot' => MarketType::SPOT,
+                    default => MarketType::PERPETUAL,
+                };
+            }
+            $context = new ExchangeContext($exchange, $marketType);
+            $klineProvider = $this->mainProvider->forContext($context)->getKlineProvider();
             $klines = $klineProvider->getKlines($symbol, $timeframe, $limit);
 
             if (empty($klines)) {

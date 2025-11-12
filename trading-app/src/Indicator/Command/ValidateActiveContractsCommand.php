@@ -9,6 +9,9 @@ use App\Contract\Indicator\IndicatorMainProviderInterface;
 use App\Provider\Repository\ContractRepository;
 use App\Contract\Provider\MainProviderInterface as LegacyMainProviderInterfaceAlias; // in case
 use App\Contract\Provider\MainProviderInterface;
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
+use App\Provider\Context\ExchangeContext;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -43,7 +46,9 @@ final class ValidateActiveContractsCommand extends Command
             ->addOption('limit', 'l', InputOption::VALUE_OPTIONAL, 'Nombre de klines à charger', 150)
             ->addOption('symbols', 's', InputOption::VALUE_OPTIONAL | InputOption::VALUE_IS_ARRAY, 'Filtre: symboles spécifiques (répéter l\'option)')
             ->addOption('side', null, InputOption::VALUE_OPTIONAL, 'long|short pour filtrer le “passé”')
-            ->addOption('compiled', null, InputOption::VALUE_NONE, 'Utiliser le registre compilé (CompilerPass) au lieu du TimeframeEvaluator');
+            ->addOption('compiled', null, InputOption::VALUE_NONE, 'Utiliser le registre compilé (CompilerPass) au lieu du TimeframeEvaluator')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -80,7 +85,27 @@ final class ValidateActiveContractsCommand extends Command
         $perSymbolValidate = [];
         $passedSymbols = [];
 
-        $klineProvider = $this->mainProvider->getKlineProvider();
+        // Resolve context (default Bitmart/Perpetual)
+        $exchangeOpt = $input->getOption('exchange');
+        $marketTypeOpt = $input->getOption('market-type');
+        $exchange = Exchange::BITMART;
+        if (is_string($exchangeOpt) && $exchangeOpt !== '') {
+            $exchange = match (strtolower(trim($exchangeOpt))) {
+                'bitmart' => Exchange::BITMART,
+                default => Exchange::BITMART,
+            };
+        }
+        $marketType = MarketType::PERPETUAL;
+        if (is_string($marketTypeOpt) && $marketTypeOpt !== '') {
+            $marketType = match (strtolower(trim($marketTypeOpt))) {
+                'perpetual', 'perp', 'future', 'futures' => MarketType::PERPETUAL,
+                'spot' => MarketType::SPOT,
+                default => MarketType::PERPETUAL,
+            };
+        }
+        $context = new ExchangeContext($exchange, $marketType);
+
+        $klineProvider = $this->mainProvider->forContext($context)->getKlineProvider();
         $engine = $this->indicatorMain->getEngine();
 
         foreach ($symbols as $symbol) {
