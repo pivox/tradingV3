@@ -40,15 +40,26 @@ final class InvestigateNoOrderWebController extends AbstractController
                     '--since-minutes=' . $sinceMinutes,
                     '--max-log-files=' . $maxLogFiles,
                     '--format=json',
+                    '--no-ansi',
+                    '--no-interaction',
                 ];
 
-                $process = new Process($cmd, $this->projectDir);
+                $process = new Process($cmd, $this->projectDir, [
+                    // Réduire bruit dans la sortie pour fiabiliser le JSON
+                    'SHELL_VERBOSITY' => '0',
+                ]);
                 $process->setTimeout(20);
                 $process->mustRun();
 
                 $output = $process->getOutput();
+                if ($output === '' && $process->getErrorOutput() !== '') {
+                    // Rien sur STDOUT mais STDERR non vide: exposer l'erreur
+                    throw new \RuntimeException(trim($process->getErrorOutput()));
+                }
+                // Tolérer du bruit autour du JSON (ANSI, logs accidentels)
+                $jsonPayload = $this->extractJsonObject($output);
                 /** @var array<string, mixed>|null $decoded */
-                $decoded = json_decode($output, true);
+                $decoded = json_decode($jsonPayload ?? $output, true);
                 if (!is_array($decoded)) {
                     throw new \RuntimeException('Sortie JSON invalide depuis la commande CLI');
                 }
@@ -96,6 +107,19 @@ final class InvestigateNoOrderWebController extends AbstractController
         ]);
     }
 
+    /**
+     * Extrait le premier objet JSON {} de la sortie si du bruit entoure la charge utile.
+     */
+    private function extractJsonObject(string $output): ?string
+    {
+        $start = strpos($output, '{');
+        if ($start === false) { return null; }
+        $end = strrpos($output, '}');
+        if ($end === false || $end <= $start) { return null; }
+        $candidate = substr($output, (int)$start, (int)($end - $start + 1));
+        return $candidate !== '' ? $candidate : null;
+    }
+    
     private function buildZoneSkipProposal(?float $zoneDev, ?float $zoneMax): string
     {
         if ($zoneDev === null || $zoneMax === null || $zoneDev <= 0.0 || $zoneMax <= 0.0) {
@@ -120,4 +144,3 @@ final class InvestigateNoOrderWebController extends AbstractController
         return 'Écart important: éviter de relâcher; attendre ou revoir la largeur de zone.';
     }
 }
-
