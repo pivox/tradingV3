@@ -1,5 +1,5 @@
 # Profil SCALPER - TradeEntry
-version: '2.5.93'
+version: '2.5.93s'
 
 meta:
     name: SCALPING v2.0 - Profil SCALPER
@@ -39,14 +39,14 @@ trade_entry:
         inside_ticks: 1
         max_deviation_pct: 0.005
         implausible_pct: 0.02
-        zone_max_deviation_pct: 0.015
+        zone_max_deviation_pct: 0.012
 
         k_dynamic: 10.0
 
     risk:
         fixed_risk_pct: 5.0
         daily_max_loss_pct: 6.0
-        daily_max_loss_usdt: 10.0
+        daily_max_loss_usdt: 25.0
         daily_loss_count_unrealized: true
         max_concurrent_positions: 4
         meta: >

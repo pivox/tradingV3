@@ -106,7 +106,7 @@ final class SymbolProcessor
                 symbol: $symbol,
                 status: $symbolResult['status'] ?? 'UNKNOWN',
                 executionTf: $symbolResult['execution_tf'] ?? null,
-                failedTimeframe: $symbolResult['failed_timeframe'] ?? null,
+                blockingTf: $symbolResult['blocking_tf'] ?? $symbolResult['failed_timeframe'] ?? null, // Support transition
                 signalSide: $symbolResult['signal_side'] ?? null,
                 tradingDecision: $symbolResult['trading_decision'] ?? null,
                 error: $symbolResult['error'] ?? null,
@@ -118,17 +118,20 @@ final class SymbolProcessor
             );
 
         } catch (\Throwable $e) {
+            $msg = (string) $e->getMessage();
+            $isDoctrineClosed = stripos($msg, 'entitymanager is closed') !== false;
             $this->mtfLogger->error('[Symbol Processor] Error processing symbol', [
                 'symbol' => $symbol,
                 'run_id' => $runId->toString(),
-                'error' => $e->getMessage()
+                'error' => $msg,
+                'doctrine_entity_manager_closed' => $isDoctrineClosed,
             ]);
             $this->mtfLogger->error('order_journey.symbol_processor.failed', [
                 'symbol' => $symbol,
                 'run_id' => $runId->toString(),
                 'decision_key' => $decisionKey,
-                'reason' => 'exception_during_symbol_processing',
-                'error' => $e->getMessage(),
+                'reason' => $isDoctrineClosed ? 'doctrine_entity_manager_closed' : 'exception_during_symbol_processing',
+                'error' => $msg,
             ]);
 
             return new SymbolResultDto(

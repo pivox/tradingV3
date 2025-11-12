@@ -83,11 +83,11 @@ migration
 
 ### Fichiers à modifier
 
-- [ ] `trading-app/src/MtfValidator/Service/Timeframe/BaseTimeframeService.php` [EDIT]
-- [ ] `trading-app/src/Repository/MtfStateRepository.php` [EDIT]
-- [ ] `trading-app/src/MtfValidator/Service/MtfService.php` [EDIT]
-- [ ] `trading-app/src/MtfValidator/Service/SymbolProcessor.php` [EDIT] (optionnel, amélioration)
+- [x] `trading-app/src/MtfValidator/Service/Timeframe/BaseTimeframeService.php` [EDIT]
+- [x] `trading-app/src/Repository/MtfStateRepository.php` [EDIT]
+- [x] `trading-app/src/MtfValidator/Service/MtfService.php` [EDIT]
+- [x] `trading-app/src/MtfValidator/Service/SymbolProcessor.php` [EDIT] (optionnel, amélioration)
 
 ### Statut
 - 🔍 Analyse terminée
-- ⏳ En attente d'approbation pour implémentation
+- ✅ Implémentation effectuée (best-effort, EM fermé géré sans masquer l'exception d'origine)

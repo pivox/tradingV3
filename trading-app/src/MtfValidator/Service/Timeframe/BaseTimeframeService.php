@@ -280,7 +280,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
             return [
                 'status' => 'INVALID',
                 'reason' => "ALIGNMENT_{$timeframe->value}_NE_{$parentTimeframe}",
-                'failed_timeframe' => $timeframe->value,
+                'blocking_tf' => $timeframe->value,
                 'conditions_long' => $currentResult['conditions_long'] ?? [],
                 'conditions_short' => $currentResult['conditions_short'] ?? [],
                 'failed_conditions_long' => $currentResult['failed_conditions_long'] ?? [],
@@ -339,9 +339,42 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
             // best effort
         }
 
-        // Persister l'entité via l'EntityManager
-        $em = $this->mtfAuditRepository->getEntityManager();
-        $em->persist($audit);
-        // Note: le flush sera fait à la fin du traitement du symbole
+        // Persister l'entité via l'EntityManager (best-effort)
+        try {
+            $em = $this->mtfAuditRepository->getEntityManager();
+            $isOpen = true;
+            try {
+                if (method_exists($em, 'isOpen')) {
+                    $isOpen = (bool) $em->isOpen();
+                }
+            } catch (\Throwable) {
+                // si la méthode n'est pas dispo ou jette, on considère ouvert
+                $isOpen = true;
+            }
+
+            if (!$isOpen) {
+                // Eviter de déclencher une nouvelle erreur qui masquerait la cause racine
+                $this->logger->warning('[MTF] EntityManager is closed; skipping audit persist', [
+                    'symbol' => $symbol,
+                    'step' => $step,
+                    'timeframe' => $context['timeframe'] ?? null,
+                ]);
+                return;
+            }
+
+            $em->persist($audit);
+            // Note: le flush sera fait à la fin du traitement du symbole
+        } catch (\Throwable $persistEx) {
+            // Ne pas remonter: l'audit est best-effort, on loggue seulement
+            try {
+                $this->logger->warning('[MTF] Failed to persist audit (best-effort)', [
+                    'symbol' => $symbol,
+                    'step' => $step,
+                    'error' => $persistEx->getMessage(),
+                ]);
+            } catch (\Throwable) {
+                // ignore total failure to log
+            }
+        }
     }
 }

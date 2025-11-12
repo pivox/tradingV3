@@ -95,12 +95,45 @@ class MtfAuditSubscriber implements EventSubscriberInterface
         }
 
         try {
+            $em = $this->entityManager;
+            $isOpen = true;
+            try {
+                if (method_exists($em, 'isOpen')) {
+                    $isOpen = (bool) $em->isOpen();
+                }
+            } catch (\Throwable) {
+                $isOpen = true;
+            }
+
+            if (!$isOpen) {
+                $this->logger->warning('[MTF Audit] EntityManager closed; dropping audit buffer (best-effort)', [
+                    'buffer_count' => count($this->buffer),
+                ]);
+                $this->buffer = [];
+                return;
+            }
+
             foreach ($this->buffer as $audit) {
                 if ($audit instanceof MtfAudit) {
-                    $this->entityManager->persist($audit);
+                    try {
+                        $em->persist($audit);
+                    } catch (\Throwable $persistEx) {
+                        $this->logger->warning('[MTF Audit] Failed to persist audit (skipping)', [
+                            'error' => $persistEx->getMessage(),
+                        ]);
+                    }
                 }
             }
-            $this->entityManager->flush();
+            try {
+                $em->flush();
+            } catch (\Throwable $flushEx) {
+                $this->logger->warning('[MTF Audit] Failed to flush audits (best-effort)', [
+                    'error' => $flushEx->getMessage(),
+                ]);
+                // Drop buffer to avoid memory growth on long processes
+                $this->buffer = [];
+                return;
+            }
 
             // Détacher pour éviter l'accumulation en mémoire lors des longs processus
             foreach ($this->buffer as $audit) {
@@ -121,5 +154,4 @@ class MtfAuditSubscriber implements EventSubscriberInterface
         }
     }
 }
-
 

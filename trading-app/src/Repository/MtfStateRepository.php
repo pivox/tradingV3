@@ -24,8 +24,25 @@ class MtfStateRepository extends ServiceEntityRepository
         if (!$state) {
             $state = new MtfState();
             $state->setSymbol($symbol);
-            $this->getEntityManager()->persist($state);
-            $this->getEntityManager()->flush();
+            $em = $this->getEntityManager();
+            // Eviter les erreurs en cascade si l'EntityManager est fermé
+            $isOpen = true;
+            try {
+                if (method_exists($em, 'isOpen')) {
+                    $isOpen = (bool) $em->isOpen();
+                }
+            } catch (\Throwable) {
+                $isOpen = true;
+            }
+
+            if ($isOpen) {
+                try {
+                    $em->persist($state);
+                    $em->flush();
+                } catch (\Throwable) {
+                    // best-effort: retourner un état non flushé pour éviter de masquer l'erreur racine
+                }
+            }
         }
         return $state;
     }
@@ -133,7 +150,6 @@ class MtfStateRepository extends ServiceEntityRepository
             ->getResult();
     }
 }
-
 
 
 

@@ -471,27 +471,39 @@ final class MtfService
             'results' => $results
         ]);
 
-        // Yield final summary
-        yield [
-            'symbol' => 'FINAL',
-            'result' => [
-                'status' => 'COMPLETED',
-                'total_symbols' => $totalSymbols,
-                'processed_symbols' => count($results),
-                'successful_symbols' => count(array_filter($results, fn($r) => ($r['status'] ?? '') === 'READY')),
-                'error_symbols' => count(array_filter($results, fn($r) => ($r['status'] ?? '') === 'ERROR')),
-                'skipped_symbols' => count(array_filter($results, fn($r) => ($r['status'] ?? '') === 'SKIPPED')),
-            ],
-            'progress' => [
-                'current' => $totalSymbols,
-                'total' => $totalSymbols,
-                'percentage' => 100.0,
-                'symbol' => 'FINAL',
-                'status' => 'COMPLETED',
-            ],
+        // Construire un résumé harmonisé (sans entrée synthétique 'FINAL')
+        $processedCount = count($results);
+        $successfulCount = count(array_filter($results, function ($r) {
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['SUCCESS', 'COMPLETED', 'READY'], true);
+        }));
+        $failedCount = count(array_filter($results, function ($r) {
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['ERROR', 'INVALID'], true);
+        }));
+        $skippedCount = count(array_filter($results, function ($r) {
+            $td = $r['trading_decision']['status'] ?? null;
+            if (is_string($td) && strtolower($td) === 'skipped') { return true; }
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['SKIPPED', 'GRACE_WINDOW'], true);
+        }));
+
+        $summary = [
+            'status' => 'completed',
+            'total_symbols' => $totalSymbols,
+            'processed_symbols' => $processedCount,
+            'successful_symbols' => $successfulCount,
+            'error_symbols' => $failedCount,
+            'skipped_symbols' => $skippedCount,
         ];
 
-        return $results;
+        // Yield le résumé final dans un bloc dédié
+        yield [
+            'summary' => $summary,
+            'results' => $results,
+        ];
+
+        return ['summary' => $summary, 'results' => $results];
     }
 
     /**
@@ -506,7 +518,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         if (!$forceRun && !$this->mtfSwitchRepository->canProcessSymbol($symbol)) {
             $this->logger->debug('[MTF] Symbol kill switch is OFF', ['symbol' => $symbol, 'force_run' => $forceRun]);
             $this->auditStep($runId, $symbol, 'KILL_SWITCH_OFF', 'Symbol kill switch is OFF');
-            return ['status' => 'SKIPPED', 'reason' => 'Symbol kill switch OFF', 'failed_timeframe' => 'symbol'];
+            return ['status' => 'SKIPPED', 'reason' => 'Symbol kill switch OFF', 'blocking_tf' => 'symbol'];
         }
 
         $state = $this->mtfStateRepository->getOrCreateForSymbol($symbol);
@@ -540,20 +552,45 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 // best-effort
             }
             if ($this->isGraceWindowResult($result)) {
-                return $result + ['failed_timeframe' => $currentTf];
+                return $result + ['blocking_tf' => $currentTf];
             }
 
             if (($result['status'] ?? null) !== 'VALID') {
                 $this->auditStep($runId, $symbol, strtoupper($currentTf) . '_VALIDATION_FAILED', $result['reason'] ?? "$currentTf validation failed", [
                     'from_cache' => (bool)($result['from_cache'] ?? false),
                 ]);
-                return $result + ['failed_timeframe' => $currentTf];
+                return $result + ['blocking_tf' => $currentTf];
             }
 
             // Mettre à jour l'état pour le timeframe spécifique
             $timeframeService->updateState($symbol, $result);
 
-            $this->mtfStateRepository->getEntityManager()->flush();
+            // Best-effort: protéger le flush en cas d'EntityManager fermé
+            try {
+                $em = $this->mtfStateRepository->getEntityManager();
+                $isOpen = true;
+                try {
+                    if (method_exists($em, 'isOpen')) {
+                        $isOpen = (bool) $em->isOpen();
+                    }
+                } catch (\Throwable) {
+                    $isOpen = true;
+                }
+                if ($isOpen) {
+                    $em->flush();
+                } else {
+                    $this->logger->warning('[MTF] EntityManager closed during single TF flush; skipping', [
+                        'symbol' => $symbol,
+                        'timeframe' => $currentTf,
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('[MTF] Failed to flush state after single TF update (best-effort)', [
+                    'symbol' => $symbol,
+                    'timeframe' => $currentTf,
+                    'error' => $e->getMessage(),
+                ]);
+            }
 
             return [
                 'status' => 'READY',
@@ -629,7 +666,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             // Persister systématiquement un snapshot 4h (même en INVALID)
             $this->persistIndicatorSnapshot($symbol, '4h', $result4h);
             if ($this->isGraceWindowResult($result4h)) {
-                return $result4h + ['failed_timeframe' => '4h'];
+                return $result4h + ['blocking_tf' => '4h'];
             }
 
             if (($result4h['status'] ?? null) !== 'VALID') {
@@ -646,7 +683,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'severity' => 2,
                     'from_cache' => (bool)($result4h['from_cache'] ?? false),
                 ]);
-                return $result4h + ['failed_timeframe' => '4h'];
+                return $result4h + ['blocking_tf' => '4h'];
             }
             $this->timeframe4hService->updateState($symbol, $result4h);
         }
@@ -698,7 +735,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             // Persister systématiquement un snapshot 1h
             $this->persistIndicatorSnapshot($symbol, '1h', $result1h);
             if ($this->isGraceWindowResult($result1h)) {
-                return $result1h + ['failed_timeframe' => '1h'];
+                return $result1h + ['blocking_tf' => '1h'];
             }
 
             if (($result1h['status'] ?? null) !== 'VALID') {
@@ -716,7 +753,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'severity' => 2,
                     'from_cache' => (bool)($result1h['from_cache'] ?? false),
                 ]);
-                return $result1h + ['failed_timeframe' => '1h'];
+                return $result1h + ['blocking_tf' => '1h'];
             }
             if ($include4h) {
                 // Règle: 1h doit matcher 4h si 4h inclus
@@ -787,7 +824,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             // Persister systématiquement un snapshot 15m
             $this->persistIndicatorSnapshot($symbol, '15m', $result15m);
             if ($this->isGraceWindowResult($result15m)) {
-                return $result15m + ['failed_timeframe' => '15m'];
+                return $result15m + ['blocking_tf' => '15m'];
             }
 
             if (($result15m['status'] ?? null) !== 'VALID') {
@@ -809,7 +846,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cfg = $activeConfig->getConfig();
                 $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
                 if (!($allowSkip && ($include5m ?? false))) {
-                    return $result15m + ['failed_timeframe' => '15m'];
+                    return $result15m + ['blocking_tf' => '15m'];
                 }
                 $this->logger->info('[MTF] 15m invalid but allow_skip_lower_tf=true, continue with 5m', ['symbol' => $symbol]);
             }
@@ -895,7 +932,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             // Persister systématiquement un snapshot 5m (après calcul ATR)
             $this->persistIndicatorSnapshot($symbol, '5m', $result5m);
             if ($this->isGraceWindowResult($result5m)) {
-                return $result5m + ['failed_timeframe' => '5m'];
+                return $result5m + ['blocking_tf' => '5m'];
             }
 
             if (($result5m['status'] ?? null) !== 'VALID') {
@@ -916,7 +953,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cfg = $activeConfig->getConfig();
                 $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
                 if (!($allowSkip && ($include1m ?? false))) {
-                    return $result5m + ['failed_timeframe' => '5m'];
+                    return $result5m + ['blocking_tf' => '5m'];
                 }
                 $this->logger->info('[MTF] 5m invalid but allow_skip_lower_tf=true, continue with 1m', ['symbol' => $symbol]);
             }
@@ -1002,7 +1039,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             // Persister systématiquement un snapshot 1m (après calcul ATR)
             $this->persistIndicatorSnapshot($symbol, '1m', $result1m);
             if ($this->isGraceWindowResult($result1m)) {
-                return $result1m + ['failed_timeframe' => '1m'];
+                return $result1m + ['blocking_tf' => '1m'];
             }
 
             if (($result1m['status'] ?? null) !== 'VALID') {
@@ -1019,7 +1056,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'severity' => 2,
                     'from_cache' => (bool)($result1m['from_cache'] ?? false),
                 ]);
-                return $result1m + ['failed_timeframe' => '1m'];
+                return $result1m + ['blocking_tf' => '1m'];
             }
 
             // Log dédié après validation 1m (positions_flow)
@@ -1050,8 +1087,30 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $this->timeframe1mService->updateState($symbol, $result1m);
         }
 
-        // Sauvegarder l'état
-        $this->mtfStateRepository->getEntityManager()->flush();
+        // Sauvegarder l'état (best-effort)
+        try {
+            $em = $this->mtfStateRepository->getEntityManager();
+            $isOpen = true;
+            try {
+                if (method_exists($em, 'isOpen')) {
+                    $isOpen = (bool) $em->isOpen();
+                }
+            } catch (\Throwable) {
+                $isOpen = true;
+            }
+            if ($isOpen) {
+                $em->flush();
+            } else {
+                $this->logger->warning('[MTF] EntityManager closed during final state flush; skipping', [
+                    'symbol' => $symbol,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('[MTF] Failed to flush final state (best-effort)', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         // Vérification stricte de la chaîne complète: tous les TF inclus doivent être VALID
         // et leurs sides doivent être identiques (LONG ou SHORT), sinon statut INVALID
@@ -1069,7 +1128,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $this->logger->info('[MTF] Chain invalid: timeframe not VALID', ['symbol' => $symbol, 'tf' => $tfKey, 'status' => $status]);
                 return [
                     'status' => 'INVALID',
-                    'failed_timeframe' => $tfKey,
+                    'blocking_tf' => $tfKey,
                     'reason' => 'CHAIN_NOT_VALIDATED',
                 ];
             }
@@ -1078,7 +1137,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $this->logger->info('[MTF] Chain invalid: side NONE', ['symbol' => $symbol, 'tf' => $tfKey]);
                 return [
                     'status' => 'INVALID',
-                    'failed_timeframe' => $tfKey,
+                    'blocking_tf' => $tfKey,
                     'reason' => 'CHAIN_SIDE_NONE',
                 ];
             }
@@ -1088,7 +1147,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $this->logger->info('[MTF] Chain invalid: side mismatch', ['symbol' => $symbol, 'tf' => $tfKey, 'expected' => $firstSide, 'actual' => $side]);
                 return [
                     'status' => 'INVALID',
-                    'failed_timeframe' => $tfKey,
+                    'blocking_tf' => $tfKey,
                     'reason' => 'CHAIN_SIDE_MISMATCH',
                 ];
             }
@@ -1169,7 +1228,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 'atr' => $selectedAtr,
                 'indicator_context' => $selectedContext,
                 'execution_tf' => $currentTf,
-                'failed_timeframe' => 'cache_warmup',
+                'blocking_tf' => 'cache_warmup',
                 'reason' => 'CACHE_WARMUP',
             ];
         }

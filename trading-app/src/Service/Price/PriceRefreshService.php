@@ -34,7 +34,32 @@ final class PriceRefreshService
             $contract = $this->contractRepository->findBySymbol($symbol);
             if ($contract) {
                 $contract->setLastPrice((string) $price);
-                $this->contractRepository->getEntityManager()->flush();
+                // Best-effort flush with EM state check
+                try {
+                    $em = $this->contractRepository->getEntityManager();
+                    $isOpen = true;
+                    try {
+                        if (method_exists($em, 'isOpen')) {
+                            $isOpen = (bool) $em->isOpen();
+                        }
+                    } catch (\Throwable) {
+                        $isOpen = true;
+                    }
+                    if ($isOpen) {
+                        $em->flush();
+                    } else {
+                        $this->logger->warning('[PriceRefresh] EntityManager closed; skip flush', [
+                            'symbol' => $symbol,
+                        ]);
+                        return false;
+                    }
+                } catch (\Throwable $e) {
+                    $this->logger->warning('[PriceRefresh] Failed to flush price update', [
+                        'symbol' => $symbol,
+                        'error' => $e->getMessage()
+                    ]);
+                    return false;
+                }
 
                 $this->logger->info('[PriceRefresh] Price updated', [
                     'symbol' => $symbol,

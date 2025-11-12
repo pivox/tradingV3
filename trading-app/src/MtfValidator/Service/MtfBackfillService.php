@@ -224,10 +224,58 @@ final class MtfBackfillService
             $kline->setVolume($klineDto->volume);
             $kline->setSource($klineDto->source);
 
-            $this->klineRepository->getEntityManager()->persist($kline);
+            // Best-effort persist
+            try {
+                $em = $this->klineRepository->getEntityManager();
+                $isOpen = true;
+                try {
+                    if (method_exists($em, 'isOpen')) {
+                        $isOpen = (bool) $em->isOpen();
+                    }
+                } catch (\Throwable) {
+                    $isOpen = true;
+                }
+                if ($isOpen) {
+                    $em->persist($kline);
+                } else {
+                    $this->logger->warning('[Backfill] EntityManager closed; skip persist', [
+                        'symbol' => $klineDto->symbol,
+                        'timeframe' => $klineDto->timeframe->value,
+                        'open_time' => $klineDto->openTime->format('Y-m-d H:i:s'),
+                    ]);
+                    return; // cannot continue safely
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('[Backfill] Failed to persist new kline', [
+                    'symbol' => $klineDto->symbol,
+                    'timeframe' => $klineDto->timeframe->value,
+                    'open_time' => $klineDto->openTime->format('Y-m-d H:i:s'),
+                    'error' => $e->getMessage(),
+                ]);
+                return; // cannot continue safely
+            }
         }
-
-        $this->klineRepository->getEntityManager()->flush();
+        // Best-effort flush
+        try {
+            $em = $this->klineRepository->getEntityManager();
+            $isOpen = true;
+            try {
+                if (method_exists($em, 'isOpen')) {
+                    $isOpen = (bool) $em->isOpen();
+                }
+            } catch (\Throwable) {
+                $isOpen = true;
+            }
+            if ($isOpen) {
+                $em->flush();
+            } else {
+                $this->logger->warning('[Backfill] EntityManager closed; skip flush');
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('[Backfill] Failed to flush kline upsert', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -316,5 +364,4 @@ final class MtfBackfillService
         return $ranges;
     }
 }
-
 

@@ -45,6 +45,7 @@ class MtfController extends AbstractController
         private readonly MainProviderInterface $mainProvider,
         #[Autowire('%kernel.project_dir%')]
         private readonly string $projectDir,
+        private readonly ?\App\MtfValidator\Service\Persistence\RunSinkInterface $runSink = null,
     ) {
     }
 
@@ -668,7 +669,7 @@ class MtfController extends AbstractController
 
             $status = empty($result['errors']) ? 'success' : 'partial_success';
 
-            // Calculer un résumé par TF à partir des résultats (failed_timeframe > execution_tf > N/A)
+            // Calculer un résumé par TF à partir des résultats (blocking_tf > execution_tf > N/A)
             $summaryByTf = $this->buildSummaryByTimeframe($result['results'] ?? []);
 
             // Extraire les symboles rejetés (tous les statuts non-SUCCESS)
@@ -688,13 +689,13 @@ class MtfController extends AbstractController
                 
                 $resultStatus = strtoupper((string)($symbolResult['status'] ?? ''));
                 
-                // Collecter les rejetés (tous les statuts non-SUCCESS)
-                if ($resultStatus !== 'SUCCESS') {
+                // Collecter les rejetés (exclure SUCCESS/COMPLETED/READY)
+                if (!in_array($resultStatus, ['SUCCESS', 'COMPLETED', 'READY'], true)) {
                     $rejectedBy[] = $symbol;
                 }
                 
-                // Collecter les derniers validés (SUCCESS uniquement)
-                if ($resultStatus === 'SUCCESS') {
+                // Collecter les derniers validés (SUCCESS/COMPLETED uniquement)
+                if ($resultStatus === 'SUCCESS' || $resultStatus === 'COMPLETED') {
                     $executionTf = $symbolResult['execution_tf'] ?? null;
                     $signalSide = $symbolResult['signal_side'] ?? null;
                     
@@ -722,6 +723,9 @@ class MtfController extends AbstractController
             $ordersPlaced = OrdersExtractor::extractPlacedOrders($results);
             $ordersCount = OrdersExtractor::countOrdersByStatus($results);
             
+            // Extraire le summary depuis result (qui vient du generator)
+            $runSummary = $result['summary'] ?? [];
+            
             $this->logger->info('[MTF Controller] Performance Analysis', [
                 'total_api_time' => round($apiTotalTime, 3),
                 'symbols_count' => count($symbols),
@@ -730,12 +734,20 @@ class MtfController extends AbstractController
                 'orders_placed_count' => $ordersCount,
             ]);
 
+            // Persister les métriques si un sink est disponible
+            try {
+                if (is_array($runSummary) && isset($runSummary['run_id']) && is_string($runSummary['run_id'])) {
+                    $this->runSink?->onMetrics($runSummary['run_id'], $performanceReport);
+                }
+            } catch (\Throwable) {}
+
+            // Restructurer la réponse : results → symbols, summary → run
             return $this->json([
                 'status' => $status,
                 'message' => 'MTF run completed',
                 'data' => [
-                    'summary' => $result['summary'] ?? [],
-                    'results' => $results,
+                    'run' => $runSummary,
+                    'symbols' => $results,
                     'errors' => $result['errors'] ?? [],
                     'workers' => $workers,
                     'summary_by_tf' => $summaryByTf,
@@ -770,7 +782,7 @@ class MtfController extends AbstractController
         $groups = [];
         foreach ($results as $symbol => $info) {
             if (!is_array($info)) { continue; }
-            $lastTf = $info['failed_timeframe'] ?? ($info['execution_tf'] ?? null);
+            $lastTf = $info['blocking_tf'] ?? $info['failed_timeframe'] ?? ($info['execution_tf'] ?? null); // Support transition
             $key = is_string($lastTf) && $lastTf !== '' ? $lastTf : 'N/A';
             if (!isset($groups[$key])) { $groups[$key] = []; }
             $groups[$key][] = (string)$symbol;
@@ -993,9 +1005,20 @@ class MtfController extends AbstractController
         $profiler->increment('controller', 'polling_count', 0, null, null, ['count' => $pollingCount]);
 
         $processed = count($results);
-        $successCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'SUCCESS'));
-        $failedCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'ERROR'));
-        $skippedCount = count(array_filter($results, fn($r) => strtoupper((string)($r['status'] ?? '')) === 'SKIPPED'));
+        $successCount = count(array_filter($results, function ($r) {
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['SUCCESS', 'COMPLETED', 'READY'], true);
+        }));
+        $failedCount = count(array_filter($results, function ($r) {
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['ERROR', 'INVALID'], true);
+        }));
+        $skippedCount = count(array_filter($results, function ($r) {
+            $td = $r['trading_decision']['status'] ?? null;
+            if (is_string($td) && strtolower($td) === 'skipped') { return true; }
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['SKIPPED', 'GRACE_WINDOW'], true);
+        }));
 
         $totalExecutionTime = microtime(true) - $startedAt;
         $summary = [
