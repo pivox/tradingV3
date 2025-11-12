@@ -3,9 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Service;
 
-use App\Config\IndicatorConfig;
-use App\Config\SignalConfig;
-use App\Config\TradeEntryConfig;
+use App\Config\{IndicatorConfig, SignalConfig, TradeEntryConfig, TradeEntryConfigProvider};
 use App\Contract\Provider\MainProviderInterface;
 use App\Entity\Position;
 use App\Repository\PositionRepository;
@@ -32,10 +30,10 @@ final class TpSlTwoTargetsService
         private readonly TakeProfitCalculator $tpc,
         private readonly MainProviderInterface $providers,
         private readonly PositionRepository $positions,
-        private readonly TradeEntryConfig $tradeEntryConfig,
+        private readonly TradeEntryConfigProvider $configProvider,
+        private readonly TradeEntryConfig $defaultConfig, // Fallback si mode non fourni
         private readonly IndicatorConfig $indicatorConfig,
         private readonly SignalConfig $signalConfig,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         private readonly ?TpSplitResolver $tpSplitResolver = null,
         private readonly ?IndicatorProviderInterface $indicatorProvider = null,
@@ -45,9 +43,10 @@ final class TpSlTwoTargetsService
     /**
      * Calcule SL + TP1/TP2 (TP2 basé sur R2/S2), annule les ordres existants (SL si différent, TP) et soumet 2 TP.
      *
+     * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
      * @return array{sl: float, tp1: float, tp2: float, submitted: array<int,array{order_id:string,price:float,size:int,type:string,side:string}>, cancelled: array<int,string>}
      */
-    public function __invoke(TpSlTwoTargetsRequest $req, ?string $decisionKey = null): array
+    public function __invoke(TpSlTwoTargetsRequest $req, ?string $decisionKey = null, ?string $mode = null): array
     {
         $symbol = strtoupper($req->symbol);
 
@@ -83,7 +82,7 @@ final class TpSlTwoTargetsService
                             if ($size === null) {
                                 $size = (int)max(0, (int)$posDto->size->toFloat());
                             }
-                            $this->journeyLogger->debug('order_journey.tp2sl.position_found', [
+                            $this->positionsLogger->debug('tp2sl.position_found', [
                                 'symbol' => $symbol,
                                 'side' => $targetSideValue,
                                 'entry_price' => $entryPrice,
@@ -94,7 +93,7 @@ final class TpSlTwoTargetsService
                         }
                     }
                 } catch (\Throwable $e) {
-                    $this->journeyLogger->warning('order_journey.tp2sl.fetch_position_failed', [
+                    $this->positionsLogger->warning('tp2sl.fetch_position_failed', [
                         'symbol' => $symbol,
                         'error' => $e->getMessage(),
                         'reason' => 'fetch_from_exchange_failed',
@@ -121,7 +120,9 @@ final class TpSlTwoTargetsService
         }
 
         // 3) Calcul SL (priorité pivot), TP1 (mécanisme actuel), TP2 (R2/S2)
-        $defaults = $this->tradeEntryConfig->getDefaults();
+        // Charger la config selon le mode (même mécanisme que validations.{mode}.yaml)
+        $config = $this->getConfigForMode($mode);
+        $defaults = $config->getDefaults();
         $riskPctDefault = (float)($defaults['risk_pct_percent'] ?? 2.0);
         $riskPct = $riskPctDefault > 1.0 ? $riskPctDefault / 100.0 : $riskPctDefault;
         $initMargin = (float)($defaults['initial_margin_usdt'] ?? 100.0);
@@ -234,7 +235,7 @@ final class TpSlTwoTargetsService
             if ($nextTp1 !== null && $nextTp1 > $currentPrice) {
                 // Utiliser directement ce niveau R comme TP1
                 $tp1 = $nextTp1;
-                $this->journeyLogger->info('order_journey.tp2sl.tp1_adjusted', [
+                $this->positionsLogger->info('tp2sl.tp1_adjusted', [
                     'symbol' => $symbol,
                     'original_tp1' => $tp1Original,
                     'adjusted_tp1' => $tp1,
@@ -245,7 +246,7 @@ final class TpSlTwoTargetsService
                 ]);
             } else {
                 // Fallback: si aucun R valide trouvé jusqu'à r5, forcer au-dessus du prix actuel
-                $this->journeyLogger->warning('order_journey.tp2sl.tp1_no_pivot_found', [
+                $this->positionsLogger->warning('tp2sl.tp1_no_pivot_found', [
                     'symbol' => $symbol,
                     'original_tp1' => $tp1Original,
                     'current_price' => $currentPrice,
@@ -285,7 +286,7 @@ final class TpSlTwoTargetsService
             if ($nextTp1 !== null && $nextTp1 < $currentPrice) {
                 // Utiliser directement ce niveau S comme TP1
                 $tp1 = $nextTp1;
-                $this->journeyLogger->info('order_journey.tp2sl.tp1_adjusted', [
+                $this->positionsLogger->info('tp2sl.tp1_adjusted', [
                     'symbol' => $symbol,
                     'original_tp1' => $tp1Original,
                     'adjusted_tp1' => $tp1,
@@ -296,7 +297,7 @@ final class TpSlTwoTargetsService
                 ]);
             } else {
                 // Fallback: si aucun S valide trouvé jusqu'à s5, forcer en dessous du prix actuel
-                $this->journeyLogger->warning('order_journey.tp2sl.tp1_no_pivot_found', [
+                $this->positionsLogger->warning('tp2sl.tp1_no_pivot_found', [
                     'symbol' => $symbol,
                     'original_tp1' => $tp1Original,
                     'current_price' => $currentPrice,
@@ -308,7 +309,7 @@ final class TpSlTwoTargetsService
 
         // Vérification finale absolue pour garantir la cohérence
         if ($req->side === EntrySide::Long && $tp1 <= $currentPrice) {
-            $this->journeyLogger->warning('order_journey.tp2sl.tp1_validation_failed', [
+            $this->positionsLogger->warning('tp2sl.tp1_validation_failed', [
                 'symbol' => $symbol,
                 'tp1' => $tp1,
                 'current_price' => $currentPrice,
@@ -328,7 +329,7 @@ final class TpSlTwoTargetsService
                 $tp1 = \App\TradeEntry\Pricing\TickQuantizer::quantizeUp($currentPrice + $tick * 10, $precision);
             }
         } elseif ($req->side === EntrySide::Short && $tp1 >= $currentPrice) {
-            $this->journeyLogger->warning('order_journey.tp2sl.tp1_validation_failed', [
+            $this->positionsLogger->warning('tp2sl.tp1_validation_failed', [
                 'symbol' => $symbol,
                 'tp1' => $tp1,
                 'current_price' => $currentPrice,
@@ -435,7 +436,7 @@ final class TpSlTwoTargetsService
                 if ($levelWithBuffer > $tp1 + $minDiffFromTp1) {
                     $tp2 = $levelWithBuffer;
                     $tp2Found = true;
-                    $this->journeyLogger->debug('order_journey.tp2sl.tp2_selected', [
+                    $this->positionsLogger->debug('tp2sl.tp2_selected', [
                         'symbol' => $symbol,
                         'tp1' => $tp1,
                         'tp2' => $tp2,
@@ -450,7 +451,7 @@ final class TpSlTwoTargetsService
                 if ($levelWithBuffer < $tp1 - $minDiffFromTp1) {
                     $tp2 = $levelWithBuffer;
                     $tp2Found = true;
-                    $this->journeyLogger->debug('order_journey.tp2sl.tp2_selected', [
+                    $this->positionsLogger->debug('tp2sl.tp2_selected', [
                         'symbol' => $symbol,
                         'tp1' => $tp1,
                         'tp2' => $tp2,
@@ -482,7 +483,7 @@ final class TpSlTwoTargetsService
             }
         }
 
-        $this->journeyLogger->info('order_journey.tp2sl.compute', [
+        $this->positionsLogger->info('tp2sl.compute', [
             'symbol' => $symbol,
             'decision_key' => $decisionKey,
             'entry' => $entryPrice,
@@ -501,7 +502,7 @@ final class TpSlTwoTargetsService
         $isDryRun = $req->dryRun ?? false;
 
         if ($isDryRun) {
-            $this->journeyLogger->info('order_journey.tp2sl.dry_run', [
+            $this->positionsLogger->info('tp2sl.dry_run', [
                 'symbol' => $symbol,
                 'decision_key' => $decisionKey,
                 'reason' => 'dry_run_mode_active',
@@ -511,7 +512,7 @@ final class TpSlTwoTargetsService
             $open = $orderProvider->getOpenOrders($symbol);
         } catch (\Throwable $e) {
             $open = [];
-            $this->journeyLogger->warning('order_journey.tp2sl.open_orders_failed', [
+            $this->positionsLogger->warning('tp2sl.open_orders_failed', [
                 'symbol' => $symbol,
                 'error' => $e->getMessage(),
                 'reason' => 'fetch_open_orders_failed',
@@ -544,7 +545,7 @@ final class TpSlTwoTargetsService
                             $cancelled[] = $existingSl->orderId;
                         }
                     } catch (\Throwable $e) {
-                        $this->journeyLogger->warning('order_journey.tp2sl.cancel_sl_failed', [
+                        $this->positionsLogger->warning('tp2sl.cancel_sl_failed', [
                             'symbol' => $symbol,
                             'order_id' => $existingSl->orderId,
                             'error' => $e->getMessage(),
@@ -576,7 +577,7 @@ final class TpSlTwoTargetsService
                             $cancelled[] = $o->orderId;
                         }
                     } catch (\Throwable $e) {
-                        $this->journeyLogger->warning('order_journey.tp2sl.cancel_tp_failed', [
+                        $this->positionsLogger->warning('tp2sl.cancel_tp_failed', [
                             'symbol' => $symbol,
                             'order_id' => $o->orderId,
                             'error' => $e->getMessage(),
@@ -787,7 +788,7 @@ final class TpSlTwoTargetsService
             }
         }
 
-        $this->journeyLogger->info('order_journey.tp2sl.submit', [
+        $this->positionsLogger->info('tp2sl.submit', [
             'symbol' => $symbol,
             'decision_key' => $decisionKey,
             'submitted_count' => \count($submitted),
@@ -997,7 +998,7 @@ final class TpSlTwoTargetsService
                     if ($quantized <= $currentPrice) {
                         $quantized = \App\TradeEntry\Pricing\TickQuantizer::quantizeUp($currentPrice + $tick, $precision);
                     }
-                    $this->journeyLogger->debug('order_journey.tp2sl.next_pivot_found', [
+                    $this->positionsLogger->debug('tp2sl.next_pivot_found', [
                         'side' => 'long',
                         'current_price' => $currentPrice,
                         'pivot_key' => $key,
@@ -1015,7 +1016,7 @@ final class TpSlTwoTargetsService
                     if ($quantized >= $currentPrice) {
                         $quantized = \App\TradeEntry\Pricing\TickQuantizer::quantize($currentPrice - $tick, $precision);
                     }
-                    $this->journeyLogger->debug('order_journey.tp2sl.next_pivot_found', [
+                    $this->positionsLogger->debug('tp2sl.next_pivot_found', [
                         'side' => 'short',
                         'current_price' => $currentPrice,
                         'pivot_key' => $key,
@@ -1047,5 +1048,29 @@ final class TpSlTwoTargetsService
         }
         // Bitmart allows fairly long IDs; keep under 64 chars to be safe
         return substr($base, 0, 64);
+    }
+
+    /**
+     * Charge la config selon le mode (même mécanisme que validations.{mode}.yaml)
+     * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping')
+     * @return TradeEntryConfig
+     */
+    private function getConfigForMode(?string $mode): TradeEntryConfig
+    {
+        if ($mode === null || $mode === '') {
+            return $this->defaultConfig;
+        }
+
+        try {
+            return $this->configProvider->getConfigForMode($mode);
+        } catch (\RuntimeException $e) {
+            // Si le mode n'existe pas, utiliser la config par défaut
+            $this->positionsLogger->warning('tp_sl_two_targets_service.mode_not_found', [
+                'mode' => $mode,
+                'error' => $e->getMessage(),
+                'fallback' => 'default_config',
+            ]);
+            return $this->defaultConfig;
+        }
     }
 }

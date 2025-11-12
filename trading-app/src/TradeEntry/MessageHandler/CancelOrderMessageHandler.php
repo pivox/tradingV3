@@ -20,8 +20,6 @@ final class CancelOrderMessageHandler
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         #[Autowire(service: 'monolog.logger.positions')]
         private readonly LoggerInterface $positionsLogger,
-        #[Autowire(service: 'monolog.logger.positions')]
-        private readonly LoggerInterface $journeyLogger,
         #[Autowire(env: 'ORDER_TIMEOUT_SWITCH_DURATION')]
         private readonly string $switchDuration = '15m',
     ) {}
@@ -40,14 +38,6 @@ final class CancelOrderMessageHandler
                 'decision_key' => $message->decisionKey,
                 'error' => $e->getMessage(),
             ]);
-            $this->journeyLogger->warning('order_journey.timeout.order_fetch_failed', [
-                'symbol' => $message->symbol,
-                'exchange_order_id' => $message->exchangeOrderId,
-                'client_order_id' => $message->clientOrderId,
-                'decision_key' => $message->decisionKey,
-                'reason' => 'timeout_handler_get_order_failed',
-                'error' => $e->getMessage(),
-            ]);
             $order = null;
         }
 
@@ -62,14 +52,6 @@ final class CancelOrderMessageHandler
                     'decision_key' => $message->decisionKey,
                     'order_status' => $status,
                 ]);
-                $this->journeyLogger->info('order_journey.timeout.skip_cancel', [
-                    'symbol' => $message->symbol,
-                    'exchange_order_id' => $message->exchangeOrderId,
-                    'client_order_id' => $message->clientOrderId,
-                    'decision_key' => $message->decisionKey,
-                    'order_status' => $status,
-                    'reason' => 'order_already_filled',
-                ]);
                 return;
             }
 
@@ -80,14 +62,6 @@ final class CancelOrderMessageHandler
                     'client_order_id' => $message->clientOrderId,
                     'decision_key' => $message->decisionKey,
                     'order_status' => $status,
-                ]);
-                $this->journeyLogger->info('order_journey.timeout.already_closed', [
-                    'symbol' => $message->symbol,
-                    'exchange_order_id' => $message->exchangeOrderId,
-                    'client_order_id' => $message->clientOrderId,
-                    'decision_key' => $message->decisionKey,
-                    'order_status' => $status,
-                    'reason' => 'order_already_closed',
                 ]);
                 return;
             }
@@ -103,15 +77,6 @@ final class CancelOrderMessageHandler
                 'cancelled' => $cancelled,
                 'order_found' => $order !== null,
             ]);
-            $this->journeyLogger->info('order_journey.timeout.cancel_attempt', [
-                'symbol' => $message->symbol,
-                'exchange_order_id' => $message->exchangeOrderId,
-                'client_order_id' => $message->clientOrderId,
-                'decision_key' => $message->decisionKey,
-                'cancelled' => $cancelled,
-                'order_found' => $order !== null,
-                'reason' => 'timeout_triggered_cancel',
-            ]);
 
             // Si l'ordre a été annulé avec succès, réactiver le MtfSwitch avec un délai réduit
             if ($cancelled) {
@@ -123,14 +88,6 @@ final class CancelOrderMessageHandler
                 'exchange_order_id' => $message->exchangeOrderId,
                 'client_order_id' => $message->clientOrderId,
                 'decision_key' => $message->decisionKey,
-                'error' => $e->getMessage(),
-            ]);
-            $this->journeyLogger->error('order_journey.timeout.cancel_failed', [
-                'symbol' => $message->symbol,
-                'exchange_order_id' => $message->exchangeOrderId,
-                'client_order_id' => $message->clientOrderId,
-                'decision_key' => $message->decisionKey,
-                'reason' => 'cancel_request_failed',
                 'error' => $e->getMessage(),
             ]);
         }
@@ -148,17 +105,8 @@ final class CancelOrderMessageHandler
                 'duration' => $this->switchDuration,
                 'reason' => 'order_cancelled_reduced_cooldown',
             ]);
-            $this->journeyLogger->info('order_journey.timeout.switch_released', [
-                'symbol' => $symbol,
-                'duration' => $this->switchDuration,
-                'reason' => 'order_cancelled_reduced_cooldown',
-            ]);
         } catch (\Throwable $e) {
             $this->positionsLogger->error('trade_entry.timeout.switch_release_failed', [
-                'symbol' => $symbol,
-                'error' => $e->getMessage(),
-            ]);
-            $this->journeyLogger->error('order_journey.timeout.switch_release_failed', [
                 'symbol' => $symbol,
                 'error' => $e->getMessage(),
             ]);

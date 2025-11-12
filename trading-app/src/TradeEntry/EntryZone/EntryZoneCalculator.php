@@ -7,7 +7,7 @@ use App\TradeEntry\Dto\EntryZone;
 use App\TradeEntry\Types\Side;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\TradeEntry\Pricing\TickQuantizer;
-use App\Config\TradeEntryConfig;
+use App\Config\{TradeEntryConfig, TradeEntryConfigProvider};
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -21,22 +21,21 @@ final class EntryZoneCalculator
 
     public function __construct(
         private readonly ?IndicatorProviderInterface $indicators = null,
-        private readonly ?TradeEntryConfig $config = null,
+        private readonly ?TradeEntryConfigProvider $configProvider = null,
+        private readonly ?TradeEntryConfig $defaultConfig = null, // Fallback si mode non fourni
         private readonly ?string $defaultTfOverride = null,
         private readonly ?float $kAtrOverride = null,
         private readonly ?float $wMinOverride = null,
         private readonly ?float $wMaxOverride = null,
         private readonly ?float $asymBiasOverride = null,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly ?LoggerInterface $flowLogger = null,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly ?LoggerInterface $journeyLogger = null,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly ?LoggerInterface $positionsLogger = null,
     ) {}
 
-    public function compute(string $symbol, ?Side $side = null, ?int $pricePrecision = null, ?string $decisionKey = null): EntryZone
+    public function compute(string $symbol, ?Side $side = null, ?int $pricePrecision = null, ?string $decisionKey = null, ?string $mode = null): EntryZone
     {
         // Fallback si aucun provider n'est injecté
         if ($this->indicators === null) {
-            $this->flowLogger?->debug('entry_zone.open_no_indicators', ['symbol' => $symbol, 'decision_key' => $decisionKey]);
-            $this->journeyLogger?->info('order_journey.entry_zone.open', [
+            $this->positionsLogger?->info('entry_zone.open_no_indicators', [
                 'symbol' => $symbol,
                 'decision_key' => $decisionKey,
                 'reason' => 'no_indicator_provider',
@@ -44,8 +43,9 @@ final class EntryZoneCalculator
             return new EntryZone(min: PHP_FLOAT_MIN, max: PHP_FLOAT_MAX, rationale: 'open zone (no indicators)');
         }
 
-        // Lecture config (avec valeurs par défaut robustes)
-        $post = $this->config?->getPostValidation() ?? [];
+        // Lecture config selon le mode (même mécanisme que validations.{mode}.yaml)
+        $config = $this->getConfigForMode($mode);
+        $post = $config?->getPostValidation() ?? [];
         $ez = $post['entry_zone'] ?? [];
         $execTf = $post['execution_timeframe']['default'] ?? null;
 
@@ -97,9 +97,9 @@ final class EntryZoneCalculator
         }
 
         if (!\is_finite($pivot) || $pivot === null || $pivot <= 0.0) {
-            $this->flowLogger?->debug('entry_zone.open_no_pivot', ['symbol' => $symbol, 'tf' => $tf, 'decision_key' => $decisionKey]);
-            $this->journeyLogger?->info('order_journey.entry_zone.open', [
+            $this->positionsLogger?->info('entry_zone.open_no_pivot', [
                 'symbol' => $symbol,
+                'tf' => $tf,
                 'decision_key' => $decisionKey,
                 'reason' => 'pivot_not_available',
             ]);
@@ -118,9 +118,10 @@ final class EntryZoneCalculator
         $half = min($half, $maxHalf);
 
         if (!\is_finite($half) || $half <= 0.0) {
-            $this->flowLogger?->debug('entry_zone.open_invalid_width', ['symbol' => $symbol, 'pivot' => $pivot, 'half' => $half, 'decision_key' => $decisionKey]);
-            $this->journeyLogger?->info('order_journey.entry_zone.open', [
+            $this->positionsLogger?->info('entry_zone.open_invalid_width', [
                 'symbol' => $symbol,
+                'pivot' => $pivot,
+                'half' => $half,
                 'decision_key' => $decisionKey,
                 'reason' => 'invalid_zone_width',
             ]);
@@ -162,7 +163,7 @@ final class EntryZoneCalculator
             $bias
         );
 
-        $this->flowLogger?->debug('entry_zone.computed', [
+        $this->positionsLogger?->debug('entry_zone.computed', [
             'symbol' => $symbol,
             'decision_key' => $decisionKey,
             'tf' => $tf,
@@ -173,18 +174,37 @@ final class EntryZoneCalculator
             'bias' => $bias,
             'min' => $low,
             'max' => $high,
-        ]);
-        $this->journeyLogger?->debug('order_journey.entry_zone.computed', [
-            'symbol' => $symbol,
-            'decision_key' => $decisionKey,
-            'tf' => $tf,
-            'pivot' => $pivot,
-            'pivot_src' => $pivotSrc,
-            'min' => $low,
-            'max' => $high,
             'reason' => 'entry_zone_calculated',
         ]);
 
         return new EntryZone(min: $low, max: $high, rationale: $rationale);
+    }
+
+    /**
+     * Charge la config selon le mode (même mécanisme que validations.{mode}.yaml)
+     * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping')
+     * @return TradeEntryConfig|null
+     */
+    private function getConfigForMode(?string $mode): ?TradeEntryConfig
+    {
+        if ($this->configProvider === null) {
+            return $this->defaultConfig;
+        }
+
+        if ($mode === null || $mode === '') {
+            return $this->defaultConfig;
+        }
+
+        try {
+            return $this->configProvider->getConfigForMode($mode);
+        } catch (\RuntimeException $e) {
+            // Si le mode n'existe pas, utiliser la config par défaut
+            $this->positionsLogger?->warning('entry_zone_calculator.mode_not_found', [
+                'mode' => $mode,
+                'error' => $e->getMessage(),
+                'fallback' => 'default_config',
+            ]);
+            return $this->defaultConfig;
+        }
     }
 }

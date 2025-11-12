@@ -25,9 +25,7 @@ final class OrderPlanBuilder
         private readonly StopLossCalculator $slc,
         private readonly TakeProfitCalculator $tpc,
         private readonly LeverageServiceInterface $leverageService,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $flowLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
         private readonly IndicatorProviderInterface $indicatorProvider,
     ) {}
 
@@ -50,7 +48,7 @@ final class OrderPlanBuilder
         // --- Budget / risk ---
         $availableBudget = min(max((float)$req->initialMarginUsdt, 0.0), max((float)$pre->availableUsdt, 0.0));
         if ($availableBudget <= 0.0) {
-            $this->journeyLogger->error('order_journey.plan_builder.no_budget', [
+            $this->positionsLogger->error('order_plan_builder.no_budget', [
                 'symbol' => $req->symbol,
                 'decision_key' => $decisionKey,
                 'initial_margin_usdt' => $req->initialMarginUsdt,
@@ -61,7 +59,7 @@ final class OrderPlanBuilder
         $riskPct = $this->normalizePercent($req->riskPct);
         $riskUsdt = $availableBudget * $riskPct;
         if ($riskUsdt <= 0.0) {
-            $this->journeyLogger->error('order_journey.plan_builder.invalid_risk', [
+            $this->positionsLogger->error('order_plan_builder.invalid_risk', [
                 'symbol' => $req->symbol,
                 'decision_key' => $decisionKey,
                 'risk_pct' => $req->riskPct,
@@ -108,7 +106,7 @@ final class OrderPlanBuilder
             $entry = $req->side === Side::Long ? $bestAsk : $bestBid;
         }
 
-        $this->flowLogger->debug('order_plan.entry_price', [
+        $this->positionsLogger->debug('order_plan.entry_price', [
             'symbol' => $req->symbol, 'side' => $req->side->value,
             'best_bid' => $bestBid, 'best_ask' => $bestAsk, 'mark' => $mark, 'entry' => $entry,
             'decision_key' => $decisionKey,
@@ -127,7 +125,7 @@ final class OrderPlanBuilder
                     ? TickQuantizer::quantize($clamped, $precision)
                     : TickQuantizer::quantizeUp($clamped, $precision);
 
-                $this->journeyLogger->info('order_journey.plan_builder.entry_clamped', [
+                $this->positionsLogger->debug('order_plan.entry_clamped', [
                     'symbol' => $req->symbol, 'decision_key' => $decisionKey,
                     'zone_min' => $zone->min, 'zone_max' => $zone->max, 'entry' => $entry,
                 ]);
@@ -142,7 +140,7 @@ final class OrderPlanBuilder
                 ? TickQuantizer::quantize($fallback, $precision)
                 : TickQuantizer::quantizeUp($fallback, $precision);
 
-            $this->journeyLogger->warning('order_journey.plan_builder.entry_fallback', [
+            $this->positionsLogger->warning('order_plan.entry_fallback', [
                 'symbol' => $req->symbol, 'decision_key' => $decisionKey, 'entry' => $entry,
             ]);
         }
@@ -237,7 +235,7 @@ final class OrderPlanBuilder
             $size = $this->positionSizer->fromRiskAndDistance($riskUsdt, $finalDistance, $contractSize, $minVolume);
             $stopRisk = $this->slc->fromRisk($entry, $req->side, $riskUsdt, (int)$size, $contractSize, $precision);
 
-            $this->flowLogger->info('order_plan.stop_min_distance_adjusted', [
+            $this->positionsLogger->info('order_plan.stop_min_distance_adjusted', [
                 'symbol' => $req->symbol,
                 'side' => $req->side->value,
                 'entry' => $entry,
@@ -265,7 +263,7 @@ final class OrderPlanBuilder
             throw new \RuntimeException('Taille calculée invalide (<=0)');
         }
 
-        $this->flowLogger->debug('order_plan.sizing', [
+        $this->positionsLogger->debug('order_plan.sizing', [
             'symbol' => $req->symbol,
             'risk_usdt' => $riskUsdt,
             'final_distance' => $finalDistance,
@@ -317,27 +315,18 @@ final class OrderPlanBuilder
             ? (($req->side === Side::Long ? ($takeProfit - $entry) : ($entry - $takeProfit)) / $riskUnit)
             : 0.0;
 
-        $this->flowLogger->debug('order_plan.take_profit_selected', [
+        $this->positionsLogger->debug('order_plan.take_profit_selected', [
             'symbol' => $req->symbol,
             'side' => $req->side->value,
             'entry' => $entry,
             'stop' => $stop,
             'tp_theoretical' => $tpTheoretical,
             'tp_final' => $takeProfit,
-            'r_theoretical' => $rTheoretical,
-            'r_effective' => round($rEffective, 3),
-            'aligned_on_pivot' => $pickedFromPivot,
-            'decision_key' => $decisionKey,
-        ]);
-        $this->journeyLogger->debug('order_journey.plan_builder.take_profit_selected', [
-            'symbol' => $req->symbol,
-            'decision_key' => $decisionKey,
-            'entry' => $entry,
-            'stop' => $stop,
             'take_profit' => $takeProfit,
             'r_theoretical' => $rTheoretical,
             'r_effective' => round($rEffective, 3),
             'aligned_on_pivot' => $pickedFromPivot,
+            'decision_key' => $decisionKey,
         ]);
 
         // --- Levier dynamique (stopPct + ATR 15m pour volatilité) ---
@@ -358,7 +347,7 @@ final class OrderPlanBuilder
             $req->executionTf,
         );
 
-        $this->flowLogger->debug('order_plan.leverage.dynamic', [
+        $this->positionsLogger->debug('order_plan.leverage.dynamic', [
             'symbol' => $req->symbol,
             'stop_pct' => $stopPct,
             'atr_15m' => $atr15m,
@@ -395,7 +384,7 @@ final class OrderPlanBuilder
             }
         }
 
-        $this->flowLogger->debug('order_plan.budget_check', [
+        $this->positionsLogger->debug('order_plan.budget_check', [
             'symbol' => $req->symbol,
             'risk_usdt' => $riskUsdt,
             'entry' => $entry,
@@ -406,13 +395,6 @@ final class OrderPlanBuilder
             'available_usdt' => $pre->availableUsdt,
             'leverage' => $leverage,
             'decision_key' => $decisionKey,
-        ]);
-        $this->journeyLogger->debug('order_journey.plan_builder.leverage', [
-            'symbol' => $req->symbol,
-            'decision_key' => $decisionKey,
-            'leverage' => $leverage,
-            'notional_usdt' => $notional,
-            'initial_margin_usdt' => $initialMargin,
         ]);
 
         // --- Build du modèle final ---
@@ -452,16 +434,6 @@ final class OrderPlanBuilder
             'initial_margin_usdt' => ($model->entry * $model->contractSize * $model->size) / max(1.0, (float)$model->leverage),
             'decision_key' => $decisionKey,
         ]);
-        $this->journeyLogger->info('order_journey.plan_builder.model_ready', [
-            'symbol' => $model->symbol,
-            'decision_key' => $decisionKey,
-            'entry' => $model->entry,
-            'stop' => $model->stop,
-            'take_profit' => $model->takeProfit,
-            'size' => $model->size,
-            'leverage' => $model->leverage,
-            'order_mode' => $model->orderMode,
-        ]);
 
         return $model;
     }
@@ -482,7 +454,7 @@ final class OrderPlanBuilder
     private function pickProvisionalDistance(float $entry, float $tick, ?float $stopAtr, ?float $stopPivot): float
     {
         if (!self::$deprecationWarningLogged) {
-            $this->flowLogger->warning('order_plan.helper_deprecated', [
+            $this->positionsLogger->warning('order_plan.helper_deprecated', [
                 'helper' => 'pickProvisionalDistance',
                 'message' => 'Helper déprécié, le nouveau flux linéaire calcule directement',
             ]);
@@ -508,7 +480,7 @@ final class OrderPlanBuilder
         ?float $marketMaxVolume
     ): int {
         if (!self::$deprecationWarningLogged) {
-            $this->flowLogger->warning('order_plan.helper_deprecated', [
+            $this->positionsLogger->warning('order_plan.helper_deprecated', [
                 'helper' => 'quantizeContracts',
                 'message' => 'Helper déprécié, le nouveau flux linéaire quantifie directement',
             ]);
@@ -539,7 +511,7 @@ final class OrderPlanBuilder
         float $minPct
     ): float {
         if (!self::$deprecationWarningLogged) {
-            $this->flowLogger->warning('order_plan.helper_deprecated', [
+            $this->positionsLogger->warning('order_plan.helper_deprecated', [
                 'helper' => 'enforceMinDistanceAndQuantize',
                 'message' => 'Helper déprécié, le nouveau flux linéaire applique la garde directement',
             ]);

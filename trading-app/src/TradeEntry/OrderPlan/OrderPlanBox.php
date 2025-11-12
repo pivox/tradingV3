@@ -12,12 +12,12 @@ final class OrderPlanBox
 {
     public function __construct(
         private readonly OrderPlanBuilder $builder,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
     public function create(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null, ?EntryZone $zone = null): OrderPlanModel
     {
-        $this->journeyLogger->debug('order_journey.plan_box.create', [
+        $this->positionsLogger->debug('order_plan_box.create', [
             'symbol' => $req->symbol,
             'decision_key' => $decisionKey,
             'has_zone' => $zone !== null,
@@ -26,7 +26,7 @@ final class OrderPlanBox
 
         $plan = $this->builder->build($req, $pre, $decisionKey, $zone);
 
-        $this->journeyLogger->debug('order_journey.plan_box.created', [
+        $this->positionsLogger->debug('order_plan_box.created', [
             'symbol' => $plan->symbol,
             'decision_key' => $decisionKey,
             'entry' => $plan->entry,

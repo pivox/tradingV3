@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Builder;
 
-use App\Config\TradeEntryConfig;
+use App\Config\{TradeEntryConfig, TradeEntryConfigProvider};
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Types\Side;
 use Psr\Log\LoggerInterface;
@@ -12,11 +12,13 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 /**
  * Builder pour créer un TradeEntryRequest depuis des champs MTF minimaux.
  * Délègue la logique de construction depuis TradingDecisionHandler.
+ * Utilise TradeEntryConfigProvider avec mode (même mécanisme que validations.{mode}.yaml).
  */
 final class TradeEntryRequestBuilder
 {
     public function __construct(
-        private readonly TradeEntryConfig $tradeEntryConfig,
+        private readonly TradeEntryConfigProvider $configProvider,
+        private readonly TradeEntryConfig $defaultConfig, // Fallback si mode non fourni
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
@@ -29,6 +31,7 @@ final class TradeEntryRequestBuilder
      * @param string|null $executionTf  TF d'exécution effectif (ex: '1m','5m','15m')
      * @param float|null  $price        Prix courant (optionnel)
      * @param float|null  $atr          Valeur ATR du TF d'exécution (optionnel si stop_from ≠ 'atr')
+     * @param string|null $mode         Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
      * @return TradeEntryRequest|null
      */
     public function fromMtfSignal(
@@ -36,7 +39,8 @@ final class TradeEntryRequestBuilder
         string $signalSide,
         ?string $executionTf = null,
         ?float $price = null,
-        ?float $atr = null
+        ?float $atr = null,
+        ?string $mode = null
     ): ?TradeEntryRequest {
         $side = strtoupper((string)$signalSide);
         if (!in_array($side, ['LONG', 'SHORT'], true)) {
@@ -46,8 +50,10 @@ final class TradeEntryRequestBuilder
         $price = $price ?? null;
         $atr = $atr ?? null;
 
+        // Charger la config selon le mode (même mécanisme que validations.{mode}.yaml)
+        $config = $this->getConfigForMode($mode);
         $executionTf = strtolower($executionTf ?? '1m');
-        $defaults = $this->tradeEntryConfig->getDefaults();
+        $defaults = $config->getDefaults();
         $multipliers = $defaults['timeframe_multipliers'] ?? [];
         $tfMultiplier = (float)($multipliers[$executionTf] ?? 1.0);
 
@@ -157,5 +163,29 @@ final class TradeEntryRequestBuilder
             tpMinKeepRatio: $tpMinKeepRatio,
             tpMaxExtraR: $tpMaxExtraR,
         );
+    }
+
+    /**
+     * Charge la config selon le mode (même mécanisme que validations.{mode}.yaml)
+     * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping')
+     * @return TradeEntryConfig
+     */
+    private function getConfigForMode(?string $mode): TradeEntryConfig
+    {
+        if ($mode === null || $mode === '') {
+            return $this->defaultConfig;
+        }
+
+        try {
+            return $this->configProvider->getConfigForMode($mode);
+        } catch (\RuntimeException $e) {
+            // Si le mode n'existe pas, utiliser la config par défaut
+            $this->positionsLogger->warning('trade_entry_request_builder.mode_not_found', [
+                'mode' => $mode,
+                'error' => $e->getMessage(),
+                'fallback' => 'default_config',
+            ]);
+            return $this->defaultConfig;
+        }
     }
 }

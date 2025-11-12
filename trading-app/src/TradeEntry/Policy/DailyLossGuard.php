@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Policy;
 
-use App\Config\TradeEntryConfig;
+use App\Config\{TradeEntryConfig, TradeEntryConfigProvider};
 use App\Contract\Provider\MainProviderInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -14,28 +14,18 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
  * Blocks new trades once the daily loss limit (absolute USDT) is reached.
  * Uses account equity when available, falls back to available balance.
  * Persists per-day baseline and lock state under var/lock/daily_loss_guard.json.
+ * Supports mode-based configuration (same as validations.{mode}.yaml).
  */
 final class DailyLossGuard
 {
     private string $statePath;
-    private float $limitUsdt;
-    private bool $countUnrealized;
 
     public function __construct(
         private readonly MainProviderInterface $providers,
-        private readonly TradeEntryConfig $config,
+        private readonly TradeEntryConfigProvider $configProvider,
+        private readonly TradeEntryConfig $defaultConfig, // Fallback si mode non fourni
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {
-        // Default settings
-        $risk = $this->config->getRisk();
-        $this->limitUsdt = isset($risk['daily_max_loss_usdt']) ? (float)$risk['daily_max_loss_usdt'] : 0.0;
-        if ($this->limitUsdt <= 0.0) {
-            // Backward compatible: if only percent exists, disable absolute guard by default
-            $this->limitUsdt = 0.0;
-        }
-        // Count unrealized through equity by default (safer for futures)
-        $this->countUnrealized = (bool)($risk['daily_loss_count_unrealized'] ?? true);
-
         $root = \dirname(__DIR__, 3); // src/TradeEntry/Policy -> src/TradeEntry -> src -> project root
         $lockDir = $root . '/var/lock';
         if (!is_dir($lockDir)) {
@@ -46,13 +36,25 @@ final class DailyLossGuard
 
     /**
      * Check current state and update lock if limit hit.
-     *
+     * 
+     * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
      * @return array{date:string, start_measure:float, measure:string, measure_value:float, pnl_today:float, limit_usdt:float, locked:bool, locked_at?:string}
      */
-    public function checkAndMaybeLock(): array
+    public function checkAndMaybeLock(?string $mode = null): array
     {
+        // Charger la config selon le mode (même mécanisme que validations.{mode}.yaml)
+        $config = $this->getConfigForMode($mode);
+        $risk = $config->getRisk();
+        $limitUsdt = isset($risk['daily_max_loss_usdt']) ? (float)$risk['daily_max_loss_usdt'] : 0.0;
+        if ($limitUsdt <= 0.0) {
+            // Backward compatible: if only percent exists, disable absolute guard by default
+            $limitUsdt = 0.0;
+        }
+        // Count unrealized through equity by default (safer for futures)
+        $countUnrealized = (bool)($risk['daily_loss_count_unrealized'] ?? true);
+
         // If not configured, do nothing
-        if ($this->limitUsdt <= 0.0) {
+        if ($limitUsdt <= 0.0) {
             return [
                 'date' => $this->today(),
                 'start_measure' => 0.0,
@@ -75,7 +77,7 @@ final class DailyLossGuard
             try { $available = $account->availableBalance->toScale(8, 3)->toFloat(); } catch (\Throwable) { $available = null; }
         }
 
-        $measureName = $this->countUnrealized && $equity !== null ? 'equity' : 'available';
+        $measureName = $countUnrealized && $equity !== null ? 'equity' : 'available';
         $measureValue = $measureName === 'equity' ? (float)($equity ?? 0.0) : (float)($available ?? 0.0);
 
         // Reset baseline if missing or day changed
@@ -87,7 +89,7 @@ final class DailyLossGuard
                 'measure' => $measureName,
                 'measure_value' => $measureValue,
                 'pnl_today' => 0.0,
-                'limit_usdt' => $this->limitUsdt,
+                'limit_usdt' => $limitUsdt,
                 'locked' => false,
             ];
             $this->saveState($state);
@@ -97,8 +99,25 @@ final class DailyLossGuard
         $pnlToday = $measureValue - (float)$state['start_measure'];
         $loss = -min($pnlToday, 0.0);
 
+        // Unlock if loss is now below the limit (e.g., limit was increased)
+        if ($state['locked'] && $loss < $limitUsdt) {
+            $state['locked'] = false;
+            unset($state['locked_at']);
+            $this->positionsLogger->info('daily_loss_guard.unlocked', [
+                'date' => $today,
+                'measure' => $measureName,
+                'start' => (float)$state['start_measure'],
+                'current' => $measureValue,
+                'pnl_today' => $pnlToday,
+                'loss' => $loss,
+                'limit_usdt' => $limitUsdt,
+                'mode' => $mode,
+                'reason' => 'loss_below_limit',
+            ]);
+        }
+
         // Lock if limit exceeded
-        if (!$state['locked'] && $loss >= $this->limitUsdt) {
+        if (!$state['locked'] && $loss >= $limitUsdt) {
             $state['locked'] = true;
             $state['locked_at'] = gmdate('c');
             $this->positionsLogger->warning('daily_loss_guard.locked', [
@@ -108,7 +127,8 @@ final class DailyLossGuard
                 'current' => $measureValue,
                 'pnl_today' => $pnlToday,
                 'loss' => $loss,
-                'limit_usdt' => $this->limitUsdt,
+                'limit_usdt' => $limitUsdt,
+                'mode' => $mode,
             ]);
         }
 
@@ -116,7 +136,7 @@ final class DailyLossGuard
         $state['measure'] = $measureName;
         $state['measure_value'] = $measureValue;
         $state['pnl_today'] = $pnlToday;
-        $state['limit_usdt'] = $this->limitUsdt;
+        $state['limit_usdt'] = $limitUsdt;
         $this->saveState($state);
 
         return $state;
@@ -152,15 +172,43 @@ final class DailyLossGuard
             } catch (\Throwable) {}
         }
 
+        // Utiliser la config par défaut pour initialiser limit_usdt
+        $risk = $this->defaultConfig->getRisk();
+        $defaultLimitUsdt = isset($risk['daily_max_loss_usdt']) ? (float)$risk['daily_max_loss_usdt'] : 0.0;
+        
         return [
             'date' => $this->today(),
             'start_measure' => null,
             'measure' => 'unknown',
             'measure_value' => 0.0,
             'pnl_today' => 0.0,
-            'limit_usdt' => $this->limitUsdt,
+            'limit_usdt' => $defaultLimitUsdt,
             'locked' => false,
         ];
+    }
+
+    /**
+     * Charge la config selon le mode (même mécanisme que validations.{mode}.yaml)
+     * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping')
+     * @return TradeEntryConfig
+     */
+    private function getConfigForMode(?string $mode): TradeEntryConfig
+    {
+        if ($mode === null || $mode === '') {
+            return $this->defaultConfig;
+        }
+
+        try {
+            return $this->configProvider->getConfigForMode($mode);
+        } catch (\RuntimeException $e) {
+            // Si le mode n'existe pas, utiliser la config par défaut
+            $this->positionsLogger->warning('daily_loss_guard.mode_not_found', [
+                'mode' => $mode,
+                'error' => $e->getMessage(),
+                'fallback' => 'default_config',
+            ]);
+            return $this->defaultConfig;
+        }
     }
 
     /**

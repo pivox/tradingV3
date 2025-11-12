@@ -20,24 +20,17 @@ final class BuildOrderPlan
         private readonly EntryZoneCalculator $zones,
         private readonly EntryZoneFilters $filters,
         private readonly LiquidationGuard $liquidation,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $flowLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
     ) {}
 
     public function __invoke(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null): OrderPlanModel
     {
-        $this->flowLogger->info('build_order_plan.start', [
+        $this->positionsLogger->info('build_order_plan.start', [
             'symbol' => $req->symbol,
             'side' => $req->side->value,
             'spread_pct' => $pre->spreadPct,
             'mode_note' => $pre->modeNote,
             'decision_key' => $decisionKey,
-        ]);
-        $this->journeyLogger->info('order_journey.plan.start', [
-            'symbol' => $req->symbol,
-            'decision_key' => $decisionKey,
-            'side' => $req->side->value,
             'reason' => 'build_order_plan',
         ]);
 
@@ -46,21 +39,15 @@ final class BuildOrderPlan
         $plan = $this->box->create($req, $pre, $decisionKey, $zone);
         $candidate = $plan->entry > 0.0 ? $plan->entry : ($req->side === Side::Long ? $pre->bestAsk : $pre->bestBid);
 
-        $this->flowLogger->debug('build_order_plan.entry_zone', [
+        $this->positionsLogger->debug('build_order_plan.entry_zone', [
             'symbol' => $req->symbol,
             'side' => $req->side->value,
             'decision_key' => $decisionKey,
             'candidate' => $candidate,
+            'entry_candidate' => $candidate,
             'zone_min' => $zone->min,
             'zone_max' => $zone->max,
             'rationale' => $zone->rationale,
-        ]);
-        $this->journeyLogger->debug('order_journey.plan.zone', [
-            'symbol' => $req->symbol,
-            'decision_key' => $decisionKey,
-            'zone_min' => $zone->min,
-            'zone_max' => $zone->max,
-            'entry_candidate' => $candidate,
             'reason' => 'zone_evaluated',
         ]);
 
@@ -84,9 +71,7 @@ final class BuildOrderPlan
                     'zone_max_dev_pct' => $zoneMaxDeviationPct,
                 ];
 
-                $this->flowLogger->warning('build_order_plan.zone_skipped_for_execution', $context);
-
-                $this->journeyLogger->info('order_journey.plan.zone_skipped_for_execution', $context + [
+                $this->positionsLogger->warning('build_order_plan.zone_skipped_for_execution', $context + [
                     'entry_candidate' => $candidate,
                     'reason' => 'zone_far_from_market',
                 ]);
@@ -98,19 +83,10 @@ final class BuildOrderPlan
             }
 
             // Cas anormal : le marché est proche de la zone mais le candidat est hors zone → bug logique
-            $this->flowLogger->error('build_order_plan.entry_out_of_zone_after_clamp', [
+            $this->positionsLogger->error('build_order_plan.entry_out_of_zone_after_clamp', [
                 'symbol' => $req->symbol,
                 'decision_key' => $decisionKey,
                 'candidate' => $candidate,
-                'zone_min' => $zone->min,
-                'zone_max' => $zone->max,
-                'zone_dev_pct' => $zoneDeviation,
-                'zone_max_dev_pct' => $zoneMaxDeviationPct,
-            ]);
-
-            $this->journeyLogger->error('order_journey.plan.entry_out_of_zone', [
-                'symbol' => $req->symbol,
-                'decision_key' => $decisionKey,
                 'entry_candidate' => $candidate,
                 'zone_min' => $zone->min,
                 'zone_max' => $zone->max,
@@ -130,13 +106,9 @@ final class BuildOrderPlan
             'decision_key' => $decisionKey,
         ];
         if (!$this->filters->passAll($context)) {
-            $this->flowLogger->error('build_order_plan.filters_rejected', [
+            $this->positionsLogger->error('build_order_plan.filters_rejected', [
                 'symbol' => $req->symbol,
                 'side' => $req->side->value,
-                'decision_key' => $decisionKey,
-            ]);
-            $this->journeyLogger->info('order_journey.plan.filters_blocked', [
-                'symbol' => $req->symbol,
                 'decision_key' => $decisionKey,
                 'reason' => 'entry_zone_filters_rejection',
             ]);
@@ -144,18 +116,12 @@ final class BuildOrderPlan
         }
 
         $this->liquidation->assertSafe($plan);
-        $this->flowLogger->debug('build_order_plan.liquidation_guard_ok', [
+        $this->positionsLogger->debug('build_order_plan.liquidation_guard_ok', [
             'symbol' => $req->symbol,
             'decision_key' => $decisionKey,
             'entry' => $plan->entry,
             'stop' => $plan->stop,
             'lev' => $plan->leverage,
-        ]);
-        $this->journeyLogger->debug('order_journey.plan.liquidation_ok', [
-            'symbol' => $req->symbol,
-            'decision_key' => $decisionKey,
-            'entry' => $plan->entry,
-            'stop' => $plan->stop,
             'leverage' => $plan->leverage,
             'reason' => 'liquidation_guard_passed',
         ]);
@@ -169,15 +135,6 @@ final class BuildOrderPlan
             'stop' => $plan->stop,
             'take_profit' => $plan->takeProfit,
             'decision_key' => $decisionKey,
-        ]);
-        $this->journeyLogger->info('order_journey.plan.ready', [
-            'symbol' => $plan->symbol,
-            'decision_key' => $decisionKey,
-            'entry' => $plan->entry,
-            'stop' => $plan->stop,
-            'take_profit' => $plan->takeProfit,
-            'size' => $plan->size,
-            'leverage' => $plan->leverage,
             'reason' => 'plan_ready_for_execution',
         ]);
 

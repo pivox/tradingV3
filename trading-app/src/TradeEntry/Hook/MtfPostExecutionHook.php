@@ -35,7 +35,7 @@ final class MtfPostExecutionHook implements PostExecutionHookInterface
         // Désactiver le symbole après soumission pour éviter les ré-entrées immédiates
         try {
         
-            $this->mtfSwitchRepository->turnOffSymbolForDuration($request->symbol, duration: '5m');
+            $this->mtfSwitchRepository->turnOffSymbolForDuration($request->symbol, duration: '15m');
             $this->positionsLogger->info('[MtfPostExecutionHook] Symbol switched OFF for 15 minutes after order', [
                 'symbol' => $request->symbol,
                 'duration' => '15 minutes',

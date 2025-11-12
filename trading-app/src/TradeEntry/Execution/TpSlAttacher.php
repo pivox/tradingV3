@@ -11,7 +11,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class TpSlAttacher
 {
     public function __construct(
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
     public function presetInSubmitPayload(OrderPlanModel $plan, string $clientOrderId): array
@@ -36,7 +36,7 @@ final class TpSlAttacher
             $payload['preset_stop_loss_price_type'] = 1;
         }
 
-        $this->journeyLogger->debug('order_journey.tp_sl_attacher.payload_ready', [
+        $this->positionsLogger->debug('tp_sl_attacher.payload_ready', [
             'symbol' => $plan->symbol,
             'client_order_id' => $clientOrderId,
             'order_type' => $plan->orderType,

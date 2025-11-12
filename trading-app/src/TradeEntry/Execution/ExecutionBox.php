@@ -20,7 +20,6 @@ final class ExecutionBox
 {
     private const MARKET_FILL_TIMEOUT_WS_STRICT = 3; // 3s pour WS strict
     private const MARKET_FILL_TIMEOUT_TOTAL = 10; // 10s total avec REST fallback
-    private const CANCEL_ALL_AFTER_SECONDS = 12; // 12s (entre 10-15s)
 
     public function __construct(
         private readonly MainProviderInterface $providers,
@@ -362,8 +361,6 @@ final class ExecutionBox
                 'client_order_id' => $clientOrderId,
                 'decision_key' => $decisionKey,
             ]);
-            // Activer cancel-all-after pour nettoyer
-            $this->scheduleCancelAllAfter($plan->symbol);
             return new ExecutionResult(
                 clientOrderId: $clientOrderId,
                 exchangeOrderId: $orderId,
@@ -440,17 +437,12 @@ final class ExecutionBox
 
             // 5) Vérifier les plans TP/SL
             $this->verifyPlanOrders($plan->symbol, $tpSlResult['submitted'], $decisionKey);
-
-            // 6) Activer cancel-all-after
-            $this->scheduleCancelAllAfter($plan->symbol);
         } catch (\Throwable $e) {
             $this->positionsLogger->error('execution.market_order.tp_sl_submit_failed', [
                 'symbol' => $plan->symbol,
                 'error' => $e->getMessage(),
                 'decision_key' => $decisionKey,
             ]);
-            // Activer cancel-all-after même en cas d'erreur
-            $this->scheduleCancelAllAfter($plan->symbol);
         }
 
         return new ExecutionResult(
@@ -617,35 +609,6 @@ final class ExecutionBox
                 'symbol' => $symbol,
                 'error' => $e->getMessage(),
                 'decision_key' => $decisionKey,
-            ]);
-        }
-    }
-
-    /**
-     * Programme l'annulation automatique des ordres après un délai (cancel-all-after).
-     */
-    private function scheduleCancelAllAfter(string $symbol): void
-    {
-        try {
-            $orderProvider = $this->providers->getOrderProvider();
-            // Vérifier si le provider supporte cancelAllAfter (spécifique BitMart)
-            if ($orderProvider instanceof \App\Provider\Bitmart\BitmartOrderProvider) {
-                $success = $orderProvider->cancelAllAfter($symbol, self::CANCEL_ALL_AFTER_SECONDS);
-                $this->positionsLogger->info('execution.market_order.cancel_all_after_scheduled', [
-                    'symbol' => $symbol,
-                    'timeout' => self::CANCEL_ALL_AFTER_SECONDS,
-                    'success' => $success,
-                ]);
-            } else {
-                $this->positionsLogger->debug('execution.market_order.cancel_all_after_skip', [
-                    'symbol' => $symbol,
-                    'reason' => 'cancelAllAfter_not_available',
-                ]);
-            }
-        } catch (\Throwable $e) {
-            $this->positionsLogger->warning('execution.market_order.cancel_all_after_failed', [
-                'symbol' => $symbol,
-                'error' => $e->getMessage(),
             ]);
         }
     }

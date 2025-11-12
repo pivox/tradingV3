@@ -19,7 +19,7 @@ final readonly class PreTradeChecks
     public function __construct(
         private MainProviderInterface $providers,
         private IndicatorProviderInterface $indicatorProvider,
-        #[Autowire(service: 'monolog.logger.positions')] private LoggerInterface $journeyLogger,
+        #[Autowire(service: 'monolog.logger.positions')] private LoggerInterface $positionsLogger,
     ) {}
 
     /**
@@ -29,19 +29,19 @@ final readonly class PreTradeChecks
     {
         $symbol = $req->symbol;
 
-        $this->journeyLogger->debug('order_journey.pretrade.fetch_contract', [
+        $this->positionsLogger->debug('pretrade.fetch_contract', [
             'symbol' => $symbol,
             'reason' => 'load_contract_specifications',
         ]);
         $specs = $this->providers->getContractProvider()->getContractDetails($symbol);
 
-        $this->journeyLogger->debug('order_journey.pretrade.fetch_order_book', [
+        $this->positionsLogger->debug('pretrade.fetch_order_book', [
             'symbol' => $symbol,
             'reason' => 'load_order_book_snapshot',
         ]);
         $orderBook = $this->providers->getOrderProvider()->getOrderBookTop($symbol)->toArray();
 
-        $this->journeyLogger->debug('order_journey.pretrade.fetch_balance', [
+        $this->positionsLogger->debug('pretrade.fetch_balance', [
             'symbol' => $symbol,
             'reason' => 'load_available_balance',
         ]);
@@ -50,7 +50,7 @@ final readonly class PreTradeChecks
         $bestBid = $orderBook['bid'];
         $bestAsk = $orderBook['ask'];
         if ($bestBid <= 0.0 || $bestAsk <= 0.0) {
-            $this->journeyLogger->error('order_journey.pretrade.invalid_order_book', [
+            $this->positionsLogger->error('pretrade.invalid_order_book', [
                 'symbol' => $symbol,
                 'best_bid' => $bestBid,
                 'best_ask' => $bestAsk,
@@ -62,7 +62,7 @@ final readonly class PreTradeChecks
         $mid = 0.5 * ($bestBid + $bestAsk);
         $spreadPct = $mid > 0.0 ? ($bestAsk - $bestBid) / $mid : 0.0;
         if ($req->orderType === 'market' && $req->marketMaxSpreadPct !== null && $spreadPct > $req->marketMaxSpreadPct) {
-            $this->journeyLogger->info('order_journey.pretrade.spread_blocked', [
+            $this->positionsLogger->info('pretrade.spread_blocked', [
                 'symbol' => $symbol,
                 'spread_pct' => $spreadPct,
                 'max_allowed' => $req->marketMaxSpreadPct,
@@ -102,7 +102,7 @@ final readonly class PreTradeChecks
 
         $pivotLevels = $this->fetchPivotLevels($symbol);
 
-        $this->journeyLogger->debug('order_journey.pretrade.metrics', [
+        $this->positionsLogger->debug('pretrade.metrics', [
             'symbol' => $symbol,
             'best_bid' => $bestBid,
             'best_ask' => $bestAsk,

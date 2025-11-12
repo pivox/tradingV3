@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Service\Leverage;
 
-use App\Config\TradeEntryConfig;
+use App\Config\{TradeEntryConfig, TradeEntryConfigProvider};
 use App\Contract\EntryTrade\LeverageServiceInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -11,8 +11,9 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class DynamicLeverageService implements LeverageServiceInterface
 {
     public function __construct(
-        private readonly TradeEntryConfig $tradeEntryConfig,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $flowLogger,
+        private readonly TradeEntryConfigProvider $configProvider,
+        private readonly TradeEntryConfig $defaultConfig, // Fallback si mode non fourni
+        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
     public function computeLeverage(
@@ -25,8 +26,9 @@ final class DynamicLeverageService implements LeverageServiceInterface
         int $minLeverage,
         int $maxLeverage,
         ?float $stopPct = null,
-        ?float $atr5mValue = null, // peut recevoir ATR 15m, le nom du param n’a pas d’incidence
-        ?string $executionTf = null
+        ?float $atr5mValue = null, // peut recevoir ATR 15m, le nom du param n'a pas d'incidence
+        ?string $executionTf = null,
+        ?string $mode = null // Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
     ): int {
         // Budget effectif borné
         $effectiveBudget = min(max($budgetUsdt, 0.0), max($availableUsdt, 0.0));
@@ -41,15 +43,16 @@ final class DynamicLeverageService implements LeverageServiceInterface
         }
 
         if ($stopPct === null || $stopPct <= 0.0 || !\is_finite($stopPct)) {
-            $this->flowLogger->error('order_plan.leverage.missing_stop_pct', [
+            $this->positionsLogger->error('order_plan.leverage.missing_stop_pct', [
                 'symbol' => $symbol, 'stop_pct' => $stopPct,
             ]);
             throw new \RuntimeException('stopPct requis pour calcul dynamique du levier');
         }
 
-        // --- Lecture config ---
-        $defaults  = $this->tradeEntryConfig->getDefaults();
-        $levConfig = $this->tradeEntryConfig->getLeverage();
+        // --- Lecture config selon le mode (même mécanisme que validations.{mode}.yaml) ---
+        $config = $this->getConfigForMode($mode);
+        $defaults  = $config->getDefaults();
+        $levConfig = $config->getLeverage();
 
         $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 5.0);
         $riskPct = $riskPctPercent > 1.0 ? $riskPctPercent / 100.0 : $riskPctPercent;
@@ -109,7 +112,7 @@ final class DynamicLeverageService implements LeverageServiceInterface
         $leverageRounded = max($minLeverage, $leverageRounded);
         $leverageRounded = min($maxLeverage, $leverageRounded);
 
-        $this->flowLogger->debug('order_plan.leverage.dynamic', [
+        $this->positionsLogger->debug('order_plan.leverage.dynamic', [
             'symbol'            => $symbol,
             'entry_price'       => $entryPrice,
             'contract_size'     => $contractSize,
@@ -169,5 +172,29 @@ final class DynamicLeverageService implements LeverageServiceInterface
             }
         }
         return $cap;
+    }
+
+    /**
+     * Charge la config selon le mode (même mécanisme que validations.{mode}.yaml)
+     * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping')
+     * @return TradeEntryConfig
+     */
+    private function getConfigForMode(?string $mode): TradeEntryConfig
+    {
+        if ($mode === null || $mode === '') {
+            return $this->defaultConfig;
+        }
+
+        try {
+            return $this->configProvider->getConfigForMode($mode);
+        } catch (\RuntimeException $e) {
+            // Si le mode n'existe pas, utiliser la config par défaut
+            $this->positionsLogger->warning('dynamic_leverage_service.mode_not_found', [
+                'mode' => $mode,
+                'error' => $e->getMessage(),
+                'fallback' => 'default_config',
+            ]);
+            return $this->defaultConfig;
+        }
     }
 }
