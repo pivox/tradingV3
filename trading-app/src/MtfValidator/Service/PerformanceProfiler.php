@@ -179,13 +179,35 @@ final class PerformanceProfiler
         // Trier les symboles par temps total
         uasort($symbolStats, fn($a, $b) => $b['total'] <=> $a['total']);
 
+        // Transformer raw_metrics en tableau d'objets structurés
+        $metricsArray = [];
+        foreach ($this->metrics as $key => $metric) {
+            $parts = explode('::', $key);
+            $category = $parts[0] ?? 'unknown';
+            $operation = $parts[1] ?? 'unknown';
+            $symbol = $parts[2] ?? null;
+            $timeframe = $parts[3] ?? null;
+
+            $metricsArray[] = [
+                'category' => $category,
+                'operation' => $operation,
+                'symbol' => $symbol,
+                'timeframe' => $timeframe,
+                'count' => $metric['count'] ?? 1,
+                'duration' => $metric['duration'] ?? 0.0,
+            ];
+        }
+
         return [
-            'total_execution_time' => round($totalTime, 3),
+            'totals' => [
+                'total_execution_time' => round($totalTime, 3),
+            ],
+            'metrics' => $metricsArray,
+            // Garder les anciennes clés pour compatibilité temporaire
             'by_category' => $byCategory,
             'by_operation' => $byOperation,
             'by_symbol' => array_slice($symbolStats, 0, 20), // Top 20
             'by_timeframe' => $timeframeStats,
-            'raw_metrics' => $this->metrics,
         ];
     }
 
