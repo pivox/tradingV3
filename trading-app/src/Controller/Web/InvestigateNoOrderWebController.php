@@ -90,6 +90,26 @@ final class InvestigateNoOrderWebController extends AbstractController
                         'proposal' => $proposal,
                     ];
                 }
+
+                // Filet de sécurité: si aucun résultat, construire des lignes 'unknown' à partir des symboles saisis
+                if (empty($rows)) {
+                    $symbolsList = array_values(array_filter(array_map(static fn(string $s) => strtoupper(trim($s)), explode(',', $symbols))));
+                    foreach ($symbolsList as $sym) {
+                        if ($sym === '') { continue; }
+                        $rows[] = [
+                            'symbol' => $sym,
+                            'status' => 'unknown',
+                            'reason' => '',
+                            'order_id' => '',
+                            'decision_key' => '',
+                            'timeframe' => '',
+                            'kline_time' => '',
+                            'zone_dev_pct' => null,
+                            'zone_max_dev_pct' => null,
+                            'proposal' => '',
+                        ];
+                    }
+                }
             } catch (\Throwable $e) {
                 $error = $e->getMessage();
             }
