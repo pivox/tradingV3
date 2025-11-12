@@ -216,6 +216,28 @@ docker-compose logs -f trading-app-db
 
 - Traçage complet placement d'ordre : `var/log/order-journey*.log` (toutes les étapes depuis le signal MTF jusqu'à l'ID d'ordre Bitmart).
 
+## 🔍 Investigation — Pourquoi aucun ordre n'a été placé ?
+
+Une commande console est fournie pour diagnostiquer rapidement pourquoi un symbole (ou plusieurs) n'a pas abouti à une soumission d'ordre.
+
+Exemples d'utilisation:
+
+```bash
+# Résumé tableau (24 dernières heures par défaut)
+docker-compose exec trading-app-php php bin/console investigate:no-order --symbols=GLMUSDT,VELODROMEUSDT,LTCUSDT,MELANIAUSDT,FILUSDT
+
+# Sortie JSON et fenêtre de 6h
+docker-compose exec trading-app-php php bin/console investigate:no-order --symbols=GLMUSDT --since-hours=6 --format=json
+
+# Fenêtre courte (30 minutes, prioritaire sur --since-hours)
+docker-compose exec trading-app-php php bin/console investigate:no-order --symbols=GLMUSDT --since-minutes=30
+```
+
+La commande scanne les `var/log/positions-*.log` récents pour détecter:
+- `positions.order_submit.success` → ordre soumis (avec `order_id` BitMart).
+- `order_journey.trade_entry.skipped` / `build_order_plan.zone_skipped_for_execution` → raison de skip (ex: `skipped_out_of_zone`) et détails de zone.
+- À défaut de traces d’exécution, elle interroge les audits MTF (`mtf_audit`) pour identifier l’étape bloquante: `*_VALIDATION_FAILED`, `ALIGNMENT_FAILED`, `KILL_SWITCH_OFF` (avec `timeframe`, `kline_time`, `cause`).
+
 ## 🔒 Sécurité
 
 - Clés API stockées dans les variables d'environnement
