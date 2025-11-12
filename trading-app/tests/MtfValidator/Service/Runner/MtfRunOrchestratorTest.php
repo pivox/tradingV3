@@ -113,7 +113,8 @@ class MtfRunOrchestratorTest extends TestCase
         $final = $generator->getReturn();
 
         $this->assertNotEmpty($yielded);
-        $this->assertSame('FINAL', $yielded[array_key_last($yielded)]['symbol']);
+        // Dernier yield contient désormais le résumé + résultats (plus d'entrée 'FINAL')
+        $this->assertArrayHasKey('summary', $yielded[array_key_last($yielded)]);
         $this->assertArrayHasKey('summary', $final);
         $this->assertArrayHasKey('results', $final);
         $this->assertSame(1, $final['summary']['symbols_processed']);

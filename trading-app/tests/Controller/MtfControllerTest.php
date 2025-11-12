@@ -97,8 +97,8 @@ class MtfControllerTest extends TestCase
         $data = json_decode($response->getContent(), true);
         $this->assertEquals('success', $data['status']);
         $this->assertEquals('MTF run completed', $data['message']);
-        $this->assertArrayHasKey('summary', $data['data']);
-        $this->assertArrayHasKey('results', $data['data']);
+        $this->assertArrayHasKey('run', $data['data']);
+        $this->assertArrayHasKey('symbols', $data['data']);
     }
 
     public function testRunMtfCycleWithCustomSymbols(): void
@@ -154,9 +154,9 @@ class MtfControllerTest extends TestCase
         $data = json_decode($response->getContent(), true);
         $this->assertEquals('success', $data['status']);
         $this->assertEquals('MTF run completed', $data['message']);
-        $this->assertArrayHasKey('summary', $data['data']);
-        $this->assertArrayHasKey('results', $data['data']);
-        $this->assertEquals(2, $data['data']['summary']['symbols_requested']);
+        $this->assertArrayHasKey('run', $data['data']);
+        $this->assertArrayHasKey('symbols', $data['data']);
+        $this->assertEquals(2, $data['data']['run']['symbols_requested']);
     }
 
     public function testRunMtfCycleWithGlobalKillSwitchOff(): void
@@ -269,8 +269,8 @@ class MtfControllerTest extends TestCase
         $data = json_decode($response->getContent(), true);
         $this->assertEquals('success', $data['status']);
         $this->assertEquals('MTF run completed', $data['message']);
-        $this->assertEquals(1, $data['data']['summary']['symbols_skipped']);
-        $this->assertEquals(0, $data['data']['summary']['symbols_successful']);
+        $this->assertEquals(1, $data['data']['run']['symbols_skipped']);
+        $this->assertEquals(0, $data['data']['run']['symbols_successful']);
     }
 
     public function testRunMtfCycleWithException(): void

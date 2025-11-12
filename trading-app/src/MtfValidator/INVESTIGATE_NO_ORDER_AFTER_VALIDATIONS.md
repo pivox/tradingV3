@@ -114,3 +114,53 @@ Use the checklist below from fastest signal → root‑cause. Copy/paste command
 
 ---
 This playbook targets rapid triage for “validations seen, no order placed”. Use it to guide an agent through logs, DB state, config, and code paths to a clear root cause.
+## 1bis) If no symbol produced orders: list READY symbols (5/5 validations)
+
+Quick usage (script):
+- `bash trading-app/bin/mtf_list_ready_symbols.sh`
+- Output: a single comma‑separated line of symbols that have 5/5 VALIDATION_SUCCESS on the latest closed candle for 1m, 5m, 15m, 1h, 4h (equivalent to green cells in “Synthèse validations”).
+- Connection (fixed): host=localhost, port=5433, user=postgres, password=password, db=trading_app.
+
+Alternatively, use this inline snippet to query Postgres and list symbols that have a VALIDATION_SUCCESS on the latest closed candle for every timeframe (1m,5m,15m,1h,4h) — equivalent to the “Synthèse validations” READY state.
+
+```sh
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+DB_HOST="${DB_HOST:-localhost}"
+DB_PORT="${DB_PORT:-5433}"
+DB_USER="${DB_USER:-postgres}"
+DB_NAME="${DB_NAME:-trading_app}"
+export PGPASSWORD="${PGPASSWORD:-password}"
+
+SQL='
+WITH tf(tf, secs) AS (
+  VALUES (''1m'',60),(''5m'',300),(''15m'',900),(''1h'',3600),(''4h'',14400)
+), targets AS (
+  SELECT tf,
+         to_char(
+           to_timestamp(floor(extract(epoch from now())/secs)*secs - secs),
+           ''YYYY-MM-DD HH24:MI:SS''
+         ) AS target_open_str
+  FROM tf
+), ok AS (
+  SELECT a.symbol, t.tf
+  FROM targets t
+  JOIN mtf_audit a
+    ON a.details->>''timeframe'' = t.tf
+   AND a.details->>''kline_time'' = t.target_open_str
+   AND a.step ILIKE ''%VALIDATION_SUCCESS''
+)
+SELECT symbol
+FROM ok
+GROUP BY symbol
+HAVING count(*) = 5
+ORDER BY symbol;'
+
+psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME" -At -c "$SQL"
+```
+
+Notes:
+- The query aligns “now” to the previous closed candle per TF and checks audits for `VALIDATION_SUCCESS` with matching `timeframe` and `kline_time`.
+- Steps may be upper/lower‑case; filtering uses `ILIKE '%VALIDATION_SUCCESS'` and relies on `details->>'timeframe'` for TF.
