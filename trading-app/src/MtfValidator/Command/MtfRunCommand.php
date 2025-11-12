@@ -1079,6 +1079,16 @@ class MtfRunCommand extends Command
         // Combiner les symboles à exclure
         $symbolsWithActivity = array_unique(array_merge($openPositionSymbols, $openOrderSymbols));
 
+        // Réactiver les switches des symboles qui n'ont plus d'ordres/positions ouverts
+        try {
+            $reactivatedCount = $this->mtfSwitchRepository->reactivateSwitchesForInactiveSymbols($symbolsWithActivity);
+            if ($reactivatedCount > 0) {
+                // Log silencieux en CLI, mais on peut ajouter un log si nécessaire
+            }
+        } catch (\Throwable $e) {
+            // Log silencieux en CLI pour les erreurs de switch
+        }
+
         // Filtrer les symboles
         foreach ($symbols as $symbol) {
             $symbolUpper = strtoupper($symbol);

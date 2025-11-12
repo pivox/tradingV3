@@ -423,6 +423,25 @@ final class MtfRunOrchestrator
         // Combiner les symboles à exclure
         $symbolsWithActivity = array_unique(array_merge($openPositionSymbols, $openOrderSymbols));
 
+        // Réactiver les switches des symboles qui n'ont plus d'ordres/positions ouverts
+        if ($this->mtfSwitchRepository) {
+            try {
+                $reactivatedCount = $this->mtfSwitchRepository->reactivateSwitchesForInactiveSymbols($symbolsWithActivity);
+                if ($reactivatedCount > 0) {
+                    $this->mtfLogger->info('[MTF Orchestrator] Reactivated switches for inactive symbols', [
+                        'run_id' => $runIdString,
+                        'reactivated_count' => $reactivatedCount,
+                        'reason' => 'no_open_orders_or_positions',
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                $this->mtfLogger->error('[MTF Orchestrator] Failed to reactivate switches for inactive symbols', [
+                    'run_id' => $runIdString,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         // Traiter chaque symbole
         foreach ($symbols as $symbol) {
             $symbolUpper = strtoupper($symbol);

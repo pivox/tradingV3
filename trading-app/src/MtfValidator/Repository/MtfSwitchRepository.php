@@ -384,6 +384,60 @@ class MtfSwitchRepository extends ServiceEntityRepository
             ->getQuery()
             ->getResult();
     }
+
+    /**
+     * Réactive les switches des symboles qui n'ont plus d'ordres/positions ouverts.
+     * Réactive uniquement les switches OFF avec expiresAt > now (encore dans leur période de cooldown).
+     *
+     * @param array<string> $symbolsWithActivity Liste des symboles qui ont des ordres/positions ouverts
+     * @return int Nombre de switches réactivés
+     */
+    public function reactivateSwitchesForInactiveSymbols(array $symbolsWithActivity): int
+    {
+        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+
+        // Récupérer tous les switches OFF avec expiresAt > now (encore dans leur période de cooldown)
+        // Uniquement les switches de symboles simples (pas les switches de symboles+timeframe)
+        $qb = $this->createQueryBuilder('s');
+        $switchesToCheck = $qb
+            ->where('s.isOn = :isOff')
+            ->andWhere('s.expiresAt IS NOT NULL')
+            ->andWhere('s.expiresAt > :now')
+            ->andWhere('s.switchKey LIKE :pattern')
+            ->andWhere('s.switchKey NOT LIKE :excludePattern')
+            ->setParameter('isOff', false)
+            ->setParameter('now', $now)
+            ->setParameter('pattern', 'SYMBOL:%')
+            ->setParameter('excludePattern', 'SYMBOL_TF:%')
+            ->getQuery()
+            ->getResult();
+
+        $reactivatedCount = 0;
+        $symbolsWithActivityUpper = array_map('strtoupper', $symbolsWithActivity);
+
+        foreach ($switchesToCheck as $switch) {
+            $symbol = $switch->getSymbol();
+            if ($symbol === null) {
+                continue;
+            }
+
+            $symbolUpper = strtoupper($symbol);
+
+            // Si le symbole n'est pas dans la liste des symboles avec activité, réactiver le switch
+            if (!in_array($symbolUpper, $symbolsWithActivityUpper, true)) {
+                $switch->turnOn();
+                $switch->setExpiresAt(null);
+                $switch->setDescription(null);
+                $reactivatedCount++;
+            }
+        }
+
+        if ($reactivatedCount > 0) {
+            $this->getEntityManager()->flush();
+        }
+
+        return $reactivatedCount;
+    }
 }
 
 
