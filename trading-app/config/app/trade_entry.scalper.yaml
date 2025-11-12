@@ -94,6 +94,13 @@ trade_entry:
         allowed_execution_timeframes: ['1m','5m','15m']
         require_price_or_atr: true
 
+    # MARKET ENTRY (capé) — activable avec conditions
+    market_entry:
+        enabled: true
+        allowed_execution_timeframes: ['1m','5m']
+        max_slippage_bps: 25
+        adx_min_1h: 15
+
     entry:
         prefer_maker: true
         fallback_taker: true

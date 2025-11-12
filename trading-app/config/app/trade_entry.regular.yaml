@@ -109,6 +109,13 @@ trade_entry:
         # Exiger au moins un prix courant ou un ATR pour tenter une exécution
         require_price_or_atr: true
 
+    # MARKET ENTRY (capé) — profil régulier, conditions plus strictes
+    market_entry:
+        enabled: true
+        allowed_execution_timeframes: ['1m','5m']
+        max_slippage_bps: 20
+        adx_min_1h: 20
+
     # ======== ENTRY BUDGET & QUANTIZATION ========
     # ❌ NON UTILISÉES: Section complète non référencée dans le code
     entry:

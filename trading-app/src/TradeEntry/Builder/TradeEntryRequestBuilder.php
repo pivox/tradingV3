@@ -40,7 +40,8 @@ final class TradeEntryRequestBuilder
         ?string $executionTf = null,
         ?float $price = null,
         ?float $atr = null,
-        ?string $mode = null
+        ?string $mode = null,
+        ?array $metrics = null
     ): ?TradeEntryRequest {
         $side = strtoupper((string)$signalSide);
         if (!in_array($side, ['LONG', 'SHORT'], true)) {
@@ -95,6 +96,47 @@ final class TradeEntryRequestBuilder
         }
 
         $orderType = $defaults['order_type'] ?? 'limit';
+
+        // Market entry decision (optional, config-driven)
+        // metrics can include: atr_pct_15m_bps, adx_1h
+        try {
+            $marketCfg = $config->getMarketEntry();
+            $marketEnabled = (bool)($marketCfg['enabled'] ?? false);
+            if ($marketEnabled) {
+                $allowedTfs = (array)($marketCfg['allowed_execution_timeframes'] ?? []);
+                $tfAllowed = empty($allowedTfs) || in_array($executionTf, array_map('strtolower', $allowedTfs), true);
+                $adxMin = isset($marketCfg['adx_min_1h']) ? (float)$marketCfg['adx_min_1h'] : null;
+                $adxOk = ($adxMin === null) || (isset($metrics['adx_1h']) && is_numeric($metrics['adx_1h']) && (float)$metrics['adx_1h'] >= $adxMin);
+                if ($tfAllowed && $adxOk) {
+                    $orderType = 'market';
+                    $this->positionsLogger->info('market_entry.decision', [
+                        'symbol' => $symbol,
+                        'execution_tf' => $executionTf,
+                        'mode' => $mode,
+                        'adx_1h' => $metrics['adx_1h'] ?? null,
+                        'atr_pct_15m_bps' => $metrics['atr_pct_15m_bps'] ?? null,
+                        'max_slippage_bps' => $marketCfg['max_slippage_bps'] ?? null,
+                        'reason' => 'market_enabled_and_conditions_passed',
+                    ]);
+                } else {
+                    $this->positionsLogger->info('market_entry.decision', [
+                        'symbol' => $symbol,
+                        'execution_tf' => $executionTf,
+                        'mode' => $mode,
+                        'adx_1h' => $metrics['adx_1h'] ?? null,
+                        'atr_pct_15m_bps' => $metrics['atr_pct_15m_bps'] ?? null,
+                        'allowed_tfs' => $allowedTfs,
+                        'adx_min' => $adxMin,
+                        'reason' => 'conditions_not_met_keep_limit',
+                    ]);
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->positionsLogger->warning('market_entry.error', [
+                'symbol' => $symbol,
+                'error' => $e->getMessage(),
+            ]);
+        }
         // entryLimitHint est optionnel; si null, OrderPlanBuilder utilisera best bid/ask
         $entryLimitHint = ($orderType === 'limit' && $price !== null) ? $price : null;
 

@@ -68,7 +68,14 @@ final class TradingDecisionHandler
         // 2. Sélecteur d'exécution (15m/5m/1m) basé sur execution_selector
         $selectorContext = $this->buildSelectorContext($symbolResult);
         $execDecision = $this->executionSelector->decide($selectorContext);
-        $effectiveTf = $execDecision->executionTimeframe !== 'NONE' ? $execDecision->executionTimeframe : ($symbolResult->executionTf ?? '1m');
+        
+        // Si ExecutionSelector retourne NONE, cela signifie que filters_mandatory ont échoué
+        if ($execDecision->executionTimeframe === 'NONE') {
+            $failedChecks = $this->extractFailedChecks($execDecision->meta['filters'] ?? []);
+            return $this->createSkippedResult($symbolResult, 'trading_conditions_not_met', $forcedAtr5m, $decisionKey, $failedChecks, $execDecision->meta['filters'] ?? []);
+        }
+        
+        $effectiveTf = $execDecision->executionTimeframe;
         // ATR du TF d'exécution (fallbacks hiérarchiques)
         $atrForTf = null;
         try { $atrForTf = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: $effectiveTf); } catch (\Throwable) {}
@@ -101,13 +108,55 @@ final class TradingDecisionHandler
             'execution_selector_config' => $execSelectorForLog,
         ] + ['meta' => $execDecision->meta]);
 
-        // 3. Construction via Builder (délégation) avec champs minimaux
+        // 3. Calculer métriques utiles à la décision market (best-effort)
+        $marketMetrics = [];
+        // adx 1h
+        try {
+            $list1h = $this->indicatorProvider->getListPivot(symbol: $symbolResult->symbol, tf: '1h');
+            if ($list1h !== null) {
+                $ind = $list1h->toArray();
+                $adx1h = $ind['adx'] ?? null;
+                if (is_numeric($adx1h)) {
+                    $marketMetrics['adx_1h'] = (float)$adx1h;
+                }
+            }
+        } catch (\Throwable) {}
+        // atr_pct_15m_bps
+        try {
+            $priceForCalc = $symbolResult->currentPrice;
+            if (!\is_float($priceForCalc) || $priceForCalc <= 0.0) {
+                // Fallback: dernière close 15m via provider
+                $kl = $this->mainProvider?->getKlineProvider()->getKlines($symbolResult->symbol, Timeframe::TF_15M, 2) ?? [];
+                if (!empty($kl)) {
+                    $last = end($kl);
+                    if (\is_object($last) && isset($last->close)) {
+                        $priceForCalc = (float)$last->close->toFloat();
+                    }
+                }
+            }
+            $atr15m = null;
+            try { $atr15m = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '15m'); } catch (\Throwable) {}
+            if (\is_float($priceForCalc) && $priceForCalc > 0.0 && \is_float($atr15m) && $atr15m > 0.0) {
+                $marketMetrics['atr_pct_15m_bps'] = 10000.0 * $atr15m / $priceForCalc;
+            }
+        } catch (\Throwable) {}
+
+        $this->mtfLogger->info('order_journey.market_entry.metrics', [
+            'symbol' => $symbolResult->symbol,
+            'execution_tf' => $effectiveTf,
+            'adx_1h' => $marketMetrics['adx_1h'] ?? null,
+            'atr_pct_15m_bps' => $marketMetrics['atr_pct_15m_bps'] ?? null,
+        ]);
+
+        // 4. Construction via Builder (délégation) avec champs minimaux
         $tradeRequest = $this->requestBuilder->fromMtfSignal(
             $symbolResult->symbol,
             (string)$symbolResult->signalSide,
             $effectiveTf,
             $symbolResult->currentPrice,
             (\is_float($atrForTf) && $atrForTf > 0.0) ? $atrForTf : $forcedAtr5m,
+            $symbolResult->tradeEntryModeUsed, // Passer le mode (même mécanisme que validations.{mode}.yaml)
+            $marketMetrics,
         );
 
         if ($tradeRequest === null) {
@@ -160,8 +209,8 @@ final class TradingDecisionHandler
             );
 
             $execution = $mtfRunDto->dryRun
-                ? $this->tradeEntryService->buildAndSimulate($tradeRequest, $decisionKey, $hook)
-                : $this->tradeEntryService->buildAndExecute($tradeRequest, $decisionKey, $hook);
+                ? $this->tradeEntryService->buildAndSimulate($tradeRequest, $decisionKey, $hook, $symbolResult->tradeEntryModeUsed)
+                : $this->tradeEntryService->buildAndExecute($tradeRequest, $decisionKey, $hook, $symbolResult->tradeEntryModeUsed);
 
             $decision = [
                 'status' => $execution->status,
@@ -457,25 +506,55 @@ final class TradingDecisionHandler
         return $context;
     }
 
-    private function createSkippedResult(SymbolResultDto $symbolResult, string $reason, ?float $forcedAtr5m = null, ?string $decisionKey = null): SymbolResultDto
-    {
+    /**
+     * @param array<string>|null $failedChecks Liste des noms de checks échoués
+     * @param array<string,array>|null $failedChecksDetail Détails complets des checks échoués (pour raw)
+     */
+    private function createSkippedResult(
+        SymbolResultDto $symbolResult,
+        string $reason,
+        ?float $forcedAtr5m = null,
+        ?string $decisionKey = null,
+        ?array $failedChecks = null,
+        ?array $failedChecksDetail = null
+    ): SymbolResultDto {
         if ($decisionKey !== null) {
             $this->mtfLogger->info('order_journey.trade_request.skipped', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
                 'reason' => $reason,
+                'failed_checks' => $failedChecks,
             ]);
         }
+
+        $tradingDecision = [
+            'status' => 'skipped',
+            'reason' => $reason,
+        ];
+
+        // Enrichir avec failed_checks si disponibles
+        if ($failedChecks !== null && $failedChecks !== []) {
+            $tradingDecision['failed_checks'] = $failedChecks;
+        }
+
+        // Construire le raw avec les détails complets si disponibles
+        $raw = [
+            'reason' => $reason,
+        ];
+        if ($failedChecks !== null && $failedChecks !== []) {
+            $raw['failed_checks'] = $failedChecks;
+        }
+        if ($failedChecksDetail !== null && $failedChecksDetail !== []) {
+            $raw['failed_checks_detail'] = $failedChecksDetail;
+        }
+        $tradingDecision['raw'] = $raw;
 
         return new SymbolResultDto(
             symbol: $symbolResult->symbol,
             status: $symbolResult->status,
             executionTf: $symbolResult->executionTf,
             signalSide: $symbolResult->signalSide,
-            tradingDecision: [
-                'status' => 'skipped',
-                'reason' => $reason,
-            ],
+            tradingDecision: $tradingDecision,
             error: $symbolResult->error,
             context: $symbolResult->context,
             currentPrice: $symbolResult->currentPrice,
@@ -483,6 +562,22 @@ final class TradingDecisionHandler
             validationModeUsed: $symbolResult->validationModeUsed,
             tradeEntryModeUsed: $symbolResult->tradeEntryModeUsed
         );
+    }
+
+    /**
+     * Extrait les noms des checks échoués depuis les résultats de filtres
+     * @param array<string,array> $filtersResults Résultats des évaluations de filtres
+     * @return array<string> Liste des noms de checks échoués
+     */
+    private function extractFailedChecks(array $filtersResults): array
+    {
+        $failed = [];
+        foreach ($filtersResults as $name => $result) {
+            if (is_array($result) && !(bool)($result['passed'] ?? false)) {
+                $failed[] = $name;
+            }
+        }
+        return $failed;
     }
 
     private function logExecution(string $symbol, array $decision): void

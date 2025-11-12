@@ -61,6 +61,11 @@ class TradeEntryConfig
         return $this->config['decision'] ?? [];
     }
 
+    public function getMarketEntry(): array
+    {
+        return $this->config['market_entry'] ?? [];
+    }
+
     public function getVersion(): string
     {
         $parsed = \Symfony\Component\Yaml\Yaml::parseFile($this->path) ?? [];
@@ -73,4 +78,3 @@ class TradeEntryConfig
         return $parsed['meta'] ?? [];
     }
 }
-
