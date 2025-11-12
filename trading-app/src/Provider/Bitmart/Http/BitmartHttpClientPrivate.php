@@ -32,7 +32,9 @@ final class BitmartHttpClientPrivate
     private const PATH_CANCEL_ALL_AFTER = '/contract/private/cancel-all-after';
     private const PATH_FEE_RATE = '/contract/private/fee-rate';
     private const PATH_SUBMIT_LEVERAGE = '/contract/private/submit-leverage';
-    private const DEFAULT_CANCEL_AFTER_SECONDS = 55;
+    // Default auto-cancel after order submission (seconds)
+    // Note: BitMart caps cancel-all-after to ~60s; higher values will be clamped.
+    private const DEFAULT_CANCEL_AFTER_SECONDS = 120;
 
     public function __construct(
         #[Autowire(service: 'http_client.bitmart_futures_v2_private')]
@@ -462,7 +464,10 @@ final class BitmartHttpClientPrivate
      */
     public function submitOrder(array $orderData): array
     {
+        // Optional per-order dead-man timeout; remove from payload before sending to Bitmart
+        $cancelAfterSeconds = null;
         if (array_key_exists('cancel_after_timeout', $orderData)) {
+            $cancelAfterSeconds = (int) $orderData['cancel_after_timeout'];
             unset($orderData['cancel_after_timeout']);
         }
 
@@ -475,11 +480,25 @@ final class BitmartHttpClientPrivate
         }
 
         try {
-            $this->cancelAllAfter($symbol, self::DEFAULT_CANCEL_AFTER_SECONDS);
+            // Only schedule cancel-all-after when explicitly requested, or when a non-zero default is configured
+            $duration = $cancelAfterSeconds ?? self::DEFAULT_CANCEL_AFTER_SECONDS;
+            if ($duration > 0) {
+                $this->cancelAllAfter($symbol, $duration);
+                $this->bitmartLogger->info('[Bitmart] Timed cancel scheduled', [
+                    'symbol' => $symbol,
+                    'timeout' => $duration,
+                ]);
+            } else {
+                // No timed cancel scheduling by default
+                $this->bitmartLogger->debug('[Bitmart] Timed cancel not scheduled (disabled)', [
+                    'symbol' => $symbol,
+                    'timeout' => $duration,
+                ]);
+            }
         } catch (\Throwable $e) {
             $this->bitmartLogger->warning('[Bitmart] Timed cancel scheduling failed', [
                 'symbol' => $symbol,
-                'timeout' => self::DEFAULT_CANCEL_AFTER_SECONDS,
+                'timeout' => $cancelAfterSeconds ?? self::DEFAULT_CANCEL_AFTER_SECONDS,
                 'error' => $e->getMessage(),
             ]);
         }
@@ -517,6 +536,9 @@ final class BitmartHttpClientPrivate
             $duration = 0;
         } elseif ($duration > 0 && $duration < 5) {
             $duration = 5;
+        } elseif ($duration > 60) {
+            // BitMart enforces a maximum around 60s; clamp to avoid API rejection
+            $duration = 60;
         }
 
         return $this->requestJsonPrivate('POST', self::PATH_CANCEL_ALL_AFTER, [], [

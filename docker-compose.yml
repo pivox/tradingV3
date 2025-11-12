@@ -334,10 +334,12 @@ services:
       DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
       LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
       APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
+      DEFAULT_URI: http://trading-app-nginx
       MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
       WS_WORKER_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
       BITMART_PUBLIC_API_URL: ${BITMART_PUBLIC_API_URL}
       ORDER_TIMEOUT_SWITCH_DURATION: ${ORDER_TIMEOUT_SWITCH_DURATION:-15m}
+      LOG_LEVEL_MAIN: info
     depends_on:
       trading-app-php:
         condition: service_started

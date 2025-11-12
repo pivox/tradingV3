@@ -22,6 +22,10 @@ parameters:
         - [name: 'regular', enabled: true, priority: 1]
         - [name: 'scalper', enabled: true, priority: 2]
 
+    # Fallbacks when env vars are missing (useful in CLI/worker containers)
+    router.default_uri: 'http://trading-app-nginx'
+    messenger.transport.dsn: 'redis://redis:6379/log-messages'
+
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
 
     # Configuration MTF/Decision: déplacée dans config/app/mtf_validations.yaml (mtf_validation.defaults)

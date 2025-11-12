@@ -152,7 +152,7 @@ flowchart LR
 - Entrée maker par défaut : les plans LIMIT sont envoyés en `mode=4` (post-only) pour tenter une exécution maker.
 - Positionnement rapproché : l'entrée LIMIT se cale 1 tick à l'intérieur du carnet (recalibrée si l'écart au mark dépasse ~0.5%).
 - Fallback automatique : si Bitmart rejette la soumission maker, la même intention est renvoyée immédiatement en ordre `market` (taker) avec le même `client_order_id`.
-- Timeout de 2 minutes : chaque ordre accepté programme une annulation différée via Messenger (`CancelOrderMessage`), afin d'éviter les LIMIT qui stagnent.
+- Annulation différée (exchange) : le « cancel-all-after » Bitmart (dead-man's switch) est activé par défaut à 120 s par symbole (clampé à 60 s côté exchange). Vous pouvez surcharger par ordre via `cancel_after_timeout` (en secondes). À l'expiration, Bitmart annule tous les ordres ouverts du symbole. Après ouverture de position (flux MARKET) et soumission des TP/SL, l'app désarme automatiquement le dead-man pour éviter d'annuler les TP/SL.
 - TP/SL préconfigurés : les prix `preset_*` (stop loss / take profit) sont envoyés autant pour le maker initial que pour le fallback taker, garantissant la couverture dès le fill.
 - TP hybride : le take-profit final combine le k·R théorique (ex. 2R) et les pivots intraday (PP/R1/S1...).
 - Traçage fin : `var/log/order-journey*.log` rejoue l’intégralité du pipeline (signal READY → plan → exécution). Voir `docs/ORDER_FLOW_README.md` pour le détail des étapes et paramètres (buffers, politiques TP).

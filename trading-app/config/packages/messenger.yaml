@@ -17,3 +17,4 @@ framework:
         failure_transport: failed_order_timeout
         routing:
             App\TradeEntry\Message\CancelOrderMessage: order_timeout
+            App\TradeEntry\Message\LimitFillWatchMessage: order_timeout
