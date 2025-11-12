@@ -27,6 +27,7 @@ mysql-data/
 .cursor/
 
 # Environment files
+/.env
 .env
 .env.local
 .env.*.local

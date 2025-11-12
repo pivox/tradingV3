@@ -20,6 +20,8 @@ class MtfStatsController extends AbstractController
     #[Route('/mtf/stats', name: 'mtf_stats_index')]
     public function index(Request $request): Response
     {
+        // Always refresh the materialized view when opening the page
+        try { $this->statsRepository->refreshMaterializedView(true); } catch (\Throwable) {}
         // KPIs globaux basés sur la vue matérialisée
         $kpis = $this->statsRepository->getGlobalKpis();
 

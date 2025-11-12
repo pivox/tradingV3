@@ -1,5 +1,5 @@
 # Profil SCALPER - TradeEntry
-version: '2.5.93s'
+version: '2.5.94s'
 
 meta:
     name: SCALPING v2.0 - Profil SCALPER
@@ -11,7 +11,7 @@ meta:
 trade_entry:
     defaults:
         risk_pct_percent: 5.0
-        initial_margin_usdt: 25.0
+        initial_margin_usdt: 70.0
         fallback_account_balance: 0.0
 
         # R plus petit pour scalping

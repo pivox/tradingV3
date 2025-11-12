@@ -25,6 +25,14 @@ parameters:
     # Fallbacks when env vars are missing (useful in CLI/worker containers)
     router.default_uri: 'http://trading-app-nginx'
     messenger.transport.dsn: 'redis://redis:6379/log-messages'
+    # Default values for env-backed log levels (so env is optional)
+    env(MTF_LOG_LEVEL): 'info'
+    env(LOG_LEVEL_MAIN): 'info'
+    env(LOG_LEVEL_SIGNALS): 'info'
+    env(LOG_LEVEL_POSITIONS): 'info'
+    env(LOG_LEVEL_INDICATORS): 'info'
+    env(LOG_LEVEL_HIGHCONVICTION): 'info'
+    env(LOG_LEVEL_PIPELINE_EXEC): 'info'
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
 

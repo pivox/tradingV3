@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\MtfValidator\Repository;
 
 use Doctrine\DBAL\Connection;
+use Throwable;
 use Psr\Log\LoggerInterface;
 
 final class MtfAuditStatsRepository
@@ -17,12 +18,88 @@ final class MtfAuditStatsRepository
 
     public function refreshMaterializedView(bool $concurrently = true): void
     {
-        $sql = $concurrently
-            ? 'REFRESH MATERIALIZED VIEW CONCURRENTLY mtf_audit_stats'
-            : 'REFRESH MATERIALIZED VIEW mtf_audit_stats';
+        // Try refresh; if view missing, create it and try again.
+        try {
+            $sql = $concurrently
+                ? 'REFRESH MATERIALIZED VIEW CONCURRENTLY mtf_audit_stats'
+                : 'REFRESH MATERIALIZED VIEW mtf_audit_stats';
+            $this->connection->executeStatement($sql);
+            $this->logger->info('[MtfAuditStats] Materialized view refreshed', [ 'concurrently' => $concurrently ]);
+            return;
+        } catch (Throwable $e) {
+            if (!$this->isRelationMissingError($e)) {
+                throw $e;
+            }
+            // Create the view and indexes, then refresh (non-concurrently first for safety)
+            $this->createMaterializedViewIfMissing();
+            $this->connection->executeStatement('REFRESH MATERIALIZED VIEW mtf_audit_stats');
+            $this->logger->info('[MtfAuditStats] Materialized view created and refreshed');
+        }
+    }
 
-        $this->connection->executeStatement($sql);
-        $this->logger->info('[MtfAuditStats] Materialized view refreshed', [ 'concurrently' => $concurrently ]);
+    private function isRelationMissingError(Throwable $e): bool
+    {
+        $msg = strtolower($e->getMessage());
+        return str_contains($msg, 'relation') && str_contains($msg, 'does not exist')
+            || str_contains($msg, '42p01');
+    }
+
+    private function createMaterializedViewIfMissing(): void
+    {
+        // Create the view with the same definition as the migration (idempotent)
+        $sqlCreate = <<<'SQL'
+CREATE MATERIALIZED VIEW IF NOT EXISTS mtf_audit_stats AS
+WITH base AS (
+  SELECT
+    symbol,
+    COALESCE(NULLIF(timeframe, ''), NULLIF(details->> 'timeframe', '')) AS timeframe,
+    created_at,
+    COALESCE(candle_open_ts, NULLIF(details->> 'kline_time', '')::timestamptz) AS candle_open_ts,
+    step,
+    NULLIF(details->> 'passed', '')::boolean AS passed,
+    CASE
+      WHEN details ? 'metrics' AND NULLIF(details->'metrics'->> 'atr_rel', '') IS NOT NULL
+        THEN NULLIF(details->'metrics'->> 'atr_rel', '')::numeric
+      WHEN (details ? 'atr' AND details ? 'current_price'
+            AND NULLIF(details->> 'current_price', '') ~ '^[0-9.]+$'
+            AND (details->> 'current_price')::numeric > 0)
+        THEN ((details->> 'atr')::numeric / NULLIF((details->> 'current_price')::numeric, 0))
+      ELSE NULL
+    END AS atr_rel,
+    CASE WHEN details ? 'spread_bps' THEN NULLIF(details->> 'spread_bps', '')::numeric ELSE NULL END AS spread_bps,
+    severity
+  FROM mtf_audit
+)
+SELECT
+  symbol,
+  timeframe,
+  COUNT(*)                                                       AS total,
+  COUNT(*) FILTER (WHERE passed IS TRUE)                         AS nb_passed,
+  CASE WHEN COUNT(*) > 0
+       THEN ROUND((COUNT(*) FILTER (WHERE passed IS TRUE))::numeric * 100.0 / COUNT(*), 2)
+       ELSE 0.0
+  END                                                            AS pass_rate,
+  AVG(atr_rel)                                                   AS avg_atr_rel,
+  AVG(spread_bps)                                                AS avg_spread_bps,
+  AVG(severity)::float                                           AS avg_severity,
+  MAX(candle_open_ts)                                            AS last_candle_open_ts,
+  MAX(created_at)                                                AS last_created_at,
+  COUNT(*) FILTER (WHERE step = 'ALIGNMENT_FAILED')              AS nb_alignment_failed,
+  COUNT(*) FILTER (WHERE step = '4H_VALIDATION_FAILED')          AS nb_validation_failed_4h,
+  COUNT(*) FILTER (WHERE step = '1H_VALIDATION_FAILED')          AS nb_validation_failed_1h,
+  COUNT(*) FILTER (WHERE step = '15M_VALIDATION_FAILED')         AS nb_validation_failed_15m,
+  COUNT(*) FILTER (WHERE step = '5M_VALIDATION_FAILED')          AS nb_validation_failed_5m,
+  COUNT(*) FILTER (WHERE step = '1M_VALIDATION_FAILED')          AS nb_validation_failed_1m
+FROM base
+WHERE timeframe IS NOT NULL AND timeframe <> ''
+GROUP BY symbol, timeframe
+SQL;
+
+        $this->connection->executeStatement($sqlCreate);
+        $this->connection->executeStatement('CREATE UNIQUE INDEX IF NOT EXISTS ux_mtf_audit_stats_symbol_tf ON mtf_audit_stats (symbol, timeframe)');
+        $this->connection->executeStatement('CREATE INDEX IF NOT EXISTS idx_mtf_audit_stats_last_created ON mtf_audit_stats (last_created_at DESC)');
+        $this->connection->executeStatement('CREATE INDEX IF NOT EXISTS idx_mtf_audit_stats_pass_rate ON mtf_audit_stats (pass_rate DESC)');
+        $this->logger->info('[MtfAuditStats] Materialized view created (if missing)');
     }
 
     /**
@@ -68,7 +145,15 @@ final class MtfAuditStatsRepository
              . ' COALESCE(AVG(avg_severity),NULL) as avg_severity, '
              . ' MAX(last_created_at) as last_created_at'
              . ' FROM mtf_audit_stats';
-        $row = $this->connection->fetchAssociative($sql) ?: [];
+        try {
+            $row = $this->connection->fetchAssociative($sql) ?: [];
+        } catch (Throwable $e) {
+            if (!$this->isRelationMissingError($e)) {
+                throw $e;
+            }
+            $this->createMaterializedViewIfMissing();
+            $row = $this->connection->fetchAssociative($sql) ?: [];
+        }
         $totalAudits = (int)($row['total_audits'] ?? 0);
         $totalPassed = (int)($row['total_passed'] ?? 0);
         $avgPassRate = $totalAudits > 0 ? round(($totalPassed / $totalAudits) * 100, 2) : 0.0;
@@ -131,7 +216,13 @@ final class MtfAuditStatsRepository
 
         // Total count
         $sqlTotal = 'SELECT COUNT(*) FROM mtf_audit_stats';
-        $total = (int)$this->connection->fetchOne($sqlTotal);
+        try {
+            $total = (int)$this->connection->fetchOne($sqlTotal);
+        } catch (Throwable $e) {
+            if (!$this->isRelationMissingError($e)) { throw $e; }
+            $this->createMaterializedViewIfMissing();
+            $total = (int)$this->connection->fetchOne($sqlTotal);
+        }
 
         // Filtered count
         $sqlCount = 'SELECT COUNT(*) FROM mtf_audit_stats';
@@ -178,5 +269,4 @@ final class MtfAuditStatsRepository
         return $this->connection->fetchAllAssociative($sql, $params, $types);
     }
 }
-
 
