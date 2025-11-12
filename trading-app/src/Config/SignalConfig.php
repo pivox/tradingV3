@@ -27,12 +27,17 @@ class SignalConfig
 
     public function getTimeframes(): array
     {
-        return array_keys($this->config['timeframes'] ?? []);
+        $tfs = $this->config['timeframes'] ?? [];
+        if (!is_array($tfs)) { return []; }
+        // Ne garder que les entrées dont la valeur est un tableau (exclut 'meta' en string)
+        $filtered = array_filter($tfs, static fn($v) => is_array($v));
+        return array_keys($filtered);
     }
 
     public function getTimeframeConfig(string $timeframe): array
     {
-        return $this->config['timeframes'][$timeframe] ?? [];
+        $v = $this->config['timeframes'][$timeframe] ?? [];
+        return is_array($v) ? $v : [];
     }
 
     public function getMinBars(string $timeframe): int
@@ -71,4 +76,3 @@ class SignalConfig
         return $this->config['runtime'] ?? [];
     }
 }
-
