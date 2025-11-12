@@ -39,7 +39,8 @@ trade_entry:
         inside_ticks: 1
         max_deviation_pct: 0.005
         implausible_pct: 0.02
-        zone_max_deviation_pct: 0.012
+        # Slightly relaxed to reduce skipped_out_of_zone for borderline cases
+        zone_max_deviation_pct: 0.016
 
         k_dynamic: 10.0
 
