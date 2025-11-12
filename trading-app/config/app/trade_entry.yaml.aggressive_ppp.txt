@@ -28,15 +28,15 @@ trade_entry:
         order_mode: 1
         market_max_spread_pct: 0.001
         inside_ticks: 1
-        max_deviation_pct: 0.005
+        
         implausible_pct: 0.02
-        zone_max_deviation_pct: 0.015
+        zone_
         k_dynamic: 10.0
 
     risk:
         fixed_risk_pct: 10.0
         daily_max_loss_pct: 8.0
-        daily_max_loss_usdt: 20.0
+        daily_max_loss_usdt: 25.0
         daily_loss_count_unrealized: true
         max_concurrent_positions: 2
 

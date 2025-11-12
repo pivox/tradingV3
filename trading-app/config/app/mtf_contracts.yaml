@@ -1,4 +1,4 @@
-version: '0.0.06'
+version: '0.0.067.120-10'
 
 mtf_contracts:
     selection:
