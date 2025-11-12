@@ -11,6 +11,12 @@ DC := $(COMPOSE) $(FILES)
 # Trading App service name
 TA_SVC ?= trading-app-php
 
+# Defaults for investigation watch
+SYMBOLS ?=
+SINCE_MINUTES ?= 30
+FORMAT ?= table
+INTERVAL ?= 120
+
 # ===================================
 # Trading App Build Commands
 # ===================================
@@ -74,6 +80,15 @@ show-orders: ## Affiche l'état actuel des ordres ouvertes
 
 show-pipeline: ## Affiche en continu le pipeline des contrats
 	docker-compose exec php php bin/console app:monitor:contract-pipeline --interval=2
+
+.PHONY: watch-investigate
+watch-investigate: ## Boucle d'investigation toutes les 2m (SYMBOLS=SYM1,SYM2 [SINCE_MINUTES=30] [INTERVAL=120] [FORMAT=table|json])
+	@if [ -z "$(SYMBOLS)" ]; then \
+		echo "❌ Veuillez spécifier les symboles : make watch-investigate SYMBOLS=GLMUSDT,VELODROMEUSDT [SINCE_MINUTES=30] [INTERVAL=120] [FORMAT=table|json]"; \
+		exit 1; \
+	fi
+	@echo "▶ investigate:no-order (watch) — SYMBOLS=$(SYMBOLS) SINCE_MINUTES=$(SINCE_MINUTES) INTERVAL=$(INTERVAL) FORMAT=$(FORMAT)"
+	$(DC) exec -T $(TA_SVC) bash bin/investigate_no_order_watch.sh --symbols=$(SYMBOLS) --since-minutes=$(SINCE_MINUTES) --format=$(FORMAT) --interval=$(INTERVAL)
 
 # ===================================
 # MTF Audit & Health Check Commands
