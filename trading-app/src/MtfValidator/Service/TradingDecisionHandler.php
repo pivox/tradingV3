@@ -15,6 +15,7 @@ use App\TradeEntry\Hook\MtfPostExecutionHook;
 use App\TradeEntry\Service\TradeEntryService;
 use App\Contract\Provider\MainProviderInterface;
 use App\Common\Enum\Timeframe;
+use App\Logging\LifecycleContextFactory;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -35,6 +36,7 @@ final class TradingDecisionHandler
         private readonly MtfValidationConfig $mtfConfig,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly AuditLoggerInterface $auditLogger,
+        private readonly LifecycleContextFactory $lifecycleContextFactory,
         private readonly ?MainProviderInterface $mainProvider = null,
     ) {}
 
@@ -101,6 +103,13 @@ final class TradingDecisionHandler
             'execution_selector_config' => $execSelectorForLog,
         ] + ['meta' => $execDecision->meta]);
 
+        $lifecycleContext = $this->lifecycleContextFactory->create($symbolResult->symbol)
+            ->withDecisionKey($decisionKey)
+            ->withProfile($symbolResult->tradeEntryModeUsed)
+            ->withMtfContext($effectiveTf, $this->extractMtfContext($symbolResult), $symbolResult->blockingTf)
+            ->withSelectorDecision($execDecision->expectedRMultiple, $execDecision->entryZoneWidthPct)
+            ->merge(['config_version' => $this->tradeEntryConfig->getVersion()]);
+
         // 3. Construction via Builder (délégation) avec champs minimaux
         $tradeRequest = $this->requestBuilder->fromMtfSignal(
             $symbolResult->symbol,
@@ -161,8 +170,8 @@ final class TradingDecisionHandler
             );
 
             $execution = $mtfRunDto->dryRun
-                ? $this->tradeEntryService->buildAndSimulate($tradeRequest, $decisionKey, $hook, $symbolResult->tradeEntryModeUsed)
-                : $this->tradeEntryService->buildAndExecute($tradeRequest, $decisionKey, $hook, $symbolResult->tradeEntryModeUsed);
+                ? $this->tradeEntryService->buildAndSimulate($tradeRequest, $decisionKey, $hook, $symbolResult->tradeEntryModeUsed, $lifecycleContext)
+                : $this->tradeEntryService->buildAndExecute($tradeRequest, $decisionKey, $hook, $symbolResult->tradeEntryModeUsed, $lifecycleContext);
 
             $decision = [
                 'status' => $execution->status,
@@ -456,6 +465,24 @@ final class TradingDecisionHandler
         }
 
         return $context;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function extractMtfContext(SymbolResultDto $symbolResult): array
+    {
+        $context = $symbolResult->context ?? [];
+        $tfs = [];
+        if (isset($context['context_tfs']) && \is_array($context['context_tfs'])) {
+            $tfs = array_map(
+                static fn($tf) => \is_string($tf) ? strtolower($tf) : null,
+                $context['context_tfs']
+            );
+            $tfs = array_values(array_filter($tfs));
+        }
+
+        return $tfs;
     }
 
     private function createSkippedResult(SymbolResultDto $symbolResult, string $reason, ?float $forcedAtr5m = null, ?string $decisionKey = null): SymbolResultDto
