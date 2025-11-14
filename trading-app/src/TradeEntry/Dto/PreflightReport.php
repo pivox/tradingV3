@@ -25,5 +25,11 @@ final class PreflightReport
         public readonly ?float $marketMaxVolume = null,
         /** @var array<string,float>|null */
         public readonly ?array $pivotLevels = null,
+        public readonly ?float $depthTopUsd = null,
+        public readonly ?float $bookLiquidityScore = null,
+        public readonly ?float $volatilityPct1m = null,
+        public readonly ?float $volumeRatio = null,
+        public readonly ?float $latencyRestMs = null,
+        public readonly ?float $latencyWsMs = null,
     ) {}
 }

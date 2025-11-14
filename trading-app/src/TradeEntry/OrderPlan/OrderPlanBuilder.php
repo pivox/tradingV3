@@ -425,6 +425,7 @@ final class OrderPlanBuilder
             entryZoneLow: $zone?->min,
             entryZoneHigh: $zone?->max,
             zoneExpiresAt: $zoneExpiresAt,
+            entryZoneMeta: $zone?->getMetadata(),
         );
 
         $this->positionsLogger->info('order_plan.model_ready', [

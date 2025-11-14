@@ -1,0 +1,199 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Trade Lifecycle - Statistiques{% endblock %}
+
+{% block body %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="mb-1">
+            <i class="bi bi-graph-up-arrow"></i> Statistiques Lifecycle
+        </h1>
+        <p class="text-muted mb-0">Période analysée&nbsp;: {{ hours }}h · Mise à jour {{ updatedAt|date('Y-m-d H:i') }} UTC</p>
+    </div>
+    <form method="get" class="d-flex align-items-center gap-2">
+        <label for="hours" class="form-label mb-0">Fenêtre (heures)</label>
+        <select class="form-select" id="hours" name="hours" onchange="this.form.submit()">
+            {% for option in [12,24,36,48,72,96,120,168] %}
+                <option value="{{ option }}" {% if option == hours %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <p class="text-muted mb-1">Zone dev moyenne</p>
+                <h4>{{ stats.zoneStats.avg_dev is not null ? (stats.zoneStats.avg_dev * 100)|number_format(2) ~ '%' : '—' }}</h4>
+                <small class="text-muted">Max toléré moyen: {{ stats.zoneStats.avg_max_dev is not null ? (stats.zoneStats.avg_max_dev * 100)|number_format(2) ~ '%' : '—' }}</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <p class="text-muted mb-1">Opportunités ratées</p>
+                <h4>{{ stats.missedTrades }}</h4>
+                <small class="text-muted">Skips > +1% 5m après</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <p class="text-muted mb-1">Timeout moyen</p>
+                <h4>{{ stats.avgTimeoutSec is not null ? stats.avgTimeoutSec|number_format(1) ~ ' s' : '—' }}</h4>
+                <small class="text-muted">ordres expirés</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <p class="text-muted mb-1">Spread moyen</p>
+                <h4>{{ stats.marketQuality.avg_spread is not null ? stats.marketQuality.avg_spread|number_format(2) ~ ' bps' : '—' }}</h4>
+                <small class="text-muted">Liquidité score: {{ stats.marketQuality.avg_liquidity is not null ? stats.marketQuality.avg_liquidity|number_format(2) : '—' }}</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-transparent">
+                <strong>Skips par symbole</strong>
+                <span class="text-muted ms-2">(Top 20)</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Symbole</th>
+                                <th class="text-end">Skipped</th>
+                                <th class="text-end">Total</th>
+                                <th class="text-end">Ratio</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in stats.skipStats %}
+                                <tr>
+                                    <td><span class="badge bg-dark">{{ row.symbol }}</span></td>
+                                    <td class="text-end">{{ row.skipped }}</td>
+                                    <td class="text-end">{{ row.total }}</td>
+                                    <td class="text-end">
+                                        <span class="fw-semibold {{ row.ratio > 0.4 ? 'text-danger' : (row.ratio > 0.2 ? 'text-warning' : 'text-success') }}">
+                                            {{ (row.ratio * 100)|number_format(1) }}%
+                                        </span>
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr><td colspan="4" class="text-center text-muted py-3">Pas de données disponibles.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-transparent">
+                <strong>Expirations par symbole</strong>
+                <span class="text-muted ms-2">(Top 20)</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Symbole</th>
+                                <th class="text-end">Submitted</th>
+                                <th class="text-end">Expired</th>
+                                <th class="text-end">Ratio</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in stats.expirationStats %}
+                                <tr>
+                                    <td><span class="badge bg-secondary">{{ row.symbol }}</span></td>
+                                    <td class="text-end">{{ row.submitted }}</td>
+                                    <td class="text-end">{{ row.expired }}</td>
+                                    <td class="text-end">
+                                        <span class="{{ row.ratio > 0.3 ? 'text-danger fw-semibold' : 'text-muted' }}">
+                                            {{ (row.ratio * 100)|number_format(1) }}%
+                                        </span>
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr><td colspan="4" class="text-center text-muted py-3">Pas de données disponibles.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4 mt-1">
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-transparent">
+                <strong>Blocages MTF</strong>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Timeframe</th>
+                                <th class="text-end">Occurrences</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in stats.mtfBlocking %}
+                                <tr>
+                                    <td>{{ row.tf|upper }}</td>
+                                    <td class="text-end">{{ row.total }}</td>
+                                </tr>
+                            {% else %}
+                                <tr><td colspan="2" class="text-center text-muted py-3">Pas de données disponibles.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-transparent">
+                <strong>Qualité marché</strong>
+            </div>
+            <div class="card-body">
+                <ul class="list-unstyled mb-0">
+                    <li class="d-flex justify-content-between mb-2">
+                        <span class="text-muted">Volume ratio</span>
+                        <span class="fw-semibold">{{ stats.marketQuality.avg_volume_ratio is not null ? stats.marketQuality.avg_volume_ratio|number_format(2) : '—' }}</span>
+                    </li>
+                    <li class="d-flex justify-content-between mb-2">
+                        <span class="text-muted">Profondeur moyenne (USD)</span>
+                        <span class="fw-semibold">{{ stats.marketQuality.avg_depth_usd is not null ? stats.marketQuality.avg_depth_usd|number_format(0, '.', ' ') : '—' }}</span>
+                    </li>
+                    <li class="d-flex justify-content-between mb-2">
+                        <span class="text-muted">Latence REST</span>
+                        <span class="fw-semibold">{{ stats.marketQuality.avg_latency_rest is not null ? stats.marketQuality.avg_latency_rest|number_format(1) ~ ' ms' : '—' }}</span>
+                    </li>
+                    <li class="d-flex justify-content-between">
+                        <span class="text-muted">Latence WS</span>
+                        <span class="fw-semibold">{{ stats.marketQuality.avg_latency_ws is not null ? stats.marketQuality.avg_latency_ws|number_format(1) ~ ' ms' : '—' }}</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

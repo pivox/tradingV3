@@ -6,6 +6,7 @@ namespace App\TradeEntry\Workflow;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\ExecutionBox;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
+use App\Logging\Dto\LifecycleContextBuilder;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -16,7 +17,7 @@ final class ExecuteOrderPlan
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
-    public function __invoke(OrderPlanModel $plan, ?string $decisionKey = null): ExecutionResult
+    public function __invoke(OrderPlanModel $plan, ?string $decisionKey = null, ?LifecycleContextBuilder $contextBuilder = null): ExecutionResult
     {
         $this->positionsLogger->info('execute_order_plan.start', [
             'symbol' => $plan->symbol,
@@ -32,7 +33,7 @@ final class ExecuteOrderPlan
         ]);
 
         try {
-            $result = $this->execution->execute($plan, $decisionKey);
+            $result = $this->execution->execute($plan, $decisionKey, $contextBuilder);
 
             $context = [
                 'symbol' => $plan->symbol,

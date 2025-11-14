@@ -11,6 +11,8 @@ final class EntryZone
         public readonly string $rationale = '',
         public readonly ?\DateTimeImmutable $createdAt = null,
         public readonly ?int $ttlSec = null,
+        /** @var array<string,mixed> */
+        public readonly array $metadata = [],
     ) {}
 
     public function contains(float $price): bool
@@ -36,5 +38,13 @@ final class EntryZone
         $now = $now ?? new \DateTimeImmutable();
         $elapsed = max(0, $now->getTimestamp() - $this->createdAt->getTimestamp());
         return max(0, $this->ttlSec - $elapsed);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public function getMetadata(): array
+    {
+        return $this->metadata;
     }
 }

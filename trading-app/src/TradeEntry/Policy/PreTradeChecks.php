@@ -7,6 +7,7 @@ use App\Common\Enum\Timeframe;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\Provider\MainProviderInterface;
 use App\TradeEntry\Dto\{PreflightReport, TradeEntryRequest};
+use App\TradeEntry\Service\MarketStructureSampler;
 use App\TradeEntry\Pricing\TickQuantizer;
 use Brick\Math\BigDecimal;
 use Brick\Math\Exception\MathException;
@@ -19,6 +20,7 @@ final readonly class PreTradeChecks
     public function __construct(
         private MainProviderInterface $providers,
         private IndicatorProviderInterface $indicatorProvider,
+        private MarketStructureSampler $marketStructureSampler,
         #[Autowire(service: 'monolog.logger.positions')] private LoggerInterface $positionsLogger,
     ) {}
 
@@ -102,6 +104,8 @@ final readonly class PreTradeChecks
 
         $pivotLevels = $this->fetchPivotLevels($symbol);
 
+        $marketSnapshot = $this->marketStructureSampler->sample($symbol, $specs->contractSize->toFloat(), $mid);
+
         $this->positionsLogger->debug('pretrade.metrics', [
             'symbol' => $symbol,
             'best_bid' => $bestBid,
@@ -137,6 +141,12 @@ final readonly class PreTradeChecks
             maxVolume: $maxVolume,
             marketMaxVolume: $marketMaxVolume,
             pivotLevels: $pivotLevels,
+            depthTopUsd: $marketSnapshot->depthTopUsd,
+            bookLiquidityScore: $marketSnapshot->bookLiquidityScore,
+            volatilityPct1m: $marketSnapshot->volatilityPct1m,
+            volumeRatio: $marketSnapshot->volumeRatio,
+            latencyRestMs: $marketSnapshot->latencyRestMs,
+            latencyWsMs: $marketSnapshot->latencyWsMs,
         );
     }
 

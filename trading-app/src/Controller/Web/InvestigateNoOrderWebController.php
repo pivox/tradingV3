@@ -4,17 +4,17 @@ declare(strict_types=1);
 
 namespace App\Controller\Web;
 
+use App\Service\NoOrderInvestigationResult;
+use App\Service\NoOrderInvestigationService;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Annotation\Route;
-use Symfony\Component\Process\Process;
 
 final class InvestigateNoOrderWebController extends AbstractController
 {
     public function __construct(
-        #[\Symfony\Component\DependencyInjection\Attribute\Autowire(param: 'kernel.project_dir')]
-        private readonly string $projectDir,
+        private readonly NoOrderInvestigationService $investigationService,
     ) {
     }
 
@@ -29,62 +29,33 @@ final class InvestigateNoOrderWebController extends AbstractController
 
         $results = null;
         $error = null;
-        $stdout = null;
-        $stderr = null;
         $rows = [];
+        $symbolsList = array_values(array_filter(array_map(static fn(string $s) => strtoupper(trim($s)), explode(',', $symbols))));
 
-        if ($symbols !== '') {
+        if ($symbols !== '' && empty($symbolsList)) {
+            $error = 'Liste de symboles vide après parsing.';
+        }
+
+        if ($symbols !== '' && $symbolsList !== []) {
             try {
-                $cmd = [
-                    'php',
-                    $this->projectDir . '/bin/console',
-                    'investigate:no-order',
-                    '--symbols=' . $symbols,
-                    '--since-minutes=' . $sinceMinutes,
-                    '--max-log-files=' . $maxLogFiles,
-                    '--format=json',
-                    '--no-ansi',
-                    '--no-interaction',
-                ];
+                $since = (new \DateTimeImmutable(sprintf('-%d minutes', max(1, $sinceMinutes))))
+                    ->setTimezone(new \DateTimeZone('UTC'));
+                $investigationResults = $this->investigationService->investigate($symbolsList, $since, $maxLogFiles);
+                $results = array_map(static fn(NoOrderInvestigationResult $r) => $r->toArray(), $investigationResults);
 
-                $process = new Process($cmd, $this->projectDir, [
-                    // Réduire bruit dans la sortie pour fiabiliser le JSON
-                    'SHELL_VERBOSITY' => '0',
-                ]);
-                $process->setTimeout($timeout);
-                $process->run();
-
-                $stdout = $process->getOutput();
-                $stderr = $process->getErrorOutput();
-                if (!$process->isSuccessful()) {
-                    $error = trim($stderr) !== '' ? trim($stderr) : sprintf('Commande échouée (code %d)', $process->getExitCode() ?? -1);
-                }
-                // Tolérer du bruit autour du JSON (ANSI, logs accidentels)
-                $jsonPayload = $this->extractJsonObject($stdout ?? '');
-                /** @var array<string, mixed>|null $decoded */
-                $decoded = json_decode($jsonPayload ?? ($stdout ?? ''), true);
-                if (!is_array($decoded)) {
-                    if ($error === null) {
-                        $error = 'Sortie JSON invalide depuis la commande CLI';
-                    }
-                    $decoded = [];
-                }
-                $results = $decoded;
-
-                foreach ($results as $symbol => $r) {
-                    $details = is_array($r['details'] ?? null) ? $r['details'] : [];
-                    $reason = (string)($r['reason'] ?? ($details['cause'] ?? ''));
+                foreach ($investigationResults as $symbol => $result) {
+                    $details = $result->details;
+                    $reason = (string)($result->reason ?? ($details['cause'] ?? ''));
                     $zoneDev = isset($details['zone_dev_pct']) && is_numeric($details['zone_dev_pct']) ? (float)$details['zone_dev_pct'] : null;
                     $zoneMax = isset($details['zone_max_dev_pct']) && is_numeric($details['zone_max_dev_pct']) ? (float)$details['zone_max_dev_pct'] : null;
-
                     $proposal = '';
-                    if (($r['status'] ?? '') === 'skipped' && ($reason === 'skipped_out_of_zone' || $reason === 'zone_far_from_market')) {
+                    if ($result->status === 'skipped' && in_array($reason, ['skipped_out_of_zone', 'zone_far_from_market'], true)) {
                         $proposal = $this->buildZoneSkipProposal($zoneDev, $zoneMax);
                     }
 
                     $rows[] = [
-                        'symbol' => (string)$symbol,
-                        'status' => (string)($r['status'] ?? 'unknown'),
+                        'symbol' => $symbol,
+                        'status' => $result->status,
                         'reason' => $reason,
                         'order_id' => (string)($details['order_id'] ?? ''),
                         'decision_key' => (string)($details['decision_key'] ?? ''),
@@ -96,9 +67,7 @@ final class InvestigateNoOrderWebController extends AbstractController
                     ];
                 }
 
-                // Filet de sécurité: si aucun résultat, construire des lignes 'unknown' à partir des symboles saisis
                 if (empty($rows)) {
-                    $symbolsList = array_values(array_filter(array_map(static fn(string $s) => strtoupper(trim($s)), explode(',', $symbols))));
                     foreach ($symbolsList as $sym) {
                         if ($sym === '') { continue; }
                         $rows[] = [
@@ -131,26 +100,11 @@ final class InvestigateNoOrderWebController extends AbstractController
             'error' => $error,
             'debug' => [
                 'enabled' => (bool)$request->query->get('debug', false),
-                'cmd' => isset($cmd) ? implode(' ', $cmd) : null,
-                'stdout' => $stdout,
-                'stderr' => $stderr,
+                'symbols' => $symbolsList,
             ],
             'results' => $results,
             'rows' => $rows,
         ]);
-    }
-
-    /**
-     * Extrait le premier objet JSON {} de la sortie si du bruit entoure la charge utile.
-     */
-    private function extractJsonObject(string $output): ?string
-    {
-        $start = strpos($output, '{');
-        if ($start === false) { return null; }
-        $end = strrpos($output, '}');
-        if ($end === false || $end <= $start) { return null; }
-        $candidate = substr($output, (int)$start, (int)($end - $start + 1));
-        return $candidate !== '' ? $candidate : null;
     }
     
     private function buildZoneSkipProposal(?float $zoneDev, ?float $zoneMax): string

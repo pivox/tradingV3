@@ -40,7 +40,12 @@ final class EntryZoneCalculator
                 'decision_key' => $decisionKey,
                 'reason' => 'no_indicator_provider',
             ]);
-            return new EntryZone(min: PHP_FLOAT_MIN, max: PHP_FLOAT_MAX, rationale: 'open zone (no indicators)');
+            return new EntryZone(
+                min: PHP_FLOAT_MIN,
+                max: PHP_FLOAT_MAX,
+                rationale: 'open zone (no indicators)',
+                metadata: ['timeframe' => $tf]
+            );
         }
 
         // Lecture config selon le mode (même mécanisme que validations.{mode}.yaml)
@@ -105,7 +110,12 @@ final class EntryZoneCalculator
                 'reason' => 'pivot_not_available',
             ]);
             // Impossible de calculer une zone sans pivot raisonnable
-            return new EntryZone(min: PHP_FLOAT_MIN, max: PHP_FLOAT_MAX, rationale: 'open zone (no pivot)');
+            return new EntryZone(
+                min: PHP_FLOAT_MIN,
+                max: PHP_FLOAT_MAX,
+                rationale: 'open zone (no pivot)',
+                metadata: ['timeframe' => $tf, 'k_atr' => $kAtr]
+            );
         }
 
         // 2) Calcule la demi-largeur basée sur ATR avec bornes relatives au prix
@@ -127,7 +137,12 @@ final class EntryZoneCalculator
                 'reason' => 'invalid_zone_width',
             ]);
             // Sécurité: si la largeur est invalide, ne pas bloquer
-            return new EntryZone(min: PHP_FLOAT_MIN, max: PHP_FLOAT_MAX, rationale: 'open zone (invalid width)');
+            return new EntryZone(
+                min: PHP_FLOAT_MIN,
+                max: PHP_FLOAT_MAX,
+                rationale: 'open zone (invalid width)',
+                metadata: ['timeframe' => $tf, 'pivot' => $pivot, 'k_atr' => $kAtr]
+            );
         }
 
         // 3) Asymétrie optionnelle selon le side
@@ -178,7 +193,21 @@ final class EntryZoneCalculator
             'reason' => 'entry_zone_calculated',
         ]);
 
-        return new EntryZone(min: $low, max: $high, rationale: $rationale, createdAt: new \DateTimeImmutable(), ttlSec: $ttlSec);
+        return new EntryZone(
+            min: $low,
+            max: $high,
+            rationale: $rationale,
+            createdAt: new \DateTimeImmutable(),
+            ttlSec: $ttlSec,
+            metadata: [
+                'timeframe' => $tf,
+                'pivot' => $pivot,
+                'pivot_source' => $pivotSrc,
+                'atr' => $atr,
+                'k_atr' => $kAtr,
+                'width_pct' => ($high - $low) / max($pivot, 1e-8),
+            ],
+        );
     }
 
     /**

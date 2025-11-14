@@ -16,6 +16,7 @@ use App\TradeEntry\Policy\{IdempotencyPolicy, MakerTakerSwitchPolicy, OrderModeP
 use App\TradeEntry\Service\TpSlTwoTargetsService;
 use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
 use App\Common\Enum\OrderStatus;
+use App\Logging\Dto\LifecycleContextBuilder;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Messenger\Stamp\DelayStamp;
@@ -37,7 +38,7 @@ final class ExecutionBox
         private readonly ?TpSlTwoTargetsService $tpSlService = null,
     ) {}
 
-    public function execute(OrderPlanModel $plan, ?string $decisionKey = null): ExecutionResult
+    public function execute(OrderPlanModel $plan, ?string $decisionKey = null, ?LifecycleContextBuilder $contextBuilder = null): ExecutionResult
     {
         $this->orderModePolicy->enforce($plan);
         $this->positionsLogger->debug('execution.start', [
@@ -108,7 +109,7 @@ final class ExecutionBox
         // Extra visibility before submit
         // Convertir le type du plan en enum OrderType pour le provider
         $enforcedOrderType = ($plan->orderType === 'market') ? OrderType::MARKET : OrderType::LIMIT;
-        
+
         $this->positionsLogger->debug('execution.presubmit_check', [
             'symbol' => $plan->symbol,
             'side_enum' => $side->value,
@@ -131,20 +132,17 @@ final class ExecutionBox
         $orderPayload['type'] = ($plan->orderType === 'market') ? OrderType::MARKET->value : OrderType::LIMIT->value;
         $orderPayload['mode'] = (int)$plan->orderMode;
 
-        // Déad-man switch côté exchange basé sur la fin de zone: programmer un cancel-all-after optionnel
-        // uniquement pour les ordres LIMIT (les MARKET se remplissent immédiatement).
-        $cancelAfterTimeout = null;
-        if ($plan->orderType !== 'market' && $plan->zoneExpiresAt !== null) {
-            $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
-            $ttl = $plan->zoneExpiresAt->getTimestamp() - $now->getTimestamp();
-            if ($ttl > 0) {
-                // BitMart: max 60s; la couche HTTP imposera min 5s si >0 et <5.
-                $cancelAfterTimeout = min(60, $ttl);
-                if ($cancelAfterTimeout > 0) {
-                    // Garder une trace dans le payload pour le logging
-                    $orderPayload['cancel_after_timeout'] = $cancelAfterTimeout;
-                }
-            }
+        // Politique: forcer une fenêtre de surveillance locale à 120s pour les LIMIT
+        // et désactiver le dead-man switch exchange (cancel-all-after) afin d'éviter
+        // l'annulation à 60s côté Bitmart (cap échange). L'annulation sera assurée
+        // par le watcher local si l'ordre n'est pas rempli au bout de 120s.
+        $cancelAfterTimeout = null;   // valeur envoyée au provider (0 => désarmement exchange)
+        $watchWindowSec = null;       // fenêtre locale de surveillance/fallback
+        if ($plan->orderType !== 'market') {
+            // Fenêtre locale forcée à 120 secondes
+            $watchWindowSec = 120;
+            // Désarmer le dead-man côté exchange (éviter le cap 60s)
+            $orderPayload['cancel_after_timeout'] = 0; // 0 => disable cancel-all-after
         }
 
         // Single-channel logging only
@@ -152,7 +150,7 @@ final class ExecutionBox
         $attemptLabel = sprintf('%s-mode-%d', $orderPayload['type'], (int)$orderPayload['mode']);
         $attemptIndex = 1;
         $attemptTotal = 1;
-        
+
         $this->positionsLogger->info('execution.order_type_mode_selected', [
             'symbol' => $plan->symbol,
             'plan_order_type' => $plan->orderType,
@@ -165,6 +163,7 @@ final class ExecutionBox
         ]);
         $orderOptions = $this->extractOrderOptions($orderPayload);
         if ($cancelAfterTimeout !== null && $cancelAfterTimeout > 0) {
+            // cas général (non utilisé ici car on désarme côté exchange)
             $orderOptions['cancel_after_timeout'] = $cancelAfterTimeout;
         }
         $orderResult = null;
@@ -212,10 +211,10 @@ final class ExecutionBox
             // Programmer un watcher de fill pour LIMIT: si filled → désarmer dead-man (cancel-all-after)
             if ($plan->orderType !== 'market') {
                 try {
-                    $watchSec = $cancelAfterTimeout ?? 60;
-                    if ($watchSec <= 0) {
-                        $watchSec = 60; // par défaut, clampé par l'API
-                    }
+                    // Utiliser la fenêtre locale forcée si définie, sinon fallback sur 60s
+                    $watchSec = $watchWindowSec ?? ($cancelAfterTimeout ?? 60);
+                    if ($watchSec <= 0) { $watchSec = 60; }
+                    $contextSnapshot = $contextBuilder?->toArray();
                     $this->bus->dispatch(
                         new LimitFillWatchMessage(
                             symbol: $plan->symbol,
@@ -223,7 +222,8 @@ final class ExecutionBox
                             clientOrderId: $clientOrderId,
                             cancelAfterSec: (int) $watchSec,
                             tries: 0,
-                            decisionKey: $decisionKey
+                            decisionKey: $decisionKey,
+                            lifecycleContext: $contextSnapshot,
                         ),
                         [new DelayStamp(self::LIMIT_WATCH_INITIAL_DELAY_MS)] // premier poll dans 5s
                     );
@@ -500,7 +500,7 @@ final class ExecutionBox
             $this->verifyPlanOrders($plan->symbol, $tpSlResult['submitted'], $decisionKey);
 
             // 6) Désarmer le dead-man switch symbolique (cancel-all-after) une fois la position ouverte et TP/SL soumis.
-            $orderProvider = $this->providers->getOrderProvider();
+           /* $orderProvider = $this->providers->getOrderProvider();
             if ($orderProvider instanceof \App\Provider\Bitmart\BitmartOrderProvider) {
                 try {
                     $orderProvider->cancelAllAfter($plan->symbol, 0);
@@ -516,7 +516,7 @@ final class ExecutionBox
                         'decision_key' => $decisionKey,
                     ]);
                 }
-            }
+            }*/
         } catch (\Throwable $e) {
             $this->positionsLogger->error('execution.market_order.tp_sl_submit_failed', [
                 'symbol' => $plan->symbol,

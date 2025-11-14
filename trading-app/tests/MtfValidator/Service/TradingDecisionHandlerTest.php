@@ -18,6 +18,7 @@ use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\EntryZone\EntryZoneCalculator;
 use App\TradeEntry\Service\TradeEntryService;
 use App\TradeEntry\Types\Side;
+use App\Logging\LifecycleContextFactory;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
@@ -66,6 +67,7 @@ class TradingDecisionHandlerTest extends TestCase
             'require_price_or_atr' => true,
         ]);
         $tradeEntryConfig->method('getDefaults')->willReturn($defaults);
+        $tradeEntryConfig->method('getVersion')->willReturn('test');
 
         $requestBuilder = $this->createMock(\App\TradeEntry\Builder\TradeEntryRequestBuilder::class);
         $requestBuilder->method('fromMtfSignal')->willReturn(
@@ -115,6 +117,7 @@ class TradingDecisionHandlerTest extends TestCase
             mtfSwitchRepository: $this->createMock(\App\Repository\MtfSwitchRepository::class),
             auditLogger: $this->auditLogger,
             entryZoneCalculator: $this->entryZoneCalculator,
+            lifecycleContextFactory: new LifecycleContextFactory(),
         );
     }
 
@@ -177,17 +180,23 @@ class TradingDecisionHandlerTest extends TestCase
         $this->tradeEntryService
             ->expects($this->once())
             ->method('buildAndExecute')
-            ->with($this->callback(function (TradeEntryRequest $request): bool {
-                $this->assertEquals('BTCUSDT', $request->symbol);
-                $this->assertEquals('limit', $request->orderType);
-                $this->assertEquals('isolated', $request->openType);
-                $this->assertEquals(4, $request->orderMode);
-                $this->assertEquals(100.0, $request->initialMarginUsdt);
-                $this->assertEqualsWithDelta(0.02, $request->riskPct, 1e-6);
-                $this->assertEquals(50250.0, $request->entryLimitHint);
+            ->with(
+                $this->callback(function (TradeEntryRequest $request): bool {
+                    $this->assertEquals('BTCUSDT', $request->symbol);
+                    $this->assertEquals('limit', $request->orderType);
+                    $this->assertEquals('isolated', $request->openType);
+                    $this->assertEquals(4, $request->orderMode);
+                    $this->assertEquals(100.0, $request->initialMarginUsdt);
+                    $this->assertEqualsWithDelta(0.02, $request->riskPct, 1e-6);
+                    $this->assertEquals(50250.0, $request->entryLimitHint);
 
-                return true;
-            }))
+                    return true;
+                }),
+                $this->anything(),
+                $this->anything(),
+                $this->anything(),
+                $this->isInstanceOf(\App\Logging\Dto\LifecycleContextBuilder::class)
+            )
             ->willReturn($execution);
 
         $this->auditLogger

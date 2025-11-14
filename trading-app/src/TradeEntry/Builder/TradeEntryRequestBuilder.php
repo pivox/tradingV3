@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Builder;
 
-use App\Config\{TradeEntryConfig, TradeEntryConfigProvider};
+use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, ZoneDeviationOverrideStore};
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Types\Side;
 use Psr\Log\LoggerInterface;
@@ -19,6 +19,7 @@ final class TradeEntryRequestBuilder
     public function __construct(
         private readonly TradeEntryConfigProvider $configProvider,
         private readonly TradeEntryConfig $defaultConfig, // Fallback si mode non fourni
+        private readonly ZoneDeviationOverrideStore $zoneDeviationOverrides,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
@@ -149,6 +150,10 @@ final class TradeEntryRequestBuilder
         $maxDeviationPct = isset($defaults['max_deviation_pct']) ? (float)$defaults['max_deviation_pct'] : null;
         $implausiblePct = isset($defaults['implausible_pct']) ? (float)$defaults['implausible_pct'] : null;
         $zoneMaxDeviationPct = isset($defaults['zone_max_deviation_pct']) ? (float)$defaults['zone_max_deviation_pct'] : null;
+        $override = $this->zoneDeviationOverrides->getOverride($mode, $symbol);
+        if ($override !== null) {
+            $zoneMaxDeviationPct = $override;
+        }
 
         $tpPolicy = (string)($defaults['tp_policy'] ?? 'pivot_conservative');
         $tpBufferPct = isset($defaults['tp_buffer_pct']) ? (float)$defaults['tp_buffer_pct'] : null;
