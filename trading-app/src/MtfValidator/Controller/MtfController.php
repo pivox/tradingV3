@@ -56,7 +56,7 @@ class MtfController extends AbstractController
     {
         try {
             $workflowStatus = 'Temporal service not available';
-            
+
             return $this->json([
                 'status' => 'success',
                 'data' => [
@@ -72,7 +72,7 @@ class MtfController extends AbstractController
             $this->logger->error('[MTF Controller] Failed to get status', [
                 'error' => $e->getMessage()
             ]);
-            
+
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
@@ -87,7 +87,7 @@ class MtfController extends AbstractController
             $lockKey = 'mtf_execution';
             $lockInfo = $this->mtfLockRepository->getLockInfo($lockKey);
             $activeLocks = $this->mtfLockRepository->getActiveLocks();
-            
+
             return $this->json([
                 'status' => 'success',
                 'data' => [
@@ -100,7 +100,7 @@ class MtfController extends AbstractController
             $this->logger->error('[MTF Controller] Failed to get lock status', [
                 'error' => $e->getMessage()
             ]);
-            
+
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
@@ -114,14 +114,14 @@ class MtfController extends AbstractController
         try {
             $lockKey = $request->request->get('lock_key', 'mtf_execution');
             $reason = $request->request->get('reason', 'Manual force release');
-            
+
             $this->logger->warning('[MTF Controller] Force releasing lock', [
                 'lock_key' => $lockKey,
                 'reason' => $reason
             ]);
-            
+
             $released = $this->mtfLockRepository->forceReleaseLock($lockKey);
-            
+
             if ($released) {
                 return $this->json([
                     'status' => 'success',
@@ -145,7 +145,7 @@ class MtfController extends AbstractController
             $this->logger->error('[MTF Controller] Failed to force release lock', [
                 'error' => $e->getMessage()
             ]);
-            
+
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
@@ -158,11 +158,11 @@ class MtfController extends AbstractController
     {
         try {
             $cleanedCount = $this->mtfLockRepository->cleanupExpiredLocks();
-            
+
             $this->logger->info('[MTF Controller] Cleaned up expired locks', [
                 'cleaned_count' => $cleanedCount
             ]);
-            
+
             return $this->json([
                 'status' => 'success',
                 'message' => 'Expired locks cleaned up',
@@ -175,7 +175,7 @@ class MtfController extends AbstractController
             $this->logger->error('[MTF Controller] Failed to cleanup expired locks', [
                 'error' => $e->getMessage()
             ]);
-            
+
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
@@ -188,7 +188,7 @@ class MtfController extends AbstractController
     {
         try {
             $workflowId = 'Temporal service not available';
-            
+
             return $this->json([
                 'status' => 'success',
                 'message' => 'MTF workflow started',
@@ -201,7 +201,7 @@ class MtfController extends AbstractController
             $this->logger->error('[MTF Controller] Failed to start workflow', [
                 'error' => $e->getMessage()
             ]);
-            
+
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
@@ -209,100 +209,7 @@ class MtfController extends AbstractController
         }
     }
 
-    #[Route('/pause', name: 'pause', methods: ['POST'])]
-    public function pauseWorkflow(): JsonResponse
-    {
-        try {
-            $this->workflowService->pauseMtfWorkflow();
-            
-            return $this->json([
-                'status' => 'success',
-                'message' => 'MTF workflow paused',
-                'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
-            ]);
-        } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to pause workflow', [
-                'error' => $e->getMessage()
-            ]);
-            
-            return $this->json([
-                'status' => 'error',
-                'message' => $e->getMessage()
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
-        }
-    }
 
-    #[Route('/resume', name: 'resume', methods: ['POST'])]
-    public function resumeWorkflow(): JsonResponse
-    {
-        try {
-            $this->workflowService->resumeMtfWorkflow();
-            
-            return $this->json([
-                'status' => 'success',
-                'message' => 'MTF workflow resumed',
-                'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
-            ]);
-        } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to resume workflow', [
-                'error' => $e->getMessage()
-            ]);
-            
-            return $this->json([
-                'status' => 'error',
-                'message' => $e->getMessage()
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
-        }
-    }
-
-    #[Route('/stop', name: 'stop', methods: ['POST'])]
-    public function stopWorkflow(): JsonResponse
-    {
-        try {
-            $this->workflowService->stopMtfWorkflow();
-            
-            return $this->json([
-                'status' => 'success',
-                'message' => 'MTF workflow stopped',
-                'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
-            ]);
-        } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to stop workflow', [
-                'error' => $e->getMessage()
-            ]);
-            
-            return $this->json([
-                'status' => 'error',
-                'message' => $e->getMessage()
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
-        }
-    }
-
-    #[Route('/restart', name: 'restart', methods: ['POST'])]
-    public function restartWorkflow(): JsonResponse
-    {
-        try {
-            $workflowId = $this->workflowService->restartMtfWorkflow();
-            
-            return $this->json([
-                'status' => 'success',
-                'message' => 'MTF workflow restarted',
-                'data' => [
-                    'workflow_id' => $workflowId,
-                    'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
-                ]
-            ]);
-        } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to restart workflow', [
-                'error' => $e->getMessage()
-            ]);
-            
-            return $this->json([
-                'status' => 'error',
-                'message' => $e->getMessage()
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
-        }
-    }
 
     #[Route('/switches', name: 'switches', methods: ['GET'])]
     public function getSwitches(): JsonResponse
@@ -310,7 +217,7 @@ class MtfController extends AbstractController
         try {
             $switches = $this->mtfSwitchRepository->findAll();
             $switchesData = [];
-            
+
             foreach ($switches as $switch) {
                 $switchesData[] = [
                     'id' => $switch->getId(),
@@ -320,7 +227,7 @@ class MtfController extends AbstractController
                     'updated_at' => $switch->getUpdatedAt()->format('Y-m-d H:i:s')
                 ];
             }
-            
+
             return $this->json([
                 'status' => 'success',
                 'data' => $switchesData
@@ -329,7 +236,7 @@ class MtfController extends AbstractController
             $this->logger->error('[MTF Controller] Failed to get switches', [
                 'error' => $e->getMessage()
             ]);
-            
+
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
@@ -348,10 +255,10 @@ class MtfController extends AbstractController
                     'message' => 'Switch not found'
                 ], Response::HTTP_NOT_FOUND);
             }
-            
+
             $switch->setIsOn(!$switch->isOn());
             $this->mtfSwitchRepository->getEntityManager()->flush();
-            
+
             return $this->json([
                 'status' => 'success',
                 'message' => 'Switch toggled',
@@ -367,7 +274,7 @@ class MtfController extends AbstractController
                 'switch_id' => $id,
                 'error' => $e->getMessage()
             ]);
-            
+
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
@@ -381,7 +288,7 @@ class MtfController extends AbstractController
         try {
             $states = $this->mtfStateRepository->findAll();
             $statesData = [];
-            
+
             foreach ($states as $state) {
                 $statesData[] = [
                     'id' => $state->getId(),
@@ -393,7 +300,7 @@ class MtfController extends AbstractController
                     'updated_at' => $state->getUpdatedAt()->format('Y-m-d H:i:s')
                 ];
             }
-            
+
             return $this->json([
                 'status' => 'success',
                 'data' => $statesData
@@ -402,7 +309,7 @@ class MtfController extends AbstractController
             $this->logger->error('[MTF Controller] Failed to get states', [
                 'error' => $e->getMessage()
             ]);
-            
+
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
@@ -417,24 +324,24 @@ class MtfController extends AbstractController
             $limit = (int) $request->query->get('limit', 100);
             $symbol = $request->query->get('symbol');
             $step = $request->query->get('step');
-            
+
             $queryBuilder = $this->mtfAuditRepository->createQueryBuilder('a')
                 ->orderBy('a.createdAt', 'DESC')
                 ->setMaxResults($limit);
-            
+
             if ($symbol) {
                 $queryBuilder->andWhere('a.symbol = :symbol')
                     ->setParameter('symbol', $symbol);
             }
-            
+
             if ($step) {
                 $queryBuilder->andWhere('a.step = :step')
                     ->setParameter('step', $step);
             }
-            
+
             $audits = $queryBuilder->getQuery()->getResult();
             $auditsData = [];
-            
+
             foreach ($audits as $audit) {
                 $auditsData[] = [
                     'id' => $audit->getId(),
@@ -447,7 +354,7 @@ class MtfController extends AbstractController
                     'created_at' => $audit->getCreatedAt()->format('Y-m-d H:i:s')
                 ];
             }
-            
+
             return $this->json([
                 'status' => 'success',
                 'data' => $auditsData
@@ -456,7 +363,7 @@ class MtfController extends AbstractController
             $this->logger->error('[MTF Controller] Failed to get audit', [
                 'error' => $e->getMessage()
             ]);
-            
+
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
@@ -470,7 +377,7 @@ class MtfController extends AbstractController
         try {
             $runId = \Ramsey\Uuid\Uuid::uuid4();
             $result = $this->mtfService->executeMtfCycle($runId);
-            
+
             return $this->json([
                 'status' => 'success',
                 'message' => 'MTF cycle executed',
@@ -484,7 +391,7 @@ class MtfController extends AbstractController
             $this->logger->error('[MTF Controller] Failed to execute cycle', [
                 'error' => $e->getMessage()
             ]);
-            
+
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
@@ -567,7 +474,7 @@ class MtfController extends AbstractController
     {
         $profiler = new PerformanceProfiler();
         $apiStartTime = microtime(true);
-        
+
         // Parse JSON request body for POST or query parameters for GET
         $data = [];
         if ($request->getMethod() === 'POST') {
@@ -621,7 +528,7 @@ class MtfController extends AbstractController
             } else {
                 $result = $this->runSequential($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck, $context);
             }
-            
+
             // Après le traitement, mettre à jour les switches pour les symboles exclus
             if (!empty($excludedSymbols)) {
                 $this->updateSwitchesForExcludedSymbols($excludedSymbols, $runIdString);
@@ -651,32 +558,32 @@ class MtfController extends AbstractController
             $rejectedBy = [];
             $lastValidated = [];
             $results = $result['results'] ?? [];
-            
+
             foreach ($results as $symbol => $symbolResult) {
                 // Skip summary entry and invalid symbols
                 if ($symbol === 'FINAL' || !is_string($symbol) || $symbol === '') {
                     continue;
                 }
-                
+
                 if (!is_array($symbolResult)) {
                     continue;
                 }
-                
+
                 $resultStatus = strtoupper((string)($symbolResult['status'] ?? ''));
-                
+
                 // Collecter les rejetés (exclure SUCCESS/COMPLETED/READY)
                 if (!in_array($resultStatus, ['SUCCESS', 'COMPLETED', 'READY'], true)) {
                     $rejectedBy[] = $symbol;
                 }
-                
+
                 // Collecter les derniers validés (SUCCESS/COMPLETED uniquement)
                 if ($resultStatus === 'SUCCESS' || $resultStatus === 'COMPLETED') {
                     $executionTf = $symbolResult['execution_tf'] ?? null;
                     $signalSide = $symbolResult['signal_side'] ?? null;
-                    
+
                     // Calculer le timeframe précédent (tf-1) ou 'READY' pour 1m
                     $timeframe = $this->getPreviousTimeframe($executionTf);
-                    
+
                     $lastValidated[] = [
                         'symbol' => $symbol,
                         'side' => $signalSide,
@@ -684,7 +591,7 @@ class MtfController extends AbstractController
                     ];
                 }
             }
-            
+
             // Trier les listes pour un affichage cohérent
             sort($rejectedBy);
             usort($lastValidated, function($a, $b) {
@@ -693,14 +600,14 @@ class MtfController extends AbstractController
 
             $apiTotalTime = microtime(true) - $apiStartTime;
             $performanceReport = $profiler->getReport();
-            
+
             // Extraire les ordres placés depuis les résultats
             $ordersPlaced = OrdersExtractor::extractPlacedOrders($results);
             $ordersCount = OrdersExtractor::countOrdersByStatus($results);
-            
+
             // Extraire le summary depuis result (qui vient du generator)
             $runSummary = $result['summary'] ?? [];
-            
+
             $this->logger->info('[MTF Controller] Performance Analysis', [
                 'total_api_time' => round($apiTotalTime, 3),
                 'symbols_count' => count($symbols),
@@ -925,7 +832,7 @@ class MtfController extends AbstractController
 
         while (!$queue->isEmpty() || $active !== []) {
             $pollStart = microtime(true);
-            
+
             while (count($active) < $workers && !$queue->isEmpty()) {
                 $symbol = $queue->dequeue();
                 $workerStart = microtime(true);
@@ -1000,7 +907,7 @@ class MtfController extends AbstractController
                             $results[$resultSymbol] = $info;
                         }
                     }
-                    
+
                     $profiler->increment('controller', 'worker_complete', $workerDuration, $symbol);
                 } else {
                     $stderr = trim($process->getErrorOutput());
@@ -1014,12 +921,12 @@ class MtfController extends AbstractController
             $pollDuration = microtime(true) - $pollStart;
             $pollingTime += $pollDuration;
             $pollingCount++;
-            
+
             if ($hasRunning) {
                 usleep(100_000);
             }
         }
-        
+
         $profiler->increment('controller', 'polling_total', $pollingTime);
         $profiler->increment('controller', 'polling_count', 0, null, null, ['count' => $pollingCount]);
 
@@ -1057,7 +964,7 @@ class MtfController extends AbstractController
             'polling_time_seconds' => round($pollingTime, 3),
             'polling_count' => $pollingCount,
         ];
-        
+
         $profiler->increment('controller', 'parallel_execution_total', $totalExecutionTime);
 
         return [
@@ -1070,14 +977,14 @@ class MtfController extends AbstractController
     /**
      * Calcule le timeframe précédent (tf-1) pour un timeframe donné.
      * Retourne 'READY' pour '1m', null pour les timeframes non reconnus ou manquants.
-     * 
+     *
      * Mapping :
      * - '15m' → '1h'
      * - '5m' → '15m'
      * - '1m' → 'READY'
      * - '1h' → '4h'
      * - '4h' → null (pas de timeframe supérieur)
-     * 
+     *
      * @param string|null $timeframe Le timeframe d'exécution
      * @return string|null Le timeframe précédent ou 'READY' pour 1m
      */
@@ -1086,9 +993,9 @@ class MtfController extends AbstractController
         if ($timeframe === null || $timeframe === '') {
             return null;
         }
-        
+
         $normalized = strtolower(trim($timeframe));
-        
+
         return match ($normalized) {
             '15m' => '1h',
             '5m' => '15m',
@@ -1162,7 +1069,7 @@ class MtfController extends AbstractController
     /**
      * Filtre les symboles ayant des ordres ou positions ouverts
      * Cette méthode est appelée AVANT le traitement des workers pour exclure ces symboles
-     * 
+     *
      * @param array<string> $symbols Liste des symboles à filtrer
      * @param string $runIdString ID du run pour les logs
      * @param array<string> $excludedSymbols Référence pour retourner les symboles exclus
@@ -1194,7 +1101,7 @@ class MtfController extends AbstractController
                     'run_id' => $runIdString,
                     'count' => count($openPositions),
                 ]);
-                
+
                 foreach ($openPositions as $position) {
                     $positionSymbol = strtoupper($position->symbol ?? '');
                     if ($positionSymbol !== '' && !in_array($positionSymbol, $openPositionSymbols, true)) {
@@ -1219,7 +1126,7 @@ class MtfController extends AbstractController
                     'run_id' => $runIdString,
                     'count' => count($openOrders),
                 ]);
-                
+
                 foreach ($openOrders as $order) {
                     $orderSymbol = strtoupper($order->symbol ?? '');
                     if ($orderSymbol !== '' && !in_array($orderSymbol, $openOrderSymbols, true)) {
@@ -1257,7 +1164,7 @@ class MtfController extends AbstractController
         // Filtrer les symboles
         foreach ($symbols as $symbol) {
             $symbolUpper = strtoupper($symbol);
-            
+
             if (in_array($symbolUpper, $symbolsWithActivity, true)) {
                 $excludedSymbols[] = $symbolUpper;
             } else {
@@ -1279,7 +1186,7 @@ class MtfController extends AbstractController
 
     /**
      * Met à jour les switches pour les symboles exclus (appelé APRÈS le traitement)
-     * 
+     *
      * @param array<string> $excludedSymbols Liste des symboles exclus (avec ordres/positions ouverts)
      * @param string $runIdString ID du run pour les logs
      */
@@ -1289,7 +1196,7 @@ class MtfController extends AbstractController
         foreach ($excludedSymbols as $symbolUpper) {
             try {
                 $isSwitchOff = !$this->mtfSwitchRepository->isSymbolSwitchOn($symbolUpper);
-                
+
                 if ($isSwitchOff) {
                     $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, '1m');
                     $this->logger->info('[MTF Controller] Symbol switch extended (was OFF)', [
