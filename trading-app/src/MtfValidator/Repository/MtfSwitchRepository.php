@@ -436,5 +436,46 @@ class MtfSwitchRepository extends ServiceEntityRepository
 
         return $reactivatedCount;
     }
-}
 
+    /**
+     * Consomme les switches de symboles qui sont toujours ON alors qu'ils ont une date d'expiration future.
+     * Cette situation signifie que le symbole a été planifié pour une itération manuelle.
+     *
+     * @return array<string> Liste des symboles consommés (en majuscule)
+     */
+    public function consumeSymbolsWithFutureExpiration(): array
+    {
+        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+
+        $switches = $this->createQueryBuilder('s')
+            ->where('s.isOn = :isOn')
+            ->andWhere('s.expiresAt IS NOT NULL')
+            ->andWhere('s.expiresAt > :now')
+            ->andWhere('s.switchKey LIKE :pattern')
+            ->andWhere('s.switchKey NOT LIKE :excludePattern')
+            ->setParameter('isOn', true)
+            ->setParameter('now', $now)
+            ->setParameter('pattern', 'SYMBOL:%')
+            ->setParameter('excludePattern', 'SYMBOL_TF:%')
+            ->getQuery()
+            ->getResult();
+
+        $symbols = [];
+
+        foreach ($switches as $switch) {
+            $symbol = $switch->getSymbol();
+            if ($symbol === null) {
+                continue;
+            }
+
+            $symbols[] = strtoupper($symbol);
+            $this->getEntityManager()->remove($switch);
+        }
+
+        if ($symbols !== []) {
+            $this->getEntityManager()->flush();
+        }
+
+        return array_values(array_unique($symbols));
+    }
+}

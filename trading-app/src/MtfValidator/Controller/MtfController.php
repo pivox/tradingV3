@@ -778,6 +778,7 @@ class MtfController extends AbstractController
      */
     private function resolveSymbols(mixed $symbolsInput): array
     {
+        $queuedSymbols = $this->consumeSymbolsFromSwitchQueue();
         $symbols = [];
         if (is_string($symbolsInput)) {
             $symbols = array_filter(array_map('trim', explode(',', $symbolsInput)));
@@ -790,22 +791,53 @@ class MtfController extends AbstractController
         }
 
         $symbols = array_values(array_unique(array_filter($symbols)));
-        if ($symbols !== []) {
-            return $symbols;
+        if ($symbols === []) {
+            try {
+                $fetched = $this->contractRepository->allActiveSymbolNames();
+                if (!empty($fetched)) {
+                    $symbols = array_values(array_unique(array_map('strval', $fetched)));
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('[MTF Controller] Failed to load active symbols, using fallback', [
+                    'error' => $e->getMessage(),
+                ]);
+                $symbols = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT', 'DOTUSDT'];
+            }
         }
 
+        if ($queuedSymbols !== []) {
+            $symbols = array_values(array_unique(array_merge($symbols, $queuedSymbols)));
+        }
+
+        if ($symbols === []) {
+            return ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT', 'DOTUSDT'];
+        }
+
+        return $symbols;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function consumeSymbolsFromSwitchQueue(): array
+    {
         try {
-            $fetched = $this->contractRepository->allActiveSymbolNames();
-            if (!empty($fetched)) {
-                return array_values(array_unique(array_map('strval', $fetched)));
+            $symbols = $this->mtfSwitchRepository->consumeSymbolsWithFutureExpiration();
+            if ($symbols !== []) {
+                $this->logger->info('[MTF Controller] Added symbols from switch queue', [
+                    'count' => count($symbols),
+                    'symbols' => array_slice($symbols, 0, 20),
+                ]);
             }
+
+            return $symbols;
         } catch (\Throwable $e) {
-            $this->logger->warning('[MTF Controller] Failed to load active symbols, using fallback', [
+            $this->logger->warning('[MTF Controller] Failed to consume symbols from switch queue', [
                 'error' => $e->getMessage(),
             ]);
-        }
 
-        return ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT', 'DOTUSDT'];
+            return [];
+        }
     }
 
     /**
