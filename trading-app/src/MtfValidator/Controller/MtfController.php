@@ -640,7 +640,12 @@ class MtfController extends AbstractController
             $status = empty($result['errors']) ? 'success' : 'partial_success';
 
             // Calculer un résumé par TF à partir des résultats (blocking_tf > execution_tf > N/A)
-            $summaryByTf = $this->buildSummaryByTimeframe($result['results'] ?? []);
+            $summaryByTfVrac = $this->buildSummaryByTimeframe($result['results'] ?? []);
+
+            $summaryByTf = [];
+            foreach (['1m', '5m', '15m', '1h', '4h'] as $tf) {
+                $summaryByTf[$tf] = $summaryByTfVrac[$tf] ?? [];
+            }
 
             // Extraire les symboles rejetés (tous les statuts non-SUCCESS)
             $rejectedBy = [];
