@@ -389,6 +389,7 @@ final class TradeEntryService
             if ($extra !== null) {
                 $payload = array_merge($payload, $extra);
             }
+            $payload = $this->enrichZoneDeviationPayload($payload, $request);
             $payload = $this->sanitizeExtra($this->mergeContextExtra($contextBuilder, $payload));
 
             $this->tradeLifecycleLogger->logSymbolSkipped(
@@ -704,6 +705,67 @@ final class TradeEntryService
         $trimmed = rtrim(rtrim($formatted, '0'), '.');
 
         return $trimmed === '' ? '0' : $trimmed;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function enrichZoneDeviationPayload(array $payload, TradeEntryRequest $request): array
+    {
+        $hasZoneDev = isset($payload['zone_dev_pct']) && is_numeric($payload['zone_dev_pct']);
+        if (!$hasZoneDev) {
+            $candidate = isset($payload['candidate']) && is_numeric($payload['candidate'])
+                ? (float) $payload['candidate']
+                : null;
+            $zoneMin = isset($payload['zone_min']) && is_numeric($payload['zone_min'])
+                ? (float) $payload['zone_min']
+                : null;
+            $zoneMax = isset($payload['zone_max']) && is_numeric($payload['zone_max'])
+                ? (float) $payload['zone_max']
+                : null;
+            $deviation = $this->computeZoneDeviation($candidate, $zoneMin, $zoneMax);
+            if ($deviation !== null) {
+                $payload['zone_dev_pct'] = $deviation;
+            }
+        }
+
+        $hasZoneMax = isset($payload['zone_max_dev_pct']) && is_numeric($payload['zone_max_dev_pct']);
+        if (!$hasZoneMax && $request->zoneMaxDeviationPct !== null) {
+            $payload['zone_max_dev_pct'] = $this->normalizePercent($request->zoneMaxDeviationPct);
+        }
+
+        return $payload;
+    }
+
+    private function computeZoneDeviation(?float $candidate, ?float $zoneMin, ?float $zoneMax): ?float
+    {
+        if ($candidate === null || $candidate <= 0.0) {
+            return null;
+        }
+
+        $distance = null;
+        if ($zoneMin !== null && $candidate < $zoneMin) {
+            $distance = ($zoneMin - $candidate) / $candidate;
+        } elseif ($zoneMax !== null && $candidate > $zoneMax) {
+            $distance = ($candidate - $zoneMax) / $candidate;
+        }
+
+        if ($distance !== null && $distance > 0.0) {
+            return round($distance, 6);
+        }
+
+        return null;
+    }
+
+    private function normalizePercent(float $value): float
+    {
+        $value = max(0.0, $value);
+        if ($value > 1.0) {
+            $value *= 0.01;
+        }
+
+        return min($value, 1.0);
     }
 
     /**
