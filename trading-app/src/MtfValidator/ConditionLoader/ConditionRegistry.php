@@ -83,6 +83,18 @@ class ConditionRegistry
             foreach ($names as $name) {
                 $cond = $this->get($name);
                 if (!$cond) {
+                    $rule = self::resolveRule($name);
+                    if ($rule !== null) {
+                        try {
+                            $out[$name] = $rule->evaluate($context)->toArray();
+                            continue;
+                        } catch (\Throwable $e) {
+                            $out[$name] = $this->errorPayload($name, $e);
+                            continue;
+                        }
+                    }
+                }
+                if (!$cond) {
                     $out[$name] = [
                         'name' => $name,
                         'passed' => false,

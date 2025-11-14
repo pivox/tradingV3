@@ -7,6 +7,7 @@ use App\Indicator\Core\Momentum\Macd;
 use App\Indicator\Core\Momentum\Rsi;
 use App\Indicator\Core\Trend\Adx;
 use App\Indicator\Core\Trend\Ema;
+use App\Indicator\Core\Trend\Sma;
 use App\Indicator\Core\Volume\Vwap;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -44,6 +45,7 @@ class IndicatorContextBuilder
         private readonly Adx $adx,
         private readonly Vwap $vwap,
         private readonly AtrCalculator $atrCalc,
+        private readonly Sma $sma,
         #[Autowire(service: 'monolog.logger.indicators')] private readonly ?LoggerInterface $indicatorLogger = null,
     ) {
         $this->traderAvailable = \extension_loaded('trader');
@@ -147,6 +149,8 @@ class IndicatorContextBuilder
             $vwapVal = $this->vwap->calculate($this->highs, $this->lows, $this->closes, $this->volumes);
         }
 
+        $volumeRatio = $this->computeVolumeRatio($this->volumes);
+
         $hlcSeries = $this->collectHlcSeries();
         $atr = null;
         if ($hlcSeries !== null) {
@@ -200,6 +204,7 @@ class IndicatorContextBuilder
             'macd_hist_last3' => $macdHistLast3,
             'macd_hist_series' => $macdHistSeries,
             'vwap' => $vwapVal,
+            'volume_ratio' => $volumeRatio,
             'atr' => $atr,
             'adx' => $adxVal ? [14 => $adxVal] : null,
             'previous' => array_filter([
@@ -447,5 +452,55 @@ class IndicatorContextBuilder
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    /**
+     * Calcule le ratio volume actuel / moyenne mobile adaptative des volumes.
+     * Logique adaptative :
+     * - Si < 3 klines → null (pas assez de données)
+     * - Si 3 ≤ klines < 20 → SMA partiel (moyenne des volumes disponibles, sans la dernière)
+     * - Si ≥ 20 → SMA20 normal (moyenne des 20 dernières, sans la dernière)
+     *
+     * @param float[] $volumes
+     */
+    private function computeVolumeRatio(array $volumes): ?float
+    {
+        $count = count($volumes);
+
+        if ($count < 3) {
+            return null; // pas de data utilisable
+        }
+
+        // Volume actuel (dernière kline)
+        $currentVol = end($volumes);
+        if ($currentVol === null || $currentVol <= 0.0) {
+            return null;
+        }
+
+        // Prendre les volumes passés (toutes les klines sauf la dernière)
+        $pastVolumes = array_slice($volumes, 0, -1);
+        if (empty($pastVolumes)) {
+            return null;
+        }
+
+        // Nombre de périodes disponible pour la moyenne (adaptatif : min entre 20 et le nombre de volumes passés)
+        $window = min(20, count($pastVolumes));
+        if ($window < 1) {
+            return null;
+        }
+
+        // Prendre les N dernières volumes passés pour le calcul de la moyenne
+        $windowVolumes = array_slice($pastVolumes, -$window);
+        if (empty($windowVolumes)) {
+            return null;
+        }
+
+        // Utiliser Sma service pour calculer la moyenne mobile
+        $avgVol = $this->sma->calculate($windowVolumes, $window);
+        if ($avgVol === null || $avgVol <= 0.0) {
+            return null;
+        }
+
+        return $currentVol / $avgVol;
     }
 }

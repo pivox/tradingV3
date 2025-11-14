@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Repository;
 
+use App\Entity\MtfState;
 use App\MtfValidator\Entity\MtfAudit;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\ArrayParameterType;
@@ -488,7 +489,7 @@ SQL;
 
         $sql = <<<SQL
 WITH latest_validations AS (
-    SELECT 
+    SELECT
         symbol,
         timeframe,
         step,
@@ -510,80 +511,80 @@ SELECT * FROM (
         symbol,
         -- 4h: Calculer l'openTime attendu de la dernière bougie fermée (expectedLastOpenTime)
         -- Logique: aligner sur borne, retirer intervalle pour obtenir l'openTime de la dernière bougie fermée
-        MAX(CASE 
+        MAX(CASE
             WHEN timeframe = '4h' AND rn = 1 THEN
-                CASE 
+                CASE
                     WHEN candle_open_ts = (
                         to_timestamp(FLOOR(EXTRACT(EPOCH FROM timezone('UTC', now())) / 14400) * 14400 - 14400) AT TIME ZONE 'UTC'
                     )
-                    THEN 1 
-                    ELSE 0 
+                    THEN 1
+                    ELSE 0
                 END
             ELSE 0
         END) AS in_window_4h,
-        
+
         to_char(MAX(CASE WHEN timeframe = '4h' AND rn = 1 THEN candle_open_ts END), 'YYYY-MM-DD HH24:MI:SS') AS validation_at_4h,
-        
+
         -- 1h
-        MAX(CASE 
+        MAX(CASE
             WHEN timeframe = '1h' AND rn = 1 THEN
-                CASE 
+                CASE
                     WHEN candle_open_ts = (
                         to_timestamp(FLOOR(EXTRACT(EPOCH FROM timezone('UTC', now())) / 3600) * 3600 - 3600) AT TIME ZONE 'UTC'
                     )
-                    THEN 1 
-                    ELSE 0 
+                    THEN 1
+                    ELSE 0
                 END
             ELSE 0
         END) AS in_window_1h,
-        
+
         to_char(MAX(CASE WHEN timeframe = '1h' AND rn = 1 THEN candle_open_ts END), 'YYYY-MM-DD HH24:MI:SS') AS validation_at_1h,
-        
+
         -- 15m
-        MAX(CASE 
+        MAX(CASE
             WHEN timeframe = '15m' AND rn = 1 THEN
-                CASE 
+                CASE
                     WHEN candle_open_ts = (
                         to_timestamp(FLOOR(EXTRACT(EPOCH FROM timezone('UTC', now())) / 900) * 900 - 900) AT TIME ZONE 'UTC'
                     )
-                    THEN 1 
-                    ELSE 0 
+                    THEN 1
+                    ELSE 0
                 END
             ELSE 0
         END) AS in_window_15m,
-        
+
         to_char(MAX(CASE WHEN timeframe = '15m' AND rn = 1 THEN candle_open_ts END), 'YYYY-MM-DD HH24:MI:SS') AS validation_at_15m,
-        
+
         -- 5m
-        MAX(CASE 
+        MAX(CASE
             WHEN timeframe = '5m' AND rn = 1 THEN
-                CASE 
+                CASE
                     WHEN candle_open_ts = (
                         to_timestamp(FLOOR(EXTRACT(EPOCH FROM timezone('UTC', now())) / 300) * 300 - 300) AT TIME ZONE 'UTC'
                     )
-                    THEN 1 
-                    ELSE 0 
+                    THEN 1
+                    ELSE 0
                 END
             ELSE 0
         END) AS in_window_5m,
-        
+
         to_char(MAX(CASE WHEN timeframe = '5m' AND rn = 1 THEN candle_open_ts END), 'YYYY-MM-DD HH24:MI:SS') AS validation_at_5m,
-        
+
         -- 1m
-        MAX(CASE 
+        MAX(CASE
             WHEN timeframe = '1m' AND rn = 1 THEN
-                CASE 
+                CASE
                     WHEN candle_open_ts = (
                         to_timestamp(FLOOR(EXTRACT(EPOCH FROM timezone('UTC', now())) / 60) * 60 - 60) AT TIME ZONE 'UTC'
                     )
-                    THEN 1 
-                    ELSE 0 
+                    THEN 1
+                    ELSE 0
                 END
             ELSE 0
         END) AS in_window_1m,
-        
+
         to_char(MAX(CASE WHEN timeframe = '1m' AND rn = 1 THEN candle_open_ts END), 'YYYY-MM-DD HH24:MI:SS') AS validation_at_1m
-        
+
     FROM latest_validations
     GROUP BY symbol
 ) AS t
@@ -597,7 +598,7 @@ ORDER BY (
 SQL;
 
         $rows = $this->conn->executeQuery($sql, $params, $types)->fetchAllAssociative();
-        
+
         return array_map(function (array $row): array {
             return [
                 'symbol' => (string)($row['symbol'] ?? ''),
@@ -677,7 +678,7 @@ WITH success_events AS (
     {$caseExpression} AS timeframe,
     -- event_ts = candle_open_ts + durée du timeframe (pour obtenir le closeTime)
     COALESCE(
-      CASE 
+      CASE
         WHEN {$caseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
         WHEN {$caseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
         WHEN {$caseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
@@ -729,7 +730,7 @@ WITH failure_events AS (
     {$caseExpression} AS timeframe,
     -- event_ts = candle_open_ts + durée du timeframe (pour obtenir le closeTime)
     COALESCE(
-      CASE 
+      CASE
         WHEN {$caseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
         WHEN {$caseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
         WHEN {$caseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
@@ -953,7 +954,7 @@ SQL;
 
     /**
      * Vérifie si une bougie existe dans hot_kline pour un symbole/timeframe/openTime donné.
-     * 
+     *
      * @param string $symbol
      * @param string $timeframe
      * @param \DateTimeImmutable $openTime
@@ -970,7 +971,7 @@ WHERE symbol = :symbol
   AND open_time = :open_time
 LIMIT 1
 SQL;
-            
+
             $result = $this->conn->fetchOne($sql, [
                 'symbol' => $symbol,
                 'timeframe' => $timeframe,
@@ -1066,9 +1067,9 @@ SQL;
 
     /**
      * Rapport de calibration : calcule le fail_pct moyen pour évaluer la qualité du système.
-     * 
+     *
      * Formule : fail_pct_moyen = (∑ fail_count) / (∑ total_fails) × 100
-     * 
+     *
      * Interprétation :
      *  - 0-5%   : Bon équilibre
      *  - 6-9%   : Marché neutre/cohérent
@@ -1183,7 +1184,7 @@ SQL;
      * @param string|null $symbol      Filtrer par symbole (null = tous les symboles)
      * @param int         $daysToKeep  Nombre de jours à conserver
      * @param bool        $dryRun      Si true, ne supprime pas mais retourne les stats
-     * 
+     *
      * @return array Statistiques détaillées
      *               [
      *                 'total' => 5000,
@@ -1197,7 +1198,7 @@ SQL;
     public function cleanupOldAudits(?string $symbol, int $daysToKeep, bool $dryRun): array
     {
         $cutoffDate = new \DateTimeImmutable("-{$daysToKeep} days", new \DateTimeZone('UTC'));
-        
+
         $symbolFilter = $symbol ? 'AND symbol = :symbol' : '';
         $params = ['cutoff' => $cutoffDate->format('Y-m-d H:i:sP')];
         $types = ['cutoff' => ParameterType::STRING];
@@ -1210,7 +1211,7 @@ SQL;
         try {
             // Calcul des statistiques
             $statsSql = <<<SQL
-SELECT 
+SELECT
   COUNT(*) as total,
   COUNT(*) FILTER (WHERE created_at < :cutoff) as to_delete,
   COUNT(*) FILTER (WHERE created_at >= :cutoff) as to_keep
@@ -1223,7 +1224,7 @@ SQL;
 
             // Statistiques par symbole
             $symbolStatsSql = <<<SQL
-SELECT 
+SELECT
   symbol,
   COUNT(*) as count
 FROM mtf_audit

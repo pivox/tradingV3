@@ -31,15 +31,15 @@ WITH base AS (
     step,
     NULLIF(details->> 'passed', '')::boolean AS passed,
     CASE
-      WHEN details ? 'metrics' AND NULLIF(details->'metrics'->> 'atr_rel', '') IS NOT NULL
+      WHEN details ?? 'metrics' AND NULLIF(details->'metrics'->> 'atr_rel', '') IS NOT NULL
         THEN NULLIF(details->'metrics'->> 'atr_rel', '')::numeric
-      WHEN (details ? 'atr' AND details ? 'current_price'
+      WHEN (details ?? 'atr' AND details ?? 'current_price'
             AND NULLIF(details->> 'current_price', '') ~ '^[0-9.]+$'
             AND (details->> 'current_price')::numeric > 0)
         THEN ((details->> 'atr')::numeric / NULLIF((details->> 'current_price')::numeric, 0))
       ELSE NULL
     END AS atr_rel,
-    CASE WHEN details ? 'spread_bps' THEN NULLIF(details->> 'spread_bps', '')::numeric ELSE NULL END AS spread_bps,
+    CASE WHEN details ?? 'spread_bps' THEN NULLIF(details->> 'spread_bps', '')::numeric ELSE NULL END AS spread_bps,
     severity
   FROM mtf_audit
 )
@@ -84,4 +84,3 @@ SQL);
         $this->addSql('DROP MATERIALIZED VIEW IF EXISTS mtf_audit_stats');
     }
 }
-

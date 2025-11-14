@@ -62,6 +62,7 @@ final class ExecutionSelector
 
         // Mandatory filters gate
         $filtersRes = !empty($filtersMandatory) ? $this->registry->evaluate($context, $filtersMandatory) : [];
+        $this->logVolumeRatioFilter($filtersRes);
         $filtersPassed = true;
         foreach ($filtersRes as $r) { if (!(bool)($r['passed'] ?? false)) { $filtersPassed = false; break; } }
         if (!$filtersPassed) {
@@ -242,6 +243,25 @@ final class ExecutionSelector
         ]);
     }
 
+    /**
+     * Log dedicated info for volume_ratio_ok to trace liquidity gating.
+     * @param array<string,array> $filtersRes
+     */
+    private function logVolumeRatioFilter(array $filtersRes): void
+    {
+        if (!isset($filtersRes['volume_ratio_ok'])) {
+            return;
+        }
+
+        $result = $filtersRes['volume_ratio_ok'];
+        $this->logger->info('[ExecSelector] volume_ratio_ok', [
+            'passed' => $result['passed'] ?? null,
+            'value' => $result['value'] ?? null,
+            'threshold' => $result['threshold'] ?? null,
+            'meta' => $result['meta'] ?? [],
+        ]);
+    }
+
     /** @param array<string,array> $results */
     private function allPassed(array $results): bool
     {
@@ -257,4 +277,3 @@ final class ExecutionSelector
         return false;
     }
 }
-

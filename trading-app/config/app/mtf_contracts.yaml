@@ -17,5 +17,5 @@ mtf_contracts:
             expire_unit: 'ms'               # à adapter à ton schéma
             open_unit: 'ms'
         limits:
-            top_n: 120
-            mid_n: 10
+            top_n: 100
+            mid_n: 0

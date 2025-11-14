@@ -1,23 +1,28 @@
 # Profil SCALPER - TradeEntry
-version: '2.5.94s'
+version: '2.5.95s'
 
 meta:
-    name: SCALPING v2.0 - Profil SCALPER
+    name: SCALPING v2.1 - Anti-Extension + Liquidité + Précision Zone
     description: >
-        Profil scalper : R plus petit, TP plus proche, même logique MTF.
-        Exécution prioritaire 5m/1m, levier modulé par timeframe.
-    created_at: '2025-11-10'
+        Version optimisée du profil scalper : contrôle de liquidité, prévention des entrées tardives,
+        réduction de la largeur des zones, levier réduit sur micro-caps, compatibilité MTF 1h→5m→1m.
+    created_at: '2025-11-13'
 
 trade_entry:
+
+    # ============================
+    # DEFAULTS
+    # ============================
     defaults:
         risk_pct_percent: 5.0
         initial_margin_usdt: 70.0
         fallback_account_balance: 0.0
 
-        # R plus petit pour scalping
-        r_multiple: 1.2
-        tp1_r: 1.0
+        # --- R-MULTIPLE corrigé (1.2 → 1.5)
+        r_multiple: 1.5
+        tp1_r: 1.3
 
+        # --- STOP LOSS
         stop_from: 'atr'
         atr_k: 1.5
         pivot_sl_policy: 'nearest_below'
@@ -25,25 +30,34 @@ trade_entry:
         pivot_sl_min_keep_ratio: 0.8
         sl_full_size: true
 
+        # --- TAKE PROFIT
         tp_policy: 'pivot_conservative'
         tp_buffer_pct: 0.001
         tp_buffer_ticks: 0
         tp_min_keep_ratio: 0.95
         tp_max_extra_r: 0.5
 
+        # --- ORDERS
         order_type: 'limit'
         open_type: 'isolated'
         order_mode: 1
 
+        # --- MARKET GUARDS
         market_max_spread_pct: 0.001
         inside_ticks: 1
-        max_deviation_pct: 0.005
-        implausible_pct: 0.02
-        # Slightly relaxed to reduce skipped_out_of_zone for borderline cases
-        zone_max_deviation_pct: 0.016
 
+        # Déviations resserrées pour éviter les entrées en extension
+        max_deviation_pct: 0.004
+        implausible_pct: 0.02
+        zone_max_deviation_pct: 0.013
+
+        # --- DYNAMIC LEVERAGE PARAM
         k_dynamic: 10.0
 
+
+    # ============================
+    # RISK MANAGEMENT
+    # ============================
     risk:
         fixed_risk_pct: 5.0
         daily_max_loss_pct: 6.0
@@ -51,23 +65,27 @@ trade_entry:
         daily_loss_count_unrealized: true
         max_concurrent_positions: 4
         meta: >
-            Même risque nominal que le profil normal, mais R plus faible
-            et fréquence d'entrées plus élevée.
+            Risque fixe, limites journalières et contrôle du nombre de positions.
 
+
+    # ============================
+    # LEVERAGE CONFIG
+    # ============================
     leverage:
         mode: dynamic_from_risk
-        floor: 5.0
-        exchange_cap: 100.0
+        floor: 4.0                   # 5 → 4 pour réduire pertes micro-caps
+        exchange_cap: 50.0           # réduit (micro-caps trop volatiles)
+
         per_symbol_caps:
             - { symbol_regex: "^(BTC|ETH|BNB).*", cap: 15.0 }
-            - { symbol_regex: "^NVDAXUSDT$", cap: 5.0 }
+            - { symbol_regex: ".*", cap: 8.0 }    # cap global anti-microcaps
 
         timeframe_multipliers:
             '4h': 0.9
             '1h': 1.0
             '15m': 1.0
-            '5m': 1.1
-            '1m': 1.2
+            '5m': 1.2
+            '1m': 1.3
 
         confidence_multiplier:
             enabled: true
@@ -78,23 +96,26 @@ trade_entry:
         conviction:
             enabled: true
             cap_pct_of_exchange: 0.60
-            meta: >
-                Boost limité sur les set-ups high-conviction, avec plafonds
-                par symbole et par timeframe.
 
         rounding:
             precision: 2
             mode: floor
 
         meta: >
-            Levier dérivé du risque et de la distance de stop (ATR),
-            modulé un peu plus fort sur 5m/1m pour le scalping.
+            Levier prudent, contrôlé, adapté aux fortes fluctuations sur tokens peu liquides.
 
+
+    # ============================
+    # DECISION ENGINE
+    # ============================
     decision:
         allowed_execution_timeframes: ['1m','5m','15m']
         require_price_or_atr: true
 
-    # ======== END-OF-ZONE FALLBACK ========
+
+    # ============================
+    # END-OF-ZONE FALLBACK
+    # ============================
     fallback_end_of_zone:
         enabled: true
         ttl_threshold_sec: 25
@@ -103,40 +124,55 @@ trade_entry:
         taker_order_type: 'market'
         max_slippage_bps: 10
 
-    # MARKET ENTRY (capé) — activable avec conditions
+
+    # ============================
+    # MARKET ENTRY (Taker)
+    # ============================
     market_entry:
         enabled: true
         allowed_execution_timeframes: ['1m','5m']
         max_slippage_bps: 25
         adx_min_1h: 15
 
+
+    # ============================
+    # ENTRY CONFIG
+    # ============================
     entry:
         prefer_maker: true
         fallback_taker: true
+
         budget:
             mode: fixed_or_available
             fixed_usdt_if_available: 40
+
         quantization:
             price_tick: from_exchange
             qty_step: from_exchange
+
         slippage_guard_bps: 8
         spread_guard_bps: 6
-        meta: >
-            Budget identique au profil normal. Ajustable si tu veux
-            des tickets plus petits pour le scalping.
 
+        meta: >
+            Budget et garde-fous de market microstructure adaptés aux scalps rapides.
+
+
+    # ============================
+    # POST-VALIDATION (EntryZone)
+    # ============================
     post_validation:
+
         entry_zone:
             vwap_anchor: true
-            k_atr: 0.30
-            w_min: 0.0005
-            w_max: 0.0120
+            k_atr: 0.24          # 0.30 → 0.24 → zones plus précises (meilleur winrate)
+            w_min: 0.0004
+            w_max: 0.0080        # 0.012 → 0.008 → évite entrées tardives
             quantize_to_exchange_step: true
-            ttl_sec: 240
+            ttl_sec: 180         # 240 → 180 (aligné sur temps de vie d’un scalp)
 
         idempotency:
             decision_key_tpl: "{symbol}:{timeframe}:{candle_open_ts}"
             max_attempts: 3
 
         meta: >
-            Même pipeline post-validation que le profil normal.
+            EntryZone resserrée, plus précise, moins permissive, cohérente avec le scalping pro.

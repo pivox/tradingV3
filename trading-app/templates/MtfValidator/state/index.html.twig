@@ -3,6 +3,45 @@
 {% block title %}États MTF - Trading{% endblock %}
 
 {% block body %}
+<style>
+.mtf-summary-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    align-items: flex-end;
+}
+.mtf-summary-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.85rem;
+    color: #475569;
+}
+td.table-success-subtle {
+    background-color: #d1fae5 !important;
+    color: #065f46 !important;
+}
+td.table-warning-subtle {
+    background-color: #fef3c7 !important;
+    color: #92400e !important;
+}
+td.table-info-subtle {
+    background-color: #dbeafe !important;
+    color: #1e40af !important;
+}
+.timeframe-recent {
+    position: relative;
+    background-color: #dcfce7 !important;
+}
+.timeframe-recent::after {
+    content: '●';
+    color: #16a34a;
+    font-size: 0.65rem;
+    position: absolute;
+    top: 4px;
+    right: 6px;
+}
+</style>
 <div class="row">
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center mb-4">
@@ -24,33 +63,50 @@
     </div>
 </div>
 
-<!-- Filtres -->
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <h6 class="mb-0">
-                    <i class="bi bi-funnel"></i> Filtres
-                </h6>
-            </div>
-            <div class="card-body">
-                <div class="row">
-                    <div class="col-md-4">
-                        <label for="filterSymbol" class="form-label">Symbole</label>
-                        <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
+<!-- Onglets -->
+<ul class="nav nav-tabs mb-4" id="mtfStatesTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tab-list" data-bs-toggle="tab" data-bs-target="#panel-list" type="button" role="tab" aria-controls="panel-list" aria-selected="true">
+            Liste
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-audit-summary" data-bs-toggle="tab" data-bs-target="#panel-audit-summary" type="button" role="tab" aria-controls="panel-audit-summary" aria-selected="false">
+            Synthèse audit
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content" id="mtfStatesTabsContent">
+    <!-- Onglet Liste -->
+    <div class="tab-pane fade show active" id="panel-list" role="tabpanel" aria-labelledby="tab-list">
+        <!-- Filtres -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">
+                            <i class="bi bi-funnel"></i> Filtres
+                        </h6>
                     </div>
-                    <div class="col-md-4 d-flex align-items-end">
-                        <button class="btn btn-outline-secondary" onclick="clearFilters()">
-                            <i class="bi bi-x-circle"></i> Effacer
-                        </button>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <label for="filterSymbol" class="form-label">Symbole</label>
+                                <input type="text" class="form-control" id="filterSymbol" placeholder="Ex: BTCUSDT">
+                            </div>
+                            <div class="col-md-4 d-flex align-items-end">
+                                <button class="btn btn-outline-secondary" onclick="clearFilters()">
+                                    <i class="bi bi-x-circle"></i> Effacer
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
-    </div>
-</div>
 
-<!-- Statistiques -->
+        <!-- Statistiques -->
 <div class="row mb-4">
     <div class="col-md-2">
         <div class="card bg-primary text-white">
@@ -116,33 +172,91 @@
     </script>
 </div>
 
-<!-- Table des états MTF -->
-<div class="row">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <h6 class="mb-0">
-                    <i class="bi bi-table"></i> Liste des États MTF ({{ mtfStates|length }})
-                </h6>
+        <!-- Table des états MTF -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">
+                            <i class="bi bi-table"></i> Liste des États MTF ({{ mtfStates|length }})
+                        </h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table id="mtfStatesTable" class="table table-striped table-hover">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Symbole</th>
+                                        <th>K4h</th>
+                                        <th>K1h</th>
+                                        <th>K15m</th>
+                                        <th>K5m</th>
+                                        <th>K1m</th>
+                                        <th>Sides</th>
+                                        <th>Mis à jour</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table id="mtfStatesTable" class="table table-striped table-hover">
-                        <thead class="table-dark">
-                            <tr>
-                                <th>ID</th>
-                                <th>Symbole</th>
-                                <th>K4h</th>
-                                <th>K1h</th>
-                                <th>K15m</th>
-                                <th>K5m</th>
-                                <th>K1m</th>
-                                <th>Sides</th>
-                                <th>Mis à jour</th>
-                            </tr>
-                        </thead>
-                        <tbody></tbody>
-                    </table>
+        </div>
+    </div>
+
+    <!-- Onglet Synthèse audit -->
+    <div class="tab-pane fade" id="panel-audit-summary" role="tabpanel" aria-labelledby="tab-audit-summary">
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0">
+                            <i class="bi bi-layers"></i> Synthèse audit MTF
+                        </h6>
+                        <button class="btn btn-outline-primary btn-sm" onclick="refreshAuditSummary(true)">
+                            <i class="bi bi-arrow-clockwise"></i> Rafraîchir
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="mtf-summary-toolbar mb-3">
+                            <div class="flex-grow-1">
+                                <label for="auditSummarySearch" class="form-label">Filtrer par symbole</label>
+                                <input type="text" class="form-control" id="auditSummarySearch" placeholder="Ex: BTCUSDT">
+                            </div>
+                            <div class="mtf-summary-meta" id="auditSummaryMeta">
+                                <span>Total symboles: <strong id="auditSummaryCount">0</strong></span>
+                                <span>Dernière génération: <strong id="auditSummaryUpdated">-</strong></span>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="table table-hover" id="auditSummaryTable">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th scope="col">Symbole</th>
+                                        <th scope="col">Règle</th>
+                                        <th scope="col">4H</th>
+                                        <th scope="col">1H</th>
+                                        <th scope="col">15M</th>
+                                        <th scope="col">5M</th>
+                                        <th scope="col">1M</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td colspan="7" class="text-center text-muted py-4">
+                                            <i class="bi bi-hourglass-split me-2"></i>Chargement des données...
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="auditSummaryEmpty" class="alert alert-info d-none">
+                            Aucun symbole ne correspond aux critères.
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -153,6 +267,13 @@
 {% block javascripts %}
 <script>
 let autoRefreshInterval;
+const TF_DURATION_MINUTES = {
+    '4h': 240,
+    '1h': 60,
+    '15m': 15,
+    '5m': 5,
+    '1m': 1,
+};
 
 $(document).ready(function() {
     // Charger stats
@@ -198,6 +319,18 @@ $(document).ready(function() {
 
     // Démarrer l'auto-refresh par défaut
     startAutoRefresh();
+
+    // Synthèse audit : chargement lazy lors du passage sur l'onglet
+    const auditSummaryTabEl = document.getElementById('tab-audit-summary');
+    auditSummaryTabEl.addEventListener('shown.bs.tab', function () {
+        if (!auditSummaryLoaded) {
+            refreshAuditSummary(false);
+        }
+    });
+
+    $('#auditSummarySearch').on('input', function() {
+        renderAuditSummaryTable();
+    });
 });
 
 function applyFilters() {
@@ -283,6 +416,209 @@ function renderSides(sides){
         parts.push(`<div class="side-item mb-1"><span class="badge bg-info">${tf}</span> ${sideBadge}</div>`);
     }
     return `<div class="sides-container">${parts.join('')}</div>`;
+}
+
+// Synthèse audit
+let auditSummaryData = [];
+let auditSummaryLoaded = false;
+let auditSummaryLoading = false;
+
+function refreshAuditSummary(forceReload) {
+    if (auditSummaryLoading) {
+        return;
+    }
+    if (auditSummaryLoaded && !forceReload) {
+        return;
+    }
+
+    auditSummaryLoading = true;
+    const tbody = document.querySelector('#auditSummaryTable tbody');
+    tbody.innerHTML = `
+        <tr>
+            <td colspan="7" class="text-center text-muted py-4">
+                <i class="bi bi-arrow-repeat me-2"></i>Actualisation de la synthèse...
+            </td>
+        </tr>
+    `;
+    document.getElementById('auditSummaryEmpty').classList.add('d-none');
+
+    const symbol = $('#auditSummarySearch').val();
+    const url = '{{ path('mtf_states_audit_summary') }}' + (symbol ? '?symbol=' + encodeURIComponent(symbol) : '');
+
+    fetch(url)
+        .then((resp) => {
+            if (!resp.ok) {
+                throw new Error('Réponse invalide');
+            }
+            return resp.json();
+        })
+        .then((payload) => {
+            auditSummaryLoaded = true;
+            auditSummaryData = Array.isArray(payload.data) ? payload.data : [];
+            const count = typeof payload.count === 'number' ? payload.count : auditSummaryData.length;
+            document.getElementById('auditSummaryCount').textContent = count.toString();
+            document.getElementById('auditSummaryUpdated').textContent = formatDateUtc(payload.generated_at || payload.generatedAt || null);
+            renderAuditSummaryTable();
+        })
+        .catch((err) => {
+            console.error('Erreur synthèse audit MTF:', err);
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="7" class="text-center text-danger py-4">
+                        <i class="bi bi-exclamation-triangle me-2"></i>Impossible de charger la synthèse.
+                    </td>
+                </tr>
+            `;
+        })
+        .finally(() => {
+            auditSummaryLoading = false;
+        });
+}
+
+function renderAuditSummaryTable() {
+    const tbody = document.querySelector('#auditSummaryTable tbody');
+    const emptyAlert = document.getElementById('auditSummaryEmpty');
+    const filterValue = ($('#auditSummarySearch').val() || '').toString().trim().toUpperCase();
+
+    if (!Array.isArray(auditSummaryData) || auditSummaryData.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" class="text-center text-muted py-4">
+                    <i class="bi bi-database-exclamation me-2"></i>Aucune donnée disponible.
+                </td>
+            </tr>
+        `;
+        emptyAlert.classList.remove('d-none');
+        return;
+    }
+
+    const prepared = auditSummaryData.filter((row) => {
+        if (!filterValue) {
+            return true;
+        }
+        return (row.symbol || '').toUpperCase().includes(filterValue);
+    });
+
+    if (prepared.length === 0) {
+        tbody.innerHTML = '';
+        emptyAlert.classList.remove('d-none');
+        return;
+    }
+
+    emptyAlert.classList.add('d-none');
+
+    // Trier par nombre de timeframes remplis (desc), puis rule_rank (1 = meilleur), puis symbole
+    prepared.sort((a, b) => {
+        const filledA = countFilledTimeframes(a);
+        const filledB = countFilledTimeframes(b);
+        if (filledA !== filledB) {
+            return filledB - filledA;
+        }
+        const rankA = a.rule_rank ?? 999;
+        const rankB = b.rule_rank ?? 999;
+        if (rankA !== rankB) {
+            return rankA - rankB;
+        }
+        return (a.symbol || '').localeCompare(b.symbol || '');
+    });
+
+    const rowsHtml = prepared.map((row) => {
+        const symbolLabel = escapeHtml(row.symbol || '');
+        const ruleRank = row.rule_rank ?? null;
+        const ruleBadge = ruleRank !== null 
+            ? `<span class="badge bg-${ruleRank === 1 ? 'success' : ruleRank === 2 ? 'info' : ruleRank === 3 ? 'warning' : 'secondary'}">Règle ${ruleRank}</span>`
+            : '<span class="text-muted">-</span>';
+
+        const timeframes = [
+            { tf: '4h', key: 'k4h_time' },
+            { tf: '1h', key: 'k1h_time' },
+            { tf: '15m', key: 'k15m_time' },
+            { tf: '5m', key: 'k5m_time' },
+            { tf: '1m', key: 'k1m_time' }
+        ];
+        const cells = timeframes.map(({ tf, key }) => {
+            const timeValue = row[key] || null;
+            
+            if (!timeValue) {
+                return '<td class="text-muted">-</td>';
+            }
+
+            // Déterminer la classe selon le ruleRank + fraîcheur
+            const classes = [];
+            if (ruleRank === 1) {
+                classes.push('table-success-subtle');
+            } else if (ruleRank === 2) {
+                classes.push('table-info-subtle');
+            } else if (ruleRank === 3) {
+                classes.push('table-warning-subtle');
+            }
+            if (isRecentTimeframe(tf, timeValue)) {
+                classes.push('timeframe-recent');
+            }
+
+            const formattedDate = formatDateUtc(timeValue);
+            return `<td class="${classes.join(' ')}">
+                <div class="small">${formattedDate}</div>
+            </td>`;
+        }).join('');
+
+        return `
+            <tr>
+                <td><strong>${symbolLabel}</strong></td>
+                <td>${ruleBadge}</td>
+                ${cells}
+            </tr>
+        `;
+    }).join('');
+
+    tbody.innerHTML = rowsHtml;
+}
+
+function formatDateUtc(value) {
+    if (!value) {
+        return '-';
+    }
+    const parsed = Date.parse(value);
+    if (Number.isNaN(parsed)) {
+        return '-';
+    }
+    return new Date(parsed).toLocaleString('fr-FR', {
+        timeZone: 'UTC',
+        hour12: false,
+    });
+}
+
+function escapeHtml(value) {
+    if (typeof value !== 'string') {
+        return '';
+    }
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function countFilledTimeframes(row) {
+    const keys = ['k4h_time', 'k1h_time', 'k15m_time', 'k5m_time', 'k1m_time'];
+    return keys.reduce((acc, key) => acc + (row[key] ? 1 : 0), 0);
+}
+
+function isRecentTimeframe(tf, isoString) {
+    const durationMin = TF_DURATION_MINUTES[tf];
+    if (!durationMin) {
+        return false;
+    }
+    const valueMs = Date.parse(isoString);
+    if (Number.isNaN(valueMs)) {
+        return false;
+    }
+    const durationMs = durationMin * 60000;
+    const adjustedNow = Date.now() - durationMs;
+    const lastClosedStart = Math.floor(adjustedNow / durationMs) * durationMs;
+    const tolerance = Math.min(60000, durationMs * 0.25);
+    return Math.abs(valueMs - lastClosedStart) <= tolerance;
 }
 </script>
 {% endblock %}

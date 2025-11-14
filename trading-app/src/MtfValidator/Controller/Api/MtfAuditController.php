@@ -178,6 +178,75 @@ class MtfAuditController extends AbstractController
         ]);
     }
 
+    #[Route('/audit-summary', name: 'audit_summary', methods: ['GET'])]
+    public function auditSummary(Request $request): JsonResponse
+    {
+        $symbol = $request->query->get('symbol');
+        $results = $this->mtfAuditRepository->getSummary();
+
+        $formatDate = static function (?\DateTimeImmutable $value): ?string {
+            return $value?->setTimezone(new \DateTimeZone('UTC'))->format(\DateTimeInterface::ATOM);
+        };
+
+        $data = [];
+        foreach ($results as $result) {
+            // Doctrine avec addSelect HIDDEN peut retourner un array mixte
+            // Structure possible: [0] => MtfState, 'ruleRank' => int
+            // ou directement l'entité si Doctrine hydrate différemment
+            $state = null;
+            $ruleRank = null;
+
+            if (is_array($result)) {
+                // Chercher l'entité MtfState dans le tableau
+                foreach ($result as $key => $value) {
+                    if (is_object($value) && method_exists($value, 'getSymbol')) {
+                        $state = $value;
+                        break;
+                    }
+                }
+                // Extraire ruleRank - peut être dans différentes positions selon Doctrine
+                if (isset($result['ruleRank'])) {
+                    $ruleRank = (int)$result['ruleRank'];
+                } elseif (isset($result[1]) && is_numeric($result[1])) {
+                    $ruleRank = (int)$result[1];
+                } elseif (isset($result['1']) && is_numeric($result['1'])) {
+                    $ruleRank = (int)$result['1'];
+                }
+            } elseif (is_object($result) && method_exists($result, 'getSymbol')) {
+                $state = $result;
+            }
+
+            if (!$state || !method_exists($state, 'getSymbol')) {
+                continue;
+            }
+
+            // Filtrer par symbole si fourni
+            if (is_string($symbol) && $symbol !== '') {
+                if (strtoupper($state->getSymbol()) !== strtoupper($symbol)) {
+                    continue;
+                }
+            }
+
+            $data[] = [
+                'symbol' => $state->getSymbol(),
+                'rule_rank' => $ruleRank,
+                'k4h_time' => $formatDate($state->getK4hTime()),
+                'k1h_time' => $formatDate($state->getK1hTime()),
+                'k15m_time' => $formatDate($state->getK15mTime()),
+                'k5m_time' => $formatDate($state->getK5mTime()),
+                'k1m_time' => $formatDate($state->getK1mTime()),
+                'sides' => $state->getSides(),
+                'updated_at' => $formatDate($state->getUpdatedAt()),
+            ];
+        }
+
+        return $this->json([
+            'count' => count($data),
+            'generated_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format(\DateTimeInterface::ATOM),
+            'data' => $data,
+        ]);
+    }
+
     #[Route('/contract/{symbol}', name: 'contract', methods: ['GET'])]
     public function contractDetails(string $symbol): JsonResponse
     {

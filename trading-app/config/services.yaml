@@ -291,6 +291,7 @@ services:
             $adx: '@App\Indicator\Core\Trend\Adx'
             $vwap: '@App\Indicator\Core\Volume\Vwap'
             $atrCalc: '@App\Indicator\Core\AtrCalculator'
+            $sma: '@App\Indicator\Core\Trend\Sma'
 
     # Contrôleur de test des indicateurs
     App\Indicator\Controller\IndicatorTestController:
