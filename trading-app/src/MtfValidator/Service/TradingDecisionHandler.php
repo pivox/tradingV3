@@ -24,6 +24,10 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
  */
 final class TradingDecisionHandler
 {
+    private const ENTRY_ZONE_DEFAULT_K_ATR = 0.30;
+    private const ENTRY_ZONE_DEFAULT_W_MIN = 0.0005;
+    private const ENTRY_ZONE_DEFAULT_W_MAX = 0.0100;
+
     public function __construct(
         private readonly TradeEntryService $tradeEntryService,
         private readonly TradeEntryRequestBuilder $requestBuilder,
@@ -372,6 +376,7 @@ final class TradingDecisionHandler
             'atr_pct_15m_bps' => $atrPct15mBps,
             'adx_5m' => null,
             'spread_bps' => null,
+            'volume_ratio' => null,
             'scalping' => false,
             'trailing_after_tp1' => false,
             'end_of_zone_fallback' => false,
@@ -422,11 +427,33 @@ final class TradingDecisionHandler
             $atrK = (float) ($defaults['atr_k'] ?? 1.5);
             $atrVal = $snap->atr !== null ? (float) ((string) $snap->atr) : ($atr15m ?? null);
             $ma21 = $snap->ma21 !== null ? (float) ((string) $snap->ma21) : null;
+            if ($atr15m === null && $atrVal !== null) {
+                $atr15m = $atrVal;
+            }
             if ($ma21 !== null && $atrVal !== null) {
                 $context['ma_21_plus_k_atr'] = $ma21 + ($atrK * $atrVal);
+                $context['ma_21_plus_1.3atr'] = $ma21 + (1.3 * $atrVal);
+                $context['ma_21_plus_2atr'] = $ma21 + (2.0 * $atrVal); // legacy consumers expect this key
             }
         } catch (\Throwable) {
             // best-effort: ces clés restent null/absentes si indisponibles
+        }
+
+        if (
+            $context['atr_pct_15m_bps'] === null &&
+            $price !== null &&
+            $price > 0.0 &&
+            $atr15m !== null &&
+            $atr15m > 0.0
+        ) {
+            $context['atr_pct_15m_bps'] = 10000.0 * $atr15m / $price;
+        }
+
+        if ($context['entry_zone_width_pct'] === null) {
+            $entryZoneWidth = $this->estimateEntryZoneWidthPct($symbol, $price ?? $context['close'] ?? null, $atr15m);
+            if ($entryZoneWidth !== null) {
+                $context['entry_zone_width_pct'] = $entryZoneWidth;
+            }
         }
 
         // ADX 1h
@@ -437,6 +464,20 @@ final class TradingDecisionHandler
                 $adx1h = $ind['adx'] ?? null;
                 if (is_numeric($adx1h)) {
                     $context['adx_1h'] = (float) $adx1h;
+                }
+            }
+        } catch (\Throwable) {
+            // ignore
+        }
+
+        // ADX 5m for forbid_drop_to_5m_if_any.adx_5m_lt
+        try {
+            $list5m = $this->indicatorProvider->getListPivot(symbol: $symbol, tf: '5m');
+            if ($list5m !== null) {
+                $ind5m = $list5m->toArray();
+                $adx5m = $ind5m['adx'] ?? null;
+                if (is_numeric($adx5m)) {
+                    $context['adx_5m'] = (float) $adx5m;
                 }
             }
         } catch (\Throwable) {
@@ -464,7 +505,233 @@ final class TradingDecisionHandler
             // ignore
         }
 
+        // Orderbook-based spread guard (bps)
+        if ($context['spread_bps'] === null) {
+            $spreadBps = $this->computeSpreadBps($symbol);
+            if ($spreadBps !== null) {
+                $context['spread_bps'] = $spreadBps;
+            }
+        }
+
+        // Volume ratio derived from recent klines if available
+        if ($context['volume_ratio'] === null) {
+            $volumeRatio = $this->computeVolumeRatio($symbol);
+            if ($volumeRatio !== null) {
+                $context['volume_ratio'] = $volumeRatio;
+            }
+        }
+
         return $context;
+    }
+
+    private function estimateEntryZoneWidthPct(string $symbol, ?float $referencePrice, ?float $atr15m): ?float
+    {
+        [$pivotCandidate, $atrFromSnapshot] = $this->fetchEntryZonePivotAndAtr($symbol);
+        $pivot = $pivotCandidate ?? $referencePrice;
+        if (!\is_finite((float) ($pivot ?? 0)) || $pivot === null || $pivot <= 0.0) {
+            return null;
+        }
+
+        $atrVal = $atrFromSnapshot ?? $atr15m;
+        if ($atrVal !== null && (!\is_finite($atrVal) || $atrVal <= 0.0)) {
+            $atrVal = null;
+        }
+
+        $postValidation = $this->tradeEntryConfig->getPostValidation();
+        $entryZoneCfg = (array) ($postValidation['entry_zone'] ?? []);
+        $kAtr = isset($entryZoneCfg['k_atr']) && \is_numeric($entryZoneCfg['k_atr'])
+            ? (float) $entryZoneCfg['k_atr']
+            : self::ENTRY_ZONE_DEFAULT_K_ATR;
+        $wMin = isset($entryZoneCfg['w_min']) && \is_numeric($entryZoneCfg['w_min'])
+            ? (float) $entryZoneCfg['w_min']
+            : self::ENTRY_ZONE_DEFAULT_W_MIN;
+        $wMax = isset($entryZoneCfg['w_max']) && \is_numeric($entryZoneCfg['w_max'])
+            ? (float) $entryZoneCfg['w_max']
+            : self::ENTRY_ZONE_DEFAULT_W_MAX;
+
+        $halfFromAtr = $atrVal !== null ? $kAtr * $atrVal : 0.0;
+        $minHalf = $pivot * $wMin;
+        $maxHalf = $pivot * $wMax;
+        $half = max($halfFromAtr, $minHalf);
+        $half = min($half, $maxHalf);
+
+        if (!\is_finite($half) || $half <= 0.0) {
+            return null;
+        }
+
+        return 100.0 * ((2.0 * $half) / $pivot);
+    }
+
+    /**
+     * @return array{0:?float,1:?float}
+     */
+    private function fetchEntryZonePivotAndAtr(string $symbol): array
+    {
+        $pivot = null;
+        $atr = null;
+
+        try {
+            $snap5m = $this->indicatorProvider->getSnapshot($symbol, '5m');
+            if ($snap5m->vwap !== null) {
+                $pivot = (float) ((string) $snap5m->vwap);
+            }
+            if (($pivot === null || $pivot <= 0.0) && $snap5m->ma21 !== null) {
+                $pivot = (float) ((string) $snap5m->ma21);
+            }
+            if (($pivot === null || $pivot <= 0.0) && $snap5m->ma9 !== null) {
+                $pivot = (float) ((string) $snap5m->ma9);
+            }
+            if ($snap5m->atr !== null) {
+                $atr = (float) ((string) $snap5m->atr);
+            }
+        } catch (\Throwable) {
+            // ignore
+        }
+
+        return [$pivot, $atr];
+    }
+
+    private function computeSpreadBps(string $symbol): ?float
+    {
+        if ($this->mainProvider === null) {
+            return null;
+        }
+
+        try {
+            $top = $this->mainProvider->getOrderProvider()->getOrderBookTop($symbol);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $bid = null;
+        $ask = null;
+        if (\is_array($top)) {
+            $bid = isset($top['bid']) && \is_numeric($top['bid']) ? (float) $top['bid'] : null;
+            $ask = isset($top['ask']) && \is_numeric($top['ask']) ? (float) $top['ask'] : null;
+        } elseif (\is_object($top)) {
+            if (isset($top->bid) && \is_numeric($top->bid)) {
+                $bid = (float) $top->bid;
+            }
+            if (isset($top->ask) && \is_numeric($top->ask)) {
+                $ask = (float) $top->ask;
+            }
+            if ($bid === null && method_exists($top, 'toArray')) {
+                $arr = $top->toArray();
+                $bid = isset($arr['bid']) && \is_numeric($arr['bid']) ? (float) $arr['bid'] : $bid;
+                $ask = isset($arr['ask']) && \is_numeric($arr['ask']) ? (float) $arr['ask'] : $ask;
+            }
+        }
+
+        if ($bid === null || $ask === null || $bid <= 0.0 || $ask <= 0.0) {
+            return null;
+        }
+
+        $mid = 0.5 * ($bid + $ask);
+        if ($mid <= 0.0) {
+            return null;
+        }
+
+        return 10000.0 * ($ask - $bid) / $mid;
+    }
+
+    private function computeVolumeRatio(string $symbol): ?float
+    {
+        if ($this->mainProvider === null) {
+            return null;
+        }
+
+        try {
+            $klines = $this->mainProvider->getKlineProvider()->getKlines($symbol, Timeframe::TF_15M, 25);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (empty($klines)) {
+            return null;
+        }
+
+        $volumes = [];
+        foreach ($klines as $kline) {
+            $volume = $this->extractKlineVolume($kline);
+            if ($volume !== null) {
+                $volumes[] = $volume;
+            }
+        }
+
+        return $this->volumeRatioFromSeries($volumes);
+    }
+
+    /**
+     * @param float[] $volumes
+     */
+    private function volumeRatioFromSeries(array $volumes): ?float
+    {
+        $count = count($volumes);
+        if ($count < 3) {
+            return null;
+        }
+
+        $current = $volumes[$count - 1];
+        if ($current <= 0.0) {
+            return null;
+        }
+
+        $window = min(20, $count - 1);
+        if ($window < 1) {
+            return null;
+        }
+
+        $past = array_slice($volumes, -($window + 1), $window);
+        if ($past === [] && $count > 1) {
+            $past = array_slice($volumes, 0, -1);
+        }
+
+        $past = array_values(array_filter($past, static fn($v) => \is_finite($v) && $v > 0.0));
+        if ($past === []) {
+            return null;
+        }
+
+        $avg = array_sum($past) / count($past);
+        if ($avg <= 0.0) {
+            return null;
+        }
+
+        return $current / $avg;
+    }
+
+    private function extractKlineVolume(mixed $kline): ?float
+    {
+        if (\is_object($kline)) {
+            if (method_exists($kline, 'getVolume')) {
+                $value = $kline->getVolume();
+                if ($value instanceof \Brick\Math\BigDecimal) {
+                    return (float) $value->toFloat();
+                }
+                if (\is_numeric($value)) {
+                    return (float) $value;
+                }
+            }
+
+            if (isset($kline->volume)) {
+                $value = $kline->volume;
+                if ($value instanceof \Brick\Math\BigDecimal) {
+                    return (float) $value->toFloat();
+                }
+                if (\is_numeric($value)) {
+                    return (float) $value;
+                }
+            }
+        } elseif (\is_array($kline) && isset($kline['volume'])) {
+            $value = $kline['volume'];
+            if ($value instanceof \Brick\Math\BigDecimal) {
+                return (float) $value->toFloat();
+            }
+            if (\is_numeric($value)) {
+                return (float) $value;
+            }
+        }
+
+        return null;
     }
 
     /**

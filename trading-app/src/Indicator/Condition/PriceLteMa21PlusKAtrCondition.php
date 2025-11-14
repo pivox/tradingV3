@@ -24,7 +24,10 @@ final class PriceLteMa21PlusKAtrCondition extends AbstractCondition
     public function evaluate(array $context): ConditionResult
     {
         $close = $context['close'] ?? null;
-        $level = $context['ma_21_plus_k_atr'] ?? $context['ma_21_plus_2atr'] ?? null;
+        $level = $context['ma_21_plus_k_atr']
+            ?? $context['ma_21_plus_1.3atr']
+            ?? $context['ma_21_plus_2atr']
+            ?? null;
 
         if (!\is_float($close) || !\is_float($level)) {
             return $this->result(self::NAME, false, null, null, $this->baseMeta($context, [
