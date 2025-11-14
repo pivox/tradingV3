@@ -12,7 +12,6 @@ import SignalsPage from './pages/SignalsPage';
 import KlinesPage from './pages/KlinesPage';
 import MtfStatePage from './pages/MtfStatePage';
 import MtfDashboardPage from './pages/MtfDashboardPage';
-import OrderPlanPage from './pages/OrderPlanPage';
 import MtfAuditPage from './pages/MtfAuditPage';
 import MtfSwitchPage from './pages/MtfSwitchPage';
 import IndicatorSnapshotPage from './pages/IndicatorSnapshotPage';
@@ -42,7 +41,6 @@ function App() {
                         <li><Link to="/klines">Klines</Link></li>
                         <li><Link to="/missing-klines">Bougies Manquantes</Link></li>
                         <li><Link to="/mtf-state">États MTF</Link></li>
-                        <li><Link to="/order-plans">Plans de Commandes</Link></li>
                         <li><Link to="/mtf-audit">Audits MTF</Link></li>
                         <li><Link to="/mtf-switch">Switches MTF</Link></li>
                         <li><Link to="/indicator-snapshots">Snapshots Indicateurs</Link></li>
@@ -68,7 +66,6 @@ function App() {
                         <Route path="/klines" element={<KlinesPage />} />
                         <Route path="/missing-klines" element={<MissingKlinesPage />} />
                         <Route path="/mtf-state" element={<MtfStatePage />} />
-                        <Route path="/order-plans" element={<OrderPlanPage />} />
                         <Route path="/mtf-audit" element={<MtfAuditPage />} />
                         <Route path="/mtf-switch" element={<MtfSwitchPage />} />
                         <Route path="/indicator-snapshots" element={<IndicatorSnapshotPage />} />

@@ -26,7 +26,6 @@ services:
       $mtfSwitchRepository: '@App\MtfValidator\Repository\MtfSwitchRepository'
       $mtfAuditRepository: '@App\MtfValidator\Repository\MtfAuditRepository'
       $mtfLockRepository: '@App\MtfValidator\Repository\MtfLockRepository'
-      $orderPlanRepository: '@App\Repository\OrderPlanRepository'
       $logger: '@logger'
       $mtfRunService: '@App\MtfValidator\Service\MtfRunService'
     tags: ['controller.service_arguments']
@@ -70,7 +69,6 @@ services:
     class: Temporal\Worker\WorkerFactory
     arguments:
       $serviceClient: '@temporal.service_client'
-
 
 
 

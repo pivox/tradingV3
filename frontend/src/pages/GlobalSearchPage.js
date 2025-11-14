@@ -10,7 +10,6 @@ const GlobalSearchPage = () => {
     const [searchResults, setSearchResults] = useState({
         contracts: [],
         signals: [],
-        orderPlans: [],
         audits: []
     });
     const [loading, setLoading] = useState(false);
@@ -34,7 +33,6 @@ const GlobalSearchPage = () => {
             setSearchResults({
                 contracts: [],
                 signals: [],
-                orderPlans: [],
                 audits: []
             });
             setHasSearched(false);
@@ -64,7 +62,6 @@ const GlobalSearchPage = () => {
             const organizedResults = {
                 contracts: response.contracts || [],
                 signals: response.signals || [],
-                orderPlans: response.orderPlans || [],
                 audits: response.audits || []
             };
             
@@ -75,7 +72,6 @@ const GlobalSearchPage = () => {
             setSearchResults({
                 contracts: [],
                 signals: [],
-                orderPlans: [],
                 audits: []
             });
         } finally {
@@ -89,7 +85,6 @@ const GlobalSearchPage = () => {
         setSearchResults({
             contracts: [],
             signals: [],
-            orderPlans: [],
             audits: []
         });
         setHasSearched(false);
@@ -157,7 +152,6 @@ const GlobalSearchPage = () => {
     const getTotalResults = () => {
         return searchResults.contracts.length + 
                searchResults.signals.length + 
-               searchResults.orderPlans.length + 
                searchResults.audits.length;
     };
 
@@ -165,7 +159,7 @@ const GlobalSearchPage = () => {
         <div className="global-search-page">
             <div className="page-header">
                 <h1>Recherche Globale</h1>
-                <p className="page-subtitle">Rechercher rapidement un symbole, signal, plan d'ordre depuis une barre de recherche</p>
+                <p className="page-subtitle">Rechercher rapidement un symbole, un signal ou un audit depuis une barre de recherche</p>
             </div>
 
             {/* Barre de recherche */}
@@ -174,7 +168,7 @@ const GlobalSearchPage = () => {
                     <div className="search-input-group">
                         <input
                             type="text"
-                            placeholder="Rechercher un symbole, signal, plan d'ordre..."
+                            placeholder="Rechercher un symbole, signal ou audit..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             className="search-input"
@@ -317,50 +311,6 @@ const GlobalSearchPage = () => {
                             )}
 
                             {/* Plans d'ordres */}
-                            {searchResults.orderPlans.length > 0 && (
-                                <div className="results-category">
-                                    <h4>
-                                        <span className="category-icon">📋</span>
-                                        Plans d'Ordres ({searchResults.orderPlans.length})
-                                    </h4>
-                                    <div className="results-list">
-                                        {searchResults.orderPlans.map((plan) => (
-                                            <div key={plan.id} className="result-item order-plan-item">
-                                                <div className="result-header">
-                                                    <span className="symbol-badge">
-                                                        {highlightText(plan.symbol, searchQuery)}
-                                                    </span>
-                                                    <span className={`badge ${getSideBadgeClass(plan.side)}`}>
-                                                        {plan.side}
-                                                    </span>
-                                                    <span className={`badge ${getStatusBadgeClass(plan.status)}`}>
-                                                        {plan.status}
-                                                    </span>
-                                                </div>
-                                                <div className="result-details">
-                                                    <div className="detail-item">
-                                                        <span className="detail-label">Date génération:</span>
-                                                        <span>{formatDate(plan.generatedAt)}</span>
-                                                    </div>
-                                                    <div className="detail-item">
-                                                        <span className="detail-label">Statut:</span>
-                                                        <span>{plan.status}</span>
-                                                    </div>
-                                                </div>
-                                                <div className="result-actions">
-                                                    <Link 
-                                                        to={`/order-plans?symbol=${plan.symbol}`}
-                                                        className="btn btn-sm btn-outline-primary"
-                                                    >
-                                                        Voir les plans
-                                                    </Link>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
                             {/* Audits */}
                             {searchResults.audits.length > 0 && (
                                 <div className="results-category">

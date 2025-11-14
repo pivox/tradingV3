@@ -93,10 +93,6 @@ class OrderIntent
     #[ORM\OneToMany(targetEntity: OrderProtection::class, mappedBy: 'orderIntent', cascade: ['persist', 'remove'])]
     private Collection $protections;
 
-    #[ORM\ManyToOne(targetEntity: OrderPlan::class)]
-    #[ORM\JoinColumn(name: 'order_plan_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
-    private ?OrderPlan $orderPlan = null;
-
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, options: ['default' => 'CURRENT_TIMESTAMP'])]
     private \DateTimeImmutable $createdAt;
 
@@ -340,17 +336,6 @@ class OrderIntent
         return $this->touch();
     }
 
-    public function getOrderPlan(): ?OrderPlan
-    {
-        return $this->orderPlan;
-    }
-
-    public function setOrderPlan(?OrderPlan $orderPlan): self
-    {
-        $this->orderPlan = $orderPlan;
-        return $this->touch();
-    }
-
     public function getCreatedAt(): \DateTimeImmutable
     {
         return $this->createdAt;
@@ -442,4 +427,3 @@ class OrderIntent
         return $this;
     }
 }
-

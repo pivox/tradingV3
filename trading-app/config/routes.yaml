@@ -35,10 +35,6 @@ mtf_web_stats:
   resource: '../src/MtfValidator/Controller/Web/MtfStatsController.php'
   type: attribute
 
-mtf_web_order_plans:
-  resource: '../src/MtfValidator/Controller/Web/MtfOrderPlanController.php'
-  type: attribute
-
 mtf_web_states:
   resource: '../src/MtfValidator/Controller/Web/MtfStateController.php'
   type: attribute

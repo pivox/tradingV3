@@ -186,19 +186,6 @@ const api = {
         return handleResponse(response);
     },
 
-    // Order Plans
-    async getOrderPlans(params = {}) {
-        const queryParams = new URLSearchParams();
-        Object.entries(params).forEach(([key, value]) => {
-            if (value !== '' && value !== null && value !== undefined) {
-                queryParams.append(key, value);
-            }
-        });
-        const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
-        const response = await fetch(`${config.apiUrl}/api/order-plans${queryString}`);
-        return handleResponse(response);
-    },
-
     // MTF Switches
     async getMtfSwitches(params = {}) {
         const queryParams = new URLSearchParams();

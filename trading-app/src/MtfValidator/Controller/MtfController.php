@@ -16,7 +16,6 @@ use App\MtfValidator\Repository\MtfAuditRepository;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\Repository\MtfStateRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
-use App\Repository\OrderPlanRepository;
 use Ramsey\Uuid\Uuid;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
@@ -41,7 +40,6 @@ class MtfController extends AbstractController
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly MtfAuditRepository $mtfAuditRepository,
         private readonly MtfLockRepository $mtfLockRepository,
-        private readonly OrderPlanRepository $orderPlanRepository,
         private readonly LoggerInterface $logger,
         private readonly MtfRunService $mtfRunService,
         private readonly ClockInterface $clock,
@@ -456,60 +454,6 @@ class MtfController extends AbstractController
             ]);
         } catch (\Exception $e) {
             $this->logger->error('[MTF Controller] Failed to get audit', [
-                'error' => $e->getMessage()
-            ]);
-            
-            return $this->json([
-                'status' => 'error',
-                'message' => $e->getMessage()
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
-        }
-    }
-
-    #[Route('/order-plans', name: 'order_plans', methods: ['GET'])]
-    public function getOrderPlans(Request $request): JsonResponse
-    {
-        try {
-            $limit = (int) $request->query->get('limit', 50);
-            $symbol = $request->query->get('symbol');
-            $status = $request->query->get('status');
-            
-            $queryBuilder = $this->orderPlanRepository->createQueryBuilder('op')
-                ->orderBy('op.planTime', 'DESC')
-                ->setMaxResults($limit);
-            
-            if ($symbol) {
-                $queryBuilder->andWhere('op.symbol = :symbol')
-                    ->setParameter('symbol', $symbol);
-            }
-            
-            if ($status) {
-                $queryBuilder->andWhere('op.status = :status')
-                    ->setParameter('status', $status);
-            }
-            
-            $orderPlans = $queryBuilder->getQuery()->getResult();
-            $orderPlansData = [];
-            
-            foreach ($orderPlans as $orderPlan) {
-                $orderPlansData[] = [
-                    'id' => $orderPlan->getId(),
-                    'symbol' => $orderPlan->getSymbol(),
-                    'side' => $orderPlan->getSide()->value,
-                    'status' => $orderPlan->getStatus(),
-                    'plan_time' => $orderPlan->getPlanTime()->format('Y-m-d H:i:s'),
-                    'context' => $orderPlan->getContextJson(),
-                    'risk' => $orderPlan->getRiskJson(),
-                    'exec' => $orderPlan->getExecJson()
-                ];
-            }
-            
-            return $this->json([
-                'status' => 'success',
-                'data' => $orderPlansData
-            ]);
-        } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to get order plans', [
                 'error' => $e->getMessage()
             ]);
             
