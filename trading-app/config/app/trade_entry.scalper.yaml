@@ -2,7 +2,8 @@
 version: '2.5.95s'
 
 meta:
-    name: SCALPING v2.1 - Anti-Extension + Liquidité + Précision Zone
+    name: > SCALPING v2.1 - Anti-Extension + Liquidité + Précision Zone
+        => j'ai deserré zone_max_dev_pct à 0.02 pour éviter trop de rejets sur certains symbols (fixed_usdt_if_available)
     description: >
         Version optimisée du profil scalper : contrôle de liquidité, prévention des entrées tardives,
         réduction de la largeur des zones, levier réduit sur micro-caps, compatibilité MTF 1h→5m→1m.
@@ -49,7 +50,7 @@ trade_entry:
         # Déviations resserrées pour éviter les entrées en extension
         max_deviation_pct: 0.004
         implausible_pct: 0.02
-        zone_max_deviation_pct: 0.013
+        zone_max_deviation_pct: 0.02
 
         # --- DYNAMIC LEVERAGE PARAM
         k_dynamic: 10.0
@@ -61,7 +62,7 @@ trade_entry:
     risk:
         fixed_risk_pct: 5.0
         daily_max_loss_pct: 6.0
-        daily_max_loss_usdt: 25.0
+        daily_max_loss_usdt: 30.0
         daily_loss_count_unrealized: true
         max_concurrent_positions: 4
         meta: >

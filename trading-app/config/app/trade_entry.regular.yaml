@@ -62,7 +62,7 @@ trade_entry:
     risk:
         fixed_risk_pct: 5.0                        # % du capital risqué par trade (base)
         daily_max_loss_pct: 6.0                     # Coupe-circuit journalier (pourcentage - non utilisé par ce guard)
-        daily_max_loss_usdt: 25.0                   # Coupe-circuit journalier absolu (USDT). Si > 0, bloque les nouvelles entrées après -X USDT.
+        daily_max_loss_usdt: 30.0                   # Coupe-circuit journalier absolu (USDT). Si > 0, bloque les nouvelles entrées après -X USDT.
         daily_loss_count_unrealized: true           # Utiliser l'equity (incl. non réalisé) si disponible pour le calcul journalier
         max_concurrent_positions: 4                  # Limite de positions simultanées
         meta: >
@@ -132,7 +132,7 @@ trade_entry:
         fallback_taker: true
         budget:
             mode: fixed_or_available
-            fixed_usdt_if_available: 40       # utilise 40 USDT si dispo, sinon solde dispo
+            fixed_usdt_if_available: 30       # utilise 30 USDT si dispo, sinon solde dispo
         quantization:
             price_tick: from_exchange
             qty_step: from_exchange
