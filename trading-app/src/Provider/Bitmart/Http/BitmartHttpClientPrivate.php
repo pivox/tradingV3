@@ -281,7 +281,7 @@ final class BitmartHttpClientPrivate
     private function parseBitmartResponse(ResponseInterface $response, string $path = ''): array
     {
         $status = $response->getStatusCode();
-        
+
         // Gérer les HTTP 404 pour les endpoints de listing (peut arriver quand pas de résultats)
         if ($status === 404 && in_array($path, [self::PATH_ORDER_PENDING, self::PATH_POSITION, self::PATH_PLAN_ORDERS], true)) {
             $content = $response->getContent(false);
@@ -304,14 +304,14 @@ final class BitmartHttpClientPrivate
             // Si pas de code 30000, lever l'exception normale
             throw new \RuntimeException('BitMart HTTP '.$status.': '.$content);
         }
-        
+
         if ($status < 200 || $status >= 300) {
             throw new \RuntimeException('BitMart HTTP '.$status.': '.$response->getContent(false));
         }
 
         $json = $response->toArray(false);
         $code = (int) ($json['code'] ?? 0);
-        
+
         // Code 30000 "Not found" est un cas normal pour les endpoints de listing (pas de résultats)
         // Selon la doc BitMart: code 30000 avec HTTP 200 = "Not found" (état normal)
         if ($code === 30000 && in_array($path, [self::PATH_ORDER_PENDING, self::PATH_POSITION, self::PATH_PLAN_ORDERS], true)) {
@@ -325,7 +325,7 @@ final class BitmartHttpClientPrivate
                 ],
             ];
         }
-        
+
         if ($code !== 1000) {
             $code = $json['code'] ?? 'unknown';
             $msg  = $json['message'] ?? 'unknown';
@@ -380,7 +380,7 @@ final class BitmartHttpClientPrivate
     /**
      * GET /contract/private/position-v2
      * Récupère les positions ouvertes.
-     * 
+     *
      * @param string|null $symbol Symbole à filtrer (optionnel)
      * @param string|null $account Type de compte: 'futures' ou 'copy_trading' (optionnel, par défaut 'futures')
      */
@@ -400,7 +400,7 @@ final class BitmartHttpClientPrivate
     /**
      * GET /contract/private/get-open-orders
      * Récupère les ordres en attente (ordres normaux, pas les TP/SL).
-     * 
+     *
      * @param string|null $symbol Symbole à filtrer (optionnel)
      * @param string|null $account Type de compte: 'futures' ou 'copy_trading' (optionnel, par défaut 'futures')
      */
@@ -420,7 +420,7 @@ final class BitmartHttpClientPrivate
     /**
      * GET /contract/private/current-plan-order
      * Récupère les ordres planifiés (Plan Orders) incluant les TP/SL.
-     * 
+     *
      * @param string|null $symbol Symbole à filtrer (optionnel)
      * @param string|null $account Type de compte: 'futures' ou 'copy_trading' (optionnel, par défaut 'futures')
      */
@@ -449,13 +449,39 @@ final class BitmartHttpClientPrivate
     /**
      * GET /contract/private/order-history
      * Récupère l'historique des ordres.
+     * 
+     * @param string $symbol Symbole (obligatoire), ex: GLMUSDT, MELANIAUSDT
+     * @param int $limit Limite de résultats (max 200)
+     * @param int|null $startTime Timestamp de début en secondes (optionnel, par défaut: 7 derniers jours)
+     * @param int|null $endTime Timestamp de fin en secondes (optionnel, par défaut: maintenant)
+     * @param string|null $account Type de compte: 'futures' ou 'copy_trading' (optionnel)
+     * @return array Réponse de l'API BitMart
      */
-    public function getOrderHistory(string $symbol, int $limit = 100): array
-    {
-        return $this->requestJsonPrivate('GET', self::PATH_ORDER_HISTORY, [
+    public function getOrderHistory(
+        string $symbol, 
+        int $limit = 100, 
+        ?int $startTime = null, 
+        ?int $endTime = null,
+        ?string $account = null
+    ): array {
+        $query = [
             'symbol' => $symbol,
-            'limit' => $limit
-        ]);
+            'limit' => min($limit, 200), // BitMart limite à 200 ordres max
+        ];
+        
+        if ($startTime !== null) {
+            $query['start_time'] = $startTime;
+        }
+        
+        if ($endTime !== null) {
+            $query['end_time'] = $endTime;
+        }
+        
+        if ($account !== null) {
+            $query['account'] = $account;
+        }
+        
+        return $this->requestJsonPrivate('GET', self::PATH_ORDER_HISTORY, $query);
     }
 
     /**
@@ -536,10 +562,8 @@ final class BitmartHttpClientPrivate
             $duration = 0;
         } elseif ($duration > 0 && $duration < 5) {
             $duration = 5;
-        } elseif ($duration > 60) {
-            // BitMart enforces a maximum around 60s; clamp to avoid API rejection
-            $duration = 60;
         }
+
 
         return $this->requestJsonPrivate('POST', self::PATH_CANCEL_ALL_AFTER, [], [
             'timeout' => $duration,
