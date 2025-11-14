@@ -193,7 +193,6 @@ services:
             $mtfSwitchRepository: '@App\MtfValidator\Repository\MtfSwitchRepository'
             $mtfAuditRepository: '@App\MtfValidator\Repository\MtfAuditRepository'
             $mtfLockRepository: '@App\MtfValidator\Repository\MtfLockRepository'
-            $orderPlanRepository: '@App\Repository\OrderPlanRepository'
             $logger: '@logger'
             $mtfRunService: '@App\MtfValidator\Service\MtfRunService'
             $clock: '@Psr\Clock\ClockInterface'
