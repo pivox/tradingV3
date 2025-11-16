@@ -75,7 +75,7 @@ final class PositionsLogScanner
                         $status = 'skipped';
                         $reason = $this->extractToken($line, 'reason') ?? 'skipped';
                         $details['decision_key'] = $this->extractToken($line, 'decision_key');
-                        foreach (['candidate', 'zone_min', 'zone_max', 'zone_dev_pct', 'zone_max_dev_pct'] as $key) {
+                        foreach (['candidate', 'zone_min', 'zone_max', 'zone_dev_pct', 'zone_max_dev_pct', 'price_vs_ma21_k_atr', 'entry_rsi', 'volume_ratio', 'r_multiple_final'] as $key) {
                             $value = $this->extractContextToken($line, $key);
                             if ($value !== null) {
                                 $details[$key] = is_numeric($value) ? (float) $value : $value;
@@ -86,7 +86,7 @@ final class PositionsLogScanner
                     if (str_contains($line, 'build_order_plan.zone_skipped_for_execution')) {
                         $status = 'skipped';
                         $reason = 'zone_far_from_market';
-                        foreach (['candidate', 'zone_min', 'zone_max', 'zone_dev_pct', 'zone_max_dev_pct'] as $key) {
+                        foreach (['candidate', 'zone_min', 'zone_max', 'zone_dev_pct', 'zone_max_dev_pct', 'price_vs_ma21_k_atr', 'entry_rsi', 'volume_ratio', 'r_multiple_final'] as $key) {
                             $value = $this->extractToken($line, $key);
                             if ($value !== null) {
                                 $details[$key] = is_numeric($value) ? (float) $value : $value;

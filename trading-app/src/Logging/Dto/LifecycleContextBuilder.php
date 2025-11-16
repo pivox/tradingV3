@@ -104,6 +104,21 @@ final class LifecycleContextBuilder
         return $this;
     }
 
+    public function withIndicatorMetrics(
+        ?float $entryRsi,
+        ?float $priceVsMa21KAtr,
+        ?float $volumeRatio = null
+    ): self {
+        $this->set('entry_rsi', $entryRsi !== null ? round($entryRsi, 2) : null);
+        $this->set('price_vs_ma21_k_atr', $priceVsMa21KAtr !== null ? round($priceVsMa21KAtr, 4) : null);
+
+        if ($volumeRatio !== null && !isset($this->data['volume_ratio'])) {
+            $this->data['volume_ratio'] = round($volumeRatio, 4);
+        }
+
+        return $this;
+    }
+
     /**
      * @param array<string,mixed> $metrics
      */

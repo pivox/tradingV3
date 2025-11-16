@@ -128,6 +128,32 @@ final class TradeLifecycleLogger
         $this->persist($event);
     }
 
+    public function logPositionClosed(
+        string $symbol,
+        string $positionId,
+        ?string $side,
+        ?string $runId = null,
+        ?string $exchange = null,
+        ?string $accountId = null,
+        ?string $reasonCode = null,
+        ?array $extra = null,
+    ): void {
+        $event = $this->newEvent($symbol, TradeLifecycleEventType::POSITION_CLOSED)
+            ->setPositionId($positionId)
+            ->setSide($side)
+            ->setRunId($runId)
+            ->setExchange($exchange)
+            ->setAccountId($accountId)
+            ->setReasonCode($reasonCode);
+
+        if ($extra !== null) {
+            $event->setExtra($this->normalizeExtra($extra));
+        }
+
+        $this->persist($event);
+    }
+
+
     private function newEvent(string $symbol, string $eventType): TradeLifecycleEvent
     {
         $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
