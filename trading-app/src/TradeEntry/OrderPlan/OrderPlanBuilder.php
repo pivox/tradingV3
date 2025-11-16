@@ -74,78 +74,150 @@ final class OrderPlanBuilder
         $mid     = 0.5 * ($bestBid + $bestAsk);
         $mark    = $pre->markPrice ?? $mid;
 
-        // --- Entry price (limit or market) + garde de cohérence ---
+        // --- Paramètres de garde prix ---
         $insideTicks         = max(1, (int)($req->insideTicks ?? 1));
-        $maxDeviationPct     = $this->normalizePercent($req->maxDeviationPct ?? 0.005);
-        $implausiblePct      = $this->normalizePercent($req->implausiblePct ?? 0.02);
+        $maxDeviationPct     = $this->normalizePercent($req->maxDeviationPct ?? 0.005);  // ~50 bps
+        $implausiblePct      = $this->normalizePercent($req->implausiblePct ?? 0.02);   // 2 %
         $zoneMaxDeviationPct = $this->normalizePercent($req->zoneMaxDeviationPct ?? 0.007);
 
+        // ============================================================
+        //  ENTRY PRICE (LIMIT / MARKET) - NOUVELLE LOGIQUE
+        // ============================================================
         if ($req->orderType === 'limit') {
-            if ($req->side === Side::Long) {
-                $entry = min($bestAsk - $tick, $bestBid + $insideTicks * $tick);
-                if ($req->entryLimitHint !== null) {
-                    $hint  = TickQuantizer::quantize(max((float)$req->entryLimitHint, $tick), $precision);
-                    $entry = min(max($entry, $bestBid - 2 * $tick), $hint);
-                }
-                if (abs($entry - $mark) / max($mark, 1e-8) > $maxDeviationPct) {
-                    $entry = min($bestAsk - $tick, $bestBid + $tick);
-                }
-                $entry = TickQuantizer::quantize(max($entry, $tick), $precision);
-            } else {
-                $entry = max($bestBid + $tick, $bestAsk - $insideTicks * $tick);
-                if ($req->entryLimitHint !== null) {
-                    $hint  = TickQuantizer::quantizeUp(max((float)$req->entryLimitHint, $tick), $precision);
-                    $entry = max(min($entry, $bestAsk + 2 * $tick), $hint);
-                }
-                if (abs($entry - $mark) / max($mark, 1e-8) > $maxDeviationPct) {
-                    $entry = max($bestBid + $tick, $bestAsk - $tick);
-                }
-                $entry = TickQuantizer::quantizeUp(max($entry, $tick), $precision);
-            }
-        } else {
-            $entry = $req->side === Side::Long ? $bestAsk : $bestBid;
-        }
 
-        $this->positionsLogger->debug('order_plan.entry_price', [
-            'symbol' => $req->symbol, 'side' => $req->side->value,
-            'best_bid' => $bestBid, 'best_ask' => $bestAsk, 'mark' => $mark, 'entry' => $entry,
-            'decision_key' => $decisionKey,
-        ]);
+            $usedZone      = false;
+            $ideal         = 0.0;
+            $zoneDeviation = 0.0;
+
+            // 1) Prix "maker" de base
+            if ($req->side === Side::Long) {
+                // On essaye d'être maker juste au-dessus du bid
+                $ideal = $bestBid + $tick;
+            } else {
+                // SHORT: maker juste en-dessous du ask
+                $ideal = $bestAsk - $tick;
+            }
+
+            // 2) Si EntryZone exploitable et proche du mark, on clamp dedans
+            if ($zone instanceof EntryZone) {
+                $zoneDeviation = $mark > 0.0
+                    ? max(abs($zone->min - $mark), abs($zone->max - $mark)) / $mark
+                    : 0.0;
+
+                if ($zoneDeviation <= $zoneMaxDeviationPct) {
+                    // Clamp dans la zone
+                    if ($req->side === Side::Long) {
+                        $ideal = max($zone->min, min($ideal, $zone->max));
+                    } else {
+                        $ideal = min($zone->max, max($ideal, $zone->min));
+                    }
+                    $usedZone = true;
+                }
+            }
+
+            // 3) Hint éventuel (entryLimitHint) : on le respecte sans briser la zone
+            if ($req->entryLimitHint !== null) {
+                $hint = max((float)$req->entryLimitHint, $tick);
+                if ($req->side === Side::Long) {
+                    $ideal = min($ideal, $hint);
+                } else {
+                    $ideal = max($ideal, $hint);
+                }
+            }
+
+            // 4) Garde maxDeviation vs mark : on rapproche dans un couloir autour du mark
+            if ($mark > 0.0) {
+                $deviation = abs($ideal - $mark) / $mark;
+                if ($deviation > $maxDeviationPct) {
+                    $lowGuard  = $mark * (1.0 - $maxDeviationPct);
+                    $highGuard = $mark * (1.0 + $maxDeviationPct);
+
+                    // Si une zone est utilisée, on intersecte avec la zone
+                    if ($usedZone && $zone instanceof EntryZone) {
+                        $lowGuard  = max($lowGuard, $zone->min);
+                        $highGuard = min($highGuard, $zone->max);
+                    }
+
+                    // Clamp dans le couloir [lowGuard, highGuard]
+                    $ideal = max($lowGuard, min($ideal, $highGuard));
+                }
+            }
+
+            // 5) Si pas de zone (ou zone non utilisable), fallback sur ancienne logique insideTicks
+            if (!$usedZone) {
+                if ($req->side === Side::Long) {
+                    $fallbackIdeal = min($bestAsk - $tick, $bestBid + $insideTicks * $tick);
+                    $ideal = max($tick, $fallbackIdeal);
+                } else {
+                    $fallbackIdeal = max($bestBid + $tick, $bestAsk - $insideTicks * $tick);
+                    $ideal = max($tick, $fallbackIdeal);
+                }
+            }
+
+            // 6) Quantization finale
+            if ($req->side === Side::Long) {
+                $entry = TickQuantizer::quantize(max($ideal, $tick), $precision);
+            } else {
+                $entry = TickQuantizer::quantizeUp(max($ideal, $tick), $precision);
+            }
+
+            $this->positionsLogger->debug('order_plan.entry_price', [
+                'symbol'        => $req->symbol,
+                'side'          => $req->side->value,
+                'best_bid'      => $bestBid,
+                'best_ask'      => $bestAsk,
+                'mark'          => $mark,
+                'entry'         => $entry,
+                'used_zone'     => $usedZone,
+                'zone_min'      => $zone?->min,
+                'zone_max'      => $zone?->max,
+                'zone_deviation'=> $zoneDeviation,
+                'max_deviation_pct' => $maxDeviationPct,
+                'decision_key'  => $decisionKey,
+            ]);
+
+        } else {
+            // MARKET: inchangé, on prend le meilleur côté
+            $entry = $req->side === Side::Long ? $bestAsk : $bestBid;
+
+            $this->positionsLogger->debug('order_plan.entry_price_market', [
+                'symbol'       => $req->symbol,
+                'side'         => $req->side->value,
+                'best_bid'     => $bestBid,
+                'best_ask'     => $bestAsk,
+                'mark'         => $mark,
+                'entry'        => $entry,
+                'decision_key' => $decisionKey,
+            ]);
+        }
 
         if (!\is_finite($entry) || $entry <= 0.0) {
             throw new \RuntimeException('Prix d\'entrée invalide');
         }
 
-        // --- Clamp à l'Entry Zone si proche du marché ---
-        if ($zone instanceof EntryZone) {
-            $zoneDeviation = $mark > 0.0 ? max(abs($zone->min - $mark), abs($zone->max - $mark)) / $mark : 0.0;
-            if ($zoneDeviation <= $zoneMaxDeviationPct) {
-                $clamped = max($zone->min, min($entry, $zone->max));
-                $entry = $req->side === Side::Long
-                    ? TickQuantizer::quantize($clamped, $precision)
-                    : TickQuantizer::quantizeUp($clamped, $precision);
-
-                $this->positionsLogger->debug('order_plan.entry_clamped', [
-                    'symbol' => $req->symbol, 'decision_key' => $decisionKey,
-                    'zone_min' => $zone->min, 'zone_max' => $zone->max, 'entry' => $entry,
-                ]);
-            }
-        }
-
+        // --- Fallback de sécurité si entry délirant vs mark (implausiblePct) ---
         if ($entry <= $tick || (abs($entry - $mark) / max($mark, 1e-8)) > $implausiblePct) {
             $fallback = $req->side === Side::Long
                 ? min($bestAsk - $tick, $bestBid + $tick)
                 : max($bestBid + $tick, $bestAsk - $tick);
+
             $entry = $req->side === Side::Long
-                ? TickQuantizer::quantize($fallback, $precision)
-                : TickQuantizer::quantizeUp($fallback, $precision);
+                ? TickQuantizer::quantize(max($fallback, $tick), $precision)
+                : TickQuantizer::quantizeUp(max($fallback, $tick), $precision);
 
             $this->positionsLogger->warning('order_plan.entry_fallback', [
-                'symbol' => $req->symbol, 'decision_key' => $decisionKey, 'entry' => $entry,
+                'symbol'         => $req->symbol,
+                'side'           => $req->side->value,
+                'entry'          => $entry,
+                'mark'           => $mark,
+                'implausible_pct'=> $implausiblePct,
+                'decision_key'   => $decisionKey,
             ]);
         }
 
-        // --- Stops: ATR / Pivot / Risk, avec garde 0.5% AVANT sizing ---
+        // ============================================================
+        //  STOPS: ATR / PIVOT / RISK (inchangé)
+        // ============================================================
         $sizingDistance = $tick * 10;
         $stopAtr = null;
         $stopPivot = null;
@@ -274,7 +346,6 @@ final class OrderPlanBuilder
         // --- TAKE PROFIT : R-multiple puis « snap » sur pivot avec garde en R ---
         $tpTheoretical = $this->tpc->fromRMultiple($entry, $stop, $req->side, (float)$req->rMultiple, $precision);
 
-        // 1) pivots déjà fournis ? sinon, récupérer calcul pivot (15m) via provider
         $pivotLevels = \is_array($pre->pivotLevels) && !empty($pre->pivotLevels) ? $pre->pivotLevels : null;
         if ($pivotLevels === null) {
             $list15 = $this->indicatorProvider->getListPivot(key: 'pivot', symbol: $req->symbol, tf: '15m');
@@ -329,7 +400,7 @@ final class OrderPlanBuilder
             'decision_key' => $decisionKey,
         ]);
 
-        // --- Levier dynamique (stopPct + ATR 15m pour volatilité) ---
+        // --- Levier dynamique ---
         $stopPct = abs($stop - $entry) / max($entry, 1e-9);
 
         $atr15m = $this->indicatorProvider->getAtr(symbol: $req->symbol, tf: '15m');
@@ -409,6 +480,22 @@ final class OrderPlanBuilder
             }
         }
 
+        // Calcul de la déviation actuelle entre prix d'entrée et mark price
+        $deviationPct = $mark > 0.0 ? abs($entry - $mark) / $mark : 0.0;
+
+        $this->positionsLogger->info('order_plan.deviation_check', [
+            'symbol' => $req->symbol,
+            'side' => $req->side instanceof \App\TradeEntry\Types\Side ? $req->side->value : (string)$req->side,
+            'timeframe' => $req->executionTf ?? null,
+            'entry_price' => $entry,
+            'mark_price' => $mark,
+            'deviation_pct' => $deviationPct,
+            'zone_max_deviation_pct' => $zoneMaxDeviationPct,
+            'implausible_pct' => $implausiblePct,
+            'max_deviation_pct' => $maxDeviationPct,
+            'decision_key' => $decisionKey,
+        ]);
+
         $model = new OrderPlanModel(
             symbol: $req->symbol,
             side: $req->side,
@@ -459,7 +546,6 @@ final class OrderPlanBuilder
 
     /**
      * @deprecated Utilisé uniquement pour compatibilité. Le nouveau flux linéaire calcule directement.
-     * Choisit une distance provisoire raisonnable pour calculer un stop-risk cohérent.
      */
     private function pickProvisionalDistance(float $entry, float $tick, ?float $stopAtr, ?float $stopPivot): float
     {
@@ -479,8 +565,7 @@ final class OrderPlanBuilder
     }
 
     /**
-     * @deprecated Utilisé uniquement pour compatibilité. Le nouveau flux linéaire quantifie directement.
-     * Quantifie une taille flottante en nombre de contrats entier, bornée par min/max/market.
+     * @deprecated Utilisé uniquement pour compatibilité.
      */
     private function quantizeContracts(
         float $sizeFloat,
@@ -509,8 +594,7 @@ final class OrderPlanBuilder
     }
 
     /**
-     * @deprecated Utilisé uniquement pour compatibilité. Le nouveau flux linéaire applique la garde directement.
-     * Applique une unique garde minimale (% du prix d'entrée) et quantize le stop selon la direction.
+     * @deprecated Utilisé uniquement pour compatibilité.
      */
     private function enforceMinDistanceAndQuantize(
         float $entry,
@@ -533,7 +617,6 @@ final class OrderPlanBuilder
             ? max($entry - $minAbs, $tick)
             : $entry + $minAbs;
 
-        // On choisit le stop le plus conservateur entre $stop et $want
         if ($side === Side::Long) {
             $stop = min($stop, $want);
             $stop = TickQuantizer::quantize(max($stop, $tick), $precision);

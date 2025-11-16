@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Service;
 
-use App\TradeEntry\Dto\{TradeEntryRequest, ExecutionResult, ZoneSkipEventDto};
+use App\TradeEntry\Dto\{TradeEntryRequest, ExecutionResult, ZoneSkipEventDto, PreflightReport};
 use App\TradeEntry\Dto\EntryZone;
 use App\TradeEntry\Dto\FallbackEndOfZoneConfig;
 use App\TradeEntry\Execution\ExecutionBox;
@@ -135,21 +135,26 @@ final class TradeEntryService
         } catch (EntryZoneOutOfBoundsException $e) {
             $cid = sprintf('SKIP-ZONE-%s', substr(sha1(($decisionKey ?? '') . microtime(true)), 0, 12));
 
+            $skipContext = $e->getContext();
+            if ($lifecycleContext !== null) {
+                $skipContext = $this->augmentSkipContext($skipContext, $lifecycleContext);
+            }
+
             $this->positionsLogger->warning('order_journey.trade_entry.skipped', [
                 'symbol' => $request->symbol,
                 'decision_key' => $decisionKey,
                 'reason' => $e->getReason(),
-                'context' => $e->getContext(),
+                'context' => $skipContext,
             ]);
             if ($lifecycleContext !== null) {
-                $this->captureEntryZoneFromContext($lifecycleContext, $e->getContext());
+                $this->captureEntryZoneFromContext($lifecycleContext, $skipContext);
             }
             $this->persistZoneSkipEvent(
                 request: $request,
                 preflight: $preflight,
                 decisionKey: $decisionKey,
                 mode: $mode,
-                context: $e->getContext(),
+                context: $skipContext,
                 lifecycleContext: $lifecycleContext,
             );
             $this->logSymbolSkippedEvent(
@@ -157,7 +162,7 @@ final class TradeEntryService
                 reasonCode: $e->getReason(),
                 decisionKey: $decisionKey,
                 mode: $mode,
-                extra: $e->getContext(),
+                extra: $skipContext,
                 contextBuilder: $lifecycleContext,
             );
 
@@ -205,7 +210,7 @@ final class TradeEntryService
         }
 
         if ($lifecycleContext !== null) {
-            $this->captureEntryZoneMetrics($lifecycleContext, $plan, $request);
+            $this->captureEntryZoneMetrics($lifecycleContext, $plan, $preflight, $request);
             $this->capturePlanMetrics($lifecycleContext, $plan);
         }
 
@@ -593,7 +598,12 @@ final class TradeEntryService
         ]);
     }
 
-    private function captureEntryZoneMetrics(LifecycleContextBuilder $builder, OrderPlanModel $plan, TradeEntryRequest $request): void
+    private function captureEntryZoneMetrics(
+        LifecycleContextBuilder $builder,
+        OrderPlanModel $plan,
+        PreflightReport $preflight,
+        TradeEntryRequest $request
+    ): void
     {
         $low = $plan->entryZoneLow;
         $high = $plan->entryZoneHigh;
@@ -626,6 +636,18 @@ final class TradeEntryService
             $vwapDistancePct = abs($entry - (float)$pivotValue) / $entry;
         }
 
+        $referencePrice = $this->resolveEntryReferencePrice($preflight, $request);
+        $zoneDeviation = $this->computeZoneDeviation($referencePrice, $low, $high);
+        if (
+            $zoneDeviation === null &&
+            $referencePrice !== null &&
+            $referencePrice >= $low &&
+            $referencePrice <= $high
+        ) {
+            $zoneDeviation = 0.0;
+        }
+        $zoneMaxDeviation = $this->resolveZoneMaxDeviation($request);
+
         $builder->withEntryZone([
             'width_pct' => $widthPct !== null ? round($widthPct, 6) : null,
             'atr_pct' => $atrPct !== null ? round($atrPct, 6) : null,
@@ -634,6 +656,11 @@ final class TradeEntryService
             'distance_from_zone_pct' => $distancePct !== null ? round($distancePct, 6) : null,
             'zone_direction' => $direction,
             'in_zone' => $inZone,
+        ]);
+
+        $builder->merge([
+            'zone_dev_pct' => $zoneDeviation,
+            'zone_max_dev_pct' => $zoneMaxDeviation,
         ]);
     }
 
@@ -673,6 +700,52 @@ final class TradeEntryService
         ]);
     }
 
+    /**
+     * @param array<string,mixed> $context
+     * @return array<string,mixed>
+     */
+    private function augmentSkipContext(array $context, ?LifecycleContextBuilder $builder): array
+    {
+        if ($builder === null) {
+            return $context;
+        }
+
+        $snapshot = $builder->toArray();
+        foreach (['zone_dev_pct', 'zone_max_dev_pct', 'price_vs_ma21_k_atr', 'entry_rsi', 'volume_ratio', 'r_multiple_final'] as $key) {
+            if (!array_key_exists($key, $snapshot)) {
+                continue;
+            }
+            if (!array_key_exists($key, $context)) {
+                $context[$key] = $snapshot[$key];
+            }
+        }
+
+        return $context;
+    }
+
+    private function resolveEntryReferencePrice(PreflightReport $preflight, TradeEntryRequest $request): ?float
+    {
+        $mark = $preflight->markPrice;
+        if ($mark !== null && $mark > 0.0) {
+            return $mark;
+        }
+
+        return $request->side === Side::Long ? $preflight->bestAsk : $preflight->bestBid;
+    }
+
+    private function resolveZoneMaxDeviation(TradeEntryRequest $request): ?float
+    {
+        $value = $request->zoneMaxDeviationPct;
+        if ($value === null) {
+            $defaults = $this->tradeEntryConfig->getDefaults();
+            if (isset($defaults['zone_max_deviation_pct']) && \is_numeric($defaults['zone_max_deviation_pct'])) {
+                $value = (float) $defaults['zone_max_deviation_pct'];
+            }
+        }
+
+        return $value !== null ? $this->normalizePercent($value) : null;
+    }
+
     private function capturePlanMetrics(LifecycleContextBuilder $builder, OrderPlanModel $plan): void
     {
         $risk = null;
@@ -696,6 +769,10 @@ final class TradeEntryService
             'r_tp1_pct' => $rTpPct !== null ? round($rTpPct, 6) : null,
             'leverage_target' => $plan->leverage,
             'conviction_score' => null,
+        ]);
+
+        $builder->merge([
+            'r_multiple_final' => $expectedR !== null ? round($expectedR, 4) : null,
         ]);
     }
 
