@@ -2,7 +2,8 @@
 version: '2.5.95s'
 
 meta:
-    name: > SCALPING v2.1 - Anti-Extension + Liquidité + Précision Zone
+    name: >
+        SCALPING v2.1 - Anti-Extension + Liquidité + Précision Zone
         => j'ai deserré zone_max_dev_pct à 0.02 pour éviter trop de rejets sur certains symbols (fixed_usdt_if_available)
     description: >
         Version optimisée du profil scalper : contrôle de liquidité, prévention des entrées tardives,
@@ -78,8 +79,15 @@ trade_entry:
         exchange_cap: 50.0           # réduit (micro-caps trop volatiles)
 
         per_symbol_caps:
-            - { symbol_regex: "^(BTC|ETH|BNB).*", cap: 15.0 }
-            - { symbol_regex: ".*", cap: 8.0 }    # cap global anti-microcaps
+            # BTC peut monter jusqu'à 40x
+            - { symbol_regex: "^BTCUSDT$", cap: 40.0 }
+
+            # ETH/BNB un peu en dessous : 25x par ex.
+            - { symbol_regex: "^(ETH|BNB)USDT$", cap: 25.0 }
+
+            # Certains shitcoins très volatils / illiquides : 5x
+            - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 5.0 }
+
 
         timeframe_multipliers:
             '4h': 0.9
