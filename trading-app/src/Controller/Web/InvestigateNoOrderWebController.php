@@ -48,6 +48,15 @@ final class InvestigateNoOrderWebController extends AbstractController
                     $reason = (string)($result->reason ?? ($details['cause'] ?? ''));
                     $zoneDev = isset($details['zone_dev_pct']) && is_numeric($details['zone_dev_pct']) ? (float)$details['zone_dev_pct'] : null;
                     $zoneMax = isset($details['zone_max_dev_pct']) && is_numeric($details['zone_max_dev_pct']) ? (float)$details['zone_max_dev_pct'] : null;
+                    $priceVsMa21 = isset($details['price_vs_ma21_k_atr']) && is_numeric($details['price_vs_ma21_k_atr']) ? (float)$details['price_vs_ma21_k_atr'] : null;
+                    $entryRsi = isset($details['entry_rsi']) && is_numeric($details['entry_rsi']) ? (float)$details['entry_rsi'] : null;
+                    $volumeRatio = isset($details['volume_ratio']) && is_numeric($details['volume_ratio']) ? (float)$details['volume_ratio'] : null;
+                    $rMultipleFinal = null;
+                    if (isset($details['r_multiple_final']) && is_numeric($details['r_multiple_final'])) {
+                        $rMultipleFinal = (float) $details['r_multiple_final'];
+                    } elseif (isset($details['expected_r_multiple']) && is_numeric($details['expected_r_multiple'])) {
+                        $rMultipleFinal = (float) $details['expected_r_multiple'];
+                    }
                     $proposal = '';
                     if ($result->status === 'skipped' && in_array($reason, ['skipped_out_of_zone', 'zone_far_from_market'], true)) {
                         $proposal = $this->buildZoneSkipProposal($zoneDev, $zoneMax);
@@ -63,6 +72,10 @@ final class InvestigateNoOrderWebController extends AbstractController
                         'kline_time' => (string)($details['kline_time'] ?? ''),
                         'zone_dev_pct' => $zoneDev,
                         'zone_max_dev_pct' => $zoneMax,
+                        'price_vs_ma21_k_atr' => $priceVsMa21,
+                        'entry_rsi' => $entryRsi,
+                        'volume_ratio' => $volumeRatio,
+                        'r_multiple_final' => $rMultipleFinal,
                         'proposal' => $proposal,
                     ];
                 }
@@ -80,6 +93,10 @@ final class InvestigateNoOrderWebController extends AbstractController
                             'kline_time' => '',
                             'zone_dev_pct' => null,
                             'zone_max_dev_pct' => null,
+                            'price_vs_ma21_k_atr' => null,
+                            'entry_rsi' => null,
+                            'volume_ratio' => null,
+                            'r_multiple_final' => null,
                             'proposal' => '',
                         ];
                     }

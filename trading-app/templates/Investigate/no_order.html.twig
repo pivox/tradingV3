@@ -98,6 +98,10 @@
               <th>Kline Time</th>
               <th>Zone Dev %</th>
               <th>Max Dev %</th>
+              <th>Price vs MA21 (ATR)</th>
+              <th>RSI</th>
+              <th>Volume Ratio</th>
+              <th>R-multiple</th>
               <th>Proposal</th>
             </tr>
             </thead>
@@ -122,6 +126,18 @@
                 </td>
                 <td>
                   {% if r.zone_max_dev_pct is not null %}{{ (r.zone_max_dev_pct * 100)|number_format(2, '.', ' ') }}%{% endif %}
+                </td>
+                <td>
+                  {% if r.price_vs_ma21_k_atr is not null %}{{ r.price_vs_ma21_k_atr|number_format(3, '.', ' ') }}{% endif %}
+                </td>
+                <td>
+                  {% if r.entry_rsi is not null %}{{ r.entry_rsi|number_format(1, '.', ' ') }}{% endif %}
+                </td>
+                <td>
+                  {% if r.volume_ratio is not null %}{{ r.volume_ratio|number_format(2, '.', ' ') }}{% endif %}
+                </td>
+                <td>
+                  {% if r.r_multiple_final is not null %}{{ r.r_multiple_final|number_format(2, '.', ' ') }}x{% endif %}
                 </td>
                 <td style="min-width: 260px;">{{ r.proposal }}</td>
               </tr>
