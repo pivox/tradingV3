@@ -112,6 +112,11 @@ final class TradingDecisionHandler
             ->withProfile($symbolResult->tradeEntryModeUsed)
             ->withMtfContext($effectiveTf, $this->extractMtfContext($symbolResult), $symbolResult->blockingTf)
             ->withSelectorDecision($execDecision->expectedRMultiple, $execDecision->entryZoneWidthPct)
+            ->withIndicatorMetrics(
+                $selectorContext['entry_rsi'] ?? null,
+                $selectorContext['price_vs_ma21_k_atr'] ?? null,
+                $selectorContext['volume_ratio'] ?? null
+            )
             ->merge(['config_version' => $this->tradeEntryConfig->getVersion()]);
 
         // 3. Construction via Builder (délégation) avec champs minimaux
@@ -407,11 +412,16 @@ final class TradingDecisionHandler
         }
 
         // Snapshot 15m: rsi, vwap, ma9, ma21, atr
+        $entryRsiValue = null;
+        $ma21Value = null;
+        $atrForMa21 = null;
+
         try {
             $snap = $this->indicatorProvider->getSnapshot($symbol, '15m');
             // rsi
             if (isset($snap->rsi) && is_float($snap->rsi)) {
                 $context['rsi'] = $snap->rsi;
+                $entryRsiValue = $snap->rsi;
             }
             // vwap
             if ($snap->vwap !== null) {
@@ -420,23 +430,40 @@ final class TradingDecisionHandler
             // ma9 / ma21
             $ma = [];
             if ($snap->ma9 !== null) { $ma[9] = (float) ((string) $snap->ma9); }
-            if ($snap->ma21 !== null) { $ma[21] = (float) ((string) $snap->ma21); }
+            if ($snap->ma21 !== null) {
+                $ma21Value = (float) ((string) $snap->ma21);
+                $ma[21] = $ma21Value;
+            }
             if ($ma !== []) { $context['ma'] = $ma; }
 
             // ma_21_plus_k_atr pour price_lte_ma21_plus_k_atr
             $atrK = (float) ($defaults['atr_k'] ?? 1.5);
             $atrVal = $snap->atr !== null ? (float) ((string) $snap->atr) : ($atr15m ?? null);
-            $ma21 = $snap->ma21 !== null ? (float) ((string) $snap->ma21) : null;
+            $ma21 = $ma21Value;
             if ($atr15m === null && $atrVal !== null) {
                 $atr15m = $atrVal;
             }
             if ($ma21 !== null && $atrVal !== null) {
+                $atrForMa21 = $atrVal;
                 $context['ma_21_plus_k_atr'] = $ma21 + ($atrK * $atrVal);
                 $context['ma_21_plus_1.3atr'] = $ma21 + (1.3 * $atrVal);
                 $context['ma_21_plus_2atr'] = $ma21 + (2.0 * $atrVal); // legacy consumers expect this key
             }
         } catch (\Throwable) {
             // best-effort: ces clés restent null/absentes si indisponibles
+        }
+
+        $closeForRatio = $context['close'] ?? $price;
+        if (
+            $closeForRatio !== null &&
+            $ma21Value !== null &&
+            $atrForMa21 !== null &&
+            $atrForMa21 > 0.0
+        ) {
+            $context['price_vs_ma21_k_atr'] = ($closeForRatio - $ma21Value) / $atrForMa21;
+        }
+        if ($entryRsiValue !== null) {
+            $context['entry_rsi'] = $entryRsiValue;
         }
 
         if (

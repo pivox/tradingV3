@@ -1,9 +1,12 @@
-# Profil SCALPER - validations MTF
+# =====================================================================
+# validations.scalper.yaml
+# Profil SCALPER - plus agressif, exécution courte (5m / 1m)
+# =====================================================================
 version: '0.0.91'
 
 mtf_validation:
     mode: 'pragmatic'
-    context_timeframes: ['1h']
+    context_timeframes: ['1h']          # (Option : remettre ['4h','1h'] si tu veux le contexte 4h)
     execution_timeframe_default: '5m'
     allow_skip_lower_tf: true
 
@@ -148,7 +151,7 @@ mtf_validation:
 
 
         # ================================
-        # LIQUIDITÉ (NOUVEAU – PROTECTION WINRATE)
+        # LIQUIDITÉ (PROTECTION WINRATE)
         # ================================
         volume_ratio_ok:
             op: '>='
@@ -202,10 +205,9 @@ mtf_validation:
     # ================================
     execution_selector:
 
+        # SCALPER : on ne veut jamais rester en 15m → GetFalseCondition
         stay_on_15m_if:
-            - expected_r_multiple_gte: 1.4
-            - entry_zone_width_pct_lte: 0.8
-            - atr_pct_15m_lte_bps: 130
+            - get_false
 
         drop_to_5m_if_any:
             - expected_r_multiple_lt: 1.4
@@ -228,9 +230,9 @@ mtf_validation:
     # FILTRES GLOBAUX (obligatoires)
     # ================================
     filters_mandatory:
-        - rsi_lt_70
-#        - price_lte_ma21_plus_k_atr
-#        - volume_ratio_ok
+        - rsi_lt_70                 # anti surachat global
+        - price_lte_ma21_plus_k_atr # anti extension MA21 + 1.3 ATR
+        - volume_ratio_ok           # évite les carnets trop creux
 
 
     # ================================
@@ -238,7 +240,7 @@ mtf_validation:
     # ================================
     validation:
 
-        start_from_timeframe: '4h'
+        start_from_timeframe: '4h'   # NB : si tu veux vraiment context 1h only → passe à '1h'
 
         timeframe:
 

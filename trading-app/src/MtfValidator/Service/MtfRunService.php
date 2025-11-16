@@ -99,10 +99,15 @@ class MtfRunService implements MtfValidatorInterface
                     $symbolsSuccessful++;
                     continue;
                 }
-                // Échecs: ERROR, INVALID
-                if (in_array($state, ['ERROR', 'INVALID'], true)) {
+                // Erreurs techniques: ERROR uniquement (pas INVALID qui est un rejet métier valide)
+                if ($state === 'ERROR') {
                     $symbolsFailed++;
                     $errors[] = $res;
+                    continue;
+                }
+                // INVALID: rejet métier (pas une erreur technique)
+                if ($state === 'INVALID') {
+                    $symbolsFailed++;
                     continue;
                 }
                 // Skipped: statut explicite SKIPPED/GRACE_WINDOW ou trading_decision.status=skipped

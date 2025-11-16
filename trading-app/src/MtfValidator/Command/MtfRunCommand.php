@@ -30,17 +30,20 @@ use Symfony\Component\Process\Process;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Provider\Context\ExchangeContext;
+use App\MtfRunner\Dto\MtfRunnerRequestDto;
+use App\MtfRunner\Service\MtfRunnerService;
 
-#[AsCommand(name: 'mtf:run', description: 'Exécute un cycle MTF pour une liste de symboles (dry-run par défaut) avec un output détaillé')]
-class MtfRunCommand extends Command
-{
-    public function __construct(
-        private readonly MtfValidatorInterface $mtfValidator,
-        private readonly MainProviderInterface $mainProvider,
-        private readonly ContractRepository $contractRepository,
-        private readonly MtfSwitchRepository $mtfSwitchRepository,
-        private readonly EntityManagerInterface $entityManager,
-        private readonly MtfRunOrchestrator $orchestrator,
+    #[AsCommand(name: 'mtf:run', description: 'Exécute un cycle MTF pour une liste de symboles (dry-run par défaut) avec un output détaillé')]
+    class MtfRunCommand extends Command
+    {
+        public function __construct(
+            private readonly MtfValidatorInterface $mtfValidator,
+            private readonly MtfRunnerService $mtfRunnerService,
+            private readonly MainProviderInterface $mainProvider,
+            private readonly ContractRepository $contractRepository,
+            private readonly MtfSwitchRepository $mtfSwitchRepository,
+            private readonly EntityManagerInterface $entityManager,
+            private readonly MtfRunOrchestrator $orchestrator,
         #[Autowire('%kernel.project_dir%')] private readonly string $projectDir,
     ) {
         parent::__construct();
@@ -173,67 +176,53 @@ class MtfRunCommand extends Command
                 return Command::SUCCESS;
             }
 
-            $symbolsCountBeforeFilter = count($symbols);
-            // Pré-filtrer les symboles avec ordres/positions ouverts une seule fois côté parent,
-            // puis indiquer aux workers de ne pas refaire le filtrage (évite des appels 429)
-            $excludedSymbols = [];
-            $prefilterRunId = 'cli:' . Uuid::uuid4()->toString();
-            try {
-                $symbols = $this->filterSymbolsWithOpenOrdersOrPositions($symbols, $prefilterRunId, $excludedSymbols, $this->mainProvider->forContext($context));
-                $symbolsCountAfterFilter = count($symbols);
-                if ($symbolsCountAfterFilter < $symbolsCountBeforeFilter) {
-                    $io->note(sprintf(
-                        'Pré-filtrage: %d symbole(s) exclu(s) (ordres/positions ouverts), %d restant(s)',
-                        $symbolsCountBeforeFilter - $symbolsCountAfterFilter,
-                        $symbolsCountAfterFilter
-                    ));
-                }
-            } catch (\Throwable $e) {
-                $io->warning('Pré-filtrage des symboles échoué: ' . $e->getMessage());
-            }
+            $io->section('Exécution MTF (Runner)');
 
-            $executionOptions = [
+            // Construire la requête pour le MtfRunnerService
+            $runnerRequest = MtfRunnerRequestDto::fromArray([
+                'symbols' => $symbols,
                 'dry_run' => $dryRun,
                 'force_run' => $forceRun,
                 'current_tf' => $currentTf,
                 'force_timeframe_check' => $forceTimeframeCheck,
                 'skip_context' => $skipContext,
-                'auto_switch_invalid' => $autoSwitchInvalid,
-                'switch_duration' => $switchDuration,
+                'lock_per_symbol' => $lockPerSymbol,
+                'skip_open_state_filter' => false,
+                'user_id' => $userId,
+                'ip_address' => $ipAddress,
+                'exchange' => $exchange->value,
+                'market_type' => $marketType->value,
+                'workers' => $workers,
+                'sync_tables' => true,
+                'process_tp_sl' => true,
+            ]);
+
+            $runnerResult = $this->mtfRunnerService->run($runnerRequest);
+            $runnerSummary = is_array($runnerResult['summary'] ?? null) ? $runnerResult['summary'] : [];
+            $details = is_array($runnerResult['results'] ?? null) ? $runnerResult['results'] : [];
+            $errors = is_array($runnerResult['errors'] ?? null) ? $runnerResult['errors'] : [];
+
+            // Construire un résumé CLI cohérent avec l'affichage
+            $summary = [
+                'run_id' => $runnerSummary['run_id'] ?? ($runnerSummary['runId'] ?? 'n/a'),
+                'execution_time_seconds' => (float) ($runnerSummary['execution_time_seconds'] ?? 0.0),
+                'symbols_requested' => (int) ($runnerSummary['symbols_requested'] ?? count($symbols)),
+                'symbols_processed' => (int) ($runnerSummary['symbols_processed'] ?? count($details)),
+                'symbols_successful' => (int) ($runnerSummary['symbols_successful'] ?? 0),
+                'symbols_failed' => (int) ($runnerSummary['symbols_failed'] ?? 0),
+                'symbols_skipped' => (int) ($runnerSummary['symbols_skipped'] ?? 0),
+                'success_rate' => (float) ($runnerSummary['success_rate'] ?? 0.0),
+                'dry_run' => $dryRun,
+                'force_run' => $forceRun,
+                'current_tf' => $currentTf,
                 'lock_per_symbol' => $lockPerSymbol,
                 'user_id' => $userId,
                 'ip_address' => $ipAddress,
-                'skip_open_filter' => true,
-                'exchange' => $exchange->value,
-                'market_type' => $marketType->value,
+                'timestamp' => (string) ($runnerSummary['timestamp'] ?? date('Y-m-d H:i:s')),
+                'status' => (string) ($runnerSummary['status'] ?? (empty($errors) ? 'completed' : 'completed_with_errors')),
             ];
-            $io->section($workers > 1 ? sprintf('Exécution MTF en parallèle (%d workers)', $workers) : 'Exécution MTF en cours...');
-            $result = $workers > 1
-                ? $this->runInParallel($io, $symbols, $workers, $executionOptions)
-                : $this->runSequential($io, $symbols, $executionOptions);
-
-            $summary = $result['summary'] ?? [];
-            $details = $result['details'] ?? [];
-            $errors = $result['errors'] ?? [];
 
             $this->renderFinalReport($io, $summary, $details, $commandStart);
-
-            // Mettre à jour les switches pour les symboles exclus (après le traitement)
-            if (!empty($excludedSymbols)) {
-                try {
-                    $this->updateSwitchesForExcludedSymbols($excludedSymbols, $prefilterRunId);
-                } catch (\Throwable $e) {
-                    $io->warning('Mise à jour des switches pour symboles exclus échouée: ' . $e->getMessage());
-                }
-            }
-
-            // Appeler processTpSlRecalculation une seule fois après tous les workers
-            // (au lieu de l'appeler dans chaque worker pour éviter les erreurs 429)
-            try {
-                $this->mtfValidator->processTpSlRecalculation($dryRun, $context);
-            } catch (\Throwable $e) {
-                $io->warning('TP/SL recalculation failed: ' . $e->getMessage());
-            }
 
             if ($autoSwitchInvalid && !$dryRun) {
                 $this->processInvalidSymbols($io, $details, $switchDuration);

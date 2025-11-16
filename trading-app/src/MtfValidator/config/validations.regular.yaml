@@ -1,3 +1,7 @@
+# =====================================================================
+# validations.regular.yaml
+# Profil REGULAR (setup plus "swing / intra-day propre")
+# =====================================================================
 version: '0.0.12'
 
 mtf_validation:

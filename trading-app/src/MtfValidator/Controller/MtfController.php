@@ -16,6 +16,8 @@ use App\MtfValidator\Repository\MtfAuditRepository;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\Repository\MtfStateRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
+use App\MtfRunner\Dto\MtfRunnerRequestDto;
+use App\MtfRunner\Service\MtfRunnerService;
 use Ramsey\Uuid\Uuid;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
@@ -42,6 +44,7 @@ class MtfController extends AbstractController
         private readonly MtfLockRepository $mtfLockRepository,
         private readonly LoggerInterface $logger,
         private readonly MtfRunService $mtfRunService,
+        private readonly MtfRunnerService $mtfRunnerService,
         private readonly ClockInterface $clock,
         private readonly ContractRepository $contractRepository,
         private readonly MainProviderInterface $mainProvider,
@@ -492,8 +495,6 @@ class MtfController extends AbstractController
             ], Response::HTTP_BAD_REQUEST);
         }
 
-        $contextualProvider = $this->mainProvider->forContext($context);
-
         $symbolsInput = $data['symbols'] ?? [];
         $dryRun = filter_var($data['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN);
         $forceRun = filter_var($data['force_run'] ?? false, FILTER_VALIDATE_BOOLEAN);
@@ -502,52 +503,60 @@ class MtfController extends AbstractController
         $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
         $workers = max(1, (int)($data['workers'] ?? 1));
 
+        // Normaliser les symboles fournis sans appliquer de fallback/queue
         $resolveStart = microtime(true);
-        $symbols = $this->resolveSymbols($symbolsInput);
+        $symbols = [];
+        if (is_string($symbolsInput)) {
+            $symbols = array_filter(array_map('trim', explode(',', $symbolsInput)));
+        } elseif (is_array($symbolsInput)) {
+            foreach ($symbolsInput as $value) {
+                if (is_string($value) && $value !== '') {
+                    $symbols[] = trim($value);
+                }
+            }
+        }
+        $symbols = array_values(array_unique($symbols));
         $profiler->increment('controller', 'resolve_symbols', microtime(true) - $resolveStart);
 
-        // Filtrer les symboles avec ordres/positions ouverts AVANT de lancer les workers
-        $filterStart = microtime(true);
-        $runIdString = Uuid::uuid4()->toString();
-        $excludedSymbols = [];
-        $symbols = $this->filterSymbolsWithOpenOrdersOrPositions($symbols, $runIdString, $excludedSymbols, $contextualProvider);
-        $profiler->increment('controller', 'filter_symbols', microtime(true) - $filterStart);
-
         try {
-            if ($workers > 1) {
-                $result = $this->runParallelViaWorkers(
-                    $symbols,
-                    $dryRun,
-                    $forceRun,
-                    $currentTf,
-                    $forceTimeframeCheck,
-                    $workers,
-                    $profiler,
-                    $context,
-                );
-            } else {
-                $result = $this->runSequential($symbols, $dryRun, $forceRun, $currentTf, $forceTimeframeCheck, $context);
-            }
+            // Construire la requête Runner (le Runner gère la résolution des symboles, le filtrage open state, les switches et TP/SL)
+            $runnerRequest = MtfRunnerRequestDto::fromArray([
+                'symbols' => $symbols,
+                'dry_run' => $dryRun,
+                'force_run' => $forceRun,
+                'current_tf' => $currentTf,
+                'force_timeframe_check' => $forceTimeframeCheck,
+                'skip_context' => (bool)($data['skip_context'] ?? false),
+                'lock_per_symbol' => (bool)($data['lock_per_symbol'] ?? false),
+                'skip_open_state_filter' => (bool)($data['skip_open_state_filter'] ?? false),
+                'user_id' => $data['user_id'] ?? null,
+                'ip_address' => $data['ip_address'] ?? null,
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
+                'workers' => $workers,
+                'sync_tables' => filter_var($data['sync_tables'] ?? true, FILTER_VALIDATE_BOOLEAN),
+                'process_tp_sl' => filter_var($data['process_tp_sl'] ?? true, FILTER_VALIDATE_BOOLEAN),
+            ]);
 
-            // Après le traitement, mettre à jour les switches pour les symboles exclus
-            if (!empty($excludedSymbols)) {
-                $this->updateSwitchesForExcludedSymbols($excludedSymbols, $runIdString);
-            }
+            $runnerStart = microtime(true);
+            $result = $this->mtfRunnerService->run($runnerRequest);
+            $profiler->increment('controller', 'runner_run', microtime(true) - $runnerStart);
 
-            // Appeler processTpSlRecalculation une seule fois après tous les workers
-            // (au lieu de l'appeler dans chaque worker pour éviter les erreurs 429)
-            try {
-                $this->mtfRunService->processTpSlRecalculation($dryRun, $context);
-            } catch (\Throwable $e) {
-                $this->logger->warning('[MTF Controller] TP/SL recalculation failed', [
-                    'error' => $e->getMessage(),
-                ]);
-            }
+            $results = $result['results'] ?? [];
+            $errors = $result['errors'] ?? [];
+            $runSummary = $result['summary'] ?? [];
 
-            $status = empty($result['errors']) ? 'success' : 'partial_success';
+            $status = 'success';
+            if (!empty($errors)) {
+                $status = 'partial_success';
+            }
+            if (is_array($runSummary) && isset($runSummary['status']) && is_string($runSummary['status'])) {
+                // Garder le statut métier détaillé retourné par le Runner si disponible
+                $status = $runSummary['status'];
+            }
 
             // Calculer un résumé par TF à partir des résultats (blocking_tf > execution_tf > N/A)
-            $summaryByTfVrac = $this->buildSummaryByTimeframe($result['results'] ?? []);
+            $summaryByTfVrac = $this->buildSummaryByTimeframe($results);
 
             $summaryByTf = [];
             foreach (['1m', '5m', '15m', '1h', '4h'] as $tf) {
@@ -557,10 +566,8 @@ class MtfController extends AbstractController
             // Extraire les symboles rejetés (tous les statuts non-SUCCESS)
             $rejectedBy = [];
             $lastValidated = [];
-            $results = $result['results'] ?? [];
 
             foreach ($results as $symbol => $symbolResult) {
-                // Skip summary entry and invalid symbols
                 if ($symbol === 'FINAL' || !is_string($symbol) || $symbol === '') {
                     continue;
                 }
@@ -571,17 +578,14 @@ class MtfController extends AbstractController
 
                 $resultStatus = strtoupper((string)($symbolResult['status'] ?? ''));
 
-                // Collecter les rejetés (exclure SUCCESS/COMPLETED/READY)
                 if (!in_array($resultStatus, ['SUCCESS', 'COMPLETED', 'READY'], true)) {
                     $rejectedBy[] = $symbol;
                 }
 
-                // Collecter les derniers validés (SUCCESS/COMPLETED uniquement)
                 if ($resultStatus === 'SUCCESS' || $resultStatus === 'COMPLETED') {
                     $executionTf = $symbolResult['execution_tf'] ?? null;
                     $signalSide = $symbolResult['signal_side'] ?? null;
 
-                    // Calculer le timeframe précédent (tf-1) ou 'READY' pour 1m
                     $timeframe = $this->getPreviousTimeframe($executionTf);
 
                     $lastValidated[] = [
@@ -592,21 +596,16 @@ class MtfController extends AbstractController
                 }
             }
 
-            // Trier les listes pour un affichage cohérent
             sort($rejectedBy);
-            usort($lastValidated, function($a, $b) {
+            usort($lastValidated, function ($a, $b) {
                 return strcmp($a['symbol'] ?? '', $b['symbol'] ?? '');
             });
 
             $apiTotalTime = microtime(true) - $apiStartTime;
             $performanceReport = $profiler->getReport();
 
-            // Extraire les ordres placés depuis les résultats
             $ordersPlaced = OrdersExtractor::extractPlacedOrders($results);
             $ordersCount = OrdersExtractor::countOrdersByStatus($results);
-
-            // Extraire le summary depuis result (qui vient du generator)
-            $runSummary = $result['summary'] ?? [];
 
             $this->logger->info('[MTF Controller] Performance Analysis', [
                 'total_api_time' => round($apiTotalTime, 3),
@@ -616,21 +615,20 @@ class MtfController extends AbstractController
                 'orders_placed_count' => $ordersCount,
             ]);
 
-            // Persister les métriques si un sink est disponible
             try {
                 if (is_array($runSummary) && isset($runSummary['run_id']) && is_string($runSummary['run_id'])) {
                     $this->runSink?->onMetrics($runSummary['run_id'], $performanceReport);
                 }
-            } catch (\Throwable) {}
+            } catch (\Throwable) {
+            }
 
-            // Restructurer la réponse : results → symbols, summary → run
             return $this->json([
                 'status' => $status,
                 'message' => 'MTF run completed',
                 'data' => [
                     'run' => $runSummary,
                     'symbols' => $results,
-                    'errors' => $result['errors'] ?? [],
+                    'errors' => $errors,
                     'workers' => $workers,
                     'summary_by_tf' => $summaryByTf,
                     'rejected_by' => $rejectedBy,

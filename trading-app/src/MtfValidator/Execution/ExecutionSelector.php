@@ -32,7 +32,7 @@ final class ExecutionSelector
         $stayOn15mSpec = $this->parseSpec((array)($selector['stay_on_15m_if'] ?? []));
         $dropTo5mAnySpec = $this->parseSpec((array)($selector['drop_to_5m_if_any'] ?? []));
         $forbidDropAnySpec = $this->parseSpec((array)($selector['forbid_drop_to_5m_if_any'] ?? []));
-        
+
         // Extraire enabled avant de parser allow_1m_only_for
         $allow1mConfig = (array)($selector['allow_1m_only_for'] ?? []);
         $allow1mEnabled = (bool)($allow1mConfig['enabled'] ?? true);
@@ -63,16 +63,25 @@ final class ExecutionSelector
         // Mandatory filters gate
         $filtersRes = !empty($filtersMandatory) ? $this->registry->evaluate($context, $filtersMandatory) : [];
         $this->logVolumeRatioFilter($filtersRes);
+
         $filtersPassed = true;
-        foreach ($filtersRes as $r) { if (!(bool)($r['passed'] ?? false)) { $filtersPassed = false; break; } }
+        foreach ($filtersRes as $r) {
+            if (!(bool)($r['passed'] ?? false)) {
+                $filtersPassed = false;
+                break;
+            }
+        }
+
         if (!$filtersPassed) {
             $this->logger->info('[ExecSelector] filters_mandatory failed', [ 'filters' => $filtersRes ]);
             return new ExecutionDecision('NONE', meta: [ 'filters' => $filtersRes ]);
         }
 
+        // stay_on_15m_if : tous les checks non-missing doivent passer, les missing_data sont ignorés
         $stayRes = !empty($stayOn15m) ? $this->registry->evaluate($context, $stayOn15m) : [];
         $this->logEvaluationResults('stay_on_15m_if', $stayRes, $stayOn15mSpec);
         $stayAll = $this->allPassed($stayRes);
+
         if ($stayAll) {
             return $this->decision('15m', $context, [
                 'stay_on_15m_if' => $stayRes,
@@ -80,10 +89,12 @@ final class ExecutionSelector
             ]);
         }
 
+        // forbid_drop_to_5m_if_any : si au moins un check non-missing passe, on interdit la descente
         $forbidRes = !empty($forbidDropAny) ? $this->registry->evaluate($context, $forbidDropAny) : [];
         $this->logEvaluationResults('forbid_drop_to_5m_if_any', $forbidRes, $forbidDropAnySpec);
         $forbidAny = $this->anyPassed($forbidRes);
 
+        // drop_to_5m_if_any : si au moins un check non-missing passe, on descend en 5m
         $dropRes = !empty($dropTo5mAny) ? $this->registry->evaluate($context, $dropTo5mAny) : [];
         $this->logEvaluationResults('drop_to_5m_if_any', $dropRes, $dropTo5mAnySpec);
         $dropAny = $this->anyPassed($dropRes);
@@ -100,11 +111,18 @@ final class ExecutionSelector
         // Si enabled = false, considérer que allow_1m_only_for retourne toujours true
         if (!$allow1mEnabled) {
             $allow1mAny = true;
-            $allow1mRes = ['enabled_override' => ['passed' => true, 'value' => 'disabled', 'meta' => ['reason' => 'allow_1m_only_for.enabled=false']]];
+            $allow1mRes = [
+                'enabled_override' => [
+                    'passed' => true,
+                    'value' => 'disabled',
+                    'meta' => ['reason' => 'allow_1m_only_for.enabled=false'],
+                ],
+            ];
         } else {
             $allow1mRes = !empty($allow1mOnlyFor) ? $this->registry->evaluate($context, $allow1mOnlyFor) : [];
             $allow1mAny = $this->anyPassed($allow1mRes);
         }
+
         if ($allow1mAny) {
             return $this->decision('1m', $context, [
                 'stay_on_15m_if' => $stayRes,
@@ -132,21 +150,8 @@ final class ExecutionSelector
             ? (float)$context['expected_r_multiple'] : null;
         $w = isset($context['entry_zone_width_pct']) && \is_numeric($context['entry_zone_width_pct'])
             ? (float)$context['entry_zone_width_pct'] : null;
-        return new ExecutionDecision($tf, $erm, $w, $meta);
-    }
 
-    /** @param array<int,mixed> $spec */
-    private function namesFromSpec(array $spec): array
-    {
-        $out = [];
-        foreach ($spec as $item) {
-            if (\is_string($item) && $item !== '') { $out[] = $item; continue; }
-            if (\is_array($item) && $item !== []) {
-                $k = array_key_first($item);
-                if (\is_string($k) && $k !== '') { $out[] = $k; }
-            }
-        }
-        return array_values(array_unique($out));
+        return new ExecutionDecision($tf, $erm, $w, $meta);
     }
 
     /**
@@ -262,18 +267,63 @@ final class ExecutionSelector
         ]);
     }
 
-    /** @param array<string,array> $results */
+    /**
+     * Tous les checks non-missing doivent passer pour que le groupe soit vrai.
+     * Les conditions avec meta.missing_data=true sont ignorées.
+     *
+     * @param array<string,array> $results
+     */
     private function allPassed(array $results): bool
     {
-        if ($results === []) return false;
-        foreach ($results as $r) { if (!(bool)($r['passed'] ?? false)) return false; }
-        return true;
+        if ($results === []) {
+            return false;
+        }
+
+        $hasNonMissing = false;
+
+        foreach ($results as $r) {
+            $meta = $r['meta'] ?? [];
+            $isMissing = (bool)($meta['missing_data'] ?? false);
+
+            if ($isMissing) {
+                // On ignore complètement cette condition dans le groupe
+                continue;
+            }
+
+            $hasNonMissing = true;
+
+            if (!(bool)($r['passed'] ?? false)) {
+                // Une condition réelle (non-missing) a échoué -> le groupe échoue
+                return false;
+            }
+        }
+
+        // Si toutes les conditions étaient en missing_data, le groupe ne décide rien -> false
+        return $hasNonMissing;
     }
 
-    /** @param array<string,array> $results */
+    /**
+     * Le groupe est vrai dès qu'un check non-missing passe.
+     * Les conditions avec meta.missing_data=true sont ignorées.
+     *
+     * @param array<string,array> $results
+     */
     private function anyPassed(array $results): bool
     {
-        foreach ($results as $r) { if ((bool)($r['passed'] ?? false)) return true; }
+        foreach ($results as $r) {
+            $meta = $r['meta'] ?? [];
+            $isMissing = (bool)($meta['missing_data'] ?? false);
+
+            if ($isMissing) {
+                // On ignore complètement cette condition
+                continue;
+            }
+
+            if ((bool)($r['passed'] ?? false)) {
+                return true;
+            }
+        }
+
         return false;
     }
 }
