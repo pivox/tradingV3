@@ -35,28 +35,28 @@ final class PositionDto extends BaseDto
         if ($side === null) {
             throw new \InvalidArgumentException('Missing side/position_side in position data');
         }
-        
+
         // BitMart utilise 'current_amount' au lieu de 'size'
         $size = $data['size'] ?? $data['current_amount'] ?? '0';
-        
+
         // BitMart utilise 'entry_price' ou 'open_avg_price'
         $entryPrice = $data['entry_price'] ?? $data['open_avg_price'] ?? '0';
-        
+
         // BitMart utilise 'mark_price'
         $markPrice = $data['mark_price'] ?? '0';
-        
+
         // BitMart utilise 'unrealized_pnl'
         $unrealizedPnl = $data['unrealized_pnl'] ?? '0';
-        
+
         // BitMart utilise 'realized_value' au lieu de 'realized_pnl'
         $realizedPnl = $data['realized_pnl'] ?? $data['realized_value'] ?? '0';
-        
+
         // BitMart utilise 'initial_margin' ou 'position_cross'
         $margin = $data['margin'] ?? $data['initial_margin'] ?? $data['position_cross'] ?? '0';
-        
+
         // BitMart utilise 'leverage' (string)
         $leverage = $data['leverage'] ?? '1';
-        
+
         // BitMart utilise 'open_timestamp' (milliseconds) ou 'timestamp'
         $openedAtTimestamp = $data['open_timestamp'] ?? $data['timestamp'] ?? null;
         if ($openedAtTimestamp) {
@@ -65,12 +65,16 @@ final class PositionDto extends BaseDto
         } else {
             $openedAt = new \DateTimeImmutable('@' . time());
         }
-        
+
         $closedAt = null;
         if (isset($data['closed_at'])) {
-            $closedAt = new \DateTimeImmutable($data['closed_at']);
+            if (is_int($data['closed_at'])) {
+                $closedAt = (new \DateTimeImmutable('@'.(int)($data['closed_at'] / 1000)))->setTimezone(new \DateTimeZone('UTC'));
+            } else {
+                $closedAt = new \DateTimeImmutable($data['closed_at']);
+            }
         }
-        
+
         return new self(
             symbol: $data['symbol'],
             side: PositionSide::from($side),

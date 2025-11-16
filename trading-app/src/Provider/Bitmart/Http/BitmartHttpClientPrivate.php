@@ -26,6 +26,8 @@ final class BitmartHttpClientPrivate
     private const PATH_PLAN_ORDERS = '/contract/private/current-plan-order'; // Pour les ordres TP/SL (Plan Orders)
     private const PATH_ORDER_DETAIL = '/contract/private/order-detail';
     private const PATH_ORDER_HISTORY = '/contract/private/order-history';
+    private const PATH_TRADES = '/contract/private/trades';
+    private const PATH_TRANSACTION_HISTORY = '/contract/private/transaction-history';
     private const PATH_SUBMIT_ORDER = '/contract/private/submit-order';
     private const PATH_CANCEL_ORDER = '/contract/private/cancel-order';
     private const PATH_CANCEL_ALL_ORDERS = '/contract/private/cancel-all-orders';
@@ -216,6 +218,14 @@ final class BitmartHttpClientPrivate
                 break;
             case self::PATH_ORDER_HISTORY:
                 $bucket = 'PRIVATE_ORDER_HISTORY';
+                $limit = 6; $window = 2.0;
+                break;
+            case self::PATH_TRADES:
+                $bucket = 'PRIVATE_TRADES';
+                $limit = 6; $window = 2.0;
+                break;
+            case self::PATH_TRANSACTION_HISTORY:
+                $bucket = 'PRIVATE_TRANSACTION_HISTORY';
                 $limit = 6; $window = 2.0;
                 break;
             case self::PATH_SUBMIT_ORDER:
@@ -482,6 +492,94 @@ final class BitmartHttpClientPrivate
         }
         
         return $this->requestJsonPrivate('GET', self::PATH_ORDER_HISTORY, $query);
+    }
+
+    /**
+     * GET /contract/private/trades
+     * Récupère les trades (fills) pour un symbole.
+     * 
+     * @param string|null $symbol Symbole (optionnel, si null retourne tous les symboles)
+     * @param int $limit Limite de résultats (max 200)
+     * @param int|null $startTime Timestamp de début en secondes (optionnel)
+     * @param int|null $endTime Timestamp de fin en secondes (optionnel)
+     * @param string|null $account Type de compte: 'futures' ou 'copy_trading' (optionnel)
+     * @return array Réponse de l'API BitMart
+     */
+    public function getTrades(
+        ?string $symbol = null,
+        int $limit = 100,
+        ?int $startTime = null,
+        ?int $endTime = null,
+        ?string $account = null
+    ): array {
+        $query = [
+            'limit' => min($limit, 200), // BitMart limite à 200 trades max
+        ];
+        
+        if ($symbol !== null) {
+            $query['symbol'] = $symbol;
+        }
+        
+        if ($startTime !== null) {
+            $query['start_time'] = $startTime;
+        }
+        
+        if ($endTime !== null) {
+            $query['end_time'] = $endTime;
+        }
+        
+        if ($account !== null) {
+            $query['account'] = $account;
+        }
+        
+        return $this->requestJsonPrivate('GET', self::PATH_TRADES, $query);
+    }
+
+    /**
+     * GET /contract/private/transaction-history
+     * Récupère l'historique des transactions (PnL réalisé, funding, etc.).
+     * 
+     * @param string|null $symbol Symbole (optionnel)
+     * @param int|null $flowType Type de flux: 1=transfer, 2=realized PnL, 3=funding, etc. (optionnel)
+     * @param int $limit Limite de résultats (max 200)
+     * @param int|null $startTime Timestamp de début en secondes (optionnel)
+     * @param int|null $endTime Timestamp de fin en secondes (optionnel)
+     * @param string|null $account Type de compte: 'futures' ou 'copy_trading' (optionnel)
+     * @return array Réponse de l'API BitMart
+     */
+    public function getTransactionHistory(
+        ?string $symbol = null,
+        ?int $flowType = null,
+        int $limit = 100,
+        ?int $startTime = null,
+        ?int $endTime = null,
+        ?string $account = null
+    ): array {
+        $query = [
+            'limit' => min($limit, 200), // BitMart limite à 200 transactions max
+        ];
+        
+        if ($symbol !== null) {
+            $query['symbol'] = $symbol;
+        }
+        
+        if ($flowType !== null) {
+            $query['flow_type'] = $flowType;
+        }
+        
+        if ($startTime !== null) {
+            $query['start_time'] = $startTime;
+        }
+        
+        if ($endTime !== null) {
+            $query['end_time'] = $endTime;
+        }
+        
+        if ($account !== null) {
+            $query['account'] = $account;
+        }
+        
+        return $this->requestJsonPrivate('GET', self::PATH_TRANSACTION_HISTORY, $query);
     }
 
     /**

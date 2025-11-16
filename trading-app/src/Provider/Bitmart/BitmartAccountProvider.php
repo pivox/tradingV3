@@ -178,6 +178,51 @@ final class BitmartAccountProvider implements AccountProviderInterface
         }
     }
 
+    public function getTrades(?string $symbol = null, int $limit = 100, ?int $startTime = null, ?int $endTime = null): array
+    {
+        try {
+            $response = $this->bitmartClient->getTrades($symbol, $limit, $startTime, $endTime);
+
+            if (isset($response['data']['trades'])) {
+                return $response['data']['trades'];
+            } elseif (isset($response['data']) && is_array($response['data'])) {
+                // Parfois BitMart retourne directement le tableau de trades
+                return $response['data'];
+            }
+
+            return [];
+        } catch (\Exception $e) {
+            $this->logger->error("Erreur lors de la récupération des trades", [
+                'symbol' => $symbol,
+                'error' => $e->getMessage()
+            ]);
+            return [];
+        }
+    }
+
+    public function getTransactionHistory(?string $symbol = null, ?int $flowType = null, int $limit = 100, ?int $startTime = null, ?int $endTime = null): array
+    {
+        try {
+            $response = $this->bitmartClient->getTransactionHistory($symbol, $flowType, $limit, $startTime, $endTime);
+
+            if (isset($response['data']['list'])) {
+                return $response['data']['list'];
+            } elseif (isset($response['data']) && is_array($response['data'])) {
+                // Parfois BitMart retourne directement le tableau de transactions
+                return $response['data'];
+            }
+
+            return [];
+        } catch (\Exception $e) {
+            $this->logger->error("Erreur lors de la récupération de l'historique des transactions", [
+                'symbol' => $symbol,
+                'flow_type' => $flowType,
+                'error' => $e->getMessage()
+            ]);
+            return [];
+        }
+    }
+
     public function getTradingFees(string $symbol): array
     {
         try {
