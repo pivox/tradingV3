@@ -395,3 +395,26 @@ services:
         arguments:
             $wsPublicKlinesService: '@App\WebSocket\Service\WsPublicKlinesService'
             $logger: '@logger'
+
+    # === Trading Storage Services ===
+    # Alias pour les interfaces de repository
+    App\Trading\Storage\PositionStateRepositoryInterface: '@App\Trading\Storage\PositionPositionStateRepository'
+    App\Trading\Storage\OrderStateRepositoryInterface: '@App\Trading\Storage\FuturesOrderOrderStateRepository'
+
+    # TradingStateSyncRunner - utilise les providers depuis MainProvider
+    App\Trading\Sync\TradingStateSyncRunner:
+        arguments:
+            $mainProvider: '@App\Contract\Provider\MainProviderInterface'
+
+    # Logger spécifique pour Trading
+    monolog.logger.trading:
+        parent: monolog.logger
+        arguments:
+            - trading
+        tags:
+            - { name: monolog.logger, channel: trading }
+
+    # Listener PositionClosedLoggerListener avec logger spécifique
+    App\Trading\Listener\PositionClosedLoggerListener:
+        arguments:
+            $tradingLogger: '@monolog.logger.trading'
