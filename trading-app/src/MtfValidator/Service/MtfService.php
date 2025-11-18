@@ -608,18 +608,42 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $activeConfig = $config ?? $this->mtfValidationConfig;
         $cfg = $activeConfig->getConfig();
         $startFrom = strtolower((string)($cfg['validation']['start_from_timeframe'] ?? '4h'));
+        $contextTimeframes = array_map('strtolower', (array)($cfg['context_timeframes'] ?? []));
+        $tfOrder = ['4h','1h','15m','5m','1m'];
+        $startIndex = array_search($startFrom, $tfOrder, true);
+        if ($startIndex === false) {
+            $startIndex = 0;
+        }
+        $includeFlags = [];
+        $contextOnlyFlags = [];
+        $shouldRunFlags = [];
+        foreach ($tfOrder as $idx => $tfKey) {
+            $includeFlags[$tfKey] = $idx >= $startIndex;
+            $contextOnlyFlags[$tfKey] = !$includeFlags[$tfKey] && in_array($tfKey, $contextTimeframes, true);
+            $shouldRunFlags[$tfKey] = $includeFlags[$tfKey] || $contextOnlyFlags[$tfKey];
+        }
         // Inclure uniquement les TF à partir de start_from_timeframe vers le bas (aucun TF supérieur)
-        $include4h  = in_array($startFrom, ['4h'], true);
-        $include1h  = in_array($startFrom, ['4h','1h'], true);
-        $include15m = in_array($startFrom, ['4h','1h','15m'], true);
-        $include5m  = in_array($startFrom, ['4h','1h','15m','5m'], true);
-        $include1m  = in_array($startFrom, ['4h','1h','15m','5m','1m'], true);
+        $include4h  = $includeFlags['4h'];
+        $include1h  = $includeFlags['1h'];
+        $include15m = $includeFlags['15m'];
+        $include5m  = $includeFlags['5m'];
+        $include1m  = $includeFlags['1m'];
+        $contextOnly4h  = $contextOnlyFlags['4h'];
+        $contextOnly1h  = $contextOnlyFlags['1h'];
+        $contextOnly15m = $contextOnlyFlags['15m'];
+        $contextOnly5m  = $contextOnlyFlags['5m'];
+        $contextOnly1m  = $contextOnlyFlags['1m'];
+        $shouldRun4h  = $shouldRunFlags['4h'];
+        $shouldRun1h  = $shouldRunFlags['1h'];
+        $shouldRun15m = $shouldRunFlags['15m'];
+        $shouldRun5m  = $shouldRunFlags['5m'];
+        $shouldRun1m  = $shouldRunFlags['1m'];
 
         $cacheWarmup = false;
         $cacheWarmupTfs = [];
 
         $result4h = null;
-        if ($include4h) {
+        if ($shouldRun4h) {
             $tf4hStart = microtime(true);
             $this->logger->debug('[MTF] Start TF 4h', ['symbol' => $symbol]);
             $hadCache4h = null;
@@ -666,7 +690,11 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             // Persister systématiquement un snapshot 4h (même en INVALID)
             $this->persistIndicatorSnapshot($symbol, '4h', $result4h);
             if ($this->isGraceWindowResult($result4h)) {
-                return $result4h + ['blocking_tf' => '4h'];
+                if ($contextOnly4h) {
+                    $this->logger->info('[MTF] Context-only TF 4h in grace window, ignoring blocking', ['symbol' => $symbol]);
+                } else {
+                    return $result4h + ['blocking_tf' => '4h'];
+                }
             }
 
             if (($result4h['status'] ?? null) !== 'VALID') {
@@ -682,14 +710,18 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'passed' => false,
                     'severity' => 2,
                     'from_cache' => (bool)($result4h['from_cache'] ?? false),
+                    'context_only' => $contextOnly4h,
                 ]);
-                return $result4h + ['blocking_tf' => '4h'];
+                if (!$contextOnly4h) {
+                    return $result4h + ['blocking_tf' => '4h'];
+                }
+            } else {
+                $this->timeframe4hService->updateState($symbol, $result4h);
             }
-            $this->timeframe4hService->updateState($symbol, $result4h);
         }
 
         $result1h = null;
-        if ($include1h) {
+        if ($shouldRun1h) {
             $tf1hStart = microtime(true);
             $hadCache1h = null;
             $cacheStart = microtime(true);
@@ -735,11 +767,16 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             // Persister systématiquement un snapshot 1h
             $this->persistIndicatorSnapshot($symbol, '1h', $result1h);
             if ($this->isGraceWindowResult($result1h)) {
-                return $result1h + ['blocking_tf' => '1h'];
+                if ($contextOnly1h) {
+                    $this->logger->info('[MTF] Context-only TF 1h in grace window, ignoring blocking', ['symbol' => $symbol]);
+                } else {
+                    return $result1h + ['blocking_tf' => '1h'];
+                }
             }
 
-            if (($result1h['status'] ?? null) !== 'VALID') {
-                $this->logger->info('[MTF] 1h not VALID, stop cascade', ['symbol' => $symbol, 'reason' => $result1h['reason'] ?? null]);
+            $canUse1h = (strtoupper((string)($result1h['status'] ?? '')) === 'VALID');
+            if (!$canUse1h) {
+                $this->logger->info('[MTF] 1h not VALID, stop cascade', ['symbol' => $symbol, 'reason' => $result1h['reason'] ?? null, 'context_only' => $contextOnly1h]);
                 $this->auditStep($runId, $symbol, '1H_VALIDATION_FAILED', $result1h['reason'] ?? '1H validation failed', [
                     'timeframe' => '1h',
                     'kline_time' => $result1h['kline_time'] ?? null,
@@ -752,10 +789,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'passed' => false,
                     'severity' => 2,
                     'from_cache' => (bool)($result1h['from_cache'] ?? false),
+                    'context_only' => $contextOnly1h,
                 ]);
-                return $result1h + ['blocking_tf' => '1h'];
+                if (!$contextOnly1h) {
+                    return $result1h + ['blocking_tf' => '1h'];
+                }
             }
-            if ($include4h) {
+            if ($canUse1h && $include4h) {
                 // Règle: 1h doit matcher 4h si 4h inclus
                 $this->logger->debug('[MTF] Check alignment 1h vs 4h', ['symbol' => $symbol, 'h4' => $result4h['signal_side'] ?? 'NONE', 'h1' => $result1h['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe1hService->checkAlignment($result1h, $result4h, '4H');
@@ -772,12 +812,14 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     return $alignmentResult;
                 }
             }
-            $this->timeframe1hService->updateState($symbol, $result1h);
+            if ($canUse1h) {
+                $this->timeframe1hService->updateState($symbol, $result1h);
+            }
         }
 
         // Étape 15m (seulement si incluse)
         $result15m = null;
-        if ($include15m) {
+        if ($shouldRun15m) {
             $tf15mStart = microtime(true);
             $this->logger->debug('[MTF] Start TF 15m', ['symbol' => $symbol]);
             $hadCache15m = null;
@@ -824,10 +866,15 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             // Persister systématiquement un snapshot 15m
             $this->persistIndicatorSnapshot($symbol, '15m', $result15m);
             if ($this->isGraceWindowResult($result15m)) {
-                return $result15m + ['blocking_tf' => '15m'];
+                if ($contextOnly15m) {
+                    $this->logger->info('[MTF] Context-only TF 15m in grace window, ignoring blocking', ['symbol' => $symbol]);
+                } else {
+                    return $result15m + ['blocking_tf' => '15m'];
+                }
             }
 
-            if (($result15m['status'] ?? null) !== 'VALID') {
+            $canUse15m = (strtoupper((string)($result15m['status'] ?? '')) === 'VALID');
+            if (!$canUse15m) {
                 $this->auditStep($runId, $symbol, '15M_VALIDATION_FAILED', $result15m['reason'] ?? '15M validation failed', [
                     'timeframe' => '15m',
                     'kline_time' => $result15m['kline_time'] ?? null,
@@ -840,18 +887,21 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'passed' => false,
                     'severity' => 2,
                     'from_cache' => (bool)($result15m['from_cache'] ?? false),
+                    'context_only' => $contextOnly15m,
                 ]);
-                // Option de contournement: si autorisé par config, on descend en 5m au lieu d'arrêter la chaîne
-                $activeConfig = $config ?? $this->mtfValidationConfig;
-                $cfg = $activeConfig->getConfig();
-                $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
-                if (!($allowSkip && ($include5m ?? false))) {
-                    return $result15m + ['blocking_tf' => '15m'];
+                if (!$contextOnly15m) {
+                    // Option de contournement: si autorisé par config, on descend en 5m au lieu d'arrêter la chaîne
+                    $activeConfig = $config ?? $this->mtfValidationConfig;
+                    $cfg = $activeConfig->getConfig();
+                    $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
+                    if (!($allowSkip && ($include5m ?? false))) {
+                        return $result15m + ['blocking_tf' => '15m'];
+                    }
+                    $this->logger->info('[MTF] 15m invalid but allow_skip_lower_tf=true, continue with 5m', ['symbol' => $symbol]);
                 }
-                $this->logger->info('[MTF] 15m invalid but allow_skip_lower_tf=true, continue with 5m', ['symbol' => $symbol]);
             }
             // Règle: 15m doit matcher 1h si 1h est inclus
-            if ($include1h && is_array($result1h)) {
+            if ($canUse15m && $include1h && is_array($result1h)) {
                 $this->logger->debug('[MTF] Check alignment 15m vs 1h', ['symbol' => $symbol, 'm15' => $result15m['signal_side'] ?? 'NONE', 'h1' => $result1h['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe15mService->checkAlignment($result15m, $result1h, '1H');
                 if ($alignmentResult['status'] === 'INVALID') {
@@ -867,12 +917,14 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     return $alignmentResult;
                 }
             }
-            $this->timeframe15mService->updateState($symbol, $result15m);
+            if ($canUse15m) {
+                $this->timeframe15mService->updateState($symbol, $result15m);
+            }
         }
 
         // Étape 5m (seulement si incluse)
         $result5m = null;
-        if ($include5m) {
+        if ($shouldRun5m) {
             $tf5mStart = microtime(true);
             $this->logger->debug('[MTF] Start TF 5m', ['symbol' => $symbol]);
             $hadCache5m = null;
@@ -932,10 +984,15 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             // Persister systématiquement un snapshot 5m (après calcul ATR)
             $this->persistIndicatorSnapshot($symbol, '5m', $result5m);
             if ($this->isGraceWindowResult($result5m)) {
-                return $result5m + ['blocking_tf' => '5m'];
+                if ($contextOnly5m) {
+                    $this->logger->info('[MTF] Context-only TF 5m in grace window, ignoring blocking', ['symbol' => $symbol]);
+                } else {
+                    return $result5m + ['blocking_tf' => '5m'];
+                }
             }
 
-            if (($result5m['status'] ?? null) !== 'VALID') {
+            $canUse5m = (strtoupper((string)($result5m['status'] ?? '')) === 'VALID');
+            if (!$canUse5m) {
                 $this->auditStep($runId, $symbol, '5M_VALIDATION_FAILED', $result5m['reason'] ?? '5M validation failed', [
                     'timeframe' => '5m',
                     'kline_time' => $result5m['kline_time'] ?? null,
@@ -948,17 +1005,20 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'passed' => false,
                     'severity' => 2,
                     'from_cache' => (bool)($result5m['from_cache'] ?? false),
+                    'context_only' => $contextOnly5m,
                 ]);
-                $activeConfig = $config ?? $this->mtfValidationConfig;
-                $cfg = $activeConfig->getConfig();
-                $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
-                if (!($allowSkip && ($include1m ?? false))) {
-                    return $result5m + ['blocking_tf' => '5m'];
+                if (!$contextOnly5m) {
+                    $activeConfig = $config ?? $this->mtfValidationConfig;
+                    $cfg = $activeConfig->getConfig();
+                    $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
+                    if (!($allowSkip && ($include1m ?? false))) {
+                        return $result5m + ['blocking_tf' => '5m'];
+                    }
+                    $this->logger->info('[MTF] 5m invalid but allow_skip_lower_tf=true, continue with 1m', ['symbol' => $symbol]);
                 }
-                $this->logger->info('[MTF] 5m invalid but allow_skip_lower_tf=true, continue with 1m', ['symbol' => $symbol]);
             }
             // Règle: 5m doit matcher 15m si 15m est inclus
-            if ($include15m && is_array($result15m)) {
+            if ($canUse5m && $include15m && is_array($result15m)) {
                 $this->logger->debug('[MTF] Check alignment 5m vs 15m', ['symbol' => $symbol, 'm5' => $result5m['signal_side'] ?? 'NONE', 'm15' => $result15m['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe5mService->checkAlignment($result5m, $result15m, '15M');
                 if ($alignmentResult['status'] === 'INVALID') {
@@ -974,7 +1034,9 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     return $alignmentResult;
                 }
             }
-            $this->timeframe5mService->updateState($symbol, $result5m);
+            if ($canUse5m) {
+                $this->timeframe5mService->updateState($symbol, $result5m);
+            }
         }
 
         // Étape 1m (seulement si incluse)
@@ -1039,10 +1101,15 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             // Persister systématiquement un snapshot 1m (après calcul ATR)
             $this->persistIndicatorSnapshot($symbol, '1m', $result1m);
             if ($this->isGraceWindowResult($result1m)) {
-                return $result1m + ['blocking_tf' => '1m'];
+                if ($contextOnly1m) {
+                    $this->logger->info('[MTF] Context-only TF 1m in grace window, ignoring blocking', ['symbol' => $symbol]);
+                } else {
+                    return $result1m + ['blocking_tf' => '1m'];
+                }
             }
 
-            if (($result1m['status'] ?? null) !== 'VALID') {
+            $canUse1m = (strtoupper((string)($result1m['status'] ?? '')) === 'VALID');
+            if (!$canUse1m) {
                 $this->auditStep($runId, $symbol, '1M_VALIDATION_FAILED', $result1m['reason'] ?? '1M validation failed', [
                     'timeframe' => '1m',
                     'kline_time' => $result1m['kline_time'] ?? null,
@@ -1055,20 +1122,25 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'passed' => false,
                     'severity' => 2,
                     'from_cache' => (bool)($result1m['from_cache'] ?? false),
+                    'context_only' => $contextOnly1m,
                 ]);
-                return $result1m + ['blocking_tf' => '1m'];
+                if (!$contextOnly1m) {
+                    return $result1m + ['blocking_tf' => '1m'];
+                }
             }
 
-            // Log dédié après validation 1m (positions_flow)
-            $this->positionsFlowLogger->info('[PositionsFlow] 1m VALIDATED', [
-                'symbol' => $symbol,
-                'signal_side' => $result1m['signal_side'] ?? 'NONE',
-                'kline_time' => isset($result1m['kline_time']) && $result1m['kline_time'] instanceof \DateTimeImmutable ? $result1m['kline_time']->format('Y-m-d H:i:s') : null,
-                'current_price' => $result1m['current_price'] ?? null,
-                'atr' => $result1m['atr'] ?? null,
-            ]);
+            if ($canUse1m) {
+                // Log dédié après validation 1m (positions_flow)
+                $this->positionsFlowLogger->info('[PositionsFlow] 1m VALIDATED', [
+                    'symbol' => $symbol,
+                    'signal_side' => $result1m['signal_side'] ?? 'NONE',
+                    'kline_time' => isset($result1m['kline_time']) && $result1m['kline_time'] instanceof \DateTimeImmutable ? $result1m['kline_time']->format('Y-m-d H:i:s') : null,
+                    'current_price' => $result1m['current_price'] ?? null,
+                    'atr' => $result1m['atr'] ?? null,
+                ]);
+            }
             // Règle: 1m doit matcher 5m si 5m est inclus
-            if ($include5m && is_array($result5m)) {
+            if ($canUse1m && $include5m && is_array($result5m)) {
                 $this->logger->debug('[MTF] Check alignment 1m vs 5m', ['symbol' => $symbol, 'm1' => $result1m['signal_side'] ?? 'NONE', 'm5' => $result5m['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe1mService->checkAlignment($result1m, $result5m, '5M');
                 if ($alignmentResult['status'] === 'INVALID') {
@@ -1084,7 +1156,9 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     return $alignmentResult;
                 }
             }
-            $this->timeframe1mService->updateState($symbol, $result1m);
+            if ($canUse1m) {
+                $this->timeframe1mService->updateState($symbol, $result1m);
+            }
         }
 
         // Sauvegarder l'état (best-effort)
