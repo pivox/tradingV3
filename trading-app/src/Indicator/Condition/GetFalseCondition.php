@@ -22,10 +22,9 @@ class GetFalseCondition extends AbstractCondition
     public function evaluate(array $context): ConditionResult
     {
         return $this->result(
-            self::NAME,
-            (bool) ($context['get_false'] ?? false),
-            [],
-            $this->baseMeta($context),
+            name: self::NAME,
+            passed: (bool) ($context['get_false'] ?? false),
+            meta: $this->baseMeta($context),
         );
     }
 }
