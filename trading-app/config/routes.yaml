@@ -27,6 +27,10 @@ ws_assignments:
   methods: [GET]
 
 # Explicit web controllers to ensure route discovery
+mtf_web_dashboard:
+  resource: '../src/MtfValidator/Controller/Web/MtfDashboardController.php'
+  type: attribute
+
 mtf_web_audit:
   resource: '../src/MtfValidator/Controller/Web/MtfAuditController.php'
   type: attribute

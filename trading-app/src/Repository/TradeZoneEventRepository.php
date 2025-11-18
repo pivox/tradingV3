@@ -86,4 +86,42 @@ final class TradeZoneEventRepository extends ServiceEntityRepository
             ];
         }, $rows);
     }
+
+    /**
+     * Récupère la dernière raison "pas de trade" par symbole
+     *
+     * @param string[] $symbols
+     * @return array<string, array{reason: string, happened_at: \DateTimeImmutable}>
+     */
+    public function getLastReasonBySymbols(array $symbols): array
+    {
+        if (empty($symbols)) {
+            return [];
+        }
+
+        // Récupérer le dernier événement pour chaque symbole
+        // On utilise une sous-requête pour obtenir le dernier événement par symbole
+        $subQb = $this->createQueryBuilder('event2')
+            ->select('MAX(event2.happenedAt)')
+            ->where('event2.symbol = event.symbol');
+
+        $qb = $this->createQueryBuilder('event')
+            ->where('event.symbol IN (:symbols)')
+            ->andWhere('event.happenedAt = (' . $subQb->getDQL() . ')')
+            ->setParameter('symbols', $symbols)
+            ->orderBy('event.symbol', 'ASC');
+
+        $events = $qb->getQuery()->getResult();
+
+        $result = [];
+        foreach ($events as $event) {
+            $symbol = $event->getSymbol();
+            $result[$symbol] = [
+                'reason' => $event->getReason(),
+                'happened_at' => $event->getHappenedAt(),
+            ];
+        }
+
+        return $result;
+    }
 }
