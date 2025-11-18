@@ -88,33 +88,30 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 $payload[$k] = $v;
             }
 
-            // Créer OrderIntent avant l'envoi si le service est disponible
-            if ($this->intentManager) {
-                $quantization = $this->extractQuantization($symbol);
-                $rawInputs = [
-                    'symbol' => $symbol,
-                    'side' => $side->value,
-                    'type' => $type->value,
-                    'quantity' => $quantity,
-                    'price' => $price,
-                    'stopPrice' => $stopPrice,
-                    'options' => $options,
-                ];
+            $quantization = $this->extractQuantization($symbol);
+            $rawInputs = [
+                'symbol' => $symbol,
+                'side' => $side->value,
+                'type' => $type->value,
+                'quantity' => $quantity,
+                'price' => $price,
+                'stopPrice' => $stopPrice,
+                'options' => $options,
+            ];
 
-                $intent = $this->intentManager->createIntent($payload, $quantization, $rawInputs);
+            $intent = $this->intentManager->createIntent($payload, $quantization, $rawInputs);
 
-                // Valider l'intent (validation basique)
-                $validationErrors = $this->validateOrderParams($payload);
-                if (!$this->intentManager->validateIntent($intent, $validationErrors)) {
-                    // Validation échouée, mais on continue quand même l'envoi
-                    $this->logger->warning('[BitmartOrderProvider] Intent validation failed but continuing', [
-                        'client_order_id' => $intent->getClientOrderId(),
-                        'errors' => $validationErrors,
-                    ]);
-                }
-
-                $this->intentManager->markReadyToSend($intent);
+            // Valider l'intent (validation basique)
+            $validationErrors = $this->validateOrderParams($payload);
+            if (!$this->intentManager->validateIntent($intent, $validationErrors)) {
+                // Validation échouée, mais on continue quand même l'envoi
+                $this->logger->warning('[BitmartOrderProvider] Intent validation failed but continuing', [
+                    'client_order_id' => $intent->getClientOrderId(),
+                    'errors' => $validationErrors,
+                ]);
             }
+
+            $this->intentManager->markReadyToSend($intent);
 
             $orderPayload = $payload;
             if (isset($orderPayload['leverage'])) {
@@ -128,15 +125,13 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 $orderId = (string) $response['data']['order_id'];
 
                 // Marquer l'intent comme SENT
-                if ($intent && $this->intentManager) {
-                    try {
-                        $this->intentManager->markAsSent($intent, $orderId);
-                    } catch (\Throwable $e) {
-                        $this->logger->warning('[BitmartOrderProvider] Failed to mark intent as sent', [
-                            'order_id' => $orderId,
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
+                try {
+                    $this->intentManager->markAsSent($intent, $orderId);
+                } catch (\Throwable $e) {
+                    $this->logger->warning('[BitmartOrderProvider] Failed to mark intent as sent', [
+                        'order_id' => $orderId,
+                        'error' => $e->getMessage(),
+                    ]);
                 }
 
                 // Synchroniser la réponse de soumission si disponible
@@ -387,7 +382,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
             try {
                 $response = $this->bitmartClient->getOpenOrders($symbol);
-                
+
                 // Log pour debug : structure de la réponse
                 $this->logger->debug('[BitmartOrderProvider] Open orders response structure', [
                     'symbol' => $symbol,
@@ -397,7 +392,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     'message' => $response['message'] ?? null,
                     'attempt' => $i + 1,
                 ]);
-                
+
                 // BitMart peut retourner soit data.orders soit data directement comme tableau
                 $orders = null;
                 if (isset($response['data']['orders']) && is_array($response['data']['orders'])) {
@@ -412,7 +407,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     }
                     // Si data est un tableau vide, orders reste null et on retourne []
                 }
-                
+
                 if ($orders !== null) {
                     // Synchroniser tous les ordres ouverts
                     if ($this->syncService) {
@@ -430,9 +425,9 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     }
                     return array_map(fn($order) => OrderDto::fromArray($order), $orders);
                 }
-                
+
                 // Si code 30000 ou data vide, c'est normal (pas d'ordres)
-                if ((isset($response['code']) && (int) $response['code'] === 30000) 
+                if ((isset($response['code']) && (int) $response['code'] === 30000)
                     || (isset($response['data']) && is_array($response['data']) && empty($response['data']))) {
                     $this->logger->debug('[BitmartOrderProvider] No open orders', [
                         'symbol' => $symbol,
@@ -440,7 +435,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     ]);
                     return [];
                 }
-                
+
                 $lastError = new \RuntimeException('Invalid open orders response structure. Response: ' . json_encode($response));
             } catch (\Throwable $e) {
                 $lastError = $e;
@@ -462,7 +457,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
 
     /**
      * Récupère les ordres planifiés (Plan Orders) incluant les TP/SL
-     * 
+     *
      * @param string|null $symbol Symbole à filtrer (optionnel)
      * @return array Tableau d'ordres planifiés
      */
@@ -472,7 +467,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
             try {
                 $response = $this->bitmartClient->getPlanOrders($symbol);
-                
+
                 $this->logger->debug('[BitmartOrderProvider] Plan orders response structure', [
                     'symbol' => $symbol,
                     'has_data' => isset($response['data']),
@@ -481,7 +476,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     'message' => $response['message'] ?? null,
                     'attempt' => $i + 1,
                 ]);
-                
+
                 // BitMart peut retourner soit data.orders soit data directement comme tableau
                 $orders = null;
                 if (isset($response['data']['orders']) && is_array($response['data']['orders'])) {
@@ -493,15 +488,15 @@ final class BitmartOrderProvider implements OrderProviderInterface
                         }
                     }
                 }
-                
+
                 if ($orders !== null) {
                     // Les plan orders peuvent avoir une structure légèrement différente
                     // On retourne les données brutes pour l'instant car OrderDto pourrait ne pas correspondre
                     return $orders;
                 }
-                
+
                 // Si code 30000 ou data vide, c'est normal (pas d'ordres)
-                if ((isset($response['code']) && (int) $response['code'] === 30000) 
+                if ((isset($response['code']) && (int) $response['code'] === 30000)
                     || (isset($response['data']) && is_array($response['data']) && empty($response['data']))) {
                     $this->logger->debug('[BitmartOrderProvider] No plan orders', [
                         'symbol' => $symbol,
@@ -509,7 +504,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     ]);
                     return [];
                 }
-                
+
                 $lastError = new \RuntimeException('Invalid plan orders response structure. Response: ' . json_encode($response));
             } catch (\Throwable $e) {
                 $lastError = $e;
@@ -535,7 +530,6 @@ final class BitmartOrderProvider implements OrderProviderInterface
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
             try {
                 $response = $this->bitmartClient->getOrderHistory($symbol, $limit);
-                
                 // BitMart peut retourner soit data.orders soit data directement comme tableau
                 $orders = null;
                 if (isset($response['data']['orders']) && is_array($response['data']['orders'])) {
@@ -549,7 +543,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                         }
                     }
                 }
-                
+
                 if ($orders !== null) {
                     // Synchroniser tous les ordres de l'historique
                     if ($this->syncService) {
@@ -567,9 +561,10 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     }
                     return array_map(fn($order) => OrderDto::fromArray($order), $orders);
                 }
-                
+
                 $lastError = new \RuntimeException('Invalid order history response structure. Expected data.orders or data as array.');
             } catch (\Throwable $e) {
+                dd($e);
                 $lastError = $e;
             }
 

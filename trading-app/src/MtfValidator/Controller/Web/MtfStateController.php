@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Controller\Web;
 
+use App\Config\MtfValidationConfig;
+use App\Config\MtfValidationConfigProvider;
 use App\Repository\MtfStateRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -121,10 +123,33 @@ class MtfStateController extends AbstractController
     }
 
     #[Route('/mtf/states/audit-summary', name: 'mtf_states_audit_summary', methods: ['GET'])]
-    public function auditSummary(Request $request): JsonResponse
-    {
+    public function auditSummary(
+        Request $request,
+        MtfValidationConfigProvider $configProvider
+    ): JsonResponse {
         $symbol = $request->query->get('symbol');
-        $results = $this->stateRepository->getSummary();
+        $requestedMode = $request->query->get('mode');
+
+        // 1) Déterminer le mode à utiliser
+        $enabledModes = $configProvider->getEnabledModes();
+        $enabledNames = array_column($enabledModes, 'name');
+        $mode = null;
+
+        if (is_string($requestedMode) && in_array($requestedMode, $enabledNames, true)) {
+            $mode = $requestedMode;
+        } else {
+            $mode = $configProvider->getPrimaryMode() ?? 'regular';
+        }
+        dd($configProvider->getPrimaryMode());
+
+        $config = $configProvider->getConfigForMode($mode);
+        $cfg = $config->getConfig();
+
+        // 2) Récupérer le TF de départ pour ce mode
+        $startFrom = $cfg['validation']['start_from_timeframe'] ?? '4h';
+
+        // 3) Appeler ton repo en lui passant startFrom
+        $results = $this->stateRepository->getSummary($startFrom);
 
         $formatDate = static function (?\DateTimeImmutable $value): ?string {
             return $value?->setTimezone(new \DateTimeZone('UTC'))->format(\DateTimeInterface::ATOM);
@@ -132,27 +157,22 @@ class MtfStateController extends AbstractController
 
         $data = [];
         foreach ($results as $result) {
-            // Doctrine avec addSelect HIDDEN peut retourner un array mixte
-            // Structure possible: [0] => MtfState, 'ruleRank' => int
-            // ou directement l'entité si Doctrine hydrate différemment
             $state = null;
             $ruleRank = null;
 
             if (is_array($result)) {
-                // Chercher l'entité MtfState dans le tableau
                 foreach ($result as $key => $value) {
                     if (is_object($value) && method_exists($value, 'getSymbol')) {
                         $state = $value;
                         break;
                     }
                 }
-                // Extraire ruleRank - peut être dans différentes positions selon Doctrine
                 if (isset($result['ruleRank'])) {
-                    $ruleRank = (int)$result['ruleRank'];
+                    $ruleRank = (int) $result['ruleRank'];
                 } elseif (isset($result[1]) && is_numeric($result[1])) {
-                    $ruleRank = (int)$result[1];
+                    $ruleRank = (int) $result[1];
                 } elseif (isset($result['1']) && is_numeric($result['1'])) {
-                    $ruleRank = (int)$result['1'];
+                    $ruleRank = (int) $result['1'];
                 }
             } elseif (is_object($result) && method_exists($result, 'getSymbol')) {
                 $state = $result;
@@ -162,7 +182,6 @@ class MtfStateController extends AbstractController
                 continue;
             }
 
-            // Filtrer par symbole si fourni
             if (is_string($symbol) && $symbol !== '') {
                 if (strtoupper($state->getSymbol()) !== strtoupper($symbol)) {
                     continue;
@@ -183,8 +202,11 @@ class MtfStateController extends AbstractController
         }
 
         return new JsonResponse([
-            'count' => count($data),
+            'count' => \count($data),
             'generated_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format(\DateTimeInterface::ATOM),
+            'mode' => $mode,
+            'available_modes' => $enabledNames,
+            'start_from_timeframe' => $startFrom,
             'data' => $data,
         ]);
     }
