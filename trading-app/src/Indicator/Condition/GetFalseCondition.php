@@ -21,9 +21,10 @@ class GetFalseCondition extends AbstractCondition
 
     public function evaluate(array $context): ConditionResult
     {
+        // GetFalseCondition retourne toujours false (utilisé pour empêcher de rester en 15m en mode scalper)
         return $this->result(
             name: self::NAME,
-            passed: (bool) ($context['get_false'] ?? false),
+            passed: false,
             meta: $this->baseMeta($context),
         );
     }

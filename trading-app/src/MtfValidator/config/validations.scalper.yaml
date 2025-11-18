@@ -6,7 +6,7 @@ version: '0.0.91'
 
 mtf_validation:
     mode: 'pragmatic'
-    context_timeframes: ['1h']          # (Option : remettre ['4h','1h'] si tu veux le contexte 4h)
+    context_timeframes: ['4h','1h']     # (Option : remettre ['4h','1h'] si tu veux le contexte 4h)
     execution_timeframe_default: '5m'
     allow_skip_lower_tf: true
 
@@ -207,7 +207,8 @@ mtf_validation:
 
         # SCALPER : on ne veut jamais rester en 15m → GetFalseCondition
         stay_on_15m_if:
-            - get_false
+            - get_false: true
+            
 
         drop_to_5m_if_any:
             - expected_r_multiple_lt: 1.4
@@ -232,7 +233,7 @@ mtf_validation:
     filters_mandatory:
         - rsi_lt_70                 # anti surachat global
         - price_lte_ma21_plus_k_atr # anti extension MA21 + 1.3 ATR
-        - volume_ratio_ok           # évite les carnets trop creux
+        # - volume_ratio_ok           # évite les carnets trop creux
 
 
     # ================================
@@ -240,7 +241,7 @@ mtf_validation:
     # ================================
     validation:
 
-        start_from_timeframe: '4h'   # NB : si tu veux vraiment context 1h only → passe à '1h'
+        start_from_timeframe: '1h'   # NB : si tu veux vraiment context 1h only → passe à '1h'
 
         timeframe:
 

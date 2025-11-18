@@ -61,7 +61,7 @@ trade_entry:
     # RISK MANAGEMENT
     # ============================
     risk:
-        fixed_risk_pct: 5.0
+        fixed_risk_pct: 2.5
         daily_max_loss_pct: 6.0
         daily_max_loss_usdt: 30.0
         daily_loss_count_unrealized: true

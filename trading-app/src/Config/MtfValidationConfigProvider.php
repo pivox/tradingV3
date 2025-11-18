@@ -26,7 +26,7 @@ final class MtfValidationConfigProvider
         ParameterBagInterface $parameterBag
     ) {
         $this->configDir = $parameterBag->get('kernel.project_dir') . '/src/MtfValidator/config';
-        
+
         // Charger les modes depuis les paramètres
         $modes = $parameterBag->get('mode') ?? [];
         $this->enabledModes = $this->loadEnabledModes($modes);
@@ -55,11 +55,11 @@ final class MtfValidationConfigProvider
 
                 continue;
             }
-            
+
             $name = 'unknown';
             $enabledFlag = false;
             $priority = 999;
-            
+
             // Extraire name, enabled, priority depuis le format spécial Symfony
             foreach ($mode as $item) {
                 if (is_array($item)) {
@@ -72,7 +72,7 @@ final class MtfValidationConfigProvider
                     }
                 }
             }
-            
+
             if ($enabledFlag) {
                 $enabled[] = [
                     'name' => $name,
@@ -81,10 +81,10 @@ final class MtfValidationConfigProvider
                 ];
             }
         }
-        
+
         // Trier par priority (croissant)
         usort($enabled, fn($a, $b) => ($a['priority'] ?? 999) <=> ($b['priority'] ?? 999));
-        
+
         return $enabled;
     }
 
@@ -95,6 +95,24 @@ final class MtfValidationConfigProvider
     public function getEnabledModes(): array
     {
         return $this->enabledModes;
+    }
+    public function getPrimaryMode(): ?string
+    {
+        // enabledModes déjà triés par priority asc
+        return $this->enabledModes[0]['name'] ?? null;
+    }
+
+    /**
+     * Raccourci pour récupérer la config du mode « primaire »
+     */
+    public function getPrimaryConfig(): ?MtfValidationConfig
+    {
+        $mode = $this->getPrimaryMode();
+        if ($mode === null) {
+            return null;
+        }
+
+        return $this->getConfigForMode($mode);
     }
 
     /**
@@ -146,7 +164,7 @@ final class MtfValidationConfigProvider
         if (isset($mapping[$modeName])) {
             $mappedFile = $mapping[$modeName];
             $mappedPath = $this->configDir . '/' . $mappedFile;
-            
+
             // Si le fichier mappé existe, l'utiliser
             if (is_file($mappedPath)) {
                 return $mappedFile;
