@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace App\Service;
 
-use App\Logging\PositionsLogScanner;
 use App\MtfValidator\Repository\MtfAuditRepository;
+use App\Provider\LogProvider;
 
 final class NoOrderInvestigationService
 {
     public function __construct(
-        private readonly PositionsLogScanner $positionsLogScanner,
+        private readonly LogProvider $logProvider,
         private readonly MtfAuditRepository $mtfAuditRepository,
     ) {
     }
@@ -21,7 +21,7 @@ final class NoOrderInvestigationService
      */
     public function investigate(array $symbols, \DateTimeImmutable $since, int $maxLogFiles): array
     {
-        $logFiles = $this->positionsLogScanner->findRecentPositionLogs($maxLogFiles);
+        $logFiles = $this->logProvider->getRecentPositionLogFiles($maxLogFiles);
         $results = [];
         foreach ($symbols as $symbol) {
             $results[$symbol] = $this->investigateSymbol($symbol, $since, $logFiles);
@@ -35,8 +35,8 @@ final class NoOrderInvestigationService
      */
     public function investigateSymbol(string $symbol, \DateTimeImmutable $since, ?array $logFiles = null): NoOrderInvestigationResult
     {
-        $files = $logFiles ?? $this->positionsLogScanner->findRecentPositionLogs(2);
-        $scan = $this->positionsLogScanner->scanSymbol($symbol, $files, $since);
+        $files = $logFiles ?? $this->logProvider->getRecentPositionLogFiles(2);
+        $scan = $this->logProvider->scanPositionsLogsForSymbol($symbol, $since, $files);
         if ($scan->status !== null) {
             return new NoOrderInvestigationResult($symbol, $scan->status, $scan->reason, $scan->details);
         }

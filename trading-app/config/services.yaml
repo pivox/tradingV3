@@ -19,8 +19,8 @@ parameters:
     # Durée de réactivation du MtfSwitch après annulation d'ordre (au lieu de 4h)
     env(ORDER_TIMEOUT_SWITCH_DURATION): '15m'
     mode:
-        - [name: 'regular', enabled: true, priority: 1]
-        - [name: 'scalper', enabled: true, priority: 2]
+        - [name: 'regular', enabled: false, priority: 0]
+        - [name: 'scalper', enabled: true, priority: 1]
 
     # Fallbacks when env vars are missing (useful in CLI/worker containers)
     router.default_uri: 'http://trading-app-nginx'
