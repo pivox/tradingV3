@@ -64,6 +64,26 @@ class PositionRepository extends ServiceEntityRepository
             return (string)$row;
         }, $results);
     }
+
+    /**
+     * Historique des positions pour un symbole (OPEN + CLOSED),
+     * ordonné par date d’insertion (approx. "open time").
+     *
+     * @return Position[]
+     */
+    public function findHistoryBySymbol(string $symbol, ?int $limit = null): array
+    {
+        $qb = $this->createQueryBuilder('p')
+            ->andWhere('p.symbol = :symbol')
+            ->setParameter('symbol', strtoupper($symbol))
+            ->orderBy('p.insertedAt', 'DESC');
+
+        if ($limit !== null) {
+            $qb->setMaxResults($limit);
+        }
+
+        return $qb->getQuery()->getResult();
+    }
 }
 
 

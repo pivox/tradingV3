@@ -59,5 +59,27 @@ final class FuturesOrderTradeRepository extends ServiceEntityRepository
         $this->getEntityManager()->persist($trade);
         $this->getEntityManager()->flush();
     }
+    /**
+     * @return FuturesOrderTrade[]
+     */
+    public function findRecentBySymbol(
+        string $symbol,
+        int $limit = 200,
+        ?\DateTimeImmutable $since = null
+    ): array {
+        $qb = $this->createQueryBuilder('t')
+            ->andWhere('t.symbol = :symbol')
+            ->setParameter('symbol', strtoupper($symbol))
+            ->orderBy('t.createdAt', 'DESC')
+            ->setMaxResults($limit);
+
+        if ($since !== null) {
+            $qb->andWhere('t.createdAt >= :since')
+                ->setParameter('since', $since);
+        }
+
+        return $qb->getQuery()->getResult();
+    }
+
 }
 
