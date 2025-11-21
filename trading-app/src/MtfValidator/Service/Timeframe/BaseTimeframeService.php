@@ -34,7 +34,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
         protected readonly MtfSwitchRepository $mtfSwitchRepository,
         protected readonly MtfAuditRepository $mtfAuditRepository,
         protected readonly SignalValidationServiceInterface $signalValidationService,
-        protected readonly LoggerInterface $logger,
+        protected readonly LoggerInterface $mtfLogger,
         protected readonly MtfConfigProviderInterface $mtfConfig,
         protected readonly KlineProviderInterface $klineProvider,
         protected readonly EntityManagerInterface $entityManager,
@@ -89,7 +89,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
                 $cfg = $this->mtfConfig->getConfig();
                 $limit = (int)($cfg['timeframes'][$timeframe->value]['guards']['min_bars'] ?? 220) +2;
             } catch (\Throwable $ex) {
-                $this->logger->error("[MTF] Error loading config for {$timeframe->value}, using default limit", ['error' => $ex->getMessage()]);
+                $this->mtfLogger->error("[MTF] Error loading config for {$timeframe->value}, using default limit", ['error' => $ex->getMessage()]);
             }
 
             $klines = $this->mainProvider->getKlineProvider()->getKlines($symbol, $timeframe, $limit);
@@ -107,7 +107,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
 
             // Fenêtre de grâce (sauf si force-run est activé)
             if (!$forceRun && $this->timeService->isInGraceWindow($now, $timeframe)) {
-                $this->logger->debug("[MTF] Grace window active - skip {$timeframe->value}", [
+                $this->mtfLogger->debug("[MTF] Grace window active - skip {$timeframe->value}", [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe->value,
                 ]);
@@ -211,7 +211,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
             );
 
         } catch (\Throwable $ex) {
-            $this->logger->error("[MTF] Exception in {$timeframe->value} processing", [
+            $this->mtfLogger->error("[MTF] Exception in {$timeframe->value} processing", [
                 'symbol' => $symbol,
                 'timeframe' => $timeframe->value,
                 'error' => $ex->getMessage(),
@@ -354,7 +354,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
 
             if (!$isOpen) {
                 // Eviter de déclencher une nouvelle erreur qui masquerait la cause racine
-                $this->logger->warning('[MTF] EntityManager is closed; skipping audit persist', [
+                $this->mtfLogger->warning('[MTF] EntityManager is closed; skipping audit persist', [
                     'symbol' => $symbol,
                     'step' => $step,
                     'timeframe' => $context['timeframe'] ?? null,
@@ -367,7 +367,7 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
         } catch (\Throwable $persistEx) {
             // Ne pas remonter: l'audit est best-effort, on loggue seulement
             try {
-                $this->logger->warning('[MTF] Failed to persist audit (best-effort)', [
+                $this->mtfLogger->warning('[MTF] Failed to persist audit (best-effort)', [
                     'symbol' => $symbol,
                     'step' => $step,
                     'error' => $persistEx->getMessage(),

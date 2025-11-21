@@ -21,7 +21,7 @@ class MtfAuditSubscriber implements EventSubscriberInterface
 
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
         private readonly bool $skipFromCache = true,
     ) {
     }
@@ -45,7 +45,7 @@ class MtfAuditSubscriber implements EventSubscriberInterface
             $audit->setCause($event->getMessage());
             $audit->setDetails($event->getData());
             $audit->setSeverity($event->getSeverity());
-            
+
             // Définir le run_id depuis les données si disponible
             $data = $event->getData();
             if (isset($data['run_id']) && $data['run_id'] !== null) {
@@ -54,13 +54,13 @@ class MtfAuditSubscriber implements EventSubscriberInterface
                     $audit->setRunId($runId);
                 } catch (\Throwable $e) {
                     // Si le run_id n'est pas un UUID valide, on l'ignore
-                    $this->logger->warning('[MTF Audit] Invalid run_id format', [
+                    $this->mtfLogger->warning('[MTF Audit] Invalid run_id format', [
                         'run_id' => $data['run_id'],
                         'error' => $e->getMessage(),
                     ]);
                 }
             }
-            
+
             // Si configuré, ignorer l'audit quand il provient du cache (details['from_cache'] === true)
             $details = $audit->getDetails();
             if ($this->skipFromCache && (bool)($details['from_cache'] ?? false) === true) {
@@ -72,7 +72,7 @@ class MtfAuditSubscriber implements EventSubscriberInterface
                 $this->flushBuffer();
             }
         } catch (\Throwable $e) {
-            $this->logger->error('[MTF Audit] Failed to buffer audit', [
+            $this->mtfLogger->error('[MTF Audit] Failed to buffer audit', [
                 'error' => $e->getMessage(),
             ]);
         }
@@ -106,7 +106,7 @@ class MtfAuditSubscriber implements EventSubscriberInterface
             }
 
             if (!$isOpen) {
-                $this->logger->warning('[MTF Audit] EntityManager closed; dropping audit buffer (best-effort)', [
+                $this->mtfLogger->warning('[MTF Audit] EntityManager closed; dropping audit buffer (best-effort)', [
                     'buffer_count' => count($this->buffer),
                 ]);
                 $this->buffer = [];
@@ -118,7 +118,7 @@ class MtfAuditSubscriber implements EventSubscriberInterface
                     try {
                         $em->persist($audit);
                     } catch (\Throwable $persistEx) {
-                        $this->logger->warning('[MTF Audit] Failed to persist audit (skipping)', [
+                        $this->mtfLogger->warning('[MTF Audit] Failed to persist audit (skipping)', [
                             'error' => $persistEx->getMessage(),
                         ]);
                     }
@@ -127,7 +127,7 @@ class MtfAuditSubscriber implements EventSubscriberInterface
             try {
                 $em->flush();
             } catch (\Throwable $flushEx) {
-                $this->logger->warning('[MTF Audit] Failed to flush audits (best-effort)', [
+                $this->mtfLogger->warning('[MTF Audit] Failed to flush audits (best-effort)', [
                     'error' => $flushEx->getMessage(),
                 ]);
                 // Drop buffer to avoid memory growth on long processes
@@ -147,7 +147,7 @@ class MtfAuditSubscriber implements EventSubscriberInterface
 
             $this->buffer = [];
         } catch (\Throwable $e) {
-            $this->logger->error('[MTF Audit] Failed to flush audit buffer', [
+            $this->mtfLogger->error('[MTF Audit] Failed to flush audit buffer', [
                 'error' => $e->getMessage(),
                 'buffer_count' => count($this->buffer),
             ]);

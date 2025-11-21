@@ -27,8 +27,8 @@ class ListOpenPositionsOrdersCommand extends Command
 {
     public function __construct(
         private readonly ?AccountProviderInterface $accountProvider = null,
+        private readonly LoggerInterface $mtfLogger,
         private readonly ?OrderProviderInterface $orderProvider = null,
-        private readonly ?LoggerInterface $logger = null,
         private readonly ?MainProviderInterface $mainProvider = null,
     ) {
         parent::__construct();
@@ -139,7 +139,7 @@ Exemples:
                     $errorMsg = 'Erreur lors de la récupération des positions ouvertes: ' . $e->getMessage();
                     $io->warning($errorMsg);
                     if ($this->logger) {
-                        $this->logger->error('[ListOpenPositionsOrdersCommand] Failed to fetch open positions', [
+                        $this->mtfLogger->error('[ListOpenPositionsOrdersCommand] Failed to fetch open positions', [
                             'symbol' => $symbol,
                             'error' => $e->getMessage(),
                             'trace' => $e->getTraceAsString(),
@@ -234,7 +234,7 @@ Exemples:
                     $errorMsg = 'Erreur lors de la récupération des ordres ouverts: ' . $e->getMessage();
                     $io->warning($errorMsg);
                     if ($this->logger) {
-                        $this->logger->error('[ListOpenPositionsOrdersCommand] Failed to fetch open orders', [
+                        $this->mtfLogger->error('[ListOpenPositionsOrdersCommand] Failed to fetch open orders', [
                             'symbol' => $symbol,
                             'error' => $e->getMessage(),
                             'trace' => $e->getTraceAsString(),
@@ -242,7 +242,7 @@ Exemples:
                     }
                     $data['orders_error'] = $e->getMessage();
                 }
-                
+
                 // 3. Récupération des ordres planifiés (TP/SL)
                 // Note: getPlanOrders() est spécifique à BitmartOrderProvider
                 $io->section('Récupération des ordres planifiés (TP/SL)...');
@@ -257,13 +257,13 @@ Exemples:
                         $io->note('Le provider ne supporte pas la récupération des ordres planifiés (TP/SL)');
                         $data['plan_orders'] = [];
                     }
-                    
+
                     if (empty($planOrders)) {
                         $io->note('Aucun ordre planifié (TP/SL)' . ($symbol ? " pour $symbol" : ''));
                         $data['plan_orders'] = [];
                     } else {
                         $data['plan_orders'] = $planOrders;
-                        
+
                         if ($format === 'table') {
                             $io->success('✅ ' . count($planOrders) . ' ordre(s) planifié(s) trouvé(s)');
                             $rows = [];
@@ -300,7 +300,7 @@ Exemples:
                     $errorMsg = 'Erreur lors de la récupération des ordres planifiés: ' . $e->getMessage();
                     $io->warning($errorMsg);
                     if ($this->logger) {
-                        $this->logger->error('[ListOpenPositionsOrdersCommand] Failed to fetch plan orders', [
+                        $this->mtfLogger->error('[ListOpenPositionsOrdersCommand] Failed to fetch plan orders', [
                             'symbol' => $symbol,
                             'error' => $e->getMessage(),
                             'trace' => $e->getTraceAsString(),
@@ -347,7 +347,7 @@ Exemples:
                 $io->writeln('Trace: ' . $e->getTraceAsString());
             }
             if ($this->logger) {
-                $this->logger->error('[ListOpenPositionsOrdersCommand] Fatal error', [
+                $this->mtfLogger->error('[ListOpenPositionsOrdersCommand] Fatal error', [
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
                 ]);

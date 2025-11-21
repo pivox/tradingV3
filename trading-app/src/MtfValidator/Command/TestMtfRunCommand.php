@@ -26,7 +26,7 @@ class TestMtfRunCommand extends Command
         private readonly MtfService $mtfService,
         private readonly BitmartHttpClientPublic $bitmartClient,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $mtfLogger
     ) {
         parent::__construct();
     }
@@ -86,7 +86,7 @@ Exemples:
 
         } catch (\Exception $e) {
             $io->error('Erreur lors du test: ' . $e->getMessage());
-            $this->logger->error('[Test MTF Run] Test failed', [
+            $this->mtfLogger->error('[Test MTF Run] Test failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);

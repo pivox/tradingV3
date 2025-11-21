@@ -12,7 +12,7 @@ final class MtfAuditStatsRepository
 {
     public function __construct(
         private readonly Connection $connection,
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
     ) {
     }
 
@@ -24,7 +24,7 @@ final class MtfAuditStatsRepository
                 ? 'REFRESH MATERIALIZED VIEW CONCURRENTLY mtf_audit_stats'
                 : 'REFRESH MATERIALIZED VIEW mtf_audit_stats';
             $this->connection->executeStatement($sql);
-            $this->logger->info('[MtfAuditStats] Materialized view refreshed', [ 'concurrently' => $concurrently ]);
+            $this->mtfLogger->info('[MtfAuditStats] Materialized view refreshed', [ 'concurrently' => $concurrently ]);
             return;
         } catch (Throwable $e) {
             if (!$this->isRelationMissingError($e)) {
@@ -33,7 +33,7 @@ final class MtfAuditStatsRepository
             // Create the view and indexes, then refresh (non-concurrently first for safety)
             $this->createMaterializedViewIfMissing();
             $this->connection->executeStatement('REFRESH MATERIALIZED VIEW mtf_audit_stats');
-            $this->logger->info('[MtfAuditStats] Materialized view created and refreshed');
+            $this->mtfLogger->info('[MtfAuditStats] Materialized view created and refreshed');
         }
     }
 
@@ -99,7 +99,7 @@ SQL;
         $this->connection->executeStatement('CREATE UNIQUE INDEX IF NOT EXISTS ux_mtf_audit_stats_symbol_tf ON mtf_audit_stats (symbol, timeframe)');
         $this->connection->executeStatement('CREATE INDEX IF NOT EXISTS idx_mtf_audit_stats_last_created ON mtf_audit_stats (last_created_at DESC)');
         $this->connection->executeStatement('CREATE INDEX IF NOT EXISTS idx_mtf_audit_stats_pass_rate ON mtf_audit_stats (pass_rate DESC)');
-        $this->logger->info('[MtfAuditStats] Materialized view created (if missing)');
+        $this->mtfLogger->info('[MtfAuditStats] Materialized view created (if missing)');
     }
 
     /**

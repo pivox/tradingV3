@@ -27,7 +27,7 @@ class TestMtfCommand extends Command
         private readonly MtfTimeService $timeService,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly MtfStateRepository $mtfStateRepository,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $mtfLogger
     ) {
         parent::__construct();
     }
@@ -147,7 +147,7 @@ Exemples:
 
         } catch (\Exception $e) {
             $io->error('Erreur lors du test: ' . $e->getMessage());
-            $this->logger->error('[Test MTF] Test failed', [
+            $this->mtfLogger->error('[Test MTF] Test failed', [
                 'symbol' => $symbol,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()

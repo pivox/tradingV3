@@ -1,5 +1,5 @@
 monolog:
-  channels: ['mtf', 'signals', 'positions', 'bitmart', 'indicators', 'highconviction', 'pipeline_exec', 'deprecation', 'global-severity', 'ws_agent']
+  channels: ['mtf', 'signals', 'positions', 'provider', 'bitmart', 'indicators', 'runtime', 'pipeline_exec', 'deprecation', 'global-severity', 'ws_agent']
   handlers:
     # =====================
     # --- Handler Temporal (Asynchrone) ---
@@ -38,6 +38,15 @@ monolog:
       channels: ['positions']
       formatter: App\Logging\CustomLineFormatter
 
+    # Canal Provider - Activité des providers; inclut Bitmart pour duplication
+    provider_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/provider.log'
+      max_files: 10
+      level: info
+      channels: ['provider', 'bitmart']
+      formatter: App\Logging\CustomLineFormatter
+
     # Canal Indicators - Calculs d'indicateurs techniques
     indicators_rotating:
       type: rotating_file
@@ -68,10 +77,10 @@ monolog:
     # Canal High Conviction - Stratégies validées
     highconviction_rotating:
       type: rotating_file
-      path: '%kernel.project_dir%/var/log/highconviction.log'
+      path: '%kernel.project_dir%/var/log/runtime.log'
       max_files: 5
-      level: '%env(LOG_LEVEL_HIGHCONVICTION)%'
-      channels: ['highconviction']
+      level: info
+      channels: ['runtime']
       formatter: App\Logging\CustomLineFormatter
 
     # Canal Pipeline Exec - Moteur d'exécution workflow

@@ -30,6 +30,7 @@ parameters:
     env(LOG_LEVEL_MAIN): 'info'
     env(LOG_LEVEL_SIGNALS): 'info'
     env(LOG_LEVEL_POSITIONS): 'info'
+    env(LOG_LEVEL_PROVIDER): 'info'
     env(LOG_LEVEL_INDICATORS): 'info'
     env(LOG_LEVEL_HIGHCONVICTION): 'info'
     env(LOG_LEVEL_PIPELINE_EXEC): 'info'
@@ -52,6 +53,19 @@ services:
             - '../src/Entity/'
             - '../src/Kernel.php'
             - '../src/*/LookAtit'
+
+    # Loggers dedicated to the provider module
+    App\Provider\:
+        resource: '../src/Provider/'
+        exclude:
+            - '../src/Provider/Entity/'
+        bind:
+            $logger: '@monolog.logger.provider'
+
+    App\Provider\Bitmart\:
+        resource: '../src/Provider/Bitmart/'
+        bind:
+            $logger: '@monolog.logger.bitmart'
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones

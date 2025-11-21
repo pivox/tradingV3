@@ -38,7 +38,7 @@ class LockManager implements LockManagerInterface
         $result = $this->redis->set($lockKey, $identifier, ['NX', 'EX' => $timeout]);
 
         if ($result) {
-            $this->logger->info("Verrou acquis", [
+            $this->runtimeLogger->info("Verrou acquis", [
                 'key' => $key,
                 'identifier' => $identifier,
                 'timeout' => $timeout
@@ -46,7 +46,7 @@ class LockManager implements LockManagerInterface
             return true;
         }
 
-        $this->logger->warning("Impossible d'acquérir le verrou", [
+        $this->runtimeLogger->warning("Impossible d'acquérir le verrou", [
             'key' => $key,
             'timeout' => $timeout
         ]);
@@ -58,7 +58,7 @@ class LockManager implements LockManagerInterface
      * Acquiert un verrou avec retry automatique
      */
     public function acquireLockWithRetry(
-        string $key, 
+        string $key,
         int $timeout = self::DEFAULT_TIMEOUT,
         int $maxRetries = 3,
         int $retryDelay = self::DEFAULT_RETRY_DELAY
@@ -82,7 +82,7 @@ class LockManager implements LockManagerInterface
     public function releaseLock(string $key): bool
     {
         $lockKey = "lock:{$key}";
-        
+
         $script = "
             if redis.call('get', KEYS[1]) == ARGV[1] then
                 return redis.call('del', KEYS[1])
@@ -95,11 +95,11 @@ class LockManager implements LockManagerInterface
         $result = $this->redis->eval($script, [$lockKey, $identifier], 1);
 
         if ($result) {
-            $this->logger->info("Verrou libéré", ['key' => $key]);
+            $this->runtimeLogger->info("Verrou libéré", ['key' => $key]);
             return true;
         }
 
-        $this->logger->warning("Impossible de libérer le verrou", ['key' => $key]);
+        $this->runtimeLogger->warning("Impossible de libérer le verrou", ['key' => $key]);
         return false;
     }
 
@@ -118,7 +118,7 @@ class LockManager implements LockManagerInterface
     public function getLockInfo(string $key): ?LockInfoDto
     {
         $lockKey = "lock:{$key}";
-        
+
         if (!$this->redis->exists($lockKey)) {
             return null;
         }
@@ -142,9 +142,9 @@ class LockManager implements LockManagerInterface
     {
         $lockKey = "lock:{$key}";
         $result = $this->redis->del($lockKey);
-        
+
         if ($result) {
-            $this->logger->warning("Verrou forcé libéré", ['key' => $key]);
+            $this->runtimeLogger->warning("Verrou forcé libéré", ['key' => $key]);
             return true;
         }
 

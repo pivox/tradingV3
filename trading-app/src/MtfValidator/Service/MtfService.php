@@ -44,17 +44,12 @@ final class MtfService
 {
     public function __construct(
         private readonly MtfTimeService $timeService,
-        private readonly KlineRepository $klineRepository,
         private readonly MtfStateRepository $mtfStateRepository,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
-        private readonly MtfAuditRepository $mtfAuditRepository,
         private readonly ContractRepository $contractRepository,
         private readonly SignalValidationServiceInterface $signalValidationService,
-        private readonly LoggerInterface $logger,
-        private readonly LoggerInterface $positionsFlowLogger,
-        private readonly MtfConfigProviderInterface $mtfConfig,
+        private readonly LoggerInterface $mtfLogger,
         private readonly MtfValidationConfig $mtfValidationConfig,
-        private readonly BitmartHttpClientPublic $bitmartClient,
         private readonly KlineProviderInterface $klineProvider,
         private readonly EntityManagerInterface $entityManager,
         private readonly ClockInterface $clock,
@@ -225,7 +220,7 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
                 'from_cache' => true,
             ];
         } catch (\Throwable $e) {
-            $this->logger->debug('[MTF] Cache read failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
+            $this->mtfLogger->debug('[MTF] Cache read failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
             return null;
         }
     }
@@ -233,7 +228,7 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
     private function putCachedTfResult(string $symbol, string $tf, array $result): void
     {
         if ($this->isGraceWindowResult($result)) {
-            $this->logger->debug('[MTF] Skip cache write for grace window result', ['symbol' => $symbol, 'tf' => $tf]);
+            $this->mtfLogger->debug('[MTF] Skip cache write for grace window result', ['symbol' => $symbol, 'tf' => $tf]);
             return;
         }
         try {
@@ -255,7 +250,7 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
             $this->entityManager->persist($rec);
             $this->entityManager->flush();
         } catch (\Throwable $e) {
-            $this->logger->debug('[MTF] Cache write failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
+            $this->mtfLogger->debug('[MTF] Cache write failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
         }
     }
 
@@ -366,7 +361,7 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
             $repo->upsert($snapshot);
 
             // Info log for observability
-            $this->logger->info('[MTF] Indicator snapshot persisted', [
+            $this->mtfLogger->info('[MTF] Indicator snapshot persisted', [
                 'symbol' => strtoupper($symbol),
                 'timeframe' => $tf,
                 'kline_time' => $klineTime->format('Y-m-d H:i:s'),
@@ -375,7 +370,7 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
                 'action' => $existing ? 'update' : 'insert',
             ]);
         } catch (\Throwable $e) {
-            $this->logger->debug('[MTF] Indicator snapshot persist failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
+            $this->mtfLogger->debug('[MTF] Indicator snapshot persist failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
         }
     }
 
@@ -395,14 +390,14 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
      */
     public function executeMtfCycle(UuidInterface $runId): \Generator
     {
-        $this->logger->info('[MTF] Starting MTF cycle', ['run_id' => $runId->toString()]);
+        $this->mtfLogger->info('[MTF] Starting MTF cycle', ['run_id' => $runId->toString()]);
 
         $results = [];
         $now = $this->timeService->getCurrentAlignedUtc();
 
         // Vérifier le kill switch global
         if (!$this->mtfSwitchRepository->isGlobalSwitchOn()) {
-            $this->logger->warning('[MTF] Global kill switch is OFF, skipping cycle');
+            $this->mtfLogger->warning('[MTF] Global kill switch is OFF, skipping cycle');
             $this->auditStep($runId, 'GLOBAL', 'KILL_SWITCH_OFF', 'Global kill switch is OFF');
             yield [
                 'symbol' => 'GLOBAL',
@@ -416,7 +411,7 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
         $activeSymbols = $this->contractRepository->allActiveSymbolNames();
 
         if (empty($activeSymbols)) {
-            $this->logger->warning('[MTF] No active symbols found');
+            $this->mtfLogger->warning('[MTF] No active symbols found');
             $this->auditStep($runId, 'GLOBAL', 'NO_ACTIVE_SYMBOLS', 'No active symbols found');
             yield [
                 'symbol' => 'GLOBAL',
@@ -426,7 +421,7 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
             return ['status' => 'SKIPPED', 'reason' => 'No active symbols found'];
         }
 
-        $this->logger->info('[MTF] Processing symbols', [
+        $this->mtfLogger->info('[MTF] Processing symbols', [
             'count' => count($activeSymbols),
             'symbols' => array_slice($activeSymbols, 0, 10) // Log only first 10 for brevity
         ]);
@@ -453,7 +448,7 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
                     'progress' => $progress,
                 ];
             } catch (\Exception $e) {
-                $this->logger->error('[MTF] Error processing symbol', [
+                $this->mtfLogger->error('[MTF] Error processing symbol', [
                     'symbol' => $symbol,
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString()
@@ -479,7 +474,7 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
             }
         }
 
-        $this->logger->info('[MTF] MTF cycle completed', [
+        $this->mtfLogger->info('[MTF] MTF cycle completed', [
             'run_id' => $runId->toString(),
             'results' => $results
         ]);
@@ -525,11 +520,11 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
      */
 private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeImmutable $now, ?string $currentTf = null, bool $forceTimeframeCheck = false, bool $forceRun = false, bool $skipContextValidation = false, ?MtfValidationConfig $config = null): array
     {
-        $this->logger->debug('[MTF] Processing symbol', ['symbol' => $symbol]);
+        $this->mtfLogger->debug('[MTF] Processing symbol', ['symbol' => $symbol]);
 
         // Vérifier le kill switch du symbole (sauf si force-run est activé)
         if (!$forceRun && !$this->mtfSwitchRepository->canProcessSymbol($symbol)) {
-            $this->logger->debug('[MTF] Symbol kill switch is OFF', ['symbol' => $symbol, 'force_run' => $forceRun]);
+            $this->mtfLogger->debug('[MTF] Symbol kill switch is OFF', ['symbol' => $symbol, 'force_run' => $forceRun]);
             $this->auditStep($runId, $symbol, 'KILL_SWITCH_OFF', 'Symbol kill switch is OFF');
             return ['status' => 'SKIPPED', 'reason' => 'Symbol kill switch OFF', 'blocking_tf' => 'symbol'];
         }
@@ -592,13 +587,13 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 if ($isOpen) {
                     $em->flush();
                 } else {
-                    $this->logger->warning('[MTF] EntityManager closed during single TF flush; skipping', [
+                    $this->mtfLogger->warning('[MTF] EntityManager closed during single TF flush; skipping', [
                         'symbol' => $symbol,
                         'timeframe' => $currentTf,
                     ]);
                 }
             } catch (\Throwable $e) {
-                $this->logger->warning('[MTF] Failed to flush state after single TF update (best-effort)', [
+                $this->mtfLogger->warning('[MTF] Failed to flush state after single TF update (best-effort)', [
                     'symbol' => $symbol,
                     'timeframe' => $currentTf,
                     'error' => $e->getMessage(),
@@ -660,7 +655,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $result4h = null;
         if ($shouldRun4h) {
             $tf4hStart = microtime(true);
-            $this->logger->debug('[MTF] Start TF 4h', ['symbol' => $symbol]);
+            $this->mtfLogger->debug('[MTF] Start TF 4h', ['symbol' => $symbol]);
             $hadCache4h = null;
             $cacheStart = microtime(true);
             $cached = $this->getCachedTfResult($symbol, '4h', $hadCache4h);
@@ -670,12 +665,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cacheWarmupTfs[] = '4h';
             }
             if ($this->shouldReuseCachedResult($cached, '4h', $symbol)) {
-                $this->logger->debug('[MTF] Cache HIT 4h', [
+                $this->mtfLogger->debug('[MTF] Cache HIT 4h', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result4h = $cached;
-                $this->logger->info('[MTF] Performance 4h', [
+                $this->mtfLogger->info('[MTF] Performance 4h', [
                     'symbol' => $symbol,
                     'timeframe' => '4h',
                     'duration_seconds' => round(microtime(true) - $tf4hStart, 3),
@@ -694,7 +689,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '4h', $result4h);
-                $this->logger->info('[MTF] Performance 4h', [
+                $this->mtfLogger->info('[MTF] Performance 4h', [
                     'symbol' => $symbol,
                     'timeframe' => '4h',
                     'duration_seconds' => round(microtime(true) - $tf4hStart, 3),
@@ -706,7 +701,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $this->persistIndicatorSnapshot($symbol, '4h', $result4h);
             if ($this->isGraceWindowResult($result4h)) {
                 if ($contextOnly4h) {
-                    $this->logger->info('[MTF] Context-only TF 4h in grace window, ignoring blocking', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] Context-only TF 4h in grace window, ignoring blocking', ['symbol' => $symbol]);
                 } else {
                     return $result4h + ['blocking_tf' => '4h'];
                 }
@@ -747,12 +742,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cacheWarmupTfs[] = '1h';
             }
             if ($this->shouldReuseCachedResult($cached, '1h', $symbol)) {
-                $this->logger->debug('[MTF] Cache HIT 1h', [
+                $this->mtfLogger->debug('[MTF] Cache HIT 1h', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result1h = $cached;
-                $this->logger->info('[MTF] Performance 1h', [
+                $this->mtfLogger->info('[MTF] Performance 1h', [
                     'symbol' => $symbol,
                     'timeframe' => '1h',
                     'duration_seconds' => round(microtime(true) - $tf1hStart, 3),
@@ -771,7 +766,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '1h', $result1h);
-                $this->logger->info('[MTF] Performance 1h', [
+                $this->mtfLogger->info('[MTF] Performance 1h', [
                     'symbol' => $symbol,
                     'timeframe' => '1h',
                     'duration_seconds' => round(microtime(true) - $tf1hStart, 3),
@@ -783,7 +778,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $this->persistIndicatorSnapshot($symbol, '1h', $result1h);
             if ($this->isGraceWindowResult($result1h)) {
                 if ($contextOnly1h) {
-                    $this->logger->info('[MTF] Context-only TF 1h in grace window, ignoring blocking', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] Context-only TF 1h in grace window, ignoring blocking', ['symbol' => $symbol]);
                 } else {
                     return $result1h + ['blocking_tf' => '1h'];
                 }
@@ -791,7 +786,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             $canUse1h = (strtoupper((string)($result1h['status'] ?? '')) === 'VALID');
             if (!$canUse1h) {
-                $this->logger->info('[MTF] 1h not VALID', ['symbol' => $symbol, 'reason' => $result1h['reason'] ?? null, 'context_only' => $contextOnly1h, 'in_context_tfs' => in_array('1h', $contextTimeframes, true), 'in_exec_tfs' => in_array('1h', $executionTimeframes, true)]);
+                $this->mtfLogger->info('[MTF] 1h not VALID', ['symbol' => $symbol, 'reason' => $result1h['reason'] ?? null, 'context_only' => $contextOnly1h, 'in_context_tfs' => in_array('1h', $contextTimeframes, true), 'in_exec_tfs' => in_array('1h', $executionTimeframes, true)]);
                 $this->auditStep($runId, $symbol, '1H_VALIDATION_FAILED', $result1h['reason'] ?? '1H validation failed', [
                     'timeframe' => '1h',
                     'kline_time' => $result1h['kline_time'] ?? null,
@@ -809,18 +804,18 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 // Ne bloquer que si 1h est dans execution_timeframes (nécessaire pour l'exécution)
                 // Si 1h est seulement dans context_timeframes, laisser ContextDecisionService gérer
                 if (!$contextOnly1h && in_array('1h', $executionTimeframes, true)) {
-                    $this->logger->info('[MTF] 1h is in execution_timeframes and not VALID, stop cascade', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] 1h is in execution_timeframes and not VALID, stop cascade', ['symbol' => $symbol]);
                     return $result1h + ['blocking_tf' => '1h'];
                 }
                 // Si 1h est seulement dans context_timeframes, continuer (ContextDecisionService gérera)
-                $this->logger->info('[MTF] 1h not VALID but only in context_timeframes, continue cascade', ['symbol' => $symbol]);
+                $this->mtfLogger->info('[MTF] 1h not VALID but only in context_timeframes, continue cascade', ['symbol' => $symbol]);
             }
             if ($canUse1h && $include4h) {
                 // Règle: 1h doit matcher 4h si 4h inclus
-                $this->logger->debug('[MTF] Check alignment 1h vs 4h', ['symbol' => $symbol, 'h4' => $result4h['signal_side'] ?? 'NONE', 'h1' => $result1h['signal_side'] ?? 'NONE']);
+                $this->mtfLogger->debug('[MTF] Check alignment 1h vs 4h', ['symbol' => $symbol, 'h4' => $result4h['signal_side'] ?? 'NONE', 'h1' => $result1h['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe1hService->checkAlignment($result1h, $result4h, '4H');
                 if ($alignmentResult['status'] === 'INVALID') {
-                    $this->logger->info('[MTF] Alignment failed 1h vs 4h, stop cascade', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] Alignment failed 1h vs 4h, stop cascade', ['symbol' => $symbol]);
                     $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '1h side != 4h side', [
                         '4h' => $result4h['signal_side'] ?? 'NONE',
                         '1h' => $result1h['signal_side'] ?? 'NONE',
@@ -841,7 +836,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $result15m = null;
         if ($shouldRun15m) {
             $tf15mStart = microtime(true);
-            $this->logger->debug('[MTF] Start TF 15m', ['symbol' => $symbol]);
+            $this->mtfLogger->debug('[MTF] Start TF 15m', ['symbol' => $symbol]);
             $hadCache15m = null;
             $cacheStart = microtime(true);
             $cached = $this->getCachedTfResult($symbol, '15m', $hadCache15m);
@@ -851,12 +846,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cacheWarmupTfs[] = '15m';
             }
             if ($this->shouldReuseCachedResult($cached, '15m', $symbol)) {
-                $this->logger->debug('[MTF] Cache HIT 15m', [
+                $this->mtfLogger->debug('[MTF] Cache HIT 15m', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result15m = $cached;
-                $this->logger->info('[MTF] Performance 15m', [
+                $this->mtfLogger->info('[MTF] Performance 15m', [
                     'symbol' => $symbol,
                     'timeframe' => '15m',
                     'duration_seconds' => round(microtime(true) - $tf15mStart, 3),
@@ -875,7 +870,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '15m', $result15m);
-                $this->logger->info('[MTF] Performance 15m', [
+                $this->mtfLogger->info('[MTF] Performance 15m', [
                     'symbol' => $symbol,
                     'timeframe' => '15m',
                     'duration_seconds' => round(microtime(true) - $tf15mStart, 3),
@@ -887,7 +882,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $this->persistIndicatorSnapshot($symbol, '15m', $result15m);
             if ($this->isGraceWindowResult($result15m)) {
                 if ($contextOnly15m) {
-                    $this->logger->info('[MTF] Context-only TF 15m in grace window, ignoring blocking', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] Context-only TF 15m in grace window, ignoring blocking', ['symbol' => $symbol]);
                 } else {
                     return $result15m + ['blocking_tf' => '15m'];
                 }
@@ -895,7 +890,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             $canUse15m = (strtoupper((string)($result15m['status'] ?? '')) === 'VALID');
             if (!$canUse15m) {
-                $this->logger->info('[MTF] 15m not VALID', ['symbol' => $symbol, 'reason' => $result15m['reason'] ?? null, 'context_only' => $contextOnly15m, 'in_context_tfs' => in_array('15m', $contextTimeframes, true), 'in_exec_tfs' => in_array('15m', $executionTimeframes, true)]);
+                $this->mtfLogger->info('[MTF] 15m not VALID', ['symbol' => $symbol, 'reason' => $result15m['reason'] ?? null, 'context_only' => $contextOnly15m, 'in_context_tfs' => in_array('15m', $contextTimeframes, true), 'in_exec_tfs' => in_array('15m', $executionTimeframes, true)]);
                 $this->auditStep($runId, $symbol, '15M_VALIDATION_FAILED', $result15m['reason'] ?? '15M validation failed', [
                     'timeframe' => '15m',
                     'kline_time' => $result15m['kline_time'] ?? null,
@@ -916,21 +911,21 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     // Option de contournement: si autorisé par config, on descend en 5m au lieu d'arrêter la chaîne
                     $allowSkip = (bool)($mtfCfg['allow_skip_lower_tf'] ?? false);
                     if (!($allowSkip && ($include5m ?? false))) {
-                        $this->logger->info('[MTF] 15m is in execution_timeframes and not VALID, stop cascade', ['symbol' => $symbol]);
+                        $this->mtfLogger->info('[MTF] 15m is in execution_timeframes and not VALID, stop cascade', ['symbol' => $symbol]);
                         return $result15m + ['blocking_tf' => '15m'];
                     }
-                    $this->logger->info('[MTF] 15m invalid but allow_skip_lower_tf=true, continue with 5m', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] 15m invalid but allow_skip_lower_tf=true, continue with 5m', ['symbol' => $symbol]);
                 } else {
                     // Si 15m est seulement dans context_timeframes, continuer (ContextDecisionService gérera)
-                    $this->logger->info('[MTF] 15m not VALID but only in context_timeframes, continue cascade', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] 15m not VALID but only in context_timeframes, continue cascade', ['symbol' => $symbol]);
                 }
             }
             // Règle: 15m doit matcher 1h si 1h est inclus
             if ($canUse15m && $include1h && is_array($result1h)) {
-                $this->logger->debug('[MTF] Check alignment 15m vs 1h', ['symbol' => $symbol, 'm15' => $result15m['signal_side'] ?? 'NONE', 'h1' => $result1h['signal_side'] ?? 'NONE']);
+                $this->mtfLogger->debug('[MTF] Check alignment 15m vs 1h', ['symbol' => $symbol, 'm15' => $result15m['signal_side'] ?? 'NONE', 'h1' => $result1h['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe15mService->checkAlignment($result15m, $result1h, '1H');
                 if ($alignmentResult['status'] === 'INVALID') {
-                    $this->logger->info('[MTF] Alignment failed 15m vs 1h, stop cascade', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] Alignment failed 15m vs 1h, stop cascade', ['symbol' => $symbol]);
                     $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '15m side != 1h side', [
                         '1h' => $result1h['signal_side'] ?? 'NONE',
                         '15m' => $result15m['signal_side'] ?? 'NONE',
@@ -951,7 +946,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $result5m = null;
         if ($shouldRun5m) {
             $tf5mStart = microtime(true);
-            $this->logger->debug('[MTF] Start TF 5m', ['symbol' => $symbol]);
+            $this->mtfLogger->debug('[MTF] Start TF 5m', ['symbol' => $symbol]);
             $hadCache5m = null;
             $cacheStart = microtime(true);
             $cached = $this->getCachedTfResult($symbol, '5m', $hadCache5m);
@@ -961,12 +956,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cacheWarmupTfs[] = '5m';
             }
             if ($this->shouldReuseCachedResult($cached, '5m', $symbol)) {
-                $this->logger->debug('[MTF] Cache HIT 5m', [
+                $this->mtfLogger->debug('[MTF] Cache HIT 5m', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result5m = $cached;
-                $this->logger->info('[MTF] Performance 5m', [
+                $this->mtfLogger->info('[MTF] Performance 5m', [
                     'symbol' => $symbol,
                     'timeframe' => '5m',
                     'duration_seconds' => round(microtime(true) - $tf5mStart, 3),
@@ -985,7 +980,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '5m', $result5m);
-                $this->logger->info('[MTF] Performance 5m', [
+                $this->mtfLogger->info('[MTF] Performance 5m', [
                     'symbol' => $symbol,
                     'timeframe' => '5m',
                     'duration_seconds' => round(microtime(true) - $tf5mStart, 3),
@@ -997,7 +992,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             try {
                 $result5m['atr'] = $this->computeAtrValue($symbol, '5m');
             } catch (\Throwable $e) {
-                $this->logger->error('[MTF] ATR computation exception', [
+                $this->mtfLogger->error('[MTF] ATR computation exception', [
                     'symbol' => $symbol,
                     'timeframe' => '5m',
                     'error' => $e->getMessage(),
@@ -1010,7 +1005,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $this->persistIndicatorSnapshot($symbol, '5m', $result5m);
             if ($this->isGraceWindowResult($result5m)) {
                 if ($contextOnly5m) {
-                    $this->logger->info('[MTF] Context-only TF 5m in grace window, ignoring blocking', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] Context-only TF 5m in grace window, ignoring blocking', ['symbol' => $symbol]);
                 } else {
                     return $result5m + ['blocking_tf' => '5m'];
                 }
@@ -1018,7 +1013,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             $canUse5m = (strtoupper((string)($result5m['status'] ?? '')) === 'VALID');
             if (!$canUse5m) {
-                $this->logger->info('[MTF] 5m not VALID', ['symbol' => $symbol, 'reason' => $result5m['reason'] ?? null, 'context_only' => $contextOnly5m, 'in_context_tfs' => in_array('5m', $contextTimeframes, true), 'in_exec_tfs' => in_array('5m', $executionTimeframes, true)]);
+                $this->mtfLogger->info('[MTF] 5m not VALID', ['symbol' => $symbol, 'reason' => $result5m['reason'] ?? null, 'context_only' => $contextOnly5m, 'in_context_tfs' => in_array('5m', $contextTimeframes, true), 'in_exec_tfs' => in_array('5m', $executionTimeframes, true)]);
                 $this->auditStep($runId, $symbol, '5M_VALIDATION_FAILED', $result5m['reason'] ?? '5M validation failed', [
                     'timeframe' => '5m',
                     'kline_time' => $result5m['kline_time'] ?? null,
@@ -1036,7 +1031,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 // Ne plus bloquer la cascade pour les TF d'exécution
                 // Laisser ExecutionTimeframeDecisionService choisir le bon TF d'exécution
                 // On continue même si 5m n'est pas VALID, car 1m pourrait être VALID
-                $this->logger->info('[MTF] 5m not VALID, continue cascade (ExecutionTimeframeDecisionService will choose execution TF)', [
+                $this->mtfLogger->info('[MTF] 5m not VALID, continue cascade (ExecutionTimeframeDecisionService will choose execution TF)', [
                     'symbol' => $symbol,
                     'in_exec_tfs' => in_array('5m', $executionTimeframes, true),
                     'other_exec_tfs' => array_filter($executionTimeframes, fn($tf) => $tf !== '5m'),
@@ -1044,10 +1039,10 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
             // Règle: 5m doit matcher 15m si 15m est inclus
             if ($canUse5m && $include15m && is_array($result15m)) {
-                $this->logger->debug('[MTF] Check alignment 5m vs 15m', ['symbol' => $symbol, 'm5' => $result5m['signal_side'] ?? 'NONE', 'm15' => $result15m['signal_side'] ?? 'NONE']);
+                $this->mtfLogger->debug('[MTF] Check alignment 5m vs 15m', ['symbol' => $symbol, 'm5' => $result5m['signal_side'] ?? 'NONE', 'm15' => $result15m['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe5mService->checkAlignment($result5m, $result15m, '15M');
                 if ($alignmentResult['status'] === 'INVALID') {
-                    $this->logger->info('[MTF] Alignment failed 5m vs 15m, stop cascade', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] Alignment failed 5m vs 15m, stop cascade', ['symbol' => $symbol]);
                     $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '5m side != 15m side', [
                         '15m' => $result15m['signal_side'] ?? 'NONE',
                         '5m' => $result5m['signal_side'] ?? 'NONE',
@@ -1068,7 +1063,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $result1m = null;
         if ($include1m) {
             $tf1mStart = microtime(true);
-            $this->logger->debug('[MTF] Start TF 1m', ['symbol' => $symbol]);
+            $this->mtfLogger->debug('[MTF] Start TF 1m', ['symbol' => $symbol]);
             $hadCache1m = null;
             $cacheStart = microtime(true);
             $cached = $this->getCachedTfResult($symbol, '1m', $hadCache1m);
@@ -1078,12 +1073,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $cacheWarmupTfs[] = '1m';
             }
             if ($this->shouldReuseCachedResult($cached, '1m', $symbol)) {
-                $this->logger->debug('[MTF] Cache HIT 1m', [
+                $this->mtfLogger->debug('[MTF] Cache HIT 1m', [
                     'symbol' => $symbol,
                     'status' => $cached['status'] ?? null,
                 ]);
                 $result1m = $cached;
-                $this->logger->info('[MTF] Performance 1m', [
+                $this->mtfLogger->info('[MTF] Performance 1m', [
                     'symbol' => $symbol,
                     'timeframe' => '1m',
                     'duration_seconds' => round(microtime(true) - $tf1mStart, 3),
@@ -1102,7 +1097,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $skipContextValidation
             );
                 $this->putCachedTfResult($symbol, '1m', $result1m);
-                $this->logger->info('[MTF] Performance 1m', [
+                $this->mtfLogger->info('[MTF] Performance 1m', [
                     'symbol' => $symbol,
                     'timeframe' => '1m',
                     'duration_seconds' => round(microtime(true) - $tf1mStart, 3),
@@ -1114,7 +1109,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             try {
                 $result1m['atr'] = $this->computeAtrValue($symbol, '1m');
             } catch (\Throwable $e) {
-                $this->logger->error('[MTF] ATR computation exception', [
+                $this->mtfLogger->error('[MTF] ATR computation exception', [
                     'symbol' => $symbol,
                     'timeframe' => '1m',
                     'error' => $e->getMessage(),
@@ -1127,7 +1122,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $this->persistIndicatorSnapshot($symbol, '1m', $result1m);
             if ($this->isGraceWindowResult($result1m)) {
                 if ($contextOnly1m) {
-                    $this->logger->info('[MTF] Context-only TF 1m in grace window, ignoring blocking', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] Context-only TF 1m in grace window, ignoring blocking', ['symbol' => $symbol]);
                 } else {
                     return $result1m + ['blocking_tf' => '1m'];
                 }
@@ -1135,7 +1130,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             $canUse1m = (strtoupper((string)($result1m['status'] ?? '')) === 'VALID');
             if (!$canUse1m) {
-                $this->logger->info('[MTF] 1m not VALID', ['symbol' => $symbol, 'reason' => $result1m['reason'] ?? null, 'context_only' => $contextOnly1m, 'in_context_tfs' => in_array('1m', $contextTimeframes, true), 'in_exec_tfs' => in_array('1m', $executionTimeframes, true)]);
+                $this->mtfLogger->info('[MTF] 1m not VALID', ['symbol' => $symbol, 'reason' => $result1m['reason'] ?? null, 'context_only' => $contextOnly1m, 'in_context_tfs' => in_array('1m', $contextTimeframes, true), 'in_exec_tfs' => in_array('1m', $executionTimeframes, true)]);
                 $this->auditStep($runId, $symbol, '1M_VALIDATION_FAILED', $result1m['reason'] ?? '1M validation failed', [
                     'timeframe' => '1m',
                     'kline_time' => $result1m['kline_time'] ?? null,
@@ -1153,7 +1148,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 // Ne plus bloquer la cascade pour les TF d'exécution
                 // Laisser ExecutionTimeframeDecisionService choisir le bon TF d'exécution
                 // On continue même si 1m n'est pas VALID, car 5m pourrait être VALID
-                $this->logger->info('[MTF] 1m not VALID, continue cascade (ExecutionTimeframeDecisionService will choose execution TF)', [
+                $this->mtfLogger->info('[MTF] 1m not VALID, continue cascade (ExecutionTimeframeDecisionService will choose execution TF)', [
                     'symbol' => $symbol,
                     'in_exec_tfs' => in_array('1m', $executionTimeframes, true),
                     'other_exec_tfs' => array_filter($executionTimeframes, fn($tf) => $tf !== '1m'),
@@ -1162,7 +1157,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             if ($canUse1m) {
                 // Log dédié après validation 1m (positions_flow)
-                $this->positionsFlowLogger->info('[PositionsFlow] 1m VALIDATED', [
+                $this->mtfLogger->info('[PositionsFlow] 1m VALIDATED', [
                     'symbol' => $symbol,
                     'signal_side' => $result1m['signal_side'] ?? 'NONE',
                     'kline_time' => isset($result1m['kline_time']) && $result1m['kline_time'] instanceof \DateTimeImmutable ? $result1m['kline_time']->format('Y-m-d H:i:s') : null,
@@ -1172,10 +1167,10 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
             // Règle: 1m doit matcher 5m si 5m est inclus
             if ($canUse1m && $include5m && is_array($result5m)) {
-                $this->logger->debug('[MTF] Check alignment 1m vs 5m', ['symbol' => $symbol, 'm1' => $result1m['signal_side'] ?? 'NONE', 'm5' => $result5m['signal_side'] ?? 'NONE']);
+                $this->mtfLogger->debug('[MTF] Check alignment 1m vs 5m', ['symbol' => $symbol, 'm1' => $result1m['signal_side'] ?? 'NONE', 'm5' => $result5m['signal_side'] ?? 'NONE']);
                 $alignmentResult = $this->timeframe1mService->checkAlignment($result1m, $result5m, '5M');
                 if ($alignmentResult['status'] === 'INVALID') {
-                    $this->logger->info('[MTF] Alignment failed 1m vs 5m, stop cascade', ['symbol' => $symbol]);
+                    $this->mtfLogger->info('[MTF] Alignment failed 1m vs 5m, stop cascade', ['symbol' => $symbol]);
                     $this->auditStep($runId, $symbol, 'ALIGNMENT_FAILED', '1m side != 5m side', [
                         '5m' => $result5m['signal_side'] ?? 'NONE',
                         '1m' => $result1m['signal_side'] ?? 'NONE',
@@ -1206,12 +1201,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             if ($isOpen) {
                 $em->flush();
             } else {
-                $this->logger->warning('[MTF] EntityManager closed during final state flush; skipping', [
+                $this->mtfLogger->warning('[MTF] EntityManager closed during final state flush; skipping', [
                     'symbol' => $symbol,
                 ]);
             }
         } catch (\Throwable $e) {
-            $this->logger->warning('[MTF] Failed to flush final state (best-effort)', [
+            $this->mtfLogger->warning('[MTF] Failed to flush final state (best-effort)', [
                 'symbol' => $symbol,
                 'error' => $e->getMessage(),
             ]);
@@ -1247,7 +1242,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         if (!$skipContextValidation && !$contextDecision->isOk()) {
             $reason = $contextDecision->getReason() ?? 'CONTEXT_NOT_OK';
-            $this->logger->info('[MTF] Context decision failed', [
+            $this->mtfLogger->info('[MTF] Context decision failed', [
                 'symbol' => $symbol,
                 'reason' => $reason,
                 'valid_sides' => $contextDecision->getValidSides(),
@@ -1276,7 +1271,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         if ($executionTf === null) {
             $reason = $execDecision?->getReason() ?? 'NO_EXEC_TF';
-            $this->logger->info('[MTF] No execution timeframe aligned with context', [
+            $this->mtfLogger->info('[MTF] No execution timeframe aligned with context', [
                 'symbol' => $symbol,
                 'context_side' => $contextSide,
                 'execution_timeframes' => $executionTimeframes,
@@ -1303,7 +1298,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $indCtx = $execRes['indicator_context'] ?? null;
 
         $contextSummary = $this->signalValidationService->buildContextSummary($knownSignals, $executionTf, $contextSide);
-        $this->logger->info('[MTF] Context summary', ['symbol' => $symbol, 'execution_tf' => $executionTf, 'context_side' => $contextSide] + $contextSummary);
+        $this->mtfLogger->info('[MTF] Context summary', ['symbol' => $symbol, 'execution_tf' => $executionTf, 'context_side' => $contextSide] + $contextSummary);
 
         // Vérifier si tous les TF utilisés (context + execution) sont en cache
         $usedTfs = array_merge($contextTimeframes, $executionTimeframes);
@@ -1335,7 +1330,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         if ($shouldGrace) {
             $warmupTfs = array_values(array_unique($cacheWarmupTfs));
-            $this->logger->info('[MTF] Cache warm-up detected, skipping trading decision', [
+            $this->mtfLogger->info('[MTF] Cache warm-up detected, skipping trading decision', [
                 'symbol' => $symbol,
                 'timeframes' => $warmupTfs,
             ]);
@@ -1380,7 +1375,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         // Attempt 1: Retrieve the klines
         $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
 
-        $this->logger->debug('[MTF] ATR computation start', [
+        $this->mtfLogger->debug('[MTF] ATR computation start', [
             'symbol' => $symbol,
             'tf' => $tf,
             'klines_count' => count($klines),
@@ -1388,7 +1383,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         ]);
 
         if (empty($klines)) {
-            $this->logger->warning('[MTF] No klines for ATR computation', [
+            $this->mtfLogger->warning('[MTF] No klines for ATR computation', [
                 'symbol' => $symbol,
                 'tf' => $tf,
             ]);
@@ -1409,12 +1404,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         // GARDE : Si ATR = 0, réessayer une fois (les klines étaient peut-être en cours d'insertion)
         if ($atr === 0.0) {
-            $this->logger->warning('[TO_BE_DELETED][MTF_ATR_ZERO]', [
+            $this->mtfLogger->warning('[TO_BE_DELETED][MTF_ATR_ZERO]', [
                 'symbol' => $symbol,
                 'tf' => $tf,
                 'ohlc_count' => count($ohlc),
             ]);
-            $this->logger->warning('[MTF] ATR = 0.0, retrying klines fetch', [
+            $this->mtfLogger->warning('[MTF] ATR = 0.0, retrying klines fetch', [
                 'symbol' => $symbol,
                 'tf' => $tf,
                 'first_attempt_klines' => count($klines),
@@ -1429,7 +1424,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
 
             if (empty($klines)) {
-                $this->logger->error('[MTF] No klines on retry for ATR computation', [
+                $this->mtfLogger->error('[MTF] No klines on retry for ATR computation', [
                     'symbol' => $symbol,
                     'tf' => $tf,
                 ]);
@@ -1448,12 +1443,12 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $atr = $calc->computeWithRules($ohlc, $period, $method, strtolower($tf));
 
             if ($atr === 0.0) {
-                $this->logger->error('[TO_BE_DELETED][MTF_ATR_ZERO_RETRY]', [
+                $this->mtfLogger->error('[TO_BE_DELETED][MTF_ATR_ZERO_RETRY]', [
                     'symbol' => $symbol,
                     'tf' => $tf,
                     'retry_klines_count' => count($klines),
                 ]);
-                $this->logger->error('[MTF] ATR still 0.0 after retry', [
+                $this->mtfLogger->error('[MTF] ATR still 0.0 after retry', [
                     'symbol' => $symbol,
                     'tf' => $tf,
                     'retry_klines_count' => count($klines),
@@ -1468,14 +1463,14 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 return null;
             }
 
-            $this->logger->info('[MTF] ATR computed successfully on retry', [
+            $this->mtfLogger->info('[MTF] ATR computed successfully on retry', [
                 'symbol' => $symbol,
                 'tf' => $tf,
                 'atr' => $atr,
             ]);
         }
 
-        $this->logger->debug('[MTF] ATR computation result', [
+        $this->mtfLogger->debug('[MTF] ATR computation result', [
             'symbol' => $symbol,
             'tf' => $tf,
             'atr' => $atr,
@@ -1534,11 +1529,11 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         UuidInterface $runId
     ): void {
         if (!$this->klineJsonIngestion) {
-            $this->logger->warning('[MTF] KlineJsonIngestionService not available, skipping bulk fill');
+            $this->mtfLogger->warning('[MTF] KlineJsonIngestionService not available, skipping bulk fill');
             return;
         }
 
-        $this->logger->info('[MTF] Filling missing klines in bulk', [
+        $this->mtfLogger->info('[MTF] Filling missing klines in bulk', [
             'symbol' => $symbol,
             'timeframe' => $timeframe->value,
             'required_limit' => $requiredLimit
@@ -1558,7 +1553,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         );
 
         if (empty($fetchedKlines)) {
-            $this->logger->warning('[MTF] No klines fetched from BitMart', [
+            $this->mtfLogger->warning('[MTF] No klines fetched from BitMart', [
                 'symbol' => $symbol,
                 'timeframe' => $timeframe->value
             ]);
@@ -1568,7 +1563,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         // Insertion en masse via la fonction SQL JSON
         $result = $this->klineJsonIngestion->ingestKlinesBatch($fetchedKlines, $symbol, $timeframe->value);
 
-        $this->logger->info('[MTF] Bulk klines insertion completed', [
+        $this->mtfLogger->info('[MTF] Bulk klines insertion completed', [
             'symbol' => $symbol,
             'timeframe' => $timeframe->value,
             'fetched_count' => count($fetchedKlines),
@@ -1745,7 +1740,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     $expirationMinutes
                 );
 
-                $this->logger->info('MTF validation cached', [
+                $this->mtfLogger->info('MTF validation cached', [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe->value,
                     'status' => $status,
@@ -1755,7 +1750,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 ]);
             }
         } catch (\Exception $e) {
-            $this->logger->error('Failed to persist MTF results', [
+            $this->mtfLogger->error('Failed to persist MTF results', [
                 'symbol' => $symbol,
                 'timeframe' => $timeframe->value,
                 'error' => $e->getMessage(),
@@ -1810,7 +1805,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         bool $skipContextValidation = false
     ): array {
         $enabledModes = $this->mtfValidationConfigProvider->getEnabledModes();
-        
+
         if (empty($enabledModes)) {
             throw new \RuntimeException(sprintf(
                 '[MTF] No enabled modes found for symbol "%s". This is likely a configuration error.',
@@ -1823,7 +1818,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         foreach ($enabledModes as $mode) {
             $modeName = $mode['name'] ?? 'unknown';
-            $this->logger->info('[MTF] Trying mode for symbol', [
+            $this->mtfLogger->info('[MTF] Trying mode for symbol', [
                 'symbol' => $symbol,
                 'mode' => $modeName,
                 'priority' => $mode['priority'] ?? 999,
@@ -1832,7 +1827,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             try {
                 // Charger les configs pour ce mode
                 $mtfConfig = $this->mtfValidationConfigProvider->getConfigForMode($modeName);
-                
+
                 // Recharger le ConditionRegistry avec le nouveau config
                 $this->conditionRegistry->reload($mtfConfig);
 
@@ -1851,7 +1846,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 // Vérifier si le résultat est valide (READY, SUCCESS, ou VALID selon le contexte)
                 $status = strtoupper((string)($result['status'] ?? 'UNKNOWN'));
                 if (in_array($status, ['READY', 'SUCCESS', 'VALID'], true)) {
-                    $this->logger->info('[MTF] Mode succeeded for symbol', [
+                    $this->mtfLogger->info('[MTF] Mode succeeded for symbol', [
                         'symbol' => $symbol,
                         'mode' => $modeName,
                         'status' => $status,
@@ -1864,7 +1859,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                             $tradeEntryConfig = $this->tradeEntryConfigProvider->getConfigForMode($modeName);
                             $result['trade_entry_mode_used'] = $modeName;
                         } catch (\Throwable $e) {
-                            $this->logger->warning('[MTF] Failed to load TradeEntry config for mode', [
+                            $this->mtfLogger->warning('[MTF] Failed to load TradeEntry config for mode', [
                                 'symbol' => $symbol,
                                 'mode' => $modeName,
                                 'error' => $e->getMessage(),
@@ -1876,7 +1871,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 }
 
                 // Le mode a échoué, continuer avec le suivant
-                $this->logger->debug('[MTF] Mode failed for symbol, trying next', [
+                $this->mtfLogger->debug('[MTF] Mode failed for symbol, trying next', [
                     'symbol' => $symbol,
                     'mode' => $modeName,
                     'status' => $status,
@@ -1887,7 +1882,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 $lastResult = $result;
 
             } catch (\Throwable $e) {
-                $this->logger->error('[MTF] Error processing symbol with mode', [
+                $this->mtfLogger->error('[MTF] Error processing symbol with mode', [
                     'symbol' => $symbol,
                     'mode' => $modeName,
                     'error' => $e->getMessage(),
@@ -1901,7 +1896,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         }
 
         // Aucun mode n'a réussi, retourner le dernier résultat ou une erreur
-        $this->logger->warning('[MTF] All modes failed for symbol', [
+        $this->mtfLogger->warning('[MTF] All modes failed for symbol', [
             'symbol' => $symbol,
             'modes_tried' => count($enabledModes),
         ]);

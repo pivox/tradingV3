@@ -18,7 +18,7 @@ final class MtfRunReadController extends AbstractController
         private readonly MtfRunRepository $runRepo,
         private readonly MtfRunSymbolRepository $symbolRepo,
         private readonly MtfRunMetricRepository $metricRepo,
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
     ) {}
 
     #[Route('/runs/{runId}', name: 'get_run', methods: ['GET'])]
@@ -102,7 +102,7 @@ final class MtfRunReadController extends AbstractController
                 ],
             ]);
         } catch (\Throwable $e) {
-            $this->logger->error('[MTF RunRead] Failed to fetch run', [
+            $this->mtfLogger->error('[MTF RunRead] Failed to fetch run', [
                 'run_id' => $runId,
                 'error' => $e->getMessage(),
             ]);

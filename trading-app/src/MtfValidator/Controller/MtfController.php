@@ -37,12 +37,11 @@ class MtfController extends AbstractController
 {
     public function __construct(
         private readonly MtfService $mtfService,
-        private readonly KlineRepository $klineRepository,
         private readonly MtfStateRepository $mtfStateRepository,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly MtfAuditRepository $mtfAuditRepository,
         private readonly MtfLockRepository $mtfLockRepository,
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
         private readonly MtfRunService $mtfRunService,
         private readonly MtfRunnerService $mtfRunnerService,
         private readonly ClockInterface $clock,
@@ -72,7 +71,7 @@ class MtfController extends AbstractController
                 ]
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to get status', [
+            $this->mtfLogger->error('[MTF Controller] Failed to get status', [
                 'error' => $e->getMessage()
             ]);
 
@@ -100,7 +99,7 @@ class MtfController extends AbstractController
                 ]
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to get lock status', [
+            $this->mtfLogger->error('[MTF Controller] Failed to get lock status', [
                 'error' => $e->getMessage()
             ]);
 
@@ -118,7 +117,7 @@ class MtfController extends AbstractController
             $lockKey = $request->request->get('lock_key', 'mtf_execution');
             $reason = $request->request->get('reason', 'Manual force release');
 
-            $this->logger->warning('[MTF Controller] Force releasing lock', [
+            $this->mtfLogger->warning('[MTF Controller] Force releasing lock', [
                 'lock_key' => $lockKey,
                 'reason' => $reason
             ]);
@@ -145,7 +144,7 @@ class MtfController extends AbstractController
                 ], Response::HTTP_NOT_FOUND);
             }
         } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to force release lock', [
+            $this->mtfLogger->error('[MTF Controller] Failed to force release lock', [
                 'error' => $e->getMessage()
             ]);
 
@@ -162,7 +161,7 @@ class MtfController extends AbstractController
         try {
             $cleanedCount = $this->mtfLockRepository->cleanupExpiredLocks();
 
-            $this->logger->info('[MTF Controller] Cleaned up expired locks', [
+            $this->mtfLogger->info('[MTF Controller] Cleaned up expired locks', [
                 'cleaned_count' => $cleanedCount
             ]);
 
@@ -175,7 +174,7 @@ class MtfController extends AbstractController
                 ]
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to cleanup expired locks', [
+            $this->mtfLogger->error('[MTF Controller] Failed to cleanup expired locks', [
                 'error' => $e->getMessage()
             ]);
 
@@ -201,7 +200,7 @@ class MtfController extends AbstractController
                 ]
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to start workflow', [
+            $this->mtfLogger->error('[MTF Controller] Failed to start workflow', [
                 'error' => $e->getMessage()
             ]);
 
@@ -236,7 +235,7 @@ class MtfController extends AbstractController
                 'data' => $switchesData
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to get switches', [
+            $this->mtfLogger->error('[MTF Controller] Failed to get switches', [
                 'error' => $e->getMessage()
             ]);
 
@@ -273,7 +272,7 @@ class MtfController extends AbstractController
                 ]
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to toggle switch', [
+            $this->mtfLogger->error('[MTF Controller] Failed to toggle switch', [
                 'switch_id' => $id,
                 'error' => $e->getMessage()
             ]);
@@ -309,7 +308,7 @@ class MtfController extends AbstractController
                 'data' => $statesData
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to get states', [
+            $this->mtfLogger->error('[MTF Controller] Failed to get states', [
                 'error' => $e->getMessage()
             ]);
 
@@ -363,7 +362,7 @@ class MtfController extends AbstractController
                 'data' => $auditsData
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to get audit', [
+            $this->mtfLogger->error('[MTF Controller] Failed to get audit', [
                 'error' => $e->getMessage()
             ]);
 
@@ -391,7 +390,7 @@ class MtfController extends AbstractController
                 ]
             ]);
         } catch (\Exception $e) {
-            $this->logger->error('[MTF Controller] Failed to execute cycle', [
+            $this->mtfLogger->error('[MTF Controller] Failed to execute cycle', [
                 'error' => $e->getMessage()
             ]);
 
@@ -436,7 +435,7 @@ class MtfController extends AbstractController
                 ], Response::HTTP_BAD_REQUEST);
             }
 
-            $this->logger->info('[MTF Controller] Contract synchronization started', [
+            $this->mtfLogger->info('[MTF Controller] Contract synchronization started', [
                 'symbols' => $symbols,
                 'timestamp' => $this->clock->now()->format('Y-m-d H:i:s'),
                 'exchange' => $context->exchange->value,
@@ -461,7 +460,7 @@ class MtfController extends AbstractController
                 'errors' => $result['errors'],
             ]);
         } catch (\Throwable $e) {
-            $this->logger->error('[MTF Controller] Failed to synchronize contracts', [
+            $this->mtfLogger->error('[MTF Controller] Failed to synchronize contracts', [
                 'error' => $e->getMessage(),
             ]);
 
@@ -607,7 +606,7 @@ class MtfController extends AbstractController
             $ordersPlaced = OrdersExtractor::extractPlacedOrders($results);
             $ordersCount = OrdersExtractor::countOrdersByStatus($results);
 
-            $this->logger->info('[MTF Controller] Performance Analysis', [
+            $this->mtfLogger->info('[MTF Controller] Performance Analysis', [
                 'total_api_time' => round($apiTotalTime, 3),
                 'symbols_count' => count($symbols),
                 'workers' => $workers,
@@ -641,7 +640,7 @@ class MtfController extends AbstractController
                 ],
             ]);
         } catch (\Throwable $e) {
-            $this->logger->error('[MTF Controller] Failed to run MTF cycle', [
+            $this->mtfLogger->error('[MTF Controller] Failed to run MTF cycle', [
                 'error' => $e->getMessage(),
             ]);
 
@@ -703,7 +702,7 @@ class MtfController extends AbstractController
                     $symbols = array_values(array_unique(array_map('strval', $fetched)));
                 }
             } catch (\Throwable $e) {
-                $this->logger->warning('[MTF Controller] Failed to load active symbols, using fallback', [
+                $this->mtfLogger->warning('[MTF Controller] Failed to load active symbols, using fallback', [
                     'error' => $e->getMessage(),
                 ]);
                 $symbols = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT', 'DOTUSDT'];
@@ -729,7 +728,7 @@ class MtfController extends AbstractController
         try {
             $symbols = $this->mtfSwitchRepository->consumeSymbolsWithFutureExpiration();
             if ($symbols !== []) {
-                $this->logger->info('[MTF Controller] Added symbols from switch queue', [
+                $this->mtfLogger->info('[MTF Controller] Added symbols from switch queue', [
                     'count' => count($symbols),
                     'symbols' => array_slice($symbols, 0, 20),
                 ]);
@@ -737,7 +736,7 @@ class MtfController extends AbstractController
 
             return $symbols;
         } catch (\Throwable $e) {
-            $this->logger->warning('[MTF Controller] Failed to consume symbols from switch queue', [
+            $this->mtfLogger->warning('[MTF Controller] Failed to consume symbols from switch queue', [
                 'error' => $e->getMessage(),
             ]);
 
@@ -1095,7 +1094,7 @@ class MtfController extends AbstractController
         if ($accountProvider) {
             try {
                 $openPositions = $accountProvider->getOpenPositions();
-                $this->logger->info('[MTF Controller] Fetched open positions', [
+                $this->mtfLogger->info('[MTF Controller] Fetched open positions', [
                     'run_id' => $runIdString,
                     'count' => count($openPositions),
                 ]);
@@ -1107,7 +1106,7 @@ class MtfController extends AbstractController
                     }
                 }
             } catch (\Throwable $e) {
-                $this->logger->warning('[MTF Controller] Failed to fetch open positions from exchange', [
+                $this->mtfLogger->warning('[MTF Controller] Failed to fetch open positions from exchange', [
                     'run_id' => $runIdString,
                     'error' => $e->getMessage(),
                 ]);
@@ -1120,7 +1119,7 @@ class MtfController extends AbstractController
         if ($orderProvider) {
             try {
                 $openOrders = $orderProvider->getOpenOrders();
-                $this->logger->info('[MTF Controller] Fetched open orders', [
+                $this->mtfLogger->info('[MTF Controller] Fetched open orders', [
                     'run_id' => $runIdString,
                     'count' => count($openOrders),
                 ]);
@@ -1132,7 +1131,7 @@ class MtfController extends AbstractController
                     }
                 }
             } catch (\Throwable $e) {
-                $this->logger->warning('[MTF Controller] Failed to fetch open orders from exchange', [
+                $this->mtfLogger->warning('[MTF Controller] Failed to fetch open orders from exchange', [
                     'run_id' => $runIdString,
                     'error' => $e->getMessage(),
                 ]);
@@ -1146,14 +1145,14 @@ class MtfController extends AbstractController
         try {
             $reactivatedCount = $this->mtfSwitchRepository->reactivateSwitchesForInactiveSymbols($symbolsWithActivity);
             if ($reactivatedCount > 0) {
-                $this->logger->info('[MTF Controller] Reactivated switches for inactive symbols', [
+                $this->mtfLogger->info('[MTF Controller] Reactivated switches for inactive symbols', [
                     'run_id' => $runIdString,
                     'reactivated_count' => $reactivatedCount,
                     'reason' => 'no_open_orders_or_positions',
                 ]);
             }
         } catch (\Throwable $e) {
-            $this->logger->error('[MTF Controller] Failed to reactivate switches for inactive symbols', [
+            $this->mtfLogger->error('[MTF Controller] Failed to reactivate switches for inactive symbols', [
                 'run_id' => $runIdString,
                 'error' => $e->getMessage(),
             ]);
@@ -1171,7 +1170,7 @@ class MtfController extends AbstractController
         }
 
         if (!empty($excludedSymbols)) {
-            $this->logger->info('[MTF Controller] Filtered symbols with open orders/positions', [
+            $this->mtfLogger->info('[MTF Controller] Filtered symbols with open orders/positions', [
                 'run_id' => $runIdString,
                 'excluded_count' => count($excludedSymbols),
                 'excluded_symbols' => array_slice($excludedSymbols, 0, 10),
@@ -1197,7 +1196,7 @@ class MtfController extends AbstractController
 
                 if ($isSwitchOff) {
                     $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, '1m');
-                    $this->logger->info('[MTF Controller] Symbol switch extended (was OFF)', [
+                    $this->mtfLogger->info('[MTF Controller] Symbol switch extended (was OFF)', [
                         'run_id' => $runIdString,
                         'symbol' => $symbolUpper,
                         'duration' => '1 minute',
@@ -1205,7 +1204,7 @@ class MtfController extends AbstractController
                     ]);
                 } else {
                     $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, duration: '5m');
-                    $this->logger->info('[MTF Controller] Symbol switch disabled', [
+                    $this->mtfLogger->info('[MTF Controller] Symbol switch disabled', [
                         'run_id' => $runIdString,
                         'symbol' => $symbolUpper,
                         'duration' => '15 minutes',
@@ -1213,7 +1212,7 @@ class MtfController extends AbstractController
                     ]);
                 }
             } catch (\Throwable $e) {
-                $this->logger->error('[MTF Controller] Failed to update symbol switch', [
+                $this->mtfLogger->error('[MTF Controller] Failed to update symbol switch', [
                     'run_id' => $runIdString,
                     'symbol' => $symbolUpper,
                     'error' => $e->getMessage(),

@@ -32,8 +32,7 @@ class ConditionRegistry
 
         #[AutowireLocator('app.indicator.condition')]
         private readonly ContainerInterface $locator,
-
-        private readonly ?LoggerInterface $logger = null,
+        private readonly LoggerInterface $mtfLogger,
     ) {
     }
 
@@ -129,7 +128,7 @@ class ConditionRegistry
     private function errorPayload(string $name, \Throwable $e): array
     {
         if ($this->logger) {
-            $this->logger->error('Condition evaluation failed', [
+            $this->mtfLogger->error('Condition evaluation failed', [
                 'name' => $name,
                 'exception' => get_class($e),
                 'message' => $e->getMessage(),

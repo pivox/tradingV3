@@ -28,7 +28,7 @@ class MtfRunService implements MtfValidatorInterface
 {
     public function __construct(
         private readonly MtfRunOrchestrator $orchestrator,
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
         private readonly ?TpSlTwoTargetsService $tpSlService = null,
         private readonly ?MainProviderInterface $mainProvider = null,
     ) {}
@@ -46,7 +46,7 @@ class MtfRunService implements MtfValidatorInterface
             $context = new ExchangeContext($request->exchange, $request->marketType);
         }
 
-        $this->logger->info('[MTF Run] Starting execution', [
+        $this->mtfLogger->info('[MTF Run] Starting execution', [
             'run_id' => $runId,
             'symbols_count' => count($request->symbols),
             'dry_run' => $request->dryRun,
@@ -147,7 +147,7 @@ class MtfRunService implements MtfValidatorInterface
             );
 
         } catch (\Throwable $e) {
-            $this->logger->error('[MTF Run] Execution failed', [
+            $this->mtfLogger->error('[MTF Run] Execution failed', [
                 'run_id' => $runId,
                 'error' => $e->getMessage()
             ]);
@@ -161,7 +161,7 @@ class MtfRunService implements MtfValidatorInterface
             // Vérification simple de la santé du service
             return true;
         } catch (\Throwable $e) {
-            $this->logger->error('[MTF Run] Health check failed', [
+            $this->mtfLogger->error('[MTF Run] Health check failed', [
                 'error' => $e->getMessage()
             ]);
             return false;
@@ -190,13 +190,13 @@ class MtfRunService implements MtfValidatorInterface
             $orderProvider = $provider?->getOrderProvider();
 
             if ($accountProvider === null || $orderProvider === null) {
-                $this->logger->warning('[MTF Run] TP/SL recalculation skipped: missing providers');
+                $this->mtfLogger->warning('[MTF Run] TP/SL recalculation skipped: missing providers');
                 return;
             }
 
             // Récupérer toutes les positions ouvertes
             $openPositions = $accountProvider->getOpenPositions();
-            $this->logger->info('[MTF Run] TP/SL recalculation: checking positions', [
+            $this->mtfLogger->info('[MTF Run] TP/SL recalculation: checking positions', [
                 'count' => count($openPositions),
                 'dry_run' => $dryRun,
             ]);
@@ -213,7 +213,7 @@ class MtfRunService implements MtfValidatorInterface
 
                     // Validation: s'assurer que le side est valide
                     if ($positionSide !== PositionSide::LONG && $positionSide !== PositionSide::SHORT) {
-                        $this->logger->warning('[MTF Run] TP/SL recalculation skipped: invalid position side', [
+                        $this->mtfLogger->warning('[MTF Run] TP/SL recalculation skipped: invalid position side', [
                             'symbol' => $symbol,
                             'side' => $positionSide->value ?? 'unknown',
                         ]);
@@ -259,7 +259,7 @@ class MtfRunService implements MtfValidatorInterface
 
                     // Critère: recalculer seulement si exactement 1 ordre TP
                     if (count($tpOrders) !== 1) {
-                        $this->logger->debug('[MTF Run] TP/SL recalculation skipped', [
+                        $this->mtfLogger->debug('[MTF Run] TP/SL recalculation skipped', [
                             'symbol' => $symbol,
                             'tp_count' => count($tpOrders),
                             'reason' => count($tpOrders) === 0 ? 'no_tp_orders' : 'multiple_tp_orders',
@@ -268,7 +268,7 @@ class MtfRunService implements MtfValidatorInterface
                     }
 
                     // Recalculer les TP/SL
-                    $this->logger->info('[MTF Run] TP/SL recalculation: processing', [
+                    $this->mtfLogger->info('[MTF Run] TP/SL recalculation: processing', [
                         'symbol' => $symbol,
                         'side' => $entrySide->value,
                         'entry_price' => $entryPrice,
@@ -288,7 +288,7 @@ class MtfRunService implements MtfValidatorInterface
 
                     $result = $this->tpSlService->__invoke($request, 'mtf_run_' . time());
 
-                    $this->logger->info('[MTF Run] TP/SL recalculation: completed', [
+                    $this->mtfLogger->info('[MTF Run] TP/SL recalculation: completed', [
                         'symbol' => $symbol,
                         'sl' => $result['sl'],
                         'tp1' => $result['tp1'],
@@ -299,7 +299,7 @@ class MtfRunService implements MtfValidatorInterface
                     ]);
 
                 } catch (\Throwable $e) {
-                    $this->logger->error('[MTF Run] TP/SL recalculation failed for position', [
+                    $this->mtfLogger->error('[MTF Run] TP/SL recalculation failed for position', [
                         'symbol' => $position->symbol ?? 'unknown',
                         'error' => $e->getMessage(),
                         'trace' => $e->getTraceAsString(),
@@ -309,7 +309,7 @@ class MtfRunService implements MtfValidatorInterface
             }
 
         } catch (\Throwable $e) {
-            $this->logger->error('[MTF Run] TP/SL recalculation process failed', [
+            $this->mtfLogger->error('[MTF Run] TP/SL recalculation process failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);

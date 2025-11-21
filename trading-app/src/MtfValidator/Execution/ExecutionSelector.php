@@ -14,7 +14,7 @@ final class ExecutionSelector
     public function __construct(
         private readonly MtfValidationConfig $mtfConfig,
         private readonly ConditionRegistry $registry,
-        #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
     ) {}
 
     /**
@@ -30,8 +30,8 @@ final class ExecutionSelector
 
         // Vérifier si execution_selector est vide (pas de per_timeframe, pas de format legacy)
         $perTimeframeCfg = (array)($selector['per_timeframe'] ?? []);
-        $hasLegacyConfig = !empty($selector['stay_on_15m_if']) 
-            || !empty($selector['drop_to_5m_if_any']) 
+        $hasLegacyConfig = !empty($selector['stay_on_15m_if'])
+            || !empty($selector['drop_to_5m_if_any'])
             || !empty($selector['forbid_drop_to_5m_if_any'])
             || !empty($selector['allow_1m_only_for']);
 
@@ -42,10 +42,10 @@ final class ExecutionSelector
             $filtersMandatorySpec = $this->parseSpec((array)($cfg['filters_mandatory'] ?? []));
             $filtersMandatory = array_keys($filtersMandatorySpec);
             $context = $this->injectThresholds($context, $filtersMandatorySpec, 'filters_mandatory');
-            
+
             $filtersRes = !empty($filtersMandatory) ? $this->registry->evaluate($context, $filtersMandatory) : [];
             $this->logVolumeRatioFilter($filtersRes);
-            
+
             $filtersPassed = true;
             foreach ($filtersRes as $r) {
                 if (!(bool)($r['passed'] ?? false)) {
@@ -53,9 +53,9 @@ final class ExecutionSelector
                     break;
                 }
             }
-            
+
             if (!$filtersPassed) {
-                $this->logger->info('[ExecSelector] filters_mandatory failed (execution_selector empty)', [
+                $this->mtfLogger->info('[ExecSelector] filters_mandatory failed (execution_selector empty)', [
                     'filters' => $filtersRes,
                 ]);
                 return new ExecutionDecision('NONE', meta: [
@@ -63,9 +63,9 @@ final class ExecutionSelector
                     'reason' => 'filters_mandatory_failed_execution_selector_empty',
                 ]);
             }
-            
+
             $defaultTf = $this->getDefaultExecutionTimeframe($cfg);
-            $this->logger->info('[ExecSelector] execution_selector is empty, using default timeframe', [
+            $this->mtfLogger->info('[ExecSelector] execution_selector is empty, using default timeframe', [
                 'default_tf' => $defaultTf,
             ]);
             return $this->decision($defaultTf, $context, [
@@ -126,7 +126,7 @@ final class ExecutionSelector
         }
 
         if (!$filtersPassed) {
-            $this->logger->info('[ExecSelector] filters_mandatory failed', [ 'filters' => $filtersRes ]);
+            $this->mtfLogger->info('[ExecSelector] filters_mandatory failed', [ 'filters' => $filtersRes ]);
             return new ExecutionDecision('NONE', meta: [ 'filters' => $filtersRes ]);
         }
 
@@ -225,7 +225,7 @@ final class ExecutionSelector
         }
 
         if (!$filtersPassed) {
-            $this->logger->info('[ExecSelector] filters_mandatory failed', ['filters' => $filtersRes]);
+            $this->mtfLogger->info('[ExecSelector] filters_mandatory failed', ['filters' => $filtersRes]);
             return new ExecutionDecision('NONE', meta: ['filters' => $filtersRes]);
         }
 
@@ -375,7 +375,7 @@ final class ExecutionSelector
         }
 
         if (!empty($injected)) {
-            $this->logger->debug('[ExecSelector] Thresholds injected from YAML', [
+            $this->mtfLogger->debug('[ExecSelector] Thresholds injected from YAML', [
                 'group' => $groupName,
                 'thresholds' => $injected,
             ]);
@@ -410,7 +410,7 @@ final class ExecutionSelector
             ];
         }
 
-        $this->logger->debug('[ExecSelector] Evaluation results', [
+        $this->mtfLogger->debug('[ExecSelector] Evaluation results', [
             'group' => $groupName,
             'results' => $summary,
         ]);
@@ -427,7 +427,7 @@ final class ExecutionSelector
         }
 
         $result = $filtersRes['volume_ratio_ok'];
-        $this->logger->info('[ExecSelector] volume_ratio_ok', [
+        $this->mtfLogger->info('[ExecSelector] volume_ratio_ok', [
             'passed' => $result['passed'] ?? null,
             'value' => $result['value'] ?? null,
             'threshold' => $result['threshold'] ?? null,

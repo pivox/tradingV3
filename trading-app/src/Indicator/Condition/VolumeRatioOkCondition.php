@@ -20,8 +20,7 @@ final class VolumeRatioOkCondition extends AbstractCondition
     private const EPS = 1.0e-9;
 
     public function __construct(
-        #[Autowire(service: 'monolog.logger.mtf')]
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $signalsLogger,
     ) {}
 
     public function getName(): string
@@ -35,7 +34,7 @@ final class VolumeRatioOkCondition extends AbstractCondition
         $ratio = $context['volume_ratio'] ?? null;
 
         if (!\is_numeric($ratio)) {
-            $this->logger->info('[MtfValidation] volume_ratio_ok missing data', [
+            $this->signalsLogger->info('[MtfValidation] volume_ratio_ok missing data', [
                 'symbol' => $context['symbol'] ?? null,
                 'timeframe' => $context['timeframe'] ?? null,
             ]);
@@ -47,7 +46,7 @@ final class VolumeRatioOkCondition extends AbstractCondition
         $ratio = (float) $ratio;
         $passed = ($ratio + self::EPS) >= $threshold;
 
-        $this->logger->info('[MtfValidation] volume_ratio_ok', [
+        $this->signalsLogger->info('[MtfValidation] volume_ratio_ok', [
             'symbol' => $context['symbol'] ?? null,
             'timeframe' => $context['timeframe'] ?? null,
             'value' => $ratio,

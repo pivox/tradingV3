@@ -23,7 +23,7 @@ final class MtfBackfillService
         private readonly KlineProviderInterface $klineProvider,
         private readonly KlineRepository $klineRepository,
         private readonly MtfTimeService $timeService,
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
         private readonly ClockInterface $clock
     ) {
     }
@@ -37,7 +37,7 @@ final class MtfBackfillService
         \DateTimeImmutable $from,
         \DateTimeImmutable $to
     ): array {
-        $this->logger->info('[Backfill] Starting backfill', [
+        $this->mtfLogger->info('[Backfill] Starting backfill', [
             'symbol' => $symbol,
             'timeframe' => $timeframe->value,
             'from' => $from->format('Y-m-d H:i:s'),
@@ -81,11 +81,11 @@ final class MtfBackfillService
                     'timestamp' => $this->clock->now()->format('Y-m-d H:i:s')
                 ];
                 $results['errors'][] = $error;
-                $this->logger->error('[Backfill] Chunk processing failed', $error);
+                $this->mtfLogger->error('[Backfill] Chunk processing failed', $error);
             }
         }
 
-        $this->logger->info('[Backfill] Backfill completed', [
+        $this->mtfLogger->info('[Backfill] Backfill completed', [
             'symbol' => $symbol,
             'timeframe' => $timeframe->value,
             'klines_fetched' => $results['klines_fetched'],
@@ -123,7 +123,7 @@ final class MtfBackfillService
                     'kline' => $klineDto->toArray(),
                     'error' => $e->getMessage()
                 ];
-                $this->logger->error('[Backfill] Kline upsert failed', [
+                $this->mtfLogger->error('[Backfill] Kline upsert failed', [
                     'kline' => $klineDto->toArray(),
                     'error' => $e->getMessage()
                 ]);
@@ -146,7 +146,7 @@ final class MtfBackfillService
 
         for ($attempt = 0; $attempt < self::MAX_RETRIES; $attempt++) {
             try {
-                $this->logger->debug('[Backfill] Fetching klines', [
+                $this->mtfLogger->debug('[Backfill] Fetching klines', [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe->value,
                     'start' => $start->format('Y-m-d H:i:s'),
@@ -167,7 +167,7 @@ final class MtfBackfillService
 
             } catch (\Exception $e) {
                 $lastException = $e;
-                $this->logger->warning('[Backfill] Fetch attempt failed', [
+                $this->mtfLogger->warning('[Backfill] Fetch attempt failed', [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe->value,
                     'attempt' => $attempt + 1,
@@ -176,12 +176,12 @@ final class MtfBackfillService
 
                 // Gérer le code 429 (trop de requêtes)
                 if (str_contains($e->getMessage(), '429')) {
-                    $this->logger->info('[Backfill] Rate limit hit, sleeping 2 seconds');
+                    $this->mtfLogger->info('[Backfill] Rate limit hit, sleeping 2 seconds');
                     sleep(2);
                 } elseif ($attempt < self::MAX_RETRIES - 1) {
                     // Attendre avant de réessayer
                     $delay = self::RETRY_DELAYS[$attempt] ?? 4000;
-                    $this->logger->info('[Backfill] Retrying in ' . $delay . 'ms');
+                    $this->mtfLogger->info('[Backfill] Retrying in ' . $delay . 'ms');
                     usleep($delay * 1000);
                 }
             }
@@ -238,7 +238,7 @@ final class MtfBackfillService
                 if ($isOpen) {
                     $em->persist($kline);
                 } else {
-                    $this->logger->warning('[Backfill] EntityManager closed; skip persist', [
+                    $this->mtfLogger->warning('[Backfill] EntityManager closed; skip persist', [
                         'symbol' => $klineDto->symbol,
                         'timeframe' => $klineDto->timeframe->value,
                         'open_time' => $klineDto->openTime->format('Y-m-d H:i:s'),
@@ -246,7 +246,7 @@ final class MtfBackfillService
                     return; // cannot continue safely
                 }
             } catch (\Throwable $e) {
-                $this->logger->warning('[Backfill] Failed to persist new kline', [
+                $this->mtfLogger->warning('[Backfill] Failed to persist new kline', [
                     'symbol' => $klineDto->symbol,
                     'timeframe' => $klineDto->timeframe->value,
                     'open_time' => $klineDto->openTime->format('Y-m-d H:i:s'),
@@ -269,10 +269,10 @@ final class MtfBackfillService
             if ($isOpen) {
                 $em->flush();
             } else {
-                $this->logger->warning('[Backfill] EntityManager closed; skip flush');
+                $this->mtfLogger->warning('[Backfill] EntityManager closed; skip flush');
             }
         } catch (\Throwable $e) {
-            $this->logger->warning('[Backfill] Failed to flush kline upsert', [
+            $this->mtfLogger->warning('[Backfill] Failed to flush kline upsert', [
                 'error' => $e->getMessage(),
             ]);
         }
@@ -283,7 +283,7 @@ final class MtfBackfillService
      */
     public function detectAndFillGaps(string $symbol, Timeframe $timeframe, \DateTimeImmutable $from, \DateTimeImmutable $to): array
     {
-        $this->logger->info('[Backfill] Detecting gaps', [
+        $this->mtfLogger->info('[Backfill] Detecting gaps', [
             'symbol' => $symbol,
             'timeframe' => $timeframe->value,
             'from' => $from->format('Y-m-d H:i:s'),
@@ -310,7 +310,7 @@ final class MtfBackfillService
         }
 
         if (!empty($gaps)) {
-            $this->logger->info('[Backfill] Found gaps', [
+            $this->mtfLogger->info('[Backfill] Found gaps', [
                 'symbol' => $symbol,
                 'timeframe' => $timeframe->value,
                 'gaps_count' => count($gaps),

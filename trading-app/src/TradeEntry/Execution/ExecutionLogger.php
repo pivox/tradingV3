@@ -9,26 +9,26 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class ExecutionLogger
 {
     public function __construct(
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $logger
+        private readonly LoggerInterface $positionsLogger
     ) {}
 
     public function info(string $message, array $context = []): void
     {
-        $this->logger->info($message, $context);
+        $this->positionsLogger->info($message, $context);
     }
 
     public function warning(string $message, array $context = []): void
     {
-        $this->logger->warning($message, $context);
+        $this->positionsLogger->warning($message, $context);
     }
 
     public function error(string $message, array $context = []): void
     {
-        $this->logger->error($message, $context);
+        $this->positionsLogger->error($message, $context);
     }
 
     public function debug(string $message, array $context = []): void
     {
-        $this->logger->debug($message, $context);
+        $this->positionsLogger->debug($message, $context);
     }
 }

@@ -18,7 +18,7 @@ final class MarketStructureSampler
 
     public function __construct(
         private readonly BitmartHttpClientPublic $publicHttpClient,
-        #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $positionsLogger,
         private readonly ClockInterface $clock,
     ) {
     }
@@ -37,7 +37,7 @@ final class MarketStructureSampler
                 $liquidityScore = min(1.0, $depthUsd / self::LIQUIDITY_TARGET_USD);
             }
         } catch (\Throwable $e) {
-            $this->logger->warning('market_sampler.depth_failed', [
+            $this->positionsLogger->warning('market_sampler.depth_failed', [
                 'symbol' => $symbol,
                 'error' => $e->getMessage(),
             ]);
@@ -64,7 +64,7 @@ final class MarketStructureSampler
                 $volumeRatio = $this->computeVolumeRatio($klines);
             }
         } catch (\Throwable $e) {
-            $this->logger->warning('market_sampler.kline_failed', [
+            $this->positionsLogger->warning('market_sampler.kline_failed', [
                 'symbol' => $symbol,
                 'error' => $e->getMessage(),
             ]);

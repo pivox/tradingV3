@@ -16,7 +16,7 @@ class MtfEventService
 {
     public function __construct(
         private readonly EventDispatcherInterface $eventDispatcher,
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
     ) {
     }
 
@@ -26,18 +26,18 @@ class MtfEventService
     public function triggerMaterializedViewsRefresh(string $runId, array $context = []): void
     {
         try {
-            $this->logger->info('[MTF Event Service] Triggering materialized views refresh', [
+            $this->mtfLogger->info('[MTF Event Service] Triggering materialized views refresh', [
                 'run_id' => $runId,
                 'context' => $context,
             ]);
 
             // Les vues matérialisées ne sont plus utilisées
 
-            $this->logger->info('[MTF Event Service] Materialized views refresh completed', [
+            $this->mtfLogger->info('[MTF Event Service] Materialized views refresh completed', [
                 'run_id' => $runId,
             ]);
         } catch (\Throwable $e) {
-            $this->logger->error('[MTF Event Service] Failed to refresh materialized views', [
+            $this->mtfLogger->error('[MTF Event Service] Failed to refresh materialized views', [
                 'run_id' => $runId,
                 'error' => $e->getMessage(),
                 'context' => $context,
@@ -64,12 +64,12 @@ class MtfEventService
                 $data['results'] ?? []
             ), $eventName);
 
-            $this->logger->info('[MTF Event Service] Custom event dispatched', [
+            $this->mtfLogger->info('[MTF Event Service] Custom event dispatched', [
                 'event_name' => $eventName,
                 'data' => $data,
             ]);
         } catch (\Throwable $e) {
-            $this->logger->error('[MTF Event Service] Failed to dispatch custom event', [
+            $this->mtfLogger->error('[MTF Event Service] Failed to dispatch custom event', [
                 'event_name' => $eventName,
                 'error' => $e->getMessage(),
                 'data' => $data,
