@@ -387,7 +387,13 @@ final class ValidationsYamlValidator
 
     private function validateExecutionSelector(array $selector, ValidationResult $result): void
     {
-        $validGroups = ['stay_on_15m_if', 'drop_to_5m_if_any', 'forbid_drop_to_5m_if_any', 'allow_1m_only_for'];
+        // Vérifier si le nouveau format per_timeframe est utilisé
+        if (isset($selector['per_timeframe'])) {
+            $this->validatePerTimeframeFormat($selector['per_timeframe'], $result);
+        }
+
+        // Valider les groupes legacy (deprecated mais maintenu pour compatibilité)
+        $validGroups = ['stay_on_15m_if', 'drop_to_5m_if_any', 'forbid_drop_to_5m_if_any', 'allow_1m_only_for', 'per_timeframe'];
 
         foreach ($selector as $groupName => $items) {
             if (!in_array($groupName, $validGroups, true)) {
@@ -398,6 +404,11 @@ final class ValidationsYamlValidator
                     null,
                     ['group' => $groupName, 'valid_groups' => $validGroups]
                 ));
+                continue;
+            }
+
+            // per_timeframe est déjà validé séparément
+            if ($groupName === 'per_timeframe') {
                 continue;
             }
 
@@ -414,6 +425,66 @@ final class ValidationsYamlValidator
             foreach ($items as $index => $item) {
                 $itemPath = "mtf_validation.execution_selector.{$groupName}[{$index}]";
                 $this->validateExecutionSelectorItem($item, $itemPath, $result);
+            }
+        }
+    }
+
+    /**
+     * Valide le format per_timeframe
+     */
+    private function validatePerTimeframeFormat(array $perTimeframe, ValidationResult $result): void
+    {
+        $validTimeframes = ['15m', '5m', '1m'];
+        $validKeys = ['stay_on_if', 'drop_to_lower_if_any', 'forbid_drop_to_lower_if_any'];
+
+        foreach ($perTimeframe as $tf => $tfConfig) {
+            if (!in_array($tf, $validTimeframes, true)) {
+                $result->addWarning(new ValidationError(
+                    'unknown_timeframe',
+                    "Timeframe inconnu dans per_timeframe",
+                    "mtf_validation.execution_selector.per_timeframe.{$tf}",
+                    null,
+                    ['timeframe' => $tf, 'valid_timeframes' => $validTimeframes]
+                ));
+                continue;
+            }
+
+            if (!is_array($tfConfig)) {
+                $result->addError(new ValidationError(
+                    'invalid_type',
+                    "La configuration du timeframe doit être un tableau",
+                    "mtf_validation.execution_selector.per_timeframe.{$tf}",
+                    null
+                ));
+                continue;
+            }
+
+            foreach ($tfConfig as $key => $value) {
+                if (!in_array($key, $validKeys, true)) {
+                    $result->addWarning(new ValidationError(
+                        'unknown_key',
+                        "Clé inconnue dans per_timeframe[{$tf}]",
+                        "mtf_validation.execution_selector.per_timeframe.{$tf}.{$key}",
+                        null,
+                        ['key' => $key, 'valid_keys' => $validKeys]
+                    ));
+                    continue;
+                }
+
+                if (!is_array($value)) {
+                    $result->addError(new ValidationError(
+                        'invalid_type',
+                        "La valeur doit être un tableau de conditions",
+                        "mtf_validation.execution_selector.per_timeframe.{$tf}.{$key}",
+                        null
+                    ));
+                    continue;
+                }
+
+                foreach ($value as $index => $item) {
+                    $itemPath = "mtf_validation.execution_selector.per_timeframe.{$tf}.{$key}[{$index}]";
+                    $this->validateExecutionSelectorItem($item, $itemPath, $result);
+                }
             }
         }
     }

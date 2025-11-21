@@ -104,8 +104,11 @@ trade_entry:
     # ======== TRADING DECISION ========
     # ✅ UTILISÉES: TradingDecisionHandler.php via TradeEntryConfig
     decision:
-        # Timeframes autorisés pour l'exécution (pilotent TradingDecisionHandler::canExecuteTrading)
-        allowed_execution_timeframes: ['1m','5m','15m']
+        # Note: allowed_execution_timeframes n'est plus utilisé pour CHOISIR le TF.
+        # Le TF d'exécution est maintenant décidé par MtfService::ExecutionTimeframeDecisionService.
+        # Si défini et non vide, cette liste sert uniquement de VALIDATION (rejette si le TF décidé n'est pas dans la liste).
+        # Si vide ou non défini, tous les TF sont acceptés.
+        allowed_execution_timeframes: []  # Vide = accepte tous les TF décidés par MtfService
         # Exiger au moins un prix courant ou un ATR pour tenter une exécution
         require_price_or_atr: true
 

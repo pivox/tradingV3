@@ -6,7 +6,8 @@ version: '0.0.91'
 
 mtf_validation:
     mode: 'pragmatic'
-    context_timeframes: ['4h','1h']     # (Option : remettre ['4h','1h'] si tu veux le contexte 4h)
+    context_timeframes: ['1h', '15m']
+    execution_timeframes: ['5m', '1m']
     execution_timeframe_default: '5m'
     allow_skip_lower_tf: true
 
@@ -205,20 +206,29 @@ mtf_validation:
     # ================================
     execution_selector:
 
-        # SCALPER : on ne veut jamais rester en 15m → GetFalseCondition
-        stay_on_15m_if:
-            - get_false: true
-            
+        # Format per_timeframe (nouveau format recommandé)
+        per_timeframe:
+            '15m':
+                # SCALPER : on ne veut jamais rester en 15m → GetFalseCondition
+                stay_on_if:
+                    - get_false: true
 
-        drop_to_5m_if_any:
-            - expected_r_multiple_lt: 1.4
-            - entry_zone_width_pct_gt: 0.8
-            - atr_pct_15m_gt_bps: 130
+                drop_to_lower_if_any:
+                    - expected_r_multiple_lt: 1.4
+                    - entry_zone_width_pct_gt: 0.8
+                    - atr_pct_15m_gt_bps: 130
 
-        forbid_drop_to_5m_if_any:
-            - adx_5m_lt: 15
-            - spread_bps_gt: 9
+                forbid_drop_to_lower_if_any:
+                    - adx_5m_lt: 15
+                    - spread_bps_gt: 9
 
+            '5m':
+                stay_on_if: []  # 5m devient le TF cible après 15m
+
+            '1m':
+                stay_on_if: []  # Si tu réactives 1m plus tard
+
+        # Format legacy (deprecated, maintenu pour backward compatibility)
         allow_1m_only_for:
             enabled: false
             conditions:

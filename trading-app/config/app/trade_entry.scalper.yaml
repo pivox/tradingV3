@@ -118,7 +118,11 @@ trade_entry:
     # DECISION ENGINE
     # ============================
     decision:
-        allowed_execution_timeframes: ['1m','5m','15m']
+        # Note: allowed_execution_timeframes n'est plus utilisé pour CHOISIR le TF.
+        # Le TF d'exécution est maintenant décidé par MtfService::ExecutionTimeframeDecisionService.
+        # Si défini et non vide, cette liste sert uniquement de VALIDATION (rejette si le TF décidé n'est pas dans la liste).
+        # Si vide ou non défini, tous les TF sont acceptés.
+        allowed_execution_timeframes: []  # Vide = accepte tous les TF décidés par MtfService
         require_price_or_atr: true
 
 
@@ -139,7 +143,10 @@ trade_entry:
     # ============================
     market_entry:
         enabled: true
-        allowed_execution_timeframes: ['1m','5m']
+        # Note: allowed_execution_timeframes dans market_entry sert uniquement de VALIDATION
+        # pour décider si on peut utiliser un ordre market au lieu de limit.
+        # Le TF d'exécution est déjà décidé par MtfService.
+        allowed_execution_timeframes: ['1m','5m']  # Validation pour market entry uniquement
         max_slippage_bps: 25
         adx_min_1h: 15
 

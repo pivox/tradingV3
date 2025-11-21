@@ -175,20 +175,30 @@ mtf_validation:
                 - all_of: [ close_below_ema_200, ema200_slope_neg ]
 
     execution_selector:
-        stay_on_15m_if:
-            - expected_r_multiple_gte: 2.0
-            - entry_zone_width_pct_lte: 1.3
-            - atr_pct_15m_lte_bps: 130
+        # Format per_timeframe (nouveau format recommandé)
+        per_timeframe:
+            '15m':
+                stay_on_if:
+                    - expected_r_multiple_gte: 2.0
+                    - entry_zone_width_pct_lte: 1.3
+                    - atr_pct_15m_lte_bps: 130
 
-        drop_to_5m_if_any:
-            - expected_r_multiple_lt: 2.0
-            - atr_pct_15m_gt_bps: 120
-            - entry_zone_width_pct_gt: 1.2
+                drop_to_lower_if_any:
+                    - expected_r_multiple_lt: 2.0
+                    - atr_pct_15m_gt_bps: 120
+                    - entry_zone_width_pct_gt: 1.2
 
-        forbid_drop_to_5m_if_any:
-            - adx_5m_lt: 20
-            - spread_bps_gt: 8
+                forbid_drop_to_lower_if_any:
+                    - adx_5m_lt: 20
+                    - spread_bps_gt: 8
 
+            '5m':
+                stay_on_if: []  # 5m devient le TF cible après 15m
+
+            '1m':
+                stay_on_if: []  # Si tu réactives 1m plus tard
+
+        # Format legacy (deprecated, maintenu pour backward compatibility)
         allow_1m_only_for:
             enabled: false
             conditions:

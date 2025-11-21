@@ -32,6 +32,8 @@ use App\MtfValidator\Service\Timeframe\Timeframe1hService;
 use App\MtfValidator\Service\Timeframe\Timeframe15mService;
 use App\MtfValidator\Service\Timeframe\Timeframe5mService;
 use App\MtfValidator\Service\Timeframe\Timeframe1mService;
+use App\MtfValidator\Service\ContextDecisionService;
+use App\MtfValidator\Service\ExecutionTimeframeDecisionService;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
@@ -62,6 +64,8 @@ final class MtfService
         private readonly Timeframe15mService $timeframe15mService,
         private readonly Timeframe5mService $timeframe5mService,
         private readonly Timeframe1mService $timeframe1mService,
+        private readonly ContextDecisionService $contextDecisionService,
+        private readonly ExecutionTimeframeDecisionService $executionTimeframeDecisionService,
         private readonly ?DbValidationCache $validationCache = null,
         private readonly ?KlineJsonIngestionService $klineJsonIngestion = null,
         private readonly ?MtfValidationConfigProvider $mtfValidationConfigProvider = null,
@@ -118,75 +122,84 @@ final class MtfService
     }
 
     private function computeTfExpiresAt(string $tf): \DateTimeImmutable
-    {
-        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
-        $minute = (int)$now->format('i');
-        $hour = (int)$now->format('H');
-        $second = 0;
-        switch ($tf) {
-            case '4h':
-                $baseHour = $hour - ($hour % 4);
-                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-                    ->setTime($baseHour, 0, 0)
-                    ->modify('+4 hours');
-                return $next->modify('-1 second');
-            case '1h':
-                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-                    ->setTime($hour, 0, 0)
-                    ->modify('+1 hour');
-                return $next->modify('-1 second');
-            case '15m':
-                $baseMin = $minute - ($minute % 15);
-                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-                    ->setTime($hour, $baseMin, 0)
-                    ->modify('+15 minutes');
-                return $next->modify('-1 second');
-            case '5m':
-                $baseMin = $minute - ($minute % 5);
-                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-                    ->setTime($hour, $baseMin, 0)
-                    ->modify('+5 minutes');
-                return $next->modify('-1 second');
-            case '1m':
-            default:
-                $next = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-                    ->setTime($hour, $minute, $second)
-                    ->modify('+1 minute');
-                return $next->modify('-1 second');
-        }
-    }
+{
+    $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+    $minute = (int) $now->format('i');
+    $hour = (int) $now->format('H');
+
+    return match ($tf) {
+        '4h' => $now
+            ->setTime($hour - ($hour % 4), 0, 0)
+            ->modify('+4 hours')
+            ->modify('-1 second'),
+        '1h' => $now
+            ->setTime($hour, 0, 0)
+            ->modify('+1 hour')
+            ->modify('-1 second'),
+        '15m' => $now
+            ->setTime($hour, $minute - ($minute % 15), 0)
+            ->modify('+15 minutes')
+            ->modify('-1 second'),
+        '5m' => $now
+            ->setTime($hour, $minute - ($minute % 5), 0)
+            ->modify('+5 minutes')
+            ->modify('-1 second'),
+        '1m' => $now
+            ->setTime($hour, $minute, 0)
+            ->modify('+1 minute')
+            ->modify('-1 second'),
+        default => throw new \InvalidArgumentException(sprintf('Invalid timeframe: %s', $tf)),
+        };
+}
+
 
     /**
-         * Decide whether a cached timeframe result can be reused as-is.
-     */
-    private function shouldReuseCachedResult(?array $cached, string $timeframe, string $symbol): bool
-    {
-        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
-        $expiredAT = $array['kline_time'] ?? null;
-        if (!$expiredAT instanceof \DateTimeImmutable) {
-            return false;
-        }
-        $addInterval = match ($timeframe) {
-            '4h' => new \DateInterval('PT4H'),
-            '1h' => new \DateInterval('PT1H'),
-            '15m' => new \DateInterval('PT15M'),
-            '5m' => new \DateInterval('PT5M'),
-            '1m' => new \DateInterval('PT1M'),
-            default => throw new \InvalidArgumentException('Invalid timeframe'),
-        };
-        $expiresAt = $expiredAT->add($addInterval);
-        if ($now >= $expiresAt) {
-            $cacheKey = $this->buildTfCacheKey($symbol, $timeframe);
-            $this->validationCache->delete($cacheKey);
-            return false;
-        }
-        if (!is_array($cached)) {
-            return false;
-        }
-
-        $status = strtoupper((string)($cached['status'] ?? ''));
-        return $status === 'VALID';
+ * Decide whether a cached timeframe result can be reused as-is.
+ */
+private function shouldReuseCachedResult(?array $cached, string $timeframe, string $symbol): bool
+{
+    // Pas de cache → on ne réutilise pas
+    if (!is_array($cached)) {
+        return false;
     }
+
+    // On ne réutilise jamais un résultat non VALID
+    $status = strtoupper((string)($cached['status'] ?? ''));
+    if ($status !== 'VALID') {
+        return false;
+    }
+
+    // Si pas de kline_time exploitable → on reste prudent, on ne réutilise pas
+    $klineTime = $cached['kline_time'] ?? null;
+    if (!$klineTime instanceof \DateTimeImmutable) {
+        return false;
+    }
+
+    // Vérification de fraîcheur (en plus du isExpired() côté entity)
+    $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
+
+    $interval = match ($timeframe) {
+        '4h' => new \DateInterval('PT4H'),
+        '1h' => new \DateInterval('PT1H'),
+        '15m' => new \DateInterval('PT15M'),
+        '5m' => new \DateInterval('PT5M'),
+        '1m' => new \DateInterval('PT1M'),
+        default => throw new \InvalidArgumentException('Invalid timeframe'),
+    };
+
+    $expiresAt = $klineTime->add($interval);
+
+    // Si on est déjà au-delà de la fin de vie de la bougie → on ne réutilise pas
+    if ($now >= $expiresAt) {
+        return false;
+    }
+
+    // Cache VALIDE + bougie encore dans sa fenêtre temporelle → on peut réutiliser
+    return true;
+}
+
+
+
 
     private function getCachedTfResult(string $symbol, string $tf, ?bool &$hadRecord = null): ?array
     {
@@ -208,7 +221,7 @@ final class MtfService
             return [
                 'status' => $payload['status'] ?? 'INVALID',
                 'signal_side' => $payload['signal_side'] ?? 'NONE',
-                'kline_time' => isset($payload['kline_time']) ? new \DateTimeImmutable($payload['kline_time'], new \DateTimeZone('UTC')) : null,
+                'kline_time' => isset($payload['kline_time']) ? $this->parseKlineTime($payload['kline_time']) : null,
                 'from_cache' => true,
             ];
         } catch (\Throwable $e) {
@@ -607,8 +620,10 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         // Logique MTF selon start_from_timeframe (depuis mtf_validations.yaml)
         $activeConfig = $config ?? $this->mtfValidationConfig;
         $cfg = $activeConfig->getConfig();
+        $mtfCfg = $cfg['mtf_validation'] ?? $cfg;
         $startFrom = strtolower((string)($cfg['validation']['start_from_timeframe'] ?? '4h'));
-        $contextTimeframes = array_map('strtolower', (array)($cfg['context_timeframes'] ?? []));
+        $contextTimeframes = array_map('strtolower', (array)($mtfCfg['context_timeframes'] ?? []));
+        $executionTimeframes = array_map('strtolower', (array)($mtfCfg['execution_timeframes'] ?? []));
         $tfOrder = ['4h','1h','15m','5m','1m'];
         $startIndex = array_search($startFrom, $tfOrder, true);
         if ($startIndex === false) {
@@ -776,7 +791,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             $canUse1h = (strtoupper((string)($result1h['status'] ?? '')) === 'VALID');
             if (!$canUse1h) {
-                $this->logger->info('[MTF] 1h not VALID, stop cascade', ['symbol' => $symbol, 'reason' => $result1h['reason'] ?? null, 'context_only' => $contextOnly1h]);
+                $this->logger->info('[MTF] 1h not VALID', ['symbol' => $symbol, 'reason' => $result1h['reason'] ?? null, 'context_only' => $contextOnly1h, 'in_context_tfs' => in_array('1h', $contextTimeframes, true), 'in_exec_tfs' => in_array('1h', $executionTimeframes, true)]);
                 $this->auditStep($runId, $symbol, '1H_VALIDATION_FAILED', $result1h['reason'] ?? '1H validation failed', [
                     'timeframe' => '1h',
                     'kline_time' => $result1h['kline_time'] ?? null,
@@ -791,9 +806,14 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'from_cache' => (bool)($result1h['from_cache'] ?? false),
                     'context_only' => $contextOnly1h,
                 ]);
-                if (!$contextOnly1h) {
+                // Ne bloquer que si 1h est dans execution_timeframes (nécessaire pour l'exécution)
+                // Si 1h est seulement dans context_timeframes, laisser ContextDecisionService gérer
+                if (!$contextOnly1h && in_array('1h', $executionTimeframes, true)) {
+                    $this->logger->info('[MTF] 1h is in execution_timeframes and not VALID, stop cascade', ['symbol' => $symbol]);
                     return $result1h + ['blocking_tf' => '1h'];
                 }
+                // Si 1h est seulement dans context_timeframes, continuer (ContextDecisionService gérera)
+                $this->logger->info('[MTF] 1h not VALID but only in context_timeframes, continue cascade', ['symbol' => $symbol]);
             }
             if ($canUse1h && $include4h) {
                 // Règle: 1h doit matcher 4h si 4h inclus
@@ -875,6 +895,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             $canUse15m = (strtoupper((string)($result15m['status'] ?? '')) === 'VALID');
             if (!$canUse15m) {
+                $this->logger->info('[MTF] 15m not VALID', ['symbol' => $symbol, 'reason' => $result15m['reason'] ?? null, 'context_only' => $contextOnly15m, 'in_context_tfs' => in_array('15m', $contextTimeframes, true), 'in_exec_tfs' => in_array('15m', $executionTimeframes, true)]);
                 $this->auditStep($runId, $symbol, '15M_VALIDATION_FAILED', $result15m['reason'] ?? '15M validation failed', [
                     'timeframe' => '15m',
                     'kline_time' => $result15m['kline_time'] ?? null,
@@ -889,15 +910,19 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'from_cache' => (bool)($result15m['from_cache'] ?? false),
                     'context_only' => $contextOnly15m,
                 ]);
-                if (!$contextOnly15m) {
+                // Ne bloquer que si 15m est dans execution_timeframes (nécessaire pour l'exécution)
+                // Si 15m est seulement dans context_timeframes, laisser ContextDecisionService gérer
+                if (!$contextOnly15m && in_array('15m', $executionTimeframes, true)) {
                     // Option de contournement: si autorisé par config, on descend en 5m au lieu d'arrêter la chaîne
-                    $activeConfig = $config ?? $this->mtfValidationConfig;
-                    $cfg = $activeConfig->getConfig();
-                    $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
+                    $allowSkip = (bool)($mtfCfg['allow_skip_lower_tf'] ?? false);
                     if (!($allowSkip && ($include5m ?? false))) {
+                        $this->logger->info('[MTF] 15m is in execution_timeframes and not VALID, stop cascade', ['symbol' => $symbol]);
                         return $result15m + ['blocking_tf' => '15m'];
                     }
                     $this->logger->info('[MTF] 15m invalid but allow_skip_lower_tf=true, continue with 5m', ['symbol' => $symbol]);
+                } else {
+                    // Si 15m est seulement dans context_timeframes, continuer (ContextDecisionService gérera)
+                    $this->logger->info('[MTF] 15m not VALID but only in context_timeframes, continue cascade', ['symbol' => $symbol]);
                 }
             }
             // Règle: 15m doit matcher 1h si 1h est inclus
@@ -993,6 +1018,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             $canUse5m = (strtoupper((string)($result5m['status'] ?? '')) === 'VALID');
             if (!$canUse5m) {
+                $this->logger->info('[MTF] 5m not VALID', ['symbol' => $symbol, 'reason' => $result5m['reason'] ?? null, 'context_only' => $contextOnly5m, 'in_context_tfs' => in_array('5m', $contextTimeframes, true), 'in_exec_tfs' => in_array('5m', $executionTimeframes, true)]);
                 $this->auditStep($runId, $symbol, '5M_VALIDATION_FAILED', $result5m['reason'] ?? '5M validation failed', [
                     'timeframe' => '5m',
                     'kline_time' => $result5m['kline_time'] ?? null,
@@ -1007,15 +1033,14 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'from_cache' => (bool)($result5m['from_cache'] ?? false),
                     'context_only' => $contextOnly5m,
                 ]);
-                if (!$contextOnly5m) {
-                    $activeConfig = $config ?? $this->mtfValidationConfig;
-                    $cfg = $activeConfig->getConfig();
-                    $allowSkip = (bool)($cfg['allow_skip_lower_tf'] ?? false);
-                    if (!($allowSkip && ($include1m ?? false))) {
-                        return $result5m + ['blocking_tf' => '5m'];
-                    }
-                    $this->logger->info('[MTF] 5m invalid but allow_skip_lower_tf=true, continue with 1m', ['symbol' => $symbol]);
-                }
+                // Ne plus bloquer la cascade pour les TF d'exécution
+                // Laisser ExecutionTimeframeDecisionService choisir le bon TF d'exécution
+                // On continue même si 5m n'est pas VALID, car 1m pourrait être VALID
+                $this->logger->info('[MTF] 5m not VALID, continue cascade (ExecutionTimeframeDecisionService will choose execution TF)', [
+                    'symbol' => $symbol,
+                    'in_exec_tfs' => in_array('5m', $executionTimeframes, true),
+                    'other_exec_tfs' => array_filter($executionTimeframes, fn($tf) => $tf !== '5m'),
+                ]);
             }
             // Règle: 5m doit matcher 15m si 15m est inclus
             if ($canUse5m && $include15m && is_array($result15m)) {
@@ -1110,6 +1135,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             $canUse1m = (strtoupper((string)($result1m['status'] ?? '')) === 'VALID');
             if (!$canUse1m) {
+                $this->logger->info('[MTF] 1m not VALID', ['symbol' => $symbol, 'reason' => $result1m['reason'] ?? null, 'context_only' => $contextOnly1m, 'in_context_tfs' => in_array('1m', $contextTimeframes, true), 'in_exec_tfs' => in_array('1m', $executionTimeframes, true)]);
                 $this->auditStep($runId, $symbol, '1M_VALIDATION_FAILED', $result1m['reason'] ?? '1M validation failed', [
                     'timeframe' => '1m',
                     'kline_time' => $result1m['kline_time'] ?? null,
@@ -1124,9 +1150,14 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                     'from_cache' => (bool)($result1m['from_cache'] ?? false),
                     'context_only' => $contextOnly1m,
                 ]);
-                if (!$contextOnly1m) {
-                    return $result1m + ['blocking_tf' => '1m'];
-                }
+                // Ne plus bloquer la cascade pour les TF d'exécution
+                // Laisser ExecutionTimeframeDecisionService choisir le bon TF d'exécution
+                // On continue même si 1m n'est pas VALID, car 5m pourrait être VALID
+                $this->logger->info('[MTF] 1m not VALID, continue cascade (ExecutionTimeframeDecisionService will choose execution TF)', [
+                    'symbol' => $symbol,
+                    'in_exec_tfs' => in_array('1m', $executionTimeframes, true),
+                    'other_exec_tfs' => array_filter($executionTimeframes, fn($tf) => $tf !== '1m'),
+                ]);
             }
 
             if ($canUse1m) {
@@ -1186,103 +1217,121 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             ]);
         }
 
-        // Vérification stricte de la chaîne complète: tous les TF inclus doivent être VALID
-        // et leurs sides doivent être identiques (LONG ou SHORT), sinon statut INVALID
-        $chainTfs = [];
-        if ($include4h)  { $chainTfs['4h']  = is_array($result4h)  ? $result4h  : []; }
-        if ($include1h)  { $chainTfs['1h']  = is_array($result1h)  ? $result1h  : []; }
-        if ($include15m) { $chainTfs['15m'] = is_array($result15m) ? $result15m : []; }
-        if ($include5m)  { $chainTfs['5m']  = is_array($result5m)  ? $result5m  : []; }
-        if ($include1m)  { $chainTfs['1m']  = is_array($result1m)  ? $result1m  : []; }
+        // Construire $tfResults depuis les résultats de la cascade
+        // Note: La validation de chaîne stricte a été supprimée.
+        // Les services ContextDecisionService et ExecutionTimeframeDecisionService
+        // valident uniquement les TF configurés dans context_timeframes et execution_timeframes.
+        $tfResults = [
+            '4h' => is_array($result4h) ? $result4h : null,
+            '1h' => is_array($result1h) ? $result1h : null,
+            '15m' => is_array($result15m) ? $result15m : null,
+            '5m' => is_array($result5m) ? $result5m : null,
+            '1m' => is_array($result1m) ? $result1m : null,
+        ];
 
-        $firstSide = null;
-        foreach ($chainTfs as $tfKey => $tfResult) {
-            $status = strtoupper((string)($tfResult['status'] ?? ''));
-            if ($status !== 'VALID') {
-                $this->logger->info('[MTF] Chain invalid: timeframe not VALID', ['symbol' => $symbol, 'tf' => $tfKey, 'status' => $status]);
-                return [
-                    'status' => 'INVALID',
-                    'blocking_tf' => $tfKey,
-                    'reason' => 'CHAIN_NOT_VALIDATED',
-                ];
-            }
-            $side = strtoupper((string)($tfResult['signal_side'] ?? 'NONE'));
-            if (!in_array($side, ['LONG','SHORT'], true)) {
-                $this->logger->info('[MTF] Chain invalid: side NONE', ['symbol' => $symbol, 'tf' => $tfKey]);
-                return [
-                    'status' => 'INVALID',
-                    'blocking_tf' => $tfKey,
-                    'reason' => 'CHAIN_SIDE_NONE',
-                ];
-            }
-            if ($firstSide === null) {
-                $firstSide = $side;
-            } elseif ($side !== $firstSide) {
-                $this->logger->info('[MTF] Chain invalid: side mismatch', ['symbol' => $symbol, 'tf' => $tfKey, 'expected' => $firstSide, 'actual' => $side]);
-                return [
-                    'status' => 'INVALID',
-                    'blocking_tf' => $tfKey,
-                    'reason' => 'CHAIN_SIDE_MISMATCH',
-                ];
-            }
-        }
+        // Récupérer la config MTF
+        $activeConfig = $config ?? $this->mtfValidationConfig;
+        $cfg = $activeConfig->getConfig();
+        $mtfCfg = $cfg['mtf_validation'] ?? $cfg;
+        $contextTimeframes = array_map('strtolower', (array)($mtfCfg['context_timeframes'] ?? []));
+        $executionTimeframes = array_map('strtolower', (array)($mtfCfg['execution_timeframes'] ?? []));
 
-        // Construire knownSignals pour contexte
+        // Construire knownSignals pour contexte (pour buildContextSummary)
         $knownSignals = [];
         foreach ($validationStates as $vs) {
             $knownSignals[$vs['tf']] = ['signal' => strtoupper((string)($vs['signal_side'] ?? 'NONE'))];
         }
 
-        // Choix TF exécution simple (15m>5m>1m)
-        $mtfByTf = [
-            '15m' => is_array($result15m) ? $result15m : [],
-            '5m'  => is_array($result5m) ? $result5m : [],
-            '1m'  => is_array($result1m) ? $result1m : [],
-        ];
-        $available = [
-            '15m' => is_array($result15m) ? ($result15m['signal_side'] ?? 'NONE') : 'NONE',
-            '5m'  => is_array($result5m) ? ($result5m['signal_side'] ?? 'NONE') : 'NONE',
-            '1m'  => is_array($result1m) ? ($result1m['signal_side'] ?? 'NONE') : 'NONE',
-        ];
-        // Option B: privilégier 1m (si validé et aligné), sinon 5m, sinon 15m
-        // Les vérifications d'alignement 1m↔5m et 5m↔15m ont déjà été effectuées plus haut.
-        $prefOrder = ['1m','5m','15m'];
-        $currentTf = '1m';
-        foreach ($prefOrder as $tf) {
-            $side = strtoupper((string)($available[$tf] ?? 'NONE'));
-            if ($side !== 'NONE') { $currentTf = $tf; break; }
+        // Décision de contexte
+        $contextDecision = $this->contextDecisionService->decide($tfResults, $contextTimeframes);
+
+        if (!$skipContextValidation && !$contextDecision->isOk()) {
+            $reason = $contextDecision->getReason() ?? 'CONTEXT_NOT_OK';
+            $this->logger->info('[MTF] Context decision failed', [
+                'symbol' => $symbol,
+                'reason' => $reason,
+                'valid_sides' => $contextDecision->getValidSides(),
+            ]);
+            $this->auditStep($runId, $symbol, 'CONTEXT_REJECTED', sprintf('Context decision failed: %s', $reason), [
+                'context_valid_sides' => $contextDecision->getValidSides(),
+            ]);
+            return [
+                'status' => 'INVALID',
+                'signal_side' => 'NONE',
+                'reason' => $reason,
+                'context_side' => null,
+                'execution_tf' => null,
+            ];
         }
-        $currentSignal = strtoupper((string)($available[$currentTf] ?? 'NONE'));
-        $selectedTfSnapshot = $mtfByTf[$currentTf] ?? [];
-        $selectedPrice = $selectedTfSnapshot['current_price'] ?? null;
-        $selectedAtr = $selectedTfSnapshot['atr'] ?? null;
-        $selectedContext = $selectedTfSnapshot['indicator_context'] ?? null;
-        $selectedKlineTime = $selectedTfSnapshot['kline_time'] ?? (is_array($result15m) ? ($result15m['kline_time'] ?? null) : null);
 
-        $contextSummary = $this->signalValidationService->buildContextSummary($knownSignals, $currentTf, $currentSignal);
-        $this->logger->info('[MTF] Context summary', [ 'symbol' => $symbol, 'current_tf' => $currentTf ] + $contextSummary);
+        $contextSide = $contextDecision->getSide() ?? 'NONE';
 
-        $chainFromCache = $chainTfs !== [] && array_reduce(
-            $chainTfs,
-            static fn(bool $carry, array $tfResult): bool => $carry && (($tfResult['from_cache'] ?? false) === true),
-            true
-        );
+        // Décision TF d'exécution
+        $execDecision = null;
+        $executionTf = null;
+        if ($contextSide !== 'NONE' && !empty($executionTimeframes)) {
+            $execDecision = $this->executionTimeframeDecisionService->decide($tfResults, $executionTimeframes, $contextSide);
+            $executionTf = $execDecision->getExecutionTimeframe();
+        }
+
+        if ($executionTf === null) {
+            $reason = $execDecision?->getReason() ?? 'NO_EXEC_TF';
+            $this->logger->info('[MTF] No execution timeframe aligned with context', [
+                'symbol' => $symbol,
+                'context_side' => $contextSide,
+                'execution_timeframes' => $executionTimeframes,
+                'reason' => $reason,
+            ]);
+            $this->auditStep($runId, $symbol, 'NO_EXEC_TF', 'No execution timeframe aligned with context', [
+                'context_side' => $contextSide,
+                'execution_timeframes' => $executionTimeframes,
+            ]);
+            return [
+                'status' => 'INVALID',
+                'signal_side' => $contextSide,
+                'reason' => $reason,
+                'context_side' => $contextSide,
+                'execution_tf' => null,
+            ];
+        }
+
+        // Construction résultat READY
+        $execRes = $tfResults[$executionTf] ?? [];
+        $klineTime = $execRes['kline_time'] ?? null;
+        $price = $execRes['current_price'] ?? null;
+        $atr = $execRes['atr'] ?? null;
+        $indCtx = $execRes['indicator_context'] ?? null;
+
+        $contextSummary = $this->signalValidationService->buildContextSummary($knownSignals, $executionTf, $contextSide);
+        $this->logger->info('[MTF] Context summary', ['symbol' => $symbol, 'execution_tf' => $executionTf, 'context_side' => $contextSide] + $contextSummary);
+
+        // Vérifier si tous les TF utilisés (context + execution) sont en cache
+        $usedTfs = array_merge($contextTimeframes, $executionTimeframes);
+        $usedTfs = array_unique(array_map('strtolower', $usedTfs));
+        $chainFromCache = true;
+        foreach ($usedTfs as $tf) {
+            $res = $tfResults[$tf] ?? null;
+            if ($res === null || !\is_array($res)) {
+                continue;
+            }
+            if (!(($res['from_cache'] ?? false) === true)) {
+                $chainFromCache = false;
+                break;
+            }
+        }
 
         $shouldGrace = $cacheWarmup && !$forceRun;
         if (!$shouldGrace) {
             $auditData = [
-                'current_tf' => $currentTf,
-                'timeframe' => $currentTf,
-                'passed' => $currentSignal !== 'NONE',
+                'current_tf' => $executionTf,
+                'timeframe' => $executionTf,
+                'passed' => $contextSide !== 'NONE',
                 'severity' => 0,
                 'from_cache' => $chainFromCache,
             ] + $contextSummary;
 
             $this->auditStep($runId, $symbol, 'MTF_CONTEXT', null, $auditData);
         }
-
-        // À ce stade, la chaîne complète est VALID et les sides sont identiques
-        $consistentSide = $firstSide ?? 'NONE';
 
         if ($shouldGrace) {
             $warmupTfs = array_values(array_unique($cacheWarmupTfs));
@@ -1297,26 +1346,27 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 'status' => 'GRACE_WINDOW',
                 'signal_side' => 'NONE',
                 'context' => $contextSummaryWarm,
-                'kline_time' => $selectedKlineTime,
-                'current_price' => $selectedPrice,
-                'atr' => $selectedAtr,
-                'indicator_context' => $selectedContext,
-                'execution_tf' => $currentTf,
+                'kline_time' => $klineTime,
+                'current_price' => $price,
+                'atr' => $atr,
+                'indicator_context' => $indCtx,
+                'execution_tf' => $executionTf,
                 'blocking_tf' => 'cache_warmup',
                 'reason' => 'CACHE_WARMUP',
             ];
         }
 
-        // Pour rester focalisé sur la demande, on n’applique pas de filtres supplémentaires ici.
         return [
             'status' => 'READY',
-            'signal_side' => $consistentSide,
+            'signal_side' => $contextSide,
+            'reason' => 'CONTEXT_AND_EXEC_OK',
+            'context_side' => $contextSide,
+            'execution_tf' => $executionTf,
+            'kline_time' => $klineTime,
+            'current_price' => $price,
+            'atr' => $atr,
+            'indicator_context' => $indCtx,
             'context' => $contextSummary,
-            'kline_time' => $selectedKlineTime,
-            'current_price' => $selectedPrice,
-            'atr' => $selectedAtr,
-            'indicator_context' => $selectedContext,
-            'execution_tf' => $currentTf,
         ];
     }
 

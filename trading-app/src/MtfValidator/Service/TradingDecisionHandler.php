@@ -71,10 +71,10 @@ final class TradingDecisionHandler
             return $this->createSkippedResult($symbolResult, 'trading_conditions_not_met', $forcedAtr5m, $decisionKey);
         }
 
-        // 2. Sélecteur d'exécution (15m/5m/1m) basé sur execution_selector
-        $selectorContext = $this->buildSelectorContext($symbolResult);
-        $execDecision = $this->executionSelector->decide($selectorContext);
-        $effectiveTf = $execDecision->executionTimeframe !== 'NONE' ? $execDecision->executionTimeframe : ($symbolResult->executionTf ?? '1m');
+        // 2. Utiliser le TF d'exécution déjà décidé par MtfService (via ExecutionTimeframeDecisionService)
+        // Plus de re-sélection : on prend directement le TF qui vient de MtfService
+        $effectiveTf = $symbolResult->executionTf ?? '1m';
+        
         // ATR du TF d'exécution (fallbacks hiérarchiques)
         $atrForTf = null;
         try { $atrForTf = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: $effectiveTf); } catch (\Throwable) {}
@@ -86,37 +86,19 @@ final class TradingDecisionHandler
             }
         }
 
-        // Extraire la configuration execution_selector du YAML pour le log
-        $cfg = $this->mtfConfig->getConfig();
-        $execSelectorConfig = (array)($cfg['execution_selector'] ?? []);
-        $execSelectorForLog = [];
-        if (isset($execSelectorConfig['stay_on_15m_if'])) {
-            $execSelectorForLog['stay_on_15m_if'] = $execSelectorConfig['stay_on_15m_if'];
-        }
-        if (isset($execSelectorConfig['drop_to_5m_if_any'])) {
-            $execSelectorForLog['drop_to_5m_if_any'] = $execSelectorConfig['drop_to_5m_if_any'];
-        }
-
-        $this->mtfLogger->info('[ExecutionSelector] decision='.$effectiveTf, [
+        $this->mtfLogger->info('[TradingDecision] Using execution TF from MtfService', [
             'symbol' => $symbolResult->symbol,
             'decision_key' => $decisionKey,
             'execution_tf' => $effectiveTf,
-            'expected_r_multiple' => $execDecision->expectedRMultiple,
-            'entry_zone_width_pct' => $execDecision->entryZoneWidthPct,
-            'atr_pct_15m_bps' => $selectorContext['atr_pct_15m_bps'] ?? null,
-            'execution_selector_config' => $execSelectorForLog,
-        ] + ['meta' => $execDecision->meta]);
+            'source' => 'MtfService::ExecutionTimeframeDecisionService',
+        ]);
 
         $lifecycleContext = $this->lifecycleContextFactory->create($symbolResult->symbol)
             ->withDecisionKey($decisionKey)
             ->withProfile($symbolResult->tradeEntryModeUsed)
             ->withMtfContext($effectiveTf, $this->extractMtfContext($symbolResult), $symbolResult->blockingTf)
-            ->withSelectorDecision($execDecision->expectedRMultiple, $execDecision->entryZoneWidthPct)
-            ->withIndicatorMetrics(
-                $selectorContext['entry_rsi'] ?? null,
-                $selectorContext['price_vs_ma21_k_atr'] ?? null,
-                $selectorContext['volume_ratio'] ?? null
-            )
+            ->withSelectorDecision(null, null) // Plus de sélection dans TradingDecisionHandler, décidé par MtfService
+            ->withIndicatorMetrics(null, null, null) // Plus de métriques de sélection
             ->merge(['config_version' => $this->tradeEntryConfig->getVersion()]);
 
         // 3. Construction via Builder (délégation) avec champs minimaux
@@ -307,19 +289,22 @@ final class TradingDecisionHandler
                 'execution_tf' => $symbolResult->executionTf,
             ]);
         } else {
-            // Mode normal : utiliser allowed_execution_timeframes depuis TradeEntryConfig
-            $allowedTfs = (array)($decision['allowed_execution_timeframes'] ?? ['1m','5m','15m']);
-            if (!in_array($effectiveTf, array_map('strtolower', $allowedTfs), true)) {
-                $this->mtfLogger->info('[Trading Decision] Skipping (unsupported execution TF)', [
+            // Mode normal : validation optionnelle avec allowed_execution_timeframes depuis TradeEntryConfig
+            // Note: Le TF est déjà décidé par MtfService, on valide juste qu'il est autorisé par TradeEntry
+            $allowedTfs = (array)($decision['allowed_execution_timeframes'] ?? []);
+            // Si allowed_execution_timeframes est vide ou non défini, on accepte tous les TF
+            if (!empty($allowedTfs) && !in_array($effectiveTf, array_map('strtolower', $allowedTfs), true)) {
+                $this->mtfLogger->info('[Trading Decision] Skipping (execution TF not allowed by TradeEntry config)', [
                     'symbol' => $symbolResult->symbol,
                     'execution_tf' => $effectiveTf,
                     'allowed_tfs' => $allowedTfs,
+                    'note' => 'TF was decided by MtfService::ExecutionTimeframeDecisionService but rejected by TradeEntry allowed_execution_timeframes',
                 ]);
                 $this->mtfLogger->info('order_journey.preconditions.blocked', [
                     'symbol' => $symbolResult->symbol,
                     'decision_key' => $decisionKey,
-                    'reason' => 'unsupported_execution_tf',
-                    'execution_tf' => $symbolResult->executionTf,
+                    'reason' => 'execution_tf_not_allowed_by_trade_entry',
+                    'execution_tf' => $effectiveTf,
                 ]);
                 return false;
             }

@@ -28,7 +28,60 @@ final class ExecutionSelector
         $cfg = $activeConfig->getConfig();
         $selector = (array)($cfg['execution_selector'] ?? []);
 
-        // Extraire les noms et seuils depuis le YAML
+        // Vérifier si execution_selector est vide (pas de per_timeframe, pas de format legacy)
+        $perTimeframeCfg = (array)($selector['per_timeframe'] ?? []);
+        $hasLegacyConfig = !empty($selector['stay_on_15m_if']) 
+            || !empty($selector['drop_to_5m_if_any']) 
+            || !empty($selector['forbid_drop_to_5m_if_any'])
+            || !empty($selector['allow_1m_only_for']);
+
+        // Si execution_selector est complètement vide, utiliser le timeframe par défaut
+        // Mais on évalue quand même les filtres obligatoires avant
+        if (empty($perTimeframeCfg) && !$hasLegacyConfig) {
+            // Évaluer les filtres obligatoires même si execution_selector est vide
+            $filtersMandatorySpec = $this->parseSpec((array)($cfg['filters_mandatory'] ?? []));
+            $filtersMandatory = array_keys($filtersMandatorySpec);
+            $context = $this->injectThresholds($context, $filtersMandatorySpec, 'filters_mandatory');
+            
+            $filtersRes = !empty($filtersMandatory) ? $this->registry->evaluate($context, $filtersMandatory) : [];
+            $this->logVolumeRatioFilter($filtersRes);
+            
+            $filtersPassed = true;
+            foreach ($filtersRes as $r) {
+                if (!(bool)($r['passed'] ?? false)) {
+                    $filtersPassed = false;
+                    break;
+                }
+            }
+            
+            if (!$filtersPassed) {
+                $this->logger->info('[ExecSelector] filters_mandatory failed (execution_selector empty)', [
+                    'filters' => $filtersRes,
+                ]);
+                return new ExecutionDecision('NONE', meta: [
+                    'filters' => $filtersRes,
+                    'reason' => 'filters_mandatory_failed_execution_selector_empty',
+                ]);
+            }
+            
+            $defaultTf = $this->getDefaultExecutionTimeframe($cfg);
+            $this->logger->info('[ExecSelector] execution_selector is empty, using default timeframe', [
+                'default_tf' => $defaultTf,
+            ]);
+            return $this->decision($defaultTf, $context, [
+                'reason' => 'execution_selector_empty_using_default',
+                'default_tf' => $defaultTf,
+                'filters' => $filtersRes,
+            ]);
+        }
+
+        // Vérifier si le nouveau format per_timeframe est utilisé
+        if (!empty($perTimeframeCfg)) {
+            return $this->decidePerTimeframe($context, $selector, $perTimeframeCfg);
+        }
+
+        // Fallback vers l'ancien format pour compatibilité
+        // Extraire les noms et seuils depuis le YAML (format legacy)
         $stayOn15mSpec = $this->parseSpec((array)($selector['stay_on_15m_if'] ?? []));
         $dropTo5mAnySpec = $this->parseSpec((array)($selector['drop_to_5m_if_any'] ?? []));
         $forbidDropAnySpec = $this->parseSpec((array)($selector['forbid_drop_to_5m_if_any'] ?? []));
@@ -140,6 +193,121 @@ final class ExecutionSelector
             'forbid_drop_to_5m_if_any' => $forbidRes,
             'allow_1m_only_for' => $allow1mRes,
             'filters' => $filtersRes,
+        ]);
+    }
+
+    /**
+     * Nouvelle logique avec format per_timeframe
+     * @param array<string,mixed> $context
+     * @param array<string,mixed> $selector
+     * @param array<string,array<string,mixed>> $perTimeframeCfg
+     */
+    private function decidePerTimeframe(array $context, array $selector, array $perTimeframeCfg): ExecutionDecision
+    {
+        // Filtres obligatoires avec éventuels seuils personnalisés
+        $cfg = $this->registry->getCurrentConfig()?->getConfig() ?? $this->mtfConfig->getConfig();
+        $filtersMandatorySpec = $this->parseSpec((array)($cfg['filters_mandatory'] ?? []));
+        $filtersMandatory = array_keys($filtersMandatorySpec);
+
+        // Injecter les seuils depuis le YAML dans le contexte
+        $context = $this->injectThresholds($context, $filtersMandatorySpec, 'filters_mandatory');
+
+        // Mandatory filters gate
+        $filtersRes = !empty($filtersMandatory) ? $this->registry->evaluate($context, $filtersMandatory) : [];
+        $this->logVolumeRatioFilter($filtersRes);
+
+        $filtersPassed = true;
+        foreach ($filtersRes as $r) {
+            if (!(bool)($r['passed'] ?? false)) {
+                $filtersPassed = false;
+                break;
+            }
+        }
+
+        if (!$filtersPassed) {
+            $this->logger->info('[ExecSelector] filters_mandatory failed', ['filters' => $filtersRes]);
+            return new ExecutionDecision('NONE', meta: ['filters' => $filtersRes]);
+        }
+
+        // Ordre des timeframes à tester (du plus haut au plus bas)
+        $timeframes = ['15m', '5m', '1m'];
+
+        foreach ($timeframes as $tf) {
+            $tfConfig = (array)($perTimeframeCfg[$tf] ?? []);
+            if (empty($tfConfig)) {
+                continue; // Pas de config pour ce TF, passer au suivant
+            }
+
+            // stay_on_if : tous les checks non-missing doivent passer
+            $stayOnSpec = $this->parseSpec((array)($tfConfig['stay_on_if'] ?? []));
+            $stayOn = array_keys($stayOnSpec);
+            $context = $this->injectThresholds($context, $stayOnSpec, "per_timeframe[$tf].stay_on_if");
+
+            $stayRes = !empty($stayOn) ? $this->registry->evaluate($context, $stayOn) : [];
+            $this->logEvaluationResults("per_timeframe[$tf].stay_on_if", $stayRes, $stayOnSpec);
+            $stayAll = $this->allPassed($stayRes);
+
+            if ($stayAll) {
+                return $this->decision($tf, $context, [
+                    "per_timeframe[$tf].stay_on_if" => $stayRes,
+                    'filters' => $filtersRes,
+                ]);
+            }
+
+            // drop_to_lower_if_any : si au moins un check non-missing passe, on descend
+            $dropToLowerSpec = $this->parseSpec((array)($tfConfig['drop_to_lower_if_any'] ?? []));
+            $dropToLower = array_keys($dropToLowerSpec);
+            $context = $this->injectThresholds($context, $dropToLowerSpec, "per_timeframe[$tf].drop_to_lower_if_any");
+
+            $dropRes = !empty($dropToLower) ? $this->registry->evaluate($context, $dropToLower) : [];
+            $this->logEvaluationResults("per_timeframe[$tf].drop_to_lower_if_any", $dropRes, $dropToLowerSpec);
+            $dropAny = $this->anyPassed($dropRes);
+
+            // forbid_drop_to_lower_if_any : si au moins un check non-missing passe, on interdit la descente
+            $forbidDropSpec = $this->parseSpec((array)($tfConfig['forbid_drop_to_lower_if_any'] ?? []));
+            $forbidDrop = array_keys($forbidDropSpec);
+            $context = $this->injectThresholds($context, $forbidDropSpec, "per_timeframe[$tf].forbid_drop_to_lower_if_any");
+
+            $forbidRes = !empty($forbidDrop) ? $this->registry->evaluate($context, $forbidDrop) : [];
+            $this->logEvaluationResults("per_timeframe[$tf].forbid_drop_to_lower_if_any", $forbidRes, $forbidDropSpec);
+            $forbidAny = $this->anyPassed($forbidRes);
+
+            // Si drop_to_lower est vrai et forbid_drop est faux, on descend au TF suivant
+            if ($dropAny && !$forbidAny) {
+                // Continuer vers le TF suivant (sera traité dans la prochaine itération)
+                continue;
+            }
+
+            // Si on arrive ici, on ne peut ni rester ni descendre depuis ce TF
+            // On continue vers le TF suivant
+        }
+
+        // Fallback : si aucun TF n'a été sélectionné, utiliser le premier TF d'exécution disponible
+        // ou retourner NONE si aucun TF n'est valide
+        $allow1mConfig = (array)($selector['allow_1m_only_for'] ?? []);
+        $allow1mEnabled = (bool)($allow1mConfig['enabled'] ?? true);
+
+        if ($allow1mEnabled) {
+            // Essayer 1m comme dernier recours
+            $allow1mConditions = $allow1mConfig['conditions'] ?? $allow1mConfig;
+            unset($allow1mConditions['enabled']);
+            $allow1mOnlyForSpec = $this->parseSpec((array)$allow1mConditions);
+            $allow1mOnlyFor = array_keys($allow1mOnlyForSpec);
+            $allow1mRes = !empty($allow1mOnlyFor) ? $this->registry->evaluate($context, $allow1mOnlyFor) : [];
+            $allow1mAny = $this->anyPassed($allow1mRes);
+
+            if ($allow1mAny) {
+                return $this->decision('1m', $context, [
+                    'allow_1m_only_for' => $allow1mRes,
+                    'filters' => $filtersRes,
+                ]);
+            }
+        }
+
+        // Fallback final : rester sur le premier TF d'exécution (15m par défaut)
+        return $this->decision('15m', $context, [
+            'filters' => $filtersRes,
+            'reason' => 'no_timeframe_selected_fallback',
         ]);
     }
 
@@ -325,5 +493,31 @@ final class ExecutionSelector
         }
 
         return false;
+    }
+
+    /**
+     * Récupère le timeframe d'exécution par défaut depuis la config
+     * @param array<string,mixed> $cfg Configuration complète
+     * @return string Timeframe par défaut (15m, 5m, 1m)
+     */
+    private function getDefaultExecutionTimeframe(array $cfg): string
+    {
+        // Essayer execution_timeframes (premier élément)
+        $execTimeframes = (array)($cfg['execution_timeframes'] ?? []);
+        if (!empty($execTimeframes)) {
+            $firstTf = strtolower((string)($execTimeframes[0] ?? ''));
+            if (in_array($firstTf, ['15m', '5m', '1m'], true)) {
+                return $firstTf;
+            }
+        }
+
+        // Fallback vers execution_timeframe_default
+        $defaultTf = strtolower((string)($cfg['execution_timeframe_default'] ?? '5m'));
+        if (in_array($defaultTf, ['15m', '5m', '1m'], true)) {
+            return $defaultTf;
+        }
+
+        // Fallback final
+        return '5m';
     }
 }
