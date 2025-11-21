@@ -1399,7 +1399,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             ];
         }
 
-        $calc = new \App\Indicator\Core\AtrCalculator($this->logger);
+        $calc = new \App\Indicator\Core\AtrCalculator($this->mtfLogger);
         $atr = $calc->computeWithRules($ohlc, $period, $method, strtolower($tf));
 
         // GARDE : Si ATR = 0, réessayer une fois (les klines étaient peut-être en cours d'insertion)

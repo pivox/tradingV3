@@ -23,7 +23,7 @@ class LockManager implements LockManagerInterface
     /** @param \Redis|\App\Runtime\Concurrency\MockRedis $redis */
     public function __construct(
         private readonly object $redis,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $runtimeLogger
     ) {}
 
     /**

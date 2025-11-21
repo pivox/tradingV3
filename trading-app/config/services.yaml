@@ -53,12 +53,14 @@ services:
             - '../src/Entity/'
             - '../src/Kernel.php'
             - '../src/*/LookAtit'
+            - '../src/Provider/'
 
     # Loggers dedicated to the provider module
     App\Provider\:
         resource: '../src/Provider/'
         exclude:
             - '../src/Provider/Entity/'
+            - '../src/Provider/Bitmart/'
         bind:
             $logger: '@monolog.logger.provider'
 
@@ -93,7 +95,7 @@ services:
     App\MtfValidator\Runtime\Concurrency\LockManager:
         arguments:
             $redis: '@Redis'
-            $logger: '@monolog.logger.mtf'
+            $runtimeLogger: '@monolog.logger.mtf'
 
 
 #    App\MtfValidator\Service\MtfRunService:
@@ -202,14 +204,16 @@ services:
     App\MtfValidator\Controller\MtfController:
         arguments:
             $mtfService: '@App\MtfValidator\Service\MtfService'
-            $klineRepository: '@App\Provider\Repository\KlineRepository'
             $mtfStateRepository: '@App\Repository\MtfStateRepository'
             $mtfSwitchRepository: '@App\MtfValidator\Repository\MtfSwitchRepository'
             $mtfAuditRepository: '@App\MtfValidator\Repository\MtfAuditRepository'
             $mtfLockRepository: '@App\MtfValidator\Repository\MtfLockRepository'
-            $logger: '@logger'
+            $mtfLogger: '@monolog.logger.mtf'
             $mtfRunService: '@App\MtfValidator\Service\MtfRunService'
+            $mtfRunnerService: '@App\MtfRunner\Service\MtfRunnerService'
             $clock: '@Psr\Clock\ClockInterface'
+            $contractRepository: '@App\Provider\Repository\ContractRepository'
+            $mainProvider: '@App\Contract\Provider\MainProviderInterface'
         public: true
 
     # HTTP Client pour BitMart
@@ -277,7 +281,7 @@ services:
     # Registre des conditions: injection automatique via AutowireLocator/AutowireIterator
     App\MtfValidator\ConditionLoader\ConditionRegistry:
         arguments:
-            $logger: '@logger'
+            $mtfLogger: '@monolog.logger.mtf'
         calls:
             - [ loadFromConfigs, ['@App\Config\MtfValidationConfig'] ]
 
