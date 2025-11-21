@@ -575,7 +575,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
             // Best-effort: protéger le flush en cas d'EntityManager fermé
             try {
-                $em = $this->mtfStateRepository->getEntityManager();
+                $em = $this->entityManager;
                 $isOpen = true;
                 try {
                     if (method_exists($em, 'isOpen')) {
@@ -1189,7 +1189,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
 
         // Sauvegarder l'état (best-effort)
         try {
-            $em = $this->mtfStateRepository->getEntityManager();
+            $em = $this->entityManager;
             $isOpen = true;
             try {
                 if (method_exists($em, 'isOpen')) {
