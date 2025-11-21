@@ -1237,6 +1237,24 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             $knownSignals[$vs['tf']] = ['signal' => strtoupper((string)($vs['signal_side'] ?? 'NONE'))];
         }
 
+        // Log diagnostic : résultats de chaque timeframe avant décision de contexte
+        $this->mtfLogger->info('[MTF] Timeframe results before context decision', [
+            'symbol' => $symbol,
+            'context_timeframes' => $contextTimeframes,
+            'execution_timeframes' => $executionTimeframes,
+            'tf_results' => array_map(function ($result) {
+                if ($result === null || !is_array($result)) {
+                    return ['status' => 'NULL_OR_NOT_ARRAY'];
+                }
+                return [
+                    'status' => $result['status'] ?? 'NO_STATUS',
+                    'signal_side' => $result['signal_side'] ?? 'NO_SIDE',
+                    'reason' => $result['reason'] ?? 'NO_REASON',
+                    'blocking_tf' => $result['blocking_tf'] ?? null,
+                ];
+            }, $tfResults),
+        ]);
+
         // Décision de contexte
         $contextDecision = $this->contextDecisionService->decide($tfResults, $contextTimeframes);
 

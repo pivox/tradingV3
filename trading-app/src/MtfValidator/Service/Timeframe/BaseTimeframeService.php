@@ -107,9 +107,10 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
 
             // Fenêtre de grâce (sauf si force-run est activé)
             if (!$forceRun && $this->timeService->isInGraceWindow($now, $timeframe)) {
-                $this->mtfLogger->debug("[MTF] Grace window active - skip {$timeframe->value}", [
+                $this->mtfLogger->info("[MTF] Grace window active - skip {$timeframe->value}", [
                     'symbol' => $symbol,
                     'timeframe' => $timeframe->value,
+                    'now' => $now->format('Y-m-d H:i:s'),
                 ]);
                 return new InternalTimeframeResultDto(
                     timeframe: $timeframe->value,
@@ -140,6 +141,22 @@ abstract class BaseTimeframeService implements TimeframeProcessorInterface
             $signalSide = $validationResult->finalSignalValue();
             $status = $validationResult->status;
             $signalData = $validationArray['signals'][$tfLower] ?? [];
+
+            // Log diagnostic pour timeframes de contexte
+            if (in_array($timeframe->value, ['1h', '15m', '4h'], true)) {
+                $this->mtfLogger->info("[MTF] Context TF validation result", [
+                    'symbol' => $symbol,
+                    'timeframe' => $timeframe->value,
+                    'status' => $status,
+                    'signal_side' => $signalSide,
+                    'validation_details' => [
+                        'failed_long' => $signalData['failed_conditions_long'] ?? [],
+                        'failed_short' => $signalData['failed_conditions_short'] ?? [],
+                        'conditions_long' => $signalData['conditions_long'] ?? [],
+                        'conditions_short' => $signalData['conditions_short'] ?? [],
+                    ],
+                ]);
+            }
 
             // Extraire les informations de la dernière kline
             $lastKline = end($klines);

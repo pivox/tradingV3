@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\MtfValidator\Service;
 
 use App\MtfValidator\Decision\ContextDecision;
+use Psr\Log\LoggerInterface;
 
 /**
  * Service de décision de contexte (context_side)
@@ -12,6 +13,11 @@ use App\MtfValidator\Decision\ContextDecision;
  */
 final class ContextDecisionService
 {
+    public function __construct(
+        private readonly ?LoggerInterface $logger = null,
+    ) {
+    }
+
     /**
      * Décide du context_side basé sur les résultats des timeframes de contexte
      *
@@ -29,12 +35,22 @@ final class ContextDecisionService
 
             if (!isset($tfResults[$tfKey]) || !\is_array($tfResults[$tfKey])) {
                 // TF pas processé (par ex. au-dessus de start_from_timeframe)
+                $this->logger?->debug('[ContextDecision] TF not processed', [
+                    'tf' => $tfKey,
+                    'reason' => 'not in tfResults or not array',
+                ]);
                 continue;
             }
 
             $res = $tfResults[$tfKey];
+            $status = $res['status'] ?? null;
 
-            if (($res['status'] ?? null) !== 'VALID') {
+            if ($status !== 'VALID') {
+                $this->logger?->info('[ContextDecision] TF not VALID', [
+                    'tf' => $tfKey,
+                    'status' => $status ?? 'NULL',
+                    'reason' => $res['reason'] ?? 'NO_REASON',
+                ]);
                 continue;
             }
 
@@ -42,6 +58,15 @@ final class ContextDecisionService
 
             if ($side === 'LONG' || $side === 'SHORT') {
                 $validSides[$tfKey] = $side;
+                $this->logger?->info('[ContextDecision] TF VALID with side', [
+                    'tf' => $tfKey,
+                    'side' => $side,
+                ]);
+            } else {
+                $this->logger?->warning('[ContextDecision] TF VALID but invalid side', [
+                    'tf' => $tfKey,
+                    'side' => $side,
+                ]);
             }
         }
 
@@ -74,4 +99,5 @@ final class ContextDecisionService
         );
     }
 }
+
 
