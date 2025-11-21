@@ -26,6 +26,10 @@ final class SignalPersistenceService
 
     /**
      * Persiste un signal unique
+     * 
+     * Best-effort: si l'EntityManager est fermé ou une erreur survient,
+     * on log l'erreur mais on ne remonte pas l'exception pour ne pas
+     * interrompre le traitement MTF.
      */
     public function persistSignal(SignalDto $signalDto): void
     {
@@ -40,13 +44,20 @@ final class SignalPersistenceService
                 'score' => $signalDto->score,
                 'kline_time' => $signalDto->klineTime->format('Y-m-d H:i:s')
             ]);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            // Best-effort: logger l'erreur mais ne pas interrompre le traitement
+            $isEntityManagerClosed = stripos($e->getMessage(), 'entitymanager is closed') !== false
+                || stripos($e->getMessage(), 'entitymanagerclosed') !== false;
+            
             $this->signalLogger->error('Failed to persist signal', [
                 'symbol' => $signalDto->symbol,
                 'timeframe' => $signalDto->timeframe->value,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'entity_manager_closed' => $isEntityManagerClosed,
             ]);
-            throw $e;
+            
+            // Ne pas relancer l'exception pour ne pas interrompre le traitement MTF
+            // Les signaux sont importants mais pas critiques pour la continuité
         }
     }
 

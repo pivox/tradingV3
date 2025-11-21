@@ -23,9 +23,14 @@ use App\Repository\PositionRepository;
 use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
 use App\TradeEntry\Service\TpSlTwoTargetsService;
 use App\TradeEntry\Types\Side as EntrySide;
+use App\MtfValidator\Service\PerformanceProfiler;
+use App\MtfValidator\Service\Helper\OrdersExtractor;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\Uuid;
+use SplQueue;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\Process\Process;
 
 /**
  * Service Runner MTF - Centralise toutes les responsabilités d'exécution MTF
@@ -51,17 +56,29 @@ final class MtfRunnerService
         private readonly MainProviderInterface $mainProvider,
         private readonly EntityManagerInterface $entityManager,
         private readonly LoggerInterface $logger,
-        private readonly ?TpSlTwoTargetsService $tpSlService = null, // PHP 8.1: optional params moved after required (voir n° de commit)
+        #[Autowire('%kernel.project_dir%')]
+        private readonly string $projectDir,
+        private readonly ?TpSlTwoTargetsService $tpSlService = null,
     ) {
     }
 
     /**
      * Exécute un cycle MTF complet avec toutes les responsabilités
      * 
-     * @return array{summary: array, results: array, errors: array}
+     * @return array{
+     *     summary: array,
+     *     results: array,
+     *     errors: array,
+     *     summary_by_tf: array,
+     *     rejected_by: array,
+     *     last_validated: array,
+     *     orders_placed: array,
+     *     performance: array
+     * }
      */
     public function run(RunnerRequestDto $request): array
     {
+        $profiler = new PerformanceProfiler();
         $runId = Uuid::uuid4()->toString();
         $startTime = microtime(true);
 
@@ -74,25 +91,31 @@ final class MtfRunnerService
 
         try {
             // 1. Résoudre les symboles
+            $resolveStart = microtime(true);
             $symbols = $this->resolveSymbols($request->symbols);
+            $profiler->increment('runner', 'resolve_symbols', microtime(true) - $resolveStart);
 
             // 2. Créer le contexte
             $context = $this->createContext($request);
 
             // 3. Synchroniser les tables depuis l'exchange (si demandé)
             if ($request->syncTables) {
+                $syncStart = microtime(true);
                 $this->syncTables($context);
+                $profiler->increment('runner', 'sync_tables', microtime(true) - $syncStart);
             }
 
             // 4. Filtrer les symboles avec ordres/positions ouverts
             $excludedSymbols = [];
             if (!$request->skipOpenStateFilter) {
+                $filterStart = microtime(true);
                 $symbols = $this->filterSymbolsWithOpenOrdersOrPositions(
                     $symbols,
                     $runId,
                     $context,
                     $excludedSymbols
                 );
+                $profiler->increment('runner', 'filter_symbols', microtime(true) - $filterStart);
             }
 
             // 5. Gérer les locks
@@ -102,9 +125,11 @@ final class MtfRunnerService
             $this->manageSwitches($symbols, $excludedSymbols, $runId);
 
             // 7. Exécuter MTF (séquentiel ou parallèle)
+            $execStart = microtime(true);
             $result = $request->workers > 1
                 ? $this->runParallel($symbols, $request, $context, $runId)
                 : $this->runSequential($symbols, $request, $context);
+            $profiler->increment('runner', 'mtf_execution', microtime(true) - $execStart);
 
             // 8. Mettre à jour les switches pour les symboles exclus (après traitement)
             if (!empty($excludedSymbols)) {
@@ -114,7 +139,9 @@ final class MtfRunnerService
             // 9. Recalcul TP/SL (si demandé)
             if ($request->processTpSl) {
                 try {
+                    $tpSlStart = microtime(true);
                     $this->processTpSlRecalculation($request->dryRun, $context);
+                    $profiler->increment('runner', 'tp_sl_recalculation', microtime(true) - $tpSlStart);
                 } catch (\Throwable $e) {
                     $this->logger->warning('[MTF Runner] TP/SL recalculation failed', [
                         'error' => $e->getMessage(),
@@ -122,14 +149,32 @@ final class MtfRunnerService
                 }
             }
 
+            // 10. Post-processing : enrichir les résultats
+            $postProcessStart = microtime(true);
+            $results = $result['results'] ?? [];
+            $enriched = $this->enrichResults($results);
+            $profiler->increment('runner', 'post_processing', microtime(true) - $postProcessStart);
+
             $executionTime = microtime(true) - $startTime;
+            $performanceReport = $profiler->getReport();
+
             $this->logger->info('[MTF Runner] Execution completed', [
                 'run_id' => $runId,
                 'execution_time' => round($executionTime, 3),
-                'symbols_processed' => count($result['results'] ?? []),
+                'symbols_processed' => count($results),
+                'performance' => $performanceReport,
             ]);
 
-            return $result;
+            return [
+                'summary' => $result['summary'] ?? [],
+                'results' => $results,
+                'errors' => $result['errors'] ?? [],
+                'summary_by_tf' => $enriched['summary_by_tf'],
+                'rejected_by' => $enriched['rejected_by'],
+                'last_validated' => $enriched['last_validated'],
+                'orders_placed' => $enriched['orders_placed'],
+                'performance' => $performanceReport,
+            ];
 
         } catch (\Throwable $e) {
             $this->logger->error('[MTF Runner] Execution failed', [
@@ -541,10 +586,9 @@ final class MtfRunnerService
     }
 
     /**
-     * Exécute MTF en mode parallèle
+     * Exécute MTF en mode parallèle via des workers Process
      * 
-     * Note: Pour l'instant, on retourne une structure similaire au séquentiel
-     * L'implémentation parallèle complète sera ajoutée plus tard
+     * @return array{summary: array, results: array, errors: array}
      */
     private function runParallel(
         array $symbols,
@@ -552,14 +596,264 @@ final class MtfRunnerService
         ExchangeContext $context,
         string $runId
     ): array {
-        // Pour l'instant, on utilise le mode séquentiel même si workers > 1
-        // L'implémentation parallèle complète sera ajoutée plus tard
-        $this->logger->info('[MTF Runner] Parallel execution not yet implemented, using sequential', [
+        $queue = new SplQueue();
+        foreach ($symbols as $symbol) {
+            $queue->enqueue($symbol);
+        }
+
+        $active = [];
+        $results = [];
+        $errors = [];
+        $startedAt = microtime(true);
+        $workerStartTimes = [];
+        $pollingTime = 0;
+        $pollingCount = 0;
+
+        $options = [
+            'dry_run' => $request->dryRun,
+            'force_run' => $request->forceRun,
+            'current_tf' => $request->currentTf,
+            'force_timeframe_check' => $request->forceTimeframeCheck,
+            'skip_context' => $request->skipContextValidation,
+            'lock_per_symbol' => $request->lockPerSymbol,
+            'skip_open_filter' => true, // Déjà filtré en amont
+            'user_id' => $request->userId,
+            'ip_address' => $request->ipAddress,
+            'exchange' => $context->exchange->value,
+            'market_type' => $context->marketType->value,
+        ];
+
+        $this->logger->info('[MTF Runner] Starting parallel execution', [
             'run_id' => $runId,
+            'symbols_count' => count($symbols),
             'workers' => $request->workers,
         ]);
 
-        return $this->runSequential($symbols, $request, $context);
+        while (!$queue->isEmpty() || $active !== []) {
+            $pollStart = microtime(true);
+
+            // Démarrer de nouveaux workers si on a de la place et des symboles en attente
+            while (count($active) < $request->workers && !$queue->isEmpty()) {
+                $symbol = $queue->dequeue();
+                $workerStart = microtime(true);
+                $process = new Process(
+                    $this->buildWorkerCommand($symbol, $options),
+                    $this->projectDir,
+                    ['APP_DEBUG' => '1']
+                );
+                $process->start();
+                $workerStartTimes[$symbol] = $workerStart;
+                $active[] = ['symbol' => $symbol, 'process' => $process];
+                $this->logger->debug('[MTF Runner] Worker started', [
+                    'run_id' => $runId,
+                    'symbol' => $symbol,
+                ]);
+            }
+
+            // Vérifier les workers terminés
+            $hasRunning = false;
+            foreach ($active as $index => $worker) {
+                $process = $worker['process'];
+                if ($process->isRunning()) {
+                    $hasRunning = true;
+                    continue;
+                }
+
+                $symbol = $worker['symbol'];
+                $workerDuration = microtime(true) - ($workerStartTimes[$symbol] ?? microtime(true));
+                unset($active[$index], $workerStartTimes[$symbol]);
+                $active = array_values($active);
+
+                if ($process->isSuccessful()) {
+                    $rawOutput = trim($process->getOutput());
+                    if ($rawOutput === '') {
+                        $errors[] = sprintf('Worker %s: empty output', $symbol);
+                        continue;
+                    }
+
+                    try {
+                        $payload = json_decode($rawOutput, true, 512, JSON_THROW_ON_ERROR);
+                    } catch (\JsonException $exception) {
+                        // Extraire le JSON même s'il y a des warnings PHP avant
+                        $jsonStart = strpos($rawOutput, '{');
+                        if ($jsonStart === false) {
+                            $errors[] = sprintf('Worker %s: invalid JSON output (%s)', $symbol, $exception->getMessage());
+                            continue;
+                        }
+
+                        $candidate = substr($rawOutput, $jsonStart);
+                        $jsonEnd = strrpos($candidate, '}');
+                        if ($jsonEnd === false) {
+                            $errors[] = sprintf('Worker %s: invalid JSON output (%s)', $symbol, $exception->getMessage());
+                            continue;
+                        }
+
+                        $candidate = substr($candidate, 0, $jsonEnd + 1);
+
+                        try {
+                            $payload = json_decode($candidate, true, 512, JSON_THROW_ON_ERROR);
+                        } catch (\JsonException $exception2) {
+                            $errors[] = sprintf('Worker %s: invalid JSON output (%s)', $symbol, $exception2->getMessage());
+                            continue;
+                        }
+                    }
+
+                    $final = $payload['final'] ?? null;
+                    $workerResults = is_array($final) ? ($final['results'] ?? []) : [];
+                    if (empty($workerResults)) {
+                        $errors[] = sprintf('Worker %s: no results returned', $symbol);
+                        continue;
+                    }
+
+                    foreach ($workerResults as $resultSymbol => $info) {
+                        // Ignorer l'entrée synthétique "FINAL" renvoyée par le worker
+                        if ($resultSymbol === 'FINAL') {
+                            continue;
+                        }
+                        if (is_string($resultSymbol)) {
+                            $results[$resultSymbol] = $info;
+                        }
+                    }
+
+                    $this->logger->debug('[MTF Runner] Worker completed', [
+                        'run_id' => $runId,
+                        'symbol' => $symbol,
+                        'duration' => round($workerDuration, 3),
+                    ]);
+                } else {
+                    $stderr = trim($process->getErrorOutput());
+                    $stdout = trim($process->getOutput());
+                    $msg = $stderr !== '' ? $stderr : ($stdout !== '' ? $stdout : 'unknown error');
+                    $errors[] = sprintf('Worker %s: %s', $symbol, $msg);
+                    $this->logger->warning('[MTF Runner] Worker failed', [
+                        'run_id' => $runId,
+                        'symbol' => $symbol,
+                        'error' => $msg,
+                    ]);
+                }
+            }
+
+            $pollDuration = microtime(true) - $pollStart;
+            $pollingTime += $pollDuration;
+            $pollingCount++;
+
+            if ($hasRunning) {
+                usleep(100_000); // 100ms
+            }
+        }
+
+        $processed = count($results);
+        $successCount = count(array_filter($results, function ($r) {
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['SUCCESS', 'COMPLETED', 'READY'], true);
+        }));
+        $failedCount = count(array_filter($results, function ($r) {
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['ERROR', 'INVALID'], true);
+        }));
+        $skippedCount = count(array_filter($results, function ($r) {
+            $td = $r['trading_decision']['status'] ?? null;
+            if (is_string($td) && strtolower($td) === 'skipped') {
+                return true;
+            }
+            $s = strtoupper((string)($r['status'] ?? ''));
+            return in_array($s, ['SKIPPED', 'GRACE_WINDOW'], true);
+        }));
+
+        $totalExecutionTime = microtime(true) - $startedAt;
+        $summary = [
+            'run_id' => $runId,
+            'execution_time_seconds' => round($totalExecutionTime, 3),
+            'symbols_requested' => count($symbols),
+            'symbols_processed' => $processed,
+            'symbols_successful' => $successCount,
+            'symbols_failed' => $failedCount,
+            'symbols_skipped' => $skippedCount,
+            'success_rate' => $processed > 0 ? round(($successCount / $processed) * 100, 2) : 0.0,
+            'dry_run' => $request->dryRun,
+            'force_run' => $request->forceRun,
+            'current_tf' => $request->currentTf,
+            'timestamp' => date('Y-m-d H:i:s'),
+            'status' => empty($errors) ? 'completed' : 'completed_with_errors',
+            'polling_time_seconds' => round($pollingTime, 3),
+            'polling_count' => $pollingCount,
+        ];
+
+        $this->logger->info('[MTF Runner] Parallel execution completed', [
+            'run_id' => $runId,
+            'symbols_processed' => $processed,
+            'execution_time' => round($totalExecutionTime, 3),
+            'polling_time' => round($pollingTime, 3),
+        ]);
+
+        return [
+            'summary' => $summary,
+            'results' => $results,
+            'errors' => $errors,
+        ];
+    }
+
+    /**
+     * Construit la commande pour un worker Process
+     * 
+     * @param string $symbol Symbole à traiter
+     * @param array{
+     *     dry_run: bool,
+     *     force_run: bool,
+     *     current_tf: ?string,
+     *     force_timeframe_check: bool,
+     *     skip_context: bool,
+     *     lock_per_symbol: bool,
+     *     skip_open_filter: bool,
+     *     user_id: ?string,
+     *     ip_address: ?string,
+     *     exchange: string,
+     *     market_type: string,
+     * } $options
+     * @return string[]
+     */
+    private function buildWorkerCommand(string $symbol, array $options): array
+    {
+        // Toujours utiliser 'php' directement pour éviter d'utiliser php-fpm dans Docker
+        // PHP_BINARY peut pointer vers php-fpm dans un environnement FPM, ce qui ne fonctionne pas pour les commandes CLI
+        $command = [
+            'php',
+            $this->projectDir . '/bin/console',
+            'mtf:run-worker',
+            '--symbols=' . $symbol,
+            '--dry-run=' . ($options['dry_run'] ? '1' : '0'),
+            '--skip-open-filter', // Le filtrage est fait en amont
+        ];
+
+        if ($options['force_run']) {
+            $command[] = '--force-run';
+        }
+        if (!empty($options['current_tf'])) {
+            $command[] = '--tf=' . $options['current_tf'];
+        }
+        if ($options['force_timeframe_check']) {
+            $command[] = '--force-timeframe-check';
+        }
+        if ($options['skip_context']) {
+            $command[] = '--skip-context';
+        }
+        if ($options['lock_per_symbol']) {
+            $command[] = '--lock-per-symbol';
+        }
+        if (!empty($options['user_id'])) {
+            $command[] = '--user-id=' . $options['user_id'];
+        }
+        if (!empty($options['ip_address'])) {
+            $command[] = '--ip-address=' . $options['ip_address'];
+        }
+        if (!empty($options['exchange'])) {
+            $command[] = '--exchange=' . $options['exchange'];
+        }
+        if (!empty($options['market_type'])) {
+            $command[] = '--market-type=' . $options['market_type'];
+        }
+
+        return $command;
     }
 
     /**
@@ -735,6 +1029,141 @@ final class MtfRunnerService
         $marketType = $request->marketType ?? MarketType::PERPETUAL;
         
         return new ExchangeContext($exchange, $marketType);
+    }
+
+    /**
+     * Enrichit les résultats avec summary_by_tf, rejected_by, last_validated, orders_placed
+     * 
+     * @param array<string, array<string, mixed>> $results
+     * @return array{
+     *     summary_by_tf: array<string, array<string>>,
+     *     rejected_by: array<string>,
+     *     last_validated: array<int, array{symbol: string, side: mixed, timeframe: string|null}>,
+     *     orders_placed: array{count: array{total: int, submitted: int, simulated: int}, orders: array}
+     * }
+     */
+    private function enrichResults(array $results): array
+    {
+        // 1. Calculer summary_by_tf
+        $summaryByTfVrac = $this->buildSummaryByTimeframe($results);
+        $summaryByTf = [];
+        foreach (['1m', '5m', '15m', '1h', '4h'] as $tf) {
+            $summaryByTf[$tf] = $summaryByTfVrac[$tf] ?? [];
+        }
+
+        // 2. Extraire rejected_by et last_validated
+        $rejectedBy = [];
+        $lastValidated = [];
+
+        foreach ($results as $symbol => $symbolResult) {
+            if ($symbol === 'FINAL' || !is_string($symbol) || $symbol === '') {
+                continue;
+            }
+
+            if (!is_array($symbolResult)) {
+                continue;
+            }
+
+            $resultStatus = strtoupper((string)($symbolResult['status'] ?? ''));
+
+            if (!in_array($resultStatus, ['SUCCESS', 'COMPLETED', 'READY'], true)) {
+                $rejectedBy[] = $symbol;
+            }
+
+            if ($resultStatus === 'SUCCESS' || $resultStatus === 'COMPLETED') {
+                $executionTf = $symbolResult['execution_tf'] ?? null;
+                $signalSide = $symbolResult['signal_side'] ?? null;
+
+                $timeframe = $this->getPreviousTimeframe($executionTf);
+
+                $lastValidated[] = [
+                    'symbol' => $symbol,
+                    'side' => $signalSide,
+                    'timeframe' => $timeframe,
+                ];
+            }
+        }
+
+        sort($rejectedBy);
+        usort($lastValidated, function ($a, $b) {
+            return strcmp($a['symbol'] ?? '', $b['symbol'] ?? '');
+        });
+
+        // 3. Extraire orders_placed
+        $ordersPlaced = OrdersExtractor::extractPlacedOrders($results);
+        $ordersCount = OrdersExtractor::countOrdersByStatus($results);
+
+        return [
+            'summary_by_tf' => $summaryByTf,
+            'rejected_by' => $rejectedBy,
+            'last_validated' => $lastValidated,
+            'orders_placed' => [
+                'count' => $ordersCount,
+                'orders' => $ordersPlaced,
+            ],
+        ];
+    }
+
+    /**
+     * Construit un résumé groupé par dernier timeframe atteint
+     * 
+     * @param array<string, array<string, mixed>> $results
+     * @return array<string, array<string>>
+     */
+    private function buildSummaryByTimeframe(array $results): array
+    {
+        $groups = [];
+        foreach ($results as $symbol => $info) {
+            if (!is_array($info)) {
+                continue;
+            }
+            $lastTf = $info['blocking_tf'] ?? $info['failed_timeframe'] ?? ($info['execution_tf'] ?? null);
+            $key = is_string($lastTf) && $lastTf !== '' ? $lastTf : 'N/A';
+            if (!isset($groups[$key])) {
+                $groups[$key] = [];
+            }
+            $groups[$key][] = (string)$symbol;
+        }
+
+        // Trier les TF de 4h -> 1m, puis N/A
+        $order = ['4h' => 5, '1h' => 4, '15m' => 3, '5m' => 2, '1m' => 1, 'N/A' => 0];
+        uksort($groups, function($a, $b) use ($order) {
+            return ($order[$b] ?? 0) - ($order[$a] ?? 0);
+        });
+
+        return $groups;
+    }
+
+    /**
+     * Calcule le timeframe précédent (tf-1) pour un timeframe donné.
+     * Retourne 'READY' pour '1m', null pour les timeframes non reconnus ou manquants.
+     *
+     * Mapping :
+     * - '15m' → '1h'
+     * - '5m' → '15m'
+     * - '1m' → 'READY'
+     * - '1h' → '4h'
+     * - '4h' → null (pas de timeframe supérieur)
+     *
+     * @param string|null $timeframe Le timeframe d'exécution
+     * @return string|null Le timeframe précédent ou 'READY' pour 1m
+     */
+    private function getPreviousTimeframe(?string $timeframe): ?string
+    {
+        if ($timeframe === null || $timeframe === '') {
+            return null;
+        }
+
+        $normalized = strtolower(trim($timeframe));
+
+        return match ($normalized) {
+            '15m' => '1h',
+            '5m' => '15m',
+            '1m' => 'READY',
+            '1h' => '4h',
+            '4h' => null,
+            default => null,
+        };
     }
 }
 

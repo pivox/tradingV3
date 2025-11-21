@@ -14,9 +14,12 @@ use Doctrine\Persistence\ManagerRegistry;
  */
 class SignalRepository extends ServiceEntityRepository
 {
+    private ManagerRegistry $registry;
+
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, Signal::class);
+        $this->registry = $registry;
     }
 
     /**
@@ -92,10 +95,39 @@ class SignalRepository extends ServiceEntityRepository
     }
 
     /**
+     * Obtient un EntityManager ouvert, en réinitialisant si nécessaire
+     */
+    private function getOpenEntityManager(): \Doctrine\ORM\EntityManagerInterface
+    {
+        $em = $this->getEntityManager();
+        
+        // Vérifier si l'EntityManager est ouvert
+        $isOpen = true;
+        try {
+            if (method_exists($em, 'isOpen')) {
+                $isOpen = (bool) $em->isOpen();
+            }
+        } catch (\Throwable) {
+            // Si la méthode n'est pas disponible ou jette, on considère ouvert
+            $isOpen = true;
+        }
+
+        // Si l'EntityManager est fermé, réinitialiser pour obtenir un nouveau
+        if (!$isOpen) {
+            $this->registry->resetManager();
+            $em = $this->getEntityManager();
+        }
+
+        return $em;
+    }
+
+    /**
      * Sauvegarde ou met à jour un signal
      */
     public function upsert(Signal $signal): void
     {
+        $em = $this->getOpenEntityManager();
+
         $existing = $this->findOneBy([
             'symbol' => $signal->getSymbol(),
             'timeframe' => $signal->getTimeframe(),
@@ -107,10 +139,10 @@ class SignalRepository extends ServiceEntityRepository
             $existing->setScore($signal->getScore());
             $existing->setMeta($signal->getMeta());
             $existing->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
-            $this->getEntityManager()->flush();
+            $em->flush();
         } else {
-            $this->getEntityManager()->persist($signal);
-            $this->getEntityManager()->flush();
+            $em->persist($signal);
+            $em->flush();
         }
     }
 
