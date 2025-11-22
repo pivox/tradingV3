@@ -185,3 +185,4 @@ $tfOrder = ['4h','1h','15m','5m','1m'];
 3. **Tester progressivement** : Commencer avec `start_from_timeframe='15m'` et vérifier que 5m n'est plus validé
 4. **Monitoring** : Surveiller les logs pour vérifier que les décisions d'exécution sont correctes
 
+
