@@ -73,7 +73,15 @@ final class TradingDecisionHandler
 
         // 2. Utiliser le TF d'exécution déjà décidé par MtfService (via ExecutionTimeframeDecisionService)
         // Plus de re-sélection : on prend directement le TF qui vient de MtfService
-        $effectiveTf = $symbolResult->executionTf ?? '1m';
+        if ($symbolResult->executionTf === null || $symbolResult->executionTf === '') {
+            $this->mtfLogger->error('[TradingDecision] executionTf is required but missing', [
+                'symbol' => $symbolResult->symbol,
+                'decision_key' => $decisionKey,
+                'status' => $symbolResult->status,
+            ]);
+            return $this->createSkippedResult($symbolResult, 'execution_tf_missing', $forcedAtr5m, $decisionKey);
+        }
+        $effectiveTf = $symbolResult->executionTf;
         
         // ATR du TF d'exécution (fallbacks hiérarchiques)
         $atrForTf = null;
