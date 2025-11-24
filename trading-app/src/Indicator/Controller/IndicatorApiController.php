@@ -65,7 +65,7 @@ final class IndicatorApiController extends AbstractController
         $withKlines = (int) $request->query->get('with-k', 0);
         if ($withKlines === 1) {
             // Récupérer les klines utilisées pour le calcul (200 comme dans getListPivot)
-            $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
+            $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 250);
             
             if (!empty($klines)) {
                 // Formater les klines pour la réponse JSON (même format que /api/klines)
@@ -131,7 +131,7 @@ final class IndicatorApiController extends AbstractController
         $withKlines = (int) $request->query->get('with-k', 0);
         if ($withKlines === 1) {
             // Récupérer les klines utilisées pour le calcul (200 comme dans getListPivot)
-            $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
+            $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 250);
             
             if (!empty($klines)) {
                 // Formater les klines pour la réponse JSON (même format que /api/klines)
@@ -212,7 +212,7 @@ final class IndicatorApiController extends AbstractController
                 $tfEnum = Timeframe::from($tfValue);
                 
                 // Récupérer les klines (200 pour le calcul ATR)
-                $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
+                $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 250);
                 
                 if (empty($klines)) {
                     $missing[] = $tfValue;

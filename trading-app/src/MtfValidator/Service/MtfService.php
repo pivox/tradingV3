@@ -1391,7 +1391,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         $tfEnum = Timeframe::from($tf);
 
         // Attempt 1: Retrieve the klines
-        $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
+        $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 250);
 
         $this->mtfLogger->debug('[MTF] ATR computation start', [
             'symbol' => $symbol,
@@ -1439,7 +1439,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             usleep(100000);
 
             // Tentative 2 : Récupérer les klines à nouveau
-            $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 200);
+            $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 250);
 
             if (empty($klines)) {
                 $this->mtfLogger->error('[MTF] No klines on retry for ATR computation', [

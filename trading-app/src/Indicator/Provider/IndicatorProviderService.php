@@ -112,10 +112,11 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             ];
         }
 
+
         public function getSnapshot(string $symbol, string $timeframe): IndicatorSnapshotDto
         {
             $tf = Timeframe::from($timeframe);
-            $klines = $this->klineProvider->getKlines($symbol, $tf, 200);
+            $klines = $this->klineProvider->getKlines($symbol, $tf, 250);
             if (empty($klines)) {
                 throw new \RuntimeException("Aucune kline pour $symbol/$timeframe");
             }
@@ -134,6 +135,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             // Compute indicators using Core services
             $ema20 = $this->emaService->calculate($closes, 20);
             $ema50 = $this->emaService->calculate($closes, 50);
+            $ema200 = $this->emaService->calculate($closes, 200);
             $macd  = $this->macdService->calculate($closes, 12, 26, 9);
             $atr   = (function () use ($highs, $lows, $closes) {
                 $n = min(count($highs), count($lows), count($closes));
@@ -159,6 +161,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 klineTime: $lastTime,
                 ema20: $ema20 !== null ? \Brick\Math\BigDecimal::of((string)$ema20) : null,
                 ema50: $ema50 !== null ? \Brick\Math\BigDecimal::of((string)$ema50) : null,
+                ema200: $ema200 !== null ? \Brick\Math\BigDecimal::of((string)$ema200) : null,
                 macd: isset($macd['macd']) && $macd['macd'] !== null ? \Brick\Math\BigDecimal::of((string)$macd['macd']) : null,
                 macdSignal: isset($macd['signal']) && $macd['signal'] !== null ? \Brick\Math\BigDecimal::of((string)$macd['signal']) : null,
                 macdHistogram: isset($macd['hist']) && $macd['hist'] !== null ? \Brick\Math\BigDecimal::of((string)$macd['hist']) : null,
@@ -198,6 +201,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             $snapshot->setBbLower($snapshotDto->bbLower?->toScale($scale, $round)->__toString());
             $snapshot->setMa9($snapshotDto->ma9?->toScale($scale, $round)->__toString());
             $snapshot->setMa21($snapshotDto->ma21?->toScale($scale, $round)->__toString());
+            $snapshot->setEma200($snapshotDto->ema200?->toScale($scale, $round)->__toString());
             $snapshot->setValue('meta', $snapshotDto->meta);
             $snapshot->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
 
@@ -395,7 +399,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
             try {
                 $tfEnum = Timeframe::from((string)$tf);
-                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 200);
+                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 250);
                 if (empty($klines)) {
                     return null;
                 }
@@ -441,7 +445,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 }
 
                 try {
-                    $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 200);
+                    $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 250);
                     if (empty($klines)) {
                         return null;
                     }
@@ -531,4 +535,123 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
             return null;
         }
+
+    public function getIndicatorsForSymbolAndTimeframes(
+        string $symbol,
+        array $timeframes,
+        \DateTimeInterface $at
+    ): array {
+        $result = [];
+
+        foreach ($timeframes as $tf) {
+            try {
+                $snapshot = $this->getSnapshotFromDatabaseOnly($symbol, $tf);
+
+                // 1️⃣ si rien en DB → on calcule à partir des klines
+                if ($snapshot === null || $this->isSnapshotStale($snapshot, $at, Timeframe::from((string)$tf))) {
+                    $fresh = $this->getSnapshot($symbol, (string)$tf);
+                    // optionnel mais logique si tu veux alimenter la table au passage
+                    $this->saveIndicatorSnapshot($fresh);
+                    $snapshot = $fresh;
+                }
+
+                // 2️⃣ mapping vers le format attendu par le MTF
+                $tfEnum = Timeframe::from((string)$tf);
+                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 250);
+
+                $closes = [];
+                foreach ($klines as $k) {
+                    $closes[] = (float) $k->close->toFloat();
+                }
+                $lastClose = $closes ? (float) end($closes) : null;
+
+                $result[$tf] = [
+                    'close'        => $lastClose,
+                    'rsi'          => $snapshot->rsi,
+                    'ema_20'       => $snapshot->ema20?->toFloat(),
+                    'ema_50'       => $snapshot->ema50?->toFloat(),
+                    'ema_200'      => $snapshot->ema200?->toFloat(),
+                    'macd_hist'    => $snapshot->macdHistogram?->toFloat(),
+                    'vwap'         => $snapshot->vwap?->toFloat(),
+                    'atr'          => $snapshot->atr?->toFloat(),
+                    'adx'          => $snapshot->meta['adx'] ?? null, // si tu stockes ADX dans meta
+                    'ma9'          => $snapshot->ma9?->toFloat(),
+                    'ma21'         => $snapshot->ma21?->toFloat(),
+                    'bb_upper'     => $snapshot->bbUpper?->toFloat(),
+                    'bb_middle'    => $snapshot->bbMiddle?->toFloat(),
+                    'bb_lower'     => $snapshot->bbLower?->toFloat(),
+                    // tu peux y rajouter volume, stoch_rsi, volume_ratio si tu les stockes dans meta
+                ];
+            } catch (\Throwable $e) {
+                if (property_exists($this, 'logger')) {
+                    $this->logger->warning('IndicatorProvider: failed to fetch indicators', [
+                        'symbol'    => $symbol,
+                        'timeframe' => $tf,
+                        'error'     => $e->getMessage(),
+                    ]);
+                }
+
+                $result[$tf] = [];
+            }
+        }
+
+        return $result;
     }
+
+
+    /**
+     * Snapshot indicateurs depuis la base UNIQUEMENT (aucun appel Bitmart).
+     */
+    private function getSnapshotFromDatabaseOnly(string $symbol, string $timeframe): ?IndicatorSnapshotDto
+    {
+        try {
+            $tfEnum = Timeframe::from($timeframe);
+        } catch (\ValueError $e) {
+            // TF inconnu par l'enum → on log et on sort
+            if (property_exists($this, 'logger')) {
+                $this->logger->warning('IndicatorProvider: invalid timeframe', [
+                    'symbol'    => $symbol,
+                    'timeframe' => $timeframe,
+                ]);
+            }
+
+            return null;
+        }
+
+        $entity = $this->snapshotRepository->findLastBySymbolAndTimeframe($symbol, $tfEnum);
+
+        if ($entity === null) {
+            return null;
+        }
+
+        // On suppose que l'entité IndicatorSnapshot stocke un array "values" compatible avec IndicatorSnapshotDto::fromArray()
+        // (ema20, ema50, macd, macd_signal, macd_histogram, atr, rsi, vwap, bb_upper, bb_middle, bb_lower, ma9, ma21, meta, source)
+        $values = $entity->getValues();
+
+        // On merge les métadonnées minimales nécessaires
+        $data = array_merge($values, [
+            'symbol'     => $entity->getSymbol(),
+            'timeframe'  => $entity->getTimeframe()->value,
+            'kline_time' => $entity->getKlineTime()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+        ]);
+
+        return IndicatorSnapshotDto::fromArray($data);
+    }
+
+
+
+    private function isSnapshotStale(
+        IndicatorSnapshotDto $snapshot,
+        \DateTimeInterface $at,
+        Timeframe $tf
+    ): bool {
+        // On considère le snapshot périmé s'il est plus vieux qu'un "step" de TF
+        $snapshotTs = $snapshot->klineTime->getTimestamp();
+        $atTs = $at->getTimestamp();
+
+        return ($atTs - $snapshotTs) > $tf->getStepInSeconds();
+    }
+
+
+
+}

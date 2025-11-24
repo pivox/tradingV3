@@ -123,7 +123,9 @@ class IndicatorContextBuilder
         $emaMap = [];
         $emaPrevMap = [];
         foreach ($emaPeriods as $p) {
-            if (count($this->closes) >= $p) {
+            // Pour calculer la pente (EMA actuelle - EMA précédente), il faut au moins period + 1 bougies
+            // Cela garantit qu'on peut calculer à la fois l'EMA actuelle et l'EMA précédente
+            if (count($this->closes) >= $p + 1) {
                 [$emaCurrent, $emaPrevious] = $this->computeEmaPair($this->closes, $p);
                 if ($emaCurrent !== null) {
                     $emaMap[$p] = $emaCurrent;
@@ -172,6 +174,26 @@ class IndicatorContextBuilder
             );
         }
 
+        // SMA 21 & niveaux MA21 + k*ATR pour les règles price_lte_ma21_plus_k_atr / price_below_ma21_plus_2atr
+        $ma21 = null;
+        if (!empty($this->closes)) {
+            try {
+                $ma21 = $this->sma->calculate($this->closes, 21);
+            } catch (\Throwable) {
+                $ma21 = null;
+            }
+        }
+
+        $ma21PlusKAtr = null;
+        $ma21Plus13Atr = null;
+        $ma21Plus2Atr = null;
+        if ($ma21 !== null && $atr !== null) {
+            $k = $this->atrK ?? 1.3;
+            $ma21PlusKAtr = $ma21 + ($k * $atr);
+            $ma21Plus13Atr = $ma21 + (1.3 * $atr);
+            $ma21Plus2Atr = $ma21 + (2.0 * $atr);
+        }
+
         $ema200Slope = null;
         if (isset($emaMap[200], $emaPrevMap[200])) {
             $ema200Slope = $emaMap[200] - $emaPrevMap[200];
@@ -206,6 +228,10 @@ class IndicatorContextBuilder
             'vwap' => $vwapVal,
             'volume_ratio' => $volumeRatio,
             'atr' => $atr,
+            'ma21' => $ma21,
+            'ma_21_plus_k_atr' => $ma21PlusKAtr,
+            'ma_21_plus_1.3atr' => $ma21Plus13Atr,
+            'ma_21_plus_2atr' => $ma21Plus2Atr,
             'adx' => $adxVal ? [14 => $adxVal] : null,
             'previous' => array_filter([
                 'rsi' => $prevRsi,

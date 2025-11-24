@@ -88,7 +88,7 @@ class KlineFetcher
     /**
      * Récupère les klines nécessaires pour le calcul des indicateurs
      */
-    public function getKlinesForIndicators(string $symbol, Timeframe $timeframe, int $requiredPeriods = 200): array
+    public function getKlinesForIndicators(string $symbol, Timeframe $timeframe, int $requiredPeriods = 250): array
     {
         $klines = $this->mainProvider->getKlineProvider()->getKlines($symbol, $timeframe, $requiredPeriods);
 
