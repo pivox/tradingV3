@@ -125,6 +125,7 @@ final class SignalPersistenceService
             ->setSymbol($signalDto->symbol)
             ->setTimeframe($signalDto->timeframe)
             ->setKlineTime($signalDto->klineTime)
+            ->setRunId($signalDto->meta['run_id'] ?? null)
             ->setSide($signalDto->side)
             ->setScore($signalDto->score)
             ->setMeta(array_merge($signalDto->meta, [

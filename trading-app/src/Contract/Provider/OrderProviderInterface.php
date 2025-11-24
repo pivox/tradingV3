@@ -30,12 +30,12 @@ interface OrderProviderInterface
     /**
      * Annule un ordre
      */
-    public function cancelOrder(string $orderId): bool;
+    public function cancelOrder(string $symbol, string $orderId): bool;
 
     /**
      * Récupère un ordre par ID
      */
-    public function getOrder(string $orderId): ?OrderDto;
+    public function getOrder(string $symbol, string $orderId): ?OrderDto;
 
     /**
      * Récupère tous les ordres ouverts

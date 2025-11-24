@@ -13,9 +13,11 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_signals_symbol_tf', columns: ['symbol', 'timeframe'])]
 #[ORM\Index(name: 'idx_signals_kline_time', columns: ['kline_time'])]
 #[ORM\Index(name: 'idx_signals_side', columns: ['side'])]
-#[ORM\UniqueConstraint(name: 'ux_signals_symbol_tf_time', columns: ['symbol', 'timeframe', 'kline_time'])]
+#[ORM\UniqueConstraint(name: 'ux_signals_symbol_tf_time_run', columns: ['symbol', 'timeframe', 'kline_time', 'run_id'])]
 class Signal
 {
+    public const DEFAULT_RUN_ID = '00000000-0000-0000-0000-000000000000';
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
@@ -26,6 +28,9 @@ class Signal
 
     #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Common\Enum\Timeframe::class)]
     private \App\Common\Enum\Timeframe $timeframe;
+
+    #[ORM\Column(name: 'run_id', type: Types::STRING, length: 36, options: ['default' => '00000000-0000-0000-0000-000000000000'])]
+    private string $runId = self::DEFAULT_RUN_ID;
 
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE)]
     private \DateTimeImmutable $klineTime;
@@ -49,6 +54,7 @@ class Signal
     {
         $this->insertedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
         $this->updatedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $this->runId = self::DEFAULT_RUN_ID;
     }
 
     public function getId(): ?int
@@ -75,6 +81,17 @@ class Signal
     public function setTimeframe(\App\Common\Enum\Timeframe $timeframe): static
     {
         $this->timeframe = $timeframe;
+        return $this;
+    }
+
+    public function getRunId(): string
+    {
+        return $this->runId;
+    }
+
+    public function setRunId(?string $runId): static
+    {
+        $this->runId = $runId !== null && $runId !== '' ? $runId : self::DEFAULT_RUN_ID;
         return $this;
     }
 
@@ -195,7 +212,5 @@ class Signal
         return $this->setMetaValue('trigger', $trigger);
     }
 }
-
-
 
 

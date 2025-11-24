@@ -131,7 +131,8 @@ class SignalRepository extends ServiceEntityRepository
         $existing = $this->findOneBy([
             'symbol' => $signal->getSymbol(),
             'timeframe' => $signal->getTimeframe(),
-            'klineTime' => $signal->getKlineTime()
+            'klineTime' => $signal->getKlineTime(),
+            'runId' => $signal->getRunId(),
         ]);
 
         if ($existing) {
@@ -317,7 +318,6 @@ class SignalRepository extends ServiceEntityRepository
         }
     }
 }
-
 
 
 

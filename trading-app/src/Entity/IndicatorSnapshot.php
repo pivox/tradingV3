@@ -176,6 +176,27 @@ class IndicatorSnapshot
         return $this->setValue('ema50', $ema50);
     }
 
+    public function getEma200(): ?string
+    {
+        $v = $this->getValue('ema200');
+        if ($v === null) {
+            $ema = $this->getValue('ema');
+            if (is_array($ema)) {
+                $val = $ema['200'] ?? ($ema[200] ?? null);
+                if ($val !== null) {
+                    $v = (string) $val;
+                }
+            }
+        }
+
+        return $v !== null ? (string) $v : null;
+    }
+
+    public function setEma200(?string $ema200): static
+    {
+        return $this->setValue('ema200', $ema200);
+    }
+
     public function getMacd(): ?string
     {
         $v = $this->getValue('macd');
@@ -290,5 +311,4 @@ class IndicatorSnapshot
         return $this->setValue('ma21', $ma21);
     }
 }
-
 

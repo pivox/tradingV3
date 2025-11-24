@@ -6,7 +6,7 @@ use App\Indicator\Attribute\AsIndicatorCondition;
 use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
-#[AsIndicatorCondition(timeframes: ['1h', '4h'], side: 'long', name: 'ema200_slope_pos')]
+#[AsIndicatorCondition(timeframes: ['1h', '4h', '15m','5m', '1m'], side: 'long', name: 'ema200_slope_pos')]
 #[AutoconfigureTag('app.indicator.condition')]
 #[AsTaggedItem(index: 'ema200_slope_pos')]
 

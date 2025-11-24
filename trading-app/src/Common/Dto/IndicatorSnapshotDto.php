@@ -15,6 +15,7 @@ final readonly class IndicatorSnapshotDto
         public \DateTimeImmutable $klineTime,
         public ?BigDecimal $ema20 = null,
         public ?BigDecimal $ema50 = null,
+        public ?BigDecimal $ema200 = null,
         public ?BigDecimal $macd = null,
         public ?BigDecimal $macdSignal = null,
         public ?BigDecimal $macdHistogram = null,
@@ -39,6 +40,7 @@ final readonly class IndicatorSnapshotDto
             'kline_time' => $this->klineTime->format('Y-m-d H:i:s'),
             'ema20' => $this->ema20?->toFixed(12),
             'ema50' => $this->ema50?->toFixed(12),
+            'ema200' => $this->ema200?->toFixed(12),
             'macd' => $this->macd?->toFixed(12),
             'macd_signal' => $this->macdSignal?->toFixed(12),
             'macd_histogram' => $this->macdHistogram?->toFixed(12),
@@ -63,6 +65,7 @@ final readonly class IndicatorSnapshotDto
             klineTime: new \DateTimeImmutable($data['kline_time'], new \DateTimeZone('UTC')),
             ema20: isset($data['ema20']) ? BigDecimal::of($data['ema20']) : null,
             ema50: isset($data['ema50']) ? BigDecimal::of($data['ema50']) : null,
+            ema200: isset($data['ema200']) ? BigDecimal::of($data['ema200']) : null,
             macd: isset($data['macd']) ? BigDecimal::of($data['macd']) : null,
             macdSignal: isset($data['macd_signal']) ? BigDecimal::of($data['macd_signal']) : null,
             macdHistogram: isset($data['macd_histogram']) ? BigDecimal::of($data['macd_histogram']) : null,
@@ -128,7 +131,6 @@ final readonly class IndicatorSnapshotDto
         return $distance !== null && $distance->isLessThanOrEqualTo($maxDistance);
     }
 }
-
 
 
 

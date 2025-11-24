@@ -43,4 +43,11 @@ interface IndicatorProviderInterface
      * @return array<string,array<string,mixed>>
      */
     public function listAvailableIndicators(): array;
+
+    public function getIndicatorsForSymbolAndTimeframes(
+        string $symbol,
+        array $timeframes,
+        \DateTimeInterface $at
+    ): array;
+
 }
