@@ -2,7 +2,15 @@ framework:
     messenger:
         transports:
             order_timeout:
-                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                dsn: 'redis://redis:6379/order_timeout'
+                options:
+                    auto_setup: true
+            mtf_projection:
+                dsn: 'redis://redis:6379/mtf_projection'
+                options:
+                    auto_setup: true
+            mtf_decision:
+                dsn: 'redis://redis:6379/mtf_decision'
                 options:
                     auto_setup: true
             failed_order_timeout:
@@ -18,3 +26,5 @@ framework:
         routing:
             App\TradeEntry\Message\CancelOrderMessage: order_timeout
             App\TradeEntry\Message\LimitFillWatchMessage: order_timeout
+            App\MtfValidator\Message\MtfResultProjectionMessage: mtf_projection
+            App\MtfValidator\Message\MtfTradingDecisionMessage: mtf_decision
