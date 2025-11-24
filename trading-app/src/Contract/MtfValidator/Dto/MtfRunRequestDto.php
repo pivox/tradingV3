@@ -26,84 +26,61 @@ final class MtfRunRequestDto
         public readonly ?MarketType $marketType = null,
     ) {}
 
+    /**
+     * @param array<string,mixed> $data
+     */
     public static function fromArray(array $data): self
     {
-        [$exchange, $marketType] = self::extractContext($data);
+        $symbols = isset($data['symbols']) && is_array($data['symbols'])
+            ? $data['symbols']
+            : [];
 
-        return new self(
-            symbols: $data['symbols'] ?? [],
-            dryRun: (bool) ($data['dry_run'] ?? false),
-            forceRun: (bool) ($data['force_run'] ?? false),
-            currentTf: $data['current_tf'] ?? null,
-            forceTimeframeCheck: (bool) ($data['force_timeframe_check'] ?? false),
-            skipContextValidation: (bool) ($data['skip_context'] ?? false),
-            lockPerSymbol: (bool) ($data['lock_per_symbol'] ?? false),
-            skipOpenStateFilter: (bool) ($data['skip_open_state_filter'] ?? false),
-            userId: $data['user_id'] ?? null,
-            ipAddress: $data['ip_address'] ?? null,
-            exchange: $exchange,
-            marketType: $marketType,
-        );
-    }
+        $dryRun   = (bool)($data['dry_run'] ?? $data['dryRun'] ?? false);
+        $forceRun = (bool)($data['force_run'] ?? $data['forceRun'] ?? false);
 
-    public function toArray(): array
-    {
-        return [
-            'symbols' => $this->symbols,
-            'dry_run' => $this->dryRun,
-            'force_run' => $this->forceRun,
-            'current_tf' => $this->currentTf,
-            'force_timeframe_check' => $this->forceTimeframeCheck,
-            'skip_context' => $this->skipContextValidation,
-            'lock_per_symbol' => $this->lockPerSymbol,
-            'skip_open_state_filter' => $this->skipOpenStateFilter,
-            'user_id' => $this->userId,
-            'ip_address' => $this->ipAddress,
-            'exchange' => $this->exchange?->value,
-            'market_type' => $this->marketType?->value,
-        ];
-    }
+        $currentTf = $data['current_tf'] ?? $data['currentTf'] ?? null;
+        $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
 
-    /**
-     * @return array{0: ?Exchange, 1: ?MarketType}
-     */
-    private static function extractContext(array $data): array
-    {
-        $exchangeInput = $data['exchange']
-            ?? $data['cex']
-            ?? null;
+        $forceTimeframeCheck = (bool)($data['force_timeframe_check'] ?? $data['forceTimeframeCheck'] ?? false);
 
-        $marketInput = $data['market_type']
-            ?? $data['type_contract']
-            ?? null;
+        $skipContextValidation = (bool)($data['skip_context_validation'] ?? $data['skipContextValidation'] ?? $data['skip_context'] ?? false);
+        $lockPerSymbol         = (bool)($data['lock_per_symbol'] ?? $data['lockPerSymbol'] ?? false);
+        $skipOpenStateFilter   = (bool)($data['skip_open_state_filter'] ?? $data['skipOpenStateFilter'] ?? false);
+
+        $userId = isset($data['user_id']) && is_string($data['user_id']) && $data['user_id'] !== ''
+            ? $data['user_id']
+            : null;
+
+        $ipAddress = isset($data['ip_address']) && is_string($data['ip_address']) && $data['ip_address'] !== ''
+            ? $data['ip_address']
+            : null;
+
+        $exchangeRaw = $data['exchange'] ?? null;
+        $marketTypeRaw = $data['market_type'] ?? null;
 
         $exchange = null;
-        if (is_string($exchangeInput) && $exchangeInput !== '') {
-            $exchange = self::normalizeExchange($exchangeInput);
+        if (is_string($exchangeRaw) && $exchangeRaw !== '') {
+            $exchange = Exchange::tryFrom(strtoupper($exchangeRaw)) ?? null;
         }
 
         $marketType = null;
-        if (is_string($marketInput) && $marketInput !== '') {
-            $marketType = self::normalizeMarketType($marketInput);
+        if (is_string($marketTypeRaw) && $marketTypeRaw !== '') {
+            $marketType = MarketType::tryFrom(strtoupper($marketTypeRaw)) ?? null;
         }
 
-        return [$exchange, $marketType];
-    }
-
-    private static function normalizeExchange(string $value): Exchange
-    {
-        return match (strtolower(trim($value))) {
-            'bitmart' => Exchange::BITMART,
-            default => throw new \InvalidArgumentException(sprintf('Unsupported exchange "%s"', $value)),
-        };
-    }
-
-    private static function normalizeMarketType(string $value): MarketType
-    {
-        return match (strtolower(trim($value))) {
-            'perpetual', 'perp', 'future', 'futures' => MarketType::PERPETUAL,
-            'spot' => MarketType::SPOT,
-            default => throw new \InvalidArgumentException(sprintf('Unsupported market type "%s"', $value)),
-        };
+        return new self(
+            symbols: $symbols,
+            dryRun: $dryRun,
+            forceRun: $forceRun,
+            currentTf: $currentTf,
+            forceTimeframeCheck: $forceTimeframeCheck,
+            skipContextValidation: $skipContextValidation,
+            lockPerSymbol: $lockPerSymbol,
+            skipOpenStateFilter: $skipOpenStateFilter,
+            userId: $userId,
+            ipAddress: $ipAddress,
+            exchange: $exchange,
+            marketType: $marketType,
+        );
     }
 }

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\MtfValidator\Command;
 
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
-use App\MtfValidator\Service\Runner\MtfRunOrchestrator;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\MtfValidator\Service\Helper\OrdersExtractor;
 use App\MtfValidator\Entity\MtfSwitch;
@@ -34,16 +33,15 @@ use App\MtfRunner\Dto\MtfRunnerRequestDto;
 use App\MtfRunner\Service\MtfRunnerService;
 
     #[AsCommand(name: 'mtf:run', description: 'Exécute un cycle MTF pour une liste de symboles (dry-run par défaut) avec un output détaillé')]
-    class MtfRunCommand extends Command
-    {
-        public function __construct(
-            private readonly MtfValidatorInterface $mtfValidator,
-            private readonly MtfRunnerService $mtfRunnerService,
-            private readonly MainProviderInterface $mainProvider,
-            private readonly ContractRepository $contractRepository,
-            private readonly MtfSwitchRepository $mtfSwitchRepository,
-            private readonly EntityManagerInterface $entityManager,
-            private readonly MtfRunOrchestrator $orchestrator,
+class MtfRunCommand extends Command
+{
+    public function __construct(
+        private readonly MtfValidatorInterface $mtfValidator,
+        private readonly MtfRunnerService $mtfRunnerService,
+        private readonly MainProviderInterface $mainProvider,
+        private readonly ContractRepository $contractRepository,
+        private readonly MtfSwitchRepository $mtfSwitchRepository,
+        private readonly EntityManagerInterface $entityManager,
         #[Autowire('%kernel.project_dir%')] private readonly string $projectDir,
     ) {
         parent::__construct();
@@ -187,7 +185,7 @@ use App\MtfRunner\Service\MtfRunnerService;
                 'force_timeframe_check' => $forceTimeframeCheck,
                 'skip_context' => $skipContext,
                 'lock_per_symbol' => $lockPerSymbol,
-                'skip_open_state_filter' => false,
+                'skip_open_state_filter' => true,
                 'user_id' => $userId,
                 'ip_address' => $ipAddress,
                 'exchange' => $exchange->value,

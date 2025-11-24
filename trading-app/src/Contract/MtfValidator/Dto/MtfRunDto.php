@@ -1,38 +1,19 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Contract\MtfValidator\Dto;
 
-class MtfRunDto
+final class MtfRunDto
 {
     public function __construct(
-        public array $symbols = [],
-        public bool $dryRun = false,
-        public bool $forceRun = false,
-        public ?string $currentTf = null,
-        public bool $forceTimeframeCheck = false,
-        public bool $skipContextValidation = false,
-        public bool $lockPerSymbol = false,
-        // When true, orchestrator will skip fetching open orders/positions to prefilter symbols
-        public bool $skipOpenStateFilter = false,
-    )
-    {
+        public readonly string $symbol,
+        public readonly string $profile,               // 'regular', 'scalper', ...
+        public readonly ?string $mode = null,          // 'pragmatic', 'strict', ... (optionnel, peut venir de la config)
+        public readonly ?\DateTimeImmutable $now = null,
+        public readonly ?string $requestId = null,     // trace_id / correlation_id
+        public readonly bool $dryRun = false,
+        public readonly array $options = [],           // dry_run, debug, overrides éventuels
+    ) {
     }
-
-    public function getArrayAsLowerSnakeCase(): array
-    {
-        return [
-            'symbols' => $this->symbols,
-            'dry_run' => $this->dryRun,
-            'force_run' => $this->forceRun,
-            'current_tf' => $this->currentTf,
-            'force_timeframe_check' => $this->forceTimeframeCheck,
-            'skip_context' => $this->skipContextValidation,
-            'lock_per_symbol' => $this->lockPerSymbol,
-            'skip_open_state_filter' => $this->skipOpenStateFilter,
-        ];
-    }
-
-
-
-
 }

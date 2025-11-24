@@ -19,17 +19,6 @@ interface MtfValidatorInterface
      */
     public function run(MtfRunRequestDto $request): MtfRunResponseDto;
 
-    /**
-     * Traite le recalcul des TP/SL pour les positions avec exactement 1 ordre TP
-     * Cette méthode doit être appelée une seule fois après tous les workers pour éviter
-     * les appels API multiples qui causent des erreurs 429.
-     */
-    public function processTpSlRecalculation(bool $dryRun, ?ExchangeContext $context = null): void;
-
-    /**
-     * Vérifie la santé du service
-     */
-    public function healthCheck(): bool;
 
     /**
      * Retourne le nom du service

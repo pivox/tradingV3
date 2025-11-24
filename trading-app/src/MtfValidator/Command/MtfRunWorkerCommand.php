@@ -17,7 +17,9 @@ use Symfony\Component\Console\Output\OutputInterface;
 #[AsCommand(name: 'mtf:run-worker', description: 'Exécute le traitement MTF pour un sous-ensemble de symboles (mode worker).')]
 final class MtfRunWorkerCommand extends Command
 {
-    public function __construct(private readonly MtfValidatorInterface $mtfValidator)
+    public function __construct(
+        private readonly MtfValidatorInterface $mtfValidator,
+    )
     {
         parent::__construct();
     }
@@ -89,12 +91,31 @@ final class MtfRunWorkerCommand extends Command
             ]);
             $response = $this->mtfValidator->run($request);
 
-            // Convertir les résultats en map symbol => result
+            // Convertir les résultats en map symbol => result (sans décision de trading, elle sera gérée via Messenger)
             $resultsMap = [];
             foreach ($response->results as $entry) {
-                if (isset($entry['symbol'], $entry['result'])) {
-                    $resultsMap[(string)$entry['symbol']] = (array)$entry['result'];
+                if (!isset($entry['symbol'], $entry['result'])) {
+                    continue;
                 }
+
+                $symbol = (string) $entry['symbol'];
+                $result = $entry['result'];
+
+                if (!$result instanceof MtfResultDto) {
+                    $resultsMap[$symbol] = (array) $result;
+                    continue;
+                }
+
+                $status = $result->isTradable ? 'READY' : 'INVALID';
+                $resultsMap[$symbol] = [
+                    'symbol' => $symbol,
+                    'status' => $status,
+                    'execution_tf' => $result->executionTimeframe,
+                    'signal_side' => $result->side,
+                    'reason' => $result->finalReason,
+                    'context' => $result->context->toArray(),
+                    'execution' => $result->execution->toArray(),
+                ];
             }
 
             $payload = [

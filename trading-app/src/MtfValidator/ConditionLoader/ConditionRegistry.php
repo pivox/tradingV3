@@ -127,7 +127,7 @@ class ConditionRegistry
     /** Payload d'erreur homogène pour le logging/audit. */
     private function errorPayload(string $name, \Throwable $e): array
     {
-        if ($this->logger) {
+        if (isset($this->mtfLogger)) {
             $this->mtfLogger->error('Condition evaluation failed', [
                 'name' => $name,
                 'exception' => get_class($e),
@@ -165,22 +165,20 @@ class ConditionRegistry
 
     public function load(array|MtfValidationConfig $config): void
     {
-        $rulesData = [];
-        $validation = $config->getValidation();
+        $rulesData  = [];
+        $validation = null;
 
         if ($config instanceof MtfValidationConfig) {
             // Nouveau format: règles depuis le fichier validations MTF
             $rulesData = $config->getRules();
+            $validation = $config->getValidation();
             // Stocker le config actuel
             $this->currentConfig = $config;
-        } elseif (is_array($config)) {
+        } elseif (\is_array($config)) {
             // Format array (pour tests/compatibilité)
-            $root = $config['mtf_validation'] ?? $config;
+            $root      = $config['mtf_validation'] ?? $config;
             $rulesData = $root['rules'] ?? [];
-            // Si validation n'est pas fournie séparément, essayer de la récupérer depuis le config
-            if ($validation === null) {
-                $validation = $root['validation'] ?? null;
-            }
+            $validation = $root['validation'] ?? null;
             // Pas de config pour les arrays
             $this->currentConfig = null;
         }

@@ -190,5 +190,24 @@ final class MtfValidationConfigProvider
     {
         $this->configCache = [];
     }
+
+    // App\Config\MtfValidationConfigProvider
+
+    /**
+     * Retourne la config YAML décodée (array) pour un "profil" MTF.
+     * Pour l’instant, on considère que profile == mode (regular, scalping, ...)
+     *
+     * @return array<string,mixed>
+     */
+    public function getConfigForProfile(string $profile): array
+    {
+        // on réutilise le mécanisme existant de modes
+        $configObj = $this->getConfigForMode($profile); // renvoie un MtfValidationConfig
+
+        // MtfValidationConfig::getConfig() retourne déjà le bloc "mtf_validation"
+        // (cf. constructeur : $this->config = $parsed['mtf_validation'] ?? [])
+        return $configObj->getConfig();
+    }
+
 }
 

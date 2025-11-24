@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\MtfRunner\Service;
 
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
+use App\Contract\MtfValidator\Dto\MtfRunDto;
+use App\Contract\MtfValidator\Dto\MtfResultDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Contract\Provider\MainProviderInterface;
 use App\Contract\Provider\Dto\OrderDto;
@@ -17,6 +19,7 @@ use App\MtfRunner\Dto\MtfRunnerRequestDto as RunnerRequestDto;
 use App\MtfRunner\Service\FuturesOrderSyncService;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
+use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Repository\ContractRepository;
 use App\Repository\PositionRepository;
@@ -373,7 +376,7 @@ final class MtfRunnerService
             }
 
             // Pour l'instant, on ne crée pas de lock automatiquement
-            // Le lock sera géré par le MtfRunService si nécessaire
+            // Les locks au niveau MTF sont gérés côté orchestrateur (MtfRunOrchestrator)
         } catch (\Throwable $e) {
             $this->logger->error('[MTF Runner] Failed to manage locks', [
                 'run_id' => $runId,
@@ -571,11 +574,20 @@ final class MtfRunnerService
             $symbol = $entry['symbol'] ?? null;
             $result = $entry['result'] ?? null;
 
-            if (!is_string($symbol) || $symbol === '' || !is_array($result)) {
+            if (!is_string($symbol) || $symbol === '' || !$result instanceof MtfResultDto) {
                 continue;
             }
 
-            $resultsMap[$symbol] = $result;
+            $status = $result->isTradable ? 'READY' : 'INVALID';
+            $resultsMap[$symbol] = [
+                'symbol' => $symbol,
+                'status' => $status,
+                'execution_tf' => $result->executionTimeframe,
+                'signal_side' => $result->side,
+                'reason' => $result->finalReason,
+                'context' => $result->context->toArray(),
+                'execution' => $result->execution->toArray(),
+            ];
         }
 
         return [
@@ -1166,4 +1178,3 @@ final class MtfRunnerService
         };
     }
 }
-

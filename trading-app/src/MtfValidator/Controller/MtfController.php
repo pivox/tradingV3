@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Controller;
 
+use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Contract\Provider\MainProviderInterface;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\MtfValidator\Service\MtfService;
-use App\MtfValidator\Service\MtfRunService;
 use App\MtfValidator\Service\PerformanceProfiler;
 use App\MtfValidator\Service\Helper\OrdersExtractor;
 use App\Provider\Repository\ContractRepository;
@@ -42,7 +42,7 @@ class MtfController extends AbstractController
         private readonly MtfAuditRepository $mtfAuditRepository,
         private readonly MtfLockRepository $mtfLockRepository,
         private readonly LoggerInterface $mtfLogger,
-        private readonly MtfRunService $mtfRunService,
+        private readonly MtfValidatorInterface $mtfValidator,
         private readonly MtfRunnerService $mtfRunnerService,
         private readonly ClockInterface $clock,
         private readonly ContractRepository $contractRepository,
@@ -767,7 +767,7 @@ class MtfController extends AbstractController
             marketType: $context->marketType,
         );
 
-        $response = $this->mtfRunService->run($request);
+        $response = $this->mtfValidator->run($request);
 
         $resultsMap = [];
         foreach ($response->results as $entry) {
