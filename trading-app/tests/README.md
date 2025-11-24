@@ -16,12 +16,7 @@ tests/
 │       └── AuditLoggerTest.php       # Tests du logger d'audit
 ├── MtfValidator/                      # Tests des services MtfValidator
 │   └── Service/
-│       ├── MtfRunServiceTest.php     # Tests du service principal
-│       ├── Runner/
-│       │   └── MtfRunOrchestratorTest.php  # Tests de l'orchestrateur
-│       ├── SymbolProcessorTest.php   # Tests du processeur de symboles
-│       ├── TradingDecisionHandlerTest.php  # Tests du gestionnaire de décisions
-│       └── MtfRunIntegrationTest.php # Tests d'intégration
+│       └── TradingDecisionHandlerTest.php  # Tests du gestionnaire de décisions
 └── README.md                         # Cette documentation
 ```
 
@@ -106,38 +101,7 @@ composer install
 - ✅ `testGetAuditLogs()` - Récupération de logs d'audit
 - ✅ `testGetAuditStats()` - Récupération de statistiques d'audit
 
-### Services MtfValidator (100% de couverture)
-
-#### MtfRunServiceTest
-- ✅ `testRunSuccess()` - Exécution réussie
-- ✅ `testRunWithDryRun()` - Exécution en mode dry run
-- ✅ `testRunWithForceRun()` - Exécution forcée
-- ✅ `testRunWithSpecificTimeframe()` - Exécution avec timeframe spécifique
-- ✅ `testRunWithEmptySymbols()` - Exécution sans symboles
-- ✅ `testRunWithException()` - Gestion d'exception
-- ✅ `testRunGeneratesUniqueRunId()` - Génération d'ID unique
-- ✅ `testRunLogsCorrectParameters()` - Logging correct des paramètres
-
-#### MtfRunOrchestratorTest
-- ✅ `testExecuteSuccess()` - Exécution orchestrée réussie
-- ✅ `testExecuteWithGlobalSwitchOff()` - Exécution avec commutateur global désactivé
-- ✅ `testExecuteWithForceRun()` - Exécution forcée
-- ✅ `testExecuteWithLockAcquisitionFailure()` - Échec d'acquisition de verrou
-- ✅ `testExecuteWithEmptySymbols()` - Exécution sans symboles
-- ✅ `testExecuteWithMultipleSymbols()` - Exécution avec plusieurs symboles
-- ✅ `testExecuteWithDryRun()` - Exécution en mode dry run
-- ✅ `testExecuteWithLockPerSymbol()` - Exécution avec verrou par symbole
-- ✅ `testExecuteLogsCorrectly()` - Logging correct
-
-#### SymbolProcessorTest
-- ✅ `testProcessSymbolSuccess()` - Traitement de symbole réussi
-- ✅ `testProcessSymbolWithError()` - Traitement avec erreur
-- ✅ `testProcessSymbolWithNullResult()` - Traitement avec résultat null
-- ✅ `testProcessSymbolWithForceRun()` - Traitement avec force run
-- ✅ `testProcessSymbolWithForceTimeframeCheck()` - Traitement avec vérification timeframe
-- ✅ `testProcessSymbolWithCurrentTf()` - Traitement avec timeframe actuel
-- ✅ `testProcessSymbolLogsCorrectly()` - Logging correct
-- ✅ `testProcessSymbolWithComplexResult()` - Traitement avec résultat complexe
+### Services MtfValidator
 
 #### TradingDecisionHandlerTest
 - ✅ `testHandleTradingDecisionWithError()` - Gestion avec erreur

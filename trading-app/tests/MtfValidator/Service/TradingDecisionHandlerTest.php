@@ -124,7 +124,7 @@ class TradingDecisionHandlerTest extends TestCase
     public function testHandleTradingDecisionReturnsSameResultWhenNotReady(): void
     {
         $symbolResult = new SymbolResultDto('BTCUSDT', 'PROCESSING');
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
+        $dto = new MtfRunDto(symbol: 'BTCUSDT', profile: 'scalper');
 
         $result = $this->handler->handleTradingDecision($symbolResult, $dto);
 
@@ -144,7 +144,7 @@ class TradingDecisionHandlerTest extends TestCase
             50000.0,
             null
         );
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
+        $dto = new MtfRunDto(symbol: 'BTCUSDT', profile: 'scalper');
 
         $result = $this->handler->handleTradingDecision($symbolResult, $dto);
 
@@ -166,7 +166,7 @@ class TradingDecisionHandlerTest extends TestCase
             50250.0,
             35.0
         );
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
+        $dto = new MtfRunDto(symbol: 'BTCUSDT', profile: 'scalper');
 
         // plus de résolution de prix côté MTF — le preflight/builder gère best bid/ask
 
@@ -230,7 +230,7 @@ class TradingDecisionHandlerTest extends TestCase
             20000.0,
             20.0
         );
-        $dto = new MtfRunDto(symbols: ['BTCUSDT']);
+        $dto = new MtfRunDto(symbol: 'BTCUSDT', profile: 'scalper');
 
         // pas d'appel au resolver, attentes retirées
 

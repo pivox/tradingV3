@@ -6,9 +6,7 @@ namespace App\Tests\MtfValidator\Integration;
 
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Contract\MtfValidator\TimeframeProcessorInterface;
-use App\MtfValidator\Service\MtfRunService;
-use App\MtfValidator\Service\Runner\MtfRunOrchestrator;
-use App\MtfValidator\Service\SymbolProcessor;
+use App\MtfValidator\Service\MtfValidatorService;
 use App\MtfValidator\Service\TradingDecisionHandler;
 use App\MtfValidator\Service\Timeframe\Timeframe15mService;
 use App\MtfValidator\Service\Timeframe\Timeframe1hService;
@@ -25,18 +23,11 @@ final class MtfValidatorAutowiringTest extends KernelTestCase
         $container = self::getContainer();
 
         $facade = $container->get(MtfValidatorInterface::class);
-        $this->assertInstanceOf(MtfRunService::class, $facade);
+        $this->assertInstanceOf(MtfValidatorService::class, $facade);
 
-        $orchestrator = $container->get(MtfRunOrchestrator::class);
-        $symbolProcessor = $container->get(SymbolProcessor::class);
         $decisionHandler = $container->get(TradingDecisionHandler::class);
 
-        $this->assertInstanceOf(SymbolProcessor::class, $this->readProperty($orchestrator, 'symbolProcessor'));
-        $this->assertInstanceOf(TradingDecisionHandler::class, $this->readProperty($orchestrator, 'tradingDecisionHandler'));
-        $this->assertSame($symbolProcessor, $this->readProperty($orchestrator, 'symbolProcessor'));
-        $this->assertSame($decisionHandler, $this->readProperty($orchestrator, 'tradingDecisionHandler'));
-
-        $this->assertInstanceOf(MtfRunOrchestrator::class, $this->readProperty($facade, 'orchestrator'));
+        $this->assertInstanceOf(TradingDecisionHandler::class, $decisionHandler);
 
         foreach ([
             Timeframe4hService::class,
@@ -50,11 +41,4 @@ final class MtfValidatorAutowiringTest extends KernelTestCase
         }
     }
 
-    private function readProperty(object $object, string $property): mixed
-    {
-        $ref = new \ReflectionProperty($object, $property);
-        $ref->setAccessible(true);
-
-        return $ref->getValue($object);
-    }
 }
