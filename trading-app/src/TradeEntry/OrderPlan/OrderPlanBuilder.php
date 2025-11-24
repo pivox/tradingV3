@@ -455,6 +455,35 @@ final class OrderPlanBuilder
             }
         }
 
+        // --- Ajustement vers la marge cible (initial_margin_usdt) ---
+        if ($availableBudget > 0.0 && $notional > 0.0) {
+            $targetMargin = $availableBudget;
+            $desiredLeverage = $notional / max($targetMargin, 1e-9);
+            $desiredLeverage = min(
+                max($desiredLeverage, (float)$pre->minLeverage),
+                (float)$pre->maxLeverage
+            );
+
+            $candidateLeverage = max(1, (int)round($desiredLeverage));
+            $candidateMargin = $notional / max(1, $candidateLeverage);
+            $currentDiff = abs($initialMargin - $targetMargin);
+            $candidateDiff = abs($candidateMargin - $targetMargin);
+
+            if ($candidateDiff + 0.5 < $currentDiff) { // petite tolérance pour éviter les oscillations
+                $this->positionsLogger->debug('order_plan.margin_target_adjust', [
+                    'symbol' => $req->symbol,
+                    'target_margin_usdt' => $targetMargin,
+                    'previous_margin_usdt' => $initialMargin,
+                    'new_margin_usdt' => $candidateMargin,
+                    'previous_leverage' => $leverage,
+                    'new_leverage' => $candidateLeverage,
+                    'decision_key' => $decisionKey,
+                ]);
+                $leverage = (float)$candidateLeverage;
+                $initialMargin = $candidateMargin;
+            }
+        }
+
         $this->positionsLogger->debug('order_plan.budget_check', [
             'symbol' => $req->symbol,
             'risk_usdt' => $riskUsdt,
