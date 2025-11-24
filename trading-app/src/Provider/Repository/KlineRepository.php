@@ -331,97 +331,90 @@ class KlineRepository extends ServiceEntityRepository
         }
 
         $this->logger->info('Starting klines upsert', [
-            'count' => count($klines),
+            'count' => \count($klines),
             'symbol' => $klines[0]->symbol ?? 'unknown',
-            'timeframe' => $klines[0]->timeframe->value ?? 'unknown'
+            'timeframe' => $klines[0]->timeframe->value ?? 'unknown',
         ]);
 
-        $upsertedCount = 0;
-        $batchSize = 50; // Traiter par lots de 50
+        $conn = $this->getConnection();
+        $batchSize = 50;
+        $totalUpserted = 0;
 
         foreach (array_chunk($klines, $batchSize) as $batch) {
-            $upsertedCount += $this->upsertBatch($batch);
-        }
+            $placeholders = [];
+            $params = [];
 
-        $this->logger->info('Klines upsert completed', [
-            'total_upserted' => $upsertedCount,
-            'total_input' => count($klines)
-        ]);
-
-        return $upsertedCount;
-    }
-
-    /**
-     * UPSERT d'un lot de klines
-     *
-     * @param KlineDto[] $batch
-     */
-    private function upsertBatch(array $batch): int
-    {
-        $upsertedCount = 0;
-
-        foreach ($batch as $klineDto) {
-            try {
-                // Chercher si la kline existe déjà
-                $existingKline = $this->findOneBy([
-                    'symbol' => $klineDto->symbol,
-                    'timeframe' => $klineDto->timeframe,
-                    'openTime' => $klineDto->openTime
-                ]);
-
-                if ($existingKline) {
-                    // Mettre à jour la kline existante
-                    $existingKline->setOpenPrice($klineDto->open->toScale(12));
-                    $existingKline->setHighPrice($klineDto->high->toScale(12));
-                    $existingKline->setLowPrice($klineDto->low->toScale(12));
-                    $existingKline->setClosePrice($klineDto->close->toScale(12));
-                    $existingKline->setVolume($klineDto->volume->toScale(12));
-                    $existingKline->setSource($klineDto->source);
-                    $existingKline->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
-
-                    $this->getEntityManager()->persist($existingKline);
-                } else {
-                    // Créer une nouvelle kline
-                    $kline = new \App\Provider\Entity\Kline();
-                    $kline->setSymbol($klineDto->symbol);
-                    $kline->setTimeframe($klineDto->timeframe);
-                    $kline->setOpenTime($klineDto->openTime);
-                    $kline->setOpenPrice($klineDto->open->toScale(12));
-                    $kline->setHighPrice($klineDto->high->toScale(12));
-                    $kline->setLowPrice($klineDto->low->toScale(12));
-                    $kline->setClosePrice($klineDto->close->toScale(12));
-                    $kline->setVolume($klineDto->volume->toScale(12));
-                    $kline->setSource($klineDto->source);
-                    $kline->setInsertedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
-                    $kline->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
-
-                    $this->getEntityManager()->persist($kline);
+            foreach ($batch as $klineDto) {
+                if (!$klineDto instanceof \App\Contract\Provider\Dto\KlineDto) {
+                    continue;
                 }
 
-                $upsertedCount++;
+                $placeholders[] = "(nextval('klines_id_seq'),?,?,?,?,?,?,?,?,?,?,?)";
 
-            } catch (\Exception $e) {
-                $this->logger->error('Error upserting kline', [
-                    'symbol' => $klineDto->symbol,
-                    'timeframe' => $klineDto->timeframe->value,
-                    'open_time' => $klineDto->openTime->format('Y-m-d H:i:s'),
-                    'error' => $e->getMessage()
+                $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+                $openTime = $klineDto->openTime->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:sP');
+                $nowStr = $now->format('Y-m-d H:i:sP');
+
+                $params[] = $klineDto->symbol;
+                $params[] = $klineDto->timeframe->value;
+                $params[] = $openTime;
+                $params[] = $klineDto->open->toScale(12)->__toString();
+                $params[] = $klineDto->high->toScale(12)->__toString();
+                $params[] = $klineDto->low->toScale(12)->__toString();
+                $params[] = $klineDto->close->toScale(12)->__toString();
+                $params[] = $klineDto->volume->toScale(12)->__toString();
+                $params[] = $klineDto->source;
+                $params[] = $nowStr;
+                $params[] = $nowStr;
+            }
+
+            if ($placeholders === []) {
+                continue;
+            }
+
+            $sql = '
+                INSERT INTO klines (
+                    id,
+                    symbol,
+                    timeframe,
+                    open_time,
+                    open_price,
+                    high_price,
+                    low_price,
+                    close_price,
+                    volume,
+                    source,
+                    inserted_at,
+                    updated_at
+                ) VALUES ' . \implode(',', $placeholders) . '
+                ON CONFLICT (symbol, timeframe, open_time) DO UPDATE SET
+                    open_price = EXCLUDED.open_price,
+                    high_price = EXCLUDED.high_price,
+                    low_price  = EXCLUDED.low_price,
+                    close_price = EXCLUDED.close_price,
+                    volume     = EXCLUDED.volume,
+                    source     = EXCLUDED.source,
+                    updated_at = EXCLUDED.updated_at
+            ';
+
+            try {
+                $conn->executeStatement($sql, $params);
+                $totalUpserted += \count($batch);
+            } catch (\Throwable $e) {
+                $this->logger->error('Error upserting klines batch via DBAL', [
+                    'error' => $e->getMessage(),
+                    'batch_count' => \count($batch),
                 ]);
+                throw $e;
             }
         }
 
-        // Flush le batch
-        try {
-            $this->getEntityManager()->flush();
-            $this->getEntityManager()->clear(); // Libérer la mémoire
-        } catch (\Exception $e) {
-            $this->logger->error('Error flushing klines batch', [
-                'error' => $e->getMessage()
-            ]);
-            throw $e;
-        }
+        $this->logger->info('Klines upsert completed', [
+            'total_upserted' => $totalUpserted,
+            'total_input' => \count($klines),
+        ]);
 
-        return $upsertedCount;
+        return $totalUpserted;
     }
 
     /**

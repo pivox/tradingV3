@@ -346,7 +346,7 @@ $result = $contractProvider->syncContracts($symbols);
 
 ### 2. Utilisation dans le cycle MTF
 
-Le service `MtfRunService` utilise `MainProviderInterface` pour accéder aux données nécessaires :
+Le cycle MTF moderne utilise `MtfRunnerService` et `MainProviderInterface` pour accéder aux données nécessaires :
 
 - **Klines** : via `getKlineProvider()` pour récupérer les données OHLCV
 - **Contrats** : via `getContractProvider()` pour les informations de marché
@@ -729,4 +729,3 @@ Toutes les opérations sont loggées via plusieurs canaux :
 10. **Validation multi-timeframe** : Système de validation en cascade sur plusieurs timeframes
 11. **Gestion des risques** : Calcul automatique de la taille de position basée sur le risque
 12. **Optimisation des prix** : Calcul intelligent des prix d'entrée, stop et take profit
-

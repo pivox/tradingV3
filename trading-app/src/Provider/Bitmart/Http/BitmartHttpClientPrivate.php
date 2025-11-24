@@ -293,12 +293,17 @@ final class BitmartHttpClientPrivate
         $status = $response->getStatusCode();
 
         // Gérer les HTTP 404 pour les endpoints de listing (peut arriver quand pas de résultats)
-        if ($status === 404 && in_array($path, [self::PATH_ORDER_PENDING, self::PATH_POSITION, self::PATH_PLAN_ORDERS], true)) {
+        if ($status === 404) {
             $content = $response->getContent(false);
+            $json = null;
             try {
-                $json = json_decode($content, true);
-                // Si c'est un 404 avec code 30000, traiter comme "pas de résultats"
-                if (isset($json['code']) && (int) $json['code'] === 30000) {
+                $json = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
+            } catch (\Throwable) {
+                // continue with default handling when payload is not JSON
+            }
+
+            if (is_array($json) && isset($json['code']) && (int) $json['code'] === 30000) {
+                if (in_array($path, [self::PATH_ORDER_PENDING, self::PATH_POSITION, self::PATH_PLAN_ORDERS], true)) {
                     return [
                         'code' => 30000,
                         'message' => $json['message'] ?? 'Not found',
@@ -308,9 +313,16 @@ final class BitmartHttpClientPrivate
                         ],
                     ];
                 }
-            } catch (\Throwable $e) {
-                // Si le parsing échoue, continuer avec l'erreur normale
+
+                if ($path === self::PATH_ORDER_DETAIL) {
+                    return [
+                        'code' => 30000,
+                        'message' => $json['message'] ?? 'Not found',
+                        'data' => null,
+                    ];
+                }
             }
+
             // Si pas de code 30000, lever l'exception normale
             throw new \RuntimeException('BitMart HTTP '.$status.': '.$content);
         }
@@ -324,16 +336,26 @@ final class BitmartHttpClientPrivate
 
         // Code 30000 "Not found" est un cas normal pour les endpoints de listing (pas de résultats)
         // Selon la doc BitMart: code 30000 avec HTTP 200 = "Not found" (état normal)
-        if ($code === 30000 && in_array($path, [self::PATH_ORDER_PENDING, self::PATH_POSITION, self::PATH_PLAN_ORDERS], true)) {
-            // Retourner une structure vide pour indiquer "pas de résultats" sans lever d'exception
-            return [
-                'code' => 30000,
-                'message' => $json['message'] ?? 'Not found',
-                'data' => [
-                    'orders' => [],
-                    'positions' => [],
-                ],
-            ];
+        if ($code === 30000) {
+            if (in_array($path, [self::PATH_ORDER_PENDING, self::PATH_POSITION, self::PATH_PLAN_ORDERS], true)) {
+                // Retourner une structure vide pour indiquer "pas de résultats" sans lever d'exception
+                return [
+                    'code' => 30000,
+                    'message' => $json['message'] ?? 'Not found',
+                    'data' => [
+                        'orders' => [],
+                        'positions' => [],
+                    ],
+                ];
+            }
+
+            if ($path === self::PATH_ORDER_DETAIL) {
+                return [
+                    'code' => 30000,
+                    'message' => $json['message'] ?? 'Not found',
+                    'data' => null,
+                ];
+            }
         }
 
         if ($code !== 1000) {
@@ -451,9 +473,12 @@ final class BitmartHttpClientPrivate
      * GET /contract/private/order-detail
      * Récupère les détails d'un ordre.
      */
-    public function getOrderDetail(string $orderId): array
+    public function getOrderDetail(string $symbol, string $orderId): array
     {
-        return $this->requestJsonPrivate('GET', self::PATH_ORDER_DETAIL, ['order_id' => $orderId]);
+        return $this->requestJsonPrivate('GET', self::PATH_ORDER_DETAIL, [
+            'symbol' => $symbol,
+            'order_id' => $orderId,
+        ]);
     }
 
     /**
@@ -634,9 +659,12 @@ final class BitmartHttpClientPrivate
      * POST /contract/private/cancel-order
      * Annule un ordre.
      */
-    public function cancelOrder(string $orderId): array
+    public function cancelOrder(string $symbol, string $orderId): array
     {
-        return $this->requestJsonPrivate('POST', self::PATH_CANCEL_ORDER, [], ['order_id' => $orderId]);
+        return $this->requestJsonPrivate('POST', self::PATH_CANCEL_ORDER, [], [
+            'symbol' => $symbol,
+            'order_id' => $orderId,
+        ]);
     }
 
     /**

@@ -82,7 +82,7 @@ final class BitmartProviderUsageExample
 
         // Annuler un ordre
         if ($order) {
-            $orderProvider->cancelOrder($order->orderId);
+            $orderProvider->cancelOrder($order->symbol, $order->orderId);
         }
     }
 

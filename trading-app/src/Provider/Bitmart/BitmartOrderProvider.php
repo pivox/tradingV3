@@ -150,7 +150,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 // Short retry loop for eventual consistency on order-detail
                 $orderDto = null;
                 for ($i = 0; $i < 3; $i++) {
-                    $orderDto = $this->getOrder($orderId);
+                    $orderDto = $this->getOrder($symbol, $orderId);
                     if ($orderDto !== null) {
                         break;
                     }
@@ -218,7 +218,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
         }
     }
 
-    public function cancelOrder(string $orderId): bool
+    public function cancelOrder(string $symbol, string $orderId): bool
     {
         // Trouver l'OrderIntent associé si disponible
         $intent = null;
@@ -229,7 +229,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
         $lastError = null;
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
             try {
-                $response = $this->bitmartClient->cancelOrder($orderId);
+                $response = $this->bitmartClient->cancelOrder($symbol, $orderId);
                 $success = isset($response['data']['result']) && $response['data']['result'] === 'success';
 
                 // Marquer l'intent comme CANCELLED si succès
@@ -255,6 +255,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
         }
         if ($lastError) {
             $this->logger->error("Erreur lors de l'annulation de l'ordre", [
+                'symbol' => $symbol,
                 'order_id' => $orderId,
                 'error' => $lastError->getMessage()
             ]);
@@ -337,13 +338,16 @@ final class BitmartOrderProvider implements OrderProviderInterface
         return count($errors) > 0 ? $errors : null;
     }
 
-    public function getOrder(string $orderId): ?OrderDto
+    public function getOrder(string $symbol, string $orderId): ?OrderDto
     {
         $lastError = null;
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
             try {
-                $response = $this->bitmartClient->getOrderDetail($orderId);
-                if (isset($response['data'])) {
+                $response = $this->bitmartClient->getOrderDetail($symbol, $orderId);
+                if (array_key_exists('data', $response)) {
+                    if ($response['data'] === null) {
+                        return null;
+                    }
                     // Synchroniser l'ordre dans la base de données
                     if ($this->syncService) {
                         try {
@@ -369,6 +373,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
         }
         if ($lastError) {
             $this->logger->error("Erreur lors de la récupération de l'ordre", [
+                'symbol' => $symbol,
                 'order_id' => $orderId,
                 'error' => $lastError->getMessage()
             ]);
