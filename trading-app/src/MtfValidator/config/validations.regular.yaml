@@ -14,6 +14,21 @@ mtf_validation:
         dry_run_validate_all_timeframes: false
 
     rules:
+
+        ema_20_gt_50:
+            gt_fields: [ 'ema_20', 'ema_50' ]
+
+        # ====== EMA 20 slope (ajouté) ======
+        ema_20_slope_pos:
+            slope_left: 'ema_20'
+            slope_lookback: 8
+            op: '>'
+            right: 0.0
+            eps: 1.0e-12
+
+        # ================================
+        # EMA 200 - règles de base
+        # ================================
         macd_hist_gt_eps:
             op: '>'
             left: 'macd_hist'
@@ -42,6 +57,13 @@ mtf_validation:
         rsi_gt_softfloor: { gt: 30 }
         rsi_lt_70: { lt: 70 }
 
+        # ====== VWAP / MA9 (ajout close_above_vwap / close_above_ma_9) ======
+        close_above_vwap:
+            gt_fields: [ 'close', 'vwap' ]
+
+        close_above_ma_9:
+            gt_fields: [ 'close', 'ma_9' ]
+
         close_above_vwap_or_ma9:
             any_of: [ close_above_vwap, close_above_ma_9 ]
 
@@ -51,6 +73,13 @@ mtf_validation:
         price_below_ma21_plus_2atr:
             lt_fields: [ 'close', 'ma_21_plus_2atr' ]
             allow_touch: true
+
+        # ====== Pullback / VWAP (ajout ma9_cross_up_ma21, near_vwap) ======
+        ma9_cross_up_ma21:
+            ma9_cross_up_ma21: true
+
+        near_vwap:
+            near_vwap: true
 
         pullback_confirmed:
             any_of:

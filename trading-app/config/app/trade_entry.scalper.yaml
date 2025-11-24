@@ -1,5 +1,5 @@
 # Profil SCALPER - TradeEntry
-version: '2.5.95s'
+version: '2.5.96s'
 
 meta:
     name: >
@@ -16,8 +16,8 @@ trade_entry:
     # DEFAULTS
     # ============================
     defaults:
-        risk_pct_percent: 5.0
-        initial_margin_usdt: 70.0
+        risk_pct_percent: 2.0
+        initial_margin_usdt: 20.0
         fallback_account_balance: 0.0
 
         # --- R-MULTIPLE corrigé (1.2 → 1.5)
@@ -26,9 +26,9 @@ trade_entry:
 
         # --- STOP LOSS
         stop_from: 'atr'
-        atr_k: 1.5
+        atr_k: 2
         pivot_sl_policy: 'nearest_below'
-        pivot_sl_buffer_pct: 0.003
+        pivot_sl_buffer_pct:    0.005
         pivot_sl_min_keep_ratio: 0.8
         sl_full_size: true
 
@@ -51,7 +51,7 @@ trade_entry:
         # Déviations resserrées pour éviter les entrées en extension
         max_deviation_pct: 0.004
         implausible_pct: 0.02
-        zone_max_deviation_pct: 0.02
+        zone_max_deviation_pct: 0.025
 
         # --- DYNAMIC LEVERAGE PARAM
         k_dynamic: 10.0
@@ -130,7 +130,7 @@ trade_entry:
     # END-OF-ZONE FALLBACK
     # ============================
     fallback_end_of_zone:
-        enabled: true
+        enabled: false
         ttl_threshold_sec: 25
         max_spread_bps: 8
         only_if_within_zone: true

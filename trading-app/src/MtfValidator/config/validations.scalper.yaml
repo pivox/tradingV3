@@ -16,6 +16,32 @@ mtf_validation:
 
     rules:
 
+        ema_20_gt_50:
+            gt_fields: [ 'ema_20', 'ema_50' ]
+
+        # ====== EMA 20 slope (ajouté) ======
+        ema_20_slope_pos:
+            slope_left: 'ema_20'
+            slope_lookback: 8
+            op: '>'
+            right: 0.0
+            eps: 1e-12
+
+        macd_hist_increasing_n:
+            increasing: { field: 'macd_hist', n: 2 }
+
+        macd_hist_decreasing_n:
+            decreasing: { field: 'macd_hist', n: 2 }
+
+        # ================================
+        # EMA 200 - règles de base
+        # ================================
+        close_above_ema_200:
+            gt_fields: [ 'close', 'ema_200' ]
+
+        close_below_ema_200:
+            lt_fields: [ 'close', 'ema_200' ]
+
         # ================================
         # MOMENTUM
         # ================================
@@ -114,6 +140,18 @@ mtf_validation:
         # ================================
         # VWAP / PULLBACK
         # ================================
+        close_above_vwap:
+            gt_fields: [ 'close', 'vwap' ]
+
+        close_above_ma_9:
+            gt_fields: [ 'close', 'ma_9' ]
+
+        ma9_cross_up_ma21:
+            ma9_cross_up_ma21: true
+
+        near_vwap:
+            near_vwap: true
+
         close_above_vwap_or_ma9:
             any_of: [ close_above_vwap, close_above_ma_9 ]
 
@@ -251,7 +289,7 @@ mtf_validation:
     # ================================
     validation:
 
-        start_from_timeframe: '1h'   # NB : si tu veux vraiment context 1h only → passe à '1h'
+        start_from_timeframe: '1h'
 
         timeframe:
 
