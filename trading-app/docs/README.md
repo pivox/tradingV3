@@ -32,7 +32,7 @@ Les README spécifiques (ex. `src/MtfValidator/README_REFACTORED_ARCHITECTURE.md
 
 Le pipeline runtime suit trois étapes clefs :
 
-1. **Façade** : `MtfRunService` expose l'interface `MtfValidatorInterface` et transforme les `MtfRunRequestDto` en DTO internes.
+1. **Façade** : `MtfValidatorInterface` expose l'API de run contractuelle (`MtfRunRequestDto` / `MtfRunResponseDto`).
 2. **Pipeline** : `MtfRunOrchestrator` séquence le verrouillage, la vérification des switches et l'évaluation des timeframes via `SymbolProcessor`.
 3. **Décision** : `TradingDecisionHandler` applique les règles d'engagement et délègue à `TradeEntryService` (simulateur ou exécution réelle).
 

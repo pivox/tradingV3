@@ -40,7 +40,6 @@ concrète (et priorisée) pour poursuivre l’intégration multi‑exchange/mark
   - `trading-app/src/MtfValidator/Controller/MtfController.php`
   - `trading-app/src/MtfValidator/Command/MtfRunCommand.php`
   - `trading-app/src/MtfValidator/Command/MtfRunWorkerCommand.php`
-  - `trading-app/src/MtfValidator/Service/MtfRunService.php`
   - DTO: `trading-app/src/Contract/MtfValidator/Dto/MtfRunRequestDto.php`
 
 - WebSocket
@@ -133,4 +132,3 @@ concrète (et priorisée) pour poursuivre l’intégration multi‑exchange/mark
 - Journaliser le contexte (`exchange`, `market_type`) sur les points de décision
 
 Bon courage pour la suite !
-

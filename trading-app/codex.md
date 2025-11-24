@@ -1,5 +1,17 @@
 # Codex Notes
 
+## Fallback Messenger (EntityManager fermé)
+
+- Problème historique : une erreur DBAL lors de l’upsert des klines fermait l’EntityManager, ce qui faisait échouer la projection MTF (audit / state / signaux).
+- Correction primaire : sécuriser l’upsert (conversion explicite des `DateTimeImmutable` en string) pour supprimer la cause racine des fermetures d’EM.
+- Garde‑fous actuels :
+  - `BaseTimeframeService::persistAudit()` et `MtfResultProjector::project()` testent `EntityManager::isOpen()` et se mettent en “best‑effort” si l’EM est fermé.
+- Plan de fallback Messenger (à implémenter si besoin) :
+  - Créer un message `PersistMtfResultMessage` (runId, MtfRunDto/MtfResultDto sérialisés).
+  - Dans `MtfResultProjector`, si `!$em->isOpen()`, logger puis dispatcher le message sur un bus Messenger dédié (`mtf_audit`).
+  - Ajouter un handler consommé par le container `trading-app-messenger` qui rouvre un EM propre, reconstruit les entités (`MtfAudit`, `MtfState`, `Signal`) et persiste/flush.
+  - Variante : même principe pour les audits ponctuels (`PersistMtfAuditMessage`) si on veut une granularité plus fine.
+
 ## Balanced Preset (objectif 7‑10 trades/jour, WR ≥55 %)
 
 1. **Option A – ajuster le basculement vers 5m**

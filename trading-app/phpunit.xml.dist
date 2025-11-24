@@ -34,7 +34,6 @@
             <directory>src/DependencyInjection</directory>
             <directory>src/Entity</directory>
             <directory>src/Kernel.php</directory>
-            <file>src/MtfValidator/Service/MtfRunService.php</file>
         </exclude>
     </coverage>
 

@@ -200,21 +200,6 @@ services:
 
     # Kline Provider
 
-    # MTF Controller
-    App\MtfValidator\Controller\MtfController:
-        arguments:
-            $mtfService: '@App\MtfValidator\Service\MtfService'
-            $mtfStateRepository: '@App\Repository\MtfStateRepository'
-            $mtfSwitchRepository: '@App\MtfValidator\Repository\MtfSwitchRepository'
-            $mtfAuditRepository: '@App\MtfValidator\Repository\MtfAuditRepository'
-            $mtfLockRepository: '@App\MtfValidator\Repository\MtfLockRepository'
-            $mtfLogger: '@monolog.logger.mtf'
-            $mtfRunService: '@App\MtfValidator\Service\MtfRunService'
-            $mtfRunnerService: '@App\MtfRunner\Service\MtfRunnerService'
-            $clock: '@Psr\Clock\ClockInterface'
-            $contractRepository: '@App\Provider\Repository\ContractRepository'
-            $mainProvider: '@App\Contract\Provider\MainProviderInterface'
-        public: true
 
     # HTTP Client pour BitMart
     GuzzleHttp\Client:
@@ -252,7 +237,7 @@ services:
 
     # Alias pour l'interface de configuration MTF -> implémentation TradingParameters
     App\Config\MtfConfigProviderInterface: '@App\Config\TradingParameters'
-    
+
     # Config par défaut (compatibilité)
     App\Config\MtfValidationConfig:
         arguments:

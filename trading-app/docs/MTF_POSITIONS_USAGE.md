@@ -43,7 +43,6 @@ $symbolsWithActivity = array_unique(array_merge($openPositionSymbols, $openOrder
 
 ### Où ?
 - `MtfRunnerService::run()` → Étape 9
-- `MtfRunService::processTpSlRecalculation()`
 
 ### Quand ?
 **Après l'exécution MTF** - pour mettre à jour les TP/SL des positions existantes.
@@ -146,7 +145,7 @@ $this->syncOrders($orderProvider);
 ### `mtf:run` (CLI - MtfRunCommand)
 - `syncTables: false` par défaut (option `--sync-contracts` pour forcer)
 - `processTpSl: true` par défaut
-- Peut utiliser soit `MtfRunnerService` (parallèle) soit `MtfRunService` (séquentiel)
+- Utilise `MtfRunnerService` (séquentiel ou parallèle selon `--workers`)
 
 ## Positions fermées
 
@@ -205,5 +204,3 @@ if ($request->processTpSl) {
 | **DÉBUT** | Filtrage symboles | Exchange (API) | Exclure symboles avec positions/ordres ouverts |
 | **FIN** | Recalcul TP/SL | Exchange (API) | Mettre à jour les protections des positions existantes |
 | **DÉBUT/FIN** | Synchronisation | Exchange → BDD | Maintenir l'état à jour et dispatcher les événements |
-
-

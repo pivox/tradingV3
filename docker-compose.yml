@@ -320,11 +320,11 @@ services:
         composer install --no-dev --optimize-autoloader --no-interaction; \
       fi; php-fpm"
 
-  trading-app-messenger:
+  trading-app-messenger-order-timeout:
     build:
       context: ./trading-app
       dockerfile: Dockerfile.mtf
-    container_name: trading_app_messenger
+    container_name: trading_app_messenger-timeout
     working_dir: /var/www/html
     volumes:
       - ./trading-app:/var/www/html
@@ -355,6 +355,79 @@ services:
         echo '[trading-app-messenger] vendor missing -> composer install'; \
         composer install --no-dev --optimize-autoloader --no-interaction; \
       fi; php bin/console messenger:consume order_timeout --sleep=1 --failure-limit=5 --time-limit=3600"
+    restart: unless-stopped
+
+  trading-app-messenger-trading:
+    build:
+      context: ./trading-app
+      dockerfile: Dockerfile.mtf
+    container_name: trading_app_messenger-trading
+    working_dir: /var/www/html
+    volumes:
+      - ./trading-app:/var/www/html
+      - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
+    environment:
+      <<: *global-env
+      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
+      LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
+      APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
+      DEFAULT_URI: http://trading-app-nginx
+      MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
+      WS_WORKER_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
+      BITMART_PUBLIC_API_URL: ${BITMART_PUBLIC_API_URL}
+      ORDER_TIMEOUT_SWITCH_DURATION: ${ORDER_TIMEOUT_SWITCH_DURATION:-15m}
+      LOG_LEVEL_MAIN: info
+    depends_on:
+      trading-app-php:
+        condition: service_started
+      trading-app-db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - trading-app-net
+      - shared-net
+    command: >-
+      sh -c "if [ ! -f vendor/autoload.php ]; then \
+        echo '[trading-app-messenger] vendor missing -> composer install'; \
+        composer install --no-dev --optimize-autoloader --no-interaction; \
+      fi; php bin/console messenger:consume mtf_decision --sleep=1 --failure-limit=5 --time-limit=3600"
+    restart: unless-stopped
+
+  trading-app-messenger-projection:
+    build:
+      context: ./trading-app
+      dockerfile: Dockerfile.mtf
+    container_name: trading_app_messenger-projection
+    working_dir: /var/www/html
+    volumes:
+      - ./trading-app:/var/www/html
+      - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
+    environment:
+      <<: *global-env
+      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
+      LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
+      APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
+      DEFAULT_URI: http://trading-app-nginx
+      MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
+      WS_WORKER_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
+      BITMART_PUBLIC_API_URL: ${BITMART_PUBLIC_API_URL}
+      LOG_LEVEL_MAIN: info
+    depends_on:
+      trading-app-php:
+        condition: service_started
+      trading-app-db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - trading-app-net
+      - shared-net
+    command: >-
+      sh -c "if [ ! -f vendor/autoload.php ]; then \
+        echo '[trading-app-messenger] vendor missing -> composer install'; \
+        composer install --no-dev --optimize-autoloader --no-interaction; \
+      fi; php bin/console messenger:consume mtf_projection --sleep=1 --failure-limit=5 --time-limit=3600"
     restart: unless-stopped
 
   trading-app-ws-agent:

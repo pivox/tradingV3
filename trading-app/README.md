@@ -91,7 +91,7 @@ L'application implémente désormais explicitement le découpage **Application /
 ```mermaid
 flowchart LR
     subgraph Application
-        facade(MtfRunService / MtfValidatorInterface)
+        facade(MtfValidatorInterface)
         orchestrator(MtfRunOrchestrator)
         decision(TradingDecisionHandler)
     end
