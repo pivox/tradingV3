@@ -562,7 +562,7 @@ final class ExecutionBox
         $maxPollInterval = 1.0; // 1s max
 
         while (time() < $totalDeadline) {
-            $order = $this->providers->getOrderProvider()->getOrder($orderId);
+            $order = $this->providers->getOrderProvider()->getOrder($symbol, $orderId);
             if ($order !== null) {
                 $status = $order->status;
                 if ($status === OrderStatus::FILLED || $status === OrderStatus::PARTIALLY_FILLED) {

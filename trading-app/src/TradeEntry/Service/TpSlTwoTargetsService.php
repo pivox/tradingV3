@@ -541,7 +541,7 @@ final class TpSlTwoTargetsService
                 $p = $priceOf($existingSl);
                 if ($p !== null && abs($p - $stop) > max($tick, 1e-8)) {
                     try {
-                        if ($orderProvider->cancelOrder($existingSl->orderId)) {
+                        if ($orderProvider->cancelOrder($existingSl->symbol, $existingSl->orderId)) {
                             $cancelled[] = $existingSl->orderId;
                         }
                     } catch (\Throwable $e) {
@@ -573,7 +573,7 @@ final class TpSlTwoTargetsService
             foreach ($closing as $o) {
                 if (!$isSl($o)) {
                     try {
-                        if ($orderProvider->cancelOrder($o->orderId)) {
+                        if ($orderProvider->cancelOrder($o->symbol, $o->orderId)) {
                             $cancelled[] = $o->orderId;
                         }
                     } catch (\Throwable $e) {

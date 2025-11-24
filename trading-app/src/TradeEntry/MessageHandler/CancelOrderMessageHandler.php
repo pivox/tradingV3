@@ -29,7 +29,7 @@ final class CancelOrderMessageHandler
         $orderProvider = $this->provider->getOrderProvider();
 
         try {
-            $order = $orderProvider->getOrder($message->exchangeOrderId);
+            $order = $orderProvider->getOrder($message->symbol, $message->exchangeOrderId);
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('trade_entry.timeout.order_fetch_failed', [
                 'symbol' => $message->symbol,
@@ -68,7 +68,7 @@ final class CancelOrderMessageHandler
         }
 
         try {
-            $cancelled = $orderProvider->cancelOrder($message->exchangeOrderId);
+            $cancelled = $orderProvider->cancelOrder($message->symbol, $message->exchangeOrderId);
             $this->positionsLogger->info('trade_entry.timeout.cancel_attempt', [
                 'symbol' => $message->symbol,
                 'exchange_order_id' => $message->exchangeOrderId,

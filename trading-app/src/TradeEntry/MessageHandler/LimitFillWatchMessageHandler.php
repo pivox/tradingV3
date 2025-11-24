@@ -35,7 +35,7 @@ final class LimitFillWatchMessageHandler
         $orderProvider = $this->provider->getOrderProvider();
 
         try {
-            $order = $orderProvider->getOrder($message->exchangeOrderId);
+            $order = $orderProvider->getOrder($message->symbol, $message->exchangeOrderId);
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('limit_watch.order_fetch_failed', [
                 'symbol' => $message->symbol,
@@ -108,7 +108,7 @@ final class LimitFillWatchMessageHandler
             ]);
 
             try {
-                $ok = $orderProvider->cancelOrder($message->exchangeOrderId);
+                $ok = $orderProvider->cancelOrder($message->symbol, $message->exchangeOrderId);
                 $this->positionsLogger->info('limit_watch.cancel_issued', [
                     'symbol' => $message->symbol,
                     'exchange_order_id' => $message->exchangeOrderId,

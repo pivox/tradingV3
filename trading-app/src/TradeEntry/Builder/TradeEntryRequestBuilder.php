@@ -54,7 +54,15 @@ final class TradeEntryRequestBuilder
 
         // Charger la config selon le mode (même mécanisme que validations.{mode}.yaml)
         $config = $this->getConfigForMode($mode);
-        $executionTf = strtolower($executionTf ?? '1m');
+        if (!is_string($executionTf) || $executionTf === '') {
+            throw new \InvalidArgumentException(
+                sprintf(
+                    'executionTf is required to build TradeEntryRequest. Symbol: %s',
+                    $symbol
+                )
+            );
+        }
+        $executionTf = strtolower($executionTf);
         $defaults = $config->getDefaults();
         $multipliers = $defaults['timeframe_multipliers'] ?? [];
         $tfMultiplier = (float)($multipliers[$executionTf] ?? 1.0);

@@ -66,7 +66,15 @@ final class DynamicLeverageService implements LeverageServiceInterface
         $roundingCfg    = (array)($levConfig['rounding'] ?? []);
 
         // Multiplicateur par timeframe d'exécution
-        $tfKey = is_string($executionTf) && $executionTf !== '' ? strtolower($executionTf) : '1m';
+        if (!is_string($executionTf) || $executionTf === '') {
+            throw new \InvalidArgumentException(
+                sprintf(
+                    'executionTf is required for leverage calculation. Symbol: %s',
+                    $symbol
+                )
+            );
+        }
+        $tfKey = strtolower($executionTf);
         $tfMult = (float)($tfMultipliers[$tfKey] ?? 1.0);
 
         // --- Base leverage : riskPct / stopPct
