@@ -4,14 +4,6 @@ services:
     arguments:
       $logger: '@logger'
 
-  App\MtfValidator\Service\MtfBackfillService:
-    arguments:
-      $klineProvider: '@app.provider.kline'
-      $klineRepository: '@App\Provider\Repository\KlineRepository'
-      $rateLimiter: '@App\Infrastructure\RateLimiter\TokenBucketRateLimiter'
-      $timeService: '@App\MtfValidator\Service\MtfTimeService'
-      $logger: '@logger'
-
   # HTTP Client (utilise maintenant BitmartHttpClientPublic)
   # App\Infrastructure\Http\BitmartClient: supprimé, utilise App\Provider\Bitmart\Http\BitmartHttpClientPublic
 
@@ -27,7 +19,6 @@ services:
       $mtfAuditRepository: '@App\MtfValidator\Repository\MtfAuditRepository'
       $mtfLockRepository: '@App\MtfValidator\Repository\MtfLockRepository'
       $logger: '@logger'
-      $mtfRunService: '@App\MtfValidator\Service\MtfRunService'
     tags: ['controller.service_arguments']
 
   # Commands
@@ -69,6 +60,4 @@ services:
     class: Temporal\Worker\WorkerFactory
     arguments:
       $serviceClient: '@temporal.service_client'
-
-
 
