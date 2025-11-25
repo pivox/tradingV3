@@ -17,6 +17,7 @@ use App\TradeEntry\Service\TpSlTwoTargetsService;
 use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
 use App\Common\Enum\OrderStatus;
 use App\Logging\Dto\LifecycleContextBuilder;
+use App\TradeEntry\Types\Side;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Messenger\Stamp\DelayStamp;
@@ -27,6 +28,7 @@ final class ExecutionBox
     private const MARKET_FILL_TIMEOUT_WS_STRICT = 3; // 3s pour WS strict
     private const MARKET_FILL_TIMEOUT_TOTAL = 10; // 10s total avec REST fallback
     private const LIMIT_WATCH_INITIAL_DELAY_MS = 5000; // premier poll watcher LIMIT
+    private const TAKE_PROFIT_R_CAP = 1.3;
 
     public function __construct(
         private readonly MainProviderInterface $providers,
@@ -95,6 +97,8 @@ final class ExecutionBox
         if ($plan->orderType === 'market') {
             return $this->executeMarketOrder($plan, $clientOrderId, $decisionKey, $leverageResult);
         }
+
+        $plan = $this->enforceTakeProfitCap($plan, $decisionKey);
 
         $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
 
@@ -341,6 +345,49 @@ final class ExecutionBox
             $options,
             static fn($value) => $value !== null && $value !== ''
         );
+    }
+
+    private function enforceTakeProfitCap(OrderPlanModel $plan, ?string $decisionKey): OrderPlanModel
+    {
+        if (self::TAKE_PROFIT_R_CAP <= 0.0) {
+            return $plan;
+        }
+
+        $riskUnit = abs($plan->entry - $plan->stop);
+        if ($riskUnit <= 0.0) {
+            return $plan;
+        }
+
+        $capDistance = self::TAKE_PROFIT_R_CAP * $riskUnit;
+        $adjusted = $plan->takeProfit;
+
+        if ($plan->side === Side::Long) {
+            $maxTp = $plan->entry + $capDistance;
+            if ($plan->takeProfit > $maxTp) {
+                $adjusted = TickQuantizer::quantize(min($plan->takeProfit, $maxTp), $plan->pricePrecision);
+            }
+        } else {
+            $minTp = $plan->entry - $capDistance;
+            if ($plan->takeProfit < $minTp) {
+                $adjusted = TickQuantizer::quantizeUp(max($plan->takeProfit, $minTp), $plan->pricePrecision);
+            }
+        }
+
+        if (abs($adjusted - $plan->takeProfit) < 1e-12) {
+            return $plan;
+        }
+
+        $this->positionsLogger->info('execution.take_profit_capped', [
+            'symbol' => $plan->symbol,
+            'side' => $plan->side->value,
+            'tp_before' => $plan->takeProfit,
+            'tp_after' => $adjusted,
+            'risk_unit' => $riskUnit,
+            'cap_r_multiple' => self::TAKE_PROFIT_R_CAP,
+            'decision_key' => $decisionKey,
+        ]);
+
+        return $plan->copyWith(takeProfit: $adjusted);
     }
 
     /**

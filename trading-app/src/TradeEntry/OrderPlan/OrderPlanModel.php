@@ -30,7 +30,8 @@ final class OrderPlanModel
     public function copyWith(
         ?string $orderType = null,
         ?int    $orderMode = null,
-        ?float  $entry     = null
+        ?float  $entry     = null,
+        ?float  $takeProfit = null
     ): self {
         return new self(
             $this->symbol,
@@ -40,7 +41,7 @@ final class OrderPlanModel
             $orderMode   ?? $this->orderMode,
             $entry       ?? $this->entry,
             $this->stop,
-            $this->takeProfit,
+            $takeProfit  ?? $this->takeProfit,
             $this->size,
             $this->leverage,
             $this->pricePrecision,
