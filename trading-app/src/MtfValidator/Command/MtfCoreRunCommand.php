@@ -28,8 +28,7 @@ final class MtfCoreRunCommand extends Command
     public function __construct(
         private readonly MtfValidatorInterface $mtfValidator,
         private readonly ContractRepository $contractRepository,
-        #[Autowire(service: 'monolog.logger.mtf')]
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
     ) {
         parent::__construct();
     }
@@ -172,7 +171,7 @@ final class MtfCoreRunCommand extends Command
             $response = $this->mtfValidator->run($requestDto);
         } catch (\Throwable $e) {
             $io->error(sprintf('Erreur lors de l’exécution du validateur MTF: %s', $e->getMessage()));
-            $this->logger->error('mtf:core:run failed', [
+            $this->mtfLogger->error('mtf:core:run failed', [
                 'exception' => $e,
                 'run_id'    => $runId,
             ]);

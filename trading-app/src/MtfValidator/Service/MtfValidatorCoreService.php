@@ -23,7 +23,7 @@ class MtfValidatorCoreService
         private readonly ExecutionSelectionService $executionSelectionService,
         private readonly AuditLoggerInterface $auditLogger,
         private readonly ClockInterface $clock,
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
     ) {
     }
 
@@ -47,7 +47,7 @@ class MtfValidatorCoreService
         )));
 
         if (empty($allTimeframes)) {
-            $this->logger->warning('MTF config has no timeframes', [
+            $this->mtfLogger->warning('MTF config has no timeframes', [
                 'symbol'  => $input->symbol,
                 'profile' => $input->profile,
             ]);
@@ -88,7 +88,7 @@ class MtfValidatorCoreService
                 contextDecision: $contextDecision,
             );
 
-            $this->logger->info('MTF context invalid', [
+            $this->mtfLogger->info('MTF context invalid', [
                 'symbol'             => $input->symbol,
                 'profile'            => $input->profile,
                 'mode'               => $mode,

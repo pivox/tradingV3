@@ -15,7 +15,7 @@ final class MtfTradingDecisionMessageHandler
 {
     public function __construct(
         private readonly TradingDecisionHandler $tradingDecisionHandler,
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
     ) {
     }
 
@@ -28,7 +28,7 @@ final class MtfTradingDecisionMessageHandler
             return;
         }
 
-        $this->logger->info('[MTF Messenger] Dispatching trading decision', [
+        $this->mtfLogger->info('[MTF Messenger] Dispatching trading decision', [
             'run_id' => $message->runId,
             'symbol' => $result->symbol,
             'execution_tf' => $result->executionTimeframe,
@@ -58,7 +58,7 @@ final class MtfTradingDecisionMessageHandler
 
         $decisionResult = $this->tradingDecisionHandler->handleTradingDecision($symbolResult, $mtfRunDto);
 
-        $this->logger->info('[MTF Messenger] Trading decision processed', [
+        $this->mtfLogger->info('[MTF Messenger] Trading decision processed', [
             'run_id' => $message->runId,
             'symbol' => $result->symbol,
             'execution_tf' => $result->executionTimeframe,

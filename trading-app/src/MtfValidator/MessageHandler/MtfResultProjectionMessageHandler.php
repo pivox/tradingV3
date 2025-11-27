@@ -16,7 +16,7 @@ final class MtfResultProjectionMessageHandler
     public function __construct(
         private readonly MtfResultProjector $projector,
         private readonly EntityManagerInterface $em,
-        private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
     ) {
     }
 
@@ -29,7 +29,7 @@ final class MtfResultProjectionMessageHandler
                 $this->em->flush();
             }
         } catch (\Throwable $exception) {
-            $this->logger->error('[MTF Projection] Failed to persist result', [
+            $this->mtfLogger->error('[MTF Projection] Failed to persist result', [
                 'run_id' => $message->runId,
                 'symbol' => $message->result->symbol ?? null,
                 'error' => $exception->getMessage(),
