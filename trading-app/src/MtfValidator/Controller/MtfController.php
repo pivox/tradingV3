@@ -471,7 +471,8 @@ class MtfController extends AbstractController
         }
     }
 
-    #[Route('/run', name: 'run', methods: ['POST', 'GET'])]
+    // Route supprimée - gérée par RunnerController::index() via /api/mtf/run
+    // #[Route('/run', name: 'run', methods: ['POST', 'GET'])]
     public function runMtfCycle(Request $request): JsonResponse
     {
         $profiler = new PerformanceProfiler();
