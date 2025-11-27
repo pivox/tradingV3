@@ -1,5 +1,5 @@
 # Profil SCALPER - TradeEntry
-version: '2.5.96s'
+version: '2.5.97s'   # Version du profil scalper active
 
 meta:
     name: >
@@ -8,7 +8,7 @@ meta:
     description: >
         Version optimisée du profil scalper : contrôle de liquidité, prévention des entrées tardives,
         réduction de la largeur des zones, levier réduit sur micro-caps, compatibilité MTF 1h→5m→1m.
-    created_at: '2025-11-13'
+    created_at: '2025-11-13'   # Date de création/dernière update du profil
 
 trade_entry:
 
@@ -16,56 +16,56 @@ trade_entry:
     # DEFAULTS
     # ============================
     defaults:
-        risk_pct_percent: 2.0
-        initial_margin_usdt: 20.0
-        fallback_account_balance: 0.0
+        risk_pct_percent: 2.0        # Risque par trade (% equity)
+        initial_margin_usdt: 20.0    # Marge initiale minimale allouée
+        fallback_account_balance: 0.0 # Si balance insuffisante, fallback budget
 
         # --- R-MULTIPLE corrigé (1.2 → 1.5)
-        r_multiple: 1.5
-        tp1_r: 1.3
+        r_multiple: 1.3              # Ratio R attendu sur le trade
+        tp1_r: 1.0                   # TP1 déclenché à 1R
 
         # --- STOP LOSS
-        stop_from: 'atr'
-        atr_k: 2
-        pivot_sl_policy: 'nearest_below'
-        pivot_sl_buffer_pct:    0.005
-        pivot_sl_min_keep_ratio: 0.8
-        sl_full_size: true
+        stop_from: 'atr'             # Stop basé sur ATR dynamique
+        atr_k: 2                     # Multiplicateur ATR (SL = ATR*k)
+        pivot_sl_policy: 'nearest_below'   # Politique SL pivot : niveau inférieur
+        pivot_sl_buffer_pct: 0.005         # Petit buffer sur SL pivot
+        pivot_sl_min_keep_ratio: 0.8       # Ratio de préservation du stop
+        sl_full_size: true                 # SL appliqué sur taille totale
 
         # --- TAKE PROFIT
-        tp_policy: 'pivot_conservative'
-        tp_buffer_pct: 0.001
-        tp_buffer_ticks: 0
-        tp_min_keep_ratio: 0.95
-        tp_max_extra_r: 0.5
+        tp_policy: 'pivot_conservative'    # TP basé sur pivot prudent
+        tp_buffer_pct: 0.001               # Min buffer sur TP pivot
+        tp_buffer_ticks: 0                 # Pas de ticks supplémentaires
+        tp_min_keep_ratio: 0.95            # TP ne doit pas réduire plus que 5%
+        tp_max_extra_r: 0.5                # TP additionnel max (0.5R)
 
         # --- ORDERS
-        order_type: 'limit'
-        open_type: 'isolated'
-        order_mode: 1
+        order_type: 'limit'         # Ouverture préférée en limit
+        open_type: 'isolated'       # Mode Isolated (pas cross)
+        order_mode: 1               # Maker-only si supporté
 
         # --- MARKET GUARDS
-        market_max_spread_pct: 0.001
-        inside_ticks: 1
+        market_max_spread_pct: 0.001   # Spread max acceptable (0.1 %)
+        inside_ticks: 1               # Taille intérieure de tick
 
         # Déviations resserrées pour éviter les entrées en extension
-        max_deviation_pct: 0.004
-        implausible_pct: 0.02
-        zone_max_deviation_pct: 0.025
+        max_deviation_pct: 0.003       # Déviation max autorisée
+        implausible_pct: 0.02          # Garde-fou anti-mouvements irrationnels
+        zone_max_deviation_pct: 0.02   # Max deviation entre prix & zone
 
         # --- DYNAMIC LEVERAGE PARAM
-        k_dynamic: 10.0
+        k_dynamic: 10.0                # Paramètre K pour calcul du levier dynamique
 
 
     # ============================
     # RISK MANAGEMENT
     # ============================
     risk:
-        fixed_risk_pct: 2.5
-        daily_max_loss_pct: 6.0
-        daily_max_loss_usdt: 30.0
-        daily_loss_count_unrealized: true
-        max_concurrent_positions: 4
+        fixed_risk_pct: 2.0     # Risque fixe par trade (% du capital)
+        daily_max_loss_pct: 6.0 # Maximum drawdown journalier
+        daily_max_loss_usdt: 40.0  # Perte max en USDT par jour
+        daily_loss_count_unrealized: true # Comptabiliser pertes latentes
+        max_concurrent_positions: 6 # Nombre maximal de positions simultanées
         meta: >
             Risque fixe, limites journalières et contrôle du nombre de positions.
 
@@ -74,41 +74,35 @@ trade_entry:
     # LEVERAGE CONFIG
     # ============================
     leverage:
-        mode: dynamic_from_risk
-        floor: 4.0                   # 5 → 4 pour réduire pertes micro-caps
-        exchange_cap: 50.0           # réduit (micro-caps trop volatiles)
+        mode: dynamic_from_risk   # Levier dérivé automatiquement du risque/stop
+        floor: 4.0                # Levier plancher pour éviter micro-caps trop risquées
+        exchange_cap: 50.0        # Cap lever max par exchange (sécurité)
 
         per_symbol_caps:
-            # BTC peut monter jusqu'à 40x
-            - { symbol_regex: "^BTCUSDT$", cap: 40.0 }
-
-            # ETH/BNB un peu en dessous : 25x par ex.
-            - { symbol_regex: "^(ETH|BNB)USDT$", cap: 25.0 }
-
-            # Certains shitcoins très volatils / illiquides : 5x
-            - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 5.0 }
-
+            - { symbol_regex: "^BTCUSDT$", cap: 40.0 }         # BTC → max 40x
+            - { symbol_regex: "^(ETH|BNB)USDT$", cap: 25.0 }   # ETH/BNB → max 25x
+            - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 5.0 } # Shitcoins → 5x max
 
         timeframe_multipliers:
-            '4h': 0.9
-            '1h': 1.0
-            '15m': 1.0
-            '5m': 1.2
-            '1m': 1.3
+            '4h': 0.9    # Contexte large → moins de levier
+            '1h': 1.0    # Standard
+            '15m': 1.0   # Execution médiane
+            '5m': 1.2    # Scalping dynamique
+            '1m': 1.3    # Ultra scalping → levier légèrement supérieur
 
         confidence_multiplier:
             enabled: true
             default: 1.0
-            when_upstream_stale: 0.8
-            when_tie_breaker_used: 0.8
+            when_upstream_stale: 0.8      # Si upstream stale → baisser levier
+            when_tie_breaker_used: 0.8    # Si égalité dans signaux MTF → prudence
 
         conviction:
             enabled: true
-            cap_pct_of_exchange: 0.60
+            cap_pct_of_exchange: 0.60     # Levier limité à 60 % du cap exchange selon la conviction
 
         rounding:
-            precision: 2
-            mode: floor
+            precision: 2                  # Levier arrondi à 2 décimales
+            mode: floor                   # Mode floor pour éviter overshoot
 
         meta: >
             Levier prudent, contrôlé, adapté aux fortes fluctuations sur tokens peu liquides.
@@ -118,56 +112,49 @@ trade_entry:
     # DECISION ENGINE
     # ============================
     decision:
-        # Note: allowed_execution_timeframes n'est plus utilisé pour CHOISIR le TF.
-        # Le TF d'exécution est maintenant décidé par MtfService::ExecutionTimeframeDecisionService.
-        # Si défini et non vide, cette liste sert uniquement de VALIDATION (rejette si le TF décidé n'est pas dans la liste).
-        # Si vide ou non défini, tous les TF sont acceptés.
-        allowed_execution_timeframes: []  # Vide = accepte tous les TF décidés par MtfService
-        require_price_or_atr: true
+        allowed_execution_timeframes: []  # Vide → accepte tous les TF décidés par MtfService
+        require_price_or_atr: true        # Exige que le prix ou ATR soit disponible
 
 
     # ============================
     # END-OF-ZONE FALLBACK
     # ============================
     fallback_end_of_zone:
-        enabled: false
-        ttl_threshold_sec: 25
-        max_spread_bps: 8
-        only_if_within_zone: true
-        taker_order_type: 'market'
-        max_slippage_bps: 10
+        enabled: false               # Désactivé (fallback maker→taker non actif)
+        ttl_threshold_sec: 25        # Si zone expire dans <25s → fallback possible
+        max_spread_bps: 8            # Spread max pour fallback (8 bps)
+        only_if_within_zone: true    # Fallback autorisé uniquement si prix dans zone
+        taker_order_type: 'market'   # Fallback exécuté en market
+        max_slippage_bps: 10         # Taux de slippage max (10 bps)
 
 
     # ============================
     # MARKET ENTRY (Taker)
     # ============================
     market_entry:
-        enabled: true
-        # Note: allowed_execution_timeframes dans market_entry sert uniquement de VALIDATION
-        # pour décider si on peut utiliser un ordre market au lieu de limit.
-        # Le TF d'exécution est déjà décidé par MtfService.
-        allowed_execution_timeframes: ['1m','5m']  # Validation pour market entry uniquement
-        max_slippage_bps: 25
-        adx_min_1h: 15
+        enabled: true                # Autorise les entrées directes en taker
+        allowed_execution_timeframes: ['1m','5m']  # TF autorisés pour market entry
+        max_slippage_bps: 25         # Slippage max toléré (25 bps)
+        adx_min_1h: 15               # ADX 1h minimal pour permettre l’entrée taker
 
 
     # ============================
     # ENTRY CONFIG
     # ============================
     entry:
-        prefer_maker: true
-        fallback_taker: true
+        prefer_maker: true     # Préférence maker-only
+        fallback_taker: true   # Autorise fallback en taker
 
         budget:
-            mode: fixed_or_available
-            fixed_usdt_if_available: 40
+            mode: fixed_or_available          # Utilise budget fixe ou solde dispo
+            fixed_usdt_if_available: 40       # Budget fixe si solde >= 40 USDT
 
         quantization:
-            price_tick: from_exchange
-            qty_step: from_exchange
+            price_tick: from_exchange         # Tick de prix selon exchange
+            qty_step: from_exchange           # Step quantité selon exchange
 
-        slippage_guard_bps: 8
-        spread_guard_bps: 6
+        slippage_guard_bps: 8                 # Garde-fou slippage (8 bps)
+        spread_guard_bps: 6                   # Garde-fou spread (6 bps)
 
         meta: >
             Budget et garde-fous de market microstructure adaptés aux scalps rapides.
@@ -179,16 +166,16 @@ trade_entry:
     post_validation:
 
         entry_zone:
-            vwap_anchor: true
-            k_atr: 0.24          # 0.30 → 0.24 → zones plus précises (meilleur winrate)
-            w_min: 0.0004
-            w_max: 0.0080        # 0.012 → 0.008 → évite entrées tardives
-            quantize_to_exchange_step: true
-            ttl_sec: 180         # 240 → 180 (aligné sur temps de vie d’un scalp)
+            vwap_anchor: true              # Zone ancrée sur VWAP
+            k_atr: 0.22                    # Largeur zone basée sur ATR*x
+            w_min: 0.0004                  # Largeur zone min
+            w_max: 0.0065                  # Largeur zone max (évite entrées tardives)
+            quantize_to_exchange_step: true # Ajustement automatique aux ticks exchange
+            ttl_sec: 150                    # Temps de vie zone → 150s
 
         idempotency:
-            decision_key_tpl: "{symbol}:{timeframe}:{candle_open_ts}"
-            max_attempts: 3
+            decision_key_tpl: "{symbol}:{timeframe}:{candle_open_ts}" # Unicité des décisions
+            max_attempts: 3                 # Nombre max tentatives pour trade_entry
 
         meta: >
             EntryZone resserrée, plus précise, moins permissive, cohérente avec le scalping pro.

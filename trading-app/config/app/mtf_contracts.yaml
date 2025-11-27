@@ -1,21 +1,39 @@
-version: '0.0.067.120-10'
+version: '0.0.067.120-11'   # Version du fichier de configuration pour traçabilité et debugging
 
 mtf_contracts:
     selection:
-        enabled: true
+        enabled: true       # Active la sélection de contrats (si false : pas de filtrage avancé)
+
         filters:
-            quote_currency: 'USDT'
-            status: 'Trading'
-            # --- Liquidité / turnover 24h ---
-            # On ne garde que les contrats avec >= 1M USDT de turnover 24h
-            min_turnover: 1000000          # seuil "MID" (>= 1M)
-            # Jusqu'à 5M = MID, au-dessus = TOP
-            mid_max_turnover: 5000000      # 1M–5M = mid caps, >5M = top
-            # --- Validité contrat ---
-            require_not_expired: false      # tu laisses BitMart gérer l'expiration
-            max_age_hours: 880              # filtre sur open_timestamp
-            expire_unit: 'ms'               # à adapter à ton schéma
-            open_unit: 'ms'
+            quote_currency: 'USDT'     # On ne garde que les futures quotés en USDT (standard BitMart)
+            status: 'Trading'          # Filtre les contrats actifs uniquement (pas settled, pas delisted)
+
+            # === LIQUIDITÉ / TURNOVER 24H ===
+            # Le turnover (valeur échangée en 24h) est utilisé pour mesurer la liquidité réelle du contrat.
+            # Plus il est élevé, plus le spread est serré et l'exécution est fiable.
+
+            min_turnover: 1500000      # Liquidité minimale en 24h : >= 1.5M USDT (filtre "MID").
+            # Exclut les micro-caps trop illiquides et trop risqués.
+
+            mid_max_turnover: 8000000  # Seuil supérieur des MID-caps. Au-delà → TOP liquidity.
+            # > 8M = TOP, entre 1.5M et 8M = MID.
+
+            # === VALIDITÉ DU CONTRAT ===
+            # Filtrage basé sur les timestamps open/expire.
+
+            require_not_expired: false # Désactive la vérification d'expiration.
+            # Tu laisses BitMart gérer l'expiration et le delist.
+
+            max_age_hours: 880         # Exclut les contrats listés depuis moins de ~36 jours.
+            # Empêche le trading de nouveaux contrats trop volatils.
+
+            expire_unit: 'ms'          # expire_timestamp est exprimé en millisecondes (format BitMart).
+            open_unit: 'ms'            # open_timestamp également en millisecondes.
+
         limits:
-            top_n: 100
-            mid_n: 0
+            top_n: 250                 # Nombre maximum de contrats très liquides (TOP) retenus.
+            # 250 = pool large → mode agressif (plus de symboles analysés).
+
+            mid_n: 0                   # Désactive la sélection MID.
+              # Donc seuls les contrats avec turnover > 8M seront retenus.
+            # Sécurise fortement la liquidité (spreads plus serrés).
