@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Service\Leverage;
 
-use App\Config\{TradeEntryConfig, TradeEntryConfigProvider};
+use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContext};
 use App\Contract\EntryTrade\LeverageServiceInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -12,6 +12,7 @@ final class DynamicLeverageService implements LeverageServiceInterface
 {
     public function __construct(
         private readonly TradeEntryConfigProvider $configProvider,
+        private readonly TradeEntryModeContext $modeContext,
         private readonly TradeEntryConfig $defaultConfig, // Fallback si mode non fourni
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
@@ -189,19 +190,22 @@ final class DynamicLeverageService implements LeverageServiceInterface
      */
     private function getConfigForMode(?string $mode): TradeEntryConfig
     {
-        if ($mode === null || $mode === '') {
-            return $this->defaultConfig;
-        }
+        $resolvedMode = $this->modeContext->resolve($mode);
 
         try {
-            return $this->configProvider->getConfigForMode($mode);
+            return $this->configProvider->getConfigForMode($resolvedMode);
         } catch (\RuntimeException $e) {
-            // Si le mode n'existe pas, utiliser la config par défaut
             $this->positionsLogger->warning('dynamic_leverage_service.mode_not_found', [
-                'mode' => $mode,
+                'mode' => $resolvedMode,
                 'error' => $e->getMessage(),
-                'fallback' => 'default_config',
+                'fallback' => 'default_mode',
             ]);
+
+            $fallbackMode = $this->modeContext->resolve(null);
+            if ($fallbackMode !== $resolvedMode) {
+                return $this->configProvider->getConfigForMode($fallbackMode);
+            }
+
             return $this->defaultConfig;
         }
     }

@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Service;
 
-use App\Config\{IndicatorConfig, SignalConfig, TradeEntryConfig, TradeEntryConfigProvider};
+use App\Config\{IndicatorConfig, SignalConfig, TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContext};
 use App\Contract\Provider\MainProviderInterface;
 use App\Entity\Position;
 use App\Repository\PositionRepository;
@@ -31,6 +31,7 @@ final class TpSlTwoTargetsService
         private readonly MainProviderInterface $providers,
         private readonly PositionRepository $positions,
         private readonly TradeEntryConfigProvider $configProvider,
+        private readonly TradeEntryModeContext $modeContext,
         private readonly TradeEntryConfig $defaultConfig, // Fallback si mode non fourni
         private readonly IndicatorConfig $indicatorConfig,
         private readonly SignalConfig $signalConfig,
@@ -1057,19 +1058,22 @@ final class TpSlTwoTargetsService
      */
     private function getConfigForMode(?string $mode): TradeEntryConfig
     {
-        if ($mode === null || $mode === '') {
-            return $this->defaultConfig;
-        }
+        $resolvedMode = $this->modeContext->resolve($mode);
 
         try {
-            return $this->configProvider->getConfigForMode($mode);
+            return $this->configProvider->getConfigForMode($resolvedMode);
         } catch (\RuntimeException $e) {
-            // Si le mode n'existe pas, utiliser la config par défaut
             $this->positionsLogger->warning('tp_sl_two_targets_service.mode_not_found', [
-                'mode' => $mode,
+                'mode' => $resolvedMode,
                 'error' => $e->getMessage(),
-                'fallback' => 'default_config',
+                'fallback' => 'default_mode',
             ]);
+
+            $fallbackMode = $this->modeContext->resolve(null);
+            if ($fallbackMode !== $resolvedMode) {
+                return $this->configProvider->getConfigForMode($fallbackMode);
+            }
+
             return $this->defaultConfig;
         }
     }

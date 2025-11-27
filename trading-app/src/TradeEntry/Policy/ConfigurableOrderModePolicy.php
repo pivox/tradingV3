@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Policy;
 
-use App\Config\{TradeEntryConfig, TradeEntryConfigProvider};
+use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContext};
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 
@@ -12,6 +12,7 @@ final class ConfigurableOrderModePolicy implements OrderModePolicyInterface
 {
     public function __construct(
         private readonly TradeEntryConfigProvider $configProvider,
+        private readonly TradeEntryModeContext $modeContext,
         private readonly TradeEntryConfig $defaultConfig, // Fallback si mode non fourni
         private readonly MakerOnlyPolicy $makerOnlyPolicy,
         private readonly TakerOnlyPolicy $takerOnlyPolicy,
@@ -39,14 +40,19 @@ final class ConfigurableOrderModePolicy implements OrderModePolicyInterface
      */
     private function getConfigForMode(?string $mode): TradeEntryConfig
     {
-        if ($mode === null || $mode === '') {
-            return $this->defaultConfig;
-        }
+        $resolvedMode = $this->modeContext->resolve($mode);
 
         try {
-            return $this->configProvider->getConfigForMode($mode);
+            return $this->configProvider->getConfigForMode($resolvedMode);
         } catch (\RuntimeException $e) {
-            // Si le mode n'existe pas, utiliser la config par défaut
+            if ($resolvedMode !== $this->modeContext->resolve(null)) {
+                try {
+                    return $this->configProvider->getConfigForMode($this->modeContext->resolve(null));
+                } catch (\RuntimeException) {
+                    // ignore and fallback below
+                }
+            }
+
             return $this->defaultConfig;
         }
     }

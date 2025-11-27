@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Controller;
 
-use App\Config\TradeEntryConfig;
+use App\Config\TradeEntryConfigResolver;
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Service\TradeEntryService;
 use App\TradeEntry\Types\Side;
@@ -18,7 +18,7 @@ final class TradeEntryController extends AbstractController
 {
     public function __construct(
         private readonly TradeEntryService $service,
-        private readonly TradeEntryConfig $tradeEntryConfig,
+        private readonly TradeEntryConfigResolver $tradeEntryConfigResolver,
     ) {}
 
     #[Route('/execute', name: 'execute', methods: ['POST'])]
@@ -49,7 +49,9 @@ final class TradeEntryController extends AbstractController
                 return new JsonResponse(['error' => 'Invalid side value'], 400);
             }
 
-            $defaults = $this->tradeEntryConfig->getDefaults();
+            $mode = isset($data['mode']) && is_string($data['mode']) ? $data['mode'] : null;
+            $config = $this->tradeEntryConfigResolver->resolve($mode);
+            $defaults = $config->getDefaults();
             $riskPctDefault = (float)($defaults['risk_pct_percent'] ?? 2.0);
             $riskPct = isset($data['risk_pct']) ? (float)$data['risk_pct'] : $riskPctDefault;
             if ($riskPct > 1.0) {
@@ -96,7 +98,7 @@ final class TradeEntryController extends AbstractController
                 marketMaxSpreadPct: $marketSpread,
             );
 
-            $result = $this->service->buildAndExecute($requestDto);
+            $result = $this->service->buildAndExecute($requestDto, mode: $mode);
 
             return new JsonResponse([
                 'status' => $result->status,

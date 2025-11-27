@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Example;
 
+use App\Config\TradeEntryConfigResolver;
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Service\TradeEntryService;
 use App\TradeEntry\Types\Side;
@@ -17,8 +18,8 @@ final class ExampleTradeEntryRunner
 {
     public function __construct(
         private readonly TradeEntryService $tradeEntryService,
-        #[Autowire(service: 'App\\Config\\TradeEntryConfig')]
-        private readonly \App\Config\TradeEntryConfig $tradeEntryConfig,
+        #[Autowire(service: 'App\\Config\\TradeEntryConfigResolver')]
+        private readonly TradeEntryConfigResolver $tradeEntryConfigResolver,
     ) {}
 
     /**
@@ -29,9 +30,10 @@ final class ExampleTradeEntryRunner
      * @param float $price Prix limite souhaité
      * @param float|null $atr ATR pré-calculé (optionnel)
      */
-    public function placeLimitOrder(string $symbol, Side $side, float $price, ?float $atr = null)
+    public function placeLimitOrder(string $symbol, Side $side, float $price, ?float $atr = null, ?string $mode = null)
     {
-        $defaults = $this->tradeEntryConfig->getDefaults();
+        $config = $this->tradeEntryConfigResolver->resolve($mode);
+        $defaults = $config->getDefaults();
         $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 2.0);
         $riskPct = max(0.0, $riskPctPercent > 1.0 ? $riskPctPercent / 100.0 : $riskPctPercent);
         $pivotSlPolicy = (string)($defaults['pivot_sl_policy'] ?? 'nearest_below');
@@ -63,6 +65,6 @@ final class ExampleTradeEntryRunner
             marketMaxSpreadPct: (float)($defaults['market_max_spread_pct'] ?? 0.001)
         );
 
-        return $this->tradeEntryService->buildAndExecute($request);
+        return $this->tradeEntryService->buildAndExecute($request, mode: $mode);
     }
 }

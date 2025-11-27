@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Policy;
 
-use App\Config\{TradeEntryConfig, TradeEntryConfigProvider};
+use App\Config\TradeEntryConfigResolver;
 use App\Contract\Provider\MainProviderInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -13,17 +13,16 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
  *
  * Blocks new trades once the daily loss limit (absolute USDT) is reached.
  * Uses account equity when available, falls back to available balance.
- * Persists per-day baseline and lock state under var/lock/daily_loss_guard.json.
+ * Persists per-day baseline and lock state per mode under var/lock/daily_loss_guard.<mode>.json.
  * Supports mode-based configuration (same as validations.{mode}.yaml).
  */
 final class DailyLossGuard
 {
-    private string $statePath;
+    private string $lockDir;
 
     public function __construct(
         private readonly MainProviderInterface $providers,
-        private readonly TradeEntryConfigProvider $configProvider,
-        private readonly TradeEntryConfig $defaultConfig, // Fallback si mode non fourni
+        private readonly TradeEntryConfigResolver $configResolver,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {
         $root = \dirname(__DIR__, 3); // src/TradeEntry/Policy -> src/TradeEntry -> src -> project root
@@ -31,7 +30,7 @@ final class DailyLossGuard
         if (!is_dir($lockDir)) {
             @mkdir($lockDir, 0777, true);
         }
-        $this->statePath = $lockDir . '/daily_loss_guard.json';
+        $this->lockDir = $lockDir;
     }
 
     /**
@@ -42,18 +41,15 @@ final class DailyLossGuard
      */
     public function checkAndMaybeLock(?string $mode = null): array
     {
-        // Charger la config selon le mode (même mécanisme que validations.{mode}.yaml)
-        $config = $this->getConfigForMode($mode);
+        $config = $this->configResolver->resolve($mode);
+        $modeUsed = $this->configResolver->resolveMode($mode);
         $risk = $config->getRisk();
         $limitUsdt = isset($risk['daily_max_loss_usdt']) ? (float)$risk['daily_max_loss_usdt'] : 0.0;
         if ($limitUsdt <= 0.0) {
-            // Backward compatible: if only percent exists, disable absolute guard by default
             $limitUsdt = 0.0;
         }
-        // Count unrealized through equity by default (safer for futures)
         $countUnrealized = (bool)($risk['daily_loss_count_unrealized'] ?? true);
 
-        // If not configured, do nothing
         if ($limitUsdt <= 0.0) {
             return [
                 'date' => $this->today(),
@@ -63,10 +59,11 @@ final class DailyLossGuard
                 'pnl_today' => 0.0,
                 'limit_usdt' => 0.0,
                 'locked' => false,
+                'mode' => $modeUsed,
             ];
         }
 
-        $state = $this->loadState();
+        $state = $this->loadState($modeUsed, $limitUsdt);
 
         // Measure equity/available
         $account = $this->providers->getAccountProvider()->getAccountInfo();
@@ -91,8 +88,9 @@ final class DailyLossGuard
                 'pnl_today' => 0.0,
                 'limit_usdt' => $limitUsdt,
                 'locked' => false,
+                'mode' => $modeUsed,
             ];
-            $this->saveState($state);
+            $this->saveState($state, $modeUsed);
         }
 
         // Compute PnL from baseline
@@ -111,7 +109,7 @@ final class DailyLossGuard
                 'pnl_today' => $pnlToday,
                 'loss' => $loss,
                 'limit_usdt' => $limitUsdt,
-                'mode' => $mode,
+                'mode' => $modeUsed,
                 'reason' => 'loss_below_limit',
             ]);
         }
@@ -128,7 +126,7 @@ final class DailyLossGuard
                 'pnl_today' => $pnlToday,
                 'loss' => $loss,
                 'limit_usdt' => $limitUsdt,
-                'mode' => $mode,
+                'mode' => $modeUsed,
             ]);
         }
 
@@ -137,14 +135,19 @@ final class DailyLossGuard
         $state['measure_value'] = $measureValue;
         $state['pnl_today'] = $pnlToday;
         $state['limit_usdt'] = $limitUsdt;
-        $this->saveState($state);
+        $state['mode'] = $modeUsed;
+        $this->saveState($state, $modeUsed);
 
         return $state;
     }
 
-    public function isLocked(): bool
+    public function isLocked(?string $mode = null): bool
     {
-        $state = $this->loadState();
+        $modeUsed = $this->configResolver->resolveMode($mode);
+        $config = $this->configResolver->resolve($mode);
+        $risk = $config->getRisk();
+        $limitUsdt = isset($risk['daily_max_loss_usdt']) ? (float)$risk['daily_max_loss_usdt'] : 0.0;
+        $state = $this->loadState($modeUsed, $limitUsdt);
         // If day changed, treat as unlocked until checkAndMaybeLock() is called
         return ($state['date'] ?? '') === $this->today() && (bool)($state['locked'] ?? false);
     }
@@ -158,24 +161,30 @@ final class DailyLossGuard
     /**
      * @return array<string,mixed>
      */
-    private function loadState(): array
+    private function loadState(string $mode, float $defaultLimitUsdt): array
     {
-        if (is_file($this->statePath)) {
+        $path = $this->getStatePath($mode);
+        if (!is_file($path)) {
+            $legacy = $this->lockDir . '/daily_loss_guard.json';
+            if (is_file($legacy)) {
+                $path = $legacy;
+            }
+        }
+
+        if (is_file($path)) {
             try {
-                $content = file_get_contents($this->statePath);
+                $content = file_get_contents($path);
                 if ($content !== false) {
                     $data = json_decode($content, true);
                     if (\is_array($data)) {
+                        $data['mode'] = $mode;
                         return $data;
                     }
                 }
-            } catch (\Throwable) {}
+            } catch (\Throwable) {
+            }
         }
 
-        // Utiliser la config par défaut pour initialiser limit_usdt
-        $risk = $this->defaultConfig->getRisk();
-        $defaultLimitUsdt = isset($risk['daily_max_loss_usdt']) ? (float)$risk['daily_max_loss_usdt'] : 0.0;
-        
         return [
             'date' => $this->today(),
             'start_measure' => null,
@@ -184,43 +193,34 @@ final class DailyLossGuard
             'pnl_today' => 0.0,
             'limit_usdt' => $defaultLimitUsdt,
             'locked' => false,
+            'mode' => $mode,
         ];
-    }
-
-    /**
-     * Charge la config selon le mode (même mécanisme que validations.{mode}.yaml)
-     * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping')
-     * @return TradeEntryConfig
-     */
-    private function getConfigForMode(?string $mode): TradeEntryConfig
-    {
-        if ($mode === null || $mode === '') {
-            return $this->defaultConfig;
-        }
-
-        try {
-            return $this->configProvider->getConfigForMode($mode);
-        } catch (\RuntimeException $e) {
-            // Si le mode n'existe pas, utiliser la config par défaut
-            $this->positionsLogger->warning('daily_loss_guard.mode_not_found', [
-                'mode' => $mode,
-                'error' => $e->getMessage(),
-                'fallback' => 'default_config',
-            ]);
-            return $this->defaultConfig;
-        }
     }
 
     /**
      * @param array<string,mixed> $state
      */
-    private function saveState(array $state): void
+    private function saveState(array $state, string $mode): void
     {
+        $path = $this->getStatePath($mode);
         try {
-            file_put_contents($this->statePath, json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+            file_put_contents($path, json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         } catch (\Throwable) {
             // ignore
         }
     }
-}
 
+    private function getStatePath(string $mode): string
+    {
+        $suffix = $mode !== '' ? '.' . $this->normalizeMode($mode) : '';
+        return sprintf('%s/daily_loss_guard%s.json', $this->lockDir, $suffix);
+    }
+
+    private function normalizeMode(string $mode): string
+    {
+        $clean = strtolower($mode);
+        $clean = preg_replace('/[^a-z0-9_-]+/', '_', $clean);
+        $clean = trim((string)$clean, '_');
+        return $clean !== '' ? $clean : 'default';
+    }
+}

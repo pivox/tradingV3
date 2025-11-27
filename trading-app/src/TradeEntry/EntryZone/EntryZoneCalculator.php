@@ -7,7 +7,7 @@ use App\TradeEntry\Dto\EntryZone;
 use App\TradeEntry\Types\Side;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\TradeEntry\Pricing\TickQuantizer;
-use App\Config\{TradeEntryConfig, TradeEntryConfigProvider};
+use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContext};
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -23,6 +23,7 @@ final class EntryZoneCalculator
         private readonly ?IndicatorProviderInterface $indicators = null,
         private readonly ?TradeEntryConfigProvider $configProvider = null,
         private readonly ?TradeEntryConfig $defaultConfig = null, // Fallback si mode non fourni
+        private readonly ?TradeEntryModeContext $modeContext = null,
         private readonly ?string $defaultTfOverride = null,
         private readonly ?float $kAtrOverride = null,
         private readonly ?float $wMinOverride = null,
@@ -221,19 +222,25 @@ final class EntryZoneCalculator
             return $this->defaultConfig;
         }
 
-        if ($mode === null || $mode === '') {
+        $resolvedMode = $this->modeContext?->resolve($mode) ?? ($mode ?? '');
+        if ($resolvedMode === '') {
             return $this->defaultConfig;
         }
 
         try {
-            return $this->configProvider->getConfigForMode($mode);
+            return $this->configProvider->getConfigForMode($resolvedMode);
         } catch (\RuntimeException $e) {
-            // Si le mode n'existe pas, utiliser la config par défaut
             $this->positionsLogger?->warning('entry_zone_calculator.mode_not_found', [
-                'mode' => $mode,
+                'mode' => $resolvedMode,
                 'error' => $e->getMessage(),
                 'fallback' => 'default_config',
             ]);
+            if ($this->modeContext !== null) {
+                $fallbackMode = $this->modeContext->resolve(null);
+                if ($fallbackMode !== $resolvedMode) {
+                    return $this->configProvider->getConfigForMode($fallbackMode);
+                }
+            }
             return $this->defaultConfig;
         }
     }

@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Builder;
 
-use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, ZoneDeviationOverrideStore};
+use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContext, ZoneDeviationOverrideStore};
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Types\Side;
 use Psr\Log\LoggerInterface;
@@ -18,7 +18,7 @@ final class TradeEntryRequestBuilder
 {
     public function __construct(
         private readonly TradeEntryConfigProvider $configProvider,
-        private readonly TradeEntryConfig $defaultConfig, // Fallback si mode non fourni
+        private readonly TradeEntryModeContext $modeContext,
         private readonly ZoneDeviationOverrideStore $zoneDeviationOverrides,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
@@ -227,20 +227,23 @@ final class TradeEntryRequestBuilder
      */
     private function getConfigForMode(?string $mode): TradeEntryConfig
     {
-        if ($mode === null || $mode === '') {
-            return $this->defaultConfig;
-        }
+        $resolvedMode = $this->modeContext->resolve($mode);
 
         try {
-            return $this->configProvider->getConfigForMode($mode);
+            return $this->configProvider->getConfigForMode($resolvedMode);
         } catch (\RuntimeException $e) {
-            // Si le mode n'existe pas, utiliser la config par défaut
             $this->positionsLogger->warning('trade_entry_request_builder.mode_not_found', [
-                'mode' => $mode,
+                'mode' => $resolvedMode,
                 'error' => $e->getMessage(),
-                'fallback' => 'default_config',
+                'fallback' => 'default_mode',
             ]);
-            return $this->defaultConfig;
+
+            $fallbackMode = $this->modeContext->resolve(null);
+            if ($fallbackMode !== $resolvedMode) {
+                return $this->configProvider->getConfigForMode($fallbackMode);
+            }
+
+            throw $e;
         }
     }
 }

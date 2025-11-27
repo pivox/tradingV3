@@ -7,7 +7,7 @@ use App\TradeEntry\Dto\{TradeEntryRequest, ExecutionResult, ZoneSkipEventDto, Pr
 use App\TradeEntry\Dto\EntryZone;
 use App\TradeEntry\Dto\FallbackEndOfZoneConfig;
 use App\TradeEntry\Execution\ExecutionBox;
-use App\Config\TradeEntryConfig;
+use App\Config\TradeEntryConfigResolver;
 use App\TradeEntry\Exception\EntryZoneOutOfBoundsException;
 use App\TradeEntry\Hook\PostExecutionHookInterface;
 use App\TradeEntry\Workflow\{BuildPreOrder, BuildOrderPlan, ExecuteOrderPlan};
@@ -27,7 +27,7 @@ final class TradeEntryService
         private readonly ExecuteOrderPlan $executor,
         private readonly TradeEntryMetricsService $metrics,
         private readonly \App\TradeEntry\Policy\DailyLossGuard $dailyLossGuard,
-        private readonly TradeEntryConfig $tradeEntryConfig,
+        private readonly TradeEntryConfigResolver $tradeEntryConfigResolver,
         private readonly ExecutionBox $executionBox,
         private readonly TradeLifecycleLogger $tradeLifecycleLogger,
         private readonly ZoneSkipPersistenceService $zoneSkipPersistence,
@@ -107,6 +107,9 @@ final class TradeEntryService
             ]);
         }
 
+        $entryConfig = $this->tradeEntryConfigResolver->resolve($mode);
+        $configDefaults = $entryConfig->getDefaults();
+
         $this->positionsLogger->info('order_journey.trade_entry.preflight_start', [
             'symbol' => $request->symbol,
             'decision_key' => $decisionKey,
@@ -180,7 +183,7 @@ final class TradeEntryService
 
         // End-of-zone fallback decision (taker switch) if configured
         try {
-            $fallbackCfg = $this->tradeEntryConfig->getFallbackEndOfZoneConfig();
+            $fallbackCfg = $entryConfig->getFallbackEndOfZoneConfig();
             if ($fallbackCfg->enabled) {
                 $zone = new EntryZone(
                     min: $plan->entryZoneLow ?? PHP_FLOAT_MIN,
@@ -210,7 +213,7 @@ final class TradeEntryService
         }
 
         if ($lifecycleContext !== null) {
-            $this->captureEntryZoneMetrics($lifecycleContext, $plan, $preflight, $request);
+            $this->captureEntryZoneMetrics($lifecycleContext, $plan, $preflight, $request, $configDefaults);
             $this->capturePlanMetrics($lifecycleContext, $plan);
         }
 
@@ -283,6 +286,9 @@ final class TradeEntryService
             'reason' => 'simulate_trade_entry',
         ]);
 
+        $entryConfig = $this->tradeEntryConfigResolver->resolve($mode);
+        $configDefaults = $entryConfig->getDefaults();
+
         // Run preflight and planning only (no execution)
         // Propagate decision key for consistent logging across steps
         $preflight = ($this->preflight)($request, $decisionKey);
@@ -313,7 +319,7 @@ final class TradeEntryService
 
         // End-of-zone fallback decision also applied in simulation to mirror logs
         try {
-            $fallbackCfg = $this->tradeEntryConfig->getFallbackEndOfZoneConfig();
+            $fallbackCfg = $entryConfig->getFallbackEndOfZoneConfig();
             if ($fallbackCfg->enabled) {
                 $zone = new EntryZone(
                     min: $plan->entryZoneLow ?? PHP_FLOAT_MIN,
@@ -602,7 +608,8 @@ final class TradeEntryService
         LifecycleContextBuilder $builder,
         OrderPlanModel $plan,
         PreflightReport $preflight,
-        TradeEntryRequest $request
+        TradeEntryRequest $request,
+        array $configDefaults = []
     ): void
     {
         $low = $plan->entryZoneLow;
@@ -646,7 +653,7 @@ final class TradeEntryService
         ) {
             $zoneDeviation = 0.0;
         }
-        $zoneMaxDeviation = $this->resolveZoneMaxDeviation($request);
+        $zoneMaxDeviation = $this->resolveZoneMaxDeviation($request, $configDefaults);
 
         $builder->withEntryZone([
             'width_pct' => $widthPct !== null ? round($widthPct, 6) : null,
@@ -733,11 +740,10 @@ final class TradeEntryService
         return $request->side === Side::Long ? $preflight->bestAsk : $preflight->bestBid;
     }
 
-    private function resolveZoneMaxDeviation(TradeEntryRequest $request): ?float
+    private function resolveZoneMaxDeviation(TradeEntryRequest $request, array $defaults = []): ?float
     {
         $value = $request->zoneMaxDeviationPct;
         if ($value === null) {
-            $defaults = $this->tradeEntryConfig->getDefaults();
             if (isset($defaults['zone_max_deviation_pct']) && \is_numeric($defaults['zone_max_deviation_pct'])) {
                 $value = (float) $defaults['zone_max_deviation_pct'];
             }
