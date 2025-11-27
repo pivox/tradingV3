@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Service;
 
-use App\Config\{TradeEntryConfig, MtfValidationConfig};
+use App\Config\{TradeEntryConfig, TradeEntryConfigResolver, MtfValidationConfig};
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
@@ -36,7 +36,7 @@ final class TradingDecisionHandler
         #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $mtfLogger,
         #[Autowire(service: 'monolog.logger.mtf')] private readonly LoggerInterface $positionsFlowLogger,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
-        private readonly TradeEntryConfig $tradeEntryConfig,
+        private readonly TradeEntryConfigResolver $tradeEntryConfigResolver,
         private readonly MtfValidationConfig $mtfConfig,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly AuditLoggerInterface $auditLogger,
@@ -58,6 +58,9 @@ final class TradingDecisionHandler
         // Force ATR to the 5m timeframe so downstream sizing/guards stay consistent across execution TFs.
         $forcedAtr5m = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '5m');
 
+        $resolvedMode = $this->tradeEntryConfigResolver->resolveMode($symbolResult->tradeEntryModeUsed);
+        $tradeEntryConfig = $this->tradeEntryConfigResolver->resolve($symbolResult->tradeEntryModeUsed);
+
         $this->mtfLogger->info('order_journey.signal_ready', [
             'symbol' => $symbolResult->symbol,
             'execution_tf' => $symbolResult->executionTf,
@@ -67,8 +70,8 @@ final class TradingDecisionHandler
         ]);
 
         // 1. Validation MTF spécifique
-        if (!$this->canExecuteMtfTrading($symbolResult, $mtfRunDto, $forcedAtr5m, $decisionKey, null)) {
-            return $this->createSkippedResult($symbolResult, 'trading_conditions_not_met', $forcedAtr5m, $decisionKey);
+        if (!$this->canExecuteMtfTrading($symbolResult, $mtfRunDto, $forcedAtr5m, $decisionKey, null, $tradeEntryConfig)) {
+            return $this->createSkippedResult($symbolResult, 'trading_conditions_not_met', $forcedAtr5m, $decisionKey, $resolvedMode);
         }
 
         // 2. Utiliser le TF d'exécution déjà décidé par MtfService (via ExecutionTimeframeDecisionService)
@@ -79,7 +82,7 @@ final class TradingDecisionHandler
                 'decision_key' => $decisionKey,
                 'status' => $symbolResult->status,
             ]);
-            return $this->createSkippedResult($symbolResult, 'execution_tf_missing', $forcedAtr5m, $decisionKey);
+            return $this->createSkippedResult($symbolResult, 'execution_tf_missing', $forcedAtr5m, $decisionKey, $resolvedMode);
         }
         $effectiveTf = $symbolResult->executionTf;
         
@@ -103,11 +106,11 @@ final class TradingDecisionHandler
 
         $lifecycleContext = $this->lifecycleContextFactory->create($symbolResult->symbol)
             ->withDecisionKey($decisionKey)
-            ->withProfile($symbolResult->tradeEntryModeUsed)
+            ->withProfile($resolvedMode)
             ->withMtfContext($effectiveTf, $this->extractMtfContext($symbolResult), $symbolResult->blockingTf)
             ->withSelectorDecision(null, null) // Plus de sélection dans TradingDecisionHandler, décidé par MtfService
             ->withIndicatorMetrics(null, null, null) // Plus de métriques de sélection
-            ->merge(['config_version' => $this->tradeEntryConfig->getVersion()]);
+            ->merge(['config_version' => $tradeEntryConfig->getVersion()]);
 
         // 3. Construction via Builder (délégation) avec champs minimaux
         $tradeRequest = $this->requestBuilder->fromMtfSignal(
@@ -116,7 +119,7 @@ final class TradingDecisionHandler
             $effectiveTf,
             $symbolResult->currentPrice,
             (\is_float($atrForTf) && $atrForTf > 0.0) ? $atrForTf : $forcedAtr5m,
-            $symbolResult->tradeEntryModeUsed, // Passer le mode (même mécanisme que validations.{mode}.yaml)
+            $resolvedMode, // Passer le mode (même mécanisme que validations.{mode}.yaml)
         );
 
         if ($tradeRequest === null) {
@@ -125,7 +128,7 @@ final class TradingDecisionHandler
                 'decision_key' => $decisionKey,
                 'reason' => 'builder_returned_null',
             ]);
-            return $this->createSkippedResult($symbolResult, 'unable_to_build_request', $forcedAtr5m, $decisionKey);
+            return $this->createSkippedResult($symbolResult, 'unable_to_build_request', $forcedAtr5m, $decisionKey, $resolvedMode);
         }
 
         $this->mtfLogger->info('order_journey.trade_request.built', [
@@ -137,7 +140,7 @@ final class TradingDecisionHandler
             'initial_margin_usdt' => $tradeRequest->initialMarginUsdt,
             'stop_from' => $tradeRequest->stopFrom,
             'validation_mode_used' => $symbolResult->validationModeUsed,
-            'trade_entry_mode_used' => $symbolResult->tradeEntryModeUsed,
+            'trade_entry_mode_used' => $resolvedMode,
             'reason' => 'mtf_defaults_applied',
         ]);
 
@@ -148,7 +151,7 @@ final class TradingDecisionHandler
                 'side' => $symbolResult->signalSide,
                 'decision_key' => $decisionKey,
                 'validation_mode_used' => $symbolResult->validationModeUsed,
-                'trade_entry_mode_used' => $symbolResult->tradeEntryModeUsed,
+                'trade_entry_mode_used' => $resolvedMode,
             ]);
 
             $this->mtfLogger->info('order_journey.trade_entry.dispatch', [
@@ -156,7 +159,7 @@ final class TradingDecisionHandler
                 'decision_key' => $decisionKey,
                 'dry_run' => $mtfRunDto->dryRun,
                 'validation_mode_used' => $symbolResult->validationModeUsed,
-                'trade_entry_mode_used' => $symbolResult->tradeEntryModeUsed,
+                'trade_entry_mode_used' => $resolvedMode,
                 'reason' => $mtfRunDto->dryRun ? 'dry_run_simulation' : 'live_execution',
             ]);
 
@@ -169,8 +172,8 @@ final class TradingDecisionHandler
             );
 
             $execution = $mtfRunDto->dryRun
-                ? $this->tradeEntryService->buildAndSimulate($tradeRequest, $decisionKey, $hook, $symbolResult->tradeEntryModeUsed, $lifecycleContext)
-                : $this->tradeEntryService->buildAndExecute($tradeRequest, $decisionKey, $hook, $symbolResult->tradeEntryModeUsed, $lifecycleContext);
+                ? $this->tradeEntryService->buildAndSimulate($tradeRequest, $decisionKey, $hook, $resolvedMode, $lifecycleContext)
+                : $this->tradeEntryService->buildAndExecute($tradeRequest, $decisionKey, $hook, $resolvedMode, $lifecycleContext);
 
             $decision = [
                 'status' => $execution->status,
@@ -187,7 +190,7 @@ final class TradingDecisionHandler
                 'client_order_id' => $execution->clientOrderId,
                 'exchange_order_id' => $execution->exchangeOrderId,
                 'validation_mode_used' => $symbolResult->validationModeUsed,
-                'trade_entry_mode_used' => $symbolResult->tradeEntryModeUsed,
+                'trade_entry_mode_used' => $resolvedMode,
                 'reason' => 'trade_entry_service_completed',
             ]);
 
@@ -204,7 +207,7 @@ final class TradingDecisionHandler
                 currentPrice: $symbolResult->currentPrice,
                 atr: $forcedAtr5m,
                 validationModeUsed: $symbolResult->validationModeUsed,
-                tradeEntryModeUsed: $symbolResult->tradeEntryModeUsed
+                tradeEntryModeUsed: $resolvedMode
             );
         } catch (\Throwable $e) {
             $this->mtfLogger->error('[Trading Decision] Trade entry execution failed', [
@@ -248,7 +251,7 @@ final class TradingDecisionHandler
                 currentPrice: $symbolResult->currentPrice,
                 atr: $forcedAtr5m,
                 validationModeUsed: $symbolResult->validationModeUsed,
-                tradeEntryModeUsed: $symbolResult->tradeEntryModeUsed
+                tradeEntryModeUsed: $resolvedMode
             );
         }
     }
@@ -257,7 +260,14 @@ final class TradingDecisionHandler
      * Validation MTF spécifique (garde dans TradingDecisionHandler).
      * Les validations génériques sont déléguées à TradeEntryService.
      */
-    private function canExecuteMtfTrading(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto, ?float $forcedAtr5m = null, ?string $decisionKey = null, ?string $executionTfOverride = null): bool
+    private function canExecuteMtfTrading(
+        SymbolResultDto $symbolResult,
+        MtfRunDto $mtfRunDto,
+        ?float $forcedAtr5m = null,
+        ?string $decisionKey = null,
+        ?string $executionTfOverride = null,
+        ?TradeEntryConfig $tradeEntryConfig = null
+    ): bool
     {
         if ($symbolResult->executionTf === null) {
             $this->mtfLogger->info('order_journey.preconditions.blocked', [
@@ -269,7 +279,7 @@ final class TradingDecisionHandler
         }
 
         // En dry-run, si le flag est activé, accepter tous les timeframes (y compris 4h et 1h)
-        $decision = $this->tradeEntryConfig->getDecision();
+        $decision = $tradeEntryConfig?->getDecision() ?? [];
         $dryRunValidateAllTfs = (bool)($this->mtfConfig->getDefault('dry_run_validate_all_timeframes', false));
         $allTimeframes = ['1m', '5m', '15m', '1h', '4h'];
 
@@ -354,7 +364,7 @@ final class TradingDecisionHandler
      * Les valeurs absentes restent nulles (les conditions géreront missing_data).
      * @return array<string,mixed>
      */
-    private function buildSelectorContext(SymbolResultDto $symbolResult): array
+    private function buildSelectorContext(SymbolResultDto $symbolResult, ?TradeEntryConfig $tradeEntryConfig = null): array
     {
         $symbol = $symbolResult->symbol;
         $price = $symbolResult->currentPrice ?? null;
@@ -364,7 +374,7 @@ final class TradingDecisionHandler
             ? (10000.0 * $atr15m / $price) : null;
 
         // Valeur R multiple attendue (fallback au défaut de config)
-        $defaults = $this->tradeEntryConfig->getDefaults();
+        $defaults = $tradeEntryConfig?->getDefaults() ?? [];
         $expectedR = isset($defaults['r_multiple']) ? (float)$defaults['r_multiple'] : 2.0;
 
         // Contexte de base consommé par l'ExecutionSelector
@@ -470,7 +480,7 @@ final class TradingDecisionHandler
         }
 
         if ($context['entry_zone_width_pct'] === null) {
-            $entryZoneWidth = $this->estimateEntryZoneWidthPct($symbol, $price ?? $context['close'] ?? null, $atr15m);
+            $entryZoneWidth = $this->estimateEntryZoneWidthPct($symbol, $price ?? $context['close'] ?? null, $atr15m, $tradeEntryConfig);
             if ($entryZoneWidth !== null) {
                 $context['entry_zone_width_pct'] = $entryZoneWidth;
             }
@@ -516,7 +526,7 @@ final class TradingDecisionHandler
                 $stopPct = max(1e-9, $atrK * $atr15m / max($price, 1e-9));
                 $levApprox = $riskPct / $stopPct;
 
-                $levCfg = $this->tradeEntryConfig->getLeverage();
+                $levCfg = $tradeEntryConfig?->getLeverage() ?? [];
                 $floor = (float) ($levCfg['floor'] ?? 1.0);
                 $cap = (float) ($levCfg['exchange_cap'] ?? 20.0);
                 $context['leverage'] = max($floor, min($cap, (float) $levApprox));
@@ -544,7 +554,7 @@ final class TradingDecisionHandler
         return $context;
     }
 
-    private function estimateEntryZoneWidthPct(string $symbol, ?float $referencePrice, ?float $atr15m): ?float
+    private function estimateEntryZoneWidthPct(string $symbol, ?float $referencePrice, ?float $atr15m, ?TradeEntryConfig $tradeEntryConfig = null): ?float
     {
         [$pivotCandidate, $atrFromSnapshot] = $this->fetchEntryZonePivotAndAtr($symbol);
         $pivot = $pivotCandidate ?? $referencePrice;
@@ -557,7 +567,7 @@ final class TradingDecisionHandler
             $atrVal = null;
         }
 
-        $postValidation = $this->tradeEntryConfig->getPostValidation();
+        $postValidation = $tradeEntryConfig?->getPostValidation() ?? [];
         $entryZoneCfg = (array) ($postValidation['entry_zone'] ?? []);
         $kAtr = isset($entryZoneCfg['k_atr']) && \is_numeric($entryZoneCfg['k_atr'])
             ? (float) $entryZoneCfg['k_atr']
@@ -772,7 +782,7 @@ final class TradingDecisionHandler
         return $tfs;
     }
 
-    private function createSkippedResult(SymbolResultDto $symbolResult, string $reason, ?float $forcedAtr5m = null, ?string $decisionKey = null): SymbolResultDto
+    private function createSkippedResult(SymbolResultDto $symbolResult, string $reason, ?float $forcedAtr5m = null, ?string $decisionKey = null, ?string $modeUsed = null): SymbolResultDto
     {
         if ($decisionKey !== null) {
             $this->mtfLogger->info('order_journey.trade_request.skipped', [
@@ -796,7 +806,7 @@ final class TradingDecisionHandler
             currentPrice: $symbolResult->currentPrice,
             atr: $forcedAtr5m,
             validationModeUsed: $symbolResult->validationModeUsed,
-            tradeEntryModeUsed: $symbolResult->tradeEntryModeUsed
+            tradeEntryModeUsed: $modeUsed ?? $symbolResult->tradeEntryModeUsed
         );
     }
 

@@ -34,7 +34,7 @@ final class TimeframeValidationService
     public function validateTimeframe(
         string $symbol,
         string $timeframe,
-        string $phase,        // "context" | "execution"
+        string $phase,
         ?string $mode,
         array $mtfConfig,
         array $indicators,
@@ -46,7 +46,7 @@ final class TimeframeValidationService
          * 0) Pas de config pour ce timeframe → neutral + invalid
          * --------------------------------------------------------- */
         if (!isset($validationConfig['timeframe'][$timeframe])) {
-            return new TimeframeDecisionDto(
+            $decision = new TimeframeDecisionDto(
                 timeframe: $timeframe,
                 phase: $phase,
                 signal: 'neutral',
@@ -56,12 +56,19 @@ final class TimeframeValidationService
                 rulesFailed: [],
                 extra: ['indicators' => $indicators],
             );
+
+            $this->logInvalidContextTimeframe($symbol, $timeframe, $phase, $mode, $decision, 'yaml');
+
+            return $decision;
         }
+
+        $decision = null;
+        $engine = 'yaml';
 
         // Si l'engine ConditionRegistry est disponible, on l'utilise en priorité.
         if ($this->canUseConditionRegistryEngine()) {
             try {
-                return $this->validateWithConditionRegistry(
+                $decision = $this->validateWithConditionRegistry(
                     symbol: $symbol,
                     timeframe: $timeframe,
                     phase: $phase,
@@ -69,6 +76,7 @@ final class TimeframeValidationService
                     mtfConfig: $mtfConfig,
                     indicators: $indicators,
                 );
+                $engine = 'condition_registry';
             } catch (\Throwable $e) {
                 if ($this->logger) {
                     $this->logger->error('[MTF] ConditionRegistry timeframe validation failed, falling back to YAML engine', [
@@ -82,16 +90,23 @@ final class TimeframeValidationService
             }
         }
 
-        return $this->validateWithYamlEngine(
-            symbol: $symbol,
-            timeframe: $timeframe,
-            phase: $phase,
-            mode: $mode,
-            mtfConfig: $mtfConfig,
-            indicators: $indicators,
-            validationConfig: $validationConfig,
-            rulesConfig: $rulesConfig,
-        );
+        if ($decision === null) {
+            $decision = $this->validateWithYamlEngine(
+                symbol: $symbol,
+                timeframe: $timeframe,
+                phase: $phase,
+                mode: $mode,
+                mtfConfig: $mtfConfig,
+                indicators: $indicators,
+                validationConfig: $validationConfig,
+                rulesConfig: $rulesConfig,
+            );
+            $engine = 'yaml';
+        }
+
+        $this->logInvalidContextTimeframe($symbol, $timeframe, $phase, $mode, $decision, $engine);
+
+        return $decision;
     }
 
     /**
@@ -324,6 +339,18 @@ final class TimeframeValidationService
                 }
             }
 
+            if ($this->logger !== null && $phase === 'context') {
+                foreach ($filtersResults as $name => $res) {
+                    $this->logger->info('[MTF] Context filter check', [
+                        'symbol'    => $symbol,
+                        'timeframe' => $timeframe,
+                        'mode'      => $mode,
+                        'filter'    => $name,
+                        'passed'    => (bool) ($res['passed'] ?? false),
+                    ]);
+                }
+            }
+
             if ($filtersFailed !== []) {
                 $valid = false;
                 $signal = 'neutral';
@@ -477,5 +504,36 @@ final class TimeframeValidationService
 
             @error_log('[MTF_RULE_DEBUG] ' . \json_encode($payload, JSON_UNESCAPED_SLASHES));
         }
+    }
+
+    private function logInvalidContextTimeframe(
+        string $symbol,
+        string $timeframe,
+        string $phase,
+        ?string $mode,
+        TimeframeDecisionDto $decision,
+        string $engine
+    ): void {
+        if ($this->logger === null) {
+            return;
+        }
+
+        if ($phase !== 'context') {
+            return;
+        }
+
+        if ($decision->valid) {
+            return;
+        }
+
+        $this->logger->info('[MTF] Context timeframe invalid', [
+            'symbol'         => $symbol,
+            'timeframe'      => $timeframe,
+            'phase'          => $phase,
+            'mode'           => $mode,
+            'engine'         => $engine,
+            'invalid_reason' => $decision->invalidReason,
+            'signal'         => $decision->signal,
+        ]);
     }
 }
