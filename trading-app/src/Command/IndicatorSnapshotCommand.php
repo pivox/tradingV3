@@ -76,10 +76,9 @@ class IndicatorSnapshotCommand extends Command
     {
         $io->title("Création d'un snapshot d'indicateurs");
 
-        // Calculer et persister via le provider (isolation des Core)
+        // Calculer via le provider (la persistance est gérée automatiquement)
         $provider = $this->indicatorMain->getIndicatorProvider();
         $snapshotDto = $provider->getSnapshot($symbol, $timeframe->value);
-        $provider->saveIndicatorSnapshot($snapshotDto);
 
         $io->success(sprintf(
             "Snapshot calculé et persisté pour %s %s (%s)",

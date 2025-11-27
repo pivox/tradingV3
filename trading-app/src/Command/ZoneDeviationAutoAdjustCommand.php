@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command;
 
-use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, ZoneDeviationOverrideStore};
+use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContext, ZoneDeviationOverrideStore};
 use App\TradeEntry\Service\ZoneDeviationAnalyzerService;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -23,6 +23,7 @@ final class ZoneDeviationAutoAdjustCommand extends Command
         private readonly ZoneDeviationAnalyzerService $analyzer,
         private readonly ZoneDeviationOverrideStore $overrideStore,
         private readonly TradeEntryConfigProvider $configProvider,
+        private readonly TradeEntryModeContext $modeContext,
         private readonly TradeEntryConfig $defaultConfig,
     ) {
         parent::__construct();
@@ -155,11 +156,15 @@ final class ZoneDeviationAutoAdjustCommand extends Command
 
     private function resolveConfig(string $mode): TradeEntryConfig
     {
-        if ($mode === 'default') {
+        $resolvedMode = $mode === 'default'
+            ? $this->modeContext->resolve(null)
+            : $this->modeContext->resolve($mode);
+
+        try {
+            return $this->configProvider->getConfigForMode($resolvedMode);
+        } catch (\RuntimeException $e) {
             return $this->defaultConfig;
         }
-
-        return $this->configProvider->getConfigForMode($mode);
     }
 
     private function normalizeMode(?string $mode): string

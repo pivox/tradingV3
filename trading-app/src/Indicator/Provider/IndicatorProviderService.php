@@ -116,6 +116,14 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         public function getSnapshot(string $symbol, string $timeframe): IndicatorSnapshotDto
         {
             $tf = Timeframe::from($timeframe);
+            $existing = $this->getSnapshotFromDatabaseOnly($symbol, $tf->value);
+            if ($existing instanceof IndicatorSnapshotDto) {
+                $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+                if (!$this->isSnapshotStale($existing, $now, $tf)) {
+                    return $existing;
+                }
+            }
+
             $klines = $this->klineProvider->getKlines($symbol, $tf, 250);
             if (empty($klines)) {
                 throw new \RuntimeException("Aucune kline pour $symbol/$timeframe");
@@ -154,8 +162,8 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 $lastTime = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
             }
 
-            // Build snapshot DTO (persist later with key symbol-timeframe)
-            return new IndicatorSnapshotDto(
+            // Build snapshot DTO and persist it (keyed by symbol/timeframe)
+            $snapshot = new IndicatorSnapshotDto(
                 symbol: $symbol,
                 timeframe: $tf,
                 klineTime: $lastTime,
@@ -176,6 +184,10 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 meta: ['key' => $symbol . '-' . $tf->value],
                 source: 'PHP'
             );
+
+            $this->saveIndicatorSnapshot($snapshot);
+
+            return $snapshot;
         }
 
         public function saveIndicatorSnapshot(IndicatorSnapshotDto $snapshotDto): void
@@ -549,10 +561,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
                 // 1️⃣ si rien en DB → on calcule à partir des klines
                 if ($snapshot === null || $this->isSnapshotStale($snapshot, $at, Timeframe::from((string)$tf))) {
-                    $fresh = $this->getSnapshot($symbol, (string)$tf);
-                    // optionnel mais logique si tu veux alimenter la table au passage
-                    $this->saveIndicatorSnapshot($fresh);
-                    $snapshot = $fresh;
+                    $snapshot = $this->getSnapshot($symbol, (string)$tf);
                 }
 
                 // 2️⃣ mapping vers le format attendu par le MTF

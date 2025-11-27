@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\MtfRunner\Service;
 
+use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\MtfValidator\Dto\MtfResultDto;
@@ -57,6 +58,7 @@ final class MtfRunnerService
         private readonly FuturesOrderSyncService $futuresOrderSyncService,
         private readonly MtfValidatorInterface $mtfValidator,
         private readonly MainProviderInterface $mainProvider,
+        private readonly IndicatorProviderInterface $indicatorProvider,
         private readonly EntityManagerInterface $entityManager,
         private readonly LoggerInterface $logger,
         #[Autowire('%kernel.project_dir%')]
@@ -133,6 +135,8 @@ final class MtfRunnerService
                 ? $this->runParallel($symbols, $request, $context, $runId)
                 : $this->runSequential($symbols, $request, $context);
             $profiler->increment('runner', 'mtf_execution', microtime(true) - $execStart);
+
+            $this->persistIndicatorSnapshots($result['results'] ?? [], $request);
 
             // 8. Mettre à jour les switches pour les symboles exclus (après traitement)
             if (!empty($excludedSymbols)) {
@@ -1013,6 +1017,47 @@ final class MtfRunnerService
             ]);
             // Ne pas faire échouer le run MTF complet
         }
+    }
+
+    /**
+     * @param array<string,mixed> $results
+     */
+    private function persistIndicatorSnapshots(array $results, RunnerRequestDto $request): void
+    {
+        $timeframes = $this->resolvePersistenceTimeframes($request);
+        if ($timeframes === []) {
+            return;
+        }
+
+        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+
+        foreach ($results as $symbol => $_) {
+            if (!is_string($symbol) || $symbol === '' || strtoupper($symbol) === 'FINAL') {
+                continue;
+            }
+
+            try {
+                $this->indicatorProvider->getIndicatorsForSymbolAndTimeframes($symbol, $timeframes, $now);
+            } catch (\Throwable $e) {
+                $this->logger->debug('[MTF Runner] Failed to persist indicator snapshots', [
+                    'symbol' => $symbol,
+                    'timeframes' => $timeframes,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+    }
+
+    /**
+     * @return string[]
+     */
+    private function resolvePersistenceTimeframes(RunnerRequestDto $request): array
+    {
+        if (is_string($request->currentTf) && $request->currentTf !== '') {
+            return [$request->currentTf];
+        }
+
+        return ['4h', '1h', '15m', '5m', '1m'];
     }
 
     /**
