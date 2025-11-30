@@ -283,6 +283,11 @@ mtf_validation:
                             - all_of:
                                     - macd_hist_gt_eps
                                     - macd_line_above_signal       # momentum MACD explicite
+                                    # Alternative possible si trop strict :
+                                    # - any_of:
+                                    #       - macd_line_above_signal                # MACD déjà au-dessus du signal
+                                    #       - macd_line_cross_up_with_hysteresis   # break clair
+                                    #       - all_of: [ macd_hist_gt_eps, macd_hist_slope_pos ] # MACD > 0 ET pente positive
                                     - ema20_over_50_with_tolerance_moderate
                                     - close_above_vwap_or_ma9
                                     - rsi_lt_70: { rsi_lt_70_threshold: 72 }
