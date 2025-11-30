@@ -25,11 +25,11 @@ class ReportingController extends AbstractController
     public function mtfReport(Request $request): Response
     {
         $date = $this->resolveDateParam($request->query->get('date'));
-        $report = $this->reportingService->getMtfReport($date);
+        $data = $this->reportingService->getMtfReportData($date);
 
         return $this->render('reporting/mtf_report.html.twig', [
             'date' => $date,
-            'report' => $report,
+            'data' => $data,
         ]);
     }
 
@@ -37,11 +37,11 @@ class ReportingController extends AbstractController
     public function mtfSymbols(Request $request): Response
     {
         $date = $this->resolveDateParam($request->query->get('date'));
-        $report = $this->reportingService->getMtfSymbolsReport($date);
+        $data = $this->reportingService->getMtfSymbolsReportData($date);
 
         return $this->render('reporting/mtf_symbols_report.html.twig', [
             'date' => $date,
-            'report' => $report,
+            'data' => $data,
         ]);
     }
 

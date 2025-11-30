@@ -22,15 +22,125 @@
         </div>
     </form>
 
-    {% include 'reporting/report_alerts.html.twig' with { report: report } %}
+    {% if data.errors is not empty %}
+        <div class="alert alert-warning">
+            <ul class="mb-0">
+                {% for error in data.errors %}
+                    <li>{{ error }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
 
-    <div class="card">
-        <div class="card-body">
-            {% if report.output %}
-                <pre class="mb-0 text-break">{{ report.output }}</pre>
-            {% else %}
-                <p class="text-muted mb-0">Aucune donnée disponible pour cette date.</p>
-            {% endif %}
+    <div class="row g-4">
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <strong>/api/mtf/run</strong>
+                </div>
+                <div class="card-body">
+                    <p class="mb-1"><strong>Total :</strong> {{ data.http_stats.count }}</p>
+                    <p class="mb-1"><strong>Premier :</strong> {{ data.http_stats.first ?? '—' }}</p>
+                    <p class="mb-0"><strong>Dernier :</strong> {{ data.http_stats.last ?? '—' }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <strong>Reasons (mtf.log)</strong>
+                </div>
+                <div class="card-body">
+                    {% if data.context_reasons is empty %}
+                        <p class="text-muted mb-0">Aucune donnée.</p>
+                    {% else %}
+                        <table class="table table-sm mb-0">
+                            {% for reason, count in data.context_reasons %}
+                                <tr>
+                                    <td>{{ reason }}</td>
+                                    <td class="text-end">{{ count }}</td>
+                                </tr>
+                            {% endfor %}
+                        </table>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header">
+                    <strong>Filtres de contexte</strong>
+                </div>
+                <div class="card-body">
+                    {% if data.filter_stats is empty %}
+                        <p class="text-muted mb-0">Aucun filtre exécuté.</p>
+                    {% else %}
+                        <table class="table table-sm mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Filtre</th>
+                                    <th class="text-end">Pass</th>
+                                    <th class="text-end">Fail</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for filter, stats in data.filter_stats %}
+                                    <tr>
+                                        <td>{{ filter }}</td>
+                                        <td class="text-end text-success">{{ stats.pass }}</td>
+                                        <td class="text-end text-danger">{{ stats.fail }}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4 mt-1">
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header">
+                    <strong>Context invalid (par raison)</strong>
+                </div>
+                <div class="card-body">
+                    {% if data.ctx_invalid_reasons is empty %}
+                        <p class="text-muted mb-0">Aucun rejet.</p>
+                    {% else %}
+                        <table class="table table-sm mb-0">
+                            {% for reason, count in data.ctx_invalid_reasons %}
+                                <tr>
+                                    <td>{{ reason }}</td>
+                                    <td class="text-end">{{ count }}</td>
+                                </tr>
+                            {% endfor %}
+                        </table>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header">
+                    <strong>Context invalid (par timeframe)</strong>
+                </div>
+                <div class="card-body">
+                    {% if data.ctx_invalid_by_tf is empty %}
+                        <p class="text-muted mb-0">Aucun rejet.</p>
+                    {% else %}
+                        <table class="table table-sm mb-0">
+                            {% for tf, count in data.ctx_invalid_by_tf %}
+                                <tr>
+                                    <td>{{ tf }}</td>
+                                    <td class="text-end">{{ count }}</td>
+                                </tr>
+                            {% endfor %}
+                        </table>
+                    {% endif %}
+                </div>
+            </div>
         </div>
     </div>
 {% endblock %}

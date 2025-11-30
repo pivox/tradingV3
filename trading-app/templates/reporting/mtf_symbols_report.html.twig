@@ -22,15 +22,171 @@
         </div>
     </form>
 
-    {% include 'reporting/report_alerts.html.twig' with { report: report } %}
+    <div class="card mb-4">
+        <div class="card-header">
+            <strong>Volumétrie globale</strong>
+        </div>
+        <div class="card-body row">
+            <div class="col-md-3">
+                <div class="text-muted">Lignes</div>
+                <div class="fw-bold">{{ data.total_rows }}</div>
+            </div>
+            <div class="col-md-3">
+                <div class="text-muted">Symboles distincts</div>
+                <div class="fw-bold">{{ data.distinct_symbols }}</div>
+            </div>
+        </div>
+    </div>
 
-    <div class="card">
-        <div class="card-body">
-            {% if report.output %}
-                <pre class="mb-0 text-break">{{ report.output }}</pre>
-            {% else %}
-                <p class="text-muted mb-0">Aucune donnée disponible pour cette date.</p>
-            {% endif %}
+    <div class="row g-4">
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header"><strong>Statuts</strong></div>
+                <div class="card-body">
+                    <table class="table table-sm mb-0">
+                        {% for row in data.statuses %}
+                            <tr>
+                                <td>{{ row.status }}</td>
+                                <td class="text-end">{{ row.c }}</td>
+                            </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header"><strong>Execution TF</strong></div>
+                <div class="card-body">
+                    <table class="table table-sm mb-0">
+                        {% for row in data.execution_tf %}
+                            <tr>
+                                <td>{{ row.execution_tf }}</td>
+                                <td class="text-end">{{ row.c }}</td>
+                            </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header"><strong>Blocking TF</strong></div>
+                <div class="card-body">
+                    <table class="table table-sm mb-0">
+                        {% for row in data.blocking_tf %}
+                            <tr>
+                                <td>{{ row.blocking_tf }}</td>
+                                <td class="text-end">{{ row.c }}</td>
+                            </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4 mt-1">
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header"><strong>Signal side</strong></div>
+                <div class="card-body">
+                    <table class="table table-sm mb-0">
+                        {% for row in data.signal_side %}
+                            <tr>
+                                <td>{{ row.signal_side }}</td>
+                                <td class="text-end">{{ row.c }}</td>
+                            </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-8">
+            <div class="card h-100">
+                <div class="card-header"><strong>Top symboles (toutes lignes)</strong></div>
+                <div class="card-body table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Symbole</th>
+                                <th>Total</th>
+                                <th>Success</th>
+                                <th>Non success</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in data.top_symbols %}
+                                <tr>
+                                    <td>{{ row.symbol }}</td>
+                                    <td>{{ row.total }}</td>
+                                    <td class="text-success">{{ row.success }}</td>
+                                    <td class="text-muted">{{ row.not_success }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4 mt-1">
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header"><strong>Top symboles problématiques</strong></div>
+                <div class="card-body table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Symbole</th>
+                                <th>Total</th>
+                                <th>Problèmes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in data.top_problematic %}
+                                <tr>
+                                    <td>{{ row.symbol }}</td>
+                                    <td>{{ row.total_rows }}</td>
+                                    <td class="text-danger">{{ row.problematic_rows }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header"><strong>Principales erreurs</strong></div>
+                <div class="card-body table-responsive">
+                    {% if data.top_errors is empty %}
+                        <p class="text-muted mb-0">Aucune erreur dans mtf_run_symbol.</p>
+                    {% else %}
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Symbole</th>
+                                    <th>Statut</th>
+                                    <th>Erreur (extrait)</th>
+                                    <th>Occurrences</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in data.top_errors %}
+                                    <tr>
+                                        <td>{{ row.symbol }}</td>
+                                        <td>{{ row.status }}</td>
+                                        <td class="text-break">{{ row.error_snippet }}</td>
+                                        <td class="text-end">{{ row.c }}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    {% endif %}
+                </div>
+            </div>
         </div>
     </div>
 {% endblock %}
