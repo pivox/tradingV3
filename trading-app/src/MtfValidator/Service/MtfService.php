@@ -24,8 +24,7 @@ use App\Repository\MtfStateRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\Entity\ValidationCache as ValidationCacheEntity;
 use App\Runtime\Cache\DbValidationCache;
-use App\Entity\IndicatorSnapshot;
-use App\Repository\IndicatorSnapshotRepository;
+use App\Indicator\Message\IndicatorSnapshotProjectionMessage;
 use App\Contract\Signal\SignalValidationServiceInterface;
 use App\MtfValidator\Service\Timeframe\Timeframe4hService;
 use App\MtfValidator\Service\Timeframe\Timeframe1hService;
@@ -35,6 +34,8 @@ use App\MtfValidator\Service\Timeframe\Timeframe1mService;
 use App\MtfValidator\Service\ContextDecisionService;
 use App\MtfValidator\Service\ExecutionTimeframeDecisionService;
 use Doctrine\ORM\EntityManagerInterface;
+use App\Logging\TraceIdProvider;
+use Symfony\Component\Messenger\MessageBusInterface;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\UuidInterface;
@@ -61,11 +62,13 @@ final class MtfService
         private readonly Timeframe1mService $timeframe1mService,
         private readonly ContextDecisionService $contextDecisionService,
         private readonly ExecutionTimeframeDecisionService $executionTimeframeDecisionService,
+        private readonly MessageBusInterface $messageBus,
         private readonly ?DbValidationCache $validationCache = null,
         private readonly ?KlineJsonIngestionService $klineJsonIngestion = null,
         private readonly ?MtfValidationConfigProvider $mtfValidationConfigProvider = null,
         private readonly ?TradeEntryConfigProvider $tradeEntryConfigProvider = null,
         private readonly ?ConditionRegistry $conditionRegistry = null,
+        private readonly ?TraceIdProvider $traceIdProvider = null,
     ) {
     }
 
@@ -254,120 +257,115 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
         }
     }
 
-    private function persistIndicatorSnapshot(string $symbol, string $tf, array $result): void
+    private function persistIndicatorSnapshot(string $symbol, string $tf, array $result, ?string $runId = null): void
     {
         if ($this->isGraceWindowResult($result)) {
             return;
         }
         try {
-            $repo = $this->entityManager->getRepository(IndicatorSnapshot::class);
-            if (!$repo instanceof IndicatorSnapshotRepository) {
-                return;
-            }
             $klineTime = $this->parseKlineTime($result['kline_time'] ?? null);
             if (!$klineTime instanceof \DateTimeImmutable) {
-                // No valid kline time, skip persistence to avoid corrupt records
                 return;
             }
 
             $values = [];
-            // Extraire et aplatir un sous-ensemble du contexte indicateur pour éviter les collisions de clés typées
             $context = $result['indicator_context'] ?? [];
             if (is_array($context)) {
-                // RSI
                 if (isset($context['rsi']) && is_numeric($context['rsi'])) {
-                    $values['rsi'] = (float)$context['rsi'];
+                    $values['rsi'] = (float) $context['rsi'];
                 }
-                // ATR (du contexte)
                 if (isset($context['atr']) && is_numeric($context['atr'])) {
-                    $values['atr'] = (string)$context['atr'];
+                    $values['atr'] = (string) $context['atr'];
                 }
-                // VWAP
                 if (isset($context['vwap']) && is_numeric($context['vwap'])) {
-                    $values['vwap'] = (string)$context['vwap'];
+                    $values['vwap'] = (string) $context['vwap'];
                 }
-                // MACD (aplatir vers macd, macd_signal, macd_histogram)
                 if (isset($context['macd'])) {
                     $macd = $context['macd'];
                     if (is_array($macd)) {
                         if (isset($macd['macd']) && is_numeric($macd['macd'])) {
-                            $values['macd'] = (string)$macd['macd'];
+                            $values['macd'] = (string) $macd['macd'];
                         }
                         if (isset($macd['signal']) && is_numeric($macd['signal'])) {
-                            $values['macd_signal'] = (string)$macd['signal'];
+                            $values['macd_signal'] = (string) $macd['signal'];
                         }
                         if (isset($macd['hist']) && is_numeric($macd['hist'])) {
-                            $values['macd_histogram'] = (string)$macd['hist'];
+                            $values['macd_histogram'] = (string) $macd['hist'];
                         }
                     } elseif (is_numeric($macd)) {
-                        $values['macd'] = (string)$macd;
+                        $values['macd'] = (string) $macd;
                     }
                 }
-                // EMA (map 20,50,200)
                 if (isset($context['ema']) && is_array($context['ema'])) {
                     foreach ([20, 50, 200] as $period) {
-                        if (isset($context['ema'][(string)$period]) && is_numeric($context['ema'][(string)$period])) {
-                            $values['ema' . $period] = (string)$context['ema'][(string)$period];
+                        if (isset($context['ema'][(string) $period]) && is_numeric($context['ema'][(string) $period])) {
+                            $values['ema' . $period] = (string) $context['ema'][(string) $period];
                         } elseif (isset($context['ema'][$period]) && is_numeric($context['ema'][$period])) {
-                            $values['ema' . $period] = (string)$context['ema'][$period];
+                            $values['ema' . $period] = (string) $context['ema'][$period];
                         }
                     }
                 }
-                // Bollinger
                 if (isset($context['bollinger']) && is_array($context['bollinger'])) {
                     $boll = $context['bollinger'];
-                    if (isset($boll['upper']) && is_numeric($boll['upper'])) { $values['bb_upper'] = (string)$boll['upper']; }
-                    if (isset($boll['middle']) && is_numeric($boll['middle'])) { $values['bb_middle'] = (string)$boll['middle']; }
-                    if (isset($boll['lower']) && is_numeric($boll['lower'])) { $values['bb_lower'] = (string)$boll['lower']; }
+                    if (isset($boll['upper']) && is_numeric($boll['upper'])) {
+                        $values['bb_upper'] = (string) $boll['upper'];
+                    }
+                    if (isset($boll['middle']) && is_numeric($boll['middle'])) {
+                        $values['bb_middle'] = (string) $boll['middle'];
+                    }
+                    if (isset($boll['lower']) && is_numeric($boll['lower'])) {
+                        $values['bb_lower'] = (string) $boll['lower'];
+                    }
                 }
-                // ADX (valeur unique ou période 14)
                 if (isset($context['adx'])) {
                     $adx = $context['adx'];
                     if (is_array($adx)) {
                         $val = $adx['14'] ?? null;
-                        if (is_numeric($val)) { $values['adx'] = (string)$val; }
+                        if (is_numeric($val)) {
+                            $values['adx'] = (string) $val;
+                        }
                     } elseif (is_numeric($adx)) {
-                        $values['adx'] = (string)$adx;
+                        $values['adx'] = (string) $adx;
                     }
                 }
-                // MA (si le contexte expose ma9/ma21 directement)
                 foreach (['ma9', 'ma21'] as $maKey) {
                     if (isset($context[$maKey]) && is_numeric($context[$maKey])) {
-                        $values[$maKey] = (string)$context[$maKey];
+                        $values[$maKey] = (string) $context[$maKey];
                     }
                 }
-                // Close
                 if (isset($context['close']) && is_numeric($context['close'])) {
-                    $values['close'] = (string)$context['close'];
+                    $values['close'] = (string) $context['close'];
                 }
             }
-            // Priorité aux champs directs utiles (ex: ATR calculé en dehors du contexte)
-            if (isset($result['atr']) && is_numeric($result['atr'])) { $values['atr'] = (string)$result['atr']; }
 
-            $snapshot = (new IndicatorSnapshot())
-                ->setSymbol(strtoupper($symbol))
-                ->setTimeframe(\App\Common\Enum\Timeframe::from($tf))
-                ->setKlineTime($klineTime->setTimezone(new \DateTimeZone('UTC')))
-                ->setValues($values)
-                ->setSource('PHP');
+            if (isset($result['atr']) && is_numeric($result['atr'])) {
+                $values['atr'] = (string) $result['atr'];
+            }
 
-            // Déterminer insert vs update pour le log
-            $existing = $repo->findOneBy([
-                'symbol' => $snapshot->getSymbol(),
-                'timeframe' => $snapshot->getTimeframe(),
-                'klineTime' => $snapshot->getKlineTime(),
-            ]);
+            $meta = [];
+            if (isset($values['meta']) && is_array($values['meta'])) {
+                $meta = $values['meta'];
+            }
+            $meta['origin'] = 'mtf_service';
+            if ($runId !== null) {
+                $meta['run_id'] = $runId;
+            }
+            $values['meta'] = $meta;
 
-            $repo->upsert($snapshot);
+            $this->messageBus->dispatch(new IndicatorSnapshotProjectionMessage(
+                strtoupper($symbol),
+                $tf,
+                $klineTime->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+                $values,
+                'MTF_SERVICE',
+                $runId,
+            ));
 
-            // Info log for observability
-            $this->mtfLogger->info('[MTF] Indicator snapshot persisted', [
+            $this->mtfLogger->info('[MTF] Indicator snapshot queued', [
                 'symbol' => strtoupper($symbol),
                 'timeframe' => $tf,
                 'kline_time' => $klineTime->format('Y-m-d H:i:s'),
                 'values_count' => count($values),
-                'source' => 'PHP',
-                'action' => $existing ? 'update' : 'insert',
             ]);
         } catch (\Throwable $e) {
             $this->mtfLogger->debug('[MTF] Indicator snapshot persist failed', ['symbol' => $symbol, 'tf' => $tf, 'error' => $e->getMessage()]);
@@ -555,7 +553,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             );
             // Toujours persister un snapshot pour trace, quel que soit le statut
             try {
-                $this->persistIndicatorSnapshot($symbol, $currentTf, $result);
+                $this->persistIndicatorSnapshot($symbol, $currentTf, $result, $runId->toString());
             } catch (\Throwable) {
                 // best-effort
             }
@@ -698,7 +696,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 ]);
             }
             // Persister systématiquement un snapshot 4h (même en INVALID)
-            $this->persistIndicatorSnapshot($symbol, '4h', $result4h);
+            $this->persistIndicatorSnapshot($symbol, '4h', $result4h, $runId->toString());
             if ($this->isGraceWindowResult($result4h)) {
                 if ($contextOnly4h) {
                     $this->mtfLogger->info('[MTF] Context-only TF 4h in grace window, ignoring blocking', ['symbol' => $symbol]);
@@ -775,7 +773,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 ]);
             }
             // Persister systématiquement un snapshot 1h
-            $this->persistIndicatorSnapshot($symbol, '1h', $result1h);
+            $this->persistIndicatorSnapshot($symbol, '1h', $result1h, $runId->toString());
             if ($this->isGraceWindowResult($result1h)) {
                 if ($contextOnly1h) {
                     $this->mtfLogger->info('[MTF] Context-only TF 1h in grace window, ignoring blocking', ['symbol' => $symbol]);
@@ -879,7 +877,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
                 ]);
             }
             // Persister systématiquement un snapshot 15m
-            $this->persistIndicatorSnapshot($symbol, '15m', $result15m);
+            $this->persistIndicatorSnapshot($symbol, '15m', $result15m, $runId->toString());
             if ($this->isGraceWindowResult($result15m)) {
                 if ($contextOnly15m) {
                     $this->mtfLogger->info('[MTF] Context-only TF 15m in grace window, ignoring blocking', ['symbol' => $symbol]);
@@ -1002,7 +1000,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
 
             // Persister systématiquement un snapshot 5m (après calcul ATR)
-            $this->persistIndicatorSnapshot($symbol, '5m', $result5m);
+            $this->persistIndicatorSnapshot($symbol, '5m', $result5m, $runId->toString());
             if ($this->isGraceWindowResult($result5m)) {
                 if ($contextOnly5m) {
                     $this->mtfLogger->info('[MTF] Context-only TF 5m in grace window, ignoring blocking', ['symbol' => $symbol]);
@@ -1119,7 +1117,7 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
             }
 
             // Persister systématiquement un snapshot 1m (après calcul ATR)
-            $this->persistIndicatorSnapshot($symbol, '1m', $result1m);
+            $this->persistIndicatorSnapshot($symbol, '1m', $result1m, $runId->toString());
             if ($this->isGraceWindowResult($result1m)) {
                 if ($contextOnly1m) {
                     $this->mtfLogger->info('[MTF] Context-only TF 1m in grace window, ignoring blocking', ['symbol' => $symbol]);
@@ -1699,10 +1697,25 @@ private function processSymbol(string $symbol, UuidInterface $runId, \DateTimeIm
         }
         $audit->setCreatedAt($this->clock->now());
 
-        // Ajouter le run_id aux détails
+        // Ajouter le run_id et la timeframe aux détails
         $details = $audit->getDetails();
         $details['run_id'] = $runId->toString();
+        if ($audit->getTimeframe() !== null && !isset($details['timeframe'])) {
+            $details['timeframe'] = $audit->getTimeframe()->value;
+        }
         $audit->setDetails($details);
+
+        // Injecter un trace_id cohérent (par symbole) si disponible
+        if ($this->traceIdProvider !== null) {
+            $traceId = $this->traceIdProvider->getOrCreate($symbol);
+            $audit->setTraceId($traceId);
+            // Propager également dans les détails pour les requêtes SQL brutes
+            $details = $audit->getDetails();
+            if (!isset($details['trace_id'])) {
+                $details['trace_id'] = $traceId;
+            }
+            $audit->setDetails($details);
+        }
 
         // Dispatcher l'événement pour déléger la persistance au subscriber
         $this->eventDispatcher->dispatch(new MtfAuditEvent(

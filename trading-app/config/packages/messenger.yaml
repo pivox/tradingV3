@@ -27,4 +27,5 @@ framework:
             App\TradeEntry\Message\CancelOrderMessage: order_timeout
             App\TradeEntry\Message\LimitFillWatchMessage: order_timeout
             App\MtfValidator\Message\MtfResultProjectionMessage: mtf_projection
+            App\Indicator\Message\IndicatorSnapshotProjectionMessage: mtf_projection
             App\MtfValidator\Message\MtfTradingDecisionMessage: mtf_decision

@@ -34,6 +34,7 @@ parameters:
     env(LOG_LEVEL_INDICATORS): 'info'
     env(LOG_LEVEL_HIGHCONVICTION): 'info'
     env(LOG_LEVEL_PIPELINE_EXEC): 'info'
+    app.trade_entry_default_mode: 'scalper'
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
 
@@ -249,8 +250,8 @@ services:
 
     # Config par défaut (compatibilité)
     App\Config\TradeEntryConfig:
-        arguments:
-            $path: '%kernel.project_dir%/config/app/trade_entry.yaml'
+        factory: ['@App\Config\TradeEntryConfigResolver', 'resolve']
+        arguments: [null]
         autowire: false
 
     App\Config\SignalConfig:
