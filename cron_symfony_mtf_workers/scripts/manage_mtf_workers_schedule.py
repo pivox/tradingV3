@@ -41,13 +41,15 @@ except AttributeError:  # pragma: no cover - compatibility with < 1.6
     OVERLAP_POLICY_BUFFER_ONE = ScheduleOverlapPolicy.SCHEDULE_OVERLAP_POLICY_BUFFER_ONE
 
 DEFAULT_URL = os.getenv("MTF_WORKERS_URL", "http://trading-app-nginx:80/api/mtf/run")
-DEFAULT_WORKERS = int(os.getenv("MTF_WORKERS_COUNT", "5"))
+# Nombre de workers désiré pour les appels MTF (override via MTF_WORKERS_COUNT)
+DEFAULT_WORKERS = int(os.getenv("MTF_WORKERS_COUNT", "15"))
 DEFAULT_DRY_RUN = os.getenv("MTF_WORKERS_DRY_RUN", "true").lower() not in {"0", "false", "no", "off"}
 
 
 def make_job() -> Dict[str, Any]:
     return {
         "url": DEFAULT_URL,
+        # Utiliser la valeur configurée plutôt qu'un littéral
         "workers": max(1, DEFAULT_WORKERS),
         "dry_run": DEFAULT_DRY_RUN,
     }

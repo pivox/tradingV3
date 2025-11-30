@@ -3,6 +3,12 @@ TODO (2025-xx): Intégrer TradeEntryService au pipeline MTF (TradingDecisionHand
 Elle suit exactement le flux : PreOrder → EntryZone → RiskSizer → OrderPlan → Execution.
 (Aucune source externe nécessaire ici — architecture interne.)
 
+TODO (2025-xx): Documenter la persistance des runs MTF via `App\MtfValidator\Service\Persistence\DbRunSink`.
+- `onRunStart` crée un `MtfRun` Doctrine, marque le run `running` et stocke toutes les métadonnées (dry-run, force, TF, workers, user/ip, options JSON).
+- `onSymbolResult` garantit l’existence d’un `MtfRunSymbol` pour chaque symbole, l’hydrate via `setFromArray` puis flush.
+- `onRunCompleted` met à jour le run avec les compteurs, la durée et la TF finale, puis fixe `finishedAt` en UTC.
+- `onMetrics` parcourt les entrées du rapport, instancie les `MtfRunMetric` (catégorie, opération, symbole, timeframe, compte, durée) et les persiste.
+
 🌿 Arborescence (à créer)
 src/TradeEntry/
   TradeEntryBox.php

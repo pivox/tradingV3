@@ -57,7 +57,7 @@ final class TradePositionController extends AbstractController
             $trades[$key]['create_time'] = (new \DateTimeImmutable())->setTimestamp(intval($trade['create_time']/1000))->format('Y-m-d H:i:s');
         }
 
-        dd($trades);
+        //dd($trades);
      //   $positions = $accountProvider->getPositions();
 
 
