@@ -17,6 +17,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class OrderPlanBuilder
 {
     private const MIN_STOP_DISTANCE_PCT = 0.005; // 0.5% minimal absolu
+    private const MAX_PIVOT_STOP_DISTANCE_PCT = 0.02; // 2% max entre entry et pivot avant fallback ATR
 
     private static bool $deprecationWarningLogged = false;
 
@@ -98,10 +99,16 @@ final class OrderPlanBuilder
                 $ideal = $bestAsk - $tick;
             }
 
-            // 2) Si EntryZone exploitable et proche du mark, on clamp dedans
+            // 2) Si EntryZone exploitable et proche d'un prix de référence (mark ou mid), on clamp dedans
             if ($zone instanceof EntryZone) {
-                $zoneDeviation = $mark > 0.0
-                    ? max(abs($zone->min - $mark), abs($zone->max - $mark)) / $mark
+                // Standardiser le prix de référence utilisé pour la déviation de zone
+                $zoneRefPrice = $mark > 0.0 ? $mark : $mid;
+                if ($zoneRefPrice <= 0.0) {
+                    $zoneRefPrice = $bestAsk > 0.0 ? $bestAsk : ($bestBid > 0.0 ? $bestBid : 0.0);
+                }
+
+                $zoneDeviation = $zoneRefPrice > 0.0
+                    ? max(abs($zone->min - $zoneRefPrice), abs($zone->max - $zoneRefPrice)) / $zoneRefPrice
                     : 0.0;
 
                 if ($zoneDeviation <= $zoneMaxDeviationPct) {
@@ -112,6 +119,24 @@ final class OrderPlanBuilder
                         $ideal = min($zone->max, max($ideal, $zone->min));
                     }
                     $usedZone = true;
+                } else {
+                    // Zone jugée trop éloignée du prix de référence → on la considère comme non exploitable
+                    $usedZone = false;
+
+                    $this->positionsLogger->info('entry_zone.rejected_by_deviation', [
+                        'symbol'                  => $req->symbol,
+                        'side'                    => $req->side->value,
+                        'zone_min'                => $zone->min,
+                        'zone_max'                => $zone->max,
+                        'zone_ref_price'          => $zoneRefPrice,
+                        'zone_deviation'          => $zoneDeviation,
+                        'zone_max_deviation_pct'  => $zoneMaxDeviationPct,
+                        'mark'                    => $mark,
+                        'mid'                     => $mid,
+                        'best_bid'                => $bestBid,
+                        'best_ask'                => $bestAsk,
+                        'decision_key'            => $decisionKey,
+                    ]);
                 }
             }
 
@@ -125,7 +150,18 @@ final class OrderPlanBuilder
                 }
             }
 
-            // 4) Garde maxDeviation vs mark : on rapproche dans un couloir autour du mark
+            // 4) Si pas de zone (ou zone non utilisable), fallback sur ancienne logique insideTicks
+            if (!$usedZone) {
+                if ($req->side === Side::Long) {
+                    $fallbackIdeal = min($bestAsk - $tick, $bestBid + $insideTicks * $tick);
+                    $ideal = max($tick, $fallbackIdeal);
+                } else {
+                    $fallbackIdeal = max($bestBid + $tick, $bestAsk - $insideTicks * $tick);
+                    $ideal = max($tick, $fallbackIdeal);
+                }
+            }
+
+            // 5) Garde maxDeviation vs mark : on rapproche dans un couloir autour du mark
             if ($mark > 0.0) {
                 $deviation = abs($ideal - $mark) / $mark;
                 if ($deviation > $maxDeviationPct) {
@@ -143,14 +179,39 @@ final class OrderPlanBuilder
                 }
             }
 
-            // 5) Si pas de zone (ou zone non utilisable), fallback sur ancienne logique insideTicks
-            if (!$usedZone) {
+            // 5bis) Garde carnet: s'assurer que le prix reste dans [best_bid, best_ask]
+            if ($bestBid > 0.0 && $bestAsk > 0.0) {
+                $idealBeforeBookClamp = $ideal;
+
                 if ($req->side === Side::Long) {
-                    $fallbackIdeal = min($bestAsk - $tick, $bestBid + $insideTicks * $tick);
-                    $ideal = max($tick, $fallbackIdeal);
+                    // Clamp dans [best_bid, best_ask] pour éviter des limits hors carnet
+                    if ($ideal < $bestBid) {
+                        $ideal = $bestBid;
+                    }
+                    if ($ideal > $bestAsk) {
+                        $ideal = $bestAsk;
+                    }
                 } else {
-                    $fallbackIdeal = max($bestBid + $tick, $bestAsk - $insideTicks * $tick);
-                    $ideal = max($tick, $fallbackIdeal);
+                    // SHORT: clamp également dans [best_bid, best_ask]
+                    if ($ideal < $bestBid) {
+                        $ideal = $bestBid;
+                    }
+                    if ($ideal > $bestAsk) {
+                        $ideal = $bestAsk;
+                    }
+                }
+
+                if ($ideal !== $idealBeforeBookClamp) {
+                    $this->positionsLogger->info('order_plan.entry_book_clamped', [
+                        'symbol'      => $req->symbol,
+                        'side'        => $req->side->value,
+                        'ideal_before'=> $idealBeforeBookClamp,
+                        'ideal_after' => $ideal,
+                        'best_bid'    => $bestBid,
+                        'best_ask'    => $bestAsk,
+                        'tick'        => $tick,
+                        'decision_key'=> $decisionKey,
+                    ]);
                 }
             }
 
@@ -167,12 +228,14 @@ final class OrderPlanBuilder
                 'best_bid'      => $bestBid,
                 'best_ask'      => $bestAsk,
                 'mark'          => $mark,
+                'mid'           => $mid,
                 'entry'         => $entry,
                 'used_zone'     => $usedZone,
                 'zone_min'      => $zone?->min,
                 'zone_max'      => $zone?->max,
                 'zone_deviation'=> $zoneDeviation,
                 'max_deviation_pct' => $maxDeviationPct,
+                'zone_max_deviation_pct' => $zoneMaxDeviationPct,
                 'decision_key'  => $decisionKey,
             ]);
 
@@ -221,12 +284,14 @@ final class OrderPlanBuilder
         $sizingDistance = $tick * 10;
         $stopAtr = null;
         $stopPivot = null;
+        $pivotStopDistancePct = null;
 
         $hasAtrInputs = $req->atrValue !== null
             && \is_finite($req->atrValue) && $req->atrValue > 0.0
             && \is_finite($req->atrK)     && $req->atrK > 0.0;
 
         if ($req->stopFrom === 'pivot' && !empty($pre->pivotLevels)) {
+            // Stop basé sur pivot par défaut
             $stopPivot = $this->slc->fromPivot(
                 entry: $entry,
                 side: $req->side,
@@ -235,7 +300,52 @@ final class OrderPlanBuilder
                 bufferPct: $req->pivotSlBufferPct ?? 0.0015,
                 pricePrecision: $precision
             );
-            $sizingDistance = max(abs($entry - $stopPivot), $tick);
+            $pivotStopDistancePct = abs($entry - $stopPivot) / max($entry, 1e-9);
+
+            $usePivotStop = $pivotStopDistancePct <= self::MAX_PIVOT_STOP_DISTANCE_PCT || !$hasAtrInputs;
+
+            if ($usePivotStop) {
+                // Pivot jugé raisonnablement proche → on l'utilise pour sizing
+                $sizingDistance = max(abs($entry - $stopPivot), $tick);
+            } elseif ($hasAtrInputs) {
+                // Entry très au-dessus du pivot (ou en-dessous pour un short) → fallback ATR
+                $stopPivot = null;
+                $stopAtr = $this->slc->fromAtr($entry, $req->side, (float)$req->atrValue, (float)$req->atrK, $precision);
+                $sizingDistance = max(abs($entry - $stopAtr), $tick);
+
+                $atrStopDistancePct = abs($entry - $stopAtr) / max($entry, 1e-9);
+                if ($atrStopDistancePct < self::MIN_STOP_DISTANCE_PCT) {
+                    $minAbs = max($tick, self::MIN_STOP_DISTANCE_PCT * $entry);
+                    $target = $req->side === Side::Long ? max($entry - $minAbs, $tick) : $entry + $minAbs;
+                    $stopAtr = $req->side === Side::Long
+                        ? TickQuantizer::quantize($target, $precision)
+                        : TickQuantizer::quantizeUp($target, $precision);
+                    $sizingDistance = max(abs($entry - $stopAtr), $tick);
+                }
+
+                $this->positionsLogger->debug('order_plan.sl_atr_candidate', [
+                    'symbol' => $req->symbol,
+                    'side' => $req->side->value,
+                    'entry' => $entry,
+                    'atr_value' => $req->atrValue,
+                    'atr_k' => $req->atrK,
+                    'stop_atr' => $stopAtr,
+                    'atr_stop_distance_pct' => $atrStopDistancePct,
+                    'min_stop_distance_pct' => self::MIN_STOP_DISTANCE_PCT,
+                    'tick' => $tick,
+                    'precision' => $precision,
+                    'decision_key' => $decisionKey,
+                ]);
+
+                $this->positionsLogger->info('order_plan.stop_pivot_fallback_atr', [
+                    'symbol' => $req->symbol,
+                    'side' => $req->side->value,
+                    'entry' => $entry,
+                    'pivot_stop_distance_pct' => $pivotStopDistancePct,
+                    'max_pivot_stop_distance_pct' => self::MAX_PIVOT_STOP_DISTANCE_PCT,
+                    'decision_key' => $decisionKey,
+                ]);
+            }
         }
 
         if ($req->stopFrom === 'atr') {

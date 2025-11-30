@@ -1,5 +1,5 @@
 # Profil SCALPER - TradeEntry
-version: '2.5.97s'   # Version du profil scalper active
+version: '2.6.0'   # Version du profil scalper active
 
 meta:
     name: >
@@ -16,19 +16,19 @@ trade_entry:
     # DEFAULTS
     # ============================
     defaults:
-        risk_pct_percent: 2.0        # Risque par trade (% equity)
+        risk_pct_percent: 2.5        # Risque par trade (% equity)
         initial_margin_usdt: 20.0    # Marge initiale minimale allouée
         fallback_account_balance: 0.0 # Si balance insuffisante, fallback budget
 
         # --- R-MULTIPLE corrigé (1.2 → 1.5)
-        r_multiple: 1.5              # Ratio R attendu sur le trade
-        tp1_r: 1.5                   # TP1 déclenché à 1R
+        r_multiple: 1.3              # Ratio R attendu sur le trade
+        tp1_r: 1.0                   # TP1 déclenché à 1R
 
         # --- STOP LOSS
-        stop_from: 'atr'             # Stop basé sur ATR dynamique
-        atr_k: 2                     # Multiplicateur ATR (SL = ATR*k)
+        stop_from: 'pivot'             # Stop basé sur ATR dynamique
+        atr_k: 1.5                     # Multiplicateur ATR (SL = ATR*k)
         pivot_sl_policy: 'nearest_below'   # Politique SL pivot : niveau inférieur
-        pivot_sl_buffer_pct: 0.005         # Petit buffer sur SL pivot
+        pivot_sl_buffer_pct: 0.003         # Petit buffer sur SL pivot
         pivot_sl_min_keep_ratio: 0.8       # Ratio de préservation du stop
         sl_full_size: true                 # SL appliqué sur taille totale
 
