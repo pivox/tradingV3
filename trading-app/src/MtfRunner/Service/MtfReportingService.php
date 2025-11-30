@@ -24,7 +24,7 @@ final class MtfReportingService
      */
     public function getMtfReport(string $date): array
     {
-        $script = $this->projectDir . '/../mtf_report.sh';
+        $script = $this->projectDir . '/scripts/mtf_report.sh';
         if (!is_file($script)) {
             return $this->buildMissingScriptResult($script);
         }
@@ -37,7 +37,7 @@ final class MtfReportingService
      */
     public function getMtfSymbolsReport(string $date): array
     {
-        $script = $this->projectDir . '/../mtf_symbols_report.sh';
+        $script = $this->projectDir . '/scripts/mtf_symbols_report.sh';
         if (!is_file($script)) {
             return $this->buildMissingScriptResult($script);
         }
