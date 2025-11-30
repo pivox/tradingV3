@@ -287,6 +287,7 @@ services:
     volumes:
       - ./trading-app:/var/www/html
       - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
+      - ./investigation:/var/www/investigation
     environment:
       <<: *global-env
       DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}

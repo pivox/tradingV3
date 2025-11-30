@@ -35,3 +35,6 @@ mysql-data/
 **/.env.local
 **/.env.*.local
 !**/.env.example
+
+# Investigation exports
+investigation/

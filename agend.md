@@ -13,6 +13,22 @@
 - BDD (psql / docker-compose): comptages sur `mtf_audit`, `mtf_run*`, `mtf_state`
 - Script de synthèse: `./mtf_report.sh 2025-11-26`
 
+## Investigation position fermé
+- Export complet des données persistées et logs pour un symbole à une date/heure précise (UTC):
+  ```bash
+  docker-compose exec trading-app-php php bin/console app:export-symbol-data <SYMBOL> "Y-m-d H:i" [--show-sql] [--show-logs]
+  ```
+  Exemple:
+  ```bash
+  docker-compose exec trading-app-php php bin/console app:export-symbol-data LINKUSDT "2025-11-30 13:02" --show-sql --show-logs
+  ```
+  - Exporte toutes les données BDD (indicator_snapshots, mtf_*, order_intent*, futures_order*, trade_lifecycle_event, trade_zone_events) dans une fenêtre de ±1h
+  - Exporte tous les logs (positions, mtf, signals, bitmart, provider, indicators, dev) dans une fenêtre de ±5min
+  - Fichier créé dans `investigation/symbol_data_<SYMBOL>_<DATE>_<HEURE>.json`
+  - Options:
+    - `--show-sql`: Affiche toutes les requêtes SQL exécutées dans la console
+    - `--show-logs`: Affiche un aperçu des logs exportés dans la console (5 premières lignes par type)
+
 ## Points d'attention
 - Deux workers doivent être actifs : `trading-app-messenger-order-timeout` (transport `order_timeout`) et `trading-app-messenger-trading` (transport `mtf_decision`).
 - Les décisions MTF sont envoyées via Messenger, surveiller les logs `[MTF Messenger]` pour confirmer les ordres.
