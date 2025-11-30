@@ -34,3 +34,16 @@
 - Les décisions MTF sont envoyées via Messenger, surveiller les logs `[MTF Messenger]` pour confirmer les ordres.
 - Les messages `App\TradeEntry\Message\LimitFillWatchMessage` restent sur `order_timeout` pour éviter les warnings côté `mtf_decision`.
 - Après chaque modification de config Messenger, relancer les deux containers pour appliquer les nouvelles files Redis.
+
+## 30 nov 2025 – Entrée & stops scalper
+
+- Commit `402acacf5b07752e183a54fcf211f253e1e624b3`
+  - `OrderPlanBuilder`:
+    - Standardisation du prix de référence pour `zoneDeviation` (mark → mid → ask/bid).
+    - Rejet explicite de l'EntryZone si `zoneDeviation > zone_max_deviation_pct` (`entry_zone.rejected_by_deviation`).
+    - Fallback `insideTicks` appliqué avant la garde `maxDeviationPct` pour plus de lisibilité.
+    - Garde carnet `order_plan.entry_book_clamped`: clamp final de `ideal` dans `[best_bid, best_ask]` avant quantization (symétrique long/short).
+    - Nouveau fallback pivot→ATR pour `stop_from: 'pivot'` si le stop pivot est trop loin (`MAX_PIVOT_STOP_DISTANCE_PCT` = 2%).
+  - `trade_entry.*.yaml`:
+    - `atr_k` remis à `1.5` sur les profils default/regular.
+    - Profil scalper: `stop_from: 'pivot'` avec fallback ATR, `risk_pct_percent`=2.5, `r_multiple`=1.3, `tp1_r`=1.0, buffer SL pivot resserré (0.003).

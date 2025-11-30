@@ -247,14 +247,13 @@ mtf_validation:
     validation:
         start_from_timeframe: '1h'
         timeframe:
-
             '4h':
                 long:
                     - all_of:
-                          - any_of:
-                                - all_of: [ ema_50_gt_200, close_above_ema_200 ]
-                                - all_of: [ ema_above_200_with_tolerance_moderate, ema_50_gt_200 ]
-                          - price_regime_ok_long
+                      - any_of:
+                            - all_of: [ ema_50_gt_200, close_above_ema_200 ]
+                            - all_of: [ ema_above_200_with_tolerance_moderate, ema_50_gt_200 ]
+                      - price_regime_ok_long
                 short:
                     - all_of:
                           - any_of:
@@ -264,38 +263,34 @@ mtf_validation:
 
             '1h':
                 long:
-                    -   all_of:
+                    - all_of:
                         - price_regime_ok_long                # structure haussière 1h
                         - any_of:
                             - macd_hist_gt_eps             # MACD > 0
                             - macd_line_above_signal       # ou MACD au-dessus du signal
                         - adx_min_for_trend                  # ADX(1h) minimal (mais plus bas que 25)
-
                 short:
-                    -   all_of:
+                    -  all_of:
                         - price_regime_ok_short
                         - any_of:
                             - macd_hist_decreasing_n
                             - macd_line_cross_down_with_hysteresis
                         - adx_min_for_trend
-
             '15m':
                 long:
-                    -   any_of:
+                    - any_of:
                             # Scénario A : continuation pro-trend (ce que tu as déjà)
-                            -   all_of:
-                                    -   any_of:
-                                            - macd_hist_gt_eps
-                                            - macd_line_above_signal
+                            - all_of:
+                                    - macd_hist_gt_eps
+                                    - macd_line_above_signal       # momentum MACD explicite
                                     - ema20_over_50_with_tolerance_moderate
                                     - close_above_vwap_or_ma9
-                                    -   rsi_lt_70: { rsi_lt_70_threshold: 72 }
+                                    - rsi_lt_70: { rsi_lt_70_threshold: 72 }
                                     - atr_rel_in_range_15m
-
                             # Scénario B : pullback confirmé sur support dynamique
                             -   all_of:
                                     - pullback_confirmed
-                                    -   rsi_lt_70: { rsi_lt_70_threshold: 65 }    # un peu plus strict
+                                    - rsi_lt_70: { rsi_lt_70_threshold: 65 }    # un peu plus strict
                                     - atr_rel_in_range_15m
 
                 short:
