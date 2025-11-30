@@ -13,13 +13,14 @@ use App\MtfValidator\ConditionLoader\TimeframeEvaluator as MtfTimeframeEvaluator
 use App\MtfValidator\Service\Rule\TimeframeRuleEvaluator;
 use App\MtfValidator\Service\Rule\YamlRuleEngine;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class TimeframeValidationService
 {
     public function __construct(
         private readonly TimeframeRuleEvaluator $tfEvaluator,
         private readonly YamlRuleEngine $ruleEngine,
-        private readonly ?LoggerInterface $logger = null,
+        private readonly ?LoggerInterface $mtfLogger = null,
         private readonly ?MtfTimeframeEvaluator $conditionTimeframeEvaluator = null,
         private readonly ?MtfConditionRegistry $conditionRegistry = null,
         private readonly ?IndicatorEngineInterface $indicatorEngine = null,
@@ -78,8 +79,8 @@ final class TimeframeValidationService
                 );
                 $engine = 'condition_registry';
             } catch (\Throwable $e) {
-                if ($this->logger) {
-                    $this->logger->error('[MTF] ConditionRegistry timeframe validation failed, falling back to YAML engine', [
+                if ($this->mtfLogger) {
+                    $this->mtfLogger->error('[MTF] ConditionRegistry timeframe validation failed, falling back to YAML engine', [
                         'symbol'    => $symbol,
                         'timeframe' => $timeframe,
                         'phase'     => $phase,
@@ -339,9 +340,9 @@ final class TimeframeValidationService
                 }
             }
 
-            if ($this->logger !== null && $phase === 'context') {
+            if ($this->mtfLogger !== null && $phase === 'context') {
                 foreach ($filtersResults as $name => $res) {
-                    $this->logger->info('[MTF] Context filter check', [
+                    $this->mtfLogger->info('[MTF] Context filter check', [
                         'symbol'    => $symbol,
                         'timeframe' => $timeframe,
                         'mode'      => $mode,
@@ -502,7 +503,11 @@ final class TimeframeValidationService
                 'engine'    => 'ConditionRegistry',
             ];
 
-            @error_log('[MTF_RULE_DEBUG] ' . \json_encode($payload, JSON_UNESCAPED_SLASHES));
+            if ($this->mtfLogger !== null) {
+                $this->mtfLogger->info('[MTF_RULE_DEBUG]', $payload);
+            } else {
+                @error_log('[MTF_RULE_DEBUG] ' . \json_encode($payload, JSON_UNESCAPED_SLASHES));
+            }
         }
     }
 
@@ -514,7 +519,7 @@ final class TimeframeValidationService
         TimeframeDecisionDto $decision,
         string $engine
     ): void {
-        if ($this->logger === null) {
+        if ($this->mtfLogger === null) {
             return;
         }
 
@@ -526,7 +531,7 @@ final class TimeframeValidationService
             return;
         }
 
-        $this->logger->info('[MTF] Context timeframe invalid', [
+        $this->mtfLogger->info('[MTF] Context timeframe invalid', [
             'symbol'         => $symbol,
             'timeframe'      => $timeframe,
             'phase'          => $phase,
@@ -534,6 +539,8 @@ final class TimeframeValidationService
             'engine'         => $engine,
             'invalid_reason' => $decision->invalidReason,
             'signal'         => $decision->signal,
+            'rules_failed'   => $decision->rulesFailed,
+            'rules_passed'   => $decision->rulesPassed,
         ]);
     }
 }

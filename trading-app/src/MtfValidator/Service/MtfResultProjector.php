@@ -10,6 +10,7 @@ use App\MtfValidator\Repository\MtfAuditRepository;
 use App\Repository\MtfStateRepository;
 use App\Repository\SignalRepository;
 use Doctrine\ORM\EntityManagerInterface;
+use App\Logging\TraceIdProvider;
 use Ramsey\Uuid\Uuid;
 
 final class MtfResultProjector
@@ -22,6 +23,7 @@ final class MtfResultProjector
         private readonly MtfAuditRepository $mtfAuditRepository,
         private readonly MtfStateRepository $mtfStateRepository,
         private readonly SignalRepository $signalRepository,
+        private readonly TraceIdProvider $traceIdProvider,
         // plus tard : service pour les signaux / TradeEntry
     ) {
     }
@@ -67,8 +69,12 @@ final class MtfResultProjector
             $audit->setTimeframe(\App\Common\Enum\Timeframe::from($result->executionTimeframe));
         }
 
+        // Générer un trace_id cohérent pour le symbole
+        $traceId = $this->traceIdProvider->getOrCreate($result->symbol);
+        $audit->setTraceId($traceId);
+
         // Details JSON : on met un résumé exploitable
-        $audit->setDetails([
+        $details = [
             'profile'      => $result->profile,
             'mode'         => $result->mode,
             'is_tradable'  => $result->isTradable,
@@ -98,7 +104,15 @@ final class MtfResultProjector
                 'by_tf'       => $result->execution->timeframeDecisions,
             ],
             'extra'        => $result->extra,
-        ]);
+        ];
+
+        // Injecter timeframe et trace_id dans les détails pour faciliter les requêtes SQL
+        if ($result->executionTimeframe !== null) {
+            $details['timeframe'] = $result->executionTimeframe;
+        }
+        $details['trace_id'] = $traceId;
+
+        $audit->setDetails($details);
 
         // Option : severity (0 = info, 1 = warning, 2 = error)
         $audit->setSeverity($result->isTradable ? 0 : 1);

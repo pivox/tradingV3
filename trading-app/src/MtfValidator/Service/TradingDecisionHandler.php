@@ -44,7 +44,7 @@ final class TradingDecisionHandler
         private readonly ?MainProviderInterface $mainProvider = null,
     ) {}
 
-    public function handleTradingDecision(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto): SymbolResultDto
+    public function handleTradingDecision(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto, string $runId): SymbolResultDto
     {
         if ($symbolResult->isError() || $symbolResult->isSkipped()) {
             return $symbolResult;
@@ -55,6 +55,16 @@ final class TradingDecisionHandler
         }
 
         $decisionKey = $this->generateDecisionKey($symbolResult->symbol);
+        // trade_id global pour ce cycle de trade (zone → ouverture → clôture)
+        try {
+            $tradeId = sprintf(
+                'trd:%s:%s',
+                strtolower($symbolResult->symbol),
+                bin2hex(random_bytes(6))
+            );
+        } catch (\Throwable) {
+            $tradeId = uniqid('trd:' . strtolower($symbolResult->symbol) . ':', true);
+        }
         // Force ATR to the 5m timeframe so downstream sizing/guards stay consistent across execution TFs.
         $forcedAtr5m = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '5m');
 
@@ -66,6 +76,8 @@ final class TradingDecisionHandler
             'execution_tf' => $symbolResult->executionTf,
             'side' => $symbolResult->signalSide,
             'decision_key' => $decisionKey,
+            'trade_id' => $tradeId,
+            'run_id' => $runId,
             'reason' => 'mtf_signal_ready',
         ]);
 
@@ -106,11 +118,15 @@ final class TradingDecisionHandler
 
         $lifecycleContext = $this->lifecycleContextFactory->create($symbolResult->symbol)
             ->withDecisionKey($decisionKey)
+            ->withTradeId($tradeId)
             ->withProfile($resolvedMode)
             ->withMtfContext($effectiveTf, $this->extractMtfContext($symbolResult), $symbolResult->blockingTf)
             ->withSelectorDecision(null, null) // Plus de sélection dans TradingDecisionHandler, décidé par MtfService
             ->withIndicatorMetrics(null, null, null) // Plus de métriques de sélection
-            ->merge(['config_version' => $tradeEntryConfig->getVersion()]);
+            ->merge([
+                'config_version' => $tradeEntryConfig->getVersion(),
+                'run_id' => $runId,
+            ]);
 
         // 3. Construction via Builder (délégation) avec champs minimaux
         $tradeRequest = $this->requestBuilder->fromMtfSignal(
@@ -134,10 +150,12 @@ final class TradingDecisionHandler
         $this->mtfLogger->info('order_journey.trade_request.built', [
             'symbol' => $tradeRequest->symbol,
             'decision_key' => $decisionKey,
+            'trade_id' => $tradeId,
             'order_type' => $tradeRequest->orderType,
             'order_mode' => $tradeRequest->orderMode,
             'risk_pct' => $tradeRequest->riskPct,
             'initial_margin_usdt' => $tradeRequest->initialMarginUsdt,
+            'run_id' => $runId,
             'stop_from' => $tradeRequest->stopFrom,
             'validation_mode_used' => $symbolResult->validationModeUsed,
             'trade_entry_mode_used' => $resolvedMode,
@@ -150,6 +168,8 @@ final class TradingDecisionHandler
                 'execution_tf' => $symbolResult->executionTf,
                 'side' => $symbolResult->signalSide,
                 'decision_key' => $decisionKey,
+                'trade_id' => $tradeId,
+                'run_id' => $runId,
                 'validation_mode_used' => $symbolResult->validationModeUsed,
                 'trade_entry_mode_used' => $resolvedMode,
             ]);
@@ -157,6 +177,8 @@ final class TradingDecisionHandler
             $this->mtfLogger->info('order_journey.trade_entry.dispatch', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
+                'trade_id' => $tradeId,
+                'run_id' => $runId,
                 'dry_run' => $mtfRunDto->dryRun,
                 'validation_mode_used' => $symbolResult->validationModeUsed,
                 'trade_entry_mode_used' => $resolvedMode,
@@ -172,8 +194,8 @@ final class TradingDecisionHandler
             );
 
             $execution = $mtfRunDto->dryRun
-                ? $this->tradeEntryService->buildAndSimulate($tradeRequest, $decisionKey, $hook, $resolvedMode, $lifecycleContext)
-                : $this->tradeEntryService->buildAndExecute($tradeRequest, $decisionKey, $hook, $resolvedMode, $lifecycleContext);
+                ? $this->tradeEntryService->buildAndSimulate($tradeRequest, $decisionKey, $hook, $resolvedMode, $lifecycleContext, $runId, $tradeId)
+                : $this->tradeEntryService->buildAndExecute($tradeRequest, $decisionKey, $hook, $resolvedMode, $lifecycleContext, $runId, $tradeId);
 
             $decision = [
                 'status' => $execution->status,
@@ -181,11 +203,13 @@ final class TradingDecisionHandler
                 'exchange_order_id' => $execution->exchangeOrderId,
                 'raw' => $execution->raw,
                 'decision_key' => $decisionKey,
+                'trade_id' => $tradeId,
             ];
 
             $this->mtfLogger->info('order_journey.trade_entry.result', [
                 'symbol' => $symbolResult->symbol,
                 'decision_key' => $decisionKey,
+                'run_id' => $runId,
                 'status' => $execution->status,
                 'client_order_id' => $execution->clientOrderId,
                 'exchange_order_id' => $execution->exchangeOrderId,
