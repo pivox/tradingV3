@@ -36,6 +36,7 @@ class IndicatorSnapshotPopulateCommand extends Command
             ->addOption('count', 'c', InputOption::VALUE_OPTIONAL, 'Nombre de snapshots à créer', 10)
             ->addOption('start-date', 's', InputOption::VALUE_OPTIONAL, 'Date de début (Y-m-d H:i:s)', '2024-01-01 00:00:00');
     }
+    //  codex resume 019aceaa-54c7-75b3-b244-0ef0c559eb17
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {

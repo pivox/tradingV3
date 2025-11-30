@@ -37,6 +37,7 @@ class IndicatorSnapshotCommand extends Command
             ->addOption('timeframe', 't', InputOption::VALUE_REQUIRED, 'Timeframe', '1h')
             ->addOption('kline-time', 'k', InputOption::VALUE_REQUIRED, 'Heure de la kline (Y-m-d H:i:s)')
             ->addOption('tolerance', null, InputOption::VALUE_REQUIRED, 'Tolérance pour la comparaison', '0.001')
+            ->addOption('limit', 'l', InputOption::VALUE_REQUIRED, 'Nombre maximum de snapshots à afficher (pour list/sample)', '20')
             ->addOption('output', 'o', InputOption::VALUE_REQUIRED, 'Fichier de sortie pour les résultats');
     }
 
@@ -49,6 +50,7 @@ class IndicatorSnapshotCommand extends Command
         $klineTime = $input->getOption('kline-time') ?: (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
         $tolerance = (float) $input->getOption('tolerance');
         $outputFile = $input->getOption('output');
+        $limit = (int) $input->getOption('limit');
         $verbose = $io->isVerbose();
 
         try {
@@ -58,7 +60,9 @@ class IndicatorSnapshotCommand extends Command
                 case 'compare':
                     return $this->compareSnapshots($io, $symbol, $timeframe, $tolerance, $outputFile, $verbose);
                 case 'list':
-                    return $this->listSnapshots($io, $symbol, $timeframe, $verbose);
+                    return $this->listSnapshots($io, $symbol, $timeframe, $limit, $verbose);
+                case 'sample':
+                    return $this->sampleSnapshots($io, $symbol, $timeframe, $limit, $verbose);
                 default:
                     $io->error("Action inconnue: $action. Actions disponibles: create, compare, list");
                     return Command::FAILURE;
@@ -135,11 +139,11 @@ class IndicatorSnapshotCommand extends Command
         return $comparison['has_differences'] ? Command::FAILURE : Command::SUCCESS;
     }
 
-    private function listSnapshots(SymfonyStyle $io, string $symbol, Timeframe $timeframe, bool $verbose): int
+    private function listSnapshots(SymfonyStyle $io, string $symbol, Timeframe $timeframe, int $limit, bool $verbose): int
     {
         $io->title("Liste des snapshots d'indicateurs");
 
-        $snapshots = $this->snapshotRepository->findRecentForIndicators($symbol, $timeframe, 10);
+        $snapshots = $this->snapshotRepository->findRecentForIndicators($symbol, $timeframe, max(1, $limit));
 
         if (empty($snapshots)) {
             $io->warning("Aucun snapshot trouvé pour $symbol {$timeframe->value}");
@@ -172,6 +176,45 @@ class IndicatorSnapshotCommand extends Command
     }
 
     // Helpers removed: Core remains encapsulated inside Indicator providers
+
+    private function sampleSnapshots(SymfonyStyle $io, string $symbol, Timeframe $timeframe, int $limit, bool $verbose): int
+    {
+        $io->title("Échantillons de snapshots d'indicateurs");
+
+        $snapshots = $this->snapshotRepository->findRecentForIndicators($symbol, $timeframe, max(1, $limit));
+
+        if (empty($snapshots)) {
+            $io->warning("Aucun snapshot trouvé pour $symbol {$timeframe->value}");
+            return Command::SUCCESS;
+        }
+
+        $table = $io->createTable();
+        $table->setHeaders(['ID', 'Kline Time', 'MACD Hist', 'MACD', 'RSI', 'ADX', 'Close', 'RunId', 'Source']);
+
+        foreach ($snapshots as $snapshot) {
+            $values = $snapshot->getValues();
+            $table->addRow([
+                $snapshot->getId(),
+                $snapshot->getKlineTime()->format('Y-m-d H:i:s'),
+                $values['macd_histogram'] ?? 'N/A',
+                $values['macd'] ?? 'N/A',
+                $values['rsi'] ?? 'N/A',
+                $values['adx'] ?? 'N/A',
+                $values['close'] ?? 'N/A',
+                $snapshot->getRunId() ?? 'N/A',
+                $snapshot->getSource(),
+            ]);
+        }
+
+        $table->render();
+
+        if ($verbose) {
+            $io->section("Détails du dernier snapshot (sample)");
+            $this->displaySnapshotDetails($io, $snapshots[0]);
+        }
+
+        return Command::SUCCESS;
+    }
 
     private function displaySnapshotDetails(SymfonyStyle $io, IndicatorSnapshot $snapshot): void
     {
