@@ -60,12 +60,21 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
     public function saveOrder(OrderDto $order): void
     {
         /** @var FuturesOrder|null $entity */
-        $entity = $this->repository->findOneByOrderId($order->orderId);
+        $entity = null;
+
+        if ($order->clientOrderId !== null) {
+            $entity = $this->repository->findOneByClientOrderId($order->clientOrderId);
+        }
+
+        if ($entity === null && $order->orderId !== '') {
+            $entity = $this->repository->findOneByOrderId($order->orderId);
+        }
 
         if ($entity === null) {
             $entity = new FuturesOrder();
-            $entity->setOrderId($order->orderId);
         }
+
+        $entity->setOrderId($order->orderId);
 
         $this->mapDtoToEntity($order, $entity);
         $this->em->persist($entity);
@@ -190,4 +199,3 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
         return $orderSide === \App\Common\Enum\OrderSide::BUY ? 1 : 4;
     }
 }
-

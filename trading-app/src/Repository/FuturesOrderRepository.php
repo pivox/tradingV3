@@ -18,6 +18,16 @@ final class FuturesOrderRepository extends ServiceEntityRepository
         parent::__construct($registry, FuturesOrder::class);
     }
 
+    public function findOneByOrderId(string $orderId): ?FuturesOrder
+    {
+        return $this->findOneBy(['orderId' => $orderId]);
+    }
+
+    public function findOneByClientOrderId(string $clientOrderId): ?FuturesOrder
+    {
+        return $this->findOneBy(['clientOrderId' => $clientOrderId]);
+    }
+
     /**
      * @return FuturesOrder[]
      */

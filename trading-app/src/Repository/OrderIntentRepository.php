@@ -60,5 +60,37 @@ final class OrderIntentRepository extends ServiceEntityRepository
         $this->getEntityManager()->persist($intent);
         $this->getEntityManager()->flush();
     }
-}
 
+    /**
+     * Retourne la liste des symboles distincts pour lesquels un OrderIntent a été créé
+     * depuis une date donnée. Utilisé pour limiter les appels BitMart aux seuls symboles
+     * effectivement tradés récemment.
+     *
+     * @return string[]
+     */
+    public function findDistinctSymbolsSince(\DateTimeImmutable $since, int $max = 50): array
+    {
+        // Utilise un GROUP BY pour satisfaire PostgreSQL (ORDER BY sur une colonne agrégée)
+        $qb = $this->createQueryBuilder('oi')
+            ->select('oi.symbol AS symbol, MAX(oi.createdAt) AS lastCreatedAt')
+            ->where('oi.createdAt >= :since')
+            // On ne retient que les intents réellement envoyés ou finalisés côté exchange
+            ->andWhere('oi.status IN (:statuses)')
+            ->setParameter('since', $since)
+            ->setParameter('statuses', [
+                OrderIntent::STATUS_SENT,
+                OrderIntent::STATUS_FAILED,
+                OrderIntent::STATUS_CANCELLED,
+            ])
+            ->groupBy('oi.symbol')
+            ->orderBy('lastCreatedAt', 'DESC')
+            ->setMaxResults($max);
+
+        $results = $qb->getQuery()->getScalarResult();
+
+        return array_values(array_map(
+            static fn (array $row) => strtoupper((string) $row['symbol']),
+            $results
+        ));
+    }
+}
