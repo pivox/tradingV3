@@ -26,11 +26,17 @@ class IndicatorSnapshot
     #[ORM\Column(type: Types::STRING, length: 10, enumType: \App\Common\Enum\Timeframe::class)]
     private \App\Common\Enum\Timeframe $timeframe;
 
+    #[ORM\Column(type: Types::STRING, length: 64, nullable: true)]
+    private ?string $runId = null;
+
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE)]
     private \DateTimeImmutable $klineTime;
 
     #[ORM\Column(type: Types::JSON)]
     private array $values = [];
+
+    #[ORM\Column(type: Types::STRING, length: 50)]
+    private string $traceId;
 
     #[ORM\Column(type: Types::STRING, length: 10, options: ['default' => 'PHP'])]
     private string $source = 'PHP';
@@ -45,6 +51,7 @@ class IndicatorSnapshot
     {
         $this->insertedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
         $this->updatedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $this->traceId   = 'INDICATOR-' . bin2hex(random_bytes(4));
     }
 
     public function getId(): ?int
@@ -74,6 +81,17 @@ class IndicatorSnapshot
         return $this;
     }
 
+    public function getRunId(): ?string
+    {
+        return $this->runId;
+    }
+
+    public function setRunId(?string $runId): static
+    {
+        $this->runId = $runId;
+        return $this;
+    }
+
     public function getKlineTime(): \DateTimeImmutable
     {
         return $this->klineTime;
@@ -93,6 +111,17 @@ class IndicatorSnapshot
     public function setValues(array $values): static
     {
         $this->values = $values;
+        return $this;
+    }
+
+    public function getTraceId(): string
+    {
+        return $this->traceId;
+    }
+
+    public function setTraceId(string $traceId): static
+    {
+        $this->traceId = $traceId;
         return $this;
     }
 
@@ -311,4 +340,3 @@ class IndicatorSnapshot
         return $this->setValue('ma21', $ma21);
     }
 }
-

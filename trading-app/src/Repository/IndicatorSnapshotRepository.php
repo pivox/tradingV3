@@ -87,6 +87,9 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
 
         if ($existing) {
             $existing->setValues($snapshot->getValues());
+            if ($snapshot->getRunId() !== null) {
+                $existing->setRunId($snapshot->getRunId());
+            }
             $existing->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
             $this->getEntityManager()->flush();
         } else {
@@ -95,7 +98,6 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
         }
     }
 }
-
 
 
 

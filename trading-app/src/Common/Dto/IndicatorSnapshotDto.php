@@ -28,7 +28,10 @@ final readonly class IndicatorSnapshotDto
         public ?BigDecimal $ma9 = null,
         public ?BigDecimal $ma21 = null,
         public array $meta = [],
-        public string $source = 'PHP'
+        public string $source = 'PHP',
+        public ?string $runId = null,
+        public ?float $adx = null,
+        public ?float $close = null,
     ) {
     }
 
@@ -54,6 +57,9 @@ final readonly class IndicatorSnapshotDto
             'ma21' => $this->ma21?->toFixed(12),
             'meta' => $this->meta,
             'source' => $this->source,
+            'run_id' => $this->runId,
+            'adx' => $this->adx,
+            'close' => $this->close,
         ];
     }
 
@@ -78,7 +84,10 @@ final readonly class IndicatorSnapshotDto
             ma9: isset($data['ma9']) ? BigDecimal::of($data['ma9']) : null,
             ma21: isset($data['ma21']) ? BigDecimal::of($data['ma21']) : null,
             meta: $data['meta'] ?? [],
-            source: $data['source'] ?? 'PHP'
+            source: $data['source'] ?? 'PHP',
+            runId: $data['run_id'] ?? null,
+            adx: isset($data['adx']) && is_numeric($data['adx']) ? (float)$data['adx'] : null,
+            close: isset($data['close']) && is_numeric($data['close']) ? (float)$data['close'] : null,
         );
     }
 
@@ -131,6 +140,4 @@ final readonly class IndicatorSnapshotDto
         return $distance !== null && $distance->isLessThanOrEqualTo($maxDistance);
     }
 }
-
-
 
