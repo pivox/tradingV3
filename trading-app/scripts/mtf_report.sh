@@ -8,8 +8,8 @@ set -u
 # Usage: ./mtf_report.sh [YYYY-MM-DD]
 
 DATE="${1:-$(date +%F)}"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$ROOT_DIR/trading-app/var/log"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOG_DIR="$ROOT_DIR/var/log"
 DEV_LOG="$LOG_DIR/dev-$DATE.log"
 MTF_LOG="$LOG_DIR/mtf-$DATE.log"
 

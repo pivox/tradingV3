@@ -12,7 +12,7 @@
 set -u
 
 DATE="${1:-$(date +%F)}"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
   echo "Docker indisponible ou injoignable, impossible d'interroger la base (trading-app-db)." >&2
@@ -130,4 +130,3 @@ echo "== Principales erreurs (JSON error) pour le jour =="
 echo
 
 echo "Rapport symboles terminé."
-
