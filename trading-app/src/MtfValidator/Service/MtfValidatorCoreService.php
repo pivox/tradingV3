@@ -11,6 +11,7 @@ use App\Contract\MtfValidator\Dto\ExecutionSelectionDto;
 use App\Contract\MtfValidator\Dto\MtfResultDto;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
+use App\Indicator\Exception\NotEnoughKlinesException;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 
@@ -65,11 +66,33 @@ class MtfValidatorCoreService
         }
 
         // 3. Indicateurs
-        $indicatorsByTimeframe = $this->indicatorProvider->getIndicatorsForSymbolAndTimeframes(
-            $input->symbol,
-            $allTimeframes,
-            $now,
-        );
+        try {
+            $indicatorsByTimeframe = $this->indicatorProvider->getIndicatorsForSymbolAndTimeframes(
+                $input->symbol,
+                $allTimeframes,
+                $now,
+            );
+        } catch (NotEnoughKlinesException $e) {
+            $this->mtfLogger->info('MTF not enough klines', [
+                'symbol'             => $input->symbol,
+                'profile'            => $input->profile,
+                'mode'               => $mode,
+                'timeframe'          => $e->getTimeframe(),
+                'required'           => $e->getRequired(),
+                'actual'             => $e->getActual(),
+            ]);
+
+            $result = $this->buildEmptyResult(
+                input: $input,
+                mode: $mode,
+                now: $now,
+                reason: 'not_enough_klines',
+            );
+
+            $this->auditResult($input, $result, 'MTF_NOT_ENOUGH_KLINES');
+
+            return $result;
+        }
 
         // 4. Contexte
         $contextDecision = $this->contextValidationService->validateContext(

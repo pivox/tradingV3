@@ -9,7 +9,7 @@ use App\Common\Enum\Timeframe;
 use App\Contract\Indicator\Dto\ListIndicatorDto;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\Provider\KlineProviderInterface;
-use App\Entity\IndicatorSnapshot;
+use App\Indicator\Exception\NotEnoughKlinesException;
 use Brick\Math\RoundingMode;
 use App\Indicator\Condition\ConditionInterface;
 use App\Indicator\Context\EvaluationContext;
@@ -127,6 +127,11 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             $klines = $this->klineProvider->getKlines($symbol, $tf, 250);
             if (empty($klines)) {
                 throw new \RuntimeException("Aucune kline pour $symbol/$timeframe");
+            }
+
+            $klinesCount = count($klines);
+            if ($klinesCount < 250) {
+                throw new NotEnoughKlinesException($symbol, $timeframe, 250, $klinesCount);
             }
 
             // Normalize arrays for calculation
@@ -567,6 +572,11 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 // 2️⃣ mapping vers le format attendu par le MTF
                 $tfEnum = Timeframe::from((string)$tf);
                 $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 250);
+
+                $klinesCount = count($klines);
+                if ($klinesCount < 250) {
+                    throw new NotEnoughKlinesException((string)$symbol, (string)$tf, 250, $klinesCount);
+                }
 
                 $closes = [];
                 foreach ($klines as $k) {
