@@ -1,0 +1,181 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Reporting - Investigation Symbole{% endblock %}
+
+{% block body %}
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="h3">
+            <i class="bi bi-search"></i> Investigation position fermée
+        </h1>
+    </div>
+
+    <form method="get" class="row g-3 mb-4">
+        <div class="col-md-3">
+            <label for="symbol" class="form-label">Symbole</label>
+            <input type="text" class="form-control" id="symbol" name="symbol" value="{{ symbol }}" required>
+        </div>
+        <div class="col-md-3">
+            <label for="datetime" class="form-label">Date &amp; heure (UTC)</label>
+            <input type="datetime-local" class="form-control" id="datetime" name="datetime" value="{{ datetime_value }}" step="60">
+        </div>
+        <div class="col-md-2 align-self-end">
+            <button type="submit" class="btn btn-primary w-100">
+                <i class="bi bi-arrow-clockwise"></i> Analyser
+            </button>
+        </div>
+    </form>
+
+    {% if error %}
+        <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    {% if result %}
+        <div class="card mb-4">
+            <div class="card-header">
+                <strong>Métadonnées</strong>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <div class="text-muted">Symbole</div>
+                        <div class="fw-bold">{{ result.metadata.symbol }}</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-muted">Date cible (UTC)</div>
+                        <div class="fw-bold">{{ result.metadata.target_datetime }}</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-muted">Fenêtre</div>
+                        <div class="fw-bold">{{ result.metadata.time_window_start }} → {{ result.metadata.time_window_end }}</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-muted">Runs / Trace IDs</div>
+                        <div class="fw-bold">{{ result.metadata.total_runs }} / {{ result.metadata.total_trace_ids }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <strong>Runs détectés (±1h)</strong>
+            </div>
+            <div class="card-body">
+                {% if result.runs is empty %}
+                    <p class="text-muted mb-0">Aucun run MTF détecté dans la fenêtre indiquée.</p>
+                {% else %}
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Run ID</th>
+                                    <th>Première activité</th>
+                                    <th>Dernière activité</th>
+                                    <th>Nb évènements</th>
+                                    <th>Détails</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for run in result.runs %}
+                                    <tr>
+                                        <td class="text-monospace">{{ run.run_id }}</td>
+                                        <td>{{ run.first_event ?? '—' }}</td>
+                                        <td>{{ run.last_event ?? '—' }}</td>
+                                        <td>{{ run.event_count }}</td>
+                                        <td>
+                                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#run-{{ loop.index }}">
+                                                Voir
+                                            </button>
+                                        </td>
+                                    </tr>
+                                    <tr class="collapse" id="run-{{ loop.index }}">
+                                        <td colspan="5">
+                                            <div class="mb-3">
+                                                <strong>trade_lifecycle_event</strong>
+                                                <pre class="bg-light p-2 small">{{ run.data.trade_lifecycle_event|json_encode(constant('JSON_PRETTY_PRINT')) }}</pre>
+                                            </div>
+                                            <div class="mb-3">
+                                                <strong>order_intent</strong>
+                                                <pre class="bg-light p-2 small">{{ run.data.order_intent|json_encode(constant('JSON_PRETTY_PRINT')) }}</pre>
+                                            </div>
+                                            <div class="mb-3">
+                                                <strong>futures_order / trades / plan</strong>
+                                                <pre class="bg-light p-2 small">{{ {
+                                                    'futures_order': run.data.futures_order,
+                                                    'futures_order_trade': run.data.futures_order_trade,
+                                                    'futures_plan_order': run.data.futures_plan_order
+                                                }|json_encode(constant('JSON_PRETTY_PRINT')) }}</pre>
+                                            </div>
+                                            <div class="mb-3">
+                                                <strong>mtf_* tables</strong>
+                                                <pre class="bg-light p-2 small">{{ {
+                                                    'mtf_audit': run.data.mtf_audit,
+                                                    'mtf_run': run.data.mtf_run,
+                                                    'mtf_run_symbol': run.data.mtf_run_symbol,
+                                                    'mtf_run_metric': run.data.mtf_run_metric
+                                                }|json_encode(constant('JSON_PRETTY_PRINT')) }}</pre>
+                                            </div>
+                                            <div class="mb-3">
+                                                <strong>trade_zone_events &amp; indicator_snapshots</strong>
+                                                <pre class="bg-light p-2 small">{{ {
+                                                    'trade_zone_events': run.data.trade_zone_events,
+                                                    'indicator_snapshots': run.data.indicator_snapshots
+                                                }|json_encode(constant('JSON_PRETTY_PRINT')) }}</pre>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <strong>Données globales symbole (±1h)</strong>
+            </div>
+            <div class="card-body">
+                {% if result.global_data is empty %}
+                    <p class="text-muted mb-0">Aucune donnée globale récoltée.</p>
+                {% else %}
+                    <div class="accordion" id="globalDataAccordion">
+                        {% for section, entries in result.global_data %}
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="heading-{{ loop.index }}">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-{{ loop.index }}">
+                                        {{ section }} ({{ entries|length }} lignes)
+                                    </button>
+                                </h2>
+                                <div id="collapse-{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#globalDataAccordion">
+                                    <div class="accordion-body">
+                                        <pre class="bg-light p-2 small">{{ entries|json_encode(constant('JSON_PRETTY_PRINT')) }}</pre>
+                                    </div>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <strong>Logs (±5min autour de l'heure cible)</strong>
+            </div>
+            <div class="card-body">
+                {% if result.logs is empty %}
+                    <p class="text-muted mb-0">Aucun log trouvé pour cette fenêtre.</p>
+                {% else %}
+                    {% for logType, lines in result.logs %}
+                        <div class="mb-4">
+                            <h6 class="text-uppercase text-muted">{{ logType }} ({{ lines|length }} lignes)</h6>
+                            <pre class="bg-dark text-light p-2 small">{{ lines|join('\n') }}</pre>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+        </div>
+    {% endif %}
+{% endblock %}

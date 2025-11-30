@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller\Web;
 
 use App\MtfRunner\Service\MtfReportingService;
+use App\MtfRunner\Service\SymbolInvestigationService;
 use DateTimeImmutable;
 use DateTimeZone;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -16,6 +17,7 @@ class ReportingController extends AbstractController
 {
     public function __construct(
         private readonly MtfReportingService $reportingService,
+        private readonly SymbolInvestigationService $symbolInvestigationService,
     ) {
     }
 
@@ -54,6 +56,36 @@ class ReportingController extends AbstractController
             'date' => $date,
             'timeFilter' => $timeFilter,
             'report' => $report,
+        ]);
+    }
+
+    #[Route('/reporting/symbol-investigation', name: 'reporting_symbol_investigation')]
+    public function symbolInvestigation(Request $request): Response
+    {
+        $symbol = strtoupper($request->query->get('symbol', 'AIXBTUSDT'));
+        $datetimeParam = $request->query->get('datetime');
+
+        try {
+            $datetime = $datetimeParam
+                ? new DateTimeImmutable($datetimeParam, new DateTimeZone('UTC'))
+                : new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        } catch (\Exception $e) {
+            $datetime = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        }
+
+        $result = null;
+        $error = null;
+        try {
+            $result = $this->symbolInvestigationService->investigate($symbol, $datetime);
+        } catch (\Throwable $e) {
+            $error = $e->getMessage();
+        }
+
+        return $this->render('reporting/symbol_investigation.html.twig', [
+            'symbol' => $symbol,
+            'datetime_value' => $datetime->format('Y-m-d\TH:i'),
+            'result' => $result,
+            'error' => $error,
         ]);
     }
 
