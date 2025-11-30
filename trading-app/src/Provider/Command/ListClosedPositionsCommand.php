@@ -8,6 +8,7 @@ use App\Contract\Provider\AccountProviderInterface;
 use App\Contract\Provider\OrderProviderInterface;
 use App\Provider\Bitmart\Http\BitmartHttpClientPrivate;
 use App\Provider\Repository\ContractRepository;
+use App\Repository\OrderIntentRepository;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -26,6 +27,7 @@ final class ListClosedPositionsCommand extends Command
         private readonly ?AccountProviderInterface $accountProvider,
         private readonly ?OrderProviderInterface $orderProvider,
         private readonly ContractRepository $contractRepository,
+        private readonly ?OrderIntentRepository $orderIntentRepository = null,
         private readonly ?BitmartHttpClientPrivate $bitmartClient = null,
         private readonly ?LoggerInterface $logger = null
     ) {
@@ -95,9 +97,9 @@ Exemples:
         }
 
         // timestamp de début (UTC)
-        $sinceTimestamp = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
-            ->modify(sprintf('-%d hours', $hours))
-            ->getTimestamp();
+        $sinceDateTime = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+            ->modify(sprintf('-%d hours', $hours));
+        $sinceTimestamp = $sinceDateTime->getTimestamp();
 
         // 1. Déterminer les symboles à traiter
         $symbols = [];
@@ -108,8 +110,19 @@ Exemples:
             );
             $symbols = array_filter($symbols, static fn (string $s) => $s !== '');
         } else {
-            // sinon on se base sur les positions ouvertes, puis sur les contrats actifs
-            if ($this->accountProvider) {
+            // sinon on se base en priorité sur les ordres réellement envoyés (order_intent),
+            // puis en fallback sur les positions ouvertes / contrats actifs
+            if ($this->orderIntentRepository) {
+                try {
+                    $symbols = $this->orderIntentRepository->findDistinctSymbolsSince($sinceDateTime, 50);
+                } catch (\Throwable $e) {
+                    $this->logger?->warning('Impossible de récupérer les symboles depuis order_intent', [
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            if (empty($symbols) && $this->accountProvider) {
                 try {
                     $openPositions = $this->accountProvider->getOpenPositions();
                     $symbols       = array_unique(array_map(static fn ($p) => $p->symbol, $openPositions));

@@ -6,7 +6,7 @@ declare(strict_types=1);
  * Script d'analyse des distances SL depuis les logs
  */
 
-$logFile = $argv[1] ?? '/var/www/html/var/log/positions-flow-debug-2025-11-05.log';
+$logFile = $argv[1] ?? '/var/www/html/var/log/positions-flow-2025-11-28.log';
 $lines = file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
 $lines = array_slice($lines, -2000); // Dernières 2000 lignes
 
@@ -23,9 +23,9 @@ foreach ($lines as $line) {
         $entry = (float)$matches[2];
         $stopPivot = (float)$matches[3];
         $stopFinal = (float)$matches[4];
-        
+
         $distancePct = abs($entry - $stopFinal) / $entry * 100;
-        
+
         $pivotStops[] = [
             'symbol' => $symbol,
             'entry' => $entry,
@@ -35,7 +35,7 @@ foreach ($lines as $line) {
             'line' => $line
         ];
     }
-    
+
     // Extraire les ajustements de distance minimale
     if (preg_match('/order_plan\.stop_min_distance_adjusted.*?symbol=(\w+).*?entry=([0-9.]+).*?stop_before=([0-9.]+).*?stop_after=([0-9.]+).*?reason=(\w+)/', $line, $matches)) {
         $symbol = $matches[1];
@@ -43,10 +43,10 @@ foreach ($lines as $line) {
         $stopBefore = (float)$matches[3];
         $stopAfter = (float)$matches[4];
         $reason = $matches[5];
-        
+
         $distanceBefore = abs($entry - $stopBefore) / $entry * 100;
         $distanceAfter = abs($entry - $stopAfter) / $entry * 100;
-        
+
         $riskStops[] = [
             'symbol' => $symbol,
             'entry' => $entry,
@@ -58,7 +58,7 @@ foreach ($lines as $line) {
             'line' => $line
         ];
     }
-    
+
     // Extraire les ordres soumis
     if (preg_match('/Trade entry submitted.*?symbol=(\w+).*?status=(\w+).*?client_order_id=(\w+)/', $line, $matches)) {
         $timestamp = substr($line, 0, 19);

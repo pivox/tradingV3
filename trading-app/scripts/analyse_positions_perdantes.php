@@ -4,86 +4,97 @@ declare(strict_types=1);
 
 /**
  * Script d'analyse des positions fermées pour identifier les causes des pertes
- * 
+ *
  * Usage: php scripts/analyse_positions_perdantes.php [--days=7] [--symbol=SYMBOL]
  */
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use Symfony\Component\Console\Input\InputInterface;
-use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Input\ArgvInput;
+use Symfony\Component\Console\Output\ConsoleOutput;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
-$io = new SymfonyStyle(
-    new class implements InputInterface {
-        public function getFirstArgument(): ?string { return null; }
-        public function hasParameterOption(string|array $values, bool $onlyParams = false): bool { return false; }
-        public function getParameterOption(string|array $values, string|bool|int|float|array|null $default = false, bool $onlyParams = false): mixed { return $default; }
-        public function bind(\Symfony\Component\Console\Input\InputDefinition $definition): void {}
-        public function validate(): void {}
-        public function getArguments(): array { return []; }
-        public function getArgument(string $name): mixed { return null; }
-        public function setArgument(string $name, mixed $value): void {}
-        public function hasArgument(string $name): bool { return false; }
-        public function getOptions(): array { 
-            $days = $_SERVER['argv'][1] ?? '7';
-            $symbol = $_SERVER['argv'][2] ?? null;
-            return [
-                'days' => is_numeric($days) ? (int)$days : 7,
-                'symbol' => $symbol
-            ];
-        }
-        public function getOption(string $name): mixed { 
-            $opts = $this->getOptions();
-            return $opts[$name] ?? null;
-        }
-        public function setOption(string $name, mixed $value): void {}
-        public function hasOption(string $name): bool { return isset($this->getOptions()[$name]); }
-        public function isInteractive(): bool { return false; }
-        public function setInteractive(bool $interactive): void {}
-    },
-    new class implements OutputInterface {
-        public function write(iterable|string $messages, bool $newline = false, int $options = self::OUTPUT_NORMAL): void {
-            echo is_string($messages) ? $messages : implode('', $messages);
-            if ($newline) echo "\n";
-        }
-        public function writeln(iterable|string $messages, int $options = self::OUTPUT_NORMAL): void {
-            $this->write($messages, true, $options);
-        }
-        public function setVerbosity(int $level): void {}
-        public function getVerbosity(): int { return self::VERBOSITY_NORMAL; }
-        public function isQuiet(): bool { return false; }
-        public function isVerbose(): bool { return false; }
-        public function isVeryVerbose(): bool { return false; }
-        public function isDebug(): bool { return false; }
-        public function setDecorated(bool $decorated): void {}
-        public function isDecorated(): bool { return true; }
-        public function setFormatter(\Symfony\Component\Console\Formatter\OutputFormatterInterface $formatter): void {}
-        public function getFormatter(): \Symfony\Component\Console\Formatter\OutputFormatterInterface {
-            return new \Symfony\Component\Console\Formatter\OutputFormatter();
-        }
-    }
-);
+$input = new ArgvInput();
+$output = new ConsoleOutput();
+$io = new SymfonyStyle($input, $output);
 
-$days = (int)($io->getOption('days') ?? 7);
-$symbol = $io->getOption('symbol');
+// Arguments CLI simples : php script.php [days] [symbol]
+$daysArg = $_SERVER['argv'][1] ?? '7';
+$symbolArg = $_SERVER['argv'][2] ?? null;
+
+$days = is_numeric($daysArg) ? (int) $daysArg : 7;
+$symbol = $symbolArg ?: null;
 
 $io->title("Analyse des positions fermées (derniers {$days} jours)");
 
 // Utiliser la commande existante pour récupérer les données
+// On passe par docker-compose pour utiliser le container trading-app-php
+$tradingAppDir = realpath(__DIR__ . '/..');
+$projectRoot = $tradingAppDir ? dirname($tradingAppDir) : __DIR__ . '/..' . '/..';
+
+// Détecter docker-compose vs docker compose (fallback)
+$dockerComposeCmd = 'docker-compose';
+$dockerComposePath = trim((string) shell_exec('command -v docker-compose'));
+if ($dockerComposePath === '') {
+    $dockerComposeCmd = 'docker compose';
+}
+
+$symbolOption = $symbol !== null ? ' --symbol=' . escapeshellarg($symbol) : '';
+
 $command = sprintf(
-    'cd %s && php bin/console provider:list-closed-positions --hours=%d --format=json %s 2>/dev/null',
-    escapeshellarg(__DIR__ . '/..'),
+    'cd %s && %s exec -T trading-app-php php bin/console provider:list-closed-positions --hours=%d --format=json%s',
+    escapeshellarg($projectRoot),
+    $dockerComposeCmd,
     $days * 24,
-    $symbol ? '--symbol=' . escapeshellarg($symbol) : ''
+    $symbolOption
 );
 
 $output = shell_exec($command);
-$data = json_decode($output, true);
 
-if (empty($data) || !is_array($data)) {
-    $io->error("Impossible de récupérer les données. Essayez d'exécuter manuellement:");
-    $io->writeln("  php bin/console provider:list-closed-positions --hours=" . ($days * 24) . " --format=json");
+if ($output === null) {
+    $io->error("La commande n'a rien retourné. Vérifiez que les containers docker (trading-app-php, BDD, Redis) sont démarrés.");
+    $io->writeln("Commande exécutée :");
+    $io->writeln('  ' . $command);
+    exit(1);
+}
+
+// Cas où la commande indique explicitement qu'il n'y a aucun ordre
+if (stripos($output, 'Aucun ordre trouvé') !== false) {
+    $io->warning("Aucune position fermée trouvée dans la période.");
+    exit(0);
+}
+
+// La commande Symfony écrit des sections / barres de progression avant le JSON.
+// On isole le premier bloc JSON ([...] ou {...}) éventuel en testant les positions candidates.
+$trimmed = ltrim($output);
+
+if ($trimmed === '') {
+    $io->warning("Aucune position fermée trouvée dans la période.");
+    exit(0);
+}
+
+// Essayer de trouver un offset où le JSON commence réellement en testant les décodages
+$data = null;
+for ($i = 0, $len = strlen($trimmed); $i < $len; $i++) {
+    $ch = $trimmed[$i];
+    if ($ch !== '[' && $ch !== '{') {
+        continue;
+    }
+
+    $candidate = substr($trimmed, $i);
+    $decoded = json_decode($candidate, true);
+    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+        $data = $decoded;
+        break;
+    }
+}
+
+if (!is_array($data)) {
+    $io->error("Impossible de décoder la sortie JSON de la commande (aucun bloc JSON valide détecté).");
+    $io->writeln("Commande exécutée :");
+    $io->writeln('  ' . $command);
+    $io->writeln("Sortie brute :");
+    $io->writeln($output);
     exit(1);
 }
 
@@ -103,16 +114,16 @@ $stats = [
 foreach ($data as $order) {
     $pnl = (float)($order['pnl'] ?? 0);
     $symbol = $order['symbol'] ?? 'UNKNOWN';
-    
+
     $stats['total']++;
     $stats['total_pnl'] += $pnl;
-    
+
     if ($pnl > 0) {
         $stats['wins']++;
     } elseif ($pnl < 0) {
         $stats['losses']++;
     }
-    
+
     if (!isset($stats['by_symbol'][$symbol])) {
         $stats['by_symbol'][$symbol] = [
             'total' => 0,
@@ -121,7 +132,7 @@ foreach ($data as $order) {
             'total_pnl' => 0.0,
         ];
     }
-    
+
     $stats['by_symbol'][$symbol]['total']++;
     $stats['by_symbol'][$symbol]['total_pnl'] += $pnl;
     if ($pnl > 0) {
@@ -129,7 +140,7 @@ foreach ($data as $order) {
     } elseif ($pnl < 0) {
         $stats['by_symbol'][$symbol]['losses']++;
     }
-    
+
     if ($stats['total'] === 1 || $pnl < $stats['min_pnl']) {
         $stats['min_pnl'] = $pnl;
     }
@@ -174,9 +185,9 @@ if (count($stats['by_symbol']) > 0) {
             number_format($s['total_pnl'], 2) . ' USDT',
         ];
     }
-    
+
     usort($rows, fn($a, $b) => (float)str_replace(' USDT', '', $a[5]) <=> (float)str_replace(' USDT', '', $b[5]));
-    
+
     $io->table(
         ['Symbole', 'Total', 'Wins', 'Losses', 'Winrate', 'PnL Total'],
         $rows
