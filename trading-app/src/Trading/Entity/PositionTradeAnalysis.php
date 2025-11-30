@@ -24,70 +24,70 @@ class PositionTradeAnalysis
     #[ORM\Column(type: Types::STRING, length: 10, nullable: true)]
     private ?string $timeframe = null;
 
-    #[ORM\Column(type: Types::STRING, length: 64, nullable: true)]
+    #[ORM\Column(type: Types::STRING, length: 64, nullable: true, name: 'run_id')]
     private ?string $runId = null;
 
-    #[ORM\Column(type: Types::STRING, length: 128, nullable: true)]
+    #[ORM\Column(type: Types::STRING, length: 128, nullable: true, name: 'trade_id')]
     private ?string $tradeId = null;
 
-    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE)]
+    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, name: 'entry_time')]
     private \DateTimeImmutable $entryTime;
 
-    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true)]
+    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, name: 'close_time')]
     private ?\DateTimeImmutable $closeTime = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'expected_r_multiple')]
     private ?float $expectedRMultiple = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'risk_usdt')]
     private ?float $riskUsdt = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'notional_usdt')]
     private ?float $notionalUsdt = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'atr_pct_entry')]
     private ?float $atrPctEntry = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_volume_ratio')]
     private ?float $entryVolumeRatio = null;
 
-    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true)]
+    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, name: 'snapshot_kline_time')]
     private ?\DateTimeImmutable $snapshotKlineTime = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_rsi')]
     private ?float $entryRsi = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_atr')]
     private ?float $entryAtr = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_macd')]
     private ?float $entryMacd = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_ma9')]
     private ?float $entryMa9 = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_ma21')]
     private ?float $entryMa21 = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_vwap')]
     private ?float $entryVwap = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'pnl_R')]
     private ?float $pnlR = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'pnl_usdt')]
     private ?float $pnlUsdt = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'pnl_pct')]
     private ?float $pnlPct = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'mfe_pct')]
     private ?float $mfePct = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'mae_pct')]
     private ?float $maePct = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true)]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'holding_time_sec')]
     private ?float $holdingTimeSec = null;
 
     public function getEntryEventId(): int

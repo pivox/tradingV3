@@ -5,18 +5,20 @@ declare(strict_types=1);
 namespace App\MtfRunner\Service;
 
 use Doctrine\DBAL\Connection;
-use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Process\Exception\ProcessFailedException;
 use Symfony\Component\Process\Process;
+use Symfony\Component\HttpKernel\KernelInterface;
 
 final class MtfReportingService
 {
     public function __construct(
         private readonly Connection $connection,
-        #[Autowire('%kernel.project_dir%')]
-        private readonly string $projectDir,
+        KernelInterface $kernel,
     ) {
+        $this->projectDir = $kernel->getProjectDir();
     }
+
+    private readonly string $projectDir;
 
     public function getMtfReportData(string $date): array
     {
