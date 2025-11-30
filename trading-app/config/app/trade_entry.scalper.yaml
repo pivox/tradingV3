@@ -21,8 +21,8 @@ trade_entry:
         fallback_account_balance: 0.0 # Si balance insuffisante, fallback budget
 
         # --- R-MULTIPLE corrigé (1.2 → 1.5)
-        r_multiple: 1.3              # Ratio R attendu sur le trade
-        tp1_r: 1.0                   # TP1 déclenché à 1R
+        r_multiple: 1.5              # Ratio R attendu sur le trade
+        tp1_r: 1.5                   # TP1 déclenché à 1R
 
         # --- STOP LOSS
         stop_from: 'atr'             # Stop basé sur ATR dynamique

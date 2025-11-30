@@ -29,7 +29,7 @@ trade_entry:
 
         # --- Stop Loss ---
         stop_from: 'atr'                          # Source du stop ('atr' ou 'risk')
-        atr_k: 1.5                                # Multiplicateur ATR pour stop
+        atr_k: 2                                  # Multiplicateur ATR pour stop (SL = 2 * ATR, avec garde min 0.5%)
         pivot_sl_policy: 'nearest_below'           # Politique de Stop Loss pivot (ou 'strongest_below', 's1', 's2')
         pivot_sl_buffer_pct: 0.003                # Buffer SL pivot en % (petit décalage pour éviter le front-run)
         pivot_sl_min_keep_ratio: 0.8              # Ratio min à conserver pour SL pivot (au moins 80% de la distance ATR)
