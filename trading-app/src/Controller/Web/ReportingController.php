@@ -6,6 +6,7 @@ namespace App\Controller\Web;
 
 use App\MtfRunner\Service\MtfReportingService;
 use App\MtfRunner\Service\SymbolInvestigationService;
+use App\Repository\PositionTradeAnalysisRepository;
 use DateTimeImmutable;
 use DateTimeZone;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -18,6 +19,7 @@ class ReportingController extends AbstractController
     public function __construct(
         private readonly MtfReportingService $reportingService,
         private readonly SymbolInvestigationService $symbolInvestigationService,
+        private readonly PositionTradeAnalysisRepository $positionTradeAnalysisRepository,
     ) {
     }
 
@@ -86,6 +88,36 @@ class ReportingController extends AbstractController
             'datetime_value' => $datetime->format('Y-m-d\TH:i'),
             'result' => $result,
             'error' => $error,
+        ]);
+    }
+
+    #[Route('/reporting/position-trade-analysis', name: 'reporting_position_trade_analysis')]
+    public function positionTradeAnalysis(Request $request): Response
+    {
+        $symbol = strtoupper($request->query->get('symbol', ''));
+        $timeframe = $request->query->get('timeframe', '');
+        $from = $request->query->get('from', '');
+        $to = $request->query->get('to', '');
+        $sort = $request->query->get('sort', 'entryTime');
+        $direction = $request->query->get('direction', 'DESC');
+
+        $filters = [
+            'symbol' => $symbol ?: null,
+            'timeframe' => $timeframe ?: null,
+            'from' => $from ?: null,
+            'to' => $to ?: null,
+        ];
+
+        $trades = $this->positionTradeAnalysisRepository->search($filters, [
+            'sort' => $sort,
+            'direction' => $direction,
+        ]);
+
+        return $this->render('reporting/position_trade_analysis.html.twig', [
+            'filters' => $filters,
+            'sort' => $sort,
+            'direction' => $direction,
+            'trades' => $trades,
         ]);
     }
 
