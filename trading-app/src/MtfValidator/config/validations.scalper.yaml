@@ -1,61 +1,66 @@
-# ===================================================================== # validations.scalper.yaml – Profil SCALPER agressif (MTF 1h→15m→5m/1m)
-version: '0.0.921'   # Version du profil de validation MTF pour le scalper
+# =====================================================================
+# validations.scalper.yaml – Profil SCALPER agressif (MTF 1h→15m→5m/1m)
+# =====================================================================
+version: '0.1.0'   # Version du profil de validation MTF pour le scalper
 
 mtf_validation:
-    mode: 'pragmatic'                     # Mode pragmatique : pas d'unanimité nécessaire entre TF
+    mode: 'strict'                     # Pas d'unanimité nécessaire entre TF si pragmatic
     context_timeframes: ['1h', '15m']     # Timeframes de contexte (tendance + momentum)
     execution_timeframes: ['5m', '1m']    # Timeframes d’exécution (scalping rapide)
-    execution_timeframe_default: '5m'     # TF d’exécution par défaut (si ambiguïté)
+    execution_timeframe_default: '5m'     # TF d’exécution par défaut
     allow_skip_lower_tf: true             # Autorise de sauter un TF bas si bruit excessif
 
     defaults:
         dry_run_validate_all_timeframes: false   # Pas de validation exhaustive en dry-run
 
+    # ================================
+    # RÈGLES ATOMIQUES
+    # ================================
     rules:
 
         ema_20_gt_50:
             gt_fields: [ 'ema_20', 'ema_50' ]   # EMA20 > EMA50 → structure haussière court terme
 
-        # ====== EMA 20 slope (ajouté) ======
+        # ====== EMA 20 slope ======
         ema_20_slope_pos:
             slope_left: 'ema_20'                # Pente EMA20 positive
             slope_lookback: 8                   # Sur 8 bougies
-            op: '>'                             # Test >
-            right: 0.0                          # Par rapport à 0
-            eps: 1e-12                          # Épsilon de tolérance
+            op: '>'
+            right: 0.0
+            eps: 1e-12
 
         macd_hist_increasing_n:
-            increasing: { field: 'macd_hist', n: 2 }   # MACD hist en augmentation 2 bougies
+            increasing: { field: 'macd_hist', n: 2 }
 
         macd_hist_decreasing_n:
-            decreasing: { field: 'macd_hist', n: 2 }   # MACD hist en baisse 2 bougies
+            decreasing: { field: 'macd_hist', n: 2 }
 
-        # ================================ # EMA 200 - règles de base (structure long terme)
+        # ====== EMA 200 structure long terme ======
         close_above_ema_200:
-            gt_fields: [ 'close', 'ema_200' ]   # Prix > EMA200 → tendance majeure haussière
+            gt_fields: [ 'close', 'ema_200' ]
 
         close_below_ema_200:
-            lt_fields: [ 'close', 'ema_200' ]   # Prix < EMA200 → tendance majeure baissière
+            lt_fields: [ 'close', 'ema_200' ]
 
-        # ================================ # MOMENTUM (MACD / dérivées)
+        # ====== MOMENTUM (MACD / dérivées) ======
         macd_hist_gt_eps:
-            op: '>'          # MACD hist > 0 = momentum haussier
+            op: '>'
             left: 'macd_hist'
             right: 0.0
             eps: 1e-6
 
         macd_hist_slope_pos:
-            derivative_gt: 0.0      # Dérivée MACD positive
-            persist_n: 1            # Sur 1 bougie
+            derivative_gt: 0.0
+            persist_n: 1
 
         macd_hist_slope_neg:
-            derivative_lt: 0.0      # Dérivée MACD négative
+            derivative_lt: 0.0
             persist_n: 1
 
         macd_line_cross_up_with_hysteresis:
-            require_prev_below: true   # MACD < signal avant croisement
-            min_gap: 0.0006            # Gap minimal
-            cool_down_bars: 2          # Cooldown anti faux signaux
+            require_prev_below: true
+            min_gap: 0.0006
+            cool_down_bars: 2
 
         macd_line_cross_down_with_hysteresis:
             require_prev_above: true
@@ -63,28 +68,28 @@ mtf_validation:
             cool_down_bars: 3
 
         macd_line_above_signal:
-            gt_fields: [ 'macd', 'macd_signal' ]   # MACD > signal
+            gt_fields: [ 'macd', 'macd_signal' ]
 
         macd_line_below_signal:
-            lt_fields: [ 'macd', 'macd_signal' ]   # MACD < signal
+            lt_fields: [ 'macd', 'macd_signal' ]
 
-        # ================================ # EMA STRUCTURE
+        # ====== EMA STRUCTURE COMPOSÉE ======
         ema20_over_50_with_tolerance:
             any_of:
-                - ema_20_gt_50                        # EMA20 > EMA50
-                - ema_20_minus_ema_50_gt: -0.0010     # Tolérance faible
-                - ema_20_slope_pos                    # Pente positive → momentum
+                - ema_20_gt_50
+                - ema_20_minus_ema_50_gt: -0.0010
+                - ema_20_slope_pos
 
         ema20_over_50_with_tolerance_moderate:
             any_of:
                 - ema_20_gt_50
-                - ema_20_minus_ema_50_gt: -0.0015     # Tolérance modérée
+                - ema_20_minus_ema_50_gt: -0.0015
                 - ema_20_slope_pos
 
         ema_above_200_with_tolerance:
             any_of:
                 - close_above_ema_200
-                - close_minus_ema_200_gt: -0.0030     # Tolérance légère
+                - close_minus_ema_200_gt: -0.0030
                 - ema200_slope_pos
 
         ema_above_200_with_tolerance_moderate:
@@ -100,41 +105,41 @@ mtf_validation:
                 - ema200_slope_neg
 
         ema200_slope_pos:
-            slope_left: 'ema_200'       # Pente EMA200 positive = tendance stable
+            slope_left: 'ema_200'
             slope_lookback: 13
             op: '>'
             right: 0.0
             eps: 1e-12
 
         ema200_slope_neg:
-            slope_left: 'ema_200'       # Pente EMA200 négative = tendance baissière
+            slope_left: 'ema_200'
             slope_lookback: 21
             op: '<'
             right: 0.0
             eps: 1e-12
 
-        # ================================ # RSI / ANTI-EXTENSION
+        # ====== RSI / ANTI-EXTENSION ======
         rsi_lt_70:
-            lt: 72                      # RSI < 72 évite entrées en extension
+            lt: 72
 
         rsi_lt_softcap:
-            lt: 82                      # Soft cap permissif (rarement utilisé)
+            lt: 82
 
         rsi_gt_softfloor:
-            gt: 20                      # RSI > 20 évite oversold profond trop risqué
+            gt: 20
 
-        # ================================ # VWAP / PULLBACK
+        # ====== VWAP / PULLBACK ======
         close_above_vwap:
-            gt_fields: [ 'close', 'vwap' ]   # Prix > VWAP
+            gt_fields: [ 'close', 'vwap' ]
 
         close_above_ma_9:
-            gt_fields: [ 'close', 'ma_9' ]   # Prix > MA9 (pullback validé)
+            gt_fields: [ 'close', 'ma_9' ]
 
         ma9_cross_up_ma21:
-            ma9_cross_up_ma21: true         # Croisement haussier MA9 → MA21
+            ma9_cross_up_ma21: true
 
         near_vwap:
-            near_vwap: true                 # Proximité VWAP → bon point d’entrée
+            near_vwap: true
 
         close_above_vwap_or_ma9:
             any_of: [ close_above_vwap, close_above_ma_9 ]
@@ -146,18 +151,18 @@ mtf_validation:
             any_of:
                 - ma9_cross_up_ma21
                 - near_vwap: true
-            validity_bars: 3               # Pullback valide 3 barres
+            validity_bars: 3
 
-        # ================================ # PRIX / ATR / EXTENSIONS
+        # ====== PRIX / ATR / EXTENSIONS ======
         price_lte_ma21_plus_k_atr:
-            lt_fields: [ 'close', 'ma_21_plus_1.3atr' ]   # Prix <= MA21 + 1.3 ATR (anti-extension)
+            lt_fields: [ 'close', 'ma_21_plus_1.3atr' ]
 
         price_below_ma21_plus_2atr:
             lt_fields: [ 'close', 'ma_21_plus_2atr' ]
             allow_touch: true
 
         atr_rel_in_range_15m:
-            use_atr_tf: ['1m','5m']   # ATR basé sur TF bas
+            use_atr_tf: ['1m','5m']
             min: 0.0005
             max: 0.045
             adapt_with_vol_bucket: true
@@ -168,13 +173,7 @@ mtf_validation:
             max: 0.045
             adapt_with_vol_bucket: true
 
-        # ================================ # LIQUIDITÉ / PROTECTION WINRATE
-        volume_ratio_ok:
-            op: '>='
-            left: 'volume_ratio'
-            right: 1.8      # Liquidity ratio min (protection contre tokens creux)
-
-        # ================================ # REGIMES LONG/SHORT
+        # ====== RÉGIMES LONG / SHORT ======
         price_regime_ok_long:
             any_of:
                 - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]
@@ -185,7 +184,7 @@ mtf_validation:
                 - all_of: [ ema_below_200_with_tolerance, ema_50_lt_200 ]
                 - all_of: [ close_below_ema_200, ema200_slope_neg ]
 
-        # ================================ # DIVERS
+        # ====== DIVERS ======
         close_below_vwap:
             lt_fields: [ 'close', 'vwap' ]
 
@@ -203,49 +202,50 @@ mtf_validation:
             min: 2.0
             max: 25.0
 
-        adx_min_for_trend_1h:
-            op: '>='
-            left: 'adx_1h'
-            period: 14
-            right: 15   # ADX minimal pour valider le trend
 
-    # ================================ # EXECUTION SELECTOR (choix du TF)
+    # ================================
+    # EXECUTION SELECTOR
+    # ================================
     execution_selector:
 
         per_timeframe:
             '15m':
                 stay_on_if:
-                    - get_false: true   # Ne jamais rester en 15m (TF de transition)
+                    - get_false: true               # 15m = TF de transition
                 drop_to_lower_if_any:
-                    - expected_r_multiple_lt: 1.4       # R multiple trop faible
-                    - entry_zone_width_pct_gt: 0.8      # Zone trop large → pas précis
-                    - atr_pct_15m_gt_bps: 130           # ATR trop élevé
+                    - expected_r_multiple_lt: 1.4
+                    - entry_zone_width_pct_gt: 0.8
+                    - atr_pct_15m_gt_bps: 130
                 forbid_drop_to_lower_if_any:
-                    - adx_5m_lt: 15                     # Pas de drop vers 5m si ADX faible
-                    - spread_bps_gt: 9                  # Spread trop large
+                    - adx_5m_lt: 15
+                    - spread_bps_gt: 9
 
             '5m':
-                stay_on_if: []   # 5m = TF d’exécution principal
+                stay_on_if: []                      # 5m = TF d’exécution principal
 
             '1m':
-                stay_on_if: []   # 1m = ultra scalping, optionnel
+                stay_on_if: []                      # 1m = ultra scalping, cas spéciaux
 
-        allow_1m_only_for:       # Hérité (deprecated)
+        allow_1m_only_for:
             enabled: false
             conditions:
                 - scalping: true
                 - trailing_after_tp1: true
                 - end_of_zone_fallback: true
 
-    # ================================ # FILTRES GLOBAUX (obligatoires)
+    # ================================
+    # FILTRES GLOBAUX (obligatoires)
+    # ================================
     filters_mandatory:
-        - rsi_lt_70                     # Anti-surachat global
-        - price_lte_ma21_plus_k_atr    # Pas d'entrée si extension MA21+ATR
-        # évite carnets trop creux (phi1)
+        - rsi_lt_70                     # Filtre anti-surachat global
+        - price_lte_ma21_plus_k_atr     # Anti-extension (MA21 + ATR)
+        # (volume_ratio_ok reste au niveau 5m/1m pour ne pas étouffer le contexte)
 
-    # ================================ # VALIDATION PAR TIMEFRAME (logique MTF)
+    # ================================
+    # VALIDATION PAR TIMEFRAME (MTF)
+    # ================================
     validation:
-        start_from_timeframe: '1h'      # Démarre la validation MTF par le 1h
+        start_from_timeframe: '1h'
         timeframe:
 
             '4h':
@@ -264,47 +264,61 @@ mtf_validation:
 
             '1h':
                 long:
-                    - all_of:
-                          - any_of:
-                                - all_of: [ ema_above_200_with_tolerance_moderate, ema_50_gt_200 ]
-                                - all_of: [ ema200_slope_pos, ema_50_gt_200 ]
-                          - macd_hist_gt_eps
-                    - price_regime_ok_long
+                    -   all_of:
+                        - price_regime_ok_long                # structure haussière 1h
+                        - any_of:
+                            - macd_hist_gt_eps             # MACD > 0
+                            - macd_line_above_signal       # ou MACD au-dessus du signal
+                        - adx_min_for_trend                  # ADX(1h) minimal (mais plus bas que 25)
 
                 short:
-                    - all_of:
-                          - any_of:
-                                - ema_below_200_with_tolerance
-                                - all_of: [ ema200_slope_neg, ema_50_lt_200 ]
-                          - macd_hist_decreasing_n
-                    - price_regime_ok_short
+                    -   all_of:
+                        - price_regime_ok_short
+                        - any_of:
+                            - macd_hist_decreasing_n
+                            - macd_line_cross_down_with_hysteresis
+                        - adx_min_for_trend
 
             '15m':
                 long:
-                    - all_of:
-                          - macd_hist_gt_eps
-                          - ema20_over_50_with_tolerance_moderate
-                          - close_above_vwap_or_ma9
-                          - rsi_lt_70: { rsi_lt_70_threshold: 72 }
-                          - atr_rel_in_range_15m
+                    -   any_of:
+                            # Scénario A : continuation pro-trend (ce que tu as déjà)
+                            -   all_of:
+                                    -   any_of:
+                                            - macd_hist_gt_eps
+                                            - macd_line_above_signal
+                                    - ema20_over_50_with_tolerance_moderate
+                                    - close_above_vwap_or_ma9
+                                    -   rsi_lt_70: { rsi_lt_70_threshold: 72 }
+                                    - atr_rel_in_range_15m
+
+                            # Scénario B : pullback confirmé sur support dynamique
+                            -   all_of:
+                                    - pullback_confirmed
+                                    -   rsi_lt_70: { rsi_lt_70_threshold: 65 }    # un peu plus strict
+                                    - atr_rel_in_range_15m
+
                 short:
                     - all_of:
-                          - macd_hist_decreasing_n
+                          - any_of:
+                                - macd_hist_decreasing_n
+                                - macd_line_below_signal
                           - ema_20_lt_50
-                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 20 }
                           - close_below_vwap
+                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 20 }
                           - atr_rel_in_range_15m
 
             '5m':
                 long:
-                    - all_of:
-                          - any_of:
-                                - macd_hist_gt_eps
-                                - macd_line_cross_up_with_hysteresis
-                                - close_above_vwap_or_ma9
-                                - rsi_lt_70: { rsi_lt_70_threshold: 72 }
-                                - atr_rel_in_range_5m
-                          - volume_ratio_ok
+                    -   all_of:
+                            -   any_of:
+                                    - macd_hist_gt_eps
+                                    - macd_line_cross_up_with_hysteresis
+                            - close_above_vwap_or_ma9
+                            -   rsi_lt_70: { rsi_lt_70_threshold: 72 }
+                            - atr_rel_in_range_5m
+                            - volume_ratio_ok
+
                 short:
                     - all_of:
                           - any_of:
@@ -317,16 +331,17 @@ mtf_validation:
 
             '1m':
                 long:
-                    - all_of:
-                          - macd_hist_gt_eps
-                          - close_above_vwap_or_ma9
-                          - rsi_lt_70: { rsi_lt_70_threshold: 72 }
-                          - atr_rel_in_range_5m
-                          - volume_ratio_ok
+                    -   all_of:
+                            - macd_hist_gt_eps
+                            - close_above_vwap_and_ma9                # plus strict que OR
+                            -   rsi_lt_70: { rsi_lt_70_threshold: 68 }  # RSI un peu plus bas
+                            - atr_rel_in_range_5m
+                            - volume_ratio_ok
+
                 short:
-                    - all_of:
-                          - macd_hist_decreasing_n
-                          - close_below_vwap
-                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 18 }
-                          - atr_rel_in_range_5m
-                          - volume_ratio_ok
+                    -   all_of:
+                            - macd_hist_decreasing_n
+                            - close_below_vwap
+                            -   rsi_gt_softfloor: { rsi_softfloor_threshold: 22 }
+                            - atr_rel_in_range_5m
+                            - volume_ratio_ok
