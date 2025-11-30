@@ -16,6 +16,8 @@ use App\Logging\TradeLifecycleReason;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Types\Side;
 use App\Logging\Dto\LifecycleContextBuilder;
+use App\Repository\IndicatorSnapshotRepository;
+use App\Common\Enum\Timeframe;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -31,6 +33,7 @@ final class TradeEntryService
         private readonly ExecutionBox $executionBox,
         private readonly TradeLifecycleLogger $tradeLifecycleLogger,
         private readonly ZoneSkipPersistenceService $zoneSkipPersistence,
+        private readonly IndicatorSnapshotRepository $indicatorSnapshotRepository,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
@@ -40,6 +43,8 @@ final class TradeEntryService
         ?PostExecutionHookInterface $hook = null,
         ?string $mode = null, // Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
         ?LifecycleContextBuilder $lifecycleContext = null,
+        ?string $runId = null,
+        ?string $tradeId = null,
     ): ExecutionResult {
         // Correlation key for logs across steps (allow external propagation)
         if ($decisionKey === null) {
@@ -214,7 +219,7 @@ final class TradeEntryService
 
         if ($lifecycleContext !== null) {
             $this->captureEntryZoneMetrics($lifecycleContext, $plan, $preflight, $request, $configDefaults);
-            $this->capturePlanMetrics($lifecycleContext, $plan);
+            $this->capturePlanMetrics($lifecycleContext, $plan, $request, $preflight);
         }
 
         $this->positionsLogger->info('order_journey.trade_entry.plan_ready', [
@@ -229,7 +234,7 @@ final class TradeEntryService
 
         $result = ($this->executor)($plan, $decisionKey, $lifecycleContext);
         if ($result->status === 'submitted') {
-            $this->logOrderSubmittedEvent($plan, $result, $request, $decisionKey, $mode, $lifecycleContext);
+            $this->logOrderSubmittedEvent($plan, $result, $request, $decisionKey, $mode, $lifecycleContext, $runId);
         } elseif ($result->status === 'skipped') {
             $this->logSymbolSkippedEvent(
                 request: $request,
@@ -238,6 +243,7 @@ final class TradeEntryService
                 mode: $mode,
                 extra: $result->raw,
                 contextBuilder: $lifecycleContext,
+                runId: $runId,
             );
         }
 
@@ -271,6 +277,8 @@ final class TradeEntryService
         ?PostExecutionHookInterface $hook = null,
         ?string $mode = null, // Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
         ?LifecycleContextBuilder $lifecycleContext = null,
+        ?string $runId = null,
+        ?string $tradeId = null,
     ): ExecutionResult {
         if ($decisionKey === null) {
             try {
@@ -391,6 +399,7 @@ final class TradeEntryService
         ?string $mode,
         ?array $extra = null,
         ?LifecycleContextBuilder $contextBuilder = null,
+        ?string $runId = null,
     ): void {
         try {
             $payload = [
@@ -406,6 +415,7 @@ final class TradeEntryService
             $this->tradeLifecycleLogger->logSymbolSkipped(
                 symbol: $request->symbol,
                 reasonCode: $reasonCode,
+                runId: $runId,
                 timeframe: $request->executionTf,
                 configProfile: $mode,
                 extra: $payload,
@@ -542,6 +552,7 @@ final class TradeEntryService
         ?string $decisionKey,
         ?string $mode,
         ?LifecycleContextBuilder $contextBuilder = null,
+        ?string $runId = null,
     ): void {
         if ($result->exchangeOrderId === null) {
             return;
@@ -564,6 +575,41 @@ final class TradeEntryService
             ];
             $extra = $this->sanitizeExtra($this->mergeContextExtra($contextBuilder, $extra));
 
+            // Enrichir avec un snapshot d'indicateurs (MACD, RSI, ATR, etc.) au moment du placement
+            try {
+                if ($request->executionTf !== null) {
+                    $tfEnum = Timeframe::from($request->executionTf);
+                    $snapshot = $this->indicatorSnapshotRepository->findLastBySymbolAndTimeframe(
+                        strtoupper($plan->symbol),
+                        $tfEnum
+                    );
+                    if ($snapshot !== null) {
+                        $entryPrice = $plan->entry;
+                        $atrValue = $snapshot->getAtr() !== null ? (float)$snapshot->getAtr() : null;
+                        $atrPct = ($atrValue !== null && $entryPrice > 0.0) ? $atrValue / $entryPrice : null;
+                        $indicatorExtra = [
+                            'timeframe' => $tfEnum->value,
+                            'rsi' => $snapshot->getRsi(),
+                            'atr' => $atrValue,
+                            'atr_pct_entry' => $atrPct,
+                            'macd' => $snapshot->getMacd() !== null ? (float)$snapshot->getMacd() : null,
+                            'ma9' => $snapshot->getMa9() !== null ? (float)$snapshot->getMa9() : null,
+                            'ma21' => $snapshot->getMa21() !== null ? (float)$snapshot->getMa21() : null,
+                            'vwap' => $snapshot->getVwap() !== null ? (float)$snapshot->getVwap() : null,
+                            'snapshot_kline_time' => $snapshot->getKlineTime()->format('Y-m-d H:i:s'),
+                        ];
+                        $extra['indicator_snapshot'] = $this->sanitizeExtra($indicatorExtra);
+                    }
+                }
+            } catch (\Throwable $e) {
+                // best-effort: si la récupération du snapshot échoue, on n'empêche pas le log
+                $this->positionsLogger->debug('trade_lifecycle.order_submitted_indicator_snapshot_failed', [
+                    'symbol' => $plan->symbol,
+                    'execution_tf' => $request->executionTf,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
             $this->tradeLifecycleLogger->logOrderSubmitted(
                 symbol: $plan->symbol,
                 orderId: (string) $result->exchangeOrderId,
@@ -571,7 +617,7 @@ final class TradeEntryService
                 side: $side,
                 qty: (string) $plan->size,
                 price: $price,
-                runId: null,
+                runId: $runId,
                 exchange: null,
                 accountId: null,
                 extra: $extra,
@@ -752,22 +798,40 @@ final class TradeEntryService
         return $value !== null ? $this->normalizePercent($value) : null;
     }
 
-    private function capturePlanMetrics(LifecycleContextBuilder $builder, OrderPlanModel $plan): void
+    private function capturePlanMetrics(
+        LifecycleContextBuilder $builder,
+        OrderPlanModel $plan,
+        TradeEntryRequest $request,
+        PreflightReport $preflight
+    ): void
     {
         $risk = null;
         $reward = null;
+        $entry = $plan->entry;
+        $stop = $plan->stop;
+        $takeProfit = $plan->takeProfit;
+
         if ($plan->side === Side::Long) {
-            $risk = $plan->entry - $plan->stop;
-            $reward = $plan->takeProfit - $plan->entry;
+            $risk = $entry - $stop;
+            $reward = $takeProfit - $entry;
         } else {
-            $risk = $plan->stop - $plan->entry;
-            $reward = $plan->entry - $plan->takeProfit;
+            $risk = $stop - $entry;
+            $reward = $entry - $takeProfit;
         }
+
         $risk = $risk > 0 ? $risk : null;
         $reward = $reward > 0 ? $reward : null;
+
         $expectedR = ($risk !== null && $reward !== null && $risk > 0.0) ? $reward / $risk : null;
-        $rStopPct = ($risk !== null && $plan->entry > 0.0) ? $risk / $plan->entry : null;
-        $rTpPct = ($reward !== null && $plan->entry > 0.0) ? $reward / $plan->entry : null;
+        $rStopPct = ($risk !== null && $entry > 0.0) ? $risk / $entry : null;
+        $rTpPct = ($reward !== null && $entry > 0.0) ? $reward / $entry : null;
+
+        $rEffective = null;
+        if ($risk !== null && $risk > 0.0) {
+            $rEffective = $plan->side === Side::Long
+                ? ($takeProfit - $entry) / $risk
+                : ($entry - $takeProfit) / $risk;
+        }
 
         $builder->withPlan([
             'expected_r_multiple' => $expectedR !== null ? round($expectedR, 4) : null,
@@ -777,8 +841,89 @@ final class TradeEntryService
             'conviction_score' => null,
         ]);
 
+        // Reconstituer les métriques de sizing et de risque
+        $notional = $entry * $plan->contractSize * $plan->size;
+        $initialMargin = $notional / max(1.0, (float)$plan->leverage);
+
+        $availableBudget = min(
+            max((float)$request->initialMarginUsdt, 0.0),
+            max((float)$preflight->availableUsdt, 0.0)
+        );
+        $riskPct = $this->normalizePercent($request->riskPct);
+        $riskUsdt = $availableBudget * $riskPct;
+
+        // ATR et k_atr utilisés pour la zone / sizing
+        $atrValue = null;
+        $atrK = null;
+        if (is_array($plan->entryZoneMeta)) {
+            $atrValue = isset($plan->entryZoneMeta['atr']) && is_numeric($plan->entryZoneMeta['atr'])
+                ? (float)$plan->entryZoneMeta['atr']
+                : null;
+            $atrK = isset($plan->entryZoneMeta['k_atr']) && is_numeric($plan->entryZoneMeta['k_atr'])
+                ? (float)$plan->entryZoneMeta['k_atr']
+                : null;
+        }
+        if ($atrValue === null && $request->atrValue !== null && $request->atrValue > 0.0) {
+            $atrValue = $request->atrValue;
+        }
+        if ($atrK === null) {
+            $atrK = $request->atrK;
+        }
+
+        $atrPctEntry = null;
+        if ($atrValue !== null && $entry > 0.0) {
+            $atrPctEntry = $atrValue / $entry;
+        }
+
+        $stopFinalPct = null;
+        if ($entry > 0.0) {
+            $stopFinalPct = abs($stop - $entry) / $entry;
+        }
+
+        // Stops candidats (ATR / risk / pivot)
+        $stopAtrPrice = $plan->stopAtr;
+        $stopRiskPrice = $plan->stopRisk;
+        $stopPivotPrice = $plan->stopPivot;
+
+        $stopAtrPct = null;
+        $stopRiskPct = null;
+        $stopPivotPct = null;
+        if ($entry > 0.0) {
+            if ($stopAtrPrice !== null) {
+                $stopAtrPct = abs($stopAtrPrice - $entry) / $entry;
+            }
+            if ($stopRiskPrice !== null) {
+                $stopRiskPct = abs($stopRiskPrice - $entry) / $entry;
+            }
+            if ($stopPivotPrice !== null) {
+                $stopPivotPct = abs($stopPivotPrice - $entry) / $entry;
+            }
+        }
+
         $builder->merge([
             'r_multiple_final' => $expectedR !== null ? round($expectedR, 4) : null,
+            'tp_final_r' => $rEffective !== null ? round($rEffective, 4) : null,
+            'tp_final_price' => $takeProfit,
+            'stop_final_price' => $stop,
+            'stop_final_pct' => $stopFinalPct !== null ? round($stopFinalPct, 6) : null,
+            'stop_final_source' => $plan->stopFinalSource,
+            'stop_atr_price' => $stopAtrPrice,
+            'stop_atr_pct' => $stopAtrPct !== null ? round($stopAtrPct, 6) : null,
+            'stop_risk_price' => $stopRiskPrice,
+            'stop_risk_pct' => $stopRiskPct !== null ? round($stopRiskPct, 6) : null,
+            'stop_pivot_price' => $stopPivotPrice,
+            'stop_pivot_pct' => $stopPivotPct !== null ? round($stopPivotPct, 6) : null,
+            'atr_value' => $atrValue,
+            'atr_k' => $atrK,
+            'atr_pct_entry' => $atrPctEntry !== null ? round($atrPctEntry, 6) : null,
+            'risk_usdt' => $riskUsdt,
+            'risk_pct' => $riskPct,
+            'available_budget_usdt' => $availableBudget,
+            'equity_snapshot_usdt' => $availableBudget,
+            'size_contracts' => $plan->size,
+            'notional_usdt' => $notional,
+            'initial_margin_usdt' => $initialMargin,
+            'leverage_effective' => $plan->leverage,
         ]);
     }
 
