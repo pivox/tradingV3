@@ -46,8 +46,14 @@ class MtfAuditSubscriber implements EventSubscriberInterface
             $audit->setDetails($event->getData());
             $audit->setSeverity($event->getSeverity());
 
-            // Définir le run_id depuis les données si disponible
             $data = $event->getData();
+
+            // Copier trace_id éventuel
+            if (isset($data['trace_id']) && is_string($data['trace_id']) && $data['trace_id'] !== '') {
+                $audit->setTraceId($data['trace_id']);
+            }
+
+            // Définir le run_id depuis les données si disponible
             if (isset($data['run_id']) && $data['run_id'] !== null) {
                 try {
                     $runId = \Ramsey\Uuid\Uuid::fromString($data['run_id']);
@@ -56,6 +62,19 @@ class MtfAuditSubscriber implements EventSubscriberInterface
                     // Si le run_id n'est pas un UUID valide, on l'ignore
                     $this->mtfLogger->warning('[MTF Audit] Invalid run_id format', [
                         'run_id' => $data['run_id'],
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            // Renseigner timeframe si présent dans les données
+            if (isset($data['timeframe']) && is_string($data['timeframe']) && $data['timeframe'] !== '') {
+                try {
+                    $tfEnum = \App\Common\Enum\Timeframe::from($data['timeframe']);
+                    $audit->setTimeframe($tfEnum);
+                } catch (\Throwable $e) {
+                    $this->mtfLogger->debug('[MTF Audit] Invalid timeframe in data', [
+                        'timeframe' => $data['timeframe'],
                         'error' => $e->getMessage(),
                     ]);
                 }
@@ -154,4 +173,3 @@ class MtfAuditSubscriber implements EventSubscriberInterface
         }
     }
 }
-

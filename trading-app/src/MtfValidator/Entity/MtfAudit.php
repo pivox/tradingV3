@@ -39,6 +39,8 @@ class MtfAudit
     #[ORM\Column(type: Types::JSON, options: ['default' => '{}'])]
     private array $details = [];
 
+    #[ORM\Column(type: Types::TEXT, nullable: true)]
+    private ?string $traceId = null;
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, options: ['default' => 'CURRENT_TIMESTAMP'])]
     private \DateTimeImmutable $createdAt;
 
@@ -124,6 +126,17 @@ class MtfAudit
         return $this;
     }
 
+    public function getTraceId(): ?string
+    {
+        return $this->traceId;
+    }
+
+    public function setTraceId(?string $traceId): static
+    {
+        $this->traceId = $traceId;
+        return $this;
+    }
+
     public function getDetailValue(string $key): mixed
     {
         return $this->details[$key] ?? null;
@@ -168,7 +181,6 @@ class MtfAudit
         return $this;
     }
 }
-
 
 
 

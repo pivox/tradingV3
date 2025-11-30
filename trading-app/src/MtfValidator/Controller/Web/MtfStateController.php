@@ -140,7 +140,7 @@ class MtfStateController extends AbstractController
         } else {
             $mode = $configProvider->getPrimaryMode() ?? 'regular';
         }
-        dd($configProvider->getPrimaryMode());
+        //dd($configProvider->getPrimaryMode());
 
         $config = $configProvider->getConfigForMode($mode);
         $cfg = $config->getConfig();
