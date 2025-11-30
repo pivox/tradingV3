@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Trading\Listener;
 
+use App\Common\Enum\Timeframe;
+use App\Contract\Provider\MainProviderInterface;
 use App\Logging\TradeLifecycleLogger;
+use App\Repository\TradeLifecycleEventRepository;
 use App\Trading\Event\OrderStateChangedEvent;
 use App\Trading\Event\PositionClosedEvent;
 use App\Trading\Event\PositionOpenedEvent;
@@ -15,6 +18,8 @@ final class TradeLifecycleLoggerListener
 {
     public function __construct(
         private readonly TradeLifecycleLogger $tradeLifecycleLogger,
+        private readonly TradeLifecycleEventRepository $tradeLifecycleRepository,
+        private readonly ?MainProviderInterface $mainProvider = null,
     ) {}
 
     // --- POSITION OUVERTE ----------------------------------------------------
@@ -63,6 +68,103 @@ final class TradeLifecycleLoggerListener
                 : ($realizedPnlFloat > 0.0 ? 'profit_or_tp' : 'closed_flat');
         }
 
+        $entryPriceFloat = (float)$history->entryPrice->__toString();
+        $exitPriceFloat = (float)$history->exitPrice->__toString();
+        $sizeFloat = (float)$history->size->__toString();
+        $notional = $entryPriceFloat > 0.0 && $sizeFloat > 0.0
+            ? $entryPriceFloat * $sizeFloat
+            : null;
+        $pnlFloat = (float)$history->realizedPnl->__toString();
+        $pnlPct = $notional !== null && $notional > 0.0 ? $pnlFloat / $notional : null;
+        $holdingTimeSec = $history->closedAt->getTimestamp() - $history->openedAt->getTimestamp();
+
+        // Approximate initial risk in USDT from the most recent ORDER_SUBMITTED lifecycle event
+        $pnlR = null;
+        try {
+            $criteria = [
+                'symbol' => strtoupper($history->symbol),
+                'eventType' => 'order_submitted',
+            ];
+            if ($event->runId !== null) {
+                $criteria['runId'] = $event->runId;
+            }
+            $recent = $this->tradeLifecycleRepository->findRecentBy($criteria, 10);
+            foreach ($recent as $lifecycleEvent) {
+                $extra = $lifecycleEvent->getExtra();
+                if (!\is_array($extra)) {
+                    continue;
+                }
+                $riskUsdt = $extra['risk_usdt'] ?? null;
+                if ($riskUsdt !== null && \is_numeric($riskUsdt) && (float)$riskUsdt > 0.0) {
+                    $riskValue = (float)$riskUsdt;
+                    $pnlR = $riskValue > 0.0 ? $pnlFloat / $riskValue : null;
+                    break;
+                }
+            }
+        } catch (\Throwable) {
+            // best-effort: pnl_R reste null si la recherche échoue
+        }
+
+        // MFE / MAE (best-effort à partir des klines 1m)
+        $mfePrice = null;
+        $maePrice = null;
+        $mfePct = null;
+        $maePct = null;
+
+        if ($this->mainProvider !== null) {
+            try {
+                $klineProvider = $this->mainProvider->getKlineProvider();
+                $klines = $klineProvider->getKlinesInWindow(
+                    $history->symbol,
+                    Timeframe::TF_1M,
+                    $history->openedAt,
+                    $history->closedAt,
+                    500
+                );
+
+                foreach ($klines as $kline) {
+                    $high = isset($kline['high']) ? (float)$kline['high'] : null;
+                    $low = isset($kline['low']) ? (float)$kline['low'] : null;
+                    if ($high === null || $low === null) {
+                        continue;
+                    }
+
+                    if (strtoupper($history->side->value) === 'LONG') {
+                        // Favorable = plus haut, défavorable = plus bas
+                        if ($mfePrice === null || $high > $mfePrice) {
+                            $mfePrice = $high;
+                        }
+                        if ($maePrice === null || $low < $maePrice) {
+                            $maePrice = $low;
+                        }
+                    } else {
+                        // SHORT: favorable = plus bas, défavorable = plus haut
+                        if ($mfePrice === null || $low < $mfePrice) {
+                            $mfePrice = $low;
+                        }
+                        if ($maePrice === null || $high > $maePrice) {
+                            $maePrice = $high;
+                        }
+                    }
+                }
+
+                if ($entryPriceFloat > 0.0) {
+                    if ($mfePrice !== null) {
+                        $mfePct = strtoupper($history->side->value) === 'LONG'
+                            ? ($mfePrice - $entryPriceFloat) / $entryPriceFloat
+                            : ($entryPriceFloat - $mfePrice) / $entryPriceFloat;
+                    }
+                    if ($maePrice !== null) {
+                        $maePct = strtoupper($history->side->value) === 'LONG'
+                            ? ($entryPriceFloat - $maePrice) / $entryPriceFloat
+                            : ($maePrice - $entryPriceFloat) / $entryPriceFloat;
+                    }
+                }
+            } catch (\Throwable) {
+                // best-effort: metrics restent null en cas d'échec
+            }
+        }
+
         $this->tradeLifecycleLogger->logPositionClosed(
             symbol: $history->symbol,
             positionId: (string) $positionId,
@@ -73,6 +175,18 @@ final class TradeLifecycleLoggerListener
             reasonCode: $reasonCode,
             extra: array_merge([
                 'pnl'  => $history->realizedPnl->__toString(),
+                'pnl_pct' => $pnlPct,
+                'pnl_R' => $pnlR,
+                'notional_usdt' => $notional,
+                'entry_price' => $history->entryPrice->__toString(),
+                'exit_price' => $history->exitPrice->__toString(),
+                'entry_time' => $history->openedAt->format('Y-m-d H:i:s'),
+                'close_time' => $history->closedAt->format('Y-m-d H:i:s'),
+                'holding_time_sec' => $holdingTimeSec,
+                'max_favorable_price' => $mfePrice,
+                'max_adverse_price' => $maePrice,
+                'mfe_pct' => $mfePct,
+                'mae_pct' => $maePct,
                 'fees' => $history->fees?->__toString(),
                 'raw'  => $history->raw,
             ], $event->extra),
@@ -132,5 +246,3 @@ final class TradeLifecycleLoggerListener
         );
     }
 }
-
-

@@ -33,6 +33,11 @@ final class LifecycleContextBuilder
         return $this->set('decision_key', $decisionKey);
     }
 
+    public function withTradeId(?string $tradeId): self
+    {
+        return $this->set('trade_id', $tradeId);
+    }
+
     public function withProfile(?string $profile): self
     {
         return $this->set('profile', $profile);
