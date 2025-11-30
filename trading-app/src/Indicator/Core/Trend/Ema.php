@@ -4,7 +4,7 @@ namespace App\Indicator\Core\Trend;
 
 use App\Indicator\Core\IndicatorInterface;
 
- 
+
 class Ema implements IndicatorInterface
 {
     /**
@@ -57,7 +57,6 @@ class Ema implements IndicatorInterface
 
     public function calculate(array $prices, int $period): float
     {
-       // dd($prices, $period);
         if (function_exists('trader_ema')) {
             $arr = \trader_ema($prices, $period);
             if (is_array($arr) && !empty($arr)) {

@@ -125,6 +125,9 @@ class IndicatorContextBuilder
         foreach ($emaPeriods as $p) {
             // Pour calculer la pente (EMA actuelle - EMA précédente), il faut au moins period + 1 bougies
             // Cela garantit qu'on peut calculer à la fois l'EMA actuelle et l'EMA précédente
+//            if ($p == 200 ) {
+//                die(count($this->closes) . ' ' . $p);
+//            }
             if (count($this->closes) >= $p + 1) {
                 [$emaCurrent, $emaPrevious] = $this->computeEmaPair($this->closes, $p);
                 if ($emaCurrent !== null) {
@@ -164,13 +167,20 @@ class IndicatorContextBuilder
             );
         }
 
-        $adxVal = null;
+        $adxVal14 = null;
+        $adxVal15 = null;
         if ($hlcSeries !== null) {
-            $adxVal = $this->computeAdxValue(
+            $adxVal14 = $this->computeAdxValue(
                 $hlcSeries['highs'],
                 $hlcSeries['lows'],
                 $hlcSeries['closes'],
                 14
+            );
+            $adxVal15 = $this->computeAdxValue(
+                $hlcSeries['highs'],
+                $hlcSeries['lows'],
+                $hlcSeries['closes'],
+                15
             );
         }
 
@@ -232,7 +242,7 @@ class IndicatorContextBuilder
             'ma_21_plus_k_atr' => $ma21PlusKAtr,
             'ma_21_plus_1.3atr' => $ma21Plus13Atr,
             'ma_21_plus_2atr' => $ma21Plus2Atr,
-            'adx' => $adxVal ? [14 => $adxVal] : null,
+            'adx' => $adxVal14 ? [14 => $adxVal14, 15 => $adxVal15] : null,
             'previous' => array_filter([
                 'rsi' => $prevRsi,
                 'macd' => ($prevMacd !== null && $prevSignal !== null) ? [

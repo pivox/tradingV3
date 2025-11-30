@@ -13,6 +13,7 @@ use App\Indicator\Core\AtrCalculator;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
+use function PHPUnit\Framework\countOf;
 
 #[AsAlias(id: IndicatorEngineInterface::class)]
 final class IndicatorEngineProvider implements IndicatorEngineInterface

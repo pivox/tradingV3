@@ -535,17 +535,35 @@ final class BitmartOrderProvider implements OrderProviderInterface
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
             try {
                 $response = $this->bitmartClient->getOrderHistory($symbol, $limit);
+
+                // Log structure pour debug (aligné sur getOpenOrders / getPlanOrders)
+                $this->logger->debug('[BitmartOrderProvider] Order history response structure', [
+                    'symbol' => $symbol,
+                    'has_data' => isset($response['data']),
+                    'data_keys' => isset($response['data']) && is_array($response['data']) ? array_keys($response['data']) : [],
+                    'code' => $response['code'] ?? null,
+                    'message' => $response['message'] ?? null,
+                    'attempt' => $i + 1,
+                ]);
+
                 // BitMart peut retourner soit data.orders soit data directement comme tableau
                 $orders = null;
                 if (isset($response['data']['orders']) && is_array($response['data']['orders'])) {
                     $orders = $response['data']['orders'];
                 } elseif (isset($response['data']) && is_array($response['data'])) {
                     // Si data est directement un tableau (peut être vide ou contenir des ordres)
-                    if (!empty($response['data']) && isset($response['data'][0]) && is_array($response['data'][0])) {
-                        // Vérifier si c'est un tableau d'ordres (premier élément a order_id)
-                        if (isset($response['data'][0]['order_id'])) {
-                            $orders = $response['data'];
-                        }
+                    if (empty($response['data'])) {
+                        // Pas d'historique pour ce symbole → cas normal
+                        $this->logger->debug('[BitmartOrderProvider] No order history entries', [
+                            'symbol' => $symbol,
+                            'code' => $response['code'] ?? null,
+                        ]);
+                        return [];
+                    }
+
+                    if (isset($response['data'][0]) && is_array($response['data'][0]) && isset($response['data'][0]['order_id'])) {
+                        // Tableau d'ordres (premier élément a order_id)
+                        $orders = $response['data'];
                     }
                 }
 
@@ -567,9 +585,18 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     return array_map(fn($order) => OrderDto::fromArray($order), $orders);
                 }
 
-                $lastError = new \RuntimeException('Invalid order history response structure. Expected data.orders or data as array.');
+                // Si code 30000 ou data vide, c'est normal (pas d'historique d'ordres)
+                if ((isset($response['code']) && (int) $response['code'] === 30000)
+                    || (isset($response['data']) && is_array($response['data']) && empty($response['data']))) {
+                    $this->logger->debug('[BitmartOrderProvider] No order history (BitMart 30000 / empty data)', [
+                        'symbol' => $symbol,
+                        'code' => $response['code'] ?? null,
+                    ]);
+                    return [];
+                }
+
+                $lastError = new \RuntimeException('Invalid order history response structure. Expected data.orders or data as array. Response: ' . json_encode($response));
             } catch (\Throwable $e) {
-                dd($e);
                 $lastError = $e;
             }
 
