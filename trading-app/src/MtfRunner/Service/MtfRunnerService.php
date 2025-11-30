@@ -38,7 +38,7 @@ use Symfony\Component\Process\Process;
 
 /**
  * Service Runner MTF - Centralise toutes les responsabilités d'exécution MTF
- * 
+ *
  * Responsabilités :
  * - Résolution des symboles
  * - Filtrage des symboles avec ordres/positions ouverts
@@ -61,6 +61,8 @@ final class MtfRunnerService
         private readonly IndicatorProviderInterface $indicatorProvider,
         private readonly EntityManagerInterface $entityManager,
         private readonly LoggerInterface $logger,
+        private readonly LoggerInterface $mtfLogger,
+        private readonly LoggerInterface $positionsLogger,
         #[Autowire('%kernel.project_dir%')]
         private readonly string $projectDir,
         private readonly ?TpSlTwoTargetsService $tpSlService = null,
@@ -69,7 +71,7 @@ final class MtfRunnerService
 
     /**
      * Exécute un cycle MTF complet avec toutes les responsabilités
-     * 
+     *
      * @return array{
      *     summary: array,
      *     results: array,
@@ -86,8 +88,10 @@ final class MtfRunnerService
         $profiler = new PerformanceProfiler();
         $runId = Uuid::uuid4()->toString();
         $startTime = microtime(true);
+        $openPositions = null;
+        $openOrders = null;
 
-        $this->logger->info('[MTF Runner] Starting execution', [
+        $this->mtfLogger->info('[MTF Runner] Starting execution', [
             'run_id' => $runId,
             'symbols_count' => count($request->symbols),
             'dry_run' => $request->dryRun,
@@ -104,9 +108,13 @@ final class MtfRunnerService
             $context = $this->createContext($request);
 
             // 3. Synchroniser les tables depuis l'exchange (si demandé)
-            if ($request->syncTables) {
+            $syncTables = true;
+            if ($syncTables) {
                 $syncStart = microtime(true);
-                $this->syncTables($context);
+                [
+                    'open_positions' => $openPositions,
+                    'open_orders' => $openOrders,
+                ] = $this->syncTables($context);
                 $profiler->increment('runner', 'sync_tables', microtime(true) - $syncStart);
             }
 
@@ -118,7 +126,9 @@ final class MtfRunnerService
                     $symbols,
                     $runId,
                     $context,
-                    $excludedSymbols
+                    $excludedSymbols,
+                    $openPositions,
+                    $openOrders
                 );
                 $profiler->increment('runner', 'filter_symbols', microtime(true) - $filterStart);
             }
@@ -131,6 +141,7 @@ final class MtfRunnerService
 
             // 7. Exécuter MTF (séquentiel ou parallèle)
             $execStart = microtime(true);
+
             $result = $request->workers > 1
                 ? $this->runParallel($symbols, $request, $context, $runId)
                 : $this->runSequential($symbols, $request, $context);
@@ -143,16 +154,21 @@ final class MtfRunnerService
                 $this->updateSwitchesForExcludedSymbols($excludedSymbols, $runId);
             }
 
-            // 9. Recalcul TP/SL (si demandé)
-            if ($request->processTpSl) {
+            // 9. Recalcul TP/SL (si demandé, avec throttling)
+            $shouldProcessTpSl = $request->processTpSl && $this->shouldRunTpSlNow();
+            if ($shouldProcessTpSl) {
                 try {
                     $tpSlStart = microtime(true);
                     $this->processTpSlRecalculation($request->dryRun, $context);
                     $profiler->increment('runner', 'tp_sl_recalculation', microtime(true) - $tpSlStart);
                 } catch (\Throwable $e) {
-                    $this->logger->warning('[MTF Runner] TP/SL recalculation failed', [
+                    $this->positionsLogger->warning('[MTF Runner] TP/SL recalculation failed', [
                         'error' => $e->getMessage(),
                     ]);
+                }
+            } else {
+                if ($request->processTpSl) {
+                    $this->positionsLogger->debug('[MTF Runner] TP/SL recalculation skipped by throttling rule');
                 }
             }
 
@@ -165,7 +181,7 @@ final class MtfRunnerService
             $executionTime = microtime(true) - $startTime;
             $performanceReport = $profiler->getReport();
 
-            $this->logger->info('[MTF Runner] Execution completed', [
+            $this->mtfLogger->info('[MTF Runner] Execution completed', [
                 'run_id' => $runId,
                 'execution_time' => round($executionTime, 3),
                 'symbols_processed' => count($results),
@@ -195,14 +211,14 @@ final class MtfRunnerService
 
     /**
      * Résout les symboles à traiter
-     * 
+     *
      * @param array<string> $inputSymbols Symboles fournis en entrée
      * @return array<string> Liste des symboles à traiter
      */
     public function resolveSymbols(array $inputSymbols): array
     {
         $symbols = [];
-        
+
         // Normaliser les symboles fournis
         foreach ($inputSymbols as $symbol) {
             if (is_string($symbol) && $symbol !== '') {
@@ -231,7 +247,7 @@ final class MtfRunnerService
         $queuedSymbols = $this->consumeSymbolsFromSwitchQueue();
         if (!empty($queuedSymbols)) {
             $symbols = array_values(array_unique(array_merge($symbols, $queuedSymbols)));
-            $this->logger->info('[MTF Runner] Added symbols from switch queue', [
+            $this->mtfLogger->info('[MTF Runner] Added symbols from switch queue', [
                 'count' => count($queuedSymbols),
             ]);
         }
@@ -246,11 +262,13 @@ final class MtfRunnerService
 
     /**
      * Filtre les symboles ayant des ordres ou positions ouverts
-     * 
+     *
      * @param array<string> $symbols Liste des symboles à filtrer
      * @param string $runId ID du run pour les logs
      * @param array<string> $excludedSymbols Référence pour retourner les symboles exclus
      * @param ExchangeContext $context Contexte d'échange
+     * @param array<array>|null $openPositions Positions ouvertes préchargées (optionnel)
+     * @param array<array>|null $openOrders Ordres ouverts préchargés (optionnel)
      * @return array<string> Liste des symboles à traiter (sans ceux exclus)
      */
     // PHP 8.1: paramètres requis avant optionnels (voir n° de commit)
@@ -258,12 +276,17 @@ final class MtfRunnerService
         array $symbols,
         string $runId,
         ExchangeContext $context,
-        array &$excludedSymbols = []
+        array &$excludedSymbols = [],
+        ?array $openPositions = null,
+        ?array $openOrders = null
     ): array {
         $excludedSymbols = [];
         $provider = $this->mainProvider->forContext($context);
 
-        if (empty($symbols) || (!$provider->getAccountProvider() && !$provider->getOrderProvider())) {
+        $hasAccountProvider = $provider->getAccountProvider() !== null || $openPositions !== null;
+        $hasOrderProvider = $provider->getOrderProvider() !== null || $openOrders !== null;
+
+        if (empty($symbols) || (!$hasAccountProvider && !$hasOrderProvider)) {
             return $symbols;
         }
 
@@ -272,13 +295,20 @@ final class MtfRunnerService
         // Récupérer les symboles avec positions ouvertes depuis l'exchange
         $openPositionSymbols = [];
         $accountProvider = $provider->getAccountProvider();
-        if ($accountProvider) {
+        if ($accountProvider || $openPositions !== null) {
             try {
-                $openPositions = $accountProvider->getOpenPositions();
-                $this->logger->info('[MTF Runner] Fetched open positions', [
-                    'run_id' => $runId,
-                    'count' => count($openPositions),
-                ]);
+                if ($openPositions === null && $accountProvider) {
+                    $openPositions = $accountProvider->getOpenPositions();
+                    $this->mtfLogger->info('[MTF Runner] Fetched open positions', [
+                        'run_id' => $runId,
+                        'count' => count($openPositions),
+                    ]);
+                } elseif ($openPositions !== null) {
+                    $this->mtfLogger->info('[MTF Runner] Reusing prefetched open positions', [
+                        'run_id' => $runId,
+                        'count' => count($openPositions),
+                    ]);
+                }
 
                 foreach ($openPositions as $position) {
                     $positionSymbol = strtoupper($position->symbol ?? '');
@@ -287,7 +317,7 @@ final class MtfRunnerService
                     }
                 }
             } catch (\Throwable $e) {
-                $this->logger->warning('[MTF Runner] Failed to fetch open positions from exchange', [
+                $this->mtfLogger->warning('[MTF Runner] Failed to fetch open positions from exchange', [
                     'run_id' => $runId,
                     'error' => $e->getMessage(),
                 ]);
@@ -297,13 +327,20 @@ final class MtfRunnerService
         // Récupérer les symboles avec ordres ouverts depuis l'exchange
         $openOrderSymbols = [];
         $orderProvider = $provider->getOrderProvider();
-        if ($orderProvider) {
+        if ($orderProvider || $openOrders !== null) {
             try {
-                $openOrders = $orderProvider->getOpenOrders();
-                $this->logger->info('[MTF Runner] Fetched open orders', [
-                    'run_id' => $runId,
-                    'count' => count($openOrders),
-                ]);
+                if ($openOrders === null && $orderProvider) {
+                    $openOrders = $orderProvider->getOpenOrders();
+                    $this->mtfLogger->info('[MTF Runner] Fetched open orders', [
+                        'run_id' => $runId,
+                        'count' => count($openOrders),
+                    ]);
+                } elseif ($openOrders !== null) {
+                    $this->mtfLogger->info('[MTF Runner] Reusing prefetched open orders', [
+                        'run_id' => $runId,
+                        'count' => count($openOrders),
+                    ]);
+                }
 
                 foreach ($openOrders as $order) {
                     $orderSymbol = strtoupper($order->symbol ?? '');
@@ -326,7 +363,7 @@ final class MtfRunnerService
         try {
             $reactivatedCount = $this->mtfSwitchRepository->reactivateSwitchesForInactiveSymbols($symbolsWithActivity);
             if ($reactivatedCount > 0) {
-                $this->logger->info('[MTF Runner] Reactivated switches for inactive symbols', [
+                $this->mtfLogger->info('[MTF Runner] Reactivated switches for inactive symbols', [
                     'run_id' => $runId,
                     'reactivated_count' => $reactivatedCount,
                 ]);
@@ -368,11 +405,11 @@ final class MtfRunnerService
     {
         try {
             $lockKey = $lockPerSymbol ? 'mtf_execution_per_symbol' : 'mtf_execution';
-            
+
             // Vérifier si un lock existe déjà
             $lockInfo = $this->mtfLockRepository->getLockInfo($lockKey);
             if ($lockInfo && $lockInfo['is_locked']) {
-                $this->logger->warning('[MTF Runner] Lock already exists', [
+                $this->mtfLogger->warning('[MTF Runner] Lock already exists', [
                     'run_id' => $runId,
                     'lock_key' => $lockKey,
                 ]);
@@ -416,7 +453,7 @@ final class MtfRunnerService
 
                 if ($isSwitchOff) {
                     $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, '1m');
-                    $this->logger->info('[MTF Runner] Symbol switch extended (was OFF)', [
+                    $this->mtfLogger->info('[MTF Runner] Symbol switch extended (was OFF)', [
                         'run_id' => $runId,
                         'symbol' => $symbolUpper,
                         'duration' => '1 minute',
@@ -424,7 +461,7 @@ final class MtfRunnerService
                     ]);
                 } else {
                     $this->mtfSwitchRepository->turnOffSymbolForDuration($symbolUpper, '5m');
-                    $this->logger->info('[MTF Runner] Symbol switch disabled', [
+                    $this->mtfLogger->info('[MTF Runner] Symbol switch disabled', [
                         'run_id' => $runId,
                         'symbol' => $symbolUpper,
                         'duration' => '5 minutes',
@@ -447,26 +484,32 @@ final class MtfRunnerService
      * - futures_order
      * - futures_order_trade
      */
-    public function syncTables(ExchangeContext $context): void
+    public function syncTables(ExchangeContext $context): array
     {
+        $openPositions = [];
+        $openOrders = [];
+
         try {
             $provider = $this->mainProvider->forContext($context);
             $accountProvider = $provider->getAccountProvider();
             $orderProvider = $provider->getOrderProvider();
 
             if (!$accountProvider && !$orderProvider) {
-                $this->logger->warning('[MTF Runner] Cannot sync tables: missing providers');
-                return;
+                $this->positionsLogger->warning('[MTF Runner] Cannot sync tables: missing providers');
+                return [
+                    'open_positions' => $openPositions,
+                    'open_orders' => $openOrders,
+                ];
             }
 
             // 1. Synchroniser les positions
             if ($accountProvider) {
-                $this->syncPositions($accountProvider);
+                $openPositions = $this->syncPositions($accountProvider);
             }
 
             // 2. Synchroniser les ordres
             if ($orderProvider) {
-                $this->syncOrders($orderProvider);
+                $openOrders = $this->syncOrders($orderProvider);
             }
 
         } catch (\Throwable $e) {
@@ -475,16 +518,23 @@ final class MtfRunnerService
                 'trace' => $e->getTraceAsString(),
             ]);
         }
+
+        return [
+            'open_positions' => $openPositions,
+            'open_orders' => $openOrders,
+        ];
     }
 
     /**
      * Synchronise les positions depuis l'exchange vers la table positions
      */
-    private function syncPositions($accountProvider): void
+    private function syncPositions($accountProvider): array
     {
+        $openPositions = [];
+
         try {
             $openPositions = $accountProvider->getOpenPositions();
-            $this->logger->info('[MTF Runner] Syncing positions', [
+            $this->positionsLogger->info('[MTF Runner] Syncing positions', [
                 'count' => count($openPositions),
             ]);
 
@@ -524,17 +574,21 @@ final class MtfRunnerService
                 'error' => $e->getMessage(),
             ]);
         }
+
+        return $openPositions;
     }
 
     /**
      * Synchronise les ordres depuis l'exchange vers futures_order et futures_order_trade
      */
-    private function syncOrders($orderProvider): void
+    private function syncOrders($orderProvider): array
     {
+        $openOrders = [];
+
         try {
             $openOrders = $orderProvider->getOpenOrders();
             // getOpenOrders() synchronise déjà les ordres via FuturesOrderSyncService
-            $this->logger->info('[MTF Runner] Syncing orders via provider', [
+            $this->positionsLogger->info('[MTF Runner] Syncing orders via provider', [
                 'count' => count($openOrders),
             ]);
         } catch (\Throwable $e) {
@@ -542,6 +596,8 @@ final class MtfRunnerService
                 'error' => $e->getMessage(),
             ]);
         }
+
+        return $openOrders;
     }
 
     /**
@@ -603,7 +659,7 @@ final class MtfRunnerService
 
     /**
      * Exécute MTF en mode parallèle via des workers Process
-     * 
+     *
      * @return array{summary: array, results: array, errors: array}
      */
     private function runParallel(
@@ -639,7 +695,7 @@ final class MtfRunnerService
             'market_type' => $context->marketType->value,
         ];
 
-        $this->logger->info('[MTF Runner] Starting parallel execution', [
+        $this->mtfLogger->info('[MTF Runner] Starting parallel execution', [
             'run_id' => $runId,
             'symbols_count' => count($symbols),
             'workers' => $request->workers,
@@ -660,7 +716,7 @@ final class MtfRunnerService
                 $process->start();
                 $workerStartTimes[$symbol] = $workerStart;
                 $active[] = ['symbol' => $symbol, 'process' => $process];
-                $this->logger->debug('[MTF Runner] Worker started', [
+                $this->mtfLogger->debug('[MTF Runner] Worker started', [
                     'run_id' => $runId,
                     'symbol' => $symbol,
                 ]);
@@ -731,7 +787,7 @@ final class MtfRunnerService
                         }
                     }
 
-                    $this->logger->debug('[MTF Runner] Worker completed', [
+                    $this->mtfLogger->debug('[MTF Runner] Worker completed', [
                         'run_id' => $runId,
                         'symbol' => $symbol,
                         'duration' => round($workerDuration, 3),
@@ -741,7 +797,7 @@ final class MtfRunnerService
                     $stdout = trim($process->getOutput());
                     $msg = $stderr !== '' ? $stderr : ($stdout !== '' ? $stdout : 'unknown error');
                     $errors[] = sprintf('Worker %s: %s', $symbol, $msg);
-                    $this->logger->warning('[MTF Runner] Worker failed', [
+                    $this->mtfLogger->warning('[MTF Runner] Worker failed', [
                         'run_id' => $runId,
                         'symbol' => $symbol,
                         'error' => $msg,
@@ -795,7 +851,7 @@ final class MtfRunnerService
             'polling_count' => $pollingCount,
         ];
 
-        $this->logger->info('[MTF Runner] Parallel execution completed', [
+        $this->mtfLogger->info('[MTF Runner] Parallel execution completed', [
             'run_id' => $runId,
             'symbols_processed' => $processed,
             'execution_time' => round($totalExecutionTime, 3),
@@ -811,7 +867,7 @@ final class MtfRunnerService
 
     /**
      * Construit la commande pour un worker Process
-     * 
+     *
      * @param string $symbol Symbole à traiter
      * @param array{
      *     dry_run: bool,
@@ -887,18 +943,18 @@ final class MtfRunnerService
             $orderProvider = $provider?->getOrderProvider();
 
             if ($accountProvider === null || $orderProvider === null) {
-                $this->logger->warning('[MTF Runner] TP/SL recalculation skipped: missing providers');
+                $this->positionsLogger->warning('[MTF Runner] TP/SL recalculation skipped: missing providers');
                 return;
             }
 
             if ($this->tpSlService === null) {
-                $this->logger->warning('[MTF Runner] TP/SL recalculation skipped: TpSlTwoTargetsService not available');
+                $this->positionsLogger->warning('[MTF Runner] TP/SL recalculation skipped: TpSlTwoTargetsService not available');
                 return;
             }
 
             // Récupérer toutes les positions ouvertes
             $openPositions = $accountProvider->getOpenPositions();
-            $this->logger->info('[MTF Runner] TP/SL recalculation: checking positions', [
+            $this->positionsLogger->info('[MTF Runner] TP/SL recalculation: checking positions', [
                 'count' => count($openPositions),
                 'dry_run' => $dryRun,
             ]);
@@ -915,7 +971,7 @@ final class MtfRunnerService
 
                     // Validation: s'assurer que le side est valide
                     if ($positionSide !== PositionSide::LONG && $positionSide !== PositionSide::SHORT) {
-                        $this->logger->warning('[MTF Runner] TP/SL recalculation skipped: invalid position side', [
+                        $this->positionsLogger->warning('[MTF Runner] TP/SL recalculation skipped: invalid position side', [
                             'symbol' => $symbol,
                             'side' => $positionSide->value ?? 'unknown',
                         ]);
@@ -961,7 +1017,7 @@ final class MtfRunnerService
 
                     // Critère: recalculer seulement si exactement 1 ordre TP
                     if (count($tpOrders) !== 1) {
-                        $this->logger->debug('[MTF Runner] TP/SL recalculation skipped', [
+                        $this->positionsLogger->debug('[MTF Runner] TP/SL recalculation skipped', [
                             'symbol' => $symbol,
                             'tp_count' => count($tpOrders),
                             'reason' => count($tpOrders) === 0 ? 'no_tp_orders' : 'multiple_tp_orders',
@@ -970,7 +1026,7 @@ final class MtfRunnerService
                     }
 
                     // Recalculer les TP/SL
-                    $this->logger->info('[MTF Runner] TP/SL recalculation: processing', [
+                    $this->positionsLogger->info('[MTF Runner] TP/SL recalculation: processing', [
                         'symbol' => $symbol,
                         'side' => $entrySide->value,
                         'entry_price' => $entryPrice,
@@ -990,7 +1046,7 @@ final class MtfRunnerService
 
                     $result = $this->tpSlService->__invoke($tpSlRequest, 'mtf_runner_' . time());
 
-                    $this->logger->info('[MTF Runner] TP/SL recalculation: completed', [
+                    $this->positionsLogger->info('[MTF Runner] TP/SL recalculation: completed', [
                         'symbol' => $symbol,
                         'sl' => $result['sl'],
                         'tp1' => $result['tp1'],
@@ -1017,6 +1073,20 @@ final class MtfRunnerService
             ]);
             // Ne pas faire échouer le run MTF complet
         }
+    }
+
+    /**
+     * Détermine si le recalcul TP/SL doit être exécuté maintenant.
+     *
+     * Règle actuelle : exécuter uniquement lorsque la minute courante
+     * est un multiple de 3 (0, 3, 6, ..., 57).
+     */
+    private function shouldRunTpSlNow(): bool
+    {
+        $now = new \DateTimeImmutable('now');
+        $minute = (int) $now->format('i');
+
+        return $minute % 3 === 0;
     }
 
     /**
@@ -1057,12 +1127,12 @@ final class MtfRunnerService
             return [$request->currentTf];
         }
 
-        return ['4h', '1h', '15m', '5m', '1m'];
+        return ['1h', '15m', '5m', '1m'];
     }
 
     /**
      * Consomme les symboles depuis la queue des switches
-     * 
+     *
      * @return array<string>
      */
     private function consumeSymbolsFromSwitchQueue(): array
@@ -1084,13 +1154,13 @@ final class MtfRunnerService
     {
         $exchange = $request->exchange ?? Exchange::BITMART;
         $marketType = $request->marketType ?? MarketType::PERPETUAL;
-        
+
         return new ExchangeContext($exchange, $marketType);
     }
 
     /**
      * Enrichit les résultats avec summary_by_tf, rejected_by, last_validated, orders_placed
-     * 
+     *
      * @param array<string, array<string, mixed>> $results
      * @return array{
      *     summary_by_tf: array<string, array<string>>,
@@ -1163,7 +1233,7 @@ final class MtfRunnerService
 
     /**
      * Construit un résumé groupé par dernier timeframe atteint
-     * 
+     *
      * @param array<string, array<string, mixed>> $results
      * @return array<string, array<string>>
      */
