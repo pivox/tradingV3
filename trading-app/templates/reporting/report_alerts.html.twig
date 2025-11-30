@@ -1,0 +1,12 @@
+{% if report.exitCode is defined and report.exitCode != 0 %}
+    <div class="alert alert-warning">
+        <strong>Code de sortie :</strong> {{ report.exitCode }}
+    </div>
+{% endif %}
+
+{% if report.error %}
+    <div class="alert alert-danger">
+        <strong>Erreur :</strong>
+        <pre class="mb-0 text-break">{{ report.error }}</pre>
+    </div>
+{% endif %}
