@@ -150,7 +150,7 @@ zone_max_deviation_pct: 0.015  # Au lieu de 0.02 (moins de déviation)
 # Ajouter des filtres MTF plus stricts
 # (dans validations.yaml)
 filters_mandatory:
-  - adx_min_for_trend_1h: 20  # Forcer tendance forte
+  - adx_min_for_trend: 20  # Forcer tendance forte
   - volume_ratio_gt: 1.2       # Volume supérieur à la moyenne
 ```
 
@@ -272,5 +272,11 @@ Si winrate = 35% et R-multiple = 2.0:
 **Solution immédiate:** Augmenter R-multiple à 2.0 pour réduire le winrate minimum requis à 33.3%
 
 **Solution long terme:** Améliorer la sélection des entrées pour augmenter le winrate réel à > 35%
+
+
+
+
+
+
 
 

@@ -8,14 +8,14 @@ use App\Indicator\Attribute\AsIndicatorCondition;
 use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
-#[AsIndicatorCondition(timeframes: ['4h', '1h', '15m', '5m'], name: AdxMinForTrend1hCondition::NAME)]
+#[AsIndicatorCondition(timeframes: ['4h', '1h', '15m', '5m'], name: AdxMinForTrendCondition::NAME)]
 #[AutoconfigureTag('app.indicator.condition')]
-#[AsTaggedItem(index: AdxMinForTrend1hCondition::NAME)]
-final class AdxMinForTrend1hCondition extends AbstractCondition
+#[AsTaggedItem(index: AdxMinForTrendCondition::NAME)]
+final class AdxMinForTrendCondition extends AbstractCondition
 {
-    public const NAME = 'adx_min_for_trend_1h';
+    public const NAME = 'adx_min_for_trend';
 
-    public function __construct(private readonly float $minAdx = 25.0) {}
+    public function __construct(private readonly float $minAdx = 15.0) {}
 
     public function getName(): string
     {
@@ -27,7 +27,7 @@ final class AdxMinForTrend1hCondition extends AbstractCondition
         $tf = $context['timeframe'] ?? null;
 
         // 1) Récupération ADX(1h) souple: accepte float|int|string numériques
-        $adx1hRaw = $context['adx_1h'] ?? null;
+        $adx1hRaw = $context['adx'][$this->minAdx] ?? null;
         if ($adx1hRaw === null && $tf === '1h') {
             $adx1hRaw = $context['adx'] ?? null; // fallback sur 1h
         }
