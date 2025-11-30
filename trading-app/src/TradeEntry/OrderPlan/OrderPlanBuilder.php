@@ -254,6 +254,20 @@ final class OrderPlanBuilder
                     : TickQuantizer::quantizeUp($target, $precision);
                 $sizingDistance = max(abs($entry - $stopAtr), $tick);
             }
+
+            $this->positionsLogger->debug('order_plan.sl_atr_candidate', [
+                'symbol' => $req->symbol,
+                'side' => $req->side->value,
+                'entry' => $entry,
+                'atr_value' => $req->atrValue,
+                'atr_k' => $req->atrK,
+                'stop_atr' => $stopAtr,
+                'atr_stop_distance_pct' => $atrStopDistancePct,
+                'min_stop_distance_pct' => self::MIN_STOP_DISTANCE_PCT,
+                'tick' => $tick,
+                'precision' => $precision,
+                'decision_key' => $decisionKey,
+            ]);
         }
 
         // Garde 0.5% pour le stop pivot
@@ -267,9 +281,22 @@ final class OrderPlanBuilder
                     : TickQuantizer::quantizeUp($target, $precision);
                 $sizingDistance = max(abs($entry - $stopPivot), $tick);
             }
+
+            $this->positionsLogger->debug('order_plan.sl_pivot_candidate', [
+                'symbol' => $req->symbol,
+                'side' => $req->side->value,
+                'entry' => $entry,
+                'stop_pivot' => $stopPivot,
+                'pivot_stop_distance_pct' => $pivotStopDistancePct,
+                'min_stop_distance_pct' => self::MIN_STOP_DISTANCE_PCT,
+                'tick' => $tick,
+                'precision' => $precision,
+                'decision_key' => $decisionKey,
+            ]);
         }
 
         // --- Sizing initial, choix final du stop conservateur ---
+        $stopFinalSource = null;
         $size = $this->positionSizer->fromRiskAndDistance($riskUsdt, $sizingDistance, $contractSize, $minVolume);
 
         $stopRisk = $this->slc->fromRisk($entry, $req->side, $riskUsdt, $size, $contractSize, $precision);
@@ -278,6 +305,30 @@ final class OrderPlanBuilder
             $stopAtr   !== null => $this->slc->conservative($req->side, $stopAtr, $stopRisk),
             default              => $stopRisk,
         };
+
+        if ($stopPivot !== null) {
+            $stopFinalSource = 'pivot';
+        } elseif ($stopAtr !== null) {
+            $stopFinalSource = 'atr_conservative';
+        } else {
+            $stopFinalSource = 'risk';
+        }
+
+        $this->positionsLogger->debug('order_plan.sl_risk_and_choice', [
+            'symbol' => $req->symbol,
+            'side' => $req->side->value,
+            'entry' => $entry,
+            'risk_usdt' => $riskUsdt,
+            'sizing_distance' => $sizingDistance,
+            'stop_atr' => $stopAtr,
+            'stop_pivot' => $stopPivot,
+            'stop_risk' => $stopRisk,
+            'stop_initial_choice' => $stop,
+            'contract_size' => $contractSize,
+            'min_volume' => $minVolume,
+            'size_initial' => $size,
+            'decision_key' => $decisionKey,
+        ]);
 
         // Si le stop final diffère, re-sizer
         $finalDistance = max(abs($entry - $stop), $tick);
@@ -296,6 +347,7 @@ final class OrderPlanBuilder
             throw new \RuntimeException('Stop loss invalide');
         }
         $stopDistancePct = abs($stop - $entry) / max($entry, 1e-9);
+        $minGuardApplied = false;
         if ($stopDistancePct < self::MIN_STOP_DISTANCE_PCT) {
             $minAbs = max($tick, self::MIN_STOP_DISTANCE_PCT * $entry);
             $target = $req->side === Side::Long ? max($entry - $minAbs, $minTick) : $entry + $minAbs;
@@ -307,6 +359,8 @@ final class OrderPlanBuilder
             $size = $this->positionSizer->fromRiskAndDistance($riskUsdt, $finalDistance, $contractSize, $minVolume);
             $stopRisk = $this->slc->fromRisk($entry, $req->side, $riskUsdt, (int)$size, $contractSize, $precision);
 
+            $minGuardApplied = true;
+
             $this->positionsLogger->info('order_plan.stop_min_distance_adjusted', [
                 'symbol' => $req->symbol,
                 'side' => $req->side->value,
@@ -317,6 +371,25 @@ final class OrderPlanBuilder
                 'decision_key' => $decisionKey,
             ]);
         }
+
+        $this->positionsLogger->debug('order_plan.sl_final', [
+            'symbol' => $req->symbol,
+            'side' => $req->side->value,
+            'entry' => $entry,
+            'stop_final' => $stop,
+            'stop_distance_pct' => $stopDistancePct,
+            'min_stop_distance_pct' => self::MIN_STOP_DISTANCE_PCT,
+            'risk_usdt' => $riskUsdt,
+            'final_distance' => $finalDistance,
+            'size_final' => $size,
+            'tick' => $tick,
+            'precision' => $precision,
+            'contract_size' => $contractSize,
+            'min_volume' => $minVolume,
+            'stop_final_source' => $stopFinalSource,
+            'min_stop_guard_applied' => $minGuardApplied,
+            'decision_key' => $decisionKey,
+        ]);
 
         // --- Quantisation / clamps taille ---
         if ($volPrecision === 0) {
@@ -525,6 +598,14 @@ final class OrderPlanBuilder
             'decision_key' => $decisionKey,
         ]);
 
+        if ($minGuardApplied) {
+            $stopFinalSource = match (true) {
+                $stopPivot !== null => 'pivot_guarded',
+                $stopAtr !== null => 'atr_guarded',
+                default => 'risk_guarded',
+            };
+        }
+
         $model = new OrderPlanModel(
             symbol: $req->symbol,
             side: $req->side,
@@ -542,6 +623,10 @@ final class OrderPlanBuilder
             entryZoneHigh: $zone?->max,
             zoneExpiresAt: $zoneExpiresAt,
             entryZoneMeta: $zone?->getMetadata(),
+            stopAtr: $stopAtr,
+            stopRisk: $stopRisk,
+            stopPivot: $stopPivot,
+            stopFinalSource: $stopFinalSource,
         );
 
         $this->positionsLogger->info('order_plan.model_ready', [

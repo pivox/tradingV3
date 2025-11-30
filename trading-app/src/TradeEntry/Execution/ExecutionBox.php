@@ -98,7 +98,7 @@ final class ExecutionBox
             return $this->executeMarketOrder($plan, $clientOrderId, $decisionKey, $leverageResult);
         }
 
-        $plan = $this->enforceTakeProfitCap($plan, $decisionKey);
+       // $plan = $this->enforceTakeProfitCap($plan, $decisionKey);
 
         $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
 

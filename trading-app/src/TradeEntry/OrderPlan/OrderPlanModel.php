@@ -25,6 +25,10 @@ final class OrderPlanModel
         public readonly ?\DateTimeImmutable $zoneExpiresAt = null,
         /** @var array<string,mixed>|null */
         public readonly ?array $entryZoneMeta = null,
+        public readonly ?float $stopAtr = null,
+        public readonly ?float $stopRisk = null,
+        public readonly ?float $stopPivot = null,
+        public readonly ?string $stopFinalSource = null,
     ) {}
 
     public function copyWith(
@@ -50,6 +54,10 @@ final class OrderPlanModel
             $this->entryZoneHigh,
             $this->zoneExpiresAt,
             $this->entryZoneMeta,
+            $this->stopAtr,
+            $this->stopRisk,
+            $this->stopPivot,
+            $this->stopFinalSource,
         );
     }
 }
