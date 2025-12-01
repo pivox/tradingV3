@@ -47,3 +47,21 @@
   - `trade_entry.*.yaml`:
     - `atr_k` remis à `1.5` sur les profils default/regular.
     - Profil scalper: `stop_from: 'pivot'` avec fallback ATR, `risk_pct_percent`=2.5, `r_multiple`=1.3, `tp1_r`=1.0, buffer SL pivot resserré (0.003).
+
+## 1 déc 2025 – Ajustements scalper (zone & sizing)
+
+- Zone d'entrée 1m très rikiki: vues `v_zone_events_scalper_1m` / `v_zone_width_stats_scalper_1m` (cf. requêtes psql) ont montré 24 évènements `[0%,0.8%)` → 100% `skipped_out_of_zone`. Percentiles `zone_dev_pct` = {3.67%, 4.48%, 5.45%} pour `zone_max_dev_pct` fixe à 2%.
+- Pour réduire les rejets trop stricts:
+  - `trade_entry.scalper.yaml` → `defaults.zone_max_deviation_pct = 0.045` (4.5%, médiane observée) à partir du commit du 1 déc 2025.
+  - Sur demande, on a évalué l'impact d'un `risk_pct_percent`=10% (taille ×4, marges/leviers plus élevés, max loss atteint très vite) mais on garde 2.5% pour l’instant.
+- Rappel SQL utilisés :
+  ```sql
+  -- Stats par bucket de largeur
+  SELECT * FROM v_zone_width_stats_scalper_1m;
+
+  -- Percentiles zone_dev
+  SELECT percentile_cont(ARRAY[0.25,0.5,0.75])
+    WITHIN GROUP (ORDER BY zone_dev_pct)
+  FROM trade_zone_events
+  WHERE config_profile='scalper' AND timeframe='1m';
+  ```
