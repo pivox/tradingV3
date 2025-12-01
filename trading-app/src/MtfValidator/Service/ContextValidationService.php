@@ -59,12 +59,12 @@ class ContextValidationService
      *
      * - mode 'pragmatic' (par défaut) :
      *   - aucun TF contexte ne doit être invalid (valid = false)
-     *   - au moins un TF doit donner un side non neutral
-     *   - tous les sides non neutral doivent être cohérents (tous long ou tous short)
+     *   - au moins un TF doit donner un side exploitable (long/short)
+     *   - tous les sides valides doivent être cohérents (tous long ou tous short)
      *
      * - mode 'strict' (si un jour tu l'utilises) :
      *   - tous les TF contexte doivent être valid
-     *   - tous les TF contexte doivent avoir un side non neutral
+     *   - tous les TF contexte doivent avoir un side exploitable
      *   - tous les sides doivent être identiques
      *
      * @param TimeframeDecisionDto[] $decisions
@@ -101,7 +101,7 @@ class ContextValidationService
         }
 
         if ($mode === 'strict') {
-            // STRICT : aucun TF invalid, tous avec side non neutral et cohérent
+            // STRICT : aucun TF invalid, tous avec side exploitable et cohérent
             if (!empty($invalidTfs)) {
                 return [false, 'strict_context_has_invalid_timeframes'];
             }
@@ -124,12 +124,12 @@ class ContextValidationService
             return [false, 'pragmatic_context_has_invalid_timeframes'];
         }
 
-        // 2) s’il n’y a aucun side non neutral → contexte insuffisamment clair
+        // 2) s’il n’y a aucun side exploitable → contexte insuffisamment clair
         if (empty($nonNeutralSides)) {
             return [false, 'pragmatic_context_all_neutral'];
         }
 
-        // 3) si les sides non neutral sont en conflit (long + short) → contexte KO
+        // 3) si les sides exploitables sont en conflit (long + short) → contexte KO
         $uniqueSides = \array_unique(\array_values($nonNeutralSides));
         if (\count($uniqueSides) > 1) {
             return [false, 'pragmatic_context_side_conflict'];

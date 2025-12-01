@@ -182,8 +182,8 @@ final class MtfResultProjector
         string $phase,
     ): void {
 
-        // 0) On ignore les signaux neutres (signal = 'neutral')
-        if ($decision->signal === 'neutral') {
+        // 0) On ignore les signaux non exploitables (ni long ni short)
+        if (!\in_array($decision->signal, ['long', 'short'], true)) {
             return;
         }
 

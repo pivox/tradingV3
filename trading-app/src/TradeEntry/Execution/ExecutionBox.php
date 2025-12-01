@@ -224,6 +224,7 @@ final class ExecutionBox
                             symbol: $plan->symbol,
                             exchangeOrderId: (string)$orderResult->orderId,
                             clientOrderId: $clientOrderId,
+                            side: strtoupper($side->value),
                             cancelAfterSec: (int) $watchSec,
                             tries: 0,
                             decisionKey: $decisionKey,

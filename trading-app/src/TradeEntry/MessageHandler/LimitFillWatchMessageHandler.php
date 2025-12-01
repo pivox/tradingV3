@@ -89,7 +89,11 @@ final class LimitFillWatchMessageHandler
                     'decision_key' => $message->decisionKey,
                 ]);
 
-                $this->logOrderExpiredLifecycle($message, $status->value);
+                $this->logOrderExpiredLifecycle(
+                    $message,
+                    $status->value,
+                    strtoupper($order->side->value)
+                );
                 return;
             }
         }
@@ -137,9 +141,11 @@ final class LimitFillWatchMessageHandler
                 symbol: $message->symbol,
                 exchangeOrderId: $message->exchangeOrderId,
                 clientOrderId: $message->clientOrderId,
+                side: $message->side,
                 cancelAfterSec: $message->cancelAfterSec,
                 tries: $message->tries + 1,
                 decisionKey: $message->decisionKey,
+                lifecycleContext: $message->lifecycleContext,
             ),
             [new DelayStamp(self::POLL_DELAY_MS)]
         );
@@ -154,8 +160,11 @@ final class LimitFillWatchMessageHandler
         ]);
     }
 
-    private function logOrderExpiredLifecycle(LimitFillWatchMessage $message, string $status): void
-    {
+    private function logOrderExpiredLifecycle(
+        LimitFillWatchMessage $message,
+        string $status,
+        ?string $detectedSide = null
+    ): void {
         try {
             $extra = $this->withLifecycleContext($message, [
                 'source' => 'limit_watch',
@@ -166,10 +175,14 @@ final class LimitFillWatchMessageHandler
                 'grace_seconds' => self::GRACE_SECONDS,
             ]);
 
+            $side = $detectedSide ?? $message->side;
+            $normalizedSide = $side !== null ? strtoupper($side) : null;
+
             $this->tradeLifecycleLogger->logOrderExpired(
                 symbol: $message->symbol,
                 orderId: $message->exchangeOrderId,
                 clientOrderId: $message->clientOrderId,
+                side: $normalizedSide,
                 reasonCode: TradeLifecycleReason::CANCEL_AFTER_TIMEOUT,
                 extra: $extra,
             );

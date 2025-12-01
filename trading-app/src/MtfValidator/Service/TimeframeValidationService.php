@@ -44,13 +44,13 @@ final class TimeframeValidationService
         $rulesConfig      = $mtfConfig['rules'] ?? [];
 
         /** ---------------------------------------------------------
-         * 0) Pas de config pour ce timeframe → neutral + invalid
+         * 0) Pas de config pour ce timeframe → signal invalid
          * --------------------------------------------------------- */
         if (!isset($validationConfig['timeframe'][$timeframe])) {
             $decision = new TimeframeDecisionDto(
                 timeframe: $timeframe,
                 phase: $phase,
-                signal: 'neutral',
+                signal: 'invalid',
                 valid: false,
                 invalidReason: 'NO_CONFIG_FOR_TF',
                 rulesPassed: [],
@@ -152,7 +152,7 @@ final class TimeframeValidationService
             return new TimeframeDecisionDto(
                 timeframe: $timeframe,
                 phase: $phase,
-                signal: 'neutral',
+                signal: 'invalid',
                 valid: false,
                 invalidReason: 'NO_LONG_NO_SHORT',
                 rulesPassed: [],
@@ -166,7 +166,7 @@ final class TimeframeValidationService
             return new TimeframeDecisionDto(
                 timeframe: $timeframe,
                 phase: $phase,
-                signal: 'neutral',
+                signal: 'invalid',
                 valid: false,
                 invalidReason: 'LONG_AND_SHORT',
                 rulesPassed: [],
@@ -195,7 +195,7 @@ final class TimeframeValidationService
                 return new TimeframeDecisionDto(
                     timeframe: $timeframe,
                     phase: $phase,
-                    signal: 'neutral',   // neutral car veto global
+                    signal: 'invalid',   // signal invalid car veto global
                     valid: false,
                     invalidReason: 'FILTERS_MANDATORY_FAILED',
                     rulesPassed: [],
@@ -257,7 +257,7 @@ final class TimeframeValidationService
             return new TimeframeDecisionDto(
                 timeframe: $timeframe,
                 phase: $phase,
-                signal: 'neutral',
+                signal: 'invalid',
                 valid: false,
                 invalidReason: 'UNKNOWN_TIMEFRAME',
                 rulesPassed: [],
@@ -271,7 +271,7 @@ final class TimeframeValidationService
             return new TimeframeDecisionDto(
                 timeframe: $timeframe,
                 phase: $phase,
-                signal: 'neutral',
+                signal: 'invalid',
                 valid: false,
                 invalidReason: 'NO_KLINES',
                 rulesPassed: [],
@@ -300,11 +300,11 @@ final class TimeframeValidationService
 
         // Résolution du signal avant filtres mandatoires
         if (!$passedLong && !$passedShort) {
-            $signal = 'neutral';
+            $signal = 'invalid';
             $valid = false;
             $invalidReason = 'NO_LONG_NO_SHORT';
         } elseif ($passedLong && $passedShort) {
-            $signal = 'neutral';
+            $signal = 'invalid';
             $valid = false;
             $invalidReason = 'LONG_AND_SHORT';
         } else {
@@ -354,7 +354,7 @@ final class TimeframeValidationService
 
             if ($filtersFailed !== []) {
                 $valid = false;
-                $signal = 'neutral';
+                $signal = 'invalid';
                 $invalidReason = 'FILTERS_MANDATORY_FAILED';
             }
         }

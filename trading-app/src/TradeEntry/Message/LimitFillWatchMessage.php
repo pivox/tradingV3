@@ -9,6 +9,7 @@ final class LimitFillWatchMessage
         public readonly string $symbol,
         public readonly string $exchangeOrderId,
         public readonly string $clientOrderId,
+        public readonly ?string $side,
         public readonly int $cancelAfterSec,
         public readonly int $tries = 0,
         public readonly ?string $decisionKey = null,
