@@ -60,6 +60,7 @@ final class TradeLifecycleLogger
         string $symbol,
         string $orderId,
         ?string $clientOrderId,
+        ?string $side = null,
         ?string $reasonCode = null,
         ?string $runId = null,
         ?string $exchange = null,
@@ -72,6 +73,7 @@ final class TradeLifecycleLogger
             ->setAccountId($accountId)
             ->setOrderId($orderId)
             ->setClientOrderId($clientOrderId)
+            ->setSide($side)
             ->setReasonCode($reasonCode)
             ->setExtra($this->normalizeExtra($extra));
 

@@ -214,6 +214,7 @@ final class TradeLifecycleLoggerListener
                 symbol: $order->symbol,
                 orderId: $order->orderId,
                 clientOrderId: $order->clientOrderId,
+                side: strtoupper($order->side->value),
                 reasonCode: $reasonCode,
                 runId: $event->runId,
                 exchange: $event->exchange,
