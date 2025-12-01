@@ -621,6 +621,8 @@ final class MtfRunnerService
             ipAddress: $request->ipAddress,
             exchange: $context->exchange,
             marketType: $context->marketType,
+            profile: $request->profile,
+            mode: $request->validationMode,
         );
 
         $response = $this->mtfValidator->run($mtfRequest);
@@ -693,6 +695,8 @@ final class MtfRunnerService
             'ip_address' => $request->ipAddress,
             'exchange' => $context->exchange->value,
             'market_type' => $context->marketType->value,
+            'profile' => $request->profile,
+            'validation_mode' => $request->validationMode,
         ];
 
         $this->mtfLogger->info('[MTF Runner] Starting parallel execution', [
@@ -881,6 +885,8 @@ final class MtfRunnerService
      *     ip_address: ?string,
      *     exchange: string,
      *     market_type: string,
+     *     profile: ?string,
+     *     validation_mode: ?string,
      * } $options
      * @return string[]
      */
@@ -923,6 +929,12 @@ final class MtfRunnerService
         }
         if (!empty($options['market_type'])) {
             $command[] = '--market-type=' . $options['market_type'];
+        }
+        if (!empty($options['profile'])) {
+            $command[] = '--trade-profile=' . $options['profile'];
+        }
+        if (!empty($options['validation_mode'])) {
+            $command[] = '--validation-mode=' . $options['validation_mode'];
         }
 
         return $command;

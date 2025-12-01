@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Command;
 
+use App\Contract\MtfValidator\Dto\MtfResultDto;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Common\Enum\Exchange;
@@ -40,7 +41,9 @@ final class MtfRunWorkerCommand extends Command
             ->addOption('user-id', null, InputOption::VALUE_OPTIONAL, 'Identifiant utilisateur propagé au pipeline MTF')
             ->addOption('ip-address', null, InputOption::VALUE_OPTIONAL, 'Adresse IP associée à la requête')
             ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
-            ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)');
+            ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)')
+            ->addOption('trade-profile', null, InputOption::VALUE_OPTIONAL, 'Profil TradeEntry/MTF à utiliser (ex: scalper, regular)')
+            ->addOption('validation-mode', null, InputOption::VALUE_OPTIONAL, 'Mode de validation du contexte (pragmatic|strict)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -72,6 +75,10 @@ final class MtfRunWorkerCommand extends Command
 
         $exchangeOpt = $input->getOption('exchange');
         $marketTypeOpt = $input->getOption('market-type');
+        $profileOpt = $input->getOption('trade-profile');
+        $profile = is_string($profileOpt) && $profileOpt !== '' ? trim($profileOpt) : null;
+        $validationModeOpt = $input->getOption('validation-mode');
+        $validationMode = is_string($validationModeOpt) && $validationModeOpt !== '' ? strtolower(trim($validationModeOpt)) : null;
 
         try {
             // En mode worker, activer le verrou par symbole pour éviter le blocage global
@@ -88,6 +95,8 @@ final class MtfRunWorkerCommand extends Command
                 'ip_address' => $ipAddress,
                 'exchange' => $exchangeOpt !== null && $exchangeOpt !== '' ? $exchangeOpt : Exchange::BITMART->value,
                 'market_type' => $marketTypeOpt !== null && $marketTypeOpt !== '' ? $marketTypeOpt : MarketType::PERPETUAL->value,
+                'profile' => $profile,
+                'validation_mode' => $validationMode,
             ]);
             $response = $this->mtfValidator->run($request);
 
@@ -137,6 +146,8 @@ final class MtfRunWorkerCommand extends Command
                     'ip_address' => $ipAddress,
                     'exchange' => $request->exchange?->value,
                     'market_type' => $request->marketType?->value,
+                    'profile' => $request->profile,
+                    'validation_mode' => $request->mode,
                 ],
             ];
 

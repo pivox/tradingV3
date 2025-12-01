@@ -65,7 +65,9 @@ class MtfRunCommand extends Command
             ->addOption('limit', null, InputOption::VALUE_OPTIONAL, 'Nombre maximum de symboles à traiter quand --symbols est absent (0 = illimité)', '0')
             ->addOption('workers', null, InputOption::VALUE_OPTIONAL, 'Nombre de workers parallèles (1 = mode séquentiel)', '1')
             ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
-            ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)');
+            ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)')
+            ->addOption('trade-profile', null, InputOption::VALUE_OPTIONAL, 'Profil TradeEntry/MTF (ex: scalper, regular)')
+            ->addOption('validation-mode', null, InputOption::VALUE_OPTIONAL, 'Mode de validation du contexte (pragmatic|strict)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -112,6 +114,10 @@ class MtfRunCommand extends Command
             };
         }
         $context = new ExchangeContext($exchange, $marketType);
+        $profileOpt = $input->getOption('trade-profile');
+        $profile = is_string($profileOpt) && $profileOpt !== '' ? trim($profileOpt) : null;
+        $validationModeOpt = $input->getOption('validation-mode');
+        $validationMode = is_string($validationModeOpt) && $validationModeOpt !== '' ? strtolower(trim($validationModeOpt)) : null;
 
         $io->title('MTF Run');
         $io->text([
@@ -193,6 +199,8 @@ class MtfRunCommand extends Command
                 'workers' => $workers,
                 'sync_tables' => true,
                 'process_tp_sl' => true,
+                'profile' => $profile,
+                'validation_mode' => $validationMode,
             ]);
 
             $runnerResult = $this->mtfRunnerService->run($runnerRequest);
@@ -251,7 +259,7 @@ class MtfRunCommand extends Command
 
     /**
      * @param string[] $symbols
-     * @param array{dry_run: bool, force_run: bool, current_tf: ?string, force_timeframe_check: bool, auto_switch_invalid: bool, switch_duration: string} $options
+     * @param array{dry_run: bool, force_run: bool, current_tf: ?string, force_timeframe_check: bool, auto_switch_invalid: bool, switch_duration: string, profile?: ?string, validation_mode?: ?string} $options
      * @return array{summary: array, details: array, errors: array}
      */
     private function runSequential(SymfonyStyle $io, array $symbols, array $options): array
@@ -269,6 +277,8 @@ class MtfRunCommand extends Command
             'ip_address' => $options['ip_address'] ?? null,
             'exchange' => $options['exchange'] ?? \App\Common\Enum\Exchange::BITMART->value,
             'market_type' => $options['market_type'] ?? \App\Common\Enum\MarketType::PERPETUAL->value,
+            'profile' => $options['profile'] ?? null,
+            'validation_mode' => $options['validation_mode'] ?? null,
         ]);
         $response = $this->mtfValidator->run($mtfRunRequestDto);
 
@@ -599,7 +609,7 @@ class MtfRunCommand extends Command
     }
 
     /**
-     * @param array{dry_run: bool, force_run: bool, current_tf: ?string, force_timeframe_check: bool, auto_switch_invalid: bool, switch_duration: string, exchange?: string, market_type?: string} $options
+     * @param array{dry_run: bool, force_run: bool, current_tf: ?string, force_timeframe_check: bool, auto_switch_invalid: bool, switch_duration: string, exchange?: string, market_type?: string, profile?: ?string, validation_mode?: ?string} $options
      */
     private function buildWorkerCommand(string $symbol, array $options): array
     {
@@ -647,6 +657,12 @@ class MtfRunCommand extends Command
         }
         if (!empty($options['market_type'])) {
             $command[] = '--market-type=' . $options['market_type'];
+        }
+        if (!empty($options['profile'])) {
+            $command[] = '--trade-profile=' . $options['profile'];
+        }
+        if (!empty($options['validation_mode'])) {
+            $command[] = '--validation-mode=' . $options['validation_mode'];
         }
 
         return $command;
