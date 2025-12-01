@@ -52,7 +52,7 @@ final class Version20251104110755 extends AbstractMigration
             BEGIN
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint 
-                    WHERE conname = \'FK_EB1EDFD01EE3ABD0\'
+                    WHERE conname = \'fk_eb1edfd01ee3abd0\'
                 ) THEN
                     ALTER TABLE exchange_order 
                     ADD CONSTRAINT FK_EB1EDFD01EE3ABD0 
@@ -119,7 +119,7 @@ final class Version20251104110755 extends AbstractMigration
             BEGIN
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint 
-                    WHERE conname = \'FK_7DE3EBC41EE3ABD0\'
+                    WHERE conname = \'fk_7de3ebc41ee3abd0\'
                 ) THEN
                     ALTER TABLE order_intent 
                     ADD CONSTRAINT FK_7DE3EBC41EE3ABD0 

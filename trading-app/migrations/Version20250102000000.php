@@ -257,7 +257,7 @@ final class Version20250102000000 extends AbstractMigration
         // Table: lock_keys
         // ============================================================
         $this->addSql('
-            CREATE TABLE lock_keys (
+            CREATE TABLE IF NOT EXISTS lock_keys (
                 key_id VARCHAR(64) PRIMARY KEY,
                 key_token VARCHAR(44) NOT NULL,
                 key_expiration INTEGER NOT NULL
@@ -404,7 +404,7 @@ final class Version20250102000000 extends AbstractMigration
         // Table: messenger_messages_failed (Symfony Messenger)
         // ============================================================
         $this->addSql('
-            CREATE TABLE messenger_messages_failed (
+            CREATE TABLE IF NOT EXISTS messenger_messages_failed (
                 id BIGSERIAL PRIMARY KEY,
                 body TEXT NOT NULL,
                 headers TEXT NOT NULL,
@@ -414,9 +414,9 @@ final class Version20250102000000 extends AbstractMigration
                 delivered_at TIMESTAMP(0) WITHOUT TIME ZONE DEFAULT NULL
             )
         ');
-        $this->addSql('CREATE INDEX idx_804a86d9fb7336f0 ON messenger_messages_failed (queue_name)');
-        $this->addSql('CREATE INDEX idx_804a86d9e3bd61ce ON messenger_messages_failed (available_at)');
-        $this->addSql('CREATE INDEX idx_804a86d916ba31db ON messenger_messages_failed (delivered_at)');
+        $this->addSql('CREATE INDEX IF NOT EXISTS idx_804a86d9fb7336f0 ON messenger_messages_failed (queue_name)');
+        $this->addSql('CREATE INDEX IF NOT EXISTS idx_804a86d9e3bd61ce ON messenger_messages_failed (available_at)');
+        $this->addSql('CREATE INDEX IF NOT EXISTS idx_804a86d916ba31db ON messenger_messages_failed (delivered_at)');
         $this->addSql("COMMENT ON COLUMN messenger_messages_failed.created_at IS '(DC2Type:datetime_immutable)'");
         $this->addSql("COMMENT ON COLUMN messenger_messages_failed.available_at IS '(DC2Type:datetime_immutable)'");
         $this->addSql("COMMENT ON COLUMN messenger_messages_failed.delivered_at IS '(DC2Type:datetime_immutable)'");
@@ -464,4 +464,3 @@ final class Version20250102000000 extends AbstractMigration
         $this->addSql('DROP TABLE IF EXISTS blacklisted_contract CASCADE');
     }
 }
-

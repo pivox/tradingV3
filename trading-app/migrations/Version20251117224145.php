@@ -61,12 +61,22 @@ final class Version20251117224145 extends AbstractMigration
         $this->addSql('ALTER TABLE trade_lifecycle_event ALTER happened_at TYPE TIMESTAMP(0) WITH TIME ZONE');
         $this->addSql('ALTER TABLE trade_lifecycle_event ALTER happened_at DROP DEFAULT');
         $this->addSql('COMMENT ON COLUMN trade_lifecycle_event.happened_at IS \'(DC2Type:datetimetz_immutable)\'');
-        $this->addSql('ALTER TABLE trade_zone_events ALTER id DROP DEFAULT');
-        $this->addSql('ALTER TABLE trade_zone_events ALTER happened_at TYPE TIMESTAMP(0) WITH TIME ZONE');
-        $this->addSql('ALTER TABLE trade_zone_events ALTER happened_at DROP DEFAULT');
-        $this->addSql('ALTER TABLE trade_zone_events ALTER mtf_context DROP DEFAULT');
-        $this->addSql('ALTER TABLE trade_zone_events ALTER category DROP DEFAULT');
-        $this->addSql('COMMENT ON COLUMN trade_zone_events.happened_at IS \'(DC2Type:datetimetz_immutable)\'');
+        $this->addSql("DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'trade_zone_events'
+                ) THEN
+                    EXECUTE 'ALTER TABLE trade_zone_events ALTER id DROP DEFAULT';
+                    EXECUTE 'ALTER TABLE trade_zone_events ALTER happened_at TYPE TIMESTAMP(0) WITH TIME ZONE';
+                    EXECUTE 'ALTER TABLE trade_zone_events ALTER happened_at DROP DEFAULT';
+                    EXECUTE 'ALTER TABLE trade_zone_events ALTER mtf_context DROP DEFAULT';
+                    EXECUTE 'ALTER TABLE trade_zone_events ALTER category DROP DEFAULT';
+                    EXECUTE 'COMMENT ON COLUMN trade_zone_events.happened_at IS ''(DC2Type:datetimetz_immutable)''';
+                END IF;
+            END;
+        $$;");
     }
 
     public function down(Schema $schema): void
