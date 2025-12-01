@@ -280,3 +280,7 @@ Si winrate = 35% et R-multiple = 2.0:
 
 
 
+
+
+
+
