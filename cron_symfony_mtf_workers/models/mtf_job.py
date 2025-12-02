@@ -42,6 +42,7 @@ class MtfJob:
     symbols: Optional[List[str]] = field(default_factory=list)
     exchange: Optional[str] = None
     market_type: Optional[str] = None
+    mtf_profile: Optional[str] = None
     timeout_minutes: int = 15
 
     @classmethod
@@ -57,6 +58,7 @@ class MtfJob:
         timeout_minutes = int(data.get("timeout_minutes", 15))
         exchange = data.get("exchange")
         market_type = data.get("market_type")
+        mtf_profile = data.get("mtf_profile")
 
         return cls(
             url=url,
@@ -69,6 +71,7 @@ class MtfJob:
             timeout_minutes=max(1, timeout_minutes),
             exchange=str(exchange) if exchange else None,
             market_type=str(market_type) if market_type else None,
+            mtf_profile=str(mtf_profile) if mtf_profile else None,
         )
 
     def payload(self) -> Dict[str, Any]:
@@ -87,5 +90,7 @@ class MtfJob:
             payload["exchange"] = self.exchange
         if self.market_type:
             payload["market_type"] = self.market_type
+        if self.mtf_profile:
+            payload["mtf_profile"] = self.mtf_profile
 
         return payload

@@ -19,11 +19,23 @@ final class ExecutionSelectionDto
 
     public function toArray(): array
     {
+        // Convertir les objets TimeframeDecisionDto en tableaux
+        $normalizedDecisions = [];
+        foreach ($this->timeframeDecisions as $decision) {
+            if ($decision instanceof TimeframeDecisionDto) {
+                $normalizedDecisions[] = $decision->toArray();
+            } elseif (is_array($decision)) {
+                $normalizedDecisions[] = $decision;
+            } else {
+                $normalizedDecisions[] = $decision;
+            }
+        }
+
         return [
             'selected_timeframe' => $this->selectedTimeframe,
             'selected_side' => $this->selectedSide,
             'reason_if_none' => $this->reasonIfNone,
-            'timeframe_decisions' => $this->timeframeDecisions
+            'timeframe_decisions' => $normalizedDecisions,
         ];
     }
 }

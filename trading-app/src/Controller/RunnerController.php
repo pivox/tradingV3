@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Config\TradeEntryModeContext;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
 use App\MtfRunner\Service\MtfRunnerService;
 use Psr\Log\LoggerInterface;
@@ -17,6 +18,7 @@ class RunnerController extends AbstractController
 {
     public function __construct(
         private readonly LoggerInterface $logger,
+        private readonly TradeEntryModeContext $modeContext,
     ) {
     }
 
@@ -60,6 +62,21 @@ class RunnerController extends AbstractController
             }
             $symbols = array_values(array_unique($symbols));
 
+            // Injection automatique du profile depuis la configuration si non fourni
+            // ROLLBACK: Si besoin de revenir en arrière, supprimer cette logique et remettre:
+            // 'profile' => $data['profile'] ?? $data['mtf_profile'] ?? null,
+            $defaultProfile = null;
+            if (!isset($data['profile']) && !isset($data['mtf_profile'])) {
+                $enabledModes = $this->modeContext->getEnabledModes();
+                if (!empty($enabledModes)) {
+                    $defaultProfile = $enabledModes[0]['name'] ?? null;
+                    $this->logger->debug('[Runner Controller] Auto-injecting profile from config', [
+                        'profile' => $defaultProfile,
+                        'enabled_modes' => array_column($enabledModes, 'name'),
+                    ]);
+                }
+            }
+
             // Construire la requête Runner (le Runner gère tout : résolution, filtrage, switches, TP/SL, post-processing)
             $runnerRequest = MtfRunnerRequestDto::fromArray([
                 'symbols' => $symbols,
@@ -77,8 +94,12 @@ class RunnerController extends AbstractController
                 'workers' => $workers,
                 'sync_tables' => filter_var($data['sync_tables'] ?? true, FILTER_VALIDATE_BOOLEAN),
                 'process_tp_sl' => filter_var($data['process_tp_sl'] ?? true, FILTER_VALIDATE_BOOLEAN),
+                'profile' => $data['profile'] ?? $data['mtf_profile'] ?? $defaultProfile,
+                'mtf_profile' => $data['mtf_profile'] ?? $defaultProfile,
+                'validation_mode' => $data['validation_mode'] ?? null,
+                'context_mode' => $data['context_mode'] ?? null,
+                'mode' => $data['mode'] ?? null,
             ]);
-
             $result = $mtfRunnerService->run($runnerRequest);
 
             // Le résultat est déjà enrichi par MtfRunnerService

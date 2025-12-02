@@ -28,6 +28,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Process\Process;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Config\TradeEntryModeContext;
 use App\Provider\Context\ExchangeContext;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
 use App\MtfRunner\Service\MtfRunnerService;
@@ -42,6 +43,7 @@ class MtfRunCommand extends Command
         private readonly ContractRepository $contractRepository,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         private readonly EntityManagerInterface $entityManager,
+        private readonly TradeEntryModeContext $modeContext,
         #[Autowire('%kernel.project_dir%')] private readonly string $projectDir,
     ) {
         parent::__construct();
@@ -116,6 +118,18 @@ class MtfRunCommand extends Command
         $context = new ExchangeContext($exchange, $marketType);
         $profileOpt = $input->getOption('trade-profile');
         $profile = is_string($profileOpt) && $profileOpt !== '' ? trim($profileOpt) : null;
+        
+        // Injection automatique du profile depuis la configuration si non fourni
+        if ($profile === null) {
+            $enabledModes = $this->modeContext->getEnabledModes();
+            if (!empty($enabledModes)) {
+                $profile = $enabledModes[0]['name'] ?? null;
+                if ($profile !== null) {
+                    $io->note(sprintf('Profile automatique injecté depuis la configuration: %s', $profile));
+                }
+            }
+        }
+        
         $validationModeOpt = $input->getOption('validation-mode');
         $validationMode = is_string($validationModeOpt) && $validationModeOpt !== '' ? strtolower(trim($validationModeOpt)) : null;
 

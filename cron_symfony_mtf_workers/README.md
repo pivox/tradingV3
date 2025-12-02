@@ -102,3 +102,42 @@ python scripts/manage_contract_sync_schedule.py delete
 **Timeout personnalisé :**
 
 Le workflow de synchronisation des contrats utilise un timeout de 10 minutes par défaut (au lieu de 15 minutes pour MTF). Ce timeout est configurable via le champ `timeout_minutes` dans le job.
+
+## Schedule Scalper Micro
+
+Exécution périodique du workflow MTF avec le profile `scalper_micro` (toutes les minutes par défaut).
+
+**Variables d'environnement :**
+
+| Variable                      | Valeur par défaut                            | Description |
+|-------------------------------|----------------------------------------------|-------------|
+| `SCALPER_MICRO_SCHEDULE_ID`   | `cron-symfony-mtf-workers-scalper-micro-1m`  | ID du schedule Temporal |
+| `SCALPER_MICRO_WORKFLOW_ID`   | `cron-symfony-mtf-workers-scalper-micro-runner` | ID du workflow |
+| `SCALPER_MICRO_CRON`          | `*/1 * * * *`                                | Expression cron (chaque minute) |
+| `SCALPER_MICRO_URL`           | `http://trading-app-nginx:80/api/mtf/run`    | URL de l'endpoint MTF |
+| `SCALPER_MICRO_WORKERS_COUNT` | `8`                                          | Nombre de workers parallèles |
+| `SCALPER_MICRO_DRY_RUN`       | `true`                                       | Mode dry-run par défaut |
+
+**Commandes :**
+
+```bash
+# Créer le schedule (avec preview)
+python scripts/manage_scalper_micro_schedule.py create --dry-run
+
+# Créer le schedule
+python scripts/manage_scalper_micro_schedule.py create
+
+# Voir le statut
+python scripts/manage_scalper_micro_schedule.py status
+
+# Mettre en pause
+python scripts/manage_scalper_micro_schedule.py pause
+
+# Reprendre
+python scripts/manage_scalper_micro_schedule.py resume
+
+# Supprimer
+python scripts/manage_scalper_micro_schedule.py delete
+```
+
+**Note :** Ce schedule utilise automatiquement le profile `scalper_micro` dans les requêtes MTF.

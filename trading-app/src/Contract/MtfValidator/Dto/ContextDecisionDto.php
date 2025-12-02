@@ -18,11 +18,22 @@ final class ContextDecisionDto
 
     public function toArray(): array
     {
+        // Convertir les objets TimeframeDecisionDto en tableaux
+        $normalizedDecisions = [];
+        foreach ($this->timeframeDecisions as $decision) {
+            if ($decision instanceof TimeframeDecisionDto) {
+                $normalizedDecisions[] = $decision->toArray();
+            } elseif (is_array($decision)) {
+                $normalizedDecisions[] = $decision;
+            } else {
+                $normalizedDecisions[] = $decision;
+            }
+        }
+
         return [
             'valid' => $this->isValid,
             'reason_if_invalid' => $this->reasonIfInvalid,
-            'timeframe_decisions' => $this->timeframeDecisions
-
+            'timeframe_decisions' => $normalizedDecisions,
         ];
     }
 }

@@ -17,4 +17,18 @@ final class TimeframeDecisionDto
         public readonly array $extra = [],             // métriques brutes: r_multiple, atr_pct, etc.
     ) {
     }
+
+    public function toArray(): array
+    {
+        return [
+            'timeframe' => $this->timeframe,
+            'phase' => $this->phase,
+            'signal' => $this->signal,
+            'valid' => $this->valid,
+            'invalid_reason' => $this->invalidReason,
+            'rules_passed' => $this->rulesPassed,
+            'rules_failed' => $this->rulesFailed,
+            'extra' => $this->extra,
+        ];
+    }
 }

@@ -20,7 +20,8 @@ parameters:
     env(ORDER_TIMEOUT_SWITCH_DURATION): '15m'
     mode:
         - [name: 'regular', enabled: false, priority: 0]
-        - [name: 'scalper', enabled: true, priority: 1]
+        - [name: 'scalper', enabled: false, priority: 1]
+        - [name: 'scalper_micro', enabled: true, priority: 2]
 
     # Fallbacks when env vars are missing (useful in CLI/worker containers)
     router.default_uri: 'http://trading-app-nginx'
@@ -34,7 +35,7 @@ parameters:
     env(LOG_LEVEL_INDICATORS): 'info'
     env(LOG_LEVEL_HIGHCONVICTION): 'info'
     env(LOG_LEVEL_PIPELINE_EXEC): 'info'
-    app.trade_entry_default_mode: 'scalper'
+    app.trade_entry_default_mode: 'scalper_micro'
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
 
@@ -240,9 +241,10 @@ services:
     App\Config\MtfConfigProviderInterface: '@App\Config\TradingParameters'
 
     # Config par défaut (compatibilité)
+    # Utilise scalper_micro comme config par défaut (mode activé avec priorité la plus élevée)
     App\Config\MtfValidationConfig:
         arguments:
-            $path: '%kernel.project_dir%/src/MtfValidator/config/validations.yaml'
+            $path: '%kernel.project_dir%/src/MtfValidator/config/validations.scalper_micro.yaml'
 
     # Providers pour gérer les modes (regular/scalping)
     App\Config\MtfValidationConfigProvider: ~

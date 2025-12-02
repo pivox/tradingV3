@@ -52,6 +52,28 @@ final class MtfRunResponseDto
 
     public function toArray(): array
     {
+        // Convertir les objets MtfResultDto en tableaux pour la sérialisation JSON
+        $normalizedResults = [];
+        foreach ($this->results as $entry) {
+            if (is_array($entry)) {
+                $symbol = $entry['symbol'] ?? null;
+                $result = $entry['result'] ?? null;
+                
+                // Si result est un objet MtfResultDto, le convertir en tableau
+                if ($result instanceof MtfResultDto) {
+                    $normalizedResults[] = [
+                        'symbol' => $symbol,
+                        'result' => $result->toArray(),
+                    ];
+                } else {
+                    // Sinon, garder tel quel (déjà un tableau ou autre type)
+                    $normalizedResults[] = $entry;
+                }
+            } else {
+                $normalizedResults[] = $entry;
+            }
+        }
+
         return [
             'run_id' => $this->runId,
             'status' => $this->status,
@@ -62,7 +84,7 @@ final class MtfRunResponseDto
             'symbols_failed' => $this->symbolsFailed,
             'symbols_skipped' => $this->symbolsSkipped,
             'success_rate' => $this->successRate,
-            'results' => $this->results,
+            'results' => $normalizedResults,
             'errors' => $this->errors,
             'timestamp' => $this->timestamp->format('Y-m-d H:i:s'),
             'message' => $this->message
