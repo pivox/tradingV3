@@ -6,6 +6,7 @@ namespace App\Indicator\Provider;
 
 use App\Common\Dto\IndicatorSnapshotDto;
 use App\Common\Enum\Timeframe;
+use App\Entity\IndicatorSnapshot;
 use App\Contract\Indicator\Dto\ListIndicatorDto;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\Provider\KlineProviderInterface;
@@ -24,6 +25,8 @@ use App\Indicator\Core\Volatility\Bollinger as CoreBollinger;
 use App\Indicator\Core\Volume\Vwap as CoreVwap;
 use App\Indicator\Registry\ConditionRegistry;
 use App\Repository\IndicatorSnapshotRepository;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 
 #[AsAlias(id: IndicatorProviderInterface::class)]
@@ -42,10 +45,12 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             private readonly CoreMacd $macdService,
             private readonly CoreAdx $adxService,
             private readonly CoreBollinger $bollService,
-            private readonly CoreVwap $vwapService,
+        private readonly CoreVwap $vwapService,
         private readonly CoreAtr $atrService,
         private readonly CoreStochRsi $stochRsiService,
         private readonly CoreSma $smaService,
+        #[Autowire(service: 'monolog.logger.indicators')]
+        private readonly LoggerInterface $logger,
         ) {}
 
         /**
@@ -130,8 +135,8 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             }
 
             $klinesCount = count($klines);
-            if ($klinesCount < 250) {
-                throw new NotEnoughKlinesException($symbol, $timeframe, 250, $klinesCount);
+            if ($klinesCount < 249) {
+                throw new NotEnoughKlinesException($symbol, $timeframe, 249, $klinesCount);
             }
 
             // Normalize arrays for calculation
@@ -197,6 +202,13 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
         public function saveIndicatorSnapshot(IndicatorSnapshotDto $snapshotDto): void
         {
+            $this->logger?->debug('[IndicatorProvider] Preparing snapshot persistence', [
+                'symbol' => $snapshotDto->symbol,
+                'timeframe' => $snapshotDto->timeframe->value,
+                'kline_time' => $snapshotDto->klineTime->format('Y-m-d H:i:s'),
+                'source' => $snapshotDto->source,
+            ]);
+
             $snapshot = (new IndicatorSnapshot())
                 ->setSymbol($snapshotDto->symbol)
                 ->setTimeframe($snapshotDto->timeframe)
@@ -223,6 +235,13 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             $snapshot->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
 
             $this->snapshotRepository->upsert($snapshot);
+
+            $this->logger?->info('[IndicatorProvider] Snapshot persisted', [
+                'symbol' => $snapshotDto->symbol,
+                'timeframe' => $snapshotDto->timeframe->value,
+                'kline_time' => $snapshotDto->klineTime->format('Y-m-d H:i:s'),
+                'run_id' => $snapshotDto->meta['run_id'] ?? null,
+            ]);
         }
 
         public function getListFromKlines(array $klines): ListIndicatorDto
@@ -571,11 +590,12 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
                 // 2️⃣ mapping vers le format attendu par le MTF
                 $tfEnum = Timeframe::from((string)$tf);
-                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 250);
+                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 251);
 
                 $klinesCount = count($klines);
-                if ($klinesCount < 250) {
-                    throw new NotEnoughKlinesException((string)$symbol, (string)$tf, 250, $klinesCount);
+                if ($klinesCount < 249) {
+                    //dd($symbol, $tf, $klinesCount);
+                    throw new NotEnoughKlinesException((string)$symbol, (string)$tf, 249, $klinesCount);
                 }
 
                 $closes = [];
@@ -602,13 +622,11 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                     // tu peux y rajouter volume, stoch_rsi, volume_ratio si tu les stockes dans meta
                 ];
             } catch (\Throwable $e) {
-                if (property_exists($this, 'logger')) {
-                    $this->logger->warning('IndicatorProvider: failed to fetch indicators', [
-                        'symbol'    => $symbol,
-                        'timeframe' => $tf,
-                        'error'     => $e->getMessage(),
-                    ]);
-                }
+                $this->logger->warning('IndicatorProvider: failed to fetch indicators', [
+                    'symbol'    => $symbol,
+                    'timeframe' => $tf,
+                    'error'     => $e->getMessage(),
+                ]);
 
                 $result[$tf] = [];
             }
@@ -627,12 +645,10 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             $tfEnum = Timeframe::from($timeframe);
         } catch (\ValueError $e) {
             // TF inconnu par l'enum → on log et on sort
-            if (property_exists($this, 'logger')) {
-                $this->logger->warning('IndicatorProvider: invalid timeframe', [
-                    'symbol'    => $symbol,
-                    'timeframe' => $timeframe,
-                ]);
-            }
+            $this->logger->warning('IndicatorProvider: invalid timeframe', [
+                'symbol'    => $symbol,
+                'timeframe' => $timeframe,
+            ]);
 
             return null;
         }
