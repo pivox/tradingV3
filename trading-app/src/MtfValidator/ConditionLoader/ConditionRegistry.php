@@ -7,6 +7,7 @@ use App\Indicator\Condition\ConditionInterface;
 use App\MtfValidator\ConditionLoader\Cards\Rule\Rule;
 use App\MtfValidator\ConditionLoader\Cards\Rule\Rules;
 use App\MtfValidator\ConditionLoader\Cards\Validation\Validation;
+use App\MtfValidator\Exception\MissingConditionException;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutowireIterator;
@@ -92,16 +93,8 @@ class ConditionRegistry
                             continue;
                         }
                     }
-                }
-                if (!$cond) {
-                    $out[$name] = [
-                        'name' => $name,
-                        'passed' => false,
-                        'value' => null,
-                        'threshold' => null,
-                        'meta' => ['error' => true, 'message' => 'Condition introuvable'],
-                    ];
-                    continue;
+
+                    throw MissingConditionException::forRule($name);
                 }
                 try {
                     $out[$name] = $cond->evaluate($context)->toArray();

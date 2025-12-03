@@ -10,6 +10,7 @@ use App\MtfValidator\ConditionLoader\Cards\Rule\RuleElementField;
 use App\MtfValidator\ConditionLoader\Cards\Rule\RuleElementOperation;
 use App\MtfValidator\ConditionLoader\Cards\Rule\RuleElementCustomOp;
 use App\MtfValidator\ConditionLoader\Cards\Rule\RuleElement;
+use App\MtfValidator\Exception\MissingConditionException;
 
 class Rule extends AbstractCard
 {
@@ -80,6 +81,9 @@ class Rule extends AbstractCard
             return $this->evaluateCustomOperation($spec, $context);
         }
 
+        if ($this->isAtrRangeSpec($spec)) {
+            return $this->evaluateCondition($this->name, null, $context);
+        }
 
         if (count($spec) === 1) {
             $name = (string) key($spec);
@@ -133,7 +137,7 @@ class Rule extends AbstractCard
     {
         $condition = $this->conditionRegistry->get($name);
         if (!$condition) {
-            throw new \RuntimeException(sprintf('Condition %s not found for rule %s', $name, $this->name));
+            throw MissingConditionException::forRule($name, $this->name);
         }
 
         $ctx = $this->applyOverride($context, $override);
@@ -400,5 +404,21 @@ class Rule extends AbstractCard
         }
 
         return null;
+    }
+
+    /**
+     * Les règles atr_rel_in_range_* sont décrites sous forme de paramètres (use_atr_tf, min, max, ...).
+     * Pour ConditionRegistry, on délègue simplement à la condition PHP homonyme.
+     */
+    private function isAtrRangeSpec(array $spec): bool
+    {
+        if (!str_starts_with($this->name, 'atr_rel_in_range')) {
+            return false;
+        }
+
+        $allowed = ['use_atr_tf', 'min', 'max', 'adapt_with_vol_bucket'];
+        $unknownKeys = array_diff(array_keys($spec), $allowed);
+
+        return $unknownKeys === [];
     }
 }
