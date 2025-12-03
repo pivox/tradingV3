@@ -52,6 +52,7 @@ def make_job() -> Dict[str, Any]:
         # Utiliser la valeur configurée plutôt qu'un littéral
         "workers": max(1, DEFAULT_WORKERS),
         "dry_run": DEFAULT_DRY_RUN,
+        "mtf_profile": "scalper",  # Profile spécifique pour scalper_micro
     }
 
 
