@@ -1,0 +1,305 @@
+# =====================================================================
+# validations.crash.yaml – Profil CRASH (shorts sur dumps violents)
+# MTF 4h / 1h (contexte) → 15m / 5m / 1m (exécution)
+# =====================================================================
+version: '0.1.0'
+
+mtf_validation:
+    profile: 'crash'
+    mode: 'strict'                         # Contexte strict : on ne short que si tout est aligné
+    context_timeframes: ['4h', '1h']       # Contexte long terme / intermédiaire
+    execution_timeframes: ['15m','5m','1m']
+    execution_timeframe_default: '5m'
+    allow_skip_lower_tf: true
+
+    defaults:
+        dry_run_validate_all_timeframes: false
+
+    # ================================
+    # RÈGLES ATOMIQUES
+    # (reprend la base scalper, + règles crash)
+    # ================================
+    rules:
+
+        # ====== EMA structure courte / long terme ======
+        ema_20_gt_50:
+            gt_fields: [ 'ema_20', 'ema_50' ]
+
+        ema_20_lt_50:
+            lt_fields: [ 'ema_20', 'ema_50' ]
+
+        ema_50_gt_200:
+            gt_fields: [ 'ema_50', 'ema_200' ]
+
+        ema_50_lt_200:
+            lt_fields: [ 'ema_50', 'ema_200' ]
+
+        close_above_ema_200:
+            gt_fields: [ 'close', 'ema_200' ]
+
+        close_below_ema_200:
+            lt_fields: [ 'close', 'ema_200' ]
+
+        ema200_slope_pos:
+            slope_left: 'ema_200'
+            slope_lookback: 13
+            op: '>'
+            right: 0.0
+            eps: 1e-12
+
+        ema200_slope_neg:
+            slope_left: 'ema_200'
+            slope_lookback: 21
+            op: '<'
+            right: 0.0
+            eps: 1e-12
+
+        ema_below_200_with_tolerance:
+            any_of:
+                - close_below_ema_200
+                - close_minus_ema_200_lt: -0.0030
+                - ema200_slope_neg
+
+        ema_above_200_with_tolerance:
+            any_of:
+                - close_above_ema_200
+                - close_minus_ema_200_gt: -0.0030
+                - ema200_slope_pos
+
+        # ====== MACD / momentum ======
+        macd_hist_gt_eps:
+            op: '>'
+            left: 'macd_hist'
+            right: 0.0
+            eps: 1e-6
+
+        macd_hist_increasing_n:
+            increasing: { field: 'macd_hist', n: 2 }
+
+        macd_hist_decreasing_n:
+            decreasing: { field: 'macd_hist', n: 2 }
+
+        macd_line_above_signal:
+            gt_fields: [ 'macd', 'macd_signal' ]
+
+        macd_line_below_signal:
+            lt_fields: [ 'macd', 'macd_signal' ]
+
+        macd_line_cross_up_with_hysteresis:
+            require_prev_below: true
+            min_gap: 0.0006
+            cool_down_bars: 2
+
+        macd_line_cross_down_with_hysteresis:
+            require_prev_above: true
+            min_gap: 0.0012
+            cool_down_bars: 3
+
+        # ====== VWAP / PULLBACK ======
+        close_above_vwap:
+            gt_fields: [ 'close', 'vwap' ]
+
+        close_below_vwap:
+            lt_fields: [ 'close', 'vwap' ]
+
+        close_above_ma_9:
+            gt_fields: [ 'close', 'ma_9' ]
+
+        ma9_cross_up_ma21:
+            ma9_cross_up_ma21: true
+
+        near_vwap:
+            near_vwap: true
+
+        close_above_vwap_or_ma9:
+            any_of: [ close_above_vwap, close_above_ma_9 ]
+
+        close_above_vwap_and_ma9:
+            all_of: [ close_above_vwap, close_above_ma_9 ]
+
+        pullback_confirmed:
+            any_of:
+                - ma9_cross_up_ma21
+                - near_vwap: true
+            validity_bars: 3
+
+        # ====== RSI / bornes globales ======
+        rsi_lt_70:
+            lt: 72
+
+        rsi_gt_softfloor:
+            gt: 20
+
+        rsi_1m_lt_extreme:
+            lt: 10          # RSI(1m) très bas → crash zone
+
+        rsi_5m_gt_floor:
+            gt: 20          # On évite que 5m soit déjà complètement cramé
+
+        # ====== ATR relatif ======
+        atr_rel_in_range_15m:
+            use_atr_tf: ['1m','5m']
+            min: 0.0005
+            max: 0.045
+            adapt_with_vol_bucket: true
+
+        atr_rel_in_range_5m:
+            use_atr_tf: ['1m']
+            min: 0.0005
+            max: 0.045
+            adapt_with_vol_bucket: true
+
+        # ====== Régimes long / short (structure macro) ======
+        price_regime_ok_long:
+            any_of:
+                - all_of: [ ema_above_200_with_tolerance, ema_50_gt_200 ]
+                - all_of: [ close_above_ema_200, ema200_slope_pos ]
+
+        price_regime_ok_short:
+            any_of:
+                - all_of: [ ema_below_200_with_tolerance, ema_50_lt_200 ]
+                - all_of: [ close_below_ema_200, ema200_slope_neg ]
+
+        # ====== Divers / levier ======
+        lev_bounds:
+            field: 'leverage'
+            min: 2.0
+            max: 25.0
+
+        # ====== RÈGLES SPÉCIFIQUES "CRASH SHORT" ======
+        crash_context_ok:
+            # Contexte 4h/1h déjà franchement baissier
+            all_of:
+                - price_regime_ok_short   # sous 200 + EMA200 baissière
+                - ema200_slope_neg
+                - macd_hist_decreasing_n
+                - adx_min_for_trend       # règle existante globale (non redéfinie ici)
+
+        crash_short_pattern_15m:
+            # 15m: trend baissier + sous VWAP + momentum en baisse + ATR dans le range
+            all_of:
+                - ema_20_lt_50
+                - close_below_vwap
+                - macd_hist_decreasing_n
+                - atr_rel_in_range_15m
+
+        crash_short_pattern_5m:
+            # 5m: cascade propre + volume anormal
+            all_of:
+                - ema_20_lt_50
+                - close_below_vwap
+                - macd_hist_decreasing_n
+                - atr_rel_in_range_5m
+                - volume_ratio_ok
+                - rsi_5m_gt_floor      # 5m pas totalement mort pour éviter le "dernier tic"
+
+        crash_short_pattern_1m:
+            # 1m: survente extrême mais toujours dans la tendance crash
+            all_of:
+                - macd_hist_decreasing_n
+                - close_below_vwap
+                - atr_rel_in_range_5m
+                - volume_ratio_ok
+                - rsi_1m_lt_extreme
+
+        crash_pullback_ready:
+            # Mini pullback / retest (éviter de shorter la mèche la plus basse)
+            any_of:
+                - ma9_cross_up_ma21
+                - near_vwap: true
+
+        crash_short_entry_1m:
+            all_of:
+                - crash_short_pattern_1m
+                - crash_pullback_ready
+
+
+    # ================================
+    # EXECUTION SELECTOR (simplifié pour crash)
+    # ================================
+    execution_selector:
+
+        per_timeframe:
+            '15m':
+                stay_on_if:
+                    - get_false: true        # 15m = transition
+                drop_to_lower_if_any:
+                    - atr_pct_15m_gt_bps: 130
+                    - spread_bps_gt: 9
+
+            '5m':
+                stay_on_if: []               # 5m = TF principal crash
+
+            '1m':
+                stay_on_if: []               # 1m = timing ultra précis
+
+        allow_1m_only_for:
+            enabled: false
+            conditions:
+                - scalping: true
+                - trailing_after_tp1: true
+                - end_of_zone_fallback: true
+
+
+    # ================================
+    # FILTRES GLOBAUX
+    # ================================
+    filters_mandatory:
+        - rsi_lt_70                     # Filtre anti-surachat global
+        - lev_bounds                    # bornes sur levier (par sécurité)
+
+
+    # ================================
+    # VALIDATION PAR TIMEFRAME (MTF)
+    # ================================
+    validation:
+        start_from_timeframe: '4h'
+        timeframe:
+
+            '4h':
+                long: []                 # Profil crash → on ne traite que les shorts
+                short:
+                    - all_of:
+                          - price_regime_ok_short
+
+            '1h':
+                long: []
+                short:
+                    - all_of:
+                          - crash_context_ok   # 1h doit valider le contexte crash
+
+            '15m':
+                long: []
+                short:
+                    - all_of:
+                          - crash_context_ok
+                          - crash_short_pattern_15m
+
+            '5m':
+                long: []
+                short:
+                    - any_of:
+                          # short standard crash 5m
+                          - all_of:
+                                - crash_context_ok
+                                - crash_short_pattern_5m
+
+                          # éventuelle branche plus stricte à activer plus tard
+                          # - all_of:
+                          #       - crash_context_ok
+                          #       - crash_short_pattern_5m
+                          #       - extra_filter: true
+
+            '1m':
+                long: []
+                short:
+                    - any_of:
+                          # short normal crash 1m (sans pullback)
+                          - all_of:
+                                - crash_context_ok
+                                - crash_short_pattern_1m
+
+                          # short crash après micro-pullback (plus safe)
+                          - all_of:
+                                - crash_context_ok
+                                - crash_short_entry_1m
