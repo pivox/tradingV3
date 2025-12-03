@@ -36,6 +36,7 @@ final class PriceLteMa21PlusKAtrCondition extends AbstractCondition
 
         $close = $context['close'] ?? null;
         $level = $context['ma_21_plus_k_atr']
+            ?? $context['ma_21_plus_1.5atr']
             ?? $context['ma_21_plus_1.3atr']
             ?? $context['ma_21_plus_2atr']
             ?? null;

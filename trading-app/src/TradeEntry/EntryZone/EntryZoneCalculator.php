@@ -34,6 +34,52 @@ final class EntryZoneCalculator
 
     public function compute(string $symbol, ?Side $side = null, ?int $pricePrecision = null, ?string $decisionKey = null, ?string $mode = null): EntryZone
     {
+        // Lecture config selon le mode (même mécanisme que validations.{mode}.yaml)
+        $config = $this->getConfigForMode($mode);
+        $post = $config?->getPostValidation() ?? [];
+        $postEntryZone = (array)($post['entry_zone'] ?? []);
+        $execTf = $post['execution_timeframe']['default'] ?? null;
+
+        // Config "entry" (mode trade_entry.*.yaml)
+        $entryBlock = $config?->getEntry() ?? [];
+        $entryZoneBlock = (array)($entryBlock['entry_zone'] ?? []);
+
+        // Fusion: la config "entry" a priorité sur post_validation
+        $zoneCfg = array_merge($postEntryZone, $entryZoneBlock);
+
+        $pivotTf = $this->defaultTfOverride
+            ?? ($zoneCfg['pivot_tf'] ?? (\is_string($execTf) && $execTf !== '' ? $execTf : null))
+            ?? self::DEFAULT_TF;
+        $atrTf = $zoneCfg['offset_atr_tf'] ?? $pivotTf;
+
+        $kAtr = $this->kAtrOverride
+            ?? (isset($zoneCfg['k_atr']) && \is_numeric($zoneCfg['k_atr']) ? (float)$zoneCfg['k_atr']
+                : (isset($zoneCfg['offset_k']) && \is_numeric($zoneCfg['offset_k']) ? (float)$zoneCfg['offset_k'] : self::K_ATR));
+        $wMin = $this->wMinOverride
+            ?? (isset($zoneCfg['w_min']) && \is_numeric($zoneCfg['w_min']) ? (float)$zoneCfg['w_min'] : self::W_MIN);
+        $wMax = $this->wMaxOverride
+            ?? (isset($zoneCfg['w_max']) && \is_numeric($zoneCfg['w_max']) ? (float)$zoneCfg['w_max']
+                : (isset($zoneCfg['max_deviation_pct']) && \is_numeric($zoneCfg['max_deviation_pct']) ? (float)$zoneCfg['max_deviation_pct'] : self::W_MAX));
+
+        // Gestion du pivot : entry.entry_zone.from a priorité, sinon fallback vwap_anchor
+        $from = \is_string($zoneCfg['from'] ?? null) ? strtolower(trim((string)$zoneCfg['from'])) : null;
+        $preferVwap = match ($from) {
+            'sma21' => false,
+            'ma21' => false,
+            'vwap' => true,
+            default => isset($zoneCfg['vwap_anchor']) ? (bool)$zoneCfg['vwap_anchor'] : true,
+        };
+
+        $bias = $this->asymBiasOverride
+            ?? (isset($zoneCfg['asym_bias']) && \is_numeric($zoneCfg['asym_bias'])
+                ? max(0.0, min(0.95, (float)$zoneCfg['asym_bias'])) : self::ASYM_BIAS);
+        $quantize = isset($zoneCfg['quantize_to_exchange_step'])
+            ? (bool)$zoneCfg['quantize_to_exchange_step']
+            : true;
+        $ttlSec = isset($zoneCfg['ttl_sec']) && is_numeric($zoneCfg['ttl_sec'])
+            ? max(0, (int)$zoneCfg['ttl_sec'])
+            : 240;
+
         // Fallback si aucun provider n'est injecté
         if ($this->indicators === null) {
             $this->positionsLogger?->info('entry_zone.open_no_indicators', [
@@ -45,28 +91,13 @@ final class EntryZoneCalculator
                 min: PHP_FLOAT_MIN,
                 max: PHP_FLOAT_MAX,
                 rationale: 'open zone (no indicators)',
-                metadata: ['timeframe' => $tf]
+                metadata: ['timeframe' => $pivotTf]
             );
         }
 
-        // Lecture config selon le mode (même mécanisme que validations.{mode}.yaml)
-        $config = $this->getConfigForMode($mode);
-        $post = $config?->getPostValidation() ?? [];
-        $ez = $post['entry_zone'] ?? [];
-        $execTf = $post['execution_timeframe']['default'] ?? null;
-
-        $tf = $this->defaultTfOverride ?? (\is_string($execTf) && $execTf !== '' ? $execTf : self::DEFAULT_TF);
-        $kAtr = $this->kAtrOverride ?? (isset($ez['k_atr']) && \is_numeric($ez['k_atr']) ? (float)$ez['k_atr'] : self::K_ATR);
-        $wMin = $this->wMinOverride ?? (isset($ez['w_min']) && \is_numeric($ez['w_min']) ? (float)$ez['w_min'] : self::W_MIN);
-        $wMax = $this->wMaxOverride ?? (isset($ez['w_max']) && \is_numeric($ez['w_max']) ? (float)$ez['w_max'] : self::W_MAX);
-        $preferVwap = isset($ez['vwap_anchor']) ? (bool)$ez['vwap_anchor'] : true;
-        $bias = $this->asymBiasOverride ?? (isset($ez['asym_bias']) && \is_numeric($ez['asym_bias']) ? max(0.0, min(0.95, (float)$ez['asym_bias'])) : self::ASYM_BIAS);
-        $quantize = isset($ez['quantize_to_exchange_step']) ? (bool)$ez['quantize_to_exchange_step'] : true;
-        $ttlSec = isset($ez['ttl_sec']) && is_numeric($ez['ttl_sec']) ? max(0, (int)$ez['ttl_sec']) : 240;
-
         // 1) Récupère ATR et liste pivot (vwap/sma...)
-        $atr = $this->indicators->getAtr(symbol: $symbol, tf: $tf);
-        $list = $this->indicators->getListPivot(symbol: $symbol, tf: $tf);
+        $atr = $this->indicators->getAtr(symbol: $symbol, tf: $atrTf);
+        $list = $this->indicators->getListPivot(symbol: $symbol, tf: $pivotTf);
 
         $ind = $list?->toArray() ?? [];
         $pivot = null;
@@ -106,7 +137,7 @@ final class EntryZoneCalculator
         if (!\is_finite($pivot) || $pivot === null || $pivot <= 0.0) {
             $this->positionsLogger?->info('entry_zone.open_no_pivot', [
                 'symbol' => $symbol,
-                'tf' => $tf,
+                'tf' => $pivotTf,
                 'decision_key' => $decisionKey,
                 'reason' => 'pivot_not_available',
             ]);
@@ -115,7 +146,7 @@ final class EntryZoneCalculator
                 min: PHP_FLOAT_MIN,
                 max: PHP_FLOAT_MAX,
                 rationale: 'open zone (no pivot)',
-                metadata: ['timeframe' => $tf, 'k_atr' => $kAtr]
+                metadata: ['timeframe' => $pivotTf, 'k_atr' => $kAtr]
             );
         }
 
@@ -171,7 +202,7 @@ final class EntryZoneCalculator
         $rationale = sprintf(
             '%s@%s -%.2f%%/+%.2f%% (k_atr=%.2f, clamp=%.2f%%..%.2f%%, bias=%.2f)',
             $pivotSrc ?? 'pivot',
-            $tf,
+            $pivotTf,
             100.0 * ($lowDelta / max(1e-12, $pivot)),
             100.0 * ($highDelta / max(1e-12, $pivot)),
             $kAtr,
@@ -183,7 +214,8 @@ final class EntryZoneCalculator
         $this->positionsLogger?->debug('entry_zone.computed', [
             'symbol' => $symbol,
             'decision_key' => $decisionKey,
-            'tf' => $tf,
+            'pivot_tf' => $pivotTf,
+            'atr_tf' => $atrTf,
             'pivot' => $pivot,
             'pivot_src' => $pivotSrc,
             'atr' => $atr,
@@ -201,7 +233,8 @@ final class EntryZoneCalculator
             createdAt: new \DateTimeImmutable(),
             ttlSec: $ttlSec,
             metadata: [
-                'timeframe' => $tf,
+                'timeframe' => $pivotTf,
+                'atr_tf' => $atrTf,
                 'pivot' => $pivot,
                 'pivot_source' => $pivotSrc,
                 'atr' => $atr,

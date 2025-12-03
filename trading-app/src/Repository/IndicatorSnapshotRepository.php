@@ -8,14 +8,19 @@ use App\Common\Enum\Timeframe;
 use App\Entity\IndicatorSnapshot;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
  * @extends ServiceEntityRepository<IndicatorSnapshot>
  */
 class IndicatorSnapshotRepository extends ServiceEntityRepository
 {
-    public function __construct(ManagerRegistry $registry)
-    {
+    public function __construct(
+        ManagerRegistry $registry,
+        #[Autowire(service: 'monolog.logger.indicators')]
+        private readonly LoggerInterface $logger,
+    ) {
         parent::__construct($registry, IndicatorSnapshot::class);
     }
 
@@ -91,13 +96,24 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
                 $existing->setRunId($snapshot->getRunId());
             }
             $existing->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
+            $this->logger->debug('[IndicatorSnapshotRepository] Snapshot updated', [
+                'symbol' => $existing->getSymbol(),
+                'timeframe' => $existing->getTimeframe()->value,
+                'kline_time' => $existing->getKlineTime()->format('Y-m-d H:i:s'),
+                'run_id' => $existing->getRunId(),
+            ]);
             $this->getEntityManager()->flush();
         } else {
             $this->getEntityManager()->persist($snapshot);
+            $this->logger->debug('[IndicatorSnapshotRepository] Snapshot inserted', [
+                'symbol' => $snapshot->getSymbol(),
+                'timeframe' => $snapshot->getTimeframe()->value,
+                'kline_time' => $snapshot->getKlineTime()->format('Y-m-d H:i:s'),
+                'run_id' => $snapshot->getRunId(),
+            ]);
             $this->getEntityManager()->flush();
         }
     }
 }
-
 
 

@@ -196,11 +196,13 @@ class IndicatorContextBuilder
 
         $ma21PlusKAtr = null;
         $ma21Plus13Atr = null;
+        $ma21Plus15Atr = null;
         $ma21Plus2Atr = null;
         if ($ma21 !== null && $atr !== null) {
             $k = $this->atrK ?? 1.3;
             $ma21PlusKAtr = $ma21 + ($k * $atr);
             $ma21Plus13Atr = $ma21 + (1.3 * $atr);
+            $ma21Plus15Atr = $ma21 + (1.5 * $atr);
             $ma21Plus2Atr = $ma21 + (2.0 * $atr);
         }
 
@@ -241,6 +243,7 @@ class IndicatorContextBuilder
             'ma21' => $ma21,
             'ma_21_plus_k_atr' => $ma21PlusKAtr,
             'ma_21_plus_1.3atr' => $ma21Plus13Atr,
+            'ma_21_plus_1.5atr' => $ma21Plus15Atr,
             'ma_21_plus_2atr' => $ma21Plus2Atr,
             'adx' => $adxVal14 ? [14 => $adxVal14, 15 => $adxVal15] : null,
             'previous' => array_filter([

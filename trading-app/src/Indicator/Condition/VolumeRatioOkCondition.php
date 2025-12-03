@@ -16,7 +16,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class VolumeRatioOkCondition extends AbstractCondition
 {
     public const NAME = 'volume_ratio_ok';
-    private const DEFAULT_THRESHOLD = 1.4;
+    private const DEFAULT_THRESHOLD = 0.9;
     private const EPS = 1.0e-9;
 
     public function __construct(

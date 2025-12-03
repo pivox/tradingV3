@@ -1,5 +1,5 @@
 # Profil SCALPER - TradeEntry
-version: '2.6.0'   # Version du profil scalper active
+version: '2.6.0leverage'   # Version du profil scalper active
 
 meta:
     name: >
@@ -16,7 +16,7 @@ trade_entry:
     # DEFAULTS
     # ============================
     defaults:
-        risk_pct_percent: 2.5        # Risque par trade (% equity)
+        risk_pct_percent: 7        # Risque par trade (% equity)
         initial_margin_usdt: 20.0    # Marge initiale minimale allouée
         fallback_account_balance: 0.0 # Si balance insuffisante, fallback budget
 
@@ -51,7 +51,7 @@ trade_entry:
         # Déviations resserrées pour éviter les entrées en extension
         max_deviation_pct: 0.003       # Déviation max autorisée
         implausible_pct: 0.02          # Garde-fou anti-mouvements irrationnels
-        zone_max_deviation_pct: 0.02   # Max deviation entre prix & zone
+        zone_max_deviation_pct: 0.045  # Max deviation entre prix & zone
 
         # --- DYNAMIC LEVERAGE PARAM
         k_dynamic: 10.0                # Paramètre K pour calcul du levier dynamique
@@ -79,16 +79,16 @@ trade_entry:
         exchange_cap: 50.0        # Cap lever max par exchange (sécurité)
 
         per_symbol_caps:
-            - { symbol_regex: "^BTCUSDT$", cap: 40.0 }         # BTC → max 40x
-            - { symbol_regex: "^(ETH|BNB)USDT$", cap: 25.0 }   # ETH/BNB → max 25x
-            - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 5.0 } # Shitcoins → 5x max
+#            - { symbol_regex: "^BTCUSDT$", cap: 40.0 }         # BTC → max 40x
+#            - { symbol_regex: "^(ETH|BNB)USDT$", cap: 25.0 }   # ETH/BNB → max 25x
+#            - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 5.0 } # Shitcoins → 5x max
 
         timeframe_multipliers:
             '4h': 0.9    # Contexte large → moins de levier
             '1h': 1.0    # Standard
             '15m': 1.0   # Execution médiane
-            '5m': 1.2    # Scalping dynamique
-            '1m': 1.3    # Ultra scalping → levier légèrement supérieur
+            '5m': 2    # Scalping dynamique
+            '1m': 3    # Ultra scalping → levier légèrement supérieur
 
         confidence_multiplier:
             enabled: true
@@ -135,7 +135,7 @@ trade_entry:
         enabled: true                # Autorise les entrées directes en taker
         allowed_execution_timeframes: ['1m','5m']  # TF autorisés pour market entry
         max_slippage_bps: 25         # Slippage max toléré (25 bps)
-        adx_min_1h: 15               # ADX 1h minimal pour permettre l’entrée taker
+        
 
 
     # ============================
