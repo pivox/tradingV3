@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Service;
 
+use App\Config\MtfValidationConfig;
+use App\Config\MtfValidationConfigProvider;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
@@ -13,6 +15,7 @@ use App\MtfValidator\Message\MtfTradingDecisionMessage;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use Ramsey\Uuid\Uuid;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Messenger\MessageBusInterface;
 
 class MtfValidatorService implements MtfValidatorInterface
@@ -22,6 +25,9 @@ class MtfValidatorService implements MtfValidatorInterface
         private readonly ClockInterface $clock,
         private readonly EntityManagerInterface $em,
         private readonly MessageBusInterface $messageBus,
+        private readonly MtfValidationConfigProvider $mtfValidationConfigProvider,
+        #[Autowire('%app.trade_entry_default_mode%')]
+        private readonly string $defaultProfile,
     ) {
     }
 
@@ -38,9 +44,8 @@ class MtfValidatorService implements MtfValidatorInterface
         $symbolsFailed     = 0;
         $symbolsSkipped    = 0;
 
-        // Pour l’instant on fixe un profil par défaut (ex: 'regular')
-        $profile = 'scalper';
-        $mode    = null;
+        $profile = $request->profile ?? $this->defaultProfile;
+        $mode    = $request->mode;
 
         foreach ($request->symbols as $symbol) {
             $symbolsProcessed++;
@@ -137,5 +142,11 @@ class MtfValidatorService implements MtfValidatorInterface
     public function getServiceName(): string
     {
         return 'mtf_validator';
+    }
+
+    public function getListTimeframe(string $profile = 'scalper'): array
+    {
+        $config = $this->mtfValidationConfigProvider->getConfigForMode($profile)->getConfig();
+        return array_merge($config['context_timeframes'], $config['execution_timeframes']);
     }
 }

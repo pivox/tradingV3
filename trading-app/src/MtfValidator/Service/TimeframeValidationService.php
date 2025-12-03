@@ -295,6 +295,17 @@ final class TimeframeValidationService
             ? $this->flattenConditions($evaluation['short']['conditions'])
             : [];
 
+        $this->logContextValidationSummary(
+            symbol: $symbol,
+            timeframe: $timeframe,
+            mode: $mode,
+            phase: $phase,
+            longPassed: $passedLong,
+            shortPassed: $passedShort,
+            longConditions: $longConditions,
+            shortConditions: $shortConditions,
+        );
+
         // Logging ciblé des règles EMA clés (inputs / outputs)
         $this->logKeyRules($timeframe, $longConditions + $shortConditions);
 
@@ -342,13 +353,20 @@ final class TimeframeValidationService
 
             if ($this->mtfLogger !== null && $phase === 'context') {
                 foreach ($filtersResults as $name => $res) {
-                    $this->mtfLogger->info('[MTF] Context filter check', [
+                    $payload = [
                         'symbol'    => $symbol,
                         'timeframe' => $timeframe,
                         'mode'      => $mode,
                         'filter'    => $name,
                         'passed'    => (bool) ($res['passed'] ?? false),
-                    ]);
+                        'value'     => $res['value'] ?? null,
+                        'threshold' => $res['threshold'] ?? null,
+                    ];
+                    if (isset($res['meta']) && \is_array($res['meta'])) {
+                        $payload['meta'] = $res['meta'];
+                    }
+
+                    $this->mtfLogger->info('[MTF] Context filter check', $payload);
                 }
             }
 
@@ -459,6 +477,8 @@ final class TimeframeValidationService
             'rsi_lt_70',
             'rsi_lt_softcap',
             'rsi_gt_softfloor',
+            'rsi_bullish',
+            'rsi_bearish',
 
             // MACD
             'macd_hist_gt_eps',
@@ -472,6 +492,7 @@ final class TimeframeValidationService
             // ATR / volatilité
             'atr_rel_in_range_15m',
             'atr_rel_in_range_5m',
+            'atr_rel_in_range_micro',
 
             // VWAP / pullback
             'close_above_vwap',
@@ -542,5 +563,52 @@ final class TimeframeValidationService
             'rules_failed'   => $decision->rulesFailed,
             'rules_passed'   => $decision->rulesPassed,
         ]);
+    }
+
+    /**
+     * @param array<string,array<string,mixed>> $longConditions
+     * @param array<string,array<string,mixed>> $shortConditions
+     */
+    private function logContextValidationSummary(
+        string $symbol,
+        string $timeframe,
+        ?string $mode,
+        string $phase,
+        bool $longPassed,
+        bool $shortPassed,
+        array $longConditions,
+        array $shortConditions,
+    ): void {
+        if ($this->mtfLogger === null || $phase !== 'context') {
+            return;
+        }
+
+        $this->mtfLogger->info('[MTF] Context validation detail', [
+            'symbol'        => $symbol,
+            'timeframe'     => $timeframe,
+            'mode'          => $mode,
+            'long_passed'   => $longPassed,
+            'short_passed'  => $shortPassed,
+            'long_rules'    => $this->summarizeConditions($longConditions),
+            'short_rules'   => $this->summarizeConditions($shortConditions),
+        ]);
+    }
+
+    /**
+     * @param array<string,array<string,mixed>> $conditions
+     * @return array<string,array<string,mixed>>
+     */
+    private function summarizeConditions(array $conditions): array
+    {
+        $summary = [];
+        foreach ($conditions as $name => $node) {
+            $summary[$name] = [
+                'passed'    => (bool) ($node['passed'] ?? false),
+                'value'     => $node['value'] ?? null,
+                'threshold' => $node['threshold'] ?? null,
+            ];
+        }
+
+        return $summary;
     }
 }

@@ -30,6 +30,7 @@ use App\TradeEntry\Types\Side as EntrySide;
 use App\MtfValidator\Service\PerformanceProfiler;
 use App\MtfValidator\Service\Helper\OrdersExtractor;
 use Doctrine\ORM\EntityManagerInterface;
+use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\Uuid;
 use SplQueue;
@@ -65,6 +66,7 @@ final class MtfRunnerService
         private readonly LoggerInterface $positionsLogger,
         #[Autowire('%kernel.project_dir%')]
         private readonly string $projectDir,
+        private readonly ClockInterface $clock,
         private readonly ?TpSlTwoTargetsService $tpSlService = null,
     ) {
     }
@@ -1095,8 +1097,7 @@ final class MtfRunnerService
      */
     private function shouldRunTpSlNow(): bool
     {
-        $now = new \DateTimeImmutable('now');
-        $minute = (int) $now->format('i');
+        $minute = (int) $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('i');
 
         return $minute % 3 === 0;
     }
@@ -1111,7 +1112,7 @@ final class MtfRunnerService
             return;
         }
 
-        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
 
         foreach ($results as $symbol => $_) {
             if (!is_string($symbol) || $symbol === '' || strtoupper($symbol) === 'FINAL') {
@@ -1119,7 +1120,16 @@ final class MtfRunnerService
             }
 
             try {
+                $this->logger->debug('[MTF Runner] Persisting indicator snapshots', [
+                    'symbol' => $symbol,
+                    'timeframes' => $timeframes,
+                    'reference_time' => $now->format('Y-m-d H:i:s'),
+                ]);
                 $this->indicatorProvider->getIndicatorsForSymbolAndTimeframes($symbol, $timeframes, $now);
+                $this->logger->info('[MTF Runner] Indicator snapshots persisted', [
+                    'symbol' => $symbol,
+                    'timeframes' => $timeframes,
+                ]);
             } catch (\Throwable $e) {
                 $this->logger->debug('[MTF Runner] Failed to persist indicator snapshots', [
                     'symbol' => $symbol,
@@ -1138,8 +1148,7 @@ final class MtfRunnerService
         if (is_string($request->currentTf) && $request->currentTf !== '') {
             return [$request->currentTf];
         }
-
-        return ['1h', '15m', '5m', '1m'];
+        return $this->mtfValidator->getListTimeframe($request->profile);
     }
 
     /**

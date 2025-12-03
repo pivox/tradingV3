@@ -24,4 +24,6 @@ interface MtfValidatorInterface
      * Retourne le nom du service
      */
     public function getServiceName(): string;
+
+    public function getListTimeframe(string $profile): array;
 }

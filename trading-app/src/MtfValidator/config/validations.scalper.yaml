@@ -1,10 +1,10 @@
 # =====================================================================
 # validations.scalper.yaml – Profil SCALPER agressif (MTF 1h→15m→5m/1m)
 # =====================================================================
-version: '0.1.0'   # Version du profil de validation MTF pour le scalper
+version: '0.1.0pragmatic'   # Version du profil de validation MTF pour le scalper
 
 mtf_validation:
-    mode: 'strict'                     # Pas d'unanimité nécessaire entre TF si pragmatic
+    mode: 'pragmatic'                     # Pas d'unanimité nécessaire entre TF si pragmatic
     context_timeframes: ['1h', '15m']     # Timeframes de contexte (tendance + momentum)
     execution_timeframes: ['5m', '1m']    # Timeframes d’exécution (scalping rapide)
     execution_timeframe_default: '5m'     # TF d’exécution par défaut

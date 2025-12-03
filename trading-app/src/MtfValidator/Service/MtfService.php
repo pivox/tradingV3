@@ -260,11 +260,24 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
     private function persistIndicatorSnapshot(string $symbol, string $tf, array $result, ?string $runId = null): void
     {
         if ($this->isGraceWindowResult($result)) {
+            $this->mtfLogger->debug('[MTF] Indicator snapshot skipped (grace window)', [
+                'symbol' => strtoupper($symbol),
+                'timeframe' => $tf,
+                'status' => $result['status'] ?? null,
+                'run_id' => $runId,
+            ]);
             return;
         }
         try {
             $klineTime = $this->parseKlineTime($result['kline_time'] ?? null);
             if (!$klineTime instanceof \DateTimeImmutable) {
+                $this->mtfLogger->warning('[MTF] Indicator snapshot skipped (invalid kline_time)', [
+                    'symbol' => strtoupper($symbol),
+                    'timeframe' => $tf,
+                    'status' => $result['status'] ?? null,
+                    'raw_kline_time' => $result['kline_time'] ?? null,
+                    'run_id' => $runId,
+                ]);
                 return;
             }
 
@@ -351,6 +364,15 @@ private function shouldReuseCachedResult(?array $cached, string $timeframe, stri
                 $meta['run_id'] = $runId;
             }
             $values['meta'] = $meta;
+
+            $this->mtfLogger->debug('[MTF] Indicator snapshot prepared', [
+                'symbol' => strtoupper($symbol),
+                'timeframe' => $tf,
+                'kline_time' => $klineTime->format('Y-m-d H:i:s'),
+                'run_id' => $runId,
+                'status' => $result['status'] ?? null,
+                'values_keys' => array_keys($values),
+            ]);
 
             $this->messageBus->dispatch(new IndicatorSnapshotProjectionMessage(
                 strtoupper($symbol),

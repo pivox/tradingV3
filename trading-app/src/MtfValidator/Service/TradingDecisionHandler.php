@@ -474,6 +474,7 @@ final class TradingDecisionHandler
                 $atrForMa21 = $atrVal;
                 $context['ma_21_plus_k_atr'] = $ma21 + ($atrK * $atrVal);
                 $context['ma_21_plus_1.3atr'] = $ma21 + (1.3 * $atrVal);
+                $context['ma_21_plus_1.5atr'] = $ma21 + (1.5 * $atrVal);
                 $context['ma_21_plus_2atr'] = $ma21 + (2.0 * $atrVal); // legacy consumers expect this key
             }
         } catch (\Throwable) {

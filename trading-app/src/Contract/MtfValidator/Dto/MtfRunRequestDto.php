@@ -24,6 +24,8 @@ final class MtfRunRequestDto
         public readonly ?string $ipAddress = null,
         public readonly ?Exchange $exchange = null,
         public readonly ?MarketType $marketType = null,
+        public readonly ?string $profile = null,
+        public readonly ?string $mode = null,
     ) {}
 
     /**
@@ -58,6 +60,8 @@ final class MtfRunRequestDto
         $exchangeRaw = $data['exchange'] ?? null;
         $marketTypeRaw = $data['market_type'] ?? null;
 
+        [$profile, $validationMode] = self::extractProfileAndMode($data);
+
         $exchange = null;
         if (is_string($exchangeRaw) && $exchangeRaw !== '') {
             $exchange = Exchange::tryFrom(strtoupper($exchangeRaw)) ?? null;
@@ -81,6 +85,50 @@ final class MtfRunRequestDto
             ipAddress: $ipAddress,
             exchange: $exchange,
             marketType: $marketType,
+            profile: $profile,
+            mode: $validationMode,
         );
+    }
+
+    private static function extractProfileAndMode(array $data): array
+    {
+        $profileSources = [
+            $data['profile'] ?? null,
+            $data['mtf_profile'] ?? null,
+        ];
+
+        $profile = null;
+        foreach ($profileSources as $source) {
+            if (is_string($source) && $source !== '') {
+                $profile = trim($source);
+                break;
+            }
+        }
+
+        $mode = null;
+        $modeCandidates = [
+            $data['validation_mode'] ?? null,
+            $data['context_mode'] ?? null,
+        ];
+
+        foreach ($modeCandidates as $candidate) {
+            if (is_string($candidate) && $candidate !== '') {
+                $mode = strtolower(trim($candidate));
+                break;
+            }
+        }
+
+        $genericMode = $data['mode'] ?? null;
+        if (is_string($genericMode) && $genericMode !== '') {
+            $genericModeTrimmed = trim($genericMode);
+            $lower = strtolower($genericModeTrimmed);
+            if (in_array($lower, ['pragmatic', 'strict'], true)) {
+                $mode = $lower;
+            } elseif ($profile === null) {
+                $profile = $genericModeTrimmed;
+            }
+        }
+
+        return [$profile, $mode];
     }
 }

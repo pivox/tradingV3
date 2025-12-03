@@ -28,11 +28,14 @@ final class MtfRunnerRequestDto
         public readonly int $workers = 1,
         public readonly bool $syncTables = true,
         public readonly bool $processTpSl = true,
+        public readonly ?string $profile = null,
+        public readonly ?string $validationMode = null,
     ) {}
 
     public static function fromArray(array $data): self
     {
         [$exchange, $marketType] = self::extractContext($data);
+        [$profile, $validationMode] = self::extractProfileAndMode($data);
 
         return new self(
             symbols: $data['symbols'] ?? [],
@@ -50,6 +53,8 @@ final class MtfRunnerRequestDto
             workers: max(1, (int) ($data['workers'] ?? 1)),
             syncTables: (bool) ($data['sync_tables'] ?? true),
             processTpSl: (bool) ($data['process_tp_sl'] ?? true),
+            profile: $profile,
+            validationMode: $validationMode,
         );
     }
 
@@ -71,6 +76,8 @@ final class MtfRunnerRequestDto
             'workers' => $this->workers,
             'sync_tables' => $this->syncTables,
             'process_tp_sl' => $this->processTpSl,
+            'profile' => $this->profile,
+            'validation_mode' => $this->validationMode,
         ];
     }
 
@@ -116,6 +123,46 @@ final class MtfRunnerRequestDto
             default => throw new \InvalidArgumentException(sprintf('Unsupported market type "%s"', $value)),
         };
     }
-}
 
+    private static function extractProfileAndMode(array $data): array
+    {
+        $profileSources = [
+            $data['profile'] ?? null,
+            $data['mtf_profile'] ?? null,
+        ];
+
+        $profile = null;
+        foreach ($profileSources as $source) {
+            if (is_string($source) && $source !== '') {
+                $profile = trim($source);
+                break;
+            }
+        }
+
+        $mode = null;
+        $modeCandidates = [
+            $data['validation_mode'] ?? null,
+            $data['context_mode'] ?? null,
+        ];
+        foreach ($modeCandidates as $candidate) {
+            if (is_string($candidate) && $candidate !== '') {
+                $mode = strtolower(trim($candidate));
+                break;
+            }
+        }
+
+        $genericMode = $data['mode'] ?? null;
+        if (is_string($genericMode) && $genericMode !== '') {
+            $genericModeTrimmed = trim($genericMode);
+            $lower = strtolower($genericModeTrimmed);
+            if (in_array($lower, ['pragmatic', 'strict'], true)) {
+                $mode = $lower;
+            } elseif ($profile === null) {
+                $profile = $genericModeTrimmed;
+            }
+        }
+
+        return [$profile, $mode];
+    }
+}
 
