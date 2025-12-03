@@ -1,0 +1,69 @@
+# =====================================================================
+# trade_entry.scalper_micro.yaml – Mode micro-structure only
+# Risque réduit, daily loss cap strict, nombre de trades limité
+# =====================================================================
+version: '0.1.0-micro'
+
+profile:
+    name: 'scalper_micro'
+    description: 'Scalping micro-structure (5m/1m) sans contexte 1h/4h'
+
+risk:
+    # Risque par trade plus faible que le scalper principal
+    # Inspiré des recommandations scalping (≤ 1 % du capital / trade). :contentReference[oaicite:1]{index=1}
+    risk_pct: 0.5                 # 0.5 % du capital par trade
+    max_leverage: 10              # plafonner la levier pour ce mode
+    min_stop_atr_multiple: 1.5    # stop_pct >= 1.5 × ATR(1m)
+    max_stop_atr_multiple: 3.0    # éviter des stops ridiculement loin
+
+    # Limites globales de risque (journalières / par session)
+    daily_loss_cap_pct: 2.5       # stop trading si -2.5 % sur la journée
+    daily_max_trades: 12          # nombre de trades micro max / jour
+    per_symbol_max_trades: 3      # limiter le nombre de tentatives / symbole / jour
+
+entry:
+    mode: 'maker_first'           # toujours préférer l'entrée en maker
+    zone_max_deviation_pct: 0.02  # garde OrderPlan: tolérance max entre prix d'entrée et zone (fallback sinon 0.7%)
+    fallback_end_of_zone:
+        enabled: true
+        ttl_threshold_sec: 25     # bascule en taker si la zone expire
+        max_spread_bps: 8
+        only_if_within_zone: true
+        taker_order_type: 'MARKET'
+        max_slippage_bps: 10
+
+    # Zone d'entrée courte, pure micro-structure autour de VWAP / MA21
+    entry_zone:
+        from: 'vwap'
+        offset_atr_tf: '1m'
+        offset_k: 2             # largeur de zone ~ 1×ATR(1m)
+        max_deviation_pct: 0.050  # tolérance encore élargie pour les contextes vol faibles
+        ttl_sec: 180              # zone valable 3 minutes max
+
+stop_loss:
+    stop_from: 'atr'
+    atr_tf: '1m'
+    atr_k: 2.0                    # SL ≈ 2 × ATR(1m)
+    enforce_min_stop_multiple: 1.5  # garde-fou dynamique (stop >= 1.5×ATR)
+
+take_profit:
+    # R-multiples plus modestes pour du pur micro (rapprocher TP1)
+    tp1:
+        r_multiple: 1.2           # TP1 à 1.2R, sortie partielle
+        qty_fraction: 0.6         # 60 % de la position
+    tp2:
+        r_multiple: 2.0
+        qty_fraction: 0.4
+
+trailing:
+    enabled_after_tp1: true
+    mode: 'atr_chandelier'
+    atr_tf: '1m'
+    atr_k: 1.5                    # trailing plus serré après TP1
+    hard_time_stop_sec: 2700      # 45 min max d'exposition (profil scalper)
+
+filters:
+    # Filtres spécifiques à ce mode micro (en plus des validations)
+    require_volume_ratio_ok: true     # s'appuie sur volume_ratio_ok
+    require_spread_bps_max: 10       # ne trade pas si spread trop large
+    min_liquidity_notional_usdt: 50000  # à adapter à ton univers

@@ -1,0 +1,116 @@
+# =====================================================================
+# validations.scalper_micro.yaml – Profil SCALPER micro-structure only
+# Version B : Équilibrée — VWAP, MA9, ATR(1m), Volume
+# =====================================================================
+version: '1.0.0-micro1'
+
+mtf_validation:
+    mode: 'pragmatic'
+    context_timeframes: ['5m']
+    execution_timeframes: ['1m']
+    execution_timeframe_default: '1m'
+    allow_skip_lower_tf: false
+
+    defaults:
+        dry_run_validate_all_timeframes: false
+
+    # ================================
+    # FILTRES MANDATOIRES (MICRO ONLY)
+    # ================================
+    filters_mandatory: []
+      #  - rsi_lt_70
+       # - volume_ratio_ok
+
+    # ================================
+    # RÈGLES ATOMIQUES
+    # ================================
+    rules:
+
+        # ====== RSI ======
+        rsi_lt_70:
+            lt: 72
+
+        rsi_lt_softcap:
+            lt: 82
+
+        rsi_gt_softfloor:
+            gt: 20
+
+
+        # ====== VWAP / MA9 ======
+        close_above_vwap:
+            gt_fields: ['close', 'vwap']
+
+        close_below_vwap:
+            lt_fields: ['close', 'vwap']
+
+        close_above_ma_9:
+            gt_fields: ['close', 'ma_9']
+
+        close_below_ma_9:
+            lt_fields: ['close', 'ma_9']
+
+        close_above_vwap_or_ma9:
+            any_of: [close_above_vwap, close_above_ma_9]
+
+        close_below_vwap_or_ma9:
+            any_of: [close_below_vwap, close_below_ma_9]
+
+        near_vwap:
+            near_vwap: true
+
+        pullback_confirmed:
+            any_of:
+                - near_vwap: true
+                - close_above_ma_9
+            validity_bars: 3
+
+        # ====== ATR MICRO ======
+        atr_rel_in_range_micro:
+            use_atr_tf: ['1m']
+            min: 0.0005
+            max: 0.045
+            adapt_with_vol_bucket: true
+
+    # ================================
+    # VALIDATION PAR TIMEFRAME
+    # ================================
+    validation:
+
+        start_from_timeframe: '5m'
+
+        timeframe:
+
+            # -------------------------
+            # 5m : CONTEXTE LOCAL
+            # -------------------------
+            '5m':
+                long:
+                    - all_of:
+                          - rsi_bullish
+                          - close_above_vwap_or_ma9
+                          - atr_rel_in_range_micro
+
+                short:
+                    - all_of:
+                          - rsi_bearish
+                          - close_below_vwap_or_ma9
+                          - atr_rel_in_range_micro
+
+            # -------------------------
+            # 1m : TIMING / EXECUTION
+            # -------------------------
+            '1m':
+                long:
+                    - all_of:
+                          - rsi_bullish
+                          - close_above_vwap_or_ma9
+                          - pullback_confirmed
+                          - rsi_gt_softfloor
+
+                short:
+                    - all_of:
+                          - rsi_bearish
+                          - close_below_vwap_or_ma9
+                          - pullback_confirmed
+                          - rsi_lt_softcap
