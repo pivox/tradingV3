@@ -2,68 +2,149 @@
 # trade_entry.scalper_micro.yaml – Mode micro-structure only
 # Risque réduit, daily loss cap strict, nombre de trades limité
 # =====================================================================
-version: '0.1.0-micro'
+version: '0.1.0-micro-distance-up'
 
-profile:
+meta:
     name: 'scalper_micro'
-    description: 'Scalping micro-structure (5m/1m) sans contexte 1h/4h'
+    description: >
+        Scalping micro-structure (5m/1m) sans contexte 1h/4h, avec tolérance de zone étendue
+        (jusqu'à 5 %) pour éviter le fallback 0.7 % (zone_max_deviation_pct par défaut).
 
-risk:
-    # Risque par trade plus faible que le scalper principal
-    # Inspiré des recommandations scalping (≤ 1 % du capital / trade). :contentReference[oaicite:1]{index=1}
-    risk_pct: 0.5                 # 0.5 % du capital par trade
-    max_leverage: 10              # plafonner la levier pour ce mode
-    min_stop_atr_multiple: 1.5    # stop_pct >= 1.5 × ATR(1m)
-    max_stop_atr_multiple: 3.0    # éviter des stops ridiculement loin
+trade_entry:
 
-    # Limites globales de risque (journalières / par session)
-    daily_loss_cap_pct: 2.5       # stop trading si -2.5 % sur la journée
-    daily_max_trades: 12          # nombre de trades micro max / jour
-    per_symbol_max_trades: 3      # limiter le nombre de tentatives / symbole / jour
+    # ============================
+    # DEFAULTS
+    # ============================
+    defaults:
+        # --- Sizing & Risk ---
+        risk_pct_percent: 0.5             # 0.5 % du capital par trade
+        initial_margin_usdt: 25.0         # budget réduit pour micro-structure
+        fallback_account_balance: 0.0
+        r_multiple: 1.2                   # TP resserré (profil micro)
+        tp1_r: 1.2
 
-entry:
-    mode: 'maker_first'           # toujours préférer l'entrée en maker
-    zone_max_deviation_pct: 0.02  # garde OrderPlan: tolérance max entre prix d'entrée et zone (fallback sinon 0.7%)
+        # --- Stop Loss ---
+        stop_from: 'atr'
+        atr_k: 2.0                        # stop ≈ 2 × ATR(1m)
+        pivot_sl_policy: 'nearest_below'
+        pivot_sl_buffer_pct: 0.003
+        pivot_sl_min_keep_ratio: 0.85
+        sl_full_size: true
+
+        # --- Take Profit ---
+        tp_policy: 'pivot_conservative'
+        tp_buffer_pct: 0.001
+        tp_buffer_ticks: 0
+        tp_min_keep_ratio: 0.95
+        tp_max_extra_r: 0.4
+
+        # --- Order Preferences ---
+        order_type: 'limit'
+        open_type: 'isolated'
+        order_mode: 4                     # priorité maker-only
+
+        # --- Market & Spread Guards ---
+        market_max_spread_pct: 0.001
+        inside_ticks: 1
+        max_deviation_pct: 0.008
+        implausible_pct: 0.03
+        zone_max_deviation_pct: 0.05      # tolérance 5 %, sinon fallback 0.7 %
+
+        # --- Leverage helper ---
+        k_dynamic: 10.0
+
+        # --- TF scaling ---
+        timeframe_multipliers:
+            '5m': 1.0
+            '1m': 0.8
+
+    # ============================
+    # RISK MANAGEMENT
+    # ============================
+    risk:
+        fixed_risk_pct: 0.5
+        daily_max_loss_pct: 2.5
+        daily_max_loss_usdt: 25.0
+        daily_loss_count_unrealized: true
+        max_concurrent_positions: 3
+        meta: >
+            Risque plus bas que le scalper principal, daily loss cap strict et
+            limitation du nombre de trades simultanés.
+
+    # ============================
+    # LEVERAGE CONFIG
+    # ============================
+    leverage:
+        mode: dynamic_from_risk
+        floor: 2.0
+        exchange_cap: 10.0
+        per_symbol_caps: []
+        timeframe_multipliers:
+            '5m': 1.0
+            '1m': 0.8
+        confidence_multiplier:
+            enabled: false
+        conviction:
+            enabled: false
+        rounding:
+            precision: 2
+            mode: floor
+        meta: >
+            Levier plafonné à 10× (aligné avec max_leverage), sans boosts de conviction.
+
+    # ============================
+    # DECISION ENGINE
+    # ============================
+    decision:
+        allowed_execution_timeframes: ['5m', '1m']
+        require_price_or_atr: true
+
+    # ============================
+    # END-OF-ZONE FALLBACK
+    # ============================
     fallback_end_of_zone:
         enabled: true
-        ttl_threshold_sec: 25     # bascule en taker si la zone expire
+        ttl_threshold_sec: 25
         max_spread_bps: 8
         only_if_within_zone: true
-        taker_order_type: 'MARKET'
+        taker_order_type: 'market'
         max_slippage_bps: 10
 
-    # Zone d'entrée courte, pure micro-structure autour de VWAP / MA21
-    entry_zone:
-        from: 'vwap'
-        offset_atr_tf: '1m'
-        offset_k: 2             # largeur de zone ~ 1×ATR(1m)
-        max_deviation_pct: 0.050  # tolérance encore élargie pour les contextes vol faibles
-        ttl_sec: 180              # zone valable 3 minutes max
+    # ============================
+    # ENTRY CONFIG
+    # ============================
+    entry:
+        prefer_maker: true
+        fallback_taker: true
+        budget:
+            mode: fixed_or_available
+            fixed_usdt_if_available: 25
+        quantization:
+            price_tick: from_exchange
+            qty_step: from_exchange
+        slippage_guard_bps: 8
+        spread_guard_bps: 6
+        entry_zone:
+            from: 'vwap'
+            offset_atr_tf: '1m'
+            offset_k: 2.0           # largeur de zone ~ 1 × ATR(1m)
+            max_deviation_pct: 0.080
+            ttl_sec: 180
+            quantize_to_exchange_step: true
 
-stop_loss:
-    stop_from: 'atr'
-    atr_tf: '1m'
-    atr_k: 2.0                    # SL ≈ 2 × ATR(1m)
-    enforce_min_stop_multiple: 1.5  # garde-fou dynamique (stop >= 1.5×ATR)
-
-take_profit:
-    # R-multiples plus modestes pour du pur micro (rapprocher TP1)
-    tp1:
-        r_multiple: 1.2           # TP1 à 1.2R, sortie partielle
-        qty_fraction: 0.6         # 60 % de la position
-    tp2:
-        r_multiple: 2.0
-        qty_fraction: 0.4
-
-trailing:
-    enabled_after_tp1: true
-    mode: 'atr_chandelier'
-    atr_tf: '1m'
-    atr_k: 1.5                    # trailing plus serré après TP1
-    hard_time_stop_sec: 2700      # 45 min max d'exposition (profil scalper)
-
-filters:
-    # Filtres spécifiques à ce mode micro (en plus des validations)
-    require_volume_ratio_ok: true     # s'appuie sur volume_ratio_ok
-    require_spread_bps_max: 10       # ne trade pas si spread trop large
-    min_liquidity_notional_usdt: 50000  # à adapter à ton univers
+    # ============================
+    # POST-VALIDATION (EntryZone)
+    # ============================
+    post_validation:
+        entry_zone:
+            vwap_anchor: true
+            k_atr: 0.35
+            w_min: 0.0005
+            w_max: 0.0100
+            ttl_sec: 240
+            quantize_to_exchange_step: true
+        idempotency:
+            decision_key_tpl: "{symbol}:{timeframe}:{candle_open_ts}"
+            max_attempts: 3
+        meta: >
+            Zone d'entrée courte, pure micro-structure autour de VWAP / MA21 (5m/1m).
