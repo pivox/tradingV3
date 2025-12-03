@@ -65,3 +65,105 @@
   FROM trade_zone_events
   WHERE config_profile='scalper' AND timeframe='1m';
   ```
+
+## 3 déc 2025 – Garde RSI bull/bear ConditionRegistry
+
+- Ajout des conditions `RsiBullishCondition` / `RsiBearishCondition` (PHP) pour supprimer les erreurs `Missing condition "gt"` et séparer clairement les contextes long/short.
+- `validations.scalper_micro.yaml` consomme désormais ces conditions avec des seuils 52/48 (overrides possibles) et les logs `[MTF_RULE_DEBUG]` exposent la valeur RSI et les TF.
+- Objectif: réduire les `LONG_AND_SHORT` en bloc tout en gardant `NO_LONG_NO_SHORT` si ni le côté bull ni bear ne valide.
+- TODO: Ajouter explicitement `zone_max_deviation_pct` dans `trade_entry.scalper_micro.yaml` (ou overrides symboles) sinon `BuildOrderPlan` retombe sur le fallback 0.007 (0,7 %) malgré `entry_zone.max_deviation_pct = 5%`.
+
+### SQL views utiles pour reproduire l'analyse zone 1m
+
+```sql
+CREATE OR REPLACE VIEW v_zone_events_scalper_1m AS
+SELECT
+    tze.id,
+    tze.symbol,
+    tze.happened_at,
+    tze.timeframe,
+    tze.config_profile,
+    tze.reason,
+    tze.category,
+    tze.zone_min,
+    tze.zone_max,
+    tze.candidate_price,
+    tze.entry_zone_width_pct,
+    tze.zone_dev_pct,
+    tze.zone_max_dev_pct,
+    tze.atr_pct,
+    tze.volume_ratio,
+    tze.spread_bps,
+    tze.vwap_distance_pct,
+    tze.mtf_level,
+    tze.decision_key
+FROM trade_zone_events tze
+WHERE
+    tze.config_profile = 'scalper'
+  AND tze.timeframe = '1m';
+
+CREATE OR REPLACE VIEW v_zone_width_stats_scalper_1m AS
+SELECT
+    CASE
+        WHEN tze.entry_zone_width_pct < 0.004  THEN '[0.0%, 0.4%)'
+        WHEN tze.entry_zone_width_pct < 0.008  THEN '[0.4%, 0.8%)'
+        WHEN tze.entry_zone_width_pct < 0.012  THEN '[0.8%, 1.2%)'
+        WHEN tze.entry_zone_width_pct < 0.016  THEN '[1.2%, 1.6%)'
+        ELSE '>= 1.6%'
+        END AS width_bucket,
+    COUNT(*) AS event_count,
+    COUNT(*) FILTER (WHERE reason = 'skipped_out_of_zone') AS skipped_out_of_zone_count
+FROM trade_zone_events tze
+WHERE
+    tze.config_profile = 'scalper'
+  AND tze.timeframe = '1m'
+GROUP BY width_bucket
+ORDER BY width_bucket;
+
+-- Jointure lifecycle (derniers 7j)
+SELECT
+    tze.symbol,
+    tze.timeframe,
+    tze.config_profile,
+    tze.reason,
+    tze.entry_zone_width_pct,
+    tze.zone_dev_pct,
+    tze.zone_max_dev_pct,
+    tze.atr_pct,
+    tze.volume_ratio,
+    tze.spread_bps,
+    tle.event_type,
+    tle.reason_code,
+    tle.happened_at AS lifecycle_happened_at
+FROM trade_zone_events tze
+LEFT JOIN trade_lifecycle_event tle
+    ON (tle.extra->>'decision_key') = tze.decision_key
+WHERE
+    tze.config_profile = 'scalper'
+  AND tze.timeframe = '1m'
+  AND tze.happened_at >= now() - interval '7 days';
+
+-- Derniers skips out of zone
+SELECT
+    tze.symbol,
+    tze.happened_at,
+    tze.timeframe,
+    tze.config_profile,
+    tze.reason,
+    tze.entry_zone_width_pct,
+    tze.zone_dev_pct,
+    tze.zone_max_dev_pct,
+    tze.atr_pct,
+    tze.volume_ratio,
+    tze.spread_bps,
+    tze.category,
+    tle.event_type,
+    tle.reason_code
+FROM trade_zone_events tze
+LEFT JOIN trade_lifecycle_event tle
+    ON (tle.extra->>'decision_key') = tze.decision_key
+WHERE
+    tze.reason = 'skipped_out_of_zone'
+ORDER BY tze.happened_at DESC
+LIMIT 50;
+```
