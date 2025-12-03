@@ -69,3 +69,8 @@ indicator_api:
 trade_entry_web:
   resource: '../src/TradeEntry/Controller/'
   type: attribute
+
+# Provider controllers
+contract_controller:
+  resource: '../src/Provider/'
+  type: attribute
