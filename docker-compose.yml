@@ -83,6 +83,8 @@ services:
       - "5434:5432"
     networks:
       - temporal-net
+    volumes:
+      - temporal-postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U temporal"]
       interval: 5s
@@ -528,6 +530,8 @@ volumes:
   ws-log:
   var-bitmart:
   var-lock:
+  temporal-postgres-data:
+
 
 networks:
   frontend-net:
