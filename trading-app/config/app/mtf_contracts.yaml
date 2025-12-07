@@ -31,7 +31,7 @@ mtf_contracts:
             open_unit: 'ms'            # open_timestamp également en millisecondes.
 
         limits:
-            top_n: 151                 # Nombre maximum de contrats très liquides (TOP) retenus.
+            top_n: 200                 # Nombre maximum de contrats très liquides (TOP) retenus.
             # 250 = pool large → mode agressif (plus de symboles analysés).
 
             mid_n: 0                   # Désactive la sélection MID.

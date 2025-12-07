@@ -200,7 +200,7 @@ final class TradeEntryRequestBuilder
             executionTf: $executionTf,
             orderType: $orderType,
             openType: $defaults['open_type'] ?? 'isolated',
-            orderMode: (int)($defaults['order_mode'] ?? 1),
+            orderMode: (int)($defaults['order_mode'] ?? 4),
             initialMarginUsdt: $initialMargin,
             riskPct: $riskPct,
             rMultiple: (float)($defaults['r_multiple'] ?? 2.0),

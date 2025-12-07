@@ -2,7 +2,7 @@
 # trade_entry.scalper_micro.yaml – Mode micro-structure only
 # Risque réduit, daily loss cap strict, nombre de trades limité
 # =====================================================================
-version: '0.1.0-micro-distance-up'
+version: '0.1.0-micro-max_deviation_pct-02'
 
 meta:
     name: 'scalper_micro'
@@ -25,7 +25,7 @@ trade_entry:
 
         # --- Stop Loss ---
         stop_from: 'atr'
-        atr_k: 2.0                        # stop ≈ 2 × ATR(1m)
+        atr_k: 4.0                        # stop ≈ 4 × ATR(1m) (distance ×2)
         pivot_sl_policy: 'nearest_below'
         pivot_sl_buffer_pct: 0.003
         pivot_sl_min_keep_ratio: 0.85
@@ -41,14 +41,14 @@ trade_entry:
         # --- Order Preferences ---
         order_type: 'limit'
         open_type: 'isolated'
-        order_mode: 4                     # priorité maker-only
+        order_mode: 1                     # micro scalper agit en taker par défaut
 
         # --- Market & Spread Guards ---
         market_max_spread_pct: 0.001
         inside_ticks: 1
-        max_deviation_pct: 0.008
-        implausible_pct: 0.03
-        zone_max_deviation_pct: 0.05      # tolérance 5 %, sinon fallback 0.7 %
+        max_deviation_pct: 0.02
+        implausible_pct: 0.05
+        zone_max_deviation_pct: 0.08      # tolérance 8 % (zone large pour éviter skips micro)
 
         # --- Leverage helper ---
         k_dynamic: 10.0
@@ -56,7 +56,7 @@ trade_entry:
         # --- TF scaling ---
         timeframe_multipliers:
             '5m': 1.0
-            '1m': 0.8
+            '1m': 3
 
     # ============================
     # RISK MANAGEMENT
@@ -128,7 +128,7 @@ trade_entry:
             from: 'vwap'
             offset_atr_tf: '1m'
             offset_k: 2.0           # largeur de zone ~ 1 × ATR(1m)
-            max_deviation_pct: 0.080
+            max_deviation_pct: 0.15 # 0.080
             ttl_sec: 180
             quantize_to_exchange_step: true
 
@@ -140,7 +140,7 @@ trade_entry:
             vwap_anchor: true
             k_atr: 0.35
             w_min: 0.0005
-            w_max: 0.0100
+            w_max: 0.0170 #0.0100
             ttl_sec: 240
             quantize_to_exchange_step: true
         idempotency:

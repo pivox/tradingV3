@@ -86,9 +86,9 @@ trade_entry:
         timeframe_multipliers:
             '4h': 0.9    # Contexte large → moins de levier
             '1h': 1.0    # Standard
-            '15m': 1.0   # Execution médiane
-            '5m': 2    # Scalping dynamique
-            '1m': 3    # Ultra scalping → levier légèrement supérieur
+            '15m': 5   # Execution médiane
+            '5m': 10    # Scalping dynamique
+            '1m': 12    # Ultra scalping → levier légèrement supérieur
 
         confidence_multiplier:
             enabled: true
