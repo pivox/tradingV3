@@ -50,9 +50,9 @@ def make_job() -> Dict[str, Any]:
     return {
         "url": DEFAULT_URL,
         # Utiliser la valeur configurée plutôt qu'un littéral
-        "workers": max(1, DEFAULT_WORKERS),
+        "workers": 15,
         "dry_run": DEFAULT_DRY_RUN,
-        "mtf_profile": "scalper",  # Profile spécifique pour scalper_micro
+        "mtf_profile": "scalper",
     }
 
 

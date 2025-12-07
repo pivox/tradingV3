@@ -158,6 +158,7 @@ flowchart LR
 - Traçage fin : `var/log/order-journey*.log` rejoue l’intégralité du pipeline (signal READY → plan → exécution). Voir `docs/ORDER_FLOW_README.md` pour le détail des étapes et paramètres (buffers, politiques TP).
 - Transport Messenger : un container `trading-app-messenger` lance `php bin/console messenger:consume order_timeout` en continu (s'appuie sur le service `redis` embarqué). Si vous faites tourner l'app sans Docker, exécutez la même commande manuellement.
 - Logs utiles : `execution.order_attempt_failed`, `execution.timeout_scheduled`, `trade_entry.timeout.cancel_attempt` documentent les étapes maker → taker et l'annulation différée.
+- Note `timeframe_multipliers` : dans `config/app/trade_entry.{mode}.yaml`, les multiplicateurs par timeframe impactent directement le sizing (`defaults.timeframe_multipliers`) via `TradeEntryRequestBuilder` et le levier (`leverage.timeframe_multipliers`) via `DynamicLeverageService`. Vérifiez que les TF exécutés ont bien un multiplicateur défini pour éviter les surprises (fallback = 1.0).
 
 ### Stop-loss pivot & garde minimale
 
