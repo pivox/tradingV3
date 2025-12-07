@@ -21,6 +21,7 @@ final class LimitFillWatchMessageHandler
 {
     private const POLL_DELAY_MS = 5000; // 5s
     private const GRACE_SECONDS = 10;   // marge au-delà du cancel-after
+    private const CONFIRMATION_POLLS = 3; // nombre de polls supplémentaires après cancel() pour confirmer l'état réel
 
     public function __construct(
         private readonly MainProviderInterface $provider,
@@ -99,16 +100,18 @@ final class LimitFillWatchMessageHandler
         }
 
         // Toujours en attente → reprogammer si dans la fenêtre autorisée
-        $maxTries = (int) ceil((max(0, $message->cancelAfterSec) + self::GRACE_SECONDS) * 1000 / self::POLL_DELAY_MS);
-        if ($message->tries + 1 > $maxTries) {
-            // Fenêtre dépassée: annuler explicitement l'ordre côté exchange (fallback local)
+        $maxTriesBeforeCancel = (int) ceil((max(0, $message->cancelAfterSec) + self::GRACE_SECONDS) * 1000 / self::POLL_DELAY_MS);
+        $maxAllowedTries = $maxTriesBeforeCancel + ($message->cancelIssued ? self::CONFIRMATION_POLLS : 0);
+
+        if ($message->tries + 1 > $maxTriesBeforeCancel && !$message->cancelIssued) {
+            // Fenêtre dépassée pour la première fois: tenter un cancel mais attendre la confirmation réelle avant de logguer un lifecycle
             $this->positionsLogger->info('limit_watch.window_exceeded', [
                 'symbol' => $message->symbol,
                 'exchange_order_id' => $message->exchangeOrderId,
                 'client_order_id' => $message->clientOrderId,
                 'decision_key' => $message->decisionKey,
                 'tries' => $message->tries,
-                'max_tries' => $maxTries,
+                'max_tries_before_cancel' => $maxTriesBeforeCancel,
             ]);
 
             try {
@@ -130,34 +133,27 @@ final class LimitFillWatchMessageHandler
                 ]);
             }
 
-            $this->logOrderExpiredLifecycle($message, 'window_exceeded');
-
+            $maxAllowedTriesAfterCancel = $maxTriesBeforeCancel + self::CONFIRMATION_POLLS;
+            $this->rescheduleWatch($message, true, $maxTriesBeforeCancel, $maxAllowedTriesAfterCancel);
             return;
         }
 
-        // Re-dispatch avec un délai
-        $this->bus->dispatch(
-            new LimitFillWatchMessage(
-                symbol: $message->symbol,
-                exchangeOrderId: $message->exchangeOrderId,
-                clientOrderId: $message->clientOrderId,
-                side: $message->side,
-                cancelAfterSec: $message->cancelAfterSec,
-                tries: $message->tries + 1,
-                decisionKey: $message->decisionKey,
-                lifecycleContext: $message->lifecycleContext,
-            ),
-            [new DelayStamp(self::POLL_DELAY_MS)]
-        );
+        if ($message->tries + 1 > $maxAllowedTries) {
+            // Même après la fenêtre de confirmation post-cancel on n'a pas d'état fiable → arrêter proprement sans faux positif
+            $this->positionsLogger->warning('limit_watch.confirmation_timeout', [
+                'symbol' => $message->symbol,
+                'exchange_order_id' => $message->exchangeOrderId,
+                'client_order_id' => $message->clientOrderId,
+                'decision_key' => $message->decisionKey,
+                'tries' => $message->tries,
+                'max_tries_before_cancel' => $maxTriesBeforeCancel,
+                'max_tries_total' => $maxAllowedTries,
+                'cancel_issued' => $message->cancelIssued,
+            ]);
+            return;
+        }
 
-        $this->positionsLogger->debug('limit_watch.rescheduled', [
-            'symbol' => $message->symbol,
-            'exchange_order_id' => $message->exchangeOrderId,
-            'client_order_id' => $message->clientOrderId,
-            'decision_key' => $message->decisionKey,
-            'tries' => $message->tries + 1,
-            'max_tries' => $maxTries,
-        ]);
+        $this->rescheduleWatch($message, $message->cancelIssued, $maxTriesBeforeCancel, $maxAllowedTries);
     }
 
     private function logOrderExpiredLifecycle(
@@ -236,5 +232,38 @@ final class LimitFillWatchMessageHandler
         }
 
         return array_merge($message->lifecycleContext, $extra);
+    }
+
+    private function rescheduleWatch(
+        LimitFillWatchMessage $message,
+        bool $cancelIssued,
+        int $maxTriesBeforeCancel,
+        int $maxAllowedTries
+    ): void {
+        $this->bus->dispatch(
+            new LimitFillWatchMessage(
+                symbol: $message->symbol,
+                exchangeOrderId: $message->exchangeOrderId,
+                clientOrderId: $message->clientOrderId,
+                side: $message->side,
+                cancelAfterSec: $message->cancelAfterSec,
+                tries: $message->tries + 1,
+                decisionKey: $message->decisionKey,
+                lifecycleContext: $message->lifecycleContext,
+                cancelIssued: $cancelIssued,
+            ),
+            [new DelayStamp(self::POLL_DELAY_MS)]
+        );
+
+        $this->positionsLogger->debug('limit_watch.rescheduled', [
+            'symbol' => $message->symbol,
+            'exchange_order_id' => $message->exchangeOrderId,
+            'client_order_id' => $message->clientOrderId,
+            'decision_key' => $message->decisionKey,
+            'tries' => $message->tries + 1,
+            'max_tries_before_cancel' => $maxTriesBeforeCancel,
+            'max_tries_total' => $maxAllowedTries,
+            'cancel_issued' => $cancelIssued,
+        ]);
     }
 }
