@@ -64,7 +64,11 @@ final class TradeEntryRequestBuilder
         }
         $executionTf = strtolower($executionTf);
         $defaults = $config->getDefaults();
-        $multipliers = $defaults['timeframe_multipliers'] ?? [];
+        $leverage = $config->getLeverage();
+        $multipliers = $defaults['timeframe_multipliers'] ?? ($leverage['timeframe_multipliers'] ?? []);
+        if (!\is_array($multipliers)) {
+            $multipliers = [];
+        }
         $tfMultiplier = (float)($multipliers[$executionTf] ?? 1.0);
 
         $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 2.0);
