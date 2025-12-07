@@ -25,6 +25,7 @@ use App\Indicator\Core\Volatility\Bollinger as CoreBollinger;
 use App\Indicator\Core\Volume\Vwap as CoreVwap;
 use App\Indicator\Registry\ConditionRegistry;
 use App\Repository\IndicatorSnapshotRepository;
+use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
@@ -49,6 +50,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         private readonly CoreAtr $atrService,
         private readonly CoreStochRsi $stochRsiService,
         private readonly CoreSma $smaService,
+        private readonly ClockInterface $clock,
         #[Autowire(service: 'monolog.logger.indicators')]
         private readonly LoggerInterface $logger,
         ) {}
@@ -123,13 +125,13 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             $tf = Timeframe::from($timeframe);
             $existing = $this->getSnapshotFromDatabaseOnly($symbol, $tf->value);
             if ($existing instanceof IndicatorSnapshotDto) {
-                $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+                $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
                 if (!$this->isSnapshotStale($existing, $now, $tf)) {
                     return $existing;
                 }
             }
 
-            $klines = $this->klineProvider->getKlines($symbol, $tf, 250);
+            $klines = $this->klineProvider->getKlines($symbol, $tf, 251);
             if (empty($klines)) {
                 throw new \RuntimeException("Aucune kline pour $symbol/$timeframe");
             }
@@ -604,6 +606,8 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 }
                 $lastClose = $closes ? (float) end($closes) : null;
 
+                $klineTime = $snapshot->klineTime ?? $at;
+
                 $result[$tf] = [
                     'close'        => $lastClose,
                     'rsi'          => $snapshot->rsi,
@@ -619,6 +623,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                     'bb_upper'     => $snapshot->bbUpper?->toFloat(),
                     'bb_middle'    => $snapshot->bbMiddle?->toFloat(),
                     'bb_lower'     => $snapshot->bbLower?->toFloat(),
+                    'kline_time'   => $klineTime->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
                     // tu peux y rajouter volume, stoch_rsi, volume_ratio si tu les stockes dans meta
                 ];
             } catch (\Throwable $e) {

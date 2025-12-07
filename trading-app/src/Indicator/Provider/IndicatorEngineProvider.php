@@ -31,6 +31,7 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
     {
         $closes = $highs = $lows = $vols = [];
         $ohlc = [];
+        $lastOpenTime = null;
 
         foreach ($klines as $k) {
             // Support objects (DTO) and arrays
@@ -61,6 +62,11 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
             }
             $closes[] = $c; $highs[] = $h; $lows[] = $l; $vols[] = $v;
             $ohlc[] = ['high' => $h, 'low' => $l, 'close' => $c];
+
+            $openTime = $this->extractOpenTime($k);
+            if ($openTime !== null) {
+                $lastOpenTime = $openTime;
+            }
         }
 
         $builder = $this->contextBuilder
@@ -98,6 +104,7 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
             'min_atr_pct' => $minApplied,
             'max_atr_pct' => $maxApplied,
             'source' => $source,
+            'last_kline_time' => $lastOpenTime?->format('Y-m-d H:i:s'),
         ]);
 
         // optional overrides
@@ -144,5 +151,37 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
     public function listConditionNames(): array
     {
         return $this->compiledRegistry->names();
+    }
+
+    private function extractOpenTime(mixed $kline): ?\DateTimeImmutable
+    {
+        if (is_object($kline)) {
+            if (property_exists($kline, 'openTime') && $kline->openTime instanceof \DateTimeInterface) {
+                return \DateTimeImmutable::createFromInterface($kline->openTime);
+            }
+            $method = 'getOpenTime';
+            if (method_exists($kline, $method)) {
+                $candidate = $kline->$method();
+                if ($candidate instanceof \DateTimeInterface) {
+                    return \DateTimeImmutable::createFromInterface($candidate);
+                }
+            }
+        }
+
+        if (is_array($kline)) {
+            $candidate = $kline['openTime'] ?? $kline['open_time'] ?? null;
+            if ($candidate instanceof \DateTimeInterface) {
+                return \DateTimeImmutable::createFromInterface($candidate);
+            }
+            if (is_numeric($candidate)) {
+                $timestamp = (int) $candidate;
+                if ($timestamp > 9999999999) {
+                    $timestamp = (int) round($timestamp / 1000);
+                }
+                return (new \DateTimeImmutable('@' . $timestamp))->setTimezone(new \DateTimeZone('UTC'));
+            }
+        }
+
+        return null;
     }
 }

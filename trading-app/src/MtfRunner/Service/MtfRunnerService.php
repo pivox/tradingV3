@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\MtfRunner\Service;
 
-use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\MtfValidator\Dto\MtfResultDto;
@@ -17,6 +16,7 @@ use App\Common\Enum\OrderSide;
 use App\Common\Enum\PositionSide;
 use App\Entity\Position;
 use App\MtfRunner\Dto\MtfRunnerRequestDto as RunnerRequestDto;
+use App\Indicator\Message\IndicatorSnapshotPersistRequestMessage;
 use App\MtfRunner\Service\FuturesOrderSyncService;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
@@ -35,6 +35,7 @@ use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\Uuid;
 use SplQueue;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Process\Process;
 
 /**
@@ -59,11 +60,11 @@ final class MtfRunnerService
         private readonly FuturesOrderSyncService $futuresOrderSyncService,
         private readonly MtfValidatorInterface $mtfValidator,
         private readonly MainProviderInterface $mainProvider,
-        private readonly IndicatorProviderInterface $indicatorProvider,
         private readonly EntityManagerInterface $entityManager,
         private readonly LoggerInterface $logger,
         private readonly LoggerInterface $mtfLogger,
         private readonly LoggerInterface $positionsLogger,
+        private readonly MessageBusInterface $messageBus,
         #[Autowire('%kernel.project_dir%')]
         private readonly string $projectDir,
         private readonly ClockInterface $clock,
@@ -149,7 +150,7 @@ final class MtfRunnerService
                 : $this->runSequential($symbols, $request, $context);
             $profiler->increment('runner', 'mtf_execution', microtime(true) - $execStart);
 
-            $this->persistIndicatorSnapshots($result['results'] ?? [], $request);
+            $this->dispatchIndicatorSnapshotPersistence($result['results'] ?? [], $request, $runId);
 
             // 8. Mettre à jour les switches pour les symboles exclus (après traitement)
             if (!empty($excludedSymbols)) {
@@ -1105,38 +1106,44 @@ final class MtfRunnerService
     /**
      * @param array<string,mixed> $results
      */
-    private function persistIndicatorSnapshots(array $results, RunnerRequestDto $request): void
+    private function dispatchIndicatorSnapshotPersistence(array $results, RunnerRequestDto $request, string $runId): void
     {
         $timeframes = $this->resolvePersistenceTimeframes($request);
         if ($timeframes === []) {
             return;
         }
 
-        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
-
-        foreach ($results as $symbol => $_) {
+        $symbols = [];
+        foreach (array_keys($results) as $symbol) {
             if (!is_string($symbol) || $symbol === '' || strtoupper($symbol) === 'FINAL') {
                 continue;
             }
+            $symbols[] = strtoupper($symbol);
+        }
 
-            try {
-                $this->logger->debug('[MTF Runner] Persisting indicator snapshots', [
-                    'symbol' => $symbol,
-                    'timeframes' => $timeframes,
-                    'reference_time' => $now->format('Y-m-d H:i:s'),
-                ]);
-                $this->indicatorProvider->getIndicatorsForSymbolAndTimeframes($symbol, $timeframes, $now);
-                $this->logger->info('[MTF Runner] Indicator snapshots persisted', [
-                    'symbol' => $symbol,
-                    'timeframes' => $timeframes,
-                ]);
-            } catch (\Throwable $e) {
-                $this->logger->debug('[MTF Runner] Failed to persist indicator snapshots', [
-                    'symbol' => $symbol,
-                    'timeframes' => $timeframes,
-                    'error' => $e->getMessage(),
-                ]);
-            }
+        if ($symbols === []) {
+            return;
+        }
+
+        try {
+            $this->messageBus->dispatch(new IndicatorSnapshotPersistRequestMessage(
+                $symbols,
+                $timeframes,
+                $runId,
+                $request->profile,
+                $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+            ));
+
+            $this->logger->debug('[MTF Runner] Indicator persistence dispatched', [
+                'run_id' => $runId,
+                'symbols_count' => count($symbols),
+                'timeframes' => $timeframes,
+            ]);
+        } catch (\Throwable $exception) {
+            $this->logger->warning('[MTF Runner] Failed to dispatch indicator persistence job', [
+                'run_id' => $runId,
+                'error' => $exception->getMessage(),
+            ]);
         }
     }
 
