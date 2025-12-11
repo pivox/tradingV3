@@ -23,6 +23,8 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class TradeEntryService
 {
+    private const MIN_EXECUTABLE_LEVERAGE = 2;
+
     public function __construct(
         private readonly BuildPreOrder $preflight,
         private readonly BuildOrderPlan $planner,
@@ -215,6 +217,46 @@ final class TradeEntryService
             }
         } catch (\Throwable) {
             // non-blocking
+        }
+
+        if ($plan->leverage <= self::MIN_EXECUTABLE_LEVERAGE) {
+            $notional = $plan->entry * $plan->contractSize * $plan->size;
+            $skipReason = 'leverage_below_threshold';
+            $extra = [
+                'reason' => $skipReason,
+                'leverage' => $plan->leverage,
+                'min_allowed_leverage' => self::MIN_EXECUTABLE_LEVERAGE,
+                'notional_usdt' => $notional,
+                'size' => $plan->size,
+                'contract_size' => $plan->contractSize,
+                'entry' => $plan->entry,
+            ];
+
+            $this->positionsLogger->warning('order_journey.trade_entry.skipped_low_leverage', [
+                'symbol' => $plan->symbol,
+                'decision_key' => $decisionKey,
+                'reason' => $skipReason,
+                'leverage' => $plan->leverage,
+                'min_allowed_leverage' => self::MIN_EXECUTABLE_LEVERAGE,
+                'notional_usdt' => $notional,
+            ]);
+
+            $this->logSymbolSkippedEvent(
+                request: $request,
+                reasonCode: TradeLifecycleReason::LEVERAGE_TOO_LOW,
+                decisionKey: $decisionKey,
+                mode: $mode,
+                extra: $extra,
+                contextBuilder: $lifecycleContext,
+                runId: $runId,
+            );
+
+            return new ExecutionResult(
+                clientOrderId: sprintf('SKIP-LEV-%s', substr(sha1(($decisionKey ?? '') . microtime(true)), 0, 12)),
+                exchangeOrderId: null,
+                status: 'skipped',
+                raw: $extra,
+            );
         }
 
         if ($lifecycleContext !== null) {

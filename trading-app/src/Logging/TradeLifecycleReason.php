@@ -15,6 +15,9 @@ final class TradeLifecycleReason
     public const SUBMIT_REJECTED_EXCHANGE = 'submit_rejected_exchange';
     public const DAILY_LOSS_LIMIT = 'daily_loss_limit_reached';
 
+    // Position guards
+    public const LEVERAGE_TOO_LOW = 'leverage_too_low';
+
     // Expiration / cancel-after
     public const CANCEL_AFTER_TIMEOUT = 'cancel_after_timeout';
 
