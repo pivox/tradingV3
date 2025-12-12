@@ -499,6 +499,7 @@ final class TimeframeValidationService
             'close_below_vwap',
             'close_above_vwap_or_ma9',
             'close_above_vwap_and_ma9',
+            'close_above_vwap_or_ma9_relaxed',
             'pullback_confirmed',
 
             // Prix / extensions

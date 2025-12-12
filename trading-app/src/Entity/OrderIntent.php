@@ -261,6 +261,23 @@ class OrderIntent
         return $this->rawInputs;
     }
 
+    public function getOrderGroupId(): ?string
+    {
+        $rawInputs = $this->rawInputs;
+        if ($rawInputs === null) {
+            return null;
+        }
+
+        $groupId = $rawInputs['order_group_id'] ?? null;
+
+        if ($groupId === null && isset($rawInputs['options']) && \is_array($rawInputs['options'])) {
+            $options = $rawInputs['options'];
+            $groupId = $options['order_group_id'] ?? $options['orderGroupId'] ?? null;
+        }
+
+        return $groupId !== null ? (string) $groupId : null;
+    }
+
     /**
      * @param array<string,mixed>|null $rawInputs
      */

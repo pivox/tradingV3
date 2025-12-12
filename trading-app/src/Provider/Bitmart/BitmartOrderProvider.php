@@ -14,6 +14,7 @@ use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
 use App\Provider\Repository\ContractRepository;
 use App\Service\FuturesOrderSyncService;
 use App\Service\OrderIntentManager;
+use App\Provider\OrderWatcherPublisher;
 use App\Entity\OrderIntent;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -42,6 +43,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
         private readonly ?HttpClientInterface $httpClient = null,
         #[Autowire('%env(WS_AGENT_BASE_URI)%')]
         private readonly ?string $wsAgentBaseUri = null,
+        private readonly ?OrderWatcherPublisher $orderWatcherPublisher = null,
     ) {}
 
     public function placeOrder(
@@ -158,12 +160,14 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 }
 
                 if ($orderDto !== null) {
+                    // Publier l'ordre dans Redis pour le watcher
+                    $this->publishOrderToWatcher($orderDto, $intent, $payload);
                     return $orderDto;
                 }
 
                 // Fallback: return a minimal submitted OrderDto so caller treats it as submitted
                 $now = (new \DateTimeImmutable('now'))->format('Y-m-d H:i:s');
-                return OrderDto::fromArray([
+                $fallbackDto = OrderDto::fromArray([
                     'order_id' => $orderId,
                     'symbol' => $symbol,
                     'side' => $side->value,
@@ -183,6 +187,10 @@ final class BitmartOrderProvider implements OrderProviderInterface
                         'submit_only' => true,
                     ],
                 ]);
+                
+                // Publier l'ordre dans Redis pour le watcher (même pour le fallback)
+                $this->publishOrderToWatcher($fallbackDto, $intent, $payload);
+                return $fallbackDto;
             }
 
             // Marquer l'intent comme FAILED si pas encore marqué
@@ -699,5 +707,72 @@ final class BitmartOrderProvider implements OrderProviderInterface
     public function getProviderName(): string
     {
         return 'Bitmart';
+    }
+
+    /**
+     * Publie l'ordre dans Redis pour le watcher bitmart-ws-watcher.
+     * 
+     * @param OrderDto $orderDto DTO de l'ordre
+     * @param OrderIntent|null $intent Intent de l'ordre (si disponible)
+     * @param array<string,mixed> $payload Payload original de l'ordre
+     */
+    private function publishOrderToWatcher(
+        OrderDto $orderDto,
+        ?OrderIntent $intent,
+        array $payload
+    ): void {
+        if (!$this->orderWatcherPublisher) {
+            return;
+        }
+
+        try {
+            // Extraire les prix SL/TP depuis les protections de l'intent
+            $slPrice = null;
+            $tpPrice = null;
+            if ($intent) {
+                foreach ($intent->getProtections() as $protection) {
+                    if ($protection->getType() === \App\Entity\OrderProtection::TYPE_STOP_LOSS) {
+                        $slPrice = (float) $protection->getPrice();
+                    } elseif ($protection->getType() === \App\Entity\OrderProtection::TYPE_TAKE_PROFIT) {
+                        $tpPrice = (float) $protection->getPrice();
+                    }
+                }
+            }
+
+            $quantity = $orderDto->quantity->toFloat();
+            $filledQuantity = $orderDto->filledQuantity->toFloat();
+            $price = $orderDto->price?->toFloat();
+            $averagePrice = $orderDto->averagePrice?->toFloat();
+
+            // Construire les données pour le watcher
+            $orderData = [
+                'symbol' => $orderDto->symbol,
+                'side' => $orderDto->side,
+                'size' => (int) \round($quantity),
+                'order_id' => $orderDto->orderId,
+                'client_order_id' => $intent?->getClientOrderId() ?? $payload['client_order_id'] ?? null,
+                'price' => $price,
+                'sl_price' => $slPrice,
+                'tp_price' => $tpPrice,
+                'order_group_id' => $payload['order_group_id'] ?? $intent?->getOrderGroupId() ?? null,
+                'strategy_id' => $payload['strategy_id'] ?? null,
+                'status' => $orderDto->status,
+                'filled_size' => (int) \round($filledQuantity),
+                'filled_notional' => $averagePrice !== null
+                    ? $averagePrice * $filledQuantity
+                    : null,
+            ];
+
+            // Nettoyer les valeurs null pour les champs optionnels
+            $orderData = array_filter($orderData, fn($value) => $value !== null);
+
+            $this->orderWatcherPublisher->publishOrder($orderData);
+        } catch (\Throwable $e) {
+            // Ne pas bloquer le flux si la publication échoue
+            $this->logger->warning('[BitmartOrderProvider] Failed to publish order to watcher', [
+                'order_id' => $orderDto->orderId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }

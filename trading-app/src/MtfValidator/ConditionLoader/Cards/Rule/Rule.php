@@ -151,7 +151,11 @@ class Rule extends AbstractCard
         }
 
         $ctx = $context;
-        if (is_bool($override)) {
+        if (is_array($override)) {
+            // Fusionner les clés du dictionnaire dans le contexte
+            // Ex: { rsi_lt_70_threshold: 72 } → $context['rsi_lt_70_threshold'] = 72
+            $ctx = array_merge($ctx, $override);
+        } elseif (is_bool($override)) {
             $ctx['expected'] = $override;
         } elseif (is_numeric($override)) {
             $ctx['threshold'] = (float) $override;

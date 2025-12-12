@@ -62,6 +62,9 @@ class ContextValidationService
      *   - au moins un TF doit donner un side exploitable (long/short)
      *   - tous les sides valides doivent être cohérents (tous long ou tous short)
      *
+     * - mode 'ultra-pragmatig' :
+     *   - équivalent à 'pragmatic' pour la décision de contexte (optimisation côté exécution uniquement)
+     *
      * - mode 'strict' (si un jour tu l'utilises) :
      *   - tous les TF contexte doivent être valid
      *   - tous les TF contexte doivent avoir un side exploitable
@@ -80,7 +83,10 @@ class ContextValidationService
         if (empty($decisions)) {
             return [false, 'no_context_timeframes'];
         }
-        $mode = $mode ?? ($mtfConfig['mode'] ?? 'pragmatic');
+        $mode = strtolower((string)($mode ?? ($mtfConfig['mode'] ?? 'pragmatic')));
+        if ($mode === 'ultra-pragmatig') {
+            $mode = 'pragmatic';
+        }
 
         $invalidTfs = [];
         $nonNeutralSides = [];
