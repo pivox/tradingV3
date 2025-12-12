@@ -82,7 +82,7 @@ class TradingDecisionHandlerTest extends TestCase
                 rMultiple: 2.0,
                 entryLimitHint: 50250.0,
                 stopFrom: 'atr',
-                pivotSlPolicy: 'nearest_below',
+                pivotSlPolicy: 'nearest',
                 pivotSlBufferPct: null,
                 pivotSlMinKeepRatio: null,
                 atrValue: 35.0,
