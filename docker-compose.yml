@@ -314,7 +314,6 @@ services:
       REDIS_ORDER_WATCH_CHANNEL: ${REDIS_ORDER_WATCH_CHANNEL:-watcher:order:watch}
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      redis: redis://redis:6379
     depends_on:
       trading-app-db:
         condition: service_healthy
