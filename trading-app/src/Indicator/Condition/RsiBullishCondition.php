@@ -15,6 +15,7 @@ final class RsiBullishCondition extends AbstractCondition
 {
     private const NAME = 'rsi_bullish';
     private const DEFAULT_THRESHOLD = 52.0;
+    private const RELAXED_THRESHOLD_5M = 49.0;
 
     public function getName(): string
     {
@@ -35,6 +36,15 @@ final class RsiBullishCondition extends AbstractCondition
             ?? $context['rsi_bullish_threshold']
             ?? self::DEFAULT_THRESHOLD;
         $threshold = (float) $threshold;
+
+        $timeframe = $context['timeframe'] ?? null;
+        if (
+            $timeframe === '5m'
+            && !isset($context['threshold'], $context['rsi_bullish_threshold'])
+            && abs($threshold - self::DEFAULT_THRESHOLD) < 1e-6
+        ) {
+            $threshold = self::RELAXED_THRESHOLD_5M;
+        }
 
         $passed = $rsi > $threshold;
 

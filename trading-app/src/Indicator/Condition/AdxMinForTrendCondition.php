@@ -62,9 +62,13 @@ final class AdxMinForTrendCondition extends AbstractCondition
         $adx1h = max(0.0, min(100.0, $adx1h));
 
         // 3) Seuil (context override → sinon défaut)
+        // Accepte 'threshold' (syntaxe YAML standard) ou 'adx_1h_min_threshold' (legacy)
         $threshold = $this->minAdx;
         $source = 'default';
-        if (array_key_exists('adx_1h_min_threshold', $context) && is_numeric($context['adx_1h_min_threshold'])) {
+        if (isset($context['threshold']) && is_numeric($context['threshold'])) {
+            $threshold = (float) $context['threshold'];
+            $source = 'context';
+        } elseif (array_key_exists('adx_1h_min_threshold', $context) && is_numeric($context['adx_1h_min_threshold'])) {
             $threshold = (float) $context['adx_1h_min_threshold'];
             $source = 'context';
         }

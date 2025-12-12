@@ -1,10 +1,10 @@
 # =====================================================================
 # validations.scalper.yaml – Profil SCALPER agressif (MTF 1h→15m→5m/1m)
 # =====================================================================
-version: '0.1.0pragmatic'   # Version du profil de validation MTF pour le scalper
+version: '0.1.1pragmatic'   # Version du profil de validation MTF pour le scalper
 
 mtf_validation:
-    mode: 'pragmatic'                     # Pas d'unanimité nécessaire entre TF si pragmatic
+    mode: 'ultra-pragmatig'               # Pas d'unanimité nécessaire entre TF + skip TF 1m si 5m valid
     context_timeframes: ['1h', '15m']     # Timeframes de contexte (tendance + momentum)
     execution_timeframes: ['5m', '1m']    # Timeframes d’exécution (scalping rapide)
     execution_timeframe_default: '5m'     # TF d’exécution par défaut
@@ -147,6 +147,13 @@ mtf_validation:
         close_above_vwap_and_ma9:
             all_of: [ close_above_vwap, close_above_ma_9 ]
 
+        close_above_vwap_or_ma9_relaxed:
+            any_of:
+                - close_above_vwap_or_ma9
+                - all_of:
+                    - atr_rel_in_range_5m
+                    - near_vwap: { near_vwap_tolerance: 0.0040 }
+
         pullback_confirmed:
             any_of:
                 - ma9_cross_up_ma21
@@ -236,9 +243,9 @@ mtf_validation:
     # ================================
     # FILTRES GLOBAUX (obligatoires)
     # ================================
-    filters_mandatory:
-        - rsi_lt_70                     # Filtre anti-surachat global
-        - price_lte_ma21_plus_k_atr     # Anti-extension (MA21 + ATR)
+    filters_mandatory: []
+     #   - rsi_lt_70                     # Filtre anti-surachat global
+     #   - price_lte_ma21_plus_k_atr     # Anti-extension (MA21 + ATR)
         # (volume_ratio_ok reste au niveau 5m/1m pour ne pas étouffer le contexte)
 
     # ================================
@@ -264,49 +271,51 @@ mtf_validation:
             '1h':
                 long:
                     - all_of:
-                        - price_regime_ok_long                # structure haussière 1h
+                        - price_regime_ok_long
                         - any_of:
-                            - macd_hist_gt_eps             # MACD > 0
-                            - macd_line_above_signal       # ou MACD au-dessus du signal
-                        - adx_min_for_trend                  # ADX(1h) minimal (mais plus bas que 25)
+                            - macd_hist_gt_eps
+                            - macd_hist_slope_pos
+                        - adx_min_for_trend: { threshold: 18 }   # si aujourd'hui c'est 20/25
                 short:
                     -  all_of:
                         - price_regime_ok_short
                         - any_of:
                             - macd_hist_decreasing_n
-                            - macd_line_cross_down_with_hysteresis
+                            - macd_hist_slope_neg
                         - adx_min_for_trend
             '15m':
                 long:
                     - any_of:
                             # Scénario A : continuation pro-trend (ce que tu as déjà)
                             - all_of:
-                                    - macd_hist_gt_eps
-                                    - macd_line_above_signal       # momentum MACD explicite
-                                    # Alternative possible si trop strict :
-                                    # - any_of:
-                                    #       - macd_line_above_signal                # MACD déjà au-dessus du signal
-                                    #       - macd_line_cross_up_with_hysteresis   # break clair
-                                    #       - all_of: [ macd_hist_gt_eps, macd_hist_slope_pos ] # MACD > 0 ET pente positive
                                     - ema20_over_50_with_tolerance_moderate
-                                    - close_above_vwap_or_ma9
-                                    - rsi_lt_70: { rsi_lt_70_threshold: 72 }
+                                    - close_above_vwap_or_ma9       # momentum MACD explicite
+                                    - rsi_lt_70: { rsi_lt_70_threshold: 74 }
                                     - atr_rel_in_range_15m
+                                    - any_of:
+                                        - macd_hist_gt_eps
+                                        - macd_hist_slope_pos
+                                        - macd_line_above_signal
                             # Scénario B : pullback confirmé sur support dynamique
-                            -   all_of:
-                                    - pullback_confirmed
-                                    - rsi_lt_70: { rsi_lt_70_threshold: 65 }    # un peu plus strict
-                                    - atr_rel_in_range_15m
+                            - all_of:
+                                - pullback_confirmed
+                                - ema20_over_50_with_tolerance_moderate
+                                - rsi_lt_70: { rsi_lt_70_threshold: 70 }
+                                - atr_rel_in_range_15m
 
                 short:
                     - all_of:
-                          - any_of:
-                                - macd_hist_decreasing_n
-                                - macd_line_below_signal
-                          - ema_20_lt_50
-                          - close_below_vwap
-                          - rsi_gt_softfloor: { rsi_softfloor_threshold: 20 }
-                          - atr_rel_in_range_15m
+                        - price_regime_ok_short          # déjà défini, structure globale
+                        - any_of:
+                            - ema_20_lt_50
+                            - ema_50_lt_200             # autoriser aussi les cas où 50 < 200
+                        - any_of:
+                            - macd_hist_decreasing_n
+                            - macd_hist_slope_neg
+                            - macd_line_below_signal
+                        - close_below_vwap               # à garder, mais tu peux si besoin créer un close_below_vwap_or_ma9 plus tolérant
+                        - rsi_gt_softfloor: { rsi_softfloor_threshold: 20 }
+                        - atr_rel_in_range_15m
 
             '5m':
                 long:
@@ -314,7 +323,7 @@ mtf_validation:
                             -   any_of:
                                     - macd_hist_gt_eps
                                     - macd_line_cross_up_with_hysteresis
-                            - close_above_vwap_or_ma9
+                            - close_above_vwap_or_ma9_relaxed
                             -   rsi_lt_70: { rsi_lt_70_threshold: 72 }
                             - atr_rel_in_range_5m
                             - volume_ratio_ok
