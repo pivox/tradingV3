@@ -42,7 +42,7 @@ except AttributeError:  # pragma: no cover - compatibility with < 1.6
 
 DEFAULT_URL = os.getenv("MTF_WORKERS_URL", "http://trading-app-nginx:80/api/mtf/run")
 # Nombre de workers désiré pour les appels MTF (override via MTF_WORKERS_COUNT)
-DEFAULT_WORKERS = int(os.getenv("MTF_WORKERS_COUNT", "15"))
+DEFAULT_WORKERS = int(os.getenv("MTF_WORKERS_COUNT", "10"))
 DEFAULT_DRY_RUN = os.getenv("MTF_WORKERS_DRY_RUN", "true").lower() not in {"0", "false", "no", "off"}
 
 
@@ -50,7 +50,7 @@ def make_job() -> Dict[str, Any]:
     return {
         "url": DEFAULT_URL,
         # Utiliser la valeur configurée plutôt qu'un littéral
-        "workers": 15,
+        "workers": 10,
         "dry_run": DEFAULT_DRY_RUN,
         "mtf_profile": "scalper",
     }

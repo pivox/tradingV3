@@ -1,0 +1,17 @@
+framework:
+    rate_limiter:
+        # Configuration du rate limiter
+        # Pas de configuration Redis nécessaire si on utilise le filesystem
+        enabled: true
+
+
+
+
+
+
+
+
+
+
+
+
