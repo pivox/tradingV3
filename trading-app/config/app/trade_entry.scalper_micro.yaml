@@ -2,7 +2,7 @@
 # trade_entry.scalper_micro.yaml – Mode micro-structure only
 # Risque réduit, daily loss cap strict, nombre de trades limité
 # =====================================================================
-version: '0.1.0-micro-max_deviation_pct-02'
+version: '0.1.0-micro-max_deviation_pct-03'
 
 meta:
     name: 'scalper_micro'
@@ -18,15 +18,17 @@ trade_entry:
     defaults:
         # --- Sizing & Risk ---
         risk_pct_percent: 0.5             # 0.5 % du capital par trade
-        initial_margin_usdt: 25.0         # budget réduit pour micro-structure
+        initial_margin_usdt: 66.0         # budget réduit pour micro-structure
         fallback_account_balance: 0.0
         r_multiple: 1.2                   # TP resserré (profil micro)
         tp1_r: 1.2
 
         # --- Stop Loss ---
         stop_from: 'atr'
+        stop_fallback: 'atr'
         atr_k: 4.0                        # stop ≈ 4 × ATR(1m) (distance ×2)
-        pivot_sl_policy: 'nearest_below'
+        # pivot_sl_policy: 'nearest' → support/résistance la plus proche (levier max). 'strongest' priorise S2/R2 → stop plus large, levier réduit.
+        pivot_sl_policy: 'nearest'
         pivot_sl_buffer_pct: 0.003
         pivot_sl_min_keep_ratio: 0.85
         sl_full_size: true
@@ -118,7 +120,7 @@ trade_entry:
         fallback_taker: true
         budget:
             mode: fixed_or_available
-            fixed_usdt_if_available: 25
+            fixed_usdt_if_available: 77
         quantization:
             price_tick: from_exchange
             qty_step: from_exchange

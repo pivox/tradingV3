@@ -27,8 +27,10 @@ trade_entry:
 
         # --- STOP LOSS
         stop_from: 'pivot'              # Stop sur pivot / structure locale
+        stop_fallback: 'atr'            # Fallback lorsque pivot trop éloigné ('atr','risk','none')
         atr_k: 1.5                      # ATR pour cadrer la distance
-        pivot_sl_policy: 'nearest_above'  # en short : pivot au-dessus
+        # pivot_sl_policy: 'nearest' → résistance la plus proche côté short (levier ↑). 'strongest' favorise R2/R1 → stop plus haut, levier ↓.
+        pivot_sl_policy: 'nearest'  # en short : pivot au-dessus
         pivot_sl_buffer_pct: 0.003
         pivot_sl_min_keep_ratio: 0.8
         sl_full_size: true              # SL sur la taille totale (règle sécurité)

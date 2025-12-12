@@ -29,8 +29,10 @@ trade_entry:
 
         # --- Stop Loss ---
         stop_from: 'atr'                          # Source du stop ('atr' ou 'risk')
+        stop_fallback: 'atr'                      # Fallback si stop pivot trop éloigné ('atr','risk','none')
         atr_k: 1.5                                # Multiplicateur ATR pour stop (SL = 1.5 * ATR, avec garde min 0.5%)
-        pivot_sl_policy: 'nearest_below'           # Politique de Stop Loss pivot (ou 'strongest_below', 's1', 's2')
+        # pivot_sl_policy: 'nearest' => pivot le plus proche (levier ↑). 'strongest' privilégie S2/R2 (stop ↑, levier ↓), ou utiliser s1/s2 explicite.
+        pivot_sl_policy: 'nearest'           # Politique de Stop Loss pivot (ou 'strongest', 's1', 's2')
         pivot_sl_buffer_pct: 0.003                # Buffer SL pivot en % (petit décalage pour éviter le front-run)
         pivot_sl_min_keep_ratio: 0.8              # Ratio min à conserver pour SL pivot (au moins 80% de la distance ATR)
         sl_full_size: true                        # SL de taille complète par défaut
