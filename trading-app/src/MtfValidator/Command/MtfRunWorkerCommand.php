@@ -43,7 +43,7 @@ final class MtfRunWorkerCommand extends Command
             ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
             ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)')
             ->addOption('trade-profile', null, InputOption::VALUE_OPTIONAL, 'Profil TradeEntry/MTF à utiliser (ex: scalper, regular)')
-            ->addOption('validation-mode', null, InputOption::VALUE_OPTIONAL, 'Mode de validation du contexte (pragmatic|strict)');
+            ->addOption('validation-mode', null, InputOption::VALUE_OPTIONAL, 'Mode de validation du contexte (pragmatic|strict|ultra-pragmatig)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
