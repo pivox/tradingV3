@@ -125,9 +125,14 @@ services:
             $apiSecret: '%env(BITMART_SECRET_KEY)%'
             $apiMemo: '%env(BITMART_API_MEMO)%'
         public: true
+    # Provider pour la configuration des contrats MTF (support par profil avec fallback)
+    App\Config\MtfContractsConfigProvider:
+        public: true
+
+    # Config par défaut (compatibilité - utilise le fallback)
     App\Config\MtfContractsConfig:
-        arguments:
-            $path: '%kernel.project_dir%/config/app/mtf_contracts.yaml'
+        factory: ['@App\Config\MtfContractsConfigProvider', 'getConfigForProfile']
+        arguments: [null]
 
     # BitMart HTTP Client
     App\Provider\Bitmart\Http\BitmartHttpClientPublic:
@@ -226,7 +231,7 @@ services:
         arguments:
             $registry: '@doctrine'
             $conn: '@doctrine.dbal.default_connection'
-            $config: '@App\Config\MtfContractsConfig'
+            $configProvider: '@App\Config\MtfContractsConfigProvider'
             $clock: '@Psr\Clock\ClockInterface'
 
     # Alias pour l'interface de configuration MTF -> implémentation TradingParameters

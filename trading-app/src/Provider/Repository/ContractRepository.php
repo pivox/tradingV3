@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Provider\Repository;
 
 use App\Config\MtfContractsConfig;
+use App\Config\MtfContractsConfigProvider;
 use App\Provider\Entity\Contract;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\Connection;
@@ -21,7 +22,7 @@ class ContractRepository extends ServiceEntityRepository
     public function __construct(
         ManagerRegistry $registry,
         private readonly Connection $conn,
-        private readonly MtfContractsConfig $config,
+        private readonly MtfContractsConfigProvider $configProvider,
         private readonly ClockInterface $clock
     )
     {
@@ -30,10 +31,12 @@ class ContractRepository extends ServiceEntityRepository
 
     /**
      * Récupère tous les contrats actifs selon les critères de trading
+     * 
+     * @param string|null $profile Profil de configuration à utiliser (ex: 'scalper', 'regular'). Si null, utilise le fallback.
      */
-    public function findActiveContracts(): array
+    public function findActiveContracts(?string $profile = null): array
     {
-        $symbols = $this->findSymbolsMixedLiquidity();
+        $symbols = $this->findSymbolsMixedLiquidity($profile);
         if ($symbols === []) {
             return [];
         }
@@ -87,10 +90,12 @@ class ContractRepository extends ServiceEntityRepository
 
     /**
      * Compte le nombre de contrats actifs
+     * 
+     * @param string|null $profile Profil de configuration à utiliser (ex: 'scalper', 'regular'). Si null, utilise le fallback.
      */
-    public function countActiveContracts(): int
+    public function countActiveContracts(?string $profile = null): int
     {
-        return count($this->findSymbolsMixedLiquidity());
+        return count($this->findSymbolsMixedLiquidity($profile));
     }
 
 
@@ -323,13 +328,14 @@ class ContractRepository extends ServiceEntityRepository
      *
      * @param array $symbols Si fourni, filtre les résultats pour ne garder que ces symboles
      * @param bool $ignoreLimits Si true, ignore les limites top_n/mid_n et retourne tous les symboles actifs
+     * @param string|null $profile Profil de configuration à utiliser (ex: 'scalper', 'regular'). Si null, utilise le fallback.
      * @return string[]
      */
-    public function allActiveSymbolNames(array $symbols = [], bool $ignoreLimits = false): array
+    public function allActiveSymbolNames(array $symbols = [], bool $ignoreLimits = false, ?string $profile = null): array
     {
         $all = $ignoreLimits
-            ? $this->findAllActiveSymbolsWithoutLimits()
-            : $this->findSymbolsMixedLiquidity();           // liste ordonnée (TOP + MID)
+            ? $this->findAllActiveSymbolsWithoutLimits($profile)
+            : $this->findSymbolsMixedLiquidity($profile);           // liste ordonnée (TOP + MID)
         if ($symbols === []) {
             return $all;
         }
@@ -341,17 +347,21 @@ class ContractRepository extends ServiceEntityRepository
     /**
      * Retourne TOUS les symboles actifs sans limite (top_n/mid_n).
      * Utile pour récupérer tous les contrats éligibles sans restriction de nombre.
+     * 
+     * @param string|null $profile Profil de configuration à utiliser (ex: 'scalper', 'regular'). Si null, utilise le fallback.
      * @return string[]
      */
-    public function findAllActiveSymbolsWithoutLimits(): array
+    public function findAllActiveSymbolsWithoutLimits(?string $profile = null): array
     {
+        $config = $this->configProvider->getConfigForProfile($profile);
+        
         // --- Config YAML ---
-        $status            = (string) $this->config->getFilter('status', 'Trading');
-        $quoteCurrency     = (string) $this->config->getFilter('quote_currency', 'USDT');
-        $minTurnover       = (float)  $this->config->getFilter('min_turnover', 500000);
-        $requireNotExpired = (bool)   $this->config->getFilter('require_not_expired', true);
-        $expireUnit        = (string) $this->config->getFilter('expire_unit', false); // 's' | 'ms'
-        $maxAgeHours       = (int)    $this->config->getFilter('max_age_hours', 880);
+        $status            = (string) $config->getFilter('status', 'Trading');
+        $quoteCurrency     = (string) $config->getFilter('quote_currency', 'USDT');
+        $minTurnover       = (float)  $config->getFilter('min_turnover', 500000);
+        $requireNotExpired = (bool)   $config->getFilter('require_not_expired', true);
+        $expireUnit        = (string) $config->getFilter('expire_unit', false); // 's' | 'ms'
+        $maxAgeHours       = (int)    $config->getFilter('max_age_hours', 880);
 
         // --- Horloge & unités ---
         $now    = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
@@ -431,23 +441,31 @@ ORDER BY {$turnoverExpr} DESC
         return $qb->getQuery()->getResult();
     }
 
-    public function findSymbolsMixedLiquidity(): array
+    /**
+     * Récupère les symboles avec liquidité mixte (TOP + MID) selon la configuration
+     * 
+     * @param string|null $profile Profil de configuration à utiliser (ex: 'scalper', 'regular'). Si null, utilise le fallback.
+     * @return string[]
+     */
+    public function findSymbolsMixedLiquidity(?string $profile = null): array
     {
+        $config = $this->configProvider->getConfigForProfile($profile);
+        
         // --- Config YAML ---
-        $status            = (string) $this->config->getFilter('status', 'Trading');
-        $quoteCurrency     = (string) $this->config->getFilter('quote_currency', 'USDT');
-        $minTurnover       = (float)  $this->config->getFilter('min_turnover', 500000);
-        $midMaxTurnover    = (float)  $this->config->getFilter('mid_max_turnover', 2000000);
-        $requireNotExpired = (bool)   $this->config->getFilter('require_not_expired', true);
-        $expireUnit        = (string) $this->config->getFilter('expire_unit', 's');   // 's' | 'ms'
-        $maxAgeHours       = (int)    $this->config->getFilter('max_age_hours', 880);
-        $openUnit          = (string) $this->config->getFilter('open_unit', 's');     // 's' | 'ms'
+        $status            = (string) $config->getFilter('status', 'Trading');
+        $quoteCurrency     = (string) $config->getFilter('quote_currency', 'USDT');
+        $minTurnover       = (float)  $config->getFilter('min_turnover', 500000);
+        $midMaxTurnover    = (float)  $config->getFilter('mid_max_turnover', 2000000);
+        $requireNotExpired = (bool)   $config->getFilter('require_not_expired', true);
+        $expireUnit        = (string) $config->getFilter('expire_unit', 's');   // 's' | 'ms'
+        $maxAgeHours       = (int)    $config->getFilter('max_age_hours', 880);
+        $openUnit          = (string) $config->getFilter('open_unit', 's');     // 's' | 'ms'
 
-        $topN   = (int) $this->config->getLimit('top_n', 0);
-        $midN   = (int) $this->config->getLimit('mid_n', 0);
+        $topN   = (int) $config->getLimit('top_n', 0);
+        $midN   = (int) $config->getLimit('mid_n', 0);
 
-        $orderTop = strtoupper($this->config->getOrder('top', 'DESC'));
-        $orderMid = strtoupper($this->config->getOrder('mid', 'ASC'));
+        $orderTop = strtoupper($config->getOrder('top', 'DESC'));
+        $orderMid = strtoupper($config->getOrder('mid', 'ASC'));
         $validOrder = ['ASC', 'DESC'];
         if (!in_array($orderTop, $validOrder, true)) {
             $orderTop = 'DESC';

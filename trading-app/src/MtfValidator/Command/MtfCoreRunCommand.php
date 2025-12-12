@@ -331,11 +331,20 @@ final class MtfCoreRunCommand extends Command
         // Sinon on va chercher les contrats actifs compatibles avec le profil MTF
         $io->writeln('Aucun symbole fourni, récupération des contrats actifs via ContractRepository...');
 
-        $contracts = $this->contractRepository->findActiveContracts($mtfProfile, $limit);
+        $contracts = $this->contractRepository->findActiveContracts($mtfProfile);
 
         $symbols = [];
         foreach ($contracts as $contract) {
             $symbols[] = $contract->getSymbol();
+        }
+
+        // Appliquer la limite si nécessaire
+        if ($limit !== null && \count($symbols) > $limit) {
+            $symbols = \array_slice($symbols, 0, $limit);
+            $io->writeln(sprintf(
+                '<comment>Limite appliquée: %d symboles seront traités.</comment>',
+                \count($symbols),
+            ));
         }
 
         $io->writeln(sprintf(

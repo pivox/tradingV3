@@ -104,7 +104,7 @@ final class MtfRunnerService
         try {
             // 1. Résoudre les symboles
             $resolveStart = microtime(true);
-            $symbols = $this->resolveSymbols($request->symbols);
+            $symbols = $this->resolveSymbols($request->symbols, $request->profile);
             $profiler->increment('runner', 'resolve_symbols', microtime(true) - $resolveStart);
 
             // 2. Créer le contexte
@@ -218,7 +218,12 @@ final class MtfRunnerService
      * @param array<string> $inputSymbols Symboles fournis en entrée
      * @return array<string> Liste des symboles à traiter
      */
-    public function resolveSymbols(array $inputSymbols): array
+    /**
+     * @param array<string> $inputSymbols Liste des symboles fournis en entrée
+     * @param string|null $profile Profil de configuration à utiliser pour récupérer les contrats actifs
+     * @return string[]
+     */
+    public function resolveSymbols(array $inputSymbols, ?string $profile = null): array
     {
         $symbols = [];
 
@@ -234,13 +239,14 @@ final class MtfRunnerService
         // Si aucun symbole fourni, récupérer depuis la base de données
         if (empty($symbols)) {
             try {
-                $fetched = $this->contractRepository->allActiveSymbolNames();
+                $fetched = $this->contractRepository->allActiveSymbolNames([], false, $profile);
                 if (!empty($fetched)) {
                     $symbols = array_values(array_unique(array_map('strval', $fetched)));
                 }
             } catch (\Throwable $e) {
                 $this->logger->warning('[MTF Runner] Failed to load active symbols, using fallback', [
                     'error' => $e->getMessage(),
+                    'profile' => $profile,
                 ]);
                 $symbols = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT', 'DOTUSDT'];
             }
