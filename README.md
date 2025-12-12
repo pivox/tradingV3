@@ -1,140 +1,176 @@
-# Trading Signal Detection Platform
+# Trading App – Orchestrateur MTF 2025
 
-Ce projet est une plateforme complète de détection de signaux de trading basée sur un stack multi-services comprenant :
-- **Symfony 7 (PHP 8.3)** pour l'API principale
-- **React + Vite** pour le frontend utilisateur
-- **FastAPI (Python)** pour l'analyse des indicateurs techniques
-- **MySQL 8** pour la base de données
-- **Nginx** comme serveur web
-- **Docker Compose** pour l'orchestration
+Plateforme Symfony dédiée au trading Bitmart futures. Elle combine :
+- un **Runner HTTP/CLI** (`/api/mtf/run`, `bin/console mtf:run`) qui orchestre les validations multi‑timeframes ;
+- un **Validator** qui applique les règles YAML et décide si un symbole est tradable ;
+- un **module TradeEntry** qui calcule zone, taille, levier, SL/TP et place les ordres.
 
-## 📦 Structure du projet
-
-```
-.
-├── symfony-app/       # Symfony 7 + API Platform
-├── frontend/          # React + Vite
-├── python-api/        # FastAPI pour les indicateurs
-├── bitmart_positions_sync/  # Worker Python de synchronisation positions Bitmart
-├── nginx/             # Config Nginx
-├── docker-compose.yml
-└── README.md
-```
-
-## 🚀 Lancer le projet
-
-### Prérequis
-- Docker & Docker Compose installés
-
-### Étapes
-1. Clonez le dépôt :
-   ```bash
-   git clone https://github.com/votre-utilisateur/votre-projet.git
-   cd votre-projet
-   ```
-
-2. Lancez les containers :
-   ```bash
-   docker-compose up --build
-   ```
-
-3. Accédez aux services :
-- Frontend : http://localhost:3000
-- API Symfony : http://localhost:8080
-- API Python (indicateurs) : http://localhost:8888
-
-## 🧹 Maintenance Docker
-
-### Nettoyage du cache buildx
-
-Docker buildx accumule des couches d'images et du cache lors des builds successifs, ce qui peut rapidement consommer plusieurs dizaines de Go d'espace disque. Cette contrainte de consommation mémoire est réelle et peut bloquer les builds si l'espace disque est saturé.
-
-Pour limiter l'utilisation d'espace disque à 7 Go maximum, exécutez régulièrement :
-
-```bash
-docker buildx prune --max-used-space 7GB --force
-```
-
-Cette commande supprime automatiquement les caches et métadonnées buildx les plus anciens lorsque l'espace utilisé dépasse 7 Go, garantissant que les builds restent fonctionnels même sur des machines avec un espace disque limité.
-
-## 🔧 Services & Ports
-
-| Service      | URL                   | Port local |
-|-------------|-----------------------|------------|
-| Frontend    | http://localhost:3000  | 3000       |
-| API Symfony | http://localhost:8080  | 8080       |
-| API Python  | http://localhost:8888  | 8888       |
-| Bitmart Position Sync | http://localhost:9000  | 9000       |
-| MySQL       | localhost              | 3306       |
-
-## 🔀 Exchange Context & Registry (Symfony)
-
-Le backend Symfony supporte un contexte `exchange/market` avec des valeurs par défaut:
-
-- Exchange par défaut: `bitmart`
-- Market type par défaut: `perpetual`
-
-Vous pouvez surcharger ce contexte via HTTP, CLI ou Temporal.
-
-Documentation détaillée: `trading-app/docs/EXCHANGE_REGISTRY.md`
-
-Exemples rapides:
-
-```
-# HTTP (défaut: bitmart/perpetual si omis)
-curl -s "http://localhost:8082/api/mtf/run?symbols=BTCUSDT&dry_run=1&exchange=bitmart&market_type=perpetual"
-
-# CLI
-php bin/console mtf:run --symbols=BTCUSDT --dry-run=1 --exchange=bitmart --market-type=perpetual
-php bin/console mtf:run-worker --symbols=BTCUSDT --dry-run=1 --exchange=bitmart --market-type=perpetual
-php bin/console mtf:list-open-positions-orders --symbol=BTCUSDT --exchange=bitmart --market-type=perpetual
-
-# Temporal (payload du job)
-{
-  "url": "http://trading-app-nginx:80/api/mtf/run",
-  "workers": 5,
-  "dry_run": true,
-  "exchange": "bitmart",
-  "market_type": "perpetual"
-}
-```
-
-## 🧩 Indicateurs disponibles (Python FastAPI)
-- RSI
-- MACD
-- ADX
-- Bollinger Bands
-- EMA
-- Candle Patterns
-- Stochastic RSI
-- Supertrend
-- VWAP
-- Volume
-
-Chaque indicateur est exposé via une route REST dédiée.
-
-## 🔄 Bitmart Position Sync
-- Service Docker Compose : `bitmart-position-sync`
-- Fonction : ouvre un flux WebSocket privé Bitmart (futures) et met à jour régulièrement la table `positions` de Symfony.
-- Mise à jour de secours : effectue un poll REST (`/contract/private/position-v2`) pour garder la base alignée si le flux temps réel manque un évènement.
-- Variables d'environnement utiles :
-- `BITMART_API_KEY`, `BITMART_SECRET_KEY`, `BITMART_API_MEMO`
-- `BITMART_WS_URL`, `BITMART_WS_CHANNELS` (défaut `wss://openapi-ws-v2.bitmart.com/api?protocol=1.1` + `futures/position`)
-- `BITMART_POLL_SECONDS` (défaut 120s)
-- `BITMART_SYNC_HOST`, `BITMART_SYNC_PORT` (défaut `0.0.0.0:9000`)
-- `BITMART_AUTO_START` (défaut `true`)
-
-### Endpoints de contrôle (port 9000)
-- `GET /status` → état courant (`running`, `channels`)
-- `POST /control/start` → démarre l'écoute WebSocket + poll REST
-- `POST /control/stop` → arrête l'écoute et ferme la connexion Bitmart
-- `POST /subscriptions/{SYMBOL}` → souscrit à une position privée (ex : `BTCUSDT`)
-- `DELETE /subscriptions/{SYMBOL}` → se désinscrit du flux correspondant
-
-## 📝 Notes importantes
-- Le système permet de lancer des analyses par timeframe (1m, 5m, 15m, 1h, 4h) depuis `/api/frame{timeframe}/run` sur l'API Python.
-- Les résultats sont unifiés pour un traitement plus simple côté Symfony ou Frontend.
+Le dépôt contient aussi les workers Temporal (`cron_symfony_mtf_workers/`) qui déclenchent les runs toutes les minutes, ainsi que les outils Provider/Indicator pour fluidifier les échanges avec Bitmart.
 
 ---
 
-Développé par Haythem 🚀
+## 1. Mise en route
+
+### 1.1 Pré‑requis
+| Outil | Version |
+| --- | --- |
+| PHP | 8.2+ |
+| Composer | 2.x |
+| Docker / docker compose | dernière stable |
+| PostgreSQL | 15+ |
+
+### 1.2 Installation rapide
+```bash
+cp trading-app/.env trading-app/.env.local        # ajuster les secrets
+docker compose up -d trading-app-db trading-app-redis trading-app-php trading-app-nginx
+docker compose exec trading-app-php composer install
+docker compose exec trading-app-php php bin/console doctrine:migrations:migrate
+```
+
+`.env.local` doit au minimum contenir :
+```env
+DATABASE_URL="postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8"
+BITMART_API_KEY=xxx
+BITMART_SECRET_KEY=xxx
+BITMART_API_MEMO=prod-trader
+REDIS_URL=redis://trading-app-redis:6379
+MESSENGER_TRANSPORT_DSN=redis://trading-app-redis:6379/messages
+```
+
+### 1.3 Commandes essentielles
+| Commande | Description |
+| --- | --- |
+| `bin/console bitmart:fetch-contracts [--symbol=BTCUSDT]` | Sync des contrats Bitmart. |
+| `bin/console bitmart:fetch-klines BTCUSDT --timeframe=1h --limit=200` | Ingestion des klines. |
+| `bin/console mtf:run --workers=4 --dry-run=1` | Run MTF piloté par le runner. |
+| `curl -XPOST http://localhost:8082/api/mtf/run -d '{"dry_run":false,"workers":8,"mtf_profile":"scalper_micro"}'` | Appel HTTP équivalent. |
+| `bin/console messenger:consume order_timeout` | Worker TP/SL + dead-man switch. |
+
+---
+
+## 2. Architecture
+
+```
+API RunnerController / CLI mtf:run
+          │ (MtfRunnerRequestDto)
+          ▼
+      MtfRunnerService
+          ├ resolveSymbols + sync tables Bitmart
+          ├ filtre positions/ordres ouverts (switch repository)
+          ├ runSequential() / runParallel() → MtfValidatorService
+          ├ dispatchIndicatorSnapshotPersistence()
+          ├ processTpSlRecalculation()
+          └ enrichResults()
+
+      MtfValidatorService
+          └ MtfValidatorCoreService
+               ├ ContextValidationService → TimeframeValidationService
+               ├ ExecutionSelectionService
+               └ TradingDecisionHandler → TradeEntry
+
+      TradeEntryService
+          └ BuildPreOrder → BuildOrderPlan → ExecuteOrderPlan → AttachTpSl
+```
+
+### Modules et documentation
+| Module | README |
+| --- | --- |
+| Runner | `trading-app/src/MtfRunner/README.md` |
+| Validator | `trading-app/src/MtfValidator/README.md` |
+| TradeEntry | `trading-app/src/TradeEntry/README.md` |
+| Indicator | `trading-app/src/Indicator/README.md` |
+| Provider (Bitmart) | `trading-app/src/Provider/README.md` |
+| Temporal cron | `cron_symfony_mtf_workers/README.md` |
+
+---
+
+## 3. Flux d’exécution détaillé
+
+### 3.1 Runner
+- Résout les symboles (contrats actifs + queue `mtf_switch`).
+- Synchronise positions/ordres (`FuturesOrderSyncService`), exclut les symboles occupés et prolonge les switches.
+- Lance l’exécution MTF en séquentiel (appel direct) ou parallèle (workers `mtf:run-worker`).
+- Publie `IndicatorSnapshotPersistRequestMessage` pour persister les contextes.
+- Recalcule périodiquement les TP/SL ouverts (`TpSlTwoTargetsService`).
+- Enrichit la réponse (summary par TF, `rejected_by`, `orders_placed`).
+
+### 3.2 Validator
+1. `MtfRunRequestDto` → `MtfRunDto` (profil, options `force_run`, `current_tf`, `lock_per_symbol`, etc.).
+2. `MtfValidatorCoreService` charge `config/app/mtf_validations.<mode>.yaml` via `MtfValidationConfigProvider`.
+3. `IndicatorProviderInterface` fournit les contextes multi‑TF.
+4. `ContextValidationService` + `TimeframeValidationService` appliquent les règles YAML ou compilées.
+5. `ExecutionSelectionService` choisit le timeframe final (stay/drop, allow_1m_only_for…).
+6. `TradingDecisionHandler` construit le `TradeEntryRequest` et envoie les signaux prêts.
+
+### 3.3 TradeEntry
+- `BuildPreOrder` collecte specs exchange, balance, spread, pivots.
+- `BuildOrderPlan` calcule l’entry zone (VWAP/SMA21), le prix limit/market, le stop (ATR/pivot/risk), les TP multiples et le sizing avec levier dynamique.
+- `ExecuteOrderPlan` soumet le levier, place l’ordre (maker/taker), déclenche watchers (limit fill, fallback end-of-zone).
+- `AttachTpSl` ou `TpSlTwoTargetsService` ajoute les ordres stop/take restants.
+
+---
+
+## 4. Configuration
+
+| Fichier | Description |
+| --- | --- |
+| `config/app/mtf_validations.<mode>.yaml` | Règles multi‑timeframes (context/execution, filters, execution_selector). |
+| `config/app/trade_entry.<mode>.yaml` | Risk sizing, leverage, stop policies, entry zone, market entry. |
+| `config/trading.yml` | Paramètres partagés (entry zone, watchers, market_entry). |
+| `config/app/mtf_contracts.yaml` | Contrats activés côté runner. |
+
+- `MtfValidationConfigProvider` + `TradeEntryModeContext` sélectionnent le mode actif (`scalper_micro` par défaut).
+- Secrets indispensables : `BITMART_*`, `APP_ENV`, `APP_DEBUG`, `REDIS_URL`, `MESSENGER_TRANSPORT_DSN`, `MTF_LOG_LEVEL`.
+
+---
+
+## 5. Cron & Temporal
+
+`cron_symfony_mtf_workers/` contient les workflows/activities Temporal qui appellent `/api/mtf/run`. Principales schedules :
+
+| Script | Rôle | Cron |
+| --- | --- | --- |
+| `scripts/manage_mtf_workers_schedule.py` | Runner standard (5 workers, dry-run configurable) | `*/1 * * * *` |
+| `scripts/manage_scalper_micro_schedule.py` | Profil `scalper_micro` (8 workers) | `*/1 * * * *` |
+| `scripts/manage_contract_sync_schedule.py` | `GET /api/mtf/sync-contracts` | `0 9 * * *` |
+| `scripts/manage_cleanup_schedule.py` | Jobs de purge (klines, audits) | selon besoin |
+
+`CronSymfonyMtfWorkersWorkflow` → `mtf_api_call` → `utils/response_formatter.py` réduit les logs à ~15 lignes (succès par TF, invalid par TF, timing) tout en conservant la réponse complète dans Temporal UI.
+
+---
+
+## 6. Observabilité & diagnostics
+
+| Logger / fichier | Usage |
+| --- | --- |
+| `var/log/mtf-runner.log` (`monolog.logger.mtf`) | Résolution symboles, filtres, exécution MTF, snapshots. |
+| `var/log/order-journey*.log` (`monolog.logger.positions`) | Détails TradeEntry (prix, watchers, levier). |
+| `var/log/bitmart-http.log` (`monolog.logger.provider`) | Appels Bitmart + rate-limit. |
+
+API / commandes utiles :
+- `GET /mtf/status`, `/mtf/lock/status`, `/mtf/audit`.
+- `GET /provider/health`.
+- `bin/console debug:config app`.
+- `bin/console app:indicator:conditions:diagnose <symbol> <tf>`.
+
+---
+
+## 7. Checklists développement
+
+1. **Nouveau mode** : `mtf_validations.<mode>.yaml` + `trade_entry.<mode>.yaml`, enregistrer dans `services.yaml`, docs Runner/TradeEntry.
+2. **Nouveau filtre/feature Runner** : modifier `src/MtfRunner/*`, ajouter tests (`tests/MtfRunner/Service/*`), mettre à jour le README du module.
+3. **Nouvelle règle MTF** : mettre à jour le YAML, ajouter les conditions `src/Indicator/Condition/*`, couvrir par `tests/MtfValidator`.
+4. **Évolution TradeEntry** : modifier builder/plan/execution + documentation `src/TradeEntry/README.md`.
+5. **Nouvel exchange** : créer un `ExchangeProviderBundle`, l’enregistrer dans `ExchangeProviderRegistry`, utiliser `MainProviderInterface::forContext()`.
+6. **Temporal** : après toute évolution API/Runner, vérifier `cron_symfony_mtf_workers/README.md` et relancer les schedules.
+7. **Déploiement** : s’assurer que `messenger:consume order_timeout` (et `indicator_snapshot` si utilisé) tournent, surveiller `mtf_runner` et `order_journey`.
+
+---
+
+## 8. Ressources complémentaires
+
+- `trading-app/src/*/README.md` : documentation approfondie par composant.
+- `trading-app/docs/*` : runbooks historiques (`MTF_POSITIONS_USAGE`, `MTF_PERFORMANCE_ANALYSIS`, etc.).
+- `cron_symfony_mtf_workers/docs/ARCHITECTURE.md` : schéma complet du workflow Temporal.
+
+Gardez ces documents à jour à chaque évolution : ils constituent la source de vérité pour l’équipe (runbook d’exploitation, onboarding, support Temporal). Bonne orchestration MTF !
