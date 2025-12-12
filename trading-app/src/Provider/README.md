@@ -1,203 +1,152 @@
-# Architecture des Providers
+# Provider README (2025)
 
-Cette architecture modulaire permet d'utiliser différents providers (Bitmart, Binance, etc.) de manière uniforme à travers une interface standardisée.
+Le module **Provider** offre une façade unique pour toutes les interactions exchange (Bitmart aujourd’hui, d’autres demain). Il est consommé par `MtfRunnerService`, `IndicatorProviderInterface`, `TradingDecisionHandler`, les scripts de sync et les contrôleurs d’administration.
 
-## Structure
+---
+
+## 1. Architecture générale
 
 ```
-src/
-├── Contract/Provider/                 # Contrats (interfaces) - à utiliser dans le code
-│   ├── MainProviderInterface.php      # Point d'entrée unique
-│   ├── KlineProviderInterface.php
-│   ├── ContractProviderInterface.php
-│   ├── OrderProviderInterface.php
-│   ├── AccountProviderInterface.php
-│   ├── SystemProviderInterface.php    # Temps système
-│   └── Dto/                           # DTOs standardisés
-│       ├── BaseDto.php
-│       ├── KlineDto.php
-│       ├── ContractDto.php
-│       ├── OrderDto.php
-│       ├── AccountDto.php
-│       ├── PositionDto.php
-│       └── SymbolBidAskDto.php
-│
-└── Provider/                          # Implémentations
-    ├── MainProvider.php               # Service central (implémente MainProviderInterface)
-    ├── CleanupProvider.php            # Nettoyage de la base de données
-    └── Bitmart/                       # Implémentation Bitmart
-        ├── BitmartKlineProvider.php
-        ├── BitmartContractProvider.php
-        ├── BitmartOrderProvider.php
-        ├── BitmartAccountProvider.php
-        ├── SystemProvider.php         # Temps système Bitmart
-        ├── Http/                      # Clients HTTP
-        │   ├── BitmartHttpClientPublic.php
-        │   ├── BitmartHttpClientPrivate.php
-        │   ├── BitmartConfig.php
-        │   ├── BitmartRequestSigner.php
-        │   └── throttleBitmartRequestTrait.php
-        ├── WebSocket/                 # Clients WebSocket
-        │   ├── BitmartWebsocketBase.php
-        │   ├── BitmartWebsocketPublic.php
-        │   └── BitmartWebsocketPrivate.php
-        ├── Service/                   # Services utilitaires
-        │   ├── KlineFetcher.php       # Récupération et sauvegarde des klines
-        │   └── KlineJsonIngestionService.php  # Ingestion performante via SQL JSON
-        ├── Dto/                       # DTOs spécifiques Bitmart
-        │   ├── KlineDto.php
-        │   ├── ContractDto.php
-        │   ├── ListKlinesDto.php
-        │   └── ListContractDto.php
-        └── Example/
-            └── BitmartProviderUsageExample.php
+Contract/Provider/
+    ├── MainProviderInterface (façade unique)
+    ├── {Kline,Contract,Order,Account,System}ProviderInterface
+    ├── ExchangeProviderRegistryInterface
+    └── Dto/{KlineDto,ContractDto,OrderDto,...}
+
+Provider/
+    ├── Context/ExchangeContext (exchange + market type)
+    ├── Registry/ExchangeProviderRegistry + ExchangeProviderBundle
+    ├── MainProvider (#[AsAlias(MainProviderInterface::class)])
+    ├── Bitmart/ (implémentation concrète)
+    └── CleanupProvider + services utilitaires
 ```
 
-## Architecture des Contrats
+- **Contrats** : utilisés partout dans le code métier. Ils garantissent qu’un switch d’exchange ou de marché (perp/spot) ne casse pas les appels.
+- **Implémentations** : chaque exchange enregistre un `ExchangeProviderBundle` (kline/order/account/contract/system). Le registre choisit dynamiquement le bundle selon un `ExchangeContext`.
 
-L'architecture suit le principe de **séparation des contrats et des implémentations** :
+---
 
-- **`App\Contract\Provider`** : Contient les interfaces et DTOs standardisés
-  - Utilisé dans tout le code métier pour l'injection de dépendances
-  - Garantit la compatibilité et la testabilité
-
-- **`App\Provider`** : Contient les implémentations concrètes
-  - `MainProvider` est marqué avec `#[AsAlias(id: MainProviderInterface::class)]`
-  - Les providers Bitmart implémentent les interfaces correspondantes
-  - Auto-configurés via Symfony DI
-
-## Utilisation
-
-### Via MainProviderInterface (recommandé)
+## 2. `MainProviderInterface` et `ExchangeContext`
 
 ```php
-use App\Contract\Provider\MainProviderInterface;
-use App\Common\Enum\Timeframe;
+public function __construct(
+    private readonly MainProviderInterface $mainProvider,
+) {}
 
-class MyService
+public function sync(Exchange $exchange, MarketType $market): void
 {
-    public function __construct(
-        private readonly MainProviderInterface $mainProvider
-    ) {}
+    $context = new ExchangeContext($exchange, $market);
+    $provider = $this->mainProvider->forContext($context);
 
-    public function getKlines(string $symbol): array
-    {
-        return $this->mainProvider
-            ->getKlineProvider()
-            ->getKlines($symbol, Timeframe::TF_1H, 100);
-    }
+    $contracts = $provider->getContractProvider()->syncContracts();
+    $klines = $provider->getKlineProvider()->getKlines('BTCUSDT', Timeframe::TF_15M, 150);
 }
 ```
 
-### Accès aux différents providers
+Points clés :
+- `forContext(?ExchangeContext $ctx)` renvoie une nouvelle façade scoped sur l’exchange/le marché demandé.
+- Si aucun contexte n’est fourni : la priorité suit `config/services.yaml` (`App\Provider\Context\ExchangeContext.bitmart_perpetual` aujourd’hui).
+- Le runner (`MtfRunnerService::createContext()`) appelle systématiquement `forContext()` avant de filtrer les symboles, synchroniser les ordres ou recalculer TP/SL.
+
+---
+
+## 3. Bundles et registre
+
+`App\Provider\Registry\ExchangeProviderRegistry` contient une map (exchange + market type → bundle). Un bundle encapsule :
 
 ```php
-use App\Contract\Provider\MainProviderInterface;
-
-class MyService
+final class ExchangeProviderBundle
 {
     public function __construct(
-        private readonly MainProviderInterface $mainProvider
+        private ExchangeContext $context,
+        private KlineProviderInterface $klineProvider,
+        private ContractProviderInterface $contractProvider,
+        private OrderProviderInterface $orderProvider,
+        private AccountProviderInterface $accountProvider,
+        private SystemProviderInterface $systemProvider,
     ) {}
-
-    public function example(): void
-    {
-        // Provider de klines
-        $klineProvider = $this->mainProvider->getKlineProvider();
-        $klines = $klineProvider->getKlines('BTCUSDT', Timeframe::TF_1H, 100);
-        
-        // Provider de contrats
-        $contractProvider = $this->mainProvider->getContractProvider();
-        $contracts = $contractProvider->getContracts();
-        
-        // Provider d'ordres
-        $orderProvider = $this->mainProvider->getOrderProvider();
-        $openOrders = $orderProvider->getOpenOrders('BTCUSDT');
-        
-        // Provider de compte
-        $accountProvider = $this->mainProvider->getAccountProvider();
-        $balance = $accountProvider->getAccountBalance();
-        
-        // Provider système (temps serveur)
-        $systemProvider = $this->mainProvider->getSystemProvider();
-        $serverTimeMs = $systemProvider->getSystemTimeMs();
-    }
 }
 ```
 
-### Via les providers spécifiques (si nécessaire)
+Cela permet :
+- d’enregistrer plusieurs bundles Bitmart (perp, spot) ou d’autres exchanges,
+- de partager la même façade `MainProviderInterface` dans l’ensemble du code,
+- de basculer un batch spécifique (`/api/mtf/run?exchange=bitmart&market_type=spot`) sans reconfigurer Symfony.
 
+---
+
+## 4. Vue rapide des providers Bitmart
+
+- **HTTP publics/privés** : `Provider/Bitmart/Http/*`
+- **WebSocket** : `Provider/Bitmart/WebSocket/*`
+- **Services utilitaires** :
+  - `KlineJsonIngestionService` → ingestion SQL JSON (bulk insert).
+  - `KlineFetcher` → orchestration fetch/persist.
+- **DTO spécifiques** (ListContracts, ListKlines…) convertis ensuite vers les DTO “contrat” (`App\Contract\Provider\Dto`).
+
+Chaque provider implémente son interface avec un accent sur :
+- `healthCheck()` (utilisé pour `/provider/health`),
+- `sync*()` (contrats, ordres, positions),
+- `Mapper`s internes pour convertir les structures Bitmart.
+
+---
+
+## 5. Exemples d’utilisation
+
+### a. Restaurer le temps serveur
 ```php
-use App\Provider\Bitmart\BitmartKlineProvider;
-
-class MyService
-{
-    public function __construct(
-        private readonly BitmartKlineProvider $klineProvider
-    ) {}
-
-    public function getKlines(string $symbol): array
-    {
-        return $this->klineProvider->getKlines($symbol, Timeframe::TF_1H, 100);
-    }
-}
+$serverTime = $this->mainProvider
+    ->forContext($context)
+    ->getSystemProvider()
+    ->getSystemTimeMs();
 ```
 
-## SystemProvider
-
-Le `SystemProvider` permet de récupérer le temps système du serveur de l'exchange, utile pour la synchronisation et la validation des timestamps.
-
+### b. Filtrer les symboles avec ordres ouverts (extrait de `MtfRunnerService`)
 ```php
-use App\Contract\Provider\MainProviderInterface;
-
-class MyService
-{
-    public function __construct(
-        private readonly MainProviderInterface $mainProvider
-    ) {}
-
-    public function getServerTime(): int
-    {
-        $systemProvider = $this->mainProvider->getSystemProvider();
-        return $systemProvider->getSystemTimeMs(); // Retourne le timestamp en millisecondes
-    }
-}
+$provider = $this->mainProvider->forContext($context);
+$openOrders = $provider->getOrderProvider()->getOpenOrders();
+$openPositions = $provider->getAccountProvider()->getOpenPositions();
 ```
 
-## CleanupProvider
+### c. Synchroniser les contrats depuis `/api/mtf/sync-contracts`
+```php
+$provider = $this->mainProvider->forContext($context)->getContractProvider();
+$result = $provider->syncContracts($optionalSymbols);
+```
 
-Le `CleanupProvider` gère le nettoyage automatique de la base de données pour éviter l'accumulation de données.
+---
+
+## 6. CleanupProvider
+
+`App\Provider\CleanupProvider` s’appuie sur les repositories Doctrine pour purger les tables volumineuses :
 
 ```php
-use App\Provider\CleanupProvider;
+$report = $this->cleanupProvider->cleanupAll(
+    symbol: null,
+    klinesKeepLimit: 500,
+    auditDaysKeep: 3,
+    signalDaysKeep: 3,
+    dryRun: true,
+);
+```
 
-class MaintenanceService
-{
-    public function __construct(
-        private readonly CleanupProvider $cleanupProvider
-    ) {}
+- `cleanupAll()` : orchestration complète (klines, audits, signaux, snapshots).
+- `cleanupKlines()` : ciblage fin (par symbole/timeframe) pour les jobs planifiés.
 
-    public function cleanup(): array
-    {
-        // Nettoyage complet (dry-run par défaut)
-        $report = $this->cleanupProvider->cleanupAll(
-            symbol: null,                    // null = tous les symboles
-            klinesKeepLimit: 500,            // Garder 500 klines par (symbol, timeframe)
-            auditDaysKeep: 3,                // Garder 3 jours d'audits MTF
-            signalDaysKeep: 3,                // Garder 3 jours de signaux
-            dryRun: true                      // Mode prévisualisation
-        );
+---
 
-        // Nettoyage ciblé
-        $klinesReport = $this->cleanupProvider->cleanupKlines(
-            symbol: 'BTCUSDT',
-            keepLimit: 1000,
-            dryRun: false
-        );
+## 7. Bonnes pratiques
 
-        return $report;
-    }
-}
+1. **Injecter les interfaces** (ex. `KlineProviderInterface`) sauf besoin d’implémentations concrètes (tests, commandes expérimentales).
+2. **Toujours créer un `ExchangeContext`** dans les services multi-exchange. Utiliser `Exchange::BITMART`, `MarketType::PERPETUAL` par défaut si rien n’est spécifié.
+3. **Ne pas manipuler directement les DTO Bitmart** hors module. Convertissez-les via les factories présentes dans les providers → vous évitez une fuite de détails spécifiques.
+4. **Health checks** : `MainProvider::healthCheck()` reste un boolean, mais `/provider/health` s’appuie sur `getDetailedHealthCheck()` pour savoir quel provider a lâché.
+5. **Extensibilité** : pour un nouvel exchange, créez :
+   - un `ExchangeContext` + `ExchangeProviderBundle`,
+   - les implémentations `KlineProviderInterface`, etc.,
+   - enregistrez le bundle dans le registre via `services.yaml`.
+
+Le module Provider est ainsi prêt pour d’autres exchanges/markets tout en continuant à servir le runner, l’indicator et les services de TradeEntry à travers des contrats stables.
 ```
 
 ## Services Utilitaires Bitmart

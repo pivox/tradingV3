@@ -1,145 +1,115 @@
-## Module Provider et Module Indicator — Vue d’ensemble
+## Module Indicator — mise à jour 2025
 
-Ce document décrit le rôle, l’architecture et l’usage des deux modules clés:
-
-- Module Provider: accès unifié aux sources externes (klines, contrats, comptes, ordres, système).
-- Module Indicator: calcul des indicateurs, évaluation des conditions par timeframe/side, persistance de snapshots, et façade d’accès.
+Le module Indicator alimente toute la chaîne MTF/TradeEntry : il prend des klines (via les providers), construit un contexte homogène, évalue les conditions (YAML ou compilées) et expose des snapshots/coffres-forts d’indicateurs. Cette page décrit le flux actuel utilisé par `MtfRunnerService` / `MtfValidatorCoreService`.
 
 ---
 
-## Module Provider
+## 1. Entrées et façades
 
-Objectif: offrir une façade unique pour la donnée de marché et les opérations, en s’appuyant sur des contrats stables.
+Tout accès passe par des contrats du namespace `App\Contract\Indicator` :
 
-- Contrats exposés (namespace `App\Contract\Provider`)
-  - `MainProviderInterface`: point d’entrée unique.
-    - `getKlineProvider(): KlineProviderInterface`
-    - `getContractProvider(): ContractProviderInterface`
-    - `getOrderProvider(): OrderProviderInterface`
-    - `getAccountProvider(): AccountProviderInterface`
-    - `getSystemProvider(): SystemProviderInterface`
-  - Les providers concrets (ex. Bitmart) implémentent ces interfaces.
+| Contrat | Rôle | Implémentation principale |
+| --- | --- | --- |
+| `IndicatorMainProviderInterface` | Façade unique. Fournit `getEngine()` et `getIndicatorProvider()` | `App\Indicator\Provider\IndicatorMainProvider` (#[AsAlias]) |
+| `IndicatorEngineInterface` | Construit le contexte, évalue YAML & registry, calcule ATR/metrics | `App\Indicator\Provider\IndicatorEngineProvider` |
+| `IndicatorProviderInterface` | Persiste/retourne les snapshots et les listes d’indicateurs | `App\Indicator\Provider\IndicatorProviderService` |
 
-- Implémentations principales (namespace `App\Provider`)
-  - `MainProvider` (#[AsAlias] vers `MainProviderInterface`): façade runtime.
-  - Providers spécifiques (ex: `Provider\Bitmart\BitmartKlineProvider` alias de `KlineProviderInterface`).
-
-- Santé et métadonnées
-  - `MainProvider::healthCheck()` agrège des checks par sous‑provider.
-  - `getSystemProvider()` expose les infos système (ex: heure serveur).
-
-- Exemple d’usage
-  ```php
-  public function __construct(MainProviderInterface $main) { $this->main = $main; }
-
-  $klines = $this->main->getKlineProvider()->getKlines('BTCUSDT', Timeframe::TF_15M, 150);
-  ```
+Le runner utilise `IndicatorProviderInterface` pour deux tâches :
+1. `MtfValidatorCoreService` → `IndicatorProviderInterface::getIndicatorsForSymbolAndTimeframes()` (via `IndicatorProviderService`) pour récupérer les contextes par TF.
+2. `MtfRunnerService::dispatchIndicatorSnapshotPersistence()` qui publie `IndicatorSnapshotPersistRequestMessage` afin de sauvegarder les snapshots des symboles récemment évalués.
 
 ---
 
-## Module Indicator
+## 2. Chaîne de traitement
 
-Objectif: standardiser le calcul des indicateurs (RSI/MACD/EMA/VWAP/ATR…), la définition/évaluation des conditions et fournir des moteurs d’évaluation (YAML vs compilé) à faible couplage.
-
-### Frontières et principes
-- Les classes internes de calcul (`App\Indicator\Core\*`) ne doivent PAS être utilisées hors du module Indicator.
-- Tout accès externe passe par des contrats/facades:
-  - `IndicatorMainProviderInterface` (façade): donne accès à
-    - `getEngine(): IndicatorEngineInterface`
-    - `getIndicatorProvider(): IndicatorProviderInterface`
-  - `IndicatorEngineInterface`: construit le contexte et évalue (YAML/compilé).
-  - `IndicatorProviderInterface`: calcule/persiste des snapshots et des listes d’indicateurs.
-
-### Contrats et services
-- `App\Contract\Indicator\IndicatorEngineInterface`
-  - `buildContext(symbol, timeframe, klines, options=[])`
-  - `evaluateYaml(timeframe, context)` (moteur YAML)
-  - `evaluateCompiled(timeframe, context, ?side)` (registre compilé)
-  - `computeAtr(highs,lows,closes,?ohlc,period=14)`
-  - `evaluateAllConditions(context)` / `evaluateConditions(context, names)`
-  - `listConditionNames()`
-- `App\Indicator\Provider\IndicatorEngineProvider` (#[AsAlias] → `IndicatorEngineInterface`)
-- `App\Contract\Indicator\IndicatorProviderInterface`
-  - `getSnapshot(symbol, timeframe): IndicatorSnapshotDto`
-  - `saveIndicatorSnapshot(IndicatorSnapshotDto)`
-  - `getListFromKlines(klines): ListIndicatorDto`
-  - `evaluateConditions(symbol, timeframe): array`
-- `App\Indicator\Provider\IndicatorProviderService` (implémentation du provider d’indicateurs)
-- `App\Contract\Indicator\IndicatorMainProviderInterface` + `App\Indicator\Provider\IndicatorMainProvider`
-
-### Conditions, attributs et compilation
-- Chaque condition implémente `ConditionInterface` et porte l’attribut:
-  ```php
-  #[AsIndicatorCondition(
-      timeframes: ['1m','5m','15m','1h','4h'],
-      side: 'long'|'short'|null,
-      name: self::NAME,
-      priority: 0
-  )]
-  ```
-- Le `CompilerPass` (`IndicatorCompilerPass`) scanne ces services et construit des ServiceLocators:
-  - par timeframe: `"15m"`
-  - par timeframe+side: `"15m:long"`, `"15m:short"`
-- Ces locators sont injectés dans `Indicator\Registry\ConditionRegistry` pour des lookups O(1).
-
-### Moteurs d’évaluation
-- YAML (legacy structure)
-  - `ConditionLoader\TimeframeEvaluator` lit `config/app/mtf_validations.yaml` et produit `long/short` avec `requirements`, `conditions`, `failed`, `passed`.
-- Compilé (attributs + registry)
-  - `ConditionRegistry::evaluateForTimeframe()` évalue la liste compilée.
-  - Note: l’agrégation est volontairement simple (ex: “au moins une condition vraie”) dans les commandes de bench; elle ne reflète pas la logique YAML complète.
-
-### Contexte indicateurs (IndicatorContextBuilder)
-- Construit un tableau cohérent à partir d’OHLCV: `rsi`, `macd(macd/signal/hist)`, `ema{9,20,21,50,200}`, `vwap`, `atr`, `adx`, `previous`…
-- Robustesse EMA9: si l’extension TRADER retourne 0.0 sur de très petits prix, un fallback pur‑PHP est utilisé pour éviter des artefacts à zéro (avec log d’avertissement + échantillon de klines).
-
-### Commandes utiles
-- `app:indicator:contracts:validate <tf> [--compiled] [--side=long|short] [--limit=150]`
-  - Mesure le temps de fetch vs validation, affiche par symbole et liste les “passés”.
-- `app:indicator:conditions:diagnose <symbol> <tf> [--side=...] [--limit=150] [--no-json] [--json-results]`
-  - Liste des conditions pour le scope, charge des klines via Provider et évalue via le registre compilé.
-- `app:indicators:get <symbol> <tf> [--limit=100] [--all-conditions|--conditions=...]`
-  - Calcule une liste d’indicateurs (DTO) et peut évaluer un sous‑ensemble de conditions.
-- `indicator:snapshot create|compare|list [...]`
-  - Calcule/persist des snapshots d’indicateurs et compare les résultats.
-
-### Exemples d’usage
-```php
-public function __construct(IndicatorMainProviderInterface $indicatorMain) { $this->ind = $indicatorMain; }
-
-// Construire un contexte et évaluer en YAML
-$engine = $this->ind->getEngine();
-$context = $engine->buildContext('BTCUSDT', '15m', $klines);
-$evaluation = $engine->evaluateYaml('15m', $context);
-
-// Lister/évaluer des conditions compilées
-$names = $engine->listConditionNames();
-$subset = array_slice($names, 0, 10);
-$results = $engine->evaluateConditions($context, $subset);
-
-// Calculer/persister un snapshot
-$provider = $this->ind->getIndicatorProvider();
-$snap = $provider->getSnapshot('BTCUSDT', '15m');
-$provider->saveIndicatorSnapshot($snap);
+```
+Klines (MainProvider) ──► IndicatorContextBuilder ──► IndicatorEngineInterface
+   │                                                         │
+   │                                   ┌─────────────── YAML ├─► ConditionLoader\TimeframeEvaluator
+   │                                   │
+   └─► Snapshot DTOs ◄── IndicatorProviderInterface ─┴──────────── Compilé (ConditionRegistry)
 ```
 
-### Performances et bonnes pratiques
-- Pour le mode compilé, utiliser `--side=long|short` réduit le nombre de conditions évaluées.
-- Restreindre `timeframes` et `side` dans les attributs des conditions pour éviter d’en évaluer trop.
-- Comparer les moteurs: YAML (structure complète) vs Compilé (liste plate) — ne pas confondre les sémantiques.
+1. `MainProviderInterface` (module Provider) fournit les klines normalisées.
+2. `Indicator\Context\IndicatorContextBuilder` enrichit un tableau complet (`ema`, `rsi`, `macd`, `atr`, `adx`, `vwap`, `price_previous`, etc.).
+3. `IndicatorEngineInterface` expose deux moteurs :
+   - **YAML** : consomme `config/app/mtf_validations*.yaml`. Utilisé par `TimeframeValidationService` pour garder la sémantique historique (rules/filters, `conditions_{long,short}`, `failed_*`…).
+   - **Compilé** : basé sur des services annotés `#[AsIndicatorCondition]`. Le `IndicatorCompilerPass` génère des ServiceLocators par timeframe/side et alimente `Indicator\Registry\ConditionRegistry`.
+4. `IndicatorProviderInterface`:
+   - hydrate les snapshots (`IndicatorSnapshotDto`) et gère leur persistance DB/Redis,
+   - fournit `evaluateConditions()` et `getListFromKlines()` pour les contrôleurs/CLI.
 
-### Organisation
-- Contrats: `src/Contract/Indicator/` et `src/Contract/Provider/`
-- Provider (façade): `src/Provider/MainProvider.php` et implémentations spécifiques (Bitmart, …)
-- Indicator: `src/Indicator/`
-  - `Core/` (implémentations de calcul internes)
-  - `Context/` (construction du contexte)
-  - `Condition/` (conditions + attributs)
-  - `Compiler/` (compiler pass)
-  - `Registry/` (registre compilé)
-  - `Provider/` (façades Engine/Indicator)
-  - `Loader/` et `ConditionLoader/` (moteur YAML)
+---
 
-### Dépannage rapide
-- `cache:clear` échoue avec un argument inconnu → vérifier les arguments nommés dans `services.yaml`/constructeurs.
-- EMA9 ≈ 0 avec close > 0 → les logs incluent un tail des klines; la voie pur‑PHP est activée par défaut en fallback.
+## 3. Définition des conditions
+
+Chaque condition se trouve sous `src/Indicator/Condition/*` et applique l’attribut :
+
+```php
+#[AsIndicatorCondition(
+    name: self::NAME,
+    timeframes: ['1m','5m','15m','1h','4h'],
+    side: null| 'long' | 'short',
+    priority: 0
+)]
+final class RsiBullishCondition implements ConditionInterface
+{
+    public const NAME = 'rsi_bullish';
+    // ...
+}
+```
+
+Principes :
+- Le `CompilerPass` construit des locators indexés (`"15m"` / `"15m:long"`) pour une résolution rapide.
+- `Indicator\Registry\ConditionRegistry` expose `evaluate(array $context, ?array $names = null)` et `names()` pour introspection (ex. CLI diagnostics).
+- Le YAML reste la source de vérité métier : la compilation accélère certaines commandes/tests mais le runner continue d’utiliser la logique YAML via `TimeframeValidationService`.
+
+---
+
+## 4. Intégration dans MTF
+
+1. `MtfRunnerService` prépare un `MtfRunRequestDto`.
+2. `MtfValidatorCoreService` :
+   - demande aux `IndicatorProviderInterface` tous les timeframes (contexte + execution) nécessaires,
+   - passe les contextes à `ContextValidationService` et `ExecutionSelectionService` (via `TimeframeValidationService` et les configs YAML),
+   - construit un `MtfResultDto` (execution_tf, context snapshot, raisons).
+3. `TradingDecisionHandler` ne recalculera pas d’indicateurs : il consomme directement les ATR/metrics fournis dans `SymbolResultDto`.
+4. `MtfRunnerService::dispatchIndicatorSnapshotPersistence()` envoie de façon asynchrone les snapshots à persister pour suivre l’évolution des indicateurs dans le temps.
+
+---
+
+## 5. Commandes et scripts utiles
+
+| Commande | Description |
+| --- | --- |
+| `bin/console app:indicator:contracts:validate <tf> [--compiled] [--side=long|short]` | Mesure la perf de fetch/évaluation pour un TF donné. |
+| `bin/console app:indicator:conditions:diagnose <symbol> <tf> [--side=...]` | Force une évaluation compilée pour analyser les états `passed/failed`. |
+| `bin/console app:indicators:get <symbol> <tf> [--all-conditions]` | Retourne les valeurs d’indicateurs + évaluation d’un sous-ensemble de conditions. |
+| `bin/console indicator:snapshot create|compare|list ...` | Gestion des snapshots (création, diff, listing). |
+
+Les contrôleurs REST (`IndicatorTestController`) exposent des diagnostics équivalents pour Grafana/Postman.
+
+---
+
+## 6. Organisation du code
+
+- `src/Contract/Indicator/` — contrats DTO + interfaces.
+- `src/Indicator/Core/` — calculs purs (EMA, RSI, ADX…).
+- `src/Indicator/Context/` — builders communs (utilisés par le moteur YAML et la compilation).
+- `src/Indicator/Condition/` — conditions taggées `AsIndicatorCondition`.
+- `src/Indicator/Compiler/` — `IndicatorCompilerPass`.
+- `src/Indicator/Registry/` — `ConditionRegistry`.
+- `src/Indicator/Provider/` — implémentations des façades `MainProvider`, `EngineProvider`, `IndicatorProviderService`.
+- `src/Indicator/Loader` & `src/MtfValidator/ConditionLoader` — moteur YAML et mapping avec `MtfValidationConfig`.
+
+---
+
+## 7. Bonnes pratiques & dépannage
+
+- **Toujours passer par les interfaces** (`IndicatorMainProviderInterface`, `IndicatorEngineInterface`, `IndicatorProviderInterface`). Les classes `Core/*` ou `Condition/*` ne doivent pas être injectées directement.
+- **Limiter les timeframes/sides** dans les attributs des conditions pour éviter une explosion du nombre de services instanciés.
+- **EMA9 ≈ 0** sur des actifs très bas : vérifier les logs `indicator.ema_fallback`. Le builder va automatiquement fallback sur le calcul PHP et loguera les klines fautives.
+- **`cache:clear`/compilation** : si un service de condition échoue à cause d’un constructeur non autowirable, Symfony bloque la compilation. Vérifier l’attribut `#[AsIndicatorCondition]` ou les dépendances optionnelles (utiliser `?LoggerInterface` par exemple).
+- **Snapshots désynchronisés** : regarder les messages `IndicatorSnapshotPersistRequestMessage` (message bus). `MtfRunnerService` loggue le nombre de symboles/timeframes persistés par run.
+
+Ce module est ainsi prêt pour d’autres exchanges/timeframes sans modifier `MtfRunnerService` : suffit d’ajouter de nouvelles conditions taggées ou d’étendre les configs YAML.

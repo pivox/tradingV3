@@ -1,262 +1,188 @@
-# Trading App - Système MTF BitMart
+# Trading App – Runner, Validator & TradeEntry (2025)
 
-Application de trading automatisé basée sur l'analyse multi-timeframe (MTF) pour BitMart Futures.
+Plateforme de trading Bitmart (futures/spot) centrée sur la validation multi‑timeframe (MTF). Cette version introduit un orchestrateur unique (`MtfRunnerService`) piloté par `/api/mtf/run` et `bin/console mtf:run`. Le README décrit tout le flux – de la configuration jusqu’au placement d’ordres.
 
-## 🚀 Démarrage rapide
+---
 
-### 1. Configuration de l'environnement
+## 1. Démarrage rapide
 
-Créez un fichier `.env.local` avec vos clés BitMart :
+### 1.1 Pré‑requis
+| Outil | Version conseillée |
+| --- | --- |
+| PHP | 8.2 |
+| Composer | 2.x |
+| Docker / docker‑compose | dernière stable |
+| PostgreSQL | 15+ |
 
-```bash
-# Database configuration
+### 1.2 Configuration
+Copier `.env.local` et renseigner les secrets :
+
+```env
+# DB
 DATABASE_URL="postgresql://postgres:password@localhost:5433/trading_app?serverVersion=15&charset=utf8"
 
-# BitMart API configuration
-BITMART_API_KEY="your_api_key_here"
-BITMART_SECRET_KEY="your_secret_key_here"
-BITMART_BASE_URL="https://api-cloud-v2.bitmart.com"
+# Bitmart futures (public + private)
+BITMART_API_KEY="xxxx"
+BITMART_SECRET_KEY="xxxx"
+BITMART_API_MEMO="prod-trader"
 
-# WebSocket configuration
+# WebSocket & rate-limit optional overrides
 BITMART_WS_URL="wss://ws-manager-compress.bitmart.com/api?protocol=1.1"
- 
-# Optional: Rate-limit overrides per endpoint bucket (limit/windowSec)
-# Example: slow down private positions and open-orders to reduce 429
 # BITMART_RATE_PRIVATE_POSITION="3/2"
 # BITMART_RATE_PRIVATE_GET_OPEN_ORDERS="20/2"
 ```
 
-### 2. Démarrage avec Docker
-
+### 1.3 Docker
 ```bash
-# Démarrer l'application
-docker-compose up -d trading-app-php trading-app-nginx trading-app-db
-
-# Exécuter les migrations
-docker-compose exec trading-app-php php bin/console doctrine:migrations:migrate
+docker compose up -d trading-app-db trading-app-redis trading-app-php trading-app-nginx
+docker compose exec trading-app-php php bin/console doctrine:migrations:migrate
 ```
 
-### 3. Commandes disponibles
+### 1.4 Commandes principales
+| Commande | Description |
+| --- | --- |
+| `bin/console bitmart:fetch-contracts` | Synchronise les contrats (option `--symbol=BTCUSDT`). |
+| `bin/console bitmart:fetch-klines BTCUSDT --timeframe=1h --limit=200` | Récupère des klines. |
+| `bin/console mtf:run --symbols=BTCUSDT,ETHUSDT --workers=4 --dry-run=1` | Lance un run MTF via le runner. |
+| `curl -XPOST http://localhost:8082/api/mtf/run -d '{"dry_run":false,"workers":8,"mtf_profile":"scalper_micro"}'` | API HTTP équivalente. |
+| `bin/console messenger:consume order_timeout` | Watcher des orders/timeouts (dead‑man interne). |
 
-#### Récupérer la liste des contrats
+---
 
-```bash
-# Tous les contrats
-docker-compose exec trading-app-php php bin/console bitmart:fetch-contracts
-
-# Contrat spécifique
-docker-compose exec trading-app-php php bin/console bitmart:fetch-contracts --symbol=BTCUSDT
-
-# Format JSON
-docker-compose exec trading-app-php php bin/console bitmart:fetch-contracts --output=json
-```
-
-#### Récupérer les klines
-
-```bash
-# Klines 1h pour BTCUSDT
-docker-compose exec trading-app-php php bin/console bitmart:fetch-klines BTCUSDT
-
-# Klines 4h avec limite
-docker-compose exec trading-app-php php bin/console bitmart:fetch-klines BTCUSDT --timeframe=4h --limit=50
-
-# Format JSON
-docker-compose exec trading-app-php php bin/console bitmart:fetch-klines BTCUSDT --output=json
-
-# Période spécifique
-docker-compose exec trading-app-php php bin/console bitmart:fetch-klines BTCUSDT --from="2024-01-01 00:00:00" --to="2024-01-02 00:00:00"
-```
-
-#### Lancer un run MTF contractuel
-
-```bash
-# Dry-run multi-symboles avec verrous globaux
-docker-compose exec trading-app-php php bin/console mtf:run \
-  --symbols="BTCUSDT,ETHUSDT" \
-  --dry-run=1 \
-  --force-timeframe-check
-
-# Exécution ciblée 1h avec verrou par symbole et métadonnées utilisateur
-docker-compose exec trading-app-php php bin/console mtf:run \
-  --tf=1h \
-  --lock-per-symbol \
-  --user-id="ops-squad" \
-  --ip-address="192.168.0.15"
-```
-
-## 🏗️ Architecture
-
-L'application implémente désormais explicitement le découpage **Application / Domaine / Infrastructure** introduit par le nouveau contrat MTF :
-
-```mermaid
-flowchart LR
-    subgraph Application
-        facade(MtfValidatorInterface)
-        orchestrator(MtfRunOrchestrator)
-        decision(TradingDecisionHandler)
-    end
-
-    subgraph Domaine
-        strategies(HighConvictionValidation)
-        dto(DTO internes)
-    end
-
-    subgraph Infrastructure
-        repo(Repositories Doctrine)
-        provider(Providers BitMart)
-        cache(Caches Redis/DB)
-    end
-
-    facade --> orchestrator --> decision
-    orchestrator --> repo
-    orchestrator --> provider
-    decision --> provider
-    decision --> repo
-    orchestrator --> strategies
-```
-
-- **Application** : façade `MtfValidatorInterface`, orchestrateur, gestion des verrous et des switches.
-- **Domaine** : stratégies, DTOs, règles métier (ex : alignement multi-timeframe).
-- **Infrastructure** : bases de données, clients HTTP/WebSocket, caches.
-- **Présentation** : contrôleurs REST, commandes CLI (ex. `mtf:run`).
-
-## 📊 Fonctionnalités
-
-### ✅ Implémentées
-
-- [x] Récupération des contrats BitMart
-- [x] Récupération des klines (4h, 1h, 15m, 5m, 1m)
-- [x] Architecture hexagonale
-- [x] Base de données PostgreSQL
-- [x] Conteneurisation Docker
-- [x] Commandes CLI
-
-### 🚧 En cours
-
-- [ ] Calcul des indicateurs techniques
-- [ ] Génération de signaux
-- [ ] Validation MTF
-- [ ] Planification d'ordres
-- [ ] WebSocket en temps réel
-
-### 📋 À venir
-
-- [ ] Workflows Temporal
-- [ ] Exécution d'ordres
-- [ ] Gestion des risques
-- [ ] Interface web
-- [ ] Tests unitaires
-
-## ⚙️ Exécution des ordres
-
-- Entrée maker par défaut : les plans LIMIT sont envoyés en `mode=4` (post-only) pour tenter une exécution maker.
-- Positionnement rapproché : l'entrée LIMIT se cale 1 tick à l'intérieur du carnet (recalibrée si l'écart au mark dépasse ~0.5%).
-- Fallback automatique : si Bitmart rejette la soumission maker, la même intention est renvoyée immédiatement en ordre `market` (taker) avec le même `client_order_id`.
-- Annulation différée (exchange) : le « cancel-all-after » Bitmart (dead-man's switch) est activé par défaut à 120 s par symbole (clampé à 60 s côté exchange). Vous pouvez surcharger par ordre via `cancel_after_timeout` (en secondes). À l'expiration, Bitmart annule tous les ordres ouverts du symbole. Après ouverture de position (flux MARKET) et soumission des TP/SL, l'app désarme automatiquement le dead-man pour éviter d'annuler les TP/SL.
-- TP/SL préconfigurés : les prix `preset_*` (stop loss / take profit) sont envoyés autant pour le maker initial que pour le fallback taker, garantissant la couverture dès le fill.
-- TP hybride : le take-profit final combine le k·R théorique (ex. 2R) et les pivots intraday (PP/R1/S1...).
-- Traçage fin : `var/log/order-journey*.log` rejoue l’intégralité du pipeline (signal READY → plan → exécution). Voir `docs/ORDER_FLOW_README.md` pour le détail des étapes et paramètres (buffers, politiques TP).
-- Transport Messenger : un container `trading-app-messenger` lance `php bin/console messenger:consume order_timeout` en continu (s'appuie sur le service `redis` embarqué). Si vous faites tourner l'app sans Docker, exécutez la même commande manuellement.
-- Logs utiles : `execution.order_attempt_failed`, `execution.timeout_scheduled`, `trade_entry.timeout.cancel_attempt` documentent les étapes maker → taker et l'annulation différée.
-- Note `timeframe_multipliers` : dans `config/app/trade_entry.{mode}.yaml`, les multiplicateurs par timeframe impactent directement le sizing (`defaults.timeframe_multipliers`) via `TradeEntryRequestBuilder` et le levier (`leverage.timeframe_multipliers`) via `DynamicLeverageService`. Vérifiez que les TF exécutés ont bien un multiplicateur défini pour éviter les surprises (fallback = 1.0).
-
-### Stop-loss pivot & garde minimale
-
-- Politique configurable : `pivot_sl_policy` supporte désormais `nearest_below`, `strongest_below`, ainsi que les clés explicites `s1` / `s2` (et `r1` / `r2` côté short). L’algorithme choisit en priorité le niveau demandé et retombe sur un pivot cohérent s’il est manquant.
-- Pivots absents : si l’indicateur ne renvoie aucun pivot journalier valide, le système bascule automatiquement sur le stop `risk` (calcul distance-risk).
-- Garde 0,5 % universelle : après toute bascule (pivot → risk, ou risque budgeté), le builder impose une distance minimale de 0,5 % (≥ 1 tick). Si le stop calculé est trop serré, il est repoussé jusqu’à ce seuil puis la taille est recalculée avant le levier, ce qui évite les expositions à 50x pour un simple tick.
-- Journaux : les ajustements sont visibles via `order_plan.stop_min_distance_adjusted` (risk) ou `order_plan.stop_min_distance_adjusted_pivot` (pivot conservé et repoussé).
-- Impact sur sizing : l’ajustement est effectué **avant** la quantification finale du volume, garantissant que le levier reflète bien la distance étendue.
-codex resume 019a49f3-50e7-7552-8cd6-4ad3b3fad83b
-
-## 🔧 Développement
-
-### Structure des fichiers
+## 2. Architecture logique
 
 ```
-src/
-├── Domain/                 # Logique métier
-│   ├── Common/
-│   │   ├── Dto/           # Objets de transfert
-│   │   └── Enum/          # Énumérations
-│   ├── Kline/Service/     # Services klines
-│   ├── Indicator/Service/ # Services indicateurs
-│   ├── Mtf/Service/       # Services MTF
-│   └── Trade/Service/     # Services trading
-├── Application/           # Workflows et orchestration
-├── Infrastructure/        # Adaptateurs externes
-│   ├── Http/             # Client REST BitMart
-│   ├── WebSocket/        # Client WebSocket
-│   ├── Persistence/      # Repositories
-│   └── Cache/            # Cache de validation
-└── Presentation/         # Contrôleurs et CLI
-    └── Command/          # Commandes console
+RunnerController (/api/mtf/run) / CLI mtf:run
+        │ (MtfRunnerRequestDto)
+        ▼
+    MtfRunnerService
+        ├─ resolveSymbols + sync tables Bitmart
+        ├─ filtre ordres/positions (Switches/Locks)
+        ├─ runSequential() / runParallel()    => MtfValidatorService
+        ├─ dispatchIndicatorSnapshotPersistence()
+        ├─ processTpSlRecalculation()
+        └─ enrichResults()
+
+    MtfValidatorService
+        └─ MtfValidatorCoreService
+             ├─ ContextValidationService → TimeframeValidationService
+             ├─ ExecutionSelectionService
+             └─ TradingDecisionHandler (dispatch Messenger → TradeEntry)
+
+    TradeEntryService
+        └─ Workflow BuildPreOrder → BuildOrderPlan → ExecuteOrderPlan → AttachTpSl
 ```
 
-### Tests
+### Modules clés
+| Module | README |
+| --- | --- |
+| Runner (orchestration) | `src/MtfRunner/README.md` |
+| Validator (règles MTF) | `src/MtfValidator/README.md` |
+| TradeEntry (pricing + ordres) | `src/TradeEntry/README.md` |
+| Indicator/Provider (conditions, snapshots, accéder à Bitmart) | `src/Indicator/README.md`, `src/Provider/README.md` |
 
-```bash
-# Tests unitaires
-docker-compose exec trading-app-php php bin/phpunit
+---
 
-# Tests d'intégration
-docker-compose exec trading-app-php php bin/phpunit --testsuite=integration
-```
+## 3. Flux d’exécution
 
-## 📝 Logs
+### 3.1 Runner
+- Résout la liste des symboles (contrats DB + queue `mtf_switch`).
+- Synchronise positions et ordres via `FuturesOrderSyncService`.
+- Filtre les symboles déjà engagés (positions/ordres). Les switches sont prolongés automatiquement.
+- Lance l’exécution MTF soit séquentielle (direct `MtfValidatorInterface::run()`), soit parallèle (workers `mtf:run-worker`).
+- Publie un message `IndicatorSnapshotPersistRequestMessage` pour sauvegarder les indicateurs.
+- Post‑traitements : recalcul TP/SL (si `process_tp_sl=true`), enrichissement des résultats (summary TF, orders, etc.).
 
-Les logs sont disponibles dans le conteneur :
+### 3.2 Validator
+- `MtfValidatorService` transforme `MtfRunnerRequestDto` → `MtfRunDto`.
+- `MtfValidatorCoreService` :
+  1. Charge `MtfValidationConfig` (profils `config/app/mtf_validations*.yaml`).
+  2. Récupère les indicateurs via `IndicatorProviderInterface`.
+  3. Valide le contexte (ContextValidationService) puis sélectionne le TF d’exécution (ExecutionSelectionService).
+  4. Retourne `MtfResultDto` (`isTradable`, `executionTimeframe`, raisons).
+- Publie `MtfResultProjectionMessage` et `MtfTradingDecisionMessage` (bus Messenger).
 
-```bash
-# Voir les logs de l'application
-docker-compose logs -f trading-app-php
+### 3.3 TradeEntry
+- `TradingDecisionHandler` consomme `SymbolResultDto`, vérifie les préconditions, construit le `TradeEntryRequest`.
+- `TradeEntryService` orchestre :
+  - `BuildPreOrder` → récupère specs/balance/spread/pivots.
+  - `BuildOrderPlan` → entry zone (VWAP/SMA21), prix limit, stop ATR/pivot/risk, TP (k·R + pivots), sizing, levier dynamique.
+  - `ExecuteOrderPlan` → soumet levier, orders, watchers maker/taker, dead‑man switch, fallback end‑of‑zone.
+  - `AttachTpSl` ou `TpSlTwoTargetsService` recalculera les TP/SL à chaud si besoin.
 
-# Voir les logs de la base de données
-docker-compose logs -f trading-app-db
-```
+---
 
-- Traçage complet placement d'ordre : `var/log/order-journey*.log` (toutes les étapes depuis le signal MTF jusqu'à l'ID d'ordre Bitmart).
+## 4. Configuration & profiles
 
-## 🔍 Investigation — Pourquoi aucun ordre n'a été placé ?
+### 4.1 Modes MTF / TradeEntry
+- `config/app/mtf_validations.<mode>.yaml` : règles multi‑timeframes, execution_selector, filters, etc.
+- `config/app/trade_entry.<mode>.yaml` : risk/r_multiple, `stop_from`, policies TP, `market_entry`, `post_validation.entry_zone`, leverage caps.
+- `config/trading.yml` : paramètres partagés (entry zone, fallback, watchers).
+- `TradeEntryModeContext` + `MtfValidationConfigProvider` sélectionnent le profil actif (`scalper_micro` par défaut).
 
-Une commande console est fournie pour diagnostiquer rapidement pourquoi un symbole (ou plusieurs) n'a pas abouti à une soumission d'ordre.
+### 4.2 Secrets / .env
+- `BITMART_*` : credentials Bitmart.
+- `APP_ENV`, `APP_DEBUG`.
+- `REDIS_URL`, `MESSENGER_TRANSPORT_DSN`.
+- `MTF_LOG_LEVEL`, `LOG_LEVEL_*` (multi‑logger).
 
-Exemples d'utilisation:
+---
 
-```bash
-# Résumé tableau (24 dernières heures par défaut)
-docker-compose exec trading-app-php php bin/console investigate:no-order --symbols=GLMUSDT,VELODROMEUSDT,LTCUSDT,MELANIAUSDT,FILUSDT
+## 5. Observabilité
 
-# Sortie JSON et fenêtre de 6h
-docker-compose exec trading-app-php php bin/console investigate:no-order --symbols=GLMUSDT --since-hours=6 --format=json
+| Logger | Usage |
+| --- | --- |
+| `monolog.logger.mtf` | Runner, validator, temporal pipelines. |
+| `monolog.logger.positions` | TradeEntry, TP/SL, order journey. |
+| `monolog.logger.provider` | Providers HTTP/WS. |
 
-# Fenêtre courte (30 minutes, prioritaire sur --since-hours)
-docker-compose exec trading-app-php php bin/console investigate:no-order --symbols=GLMUSDT --since-minutes=30
+Fichiers utiles :
+- `var/log/order-journey*.log` : relecture d’un plan complet (signal → plan → ordre).
+- `var/log/mtf-runner.log` : résolution, filtres, watchers, snapshots.
+- `var/log/bitmart-http.log` : détails REST (avec rate-limit).
 
-# Alias et mode "watch" toutes les 2 minutes
-# Alias console: investigate:no et ino
-docker-compose exec trading-app-php php bin/console investigate:no --symbols=GLMUSDT --since-minutes=30
-docker-compose exec trading-app-php php bin/console ino --symbols=GLMUSDT --since-minutes=30
+Profils perf :
+- `PerformanceProfiler` (Runner) renvoie des timings par étape.
+- Commande `bin/console app:indicator:conditions:diagnose` permet d’inspecter une condition (YAML vs compilée).
 
-# Script watch (boucle avec intervalle configurable, défaut 120s)
-docker-compose exec trading-app-php bash bin/investigate_no_order_watch.sh --symbols=GLMUSDT,VELODROMEUSDT --since-minutes=30 --interval=120
-```
+---
 
-La commande scanne les `var/log/positions-*.log` récents pour détecter:
-- `positions.order_submit.success` → ordre soumis (avec `order_id` BitMart).
-- `order_journey.trade_entry.skipped` / `build_order_plan.zone_skipped_for_execution` → raison de skip (ex: `skipped_out_of_zone`) et détails de zone.
-- À défaut de traces d’exécution, elle interroge les audits MTF (`mtf_audit`) pour identifier l’étape bloquante: `*_VALIDATION_FAILED`, `ALIGNMENT_FAILED`, `KILL_SWITCH_OFF` (avec `timeframe`, `kline_time`, `cause`).
+## 6. Services/Workers externes
 
-## 🔒 Sécurité
+| Process | Description |
+| --- | --- |
+| `messenger:consume order_timeout` | Traite les jobs d’annulation/TP‑SL asynchrones. |
+| `messenger:consume indicator_snapshot` (optionnel) | Persiste les snapshots d’indicateurs. |
+| `scheduler/cron` | Déclenche `mtf:run` ou API Runner selon vos besoins (ex: toutes les 5 min). |
 
-- Clés API stockées dans les variables d'environnement
-- Validation des entrées utilisateur
-- Headers de sécurité HTTP
-- Isolation des conteneurs Docker
+---
 
-## 📚 Documentation
+## 7. Diagnostics rapides
 
-- [Documentation BitMart Futures V2](https://developer-pro.bitmart.com/en/futuresv2/)
-- [Architecture hexagonale Symfony](https://symfony.com/doc/current/best_practices/hexagonal_architecture.html)
-- [Doctrine ORM](https://www.doctrine-project.org/projects/orm.html)
-- Documentation interne : `docs/ORDER_FLOW_README.md` (parcours order_journey et règles TP/pivots), `docs/WS_WORKER_BALANCE_INTEGRATION.md`.
+| Endpoint / Commande | Description |
+| --- | --- |
+| `GET /mtf/status` | Vérifie la santé (locks, timestamp, workflow). |
+| `GET /mtf/lock/status` / `/mtf/lock/cleanup` | Inspecte ou nettoie les locks. |
+| `GET /mtf/audit?symbol=BTCUSDT` | Liste les derniers audits MTF (DB). |
+| `GET /provider/health` (si exposé) | Vérifie les providers Kline/Order/Account. |
+| `bin/console debug:config app` | Vérifie la config active. |
+| `docs/*` | Documentation détaillée par module (`Indicator`, `Provider`, `MtfRunner`, `MtfValidator`, `TradeEntry`). |
+
+---
+
+## 8. Checklist dev
+
+1. **Ajouter un mode** → YAML `mtf_validations.<mode>` + `trade_entry.<mode>` + activer dans `services.yaml (mode list)`.
+2. **Modifier un flux** → mettre à jour le README du module concerné, ajouter tests (Runner/Validator/TradeEntry).
+3. **Nouvel exchange** → implémenter `ExchangeProviderBundle`, enregistrer dans `ExchangeProviderRegistry`, passer `exchange`/`market_type` côté Runner.
+4. **Déploiement** → faire tourner les workers Messenger, surveiller `order_journey` et `mtf_runner` pour valider l’intégration.
+
+---
+
+## 9. Ressources
+
+- `docs/README.md` : architecture globale + liens vers les modules.
+- `docs/MTF_POSITIONS_USAGE.md`, `docs/MTF_PERFORMANCE_ANALYSIS.md`, `docs/BUGS_ATR_STOP_LOSS.md` : runbooks historiques.
+- `src/*/README.md` : documentation approfondie par composant (Runner, Validator, TradeEntry, Provider, Indicator).
+
+Ce README donne les points d’entrée essentiels. Pensez à maintenir les README des sous-modules lorsque vous introduisez une nouvelle fonctionnalité, afin de garder l’architecture claire pour toute l’équipe. Bonne exécution MTF !
