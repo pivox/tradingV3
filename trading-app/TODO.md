@@ -8,3 +8,4 @@
 - Corriger l'extension `php-trader` (ATR) dans le container PHP afin d'éviter les recalculs et warnings `[ATR] trader_atr returned invalid value` côté `indicators`.
 - Brancher la persistance `entry_zone_live` (service + cleanup TTL) en utilisant `EntryZoneLiveRepository`, puis exposer le flux (API ou audit CLI).
 - Précharger ou mettre en cache les klines Bitmart 1m/5m avant `mtf_execution` (ou lisser les batchs) pour éviter les rafales `429 Too Many Requests` et les 3–5 s par symbole observés malgré 8 workers.
+- Implémenter la persistance des runs (`mtf_run`, `mtf_run_metric`, `mtf_run_symbol`) depuis `MtfRunnerService`/`MtfValidatorService` afin que l’analyse DB (`scripts/analyze_mtf_runs_since.sh`) retourne des métriques réelles.

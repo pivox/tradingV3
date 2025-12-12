@@ -43,7 +43,7 @@ Utilise **20 clés** pour construire `TradeEntryRequest` :
 | `tp_buffer_ticks` | 112 | Buffer TP en ticks (optionnel, validé > 0) | `null` |
 | `tp_min_keep_ratio` | 116 | Ratio min à conserver pour TP | `0.95` |
 | `tp_max_extra_r` | 117 | R supplémentaire max pour TP (optionnel, validé >= 0) | `null` |
-| `pivot_sl_policy` | 122 | Politique de Stop Loss pivot | `'nearest_below'` |
+| `pivot_sl_policy` | 122 | Politique de Stop Loss pivot | `'nearest'` |
 | `pivot_sl_buffer_pct` | 123 | Buffer SL pivot en % (optionnel, validé >= 0) | `null` |
 | `pivot_sl_min_keep_ratio` | 127 | Ratio min à conserver pour SL pivot (optionnel, validé > 0) | `null` |
 | `open_type` | 138 | Type d'ouverture ('isolated' ou 'cross') | `'isolated'` |
@@ -79,7 +79,7 @@ Utilise **11 clés** pour le calcul SL/TP :
 | `tp_min_keep_ratio` | 125 | Ratio min TP | `0.95` |
 | `tp_buffer_pct` | 126 | Buffer TP % (optionnel) | `null` |
 | `tp_buffer_ticks` | 127 | Buffer TP ticks (optionnel) | `null` |
-| `pivot_sl_policy` | 128 | Politique SL pivot | `'nearest_below'` |
+| `pivot_sl_policy` | 128 | Politique SL pivot | `'nearest'` |
 | `pivot_sl_buffer_pct` | 129 | Buffer SL pivot % (optionnel) | `null` |
 | `pivot_sl_min_keep_ratio` | 130 | Ratio min SL pivot (optionnel) | `null` |
 | `r_multiple` | 131 | Multiple R | `2.0` |
@@ -250,4 +250,3 @@ trade_entry:
 
 **Généré le**: 2025-01-27  
 **Version**: 1.0
-

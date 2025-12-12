@@ -12,6 +12,9 @@
 - Filtres de contexte: `rg "\[MTF\] Context filter check" trading-app/var/log/dev-2025-11-26.log`
 - BDD (psql / docker-compose): comptages sur `mtf_audit`, `mtf_run*`, `mtf_state`
 - Script de synthèse: `./mtf_report.sh 2025-11-26`
+- Script condition report (post-run) :
+  `trading-app/scripts/mtf_condition_report.py --log var/log/mtf-YYYY-MM-DD.log --since "YYYY-MM-DD HH:MM" --csv-prefix /tmp/mtf-summary`
+  → génère les trois CSV `*_failrule.csv`, `*_failsymbol.csv`, `*_passsymbol.csv` utilisables pour tracker le threshold tuning.
 
 ## Investigation position fermé
 - Export complet des données persistées et logs pour un symbole à une date/heure précise (UTC):
@@ -34,31 +37,41 @@
 - Les décisions MTF sont envoyées via Messenger, surveiller les logs `[MTF Messenger]` pour confirmer les ordres.
 - Les messages `App\TradeEntry\Message\LimitFillWatchMessage` restent sur `order_timeout` pour éviter les warnings côté `mtf_decision`.
 - Après chaque modification de config Messenger, relancer les deux containers pour appliquer les nouvelles files Redis.
+- 08 déc 2025 – changements scalper à rollback si winrate < baseline :
+  - `RsiBullishCondition` → seuil 5m abaissé dynamiquement à 49 (fallback automatique si aucun override n’est fourni).
+  - `close_above_vwap_or_ma9_relaxed` → nouvelle règle YAML qui tolère une clôture proche du VWAP lorsque `atr_rel_in_range_5m` passe et que le prix reste dans ±0.4 % du VWAP.
+- TODO 09 déc 2025 : rétablir la persistance des signaux (SignalValidationService obsolète, aucun dispatch messenger → table `signals` vide). Décider si on reconnecte `SignalPersistenceService` directement dans les services TF ou si on crée un handler messenger dédié.
 
 ## 4 déc 2025 – Persistance indicateurs asynchrone
 - `MtfRunnerService` n'appelle plus `getIndicatorsForSymbolAndTimeframes()` directement. À la place, chaque run dispatch un `IndicatorSnapshotPersistRequestMessage` (redis `mtf_projection`) contenant `symbols` + `timeframes` + `run_id`.
 - `trading-app-messenger-projection` consomme ces jobs via `IndicatorSnapshotPersistRequestMessageHandler`, qui refait la récupération des indicateurs et projette les snapshots avec `IndicatorSnapshotProjector`. Résultat : `/api/mtf/run` répond ~2× plus vite (plus de boucle bloquante sur 180 snapshots).
 - `IndicatorProviderService::getIndicatorsForSymbolAndTimeframes()` renvoie désormais `kline_time`, ce qui permet au handler d'horodater correctement chaque snapshot.
 - Logs à surveiller :
-  - `var/log/dev-2025-12-04.log` → `Parallel execution completed` puis `Execution completed` ~55 s après le POST.
+  - `var/log/dev-2025-12-04.log` → `Parallel execution completed` puis `Execution completed` ~55 s après le POST.
   - `var/log/indicators-2025-12-04.log` → `[IndicatorProvider] Snapshot persisted` et warnings `[ATR] trader_atr returned invalid value`.
 - À garder en tête : tant que `php-trader` renvoie 0, chaque projection retombe sur le fallback ATR PHP (≈30k warnings/jour). Prévoir un fix côté extension pour alléger le worker `mtf_projection`.
 
 ## 5 déc 2025 – Audit run workers=8 + indicateurs
-- Relance `curl -X POST http://localhost:8082/api/mtf/run -H 'Content-Type: application/json' -d '{"dry_run":false,"force_run":false,"force_timeframe_check":false,"workers":8,"mtf_profile":"scalper_micro"}'` → `run_id=1b6dc4d4-8233-4882-89bf-627687c3b0a5`, durée HTTP 19.5 s (`mtf_execution=18.3 s`). 38/38 symboles invalidés (`NO_LONG_NO_SHORT` sur 5 m ou 1 m).
-- `mtf-2025-12-05.log` montre que les 8 workers tournent par vagues de ~3–5 s chacune car chaque symbole déclenche `IndicatorProvider` → fetch Bitmart (250 klines / tf). Plusieurs requêtes `Bitmart` passent en 429 (backoff 2 s) dès qu'on lance 50 symboles, ce qui explique la latence résiduelle même après la persistance asynchrone.
+- Relance `curl -X POST http://localhost:8082/api/mtf/run -H 'Content-Type: application/json' -d '{"dry_run":false,"force_run":false,"force_timeframe_check":false,"workers":8,"mtf_profile":"scalper_micro"}'` → `run_id=1b6dc4d4-8233-4882-89bf-627687c3b0a5`, durée HTTP 19.5 s (`mtf_execution=18.3 s`). 38/38 symboles invalidés (`NO_LONG_NO_SHORT` sur 5 m ou 1 m).
+- `mtf-2025-12-05.log` montre que les 8 workers tournent par vagues de ~3–5 s chacune car chaque symbole déclenche `IndicatorProvider` → fetch Bitmart (250 klines / tf). Plusieurs requêtes `Bitmart` passent en 429 (backoff 2 s) dès qu'on lance 50 symboles, ce qui explique la latence résiduelle même après la persistance asynchrone.
 - `IndicatorSnapshotPersistRequestMessage` bien dispatché à la fin du run (voir `messenger.INFO` à 08:12:21 & 08:12:48). Le worker `trading-app-messenger-projection` persiste une fois par symbole/tf (`[IndicatorProvider] Snapshot persisted`), aucun doublon observé.
 - Audit indicateurs : les snapshots comportent `kline_time` correct (`5m=08:05`, `1m=08:11`) et l'ATR tombe systématiquement sur le fallback PHP (`[ATR] trader_atr returned invalid value`). Warning volume ~30k/jour confirmé.
 - Ajout d'un repository Doctrine dédié (`EntryZoneLiveRepository`) pour piloter la nouvelle entité `EntryZoneLive` (table `entry_zone_live`). Reste à brancher la projection/TTL côté TradeEntry.
 
+## 10 déc 2025 – Entry zone resserrée & politiques pivot
+
+- Zone scalper resserrée pour réduire les entrées trop éloignées : `max_deviation_pct` retombé à 1 %, `implausible_pct` à 3 % et `zone_max_deviation_pct` à 4.5 %. La post-validation limite maintenant `w_max` à 1 % du pivot (TTL 180 s), ce qui force les EntryZone à rester dans ±1 % du VWAP/SMA sur <3 min.
+- `EntryZoneCalculator` et `OrderPlanBuilder` loguent désormais ces nouvelles bornes pour suivre les `entry_zone.rejected_by_deviation`. Penser à rejouer `v_zone_width_stats_scalper_1m` pour contrôler que la largeur médiane reste compatible avec la volatilité actuelle.
+- `pivot_sl_policy` est unifiée : seules les valeurs `nearest`, `strongest`, `s1...s6` ou `r1...r6` sont supportées côté configs. `nearest` prend automatiquement le support/résistance le plus proche (stop serré → levier plus élevé), tandis que `strongest` priorise `S2/R2` puis `S1/R1` (stop plus large → levier réduit). Les anciennes valeurs `*_below`/`*_above` restent acceptées mais normalisées.
+
 ## Notes – Algorithme de calcul de zone d'entrée
 - `EntryZoneCalculator::compute()` fusionne `post_validation.entry_zone` et `entry.entry_zone` du profil YAML (ex: `trade_entry.scalper_micro.yaml`). Les clés du bloc `entry` ont priorité.
-- Sélection pivot : `entry.entry_zone.from` force l'ancre (`vwap`, `sma21`, etc.). À défaut, `post_validation.entry_zone.vwap_anchor` décide si l'on tente VWAP puis SMA21 (ou l'inverse). Les pivots proviennent de `IndicatorProvider::getListPivot(symbol, pivot_tf)`.
-- Offsets : `offset_atr_tf` (sinon `pivot_tf`) sert à récupérer un ATR via `IndicatorProvider::getAtr`. La demi-largeur brute est `k_atr * ATR`. On clamp ensuite cette largeur entre `pivot * w_min` et `pivot * w_max` (ou `max_deviation_pct` si défini côté `entry`).
-- Asymétrie : `asym_bias` (0–0.95) rééquilibre la zone selon le `Side` (plus basse pour les longs si positif). Si absent on reste symétrique.
-- Quantification : si `quantize_to_exchange_step`=true, les bornes sont arrondies au tick exchange via `TickQuantizer`, en utilisant `pricePrecision` fourni par `PreflightReport`.
-- TTL : `entry.entry_zone.ttl_sec` (sinon `post_validation.entry_zone.ttl_sec`, défaut 240 s) stocké dans l'objet `EntryZone`.
-- Contrôles runtime : `BuildOrderPlan` claque le prix candidat sur le carnet puis vérifie `EntryZone::contains()`. Si échec:
+- Sélection pivot : `entry.entry_zone.from` force l'ancre (`vwap`, `sma21`, etc.). À défaut, `post_validation.entry_zone.vwap_anchor` décide si l'on tente VWAP puis SMA21 (ou l'inverse). Les pivots proviennent de `IndicatorProvider::getListPivot(symbol, pivot_tf)`.
+- Offsets : `offset_atr_tf` (sinon `pivot_tf`) sert à récupérer un ATR via `IndicatorProvider::getAtr`. La demi-largeur brute est `k_atr * ATR`. On clamp ensuite cette largeur entre `pivot * w_min` et `pivot * w_max` (ou `max_deviation_pct` si défini côté `entry`).
+- Asymétrie : `asym_bias` (0–0.95) rééquilibre la zone selon le `Side` (plus basse pour les longs si positif). Si absent on reste symétrique.
+- Quantification : si `quantize_to_exchange_step`=true, les bornes sont arrondies au tick exchange via `TickQuantizer`, en utilisant `pricePrecision` fourni par `PreflightReport`.
+- TTL : `entry.entry_zone.ttl_sec` (sinon `post_validation.entry_zone.ttl_sec`, défaut 240 s) stocké dans l'objet `EntryZone`.
+- Contrôles runtime : `BuildOrderPlan` claque le prix candidat sur le carnet puis vérifie `EntryZone::contains()`. Si échec:
   - on calcule `zone_dev_pct = max(|zone_min - mark|, |zone_max - mark|) / mark` où `mark = preflight.markPrice ?? bestAsk ?? bestBid`.
   - si `zone_dev_pct > zone_max_deviation_pct` (valeur issue des defaults YAML, normalisée en %), on log `zone_skipped_for_execution` et on jette `EntryZoneOutOfBoundsException`.
   - sinon, c'est un bug logique → `entry_out_of_zone_after_clamp`.
@@ -100,7 +113,7 @@
 - Ajout des conditions `RsiBullishCondition` / `RsiBearishCondition` (PHP) pour supprimer les erreurs `Missing condition "gt"` et séparer clairement les contextes long/short.
 - `validations.scalper_micro.yaml` consomme désormais ces conditions avec des seuils 52/48 (overrides possibles) et les logs `[MTF_RULE_DEBUG]` exposent la valeur RSI et les TF.
 - Objectif: réduire les `LONG_AND_SHORT` en bloc tout en gardant `NO_LONG_NO_SHORT` si ni le côté bull ni bear ne valide.
-- TODO: Ajouter explicitement `zone_max_deviation_pct` dans `trade_entry.scalper_micro.yaml` (ou overrides symboles) sinon `BuildOrderPlan` retombe sur le fallback 0.007 (0,7 %) malgré `entry_zone.max_deviation_pct = 5%`.
+- TODO: Ajouter explicitement `zone_max_deviation_pct` dans `trade_entry.scalper_micro.yaml` (ou overrides symboles) sinon `BuildOrderPlan` retombe sur le fallback 0.007 (0,7 %) malgré `entry_zone.max_deviation_pct = 5%`.
 
 ### SQL views utiles pour reproduire l'analyse zone 1m
 
