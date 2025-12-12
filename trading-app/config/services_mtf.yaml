@@ -1,25 +1,9 @@
 services:
   # Services MTF
-  App\MtfValidator\Service\MtfTimeService:
-    arguments:
-      $logger: '@logger'
-
   # HTTP Client (utilise maintenant BitmartHttpClientPublic)
   # App\Infrastructure\Http\BitmartClient: supprimé, utilise App\Provider\Bitmart\Http\BitmartHttpClientPublic
 
   # Temporal Services
-
-  # Controllers
-  App\MtfValidator\Controller\MtfController:
-    arguments:
-      $mtfService: '@App\MtfValidator\Service\MtfService'
-      $klineRepository: '@App\Provider\Repository\KlineRepository'
-      $mtfStateRepository: '@App\Repository\MtfStateRepository'
-      $mtfSwitchRepository: '@App\MtfValidator\Repository\MtfSwitchRepository'
-      $mtfAuditRepository: '@App\MtfValidator\Repository\MtfAuditRepository'
-      $mtfLockRepository: '@App\MtfValidator\Repository\MtfLockRepository'
-      $logger: '@logger'
-    tags: ['controller.service_arguments']
 
   # Commands
   App\Command\MtfWorkerCommand:
@@ -60,4 +44,3 @@ services:
     class: Temporal\Worker\WorkerFactory
     arguments:
       $serviceClient: '@temporal.service_client'
-

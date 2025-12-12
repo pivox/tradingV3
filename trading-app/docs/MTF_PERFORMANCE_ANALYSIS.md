@@ -1,5 +1,7 @@
 # Analyse de Performance MTF Run
 
+> **Legacy notice:** ce document suit les métriques de l'ancien contrôleur `/api/mtf/run` (MtfController + MtfService). Depuis la généralisation de `RunnerController` + `MtfRunnerService`, il reste pour référence historique.
+
 ## Vue d'ensemble
 
 Ce document décrit le système d'analyse de performance pour l'endpoint `/api/mtf/run` qui traite 90 symboles avec 8 workers en parallèle.
@@ -180,4 +182,3 @@ Le rapport de performance est également inclus dans la réponse JSON de l'endpo
 2. Ajouter le profiling dans IndicatorProviderService pour mesurer les calculs d'indicateurs
 3. Créer un dashboard Grafana pour visualiser les métriques en temps réel
 4. Ajouter des alertes sur les temps d'exécution anormaux
-

@@ -1,5 +1,7 @@
 # Étude d'Impact : Changement Context/Execution Timeframes
 
+> **Legacy notice:** ce document analyse l'ancien service `MtfService`. Depuis la migration vers `MtfRunnerService` + `MtfValidatorCoreService`, cette étude sert uniquement de référence historique.
+
 ## Objectif
 Changer la configuration scalper pour :
 - **Contexte** : `1h` et `15m` (au lieu de `4h` et `1h`)
@@ -184,5 +186,4 @@ $tfOrder = ['4h','1h','15m','5m','1m'];
 2. **Adapter les conditions** : S'assurer que `drop_to_1m_if_any` utilise des conditions pertinentes pour 1m
 3. **Tester progressivement** : Commencer avec `start_from_timeframe='15m'` et vérifier que 5m n'est plus validé
 4. **Monitoring** : Surveiller les logs pour vérifier que les décisions d'exécution sont correctes
-
 

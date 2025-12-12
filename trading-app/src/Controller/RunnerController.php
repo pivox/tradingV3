@@ -127,7 +127,7 @@ class RunnerController extends AbstractController
                 'performance_report' => $performanceReport,
             ]);
 
-            // Formater la réponse exactement comme dans MtfController::runMtfCycle()
+            // Réponse alignée sur l'ancien endpoint runMtfCycle() pour compatibilité
             return $this->json([
                 'status' => $status,
                 'message' => 'MTF run completed',

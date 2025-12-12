@@ -77,9 +77,6 @@ services:
 
 
     # MTF Services
-    App\MtfValidator\Service\MtfTimeService:
-        public: true
-
     # Services de timeframe MTF - Configuration supprimée pour utiliser l'auto-wiring
 
     # Configuration Redis temporaire pour résoudre le problème LockManager
@@ -94,25 +91,20 @@ services:
         class: App\Runtime\Concurrency\MockRedis
         public: true
 
+    # Service Redis réel pour OrderWatcherPublisher (Pub/Sub)
+    App\Provider\Redis\RedisPubSubClient:
+        class: Redis
+        public: true
+        calls:
+            - [connect, ['%env(string:REDIS_HOST)%', '%env(int:REDIS_PORT)%']]
+        tags:
+            - { name: 'container.hot_path' }
+
     App\MtfValidator\Runtime\Concurrency\LockManager:
         arguments:
             $redis: '@Redis'
             $runtimeLogger: '@monolog.logger.mtf'
 
-
-#    App\MtfValidator\Service\MtfRunService:
-#        arguments:
-#            $mtfService: '@App\MtfValidator\Service\MtfService'
-#            $mtfSwitchRepository: '@App\Repository\MtfSwitchRepository'
-#            $mtfLockRepository: '@App\Repository\MtfLockRepository'
-#            $contractRepository: '@App\Repository\ContractRepository'
-#            $logger: '@monolog.logger.mtf'
-#            $positionsFlowLogger: '@monolog.logger.positions'
-#            $clock: '@Psr\Clock\ClockInterface'
-#            $tradingDecisionService: '@App\EntryPosition\Service\TradingDecisionService'
-#            $tradeContext: '@App\EntryPosition\Service\TradeContextService'
-#            $providerService: '@App\Provider\ProviderService'
-#        public: true
 
     # Rate Limiter
 

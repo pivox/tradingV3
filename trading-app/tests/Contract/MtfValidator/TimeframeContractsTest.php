@@ -4,27 +4,12 @@ declare(strict_types=1);
 
 namespace App\Tests\Contract\MtfValidator;
 
-use App\Contract\MtfValidator\TimeframeProcessorInterface;
 use App\Contract\MtfValidator\Dto\TimeframeResultDto;
 use App\Contract\MtfValidator\Dto\ValidationContextDto;
 use PHPUnit\Framework\TestCase;
 
-/**
- * Tests pour l'interface TimeframeProcessorInterface
- */
-class TimeframeProcessorInterfaceTest extends TestCase
+class TimeframeContractsTest extends TestCase
 {
-    public function testTimeframeProcessorInterface(): void
-    {
-        // Test que l'interface existe et a les bonnes méthodes
-        $this->assertTrue(interface_exists(TimeframeProcessorInterface::class));
-        
-        $reflection = new \ReflectionClass(TimeframeProcessorInterface::class);
-        $this->assertTrue($reflection->hasMethod('processTimeframe'));
-        $this->assertTrue($reflection->hasMethod('getTimeframeValue'));
-        $this->assertTrue($reflection->hasMethod('canProcess'));
-    }
-
     public function testTimeframeResultDto(): void
     {
         $result = new TimeframeResultDto(

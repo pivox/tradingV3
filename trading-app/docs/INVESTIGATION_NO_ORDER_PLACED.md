@@ -1,5 +1,7 @@
 # Investigation : Pourquoi aucun ordre n'est placé
 
+> **Legacy notice:** ce runbook décrit l'ancien pipeline `MtfService`. Depuis la bascule vers `MtfRunnerService` + `MtfValidatorCoreService`, ce document sert uniquement à comprendre les incidents historiques.
+
 **Date** : 2025-11-22  
 **Problème** : Aucun ordre n'est placé malgré l'exécution du cycle MTF
 
@@ -164,7 +166,6 @@ curl -X POST http://localhost:8082/api/mtf/run \
 - `trading-app/src/MtfValidator/Service/MtfService.php` : Lignes 1261-1373 (construction résultat)
 - `trading-app/src/MtfValidator/Service/TradingDecisionHandler.php` : Ligne 53 (garde READY)
 - `trading-app/src/MtfValidator/config/validations.scalper.yaml` : Configuration active
-
 
 
 

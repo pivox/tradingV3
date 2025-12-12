@@ -86,8 +86,8 @@ final class TradingDecisionHandler
             return $this->createSkippedResult($symbolResult, 'trading_conditions_not_met', $forcedAtr5m, $decisionKey, $resolvedMode);
         }
 
-        // 2. Utiliser le TF d'exécution déjà décidé par MtfService (via ExecutionTimeframeDecisionService)
-        // Plus de re-sélection : on prend directement le TF qui vient de MtfService
+        // 2. Utiliser le TF d'exécution déjà décidé par le pipeline MTF (ExecutionSelectionService)
+        // Plus de re-sélection : on prend directement le TF calculé par MtfValidatorCoreService
         if ($symbolResult->executionTf === null || $symbolResult->executionTf === '') {
             $this->mtfLogger->error('[TradingDecision] executionTf is required but missing', [
                 'symbol' => $symbolResult->symbol,
@@ -109,11 +109,11 @@ final class TradingDecisionHandler
             }
         }
 
-        $this->mtfLogger->info('[TradingDecision] Using execution TF from MtfService', [
+        $this->mtfLogger->info('[TradingDecision] Using execution TF from ExecutionSelectionService', [
             'symbol' => $symbolResult->symbol,
             'decision_key' => $decisionKey,
             'execution_tf' => $effectiveTf,
-            'source' => 'MtfService::ExecutionTimeframeDecisionService',
+            'source' => 'ExecutionSelectionService',
         ]);
 
         $lifecycleContext = $this->lifecycleContextFactory->create($symbolResult->symbol)
@@ -121,7 +121,7 @@ final class TradingDecisionHandler
             ->withTradeId($tradeId)
             ->withProfile($resolvedMode)
             ->withMtfContext($effectiveTf, $this->extractMtfContext($symbolResult), $symbolResult->blockingTf)
-            ->withSelectorDecision(null, null) // Plus de sélection dans TradingDecisionHandler, décidé par MtfService
+            ->withSelectorDecision(null, null) // Plus de sélection ici: décidé en amont par ExecutionSelectionService
             ->withIndicatorMetrics(null, null, null) // Plus de métriques de sélection
             ->merge([
                 'config_version' => $tradeEntryConfig->getVersion(),
@@ -332,7 +332,7 @@ final class TradingDecisionHandler
             ]);
         } else {
             // Mode normal : validation optionnelle avec allowed_execution_timeframes depuis TradeEntryConfig
-            // Note: Le TF est déjà décidé par MtfService, on valide juste qu'il est autorisé par TradeEntry
+            // Note: Le TF est déjà décidé par ExecutionSelectionService, on valide juste qu'il est autorisé par TradeEntry
             $allowedTfs = (array)($decision['allowed_execution_timeframes'] ?? []);
             // Si allowed_execution_timeframes est vide ou non défini, on accepte tous les TF
             if (!empty($allowedTfs) && !in_array($effectiveTf, array_map('strtolower', $allowedTfs), true)) {
@@ -340,7 +340,7 @@ final class TradingDecisionHandler
                     'symbol' => $symbolResult->symbol,
                     'execution_tf' => $effectiveTf,
                     'allowed_tfs' => $allowedTfs,
-                    'note' => 'TF was decided by MtfService::ExecutionTimeframeDecisionService but rejected by TradeEntry allowed_execution_timeframes',
+                    'note' => 'TF was decided by ExecutionSelectionService but rejected by TradeEntry allowed_execution_timeframes',
                 ]);
                 $this->mtfLogger->info('order_journey.preconditions.blocked', [
                     'symbol' => $symbolResult->symbol,

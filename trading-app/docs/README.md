@@ -6,23 +6,24 @@ Cette documentation couvre l'ensemble du système de trading V3, avec un focus p
 
 ## 🏗️ Architecture
 
-Depuis la refonte MTF 2024, le socle est explicitement découpé entre **Application** (orchestration) et **Infrastructure** (adaptateurs). Ce schéma décrit le flux principal :
+Le flux d'exécution MTF est désormais piloté exclusivement par le runner (HTTP ou CLI). L'architecture est explicitement découpée entre **Entrée** (API/CLI), **Runner** (orchestration) et **Validator/Decision** (métier). Voici le chemin complet :
 
 ```mermaid
 flowchart LR
-    Facade(MtfValidatorInterface)
-    Orchestrator(MtfRunOrchestrator)
-    Processor(SymbolProcessor)
-    Service(MtfService \n + Timeframe services)
+    Entry(RunnerController \n / mtf:run)
+    Runner(MtfRunnerService)
+    Validator(MtfValidatorService \n + Core/ExecutionSelectionService)
     Decision(TradingDecisionHandler)
     Infra((Providers / Repositories))
 
-    Facade --> Orchestrator --> Processor --> Service --> Decision
+    Entry --> Runner --> Validator --> Decision
     Decision --> Infra
-    Service --> Infra
+    Runner --> Infra
 ```
 
-- **Application** : façade `MtfValidatorInterface`, orchestrateur et pipeline de décisions.
+- **Entrée runner** : `/api/mtf/run` (RunnerController) et `mtf:run` construisent un `MtfRunnerRequestDto`.
+- **Runner** : `MtfRunnerService` gère la résolution des symboles, le filtrage ordres/positions, les locks/switches, la synchro provider et la distribution vers le validateur.
+- **Validator/Core** : `MtfValidatorService` encapsule `MtfValidatorCoreService` (context + `ExecutionSelectionService`) et retourne un `MtfResultDto` par symbole.
 - **Domain** : stratégies de validation (ex : High Conviction) et DTOs.
 - **Infrastructure** : repositories Doctrine, clients BitMart, cache Redis/DB.
 
@@ -30,10 +31,10 @@ Les README spécifiques (ex. `src/MtfValidator/README_REFACTORED_ARCHITECTURE.md
 
 ## 🧭 Flux décisionnel MTF
 
-Le pipeline runtime suit trois étapes clefs :
+Le pipeline runtime suit désormais trois étapes clefs :
 
-1. **Façade** : `MtfValidatorInterface` expose l'API de run contractuelle (`MtfRunRequestDto` / `MtfRunResponseDto`).
-2. **Pipeline** : `MtfRunOrchestrator` séquence le verrouillage, la vérification des switches et l'évaluation des timeframes via `SymbolProcessor`.
+1. **Runner** : `MtfRunnerService` prépare le contexte (sync tables, locks, switches, filtrage), puis construit un `MtfRunRequestDto`.
+2. **Validation** : `MtfValidatorService` → `MtfValidatorCoreService` évaluent les règles YAML/ConditionRegistry et déterminent le timeframe via `ExecutionSelectionService`.
 3. **Décision** : `TradingDecisionHandler` applique les règles d'engagement et délègue à `TradeEntryService` (simulateur ou exécution réelle).
 
 Les décisions sont journalisées dans les canaux `order_journey` et `positions_flow`, ce qui permet un suivi bout-en-bout (validation → ordre BitMart).

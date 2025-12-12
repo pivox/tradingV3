@@ -1,5 +1,7 @@
 # 🐛 BUGS CRITIQUES - ATR & Stop-Loss (2025-11-03)
 
+> **Legacy notice:** cette analyse cible `MtfService` et les garde-fous autour de ce module. Depuis l'introduction de `MtfRunnerService` + `MtfValidatorCoreService`, les correctifs décrits ci-dessous servent de mémoire technique.
+
 ## Contexte
 Position PIPPINUSDT touchée SL avec seulement 0.33% de distance alors qu'elle avait été validée MTF.
 
@@ -445,4 +447,3 @@ public function testBuildTradeEntryRequestFallbackWhenStopFromRisk(): void
 ---
 
 _Document créé le 2025-11-03 suite à l'incident PIPPINUSDT_
-
