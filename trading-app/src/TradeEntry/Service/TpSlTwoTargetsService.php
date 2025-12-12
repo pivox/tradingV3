@@ -131,7 +131,7 @@ final class TpSlTwoTargetsService
         $tpMinKeepRatio = isset($defaults['tp_min_keep_ratio']) ? (float)$defaults['tp_min_keep_ratio'] : 0.95;
         $tpBufferPct = isset($defaults['tp_buffer_pct']) ? (float)$defaults['tp_buffer_pct'] : null;
         $tpBufferTicks = isset($defaults['tp_buffer_ticks']) ? (int)$defaults['tp_buffer_ticks'] : null;
-        $pivotSlPolicy = (string)($defaults['pivot_sl_policy'] ?? 'nearest_below');
+        $pivotSlPolicy = (string)($defaults['pivot_sl_policy'] ?? 'nearest');
         $pivotSlBufferPct = isset($defaults['pivot_sl_buffer_pct']) ? (float)$defaults['pivot_sl_buffer_pct'] : null;
         $pivotSlMinKeepRatio = isset($defaults['pivot_sl_min_keep_ratio']) ? (float)$defaults['pivot_sl_min_keep_ratio'] : null;
         $rMultiple = (float)($req->rMultiple ?? ($defaults['r_multiple'] ?? 2.0));

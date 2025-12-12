@@ -77,7 +77,7 @@ final class TradeEntryRequestBuilder
             return null;
         }
 
-        $initialMargin = max(0.0, (float)($defaults['initial_margin_usdt'] ?? 100.0) * $tfMultiplier);
+        $initialMargin = max(0.0, (float)($defaults['initial_margin_usdt'] ?? 100.0));
         if ($initialMargin <= 0.0) {
             $fallbackCapital = (float)($defaults['fallback_account_balance'] ?? 0.0);
             $initialMargin = $fallbackCapital * $riskPct;
@@ -88,6 +88,10 @@ final class TradeEntryRequestBuilder
         }
 
         $stopFrom = $defaults['stop_from'] ?? 'risk';
+        $stopFallback = strtolower((string)($defaults['stop_fallback'] ?? 'atr'));
+        if (!in_array($stopFallback, ['atr', 'risk', 'none'], true)) {
+            $stopFallback = 'atr';
+        }
         $atrK = (float)($defaults['atr_k'] ?? 1.5);
         $atrValue = ($atr !== null && $atr > 0.0) ? $atr : null;
         
@@ -182,7 +186,7 @@ final class TradeEntryRequestBuilder
             $tpMaxExtraR = null;
         }
 
-        $pivotSlPolicy = (string)($defaults['pivot_sl_policy'] ?? 'nearest_below');
+        $pivotSlPolicy = (string)($defaults['pivot_sl_policy'] ?? 'nearest');
         $pivotSlBufferPct = isset($defaults['pivot_sl_buffer_pct']) ? (float)$defaults['pivot_sl_buffer_pct'] : null;
         if ($pivotSlBufferPct !== null && $pivotSlBufferPct < 0.0) {
             $pivotSlBufferPct = null;
@@ -206,6 +210,7 @@ final class TradeEntryRequestBuilder
             rMultiple: (float)($defaults['r_multiple'] ?? 2.0),
             entryLimitHint: $entryLimitHint,
             stopFrom: $stopFrom,
+            stopFallback: $stopFallback,
             pivotSlPolicy: $pivotSlPolicy,
             pivotSlBufferPct: $pivotSlBufferPct,
             pivotSlMinKeepRatio: $pivotSlMinKeepRatio,
@@ -221,6 +226,7 @@ final class TradeEntryRequestBuilder
             tpBufferTicks: $tpBufferTicks,
             tpMinKeepRatio: $tpMinKeepRatio,
             tpMaxExtraR: $tpMaxExtraR,
+            leverageMultiplier: $tfMultiplier > 0.0 ? $tfMultiplier : 1.0,
         );
     }
 

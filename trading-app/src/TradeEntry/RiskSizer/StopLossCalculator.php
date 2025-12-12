@@ -57,13 +57,20 @@ final class StopLossCalculator
         float $entry,
         Side $side,
         array $pivotLevels,
-        string $policy = 'nearest_below',
+        string $policy = 'nearest',
         ?float $bufferPct = 0.0015,
         int $pricePrecision = 2
     ): float {
         if (empty($pivotLevels)) {
             throw new \InvalidArgumentException('Aucun pivot fourni pour calcul du stop pivot');
         }
+
+        $policyKey = strtolower($policy);
+        $normalizedPolicy = match ($policyKey) {
+            'nearest', 'nearest_below', 'nearest_above' => 'nearest',
+            'strongest', 'strongest_below', 'strongest_above' => 'strongest',
+            default => $policyKey,
+        };
 
         if ($side === Side::Long) {
             // Trouver le pivot juste en dessous de l’entrée (S1, S2, etc.)
@@ -80,12 +87,11 @@ final class StopLossCalculator
             }
 
             // Appliquer la politique (nearest ou strongest)
-            $policyKey = strtolower($policy);
             $pivot = null;
 
-            if (str_starts_with($policyKey, 's') && isset($candidates[$policyKey])) {
+            if (preg_match('/^s[1-6]$/', $policyKey) && isset($candidates[$policyKey])) {
                 $pivot = $candidates[$policyKey];
-            } elseif ($policyKey === 'strongest_below') {
+            } elseif ($normalizedPolicy === 'strongest') {
                 // Priorité aux supports les plus forts (S2, S1, S3, puis S4, S5, S6)
                 foreach (['s2', 's1', 's3', 's4', 's5', 's6'] as $preferred) {
                     if (isset($candidates[$preferred])) {
@@ -96,7 +102,7 @@ final class StopLossCalculator
             }
 
             if ($pivot === null) {
-                $pivot = $policyKey === 'nearest_below'
+                $pivot = $normalizedPolicy === 'nearest'
                     ? max($candidates)
                     : reset($candidates);
             }
@@ -119,12 +125,11 @@ final class StopLossCalculator
             throw new \RuntimeException('Aucun pivot supérieur à l’entrée trouvé pour un short');
         }
 
-        $policyKey = strtolower($policy);
         $pivot = null;
 
-        if (str_starts_with($policyKey, 'r') && isset($candidates[$policyKey])) {
+        if (preg_match('/^r[1-6]$/', $policyKey) && isset($candidates[$policyKey])) {
             $pivot = $candidates[$policyKey];
-        } elseif ($policyKey === 'strongest_above') {
+        } elseif ($normalizedPolicy === 'strongest') {
             // Priorité aux résistances les plus fortes (R2, R1, R3, puis R4, R5, R6)
             foreach (['r2', 'r1', 'r3', 'r4', 'r5', 'r6'] as $preferred) {
                 if (isset($candidates[$preferred])) {
@@ -135,7 +140,7 @@ final class StopLossCalculator
         }
 
         if ($pivot === null) {
-            $pivot = $policyKey === 'nearest_above'
+            $pivot = $normalizedPolicy === 'nearest'
                 ? min($candidates)
                 : reset($candidates);
         }

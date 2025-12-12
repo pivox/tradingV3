@@ -36,7 +36,7 @@ final class ExampleTradeEntryRunner
         $defaults = $config->getDefaults();
         $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 2.0);
         $riskPct = max(0.0, $riskPctPercent > 1.0 ? $riskPctPercent / 100.0 : $riskPctPercent);
-        $pivotSlPolicy = (string)($defaults['pivot_sl_policy'] ?? 'nearest_below');
+        $pivotSlPolicy = (string)($defaults['pivot_sl_policy'] ?? 'nearest');
         $pivotSlBufferPct = isset($defaults['pivot_sl_buffer_pct']) ? (float)$defaults['pivot_sl_buffer_pct'] : null;
         if ($pivotSlBufferPct !== null && $pivotSlBufferPct < 0.0) {
             $pivotSlBufferPct = null;
@@ -44,6 +44,10 @@ final class ExampleTradeEntryRunner
         $pivotSlMinKeepRatio = isset($defaults['pivot_sl_min_keep_ratio']) ? (float)$defaults['pivot_sl_min_keep_ratio'] : null;
         if ($pivotSlMinKeepRatio !== null && $pivotSlMinKeepRatio <= 0.0) {
             $pivotSlMinKeepRatio = null;
+        }
+        $stopFallback = strtolower((string)($defaults['stop_fallback'] ?? 'atr'));
+        if (!in_array($stopFallback, ['atr', 'risk', 'none'], true)) {
+            $stopFallback = 'atr';
         }
 
         $request = new TradeEntryRequest(
@@ -57,6 +61,7 @@ final class ExampleTradeEntryRunner
             rMultiple: (float)($defaults['r_multiple'] ?? 2.0),
             entryLimitHint: $price,
             stopFrom: $atr !== null ? 'atr' : ($defaults['stop_from'] ?? 'risk'),
+            stopFallback: $stopFallback,
             pivotSlPolicy: $pivotSlPolicy,
             pivotSlBufferPct: $pivotSlBufferPct,
             pivotSlMinKeepRatio: $pivotSlMinKeepRatio,

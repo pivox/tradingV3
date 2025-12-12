@@ -64,7 +64,7 @@ final class TradeEntryController extends AbstractController
                 $marketSpread /= 100;
             }
 
-            $pivotSlPolicy = (string)($data['pivot_sl_policy'] ?? ($defaults['pivot_sl_policy'] ?? 'nearest_below'));
+            $pivotSlPolicy = (string)($data['pivot_sl_policy'] ?? ($defaults['pivot_sl_policy'] ?? 'nearest'));
             $pivotSlBufferPct = isset($data['pivot_sl_buffer_pct'])
                 ? (float)$data['pivot_sl_buffer_pct']
                 : (isset($defaults['pivot_sl_buffer_pct']) ? (float)$defaults['pivot_sl_buffer_pct'] : null);
@@ -79,6 +79,11 @@ final class TradeEntryController extends AbstractController
                 $pivotSlMinKeepRatio = null;
             }
 
+            $stopFallback = strtolower((string)($data['stop_fallback'] ?? ($defaults['stop_fallback'] ?? 'atr')));
+            if (!in_array($stopFallback, ['atr', 'risk', 'none'], true)) {
+                $stopFallback = 'atr';
+            }
+
             $requestDto = new TradeEntryRequest(
                 symbol: (string)$data['symbol'],
                 side: $side,
@@ -90,6 +95,7 @@ final class TradeEntryController extends AbstractController
                 rMultiple: isset($data['r_multiple']) ? (float)$data['r_multiple'] : (float)($defaults['r_multiple'] ?? 2.0),
                 entryLimitHint: isset($data['entry_limit_hint']) ? (float)$data['entry_limit_hint'] : null,
                 stopFrom: $data['stop_from'] ?? ($defaults['stop_from'] ?? 'risk'),
+                stopFallback: $stopFallback,
                 pivotSlPolicy: $pivotSlPolicy,
                 pivotSlBufferPct: $pivotSlBufferPct,
                 pivotSlMinKeepRatio: $pivotSlMinKeepRatio,

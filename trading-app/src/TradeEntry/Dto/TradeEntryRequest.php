@@ -19,7 +19,8 @@ final class TradeEntryRequest
         public readonly float $rMultiple = 2.0,
         public readonly ?float $entryLimitHint = null,
         public readonly string $stopFrom = 'risk',
-        public readonly string $pivotSlPolicy = 'nearest_below',
+        public readonly ?string $stopFallback = 'atr',
+        public readonly string $pivotSlPolicy = 'nearest',
         public readonly ?float $pivotSlBufferPct = 0.0015,
         public readonly ?float $pivotSlMinKeepRatio = 0.8,
         public readonly ?float $atrValue = null,
@@ -34,5 +35,6 @@ final class TradeEntryRequest
         public readonly ?int $tpBufferTicks = null,
         public readonly float $tpMinKeepRatio = 0.95,
         public readonly ?float $tpMaxExtraR = null,
+        public readonly float $leverageMultiplier = 1.0,
     ) {}
 }

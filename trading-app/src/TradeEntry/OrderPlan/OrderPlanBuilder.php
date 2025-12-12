@@ -291,23 +291,27 @@ final class OrderPlanBuilder
             && \is_finite($req->atrK)     && $req->atrK > 0.0;
 
         if ($req->stopFrom === 'pivot' && !empty($pre->pivotLevels)) {
+            $fallbackMode = strtolower($req->stopFallback ?? 'atr');
+            $canFallbackToAtr = $fallbackMode === 'atr' && $hasAtrInputs;
+            $canFallbackToRisk = $fallbackMode === 'risk';
             // Stop basé sur pivot par défaut
             $stopPivot = $this->slc->fromPivot(
                 entry: $entry,
                 side: $req->side,
                 pivotLevels: $pre->pivotLevels,
-                policy: $req->pivotSlPolicy ?? 'nearest_below',
+                policy: $req->pivotSlPolicy ?? 'nearest',
                 bufferPct: $req->pivotSlBufferPct ?? 0.0015,
                 pricePrecision: $precision
             );
             $pivotStopDistancePct = abs($entry - $stopPivot) / max($entry, 1e-9);
 
-            $usePivotStop = $pivotStopDistancePct <= self::MAX_PIVOT_STOP_DISTANCE_PCT || !$hasAtrInputs;
+            $shouldFallback = $pivotStopDistancePct > self::MAX_PIVOT_STOP_DISTANCE_PCT
+                && ($canFallbackToAtr || $canFallbackToRisk);
 
-            if ($usePivotStop) {
+            if (!$shouldFallback) {
                 // Pivot jugé raisonnablement proche → on l'utilise pour sizing
                 $sizingDistance = max(abs($entry - $stopPivot), $tick);
-            } elseif ($hasAtrInputs) {
+            } elseif ($canFallbackToAtr) {
                 // Entry très au-dessus du pivot (ou en-dessous pour un short) → fallback ATR
                 $stopPivot = null;
                 $stopAtr = $this->slc->fromAtr($entry, $req->side, (float)$req->atrValue, (float)$req->atrK, $precision);
@@ -338,6 +342,19 @@ final class OrderPlanBuilder
                 ]);
 
                 $this->positionsLogger->info('order_plan.stop_pivot_fallback_atr', [
+                    'symbol' => $req->symbol,
+                    'side' => $req->side->value,
+                    'entry' => $entry,
+                    'pivot_stop_distance_pct' => $pivotStopDistancePct,
+                    'max_pivot_stop_distance_pct' => self::MAX_PIVOT_STOP_DISTANCE_PCT,
+                    'decision_key' => $decisionKey,
+                ]);
+            } elseif ($canFallbackToRisk) {
+                // Fallback explicitement vers risk : laisser le sizing se recalculer plus loin
+                $stopPivot = null;
+                $sizingDistance = max($sizingDistance, $tick * 10);
+
+                $this->positionsLogger->info('order_plan.stop_pivot_fallback_risk', [
                     'symbol' => $req->symbol,
                     'side' => $req->side->value,
                     'entry' => $entry,
@@ -600,6 +617,28 @@ final class OrderPlanBuilder
             $atr15m,
             $req->executionTf,
         );
+
+        $leverageMultiplier = $req->leverageMultiplier ?? 1.0;
+        if (!\is_finite($leverageMultiplier) || $leverageMultiplier <= 0.0) {
+            $leverageMultiplier = 1.0;
+        }
+        if ($leverageMultiplier !== 1.0) {
+            $scaledLeverage = $leverage * $leverageMultiplier;
+            $scaledLeverage = min(
+                max($scaledLeverage, (float)$pre->minLeverage),
+                (float)$pre->maxLeverage
+            );
+            if ((int)$scaledLeverage !== (int)$leverage) {
+                $this->positionsLogger->debug('order_plan.leverage.multiplier_applied', [
+                    'symbol' => $req->symbol,
+                    'base_leverage' => $leverage,
+                    'multiplier' => $leverageMultiplier,
+                    'scaled_leverage' => $scaledLeverage,
+                    'decision_key' => $decisionKey,
+                ]);
+            }
+            $leverage = $scaledLeverage;
+        }
 
         $this->positionsLogger->debug('order_plan.leverage.dynamic', [
             'symbol' => $req->symbol,
