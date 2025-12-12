@@ -34,7 +34,7 @@ BITMART_API_KEY=xxx
 BITMART_SECRET_KEY=xxx
 BITMART_API_MEMO=prod-trader
 REDIS_URL=redis://trading-app-redis:6379
-MESSENGER_TRANSPORT_DSN=redis://trading-app-redis:6379/messages
+MESSENGER_TRANSPORT_DSN=doctrine://default?queue_name=log_messages
 ```
 
 ### 1.3 Commandes essentielles

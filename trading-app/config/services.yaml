@@ -25,7 +25,7 @@ parameters:
 
     # Fallbacks when env vars are missing (useful in CLI/worker containers)
     router.default_uri: 'http://trading-app-nginx'
-    messenger.transport.dsn: 'redis://redis:6379/log-messages'
+    messenger.transport.dsn: 'doctrine://default?queue_name=log_messages'
     # Default values for env-backed log levels (so env is optional)
     env(MTF_LOG_LEVEL): 'info'
     env(LOG_LEVEL_MAIN): 'info'

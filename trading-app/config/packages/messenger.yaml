@@ -2,16 +2,19 @@ framework:
     messenger:
         transports:
             order_timeout:
-                dsn: 'redis://redis:6379/order_timeout'
+                dsn: 'doctrine://default?queue_name=order_timeout'
                 options:
+                    table_name: messenger_messages_order_timeout
                     auto_setup: true
             mtf_projection:
-                dsn: 'redis://redis:6379/mtf_projection'
+                dsn: 'doctrine://default?queue_name=mtf_projection'
                 options:
+                    table_name: messenger_messages_mtf_projection
                     auto_setup: true
             mtf_decision:
-                dsn: 'redis://redis:6379/mtf_decision'
+                dsn: 'doctrine://default?queue_name=mtf_decision'
                 options:
+                    table_name: messenger_messages_mtf_decision
                     auto_setup: true
             failed_order_timeout:
                 dsn: 'doctrine://default?table_name=messenger_messages_failed'

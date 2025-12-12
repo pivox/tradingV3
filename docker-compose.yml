@@ -16,21 +16,21 @@ services:
   ##################################
   # FRONTEND (isolé)
   ##################################
-  frontend-dev:
-    image: node:20-alpine
-    container_name: frontend_dev
-    working_dir: /app
-    volumes:
-      - ./frontend:/app
-    ports:
-      - "3000:3000"
-    environment:
-      - CHOKIDAR_USEPOLLING=true
-      - REACT_APP_API_URL=http://localhost:8080
-      - REACT_APP_POSITIONS_WS_BASE_URL=http://localhost:9000
-    command: sh -c "npm install --legacy-peer-deps && npm start"
-    networks:
-      - frontend-net
+  # frontend-dev:
+  #   image: node:20-alpine
+  #   container_name: frontend_dev
+  #   working_dir: /app
+  #   volumes:
+  #     - ./frontend:/app
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - CHOKIDAR_USEPOLLING=true         # Enables polling for changes in mounted volumes (important for Docker on some OS)
+  #     - REACT_APP_API_URL=http://localhost:8080           # Backend API base URL (for frontend http requests)
+  #     - REACT_APP_POSITIONS_WS_BASE_URL=http://localhost:9000 # Websocket endpoint for positions updates
+  #   command: sh -c "npm install --legacy-peer-deps && npm start" # Installs dependencies before starting dev server
+    #networks:
+    #  - frontend-net
 
 
   ##################################
@@ -306,7 +306,7 @@ services:
       # Symfony env now sourced from project .env (APP_ENV, APP_DEBUG)
       MAILER_DSN: 'smtp://localhost'
       MTF_LOG_LEVEL: debug
-      MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
+      MESSENGER_TRANSPORT_DSN: doctrine://default?queue_name=log_messages
       APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
       WS_WORKER_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
       BITMART_PUBLIC_API_URL: ${BITMART_PUBLIC_API_URL}
@@ -341,7 +341,7 @@ services:
       LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
       APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
       DEFAULT_URI: http://trading-app-nginx
-      MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
+      MESSENGER_TRANSPORT_DSN: doctrine://default?queue_name=log_messages
       WS_WORKER_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
       BITMART_PUBLIC_API_URL: ${BITMART_PUBLIC_API_URL}
       ORDER_TIMEOUT_SWITCH_DURATION: ${ORDER_TIMEOUT_SWITCH_DURATION:-15m}
@@ -381,7 +381,7 @@ services:
       LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
       APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
       DEFAULT_URI: http://trading-app-nginx
-      MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
+      MESSENGER_TRANSPORT_DSN: doctrine://default?queue_name=log_messages
       WS_WORKER_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
       BITMART_PUBLIC_API_URL: ${BITMART_PUBLIC_API_URL}
       ORDER_TIMEOUT_SWITCH_DURATION: ${ORDER_TIMEOUT_SWITCH_DURATION:-15m}
@@ -421,7 +421,7 @@ services:
       LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
       APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
       DEFAULT_URI: http://trading-app-nginx
-      MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
+      MESSENGER_TRANSPORT_DSN: doctrine://default?queue_name=log_messages
       WS_WORKER_SHARED_SECRET: ${WS_WORKER_SHARED_SECRET:-change-me}
       BITMART_PUBLIC_API_URL: ${BITMART_PUBLIC_API_URL}
       LOG_LEVEL_MAIN: info
@@ -443,58 +443,58 @@ services:
       fi; php bin/console messenger:consume mtf_projection --sleep=1 --failure-limit=5 --time-limit=3600"
     restart: unless-stopped
 
-  trading-app-ws-agent:
-    build:
-      context: ./trading-app
-      dockerfile: Dockerfile.mtf
-    container_name: trading_app_ws_agent
-    working_dir: /var/www/html
-    volumes:
-      - ./trading-app:/var/www/html
-      - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
-      - ws-cache:/var/www/html/var/cache
-      - ws-log:/var/www/html/var/log
-      - var-bitmart:/var/www/html/var/bitmart
-      - var-lock:/var/www/html/var/lock
-    environment:
-      <<: *global-env
-      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
-      LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
-      APP_ENV: prod
-      APP_CACHE_DIR: /var/www/html/var/cache/prod-ws
-      APP_LOG_DIR: /var/www/html/var/log/ws
-      LOG_LEVEL_MAIN: info
-      LOG_LEVEL_SIGNALS: info
-      LOG_LEVEL_POSITIONS: info
-      LOG_LEVEL_INDICATORS: info
-      LOG_LEVEL_HIGHCONVICTION: info
-      LOG_LEVEL_PIPELINE_EXEC: info
-      LOG_LEVEL_GLOBAL_SEVERITY: error
-      ASYNC_LOGGING_ENABLED: '1'
-      WS_TOPICS: "futures/order,futures/position,futures/asset:USDT"
-      APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
-      TRADING_APP_BASE_URI: http://trading-app-nginx
-      TRADING_APP_ORDER_SUBMITTED_PATH: /api/order-submitted
-      WS_AGENT_HTTP_PORT: 8090
-      WS_AGENT_BASE_URI: http://trading-app-ws-agent:8090
-      MAILER_DSN: 'smtp://localhost'
-      MESSENGER_TRANSPORT_DSN: redis://redis:6379/log-messages
-    depends_on:
-      trading-app-db:
-        condition: service_healthy
-      trading-app-nginx:
-        condition: service_started
-    ports:
-      - "8090:8090"
-    networks:
-      - trading-app-net
-      - shared-net
-    command: >-
-      sh -c "if [ ! -f vendor/autoload.php ]; then \
-        echo '[trading-app-ws-agent] vendor missing -> composer install'; \
-        composer install --no-dev --optimize-autoloader --no-interaction; \
-      fi; php bin/console app:ws:agent"
-    restart: unless-stopped
+#  trading-app-ws-agent:
+#    build:
+#      context: ./trading-app
+#      dockerfile: Dockerfile.mtf
+#    container_name: trading_app_ws_agent
+#    working_dir: /var/www/html
+#    volumes:
+#      - ./trading-app:/var/www/html
+#      - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
+#      - ws-cache:/var/www/html/var/cache
+#      - ws-log:/var/www/html/var/log
+#      - var-bitmart:/var/www/html/var/bitmart
+#      - var-lock:/var/www/html/var/lock
+#    environment:
+#      <<: *global-env
+#      DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
+#      LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
+#      APP_ENV: prod
+#      APP_CACHE_DIR: /var/www/html/var/cache/prod-ws
+#      APP_LOG_DIR: /var/www/html/var/log/ws
+#      LOG_LEVEL_MAIN: info
+#      LOG_LEVEL_SIGNALS: info
+#      LOG_LEVEL_POSITIONS: info
+#      LOG_LEVEL_INDICATORS: info
+#      LOG_LEVEL_HIGHCONVICTION: info
+#      LOG_LEVEL_PIPELINE_EXEC: info
+#      LOG_LEVEL_GLOBAL_SEVERITY: error
+#      ASYNC_LOGGING_ENABLED: '1'
+#      WS_TOPICS: "futures/order,futures/position,futures/asset:USDT"
+#      APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
+#      TRADING_APP_BASE_URI: http://trading-app-nginx
+#      TRADING_APP_ORDER_SUBMITTED_PATH: /api/order-submitted
+#      WS_AGENT_HTTP_PORT: 8090
+#      WS_AGENT_BASE_URI: http://trading-app-ws-agent:8090
+#      MAILER_DSN: 'smtp://localhost'
+#      MESSENGER_TRANSPORT_DSN: doctrine://default?queue_name=log_messages
+#    depends_on:
+#      trading-app-db:
+#        condition: service_healthy
+#      trading-app-nginx:
+#        condition: service_started
+#    ports:
+#      - "8090:8090"
+#    networks:
+#      - trading-app-net
+#      - shared-net
+#    command: >-
+#      sh -c "if [ ! -f vendor/autoload.php ]; then \
+#        echo '[trading-app-ws-agent] vendor missing -> composer install'; \
+#        composer install --no-dev --optimize-autoloader --no-interaction; \
+#      fi; php bin/console app:ws:agent"
+#    restart: unless-stopped
 
   trading-app-nginx:
     image: nginx:latest
@@ -544,9 +544,9 @@ volumes:
 
 
 networks:
-  frontend-net:
-    driver: bridge
-    name: tradingv3_frontend-net
+  #frontend-net:
+   # driver: bridge
+    #name: tradingv3_frontend-net
   temporal-net:
     driver: bridge
     name: tradingv3_temporal-net
