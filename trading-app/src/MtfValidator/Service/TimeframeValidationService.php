@@ -295,7 +295,7 @@ final class TimeframeValidationService
             ? $this->flattenConditions($evaluation['short']['conditions'])
             : [];
 
-        $this->logContextValidationSummary(
+        $this->logTimeframeValidationSummary(
             symbol: $symbol,
             timeframe: $timeframe,
             mode: $mode,
@@ -570,7 +570,7 @@ final class TimeframeValidationService
      * @param array<string,array<string,mixed>> $longConditions
      * @param array<string,array<string,mixed>> $shortConditions
      */
-    private function logContextValidationSummary(
+    private function logTimeframeValidationSummary(
         string $symbol,
         string $timeframe,
         ?string $mode,
@@ -580,14 +580,22 @@ final class TimeframeValidationService
         array $longConditions,
         array $shortConditions,
     ): void {
-        if ($this->mtfLogger === null || $phase !== 'context') {
+        if ($this->mtfLogger === null) {
             return;
         }
 
-        $this->mtfLogger->info('[MTF] Context validation detail', [
+        $shouldLogPhase = $phase === 'context';
+        $shouldLogMicroTf = \in_array($timeframe, ['5m', '1m'], true);
+
+        if (!$shouldLogPhase && !$shouldLogMicroTf) {
+            return;
+        }
+
+        $this->mtfLogger->info('[MTF] Timeframe validation detail', [
             'symbol'        => $symbol,
             'timeframe'     => $timeframe,
             'mode'          => $mode,
+            'phase'         => $phase,
             'long_passed'   => $longPassed,
             'short_passed'  => $shortPassed,
             'long_rules'    => $this->summarizeConditions($longConditions),
