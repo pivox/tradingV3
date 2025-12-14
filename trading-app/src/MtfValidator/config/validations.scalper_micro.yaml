@@ -2,7 +2,7 @@
 # validations.scalper_micro.yaml – Profil SCALPER micro-structure only
 # Version C : Bias 5m + timing 1m, long/short symétriques
 # =====================================================================
-version: '1.1.0-micro-bias-v2'
+version: '1.1.1-micro-bias-v3'
 
 mtf_validation:
     mode: 'pragmatic'
@@ -24,47 +24,11 @@ mtf_validation:
     # RÈGLES ATOMIQUES
     # ================================
     rules:
-
-        # ====== RSI (bornes micro) ======
-        rsi_lt_70:
-            lt: 70
-
-        rsi_gt_30:
-            gt: 30
-
-        # ====== VWAP / MA9 (structure) ======
-        close_above_vwap:
-            gt_fields: ['close', 'vwap']
-
-        close_below_vwap:
-            lt_fields: ['close', 'vwap']
-
-        close_above_ma_9:
-            gt_fields: ['close', 'ma_9']
-
-        close_below_ma_9:
-            lt_fields: ['close', 'ma_9']
-
-        close_above_vwap_or_ma9:
-            any_of: [close_above_vwap, close_above_ma_9]
-
-        close_below_vwap_or_ma9:
-            any_of: [close_below_vwap, close_below_ma_9]
-
-        # Pullback / timing : éviter le bruit (entries proches VWAP + alignement VWAP/MA9)
-        pullback_micro_long:
-            all_of:
-                - near_vwap: { near_vwap_tolerance: 0.0012 }   # 0.12 %
-                - close_above_vwap
-                - close_above_ma_9
-
-        pullback_micro_short:
-            all_of:
-                - near_vwap: { near_vwap_tolerance: 0.0012 }   # 0.12 %
-                - close_below_vwap
-                - close_below_ma_9
-
-        # (ATR: utiliser la condition atr_volatility_ok directement via les scénarios)
+        # IMPORTANT
+        # Le runner utilise l'engine "conditions" (ConditionRegistry) pour les scénarios.
+        # Les règles YAML atomiques (lt/gt_fields/any_of/near_vwap) ne sont pas toujours
+        # prises en compte => on laisse ce bloc vide et on référence des conditions directes
+        # dans les scénarios (ex: near_vwap avec near_vwap_tolerance).
 
     # ================================
     # VALIDATION PAR TIMEFRAME
@@ -103,7 +67,8 @@ mtf_validation:
                 long:
                     - all_of:
                           - ema20_over_50_with_tolerance_moderate
-                          - pullback_micro_long
+                          - near_vwap: { near_vwap_tolerance: 0.0012 }   # 0.12 %
+                          - close_above_vwap_or_ma9
                           - macd_hist_gt_0
                           - macd_hist_increasing_n: { macd_hist_increasing_n: 1 }
                           - rsi_bullish
@@ -113,7 +78,8 @@ mtf_validation:
                 short:
                     - all_of:
                           - ema_20_lt_50
-                          - pullback_micro_short
+                          - near_vwap: { near_vwap_tolerance: 0.0012 }   # 0.12 %
+                          - close_below_vwap_or_ma9
                           - macd_hist_lt_0
                           - macd_hist_decreasing_n: { n: 1 }
                           - rsi_bearish
