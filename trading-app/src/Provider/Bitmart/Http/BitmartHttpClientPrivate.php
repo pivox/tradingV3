@@ -24,6 +24,7 @@ final class BitmartHttpClientPrivate
     private const PATH_POSITION = '/contract/private/position-v2';
     private const PATH_ORDER_PENDING = '/contract/private/get-open-orders';
     private const PATH_PLAN_ORDERS = '/contract/private/current-plan-order'; // Pour les ordres TP/SL (Plan Orders)
+    private const PATH_MODIFY_PLAN_ORDER = '/contract/private/modify-plan-order';
     private const PATH_ORDER_DETAIL = '/contract/private/order-detail';
     private const PATH_ORDER_HISTORY = '/contract/private/order-history';
     private const PATH_TRADES = '/contract/private/trades';
@@ -211,6 +212,10 @@ final class BitmartHttpClientPrivate
             case self::PATH_PLAN_ORDERS:
                 $bucket = 'PRIVATE_GET_PLAN_ORDERS';
                 $limit = 50; $window = 2.0;
+                break;
+            case self::PATH_MODIFY_PLAN_ORDER:
+                $bucket = 'PRIVATE_MODIFY_PLAN_ORDER';
+                $limit = 6; $window = 2.0;
                 break;
             case self::PATH_ORDER_DETAIL:
                 $bucket = 'PRIVATE_ORDER_DETAIL';
@@ -467,6 +472,17 @@ final class BitmartHttpClientPrivate
             $query['account'] = $account;
         }
         return $this->requestJsonPrivate('GET', self::PATH_PLAN_ORDERS, $query);
+    }
+
+    /**
+     * POST /contract/private/modify-plan-order
+     * Modifie les protections TP/SL associées à un ordre planifié.
+     *
+     * @param array<string,mixed> $payload
+     */
+    public function modifyPlanOrder(array $payload): array
+    {
+        return $this->requestJsonPrivate('POST', self::PATH_MODIFY_PLAN_ORDER, [], $payload);
     }
 
     /**

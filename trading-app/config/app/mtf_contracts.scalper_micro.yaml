@@ -33,7 +33,7 @@ mtf_contracts:
             open_unit: 'ms'            # open_timestamp également en millisecondes.
 
         limits:
-            top_n: 150                 # Nombre maximum de contrats très liquides (TOP) retenus.
+            top_n: 120                 # Nombre maximum de contrats très liquides (TOP) retenus.
 
             mid_n: 0                   # Désactive la sélection MID.
               # Donc seuls les contrats avec turnover > 8M seront retenus.

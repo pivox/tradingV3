@@ -41,6 +41,7 @@
   - `RsiBullishCondition` → seuil 5m abaissé dynamiquement à 49 (fallback automatique si aucun override n’est fourni).
   - `close_above_vwap_or_ma9_relaxed` → nouvelle règle YAML qui tolère une clôture proche du VWAP lorsque `atr_rel_in_range_5m` passe et que le prix reste dans ±0.4 % du VWAP.
 - TODO 09 déc 2025 : rétablir la persistance des signaux (SignalValidationService obsolète, aucun dispatch messenger → table `signals` vide). Décider si on reconnecte `SignalPersistenceService` directement dans les services TF ou si on crée un handler messenger dédié.
+- Nouveau endpoint `/api/provider/positions/protection` disponible pour Bitmart (payload `exchange: "bitmart"`, `symbol`, `plan_order_id` ou `order_id`, `stop_loss_price` / `take_profit_price`, `client_order_id` optionnel) ; permet de mettre à jour SL/TP via `modify-plan-order`.
 
 ## 4 déc 2025 – Persistance indicateurs asynchrone
 - `MtfRunnerService` n'appelle plus `getIndicatorsForSymbolAndTimeframes()` directement. À la place, chaque run dispatch un `IndicatorSnapshotPersistRequestMessage` (redis `mtf_projection`) contenant `symbols` + `timeframes` + `run_id`.
@@ -63,6 +64,7 @@
 - Zone scalper resserrée pour réduire les entrées trop éloignées : `max_deviation_pct` retombé à 1 %, `implausible_pct` à 3 % et `zone_max_deviation_pct` à 4.5 %. La post-validation limite maintenant `w_max` à 1 % du pivot (TTL 180 s), ce qui force les EntryZone à rester dans ±1 % du VWAP/SMA sur <3 min.
 - `EntryZoneCalculator` et `OrderPlanBuilder` loguent désormais ces nouvelles bornes pour suivre les `entry_zone.rejected_by_deviation`. Penser à rejouer `v_zone_width_stats_scalper_1m` pour contrôler que la largeur médiane reste compatible avec la volatilité actuelle.
 - `pivot_sl_policy` est unifiée : seules les valeurs `nearest`, `strongest`, `s1...s6` ou `r1...r6` sont supportées côté configs. `nearest` prend automatiquement le support/résistance le plus proche (stop serré → levier plus élevé), tandis que `strongest` priorise `S2/R2` puis `S1/R1` (stop plus large → levier réduit). Les anciennes valeurs `*_below`/`*_above` restent acceptées mais normalisées.
+- `trading-app/config/app/trade_entry.scalper_micro.yaml` passe en version `0.1.1-micro-entry-zone-tightened` pour documenter le serrage de la `entry_zone.max_deviation_pct` à 0.095 et la nouvelle limite `post_validation.entry_zone.w_max = 0.014`.
 
 ## Notes – Algorithme de calcul de zone d'entrée
 - `EntryZoneCalculator::compute()` fusionne `post_validation.entry_zone` et `entry.entry_zone` du profil YAML (ex: `trade_entry.scalper_micro.yaml`). Les clés du bloc `entry` ont priorité.

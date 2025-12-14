@@ -684,6 +684,7 @@ final class MtfRunnerService
             $queue->enqueue($symbol);
         }
 
+        /** @var array<string,Process> $active map symbol => running process */
         $active = [];
         $results = [];
         $errors = [];
@@ -717,37 +718,21 @@ final class MtfRunnerService
         while (!$queue->isEmpty() || $active !== []) {
             $pollStart = microtime(true);
 
-            // Démarrer de nouveaux workers si on a de la place et des symboles en attente
-            while (count($active) < $request->workers && !$queue->isEmpty()) {
-                $symbol = $queue->dequeue();
-                $workerStart = microtime(true);
-                $process = new Process(
-                    $this->buildWorkerCommand($symbol, $options),
-                    $this->projectDir,
-                    ['APP_DEBUG' => '1']
-                );
-                $process->start();
-                $workerStartTimes[$symbol] = $workerStart;
-                $active[] = ['symbol' => $symbol, 'process' => $process];
-                $this->mtfLogger->debug('[MTF Runner] Worker started', [
-                    'run_id' => $runId,
-                    'symbol' => $symbol,
-                ]);
-            }
-
-            // Vérifier les workers terminés
             $hasRunning = false;
-            foreach ($active as $index => $worker) {
-                $process = $worker['process'];
+            $finished = [];
+
+            // Vérifier les workers terminés (sans modifier $active pendant l'itération)
+            foreach ($active as $symbol => $process) {
                 if ($process->isRunning()) {
                     $hasRunning = true;
                     continue;
                 }
+                $finished[$symbol] = $process;
+            }
 
-                $symbol = $worker['symbol'];
+            foreach ($finished as $symbol => $process) {
                 $workerDuration = microtime(true) - ($workerStartTimes[$symbol] ?? microtime(true));
-                unset($active[$index], $workerStartTimes[$symbol]);
-                $active = array_values($active);
+                unset($active[$symbol], $workerStartTimes[$symbol]);
 
                 if ($process->isSuccessful()) {
                     $rawOutput = trim($process->getOutput());
@@ -790,6 +775,7 @@ final class MtfRunnerService
                         continue;
                     }
 
+                    $hasSymbolResults = false;
                     foreach ($workerResults as $resultSymbol => $info) {
                         // Ignorer l'entrée synthétique "FINAL" renvoyée par le worker
                         if ($resultSymbol === 'FINAL') {
@@ -797,7 +783,13 @@ final class MtfRunnerService
                         }
                         if (is_string($resultSymbol)) {
                             $results[$resultSymbol] = $info;
+                            $hasSymbolResults = true;
                         }
+                    }
+
+                    if (!$hasSymbolResults) {
+                        $errors[] = sprintf('Worker %s: no symbol results returned', $symbol);
+                        continue;
                     }
 
                     $this->mtfLogger->debug('[MTF Runner] Worker completed', [
@@ -816,6 +808,24 @@ final class MtfRunnerService
                         'error' => $msg,
                     ]);
                 }
+            }
+
+            // Démarrer de nouveaux workers si on a de la place et des symboles en attente
+            while (count($active) < $request->workers && !$queue->isEmpty()) {
+                $symbol = $queue->dequeue();
+                $workerStart = microtime(true);
+                $process = new Process(
+                    $this->buildWorkerCommand($symbol, $options),
+                    $this->projectDir,
+                    ['APP_DEBUG' => '1']
+                );
+                $process->start();
+                $workerStartTimes[$symbol] = $workerStart;
+                $active[$symbol] = $process;
+                $this->mtfLogger->debug('[MTF Runner] Worker started', [
+                    'run_id' => $runId,
+                    'symbol' => $symbol,
+                ]);
             }
 
             $pollDuration = microtime(true) - $pollStart;

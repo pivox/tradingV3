@@ -1,8 +1,8 @@
 # =====================================================================
 # validations.scalper_micro.yaml – Profil SCALPER micro-structure only
-# Version B : Équilibrée — VWAP, MA9, ATR(1m), Volume
+# Version C : Bias 5m + timing 1m, long/short symétriques
 # =====================================================================
-version: '1.0.0-micro1'
+version: '1.1.0-micro-bias-v2'
 
 mtf_validation:
     mode: 'pragmatic'
@@ -18,26 +18,21 @@ mtf_validation:
     # FILTRES MANDATOIRES (MICRO ONLY)
     # ================================
     filters_mandatory: []
-      #  - rsi_lt_70
-       # - volume_ratio_ok
+    # Garder vide : préférer des filtres intégrés aux scénarios (plus faciles à ajuster)
 
     # ================================
     # RÈGLES ATOMIQUES
     # ================================
     rules:
 
-        # ====== RSI ======
+        # ====== RSI (bornes micro) ======
         rsi_lt_70:
-            lt: 72
+            lt: 70
 
-        rsi_lt_softcap:
-            lt: 82
+        rsi_gt_30:
+            gt: 30
 
-        rsi_gt_softfloor:
-            gt: 20
-
-
-        # ====== VWAP / MA9 ======
+        # ====== VWAP / MA9 (structure) ======
         close_above_vwap:
             gt_fields: ['close', 'vwap']
 
@@ -56,21 +51,20 @@ mtf_validation:
         close_below_vwap_or_ma9:
             any_of: [close_below_vwap, close_below_ma_9]
 
-        near_vwap:
-            near_vwap: true
-
-        pullback_confirmed:
-            any_of:
-                - near_vwap: true
+        # Pullback / timing : éviter le bruit (entries proches VWAP + alignement VWAP/MA9)
+        pullback_micro_long:
+            all_of:
+                - near_vwap: { near_vwap_tolerance: 0.0012 }   # 0.12 %
+                - close_above_vwap
                 - close_above_ma_9
-            validity_bars: 3
 
-        # ====== ATR MICRO ======
-        atr_rel_in_range_micro:
-            use_atr_tf: ['1m']
-            min: 0.0005
-            max: 0.045
-            adapt_with_vol_bucket: true
+        pullback_micro_short:
+            all_of:
+                - near_vwap: { near_vwap_tolerance: 0.0012 }   # 0.12 %
+                - close_below_vwap
+                - close_below_ma_9
+
+        # (ATR: utiliser la condition atr_volatility_ok directement via les scénarios)
 
     # ================================
     # VALIDATION PAR TIMEFRAME
@@ -87,15 +81,20 @@ mtf_validation:
             '5m':
                 long:
                     - all_of:
-                          - rsi_bullish
+                          - ema20_over_50_with_tolerance_moderate
                           - close_above_vwap_or_ma9
-                          - atr_rel_in_range_micro
-
+                          - macd_hist_gt_0
+                          - rsi_bullish
+                          - rsi_lt_70
+                          - atr_volatility_ok: { min_atr_pct: 0.0005, max_atr_pct: 0.03 }
                 short:
                     - all_of:
-                          - rsi_bearish
+                          - ema_20_lt_50
                           - close_below_vwap_or_ma9
-                          - atr_rel_in_range_micro
+                          - macd_hist_lt_0
+                          - rsi_bearish
+                          - rsi_gt_30
+                          - atr_volatility_ok: { min_atr_pct: 0.0005, max_atr_pct: 0.03 }
 
             # -------------------------
             # 1m : TIMING / EXECUTION
@@ -103,14 +102,20 @@ mtf_validation:
             '1m':
                 long:
                     - all_of:
+                          - ema20_over_50_with_tolerance_moderate
+                          - pullback_micro_long
+                          - macd_hist_gt_0
+                          - macd_hist_increasing_n: { macd_hist_increasing_n: 1 }
                           - rsi_bullish
-                          - close_above_vwap_or_ma9
-                          - pullback_confirmed
-                          - rsi_gt_softfloor
+                          - rsi_lt_70
+                          - atr_volatility_ok: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }
 
                 short:
                     - all_of:
+                          - ema_20_lt_50
+                          - pullback_micro_short
+                          - macd_hist_lt_0
+                          - macd_hist_decreasing_n: { n: 1 }
                           - rsi_bearish
-                          - close_below_vwap_or_ma9
-                          - pullback_confirmed
-                          - rsi_lt_softcap
+                          - rsi_gt_30
+                          - atr_volatility_ok: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }
