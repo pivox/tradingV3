@@ -2,14 +2,14 @@
 # trade_entry.scalper_micro.yaml – Mode micro-structure only
 # Risque réduit, daily loss cap strict, nombre de trades limité
 # =====================================================================
-version: '0.1.1-micro-entry-zone-tightened'
+version: '0.1.2-micro-zone-tolerance-increased'
 
 meta:
     name: 'scalper_micro'
     description: >
         Scalping micro-structure (5m/1m) sans contexte 1h/4h, maintenant centré sur des
-        entry zones serrées (max déviation 0.095 %, w_max 0.014) pour éviter les entrées
-        out-of-zone sans élargir la tolérance globale.
+        entry zones serrées (w_max 0.014) avec tolérance runtime augmentée (zone_max_deviation_pct 12%,
+        entry max_deviation_pct 15%) pour réduire les rejets entry_zone.rejected_by_deviation.
 
 trade_entry:
 
@@ -51,7 +51,7 @@ trade_entry:
         inside_ticks: 1
         max_deviation_pct: 0.02
         implausible_pct: 0.05
-        zone_max_deviation_pct: 0.08      # tolérance 8 % (zone large pour éviter skips micro)
+        zone_max_deviation_pct: 0.12      # tolérance 12 % (augmentée pour réduire rejets runtime)
 
         # --- Leverage helper ---
         k_dynamic: 10.0
@@ -131,7 +131,7 @@ trade_entry:
             from: 'vwap'
             offset_atr_tf: '1m'
             offset_k: 2.0           # largeur de zone ~ 1 × ATR(1m)
-            max_deviation_pct: 0.095
+            max_deviation_pct: 0.15  # tolérance 15 % (augmentée pour réduire rejets runtime)
             ttl_sec: 180
             quantize_to_exchange_step: true
 
