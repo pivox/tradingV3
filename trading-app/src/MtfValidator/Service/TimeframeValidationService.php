@@ -482,6 +482,8 @@ final class TimeframeValidationService
 
             // MACD
             'macd_hist_gt_eps',
+            'macd_hist_increasing_n',
+            'macd_hist_decreasing_n',
             'macd_hist_slope_pos',
             'macd_hist_slope_neg',
             'macd_line_above_signal',
@@ -500,6 +502,7 @@ final class TimeframeValidationService
             'close_above_vwap_or_ma9',
             'close_above_vwap_and_ma9',
             'close_above_vwap_or_ma9_relaxed',
+            'near_vwap',
             'pullback_confirmed',
 
             // Prix / extensions

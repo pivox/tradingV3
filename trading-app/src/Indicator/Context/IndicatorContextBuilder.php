@@ -109,9 +109,14 @@ class IndicatorContextBuilder
         $prevRsi = (count($rsiVals) > 1) ? (float) $rsiVals[count($rsiVals) - 2] : null;
 
         $macdFull = $this->computeMacdSeries($this->closes);
-        $macdSeries = $macdFull['macd'] ?? [];
-        $signalSeries = $macdFull['signal'] ?? [];
-        $histSeries = $macdFull['hist'] ?? [];
+        $macdSeriesRaw = $macdFull['macd'] ?? [];
+        $signalSeriesRaw = $macdFull['signal'] ?? [];
+        $histSeriesRaw = $macdFull['hist'] ?? [];
+
+        $macdSeries = array_values(array_filter($macdSeriesRaw, static fn($v) => is_numeric($v) && is_finite((float) $v)));
+        $signalSeries = array_values(array_filter($signalSeriesRaw, static fn($v) => is_numeric($v) && is_finite((float) $v)));
+        $histSeries = array_values(array_filter($histSeriesRaw, static fn($v) => is_numeric($v) && is_finite((float) $v)));
+
         $macdVal = $macdSeries ? (float) end($macdSeries) : null;
         $signalVal = $signalSeries ? (float) end($signalSeries) : null;
         $histVal = $histSeries ? (float) end($histSeries) : null;
@@ -213,14 +218,21 @@ class IndicatorContextBuilder
 
         $macdHistLast3 = null;
         $macdHistSeries = null;
+
         if ($histSeries) {
-            $n = count($histSeries);
-            $macdHistLast3 = [];
-            for ($i = max(0, $n - 3); $i < $n; $i++) {
-                $macdHistLast3[] = (float) $histSeries[$i];
-            }
-            $macdHistSeries = array_values(array_map('floatval', array_reverse($histSeries)));
+            // histSeries supposé oldest-first (même ordre que closes)
+            $histFloats = array_values(array_map('floatval', $histSeries));
+
+            // On garde uniquement la fin de série (ex: 60 derniers points)
+            $tail = array_slice($histFloats, -60);
+
+            // latest-first pour la condition
+            $macdHistSeries = array_reverse($tail);
+
+            // last3 = 3 plus récents => indices 0..2 (puisque latest-first)
+            $macdHistLast3 = array_slice($macdHistSeries, 0, 3);
         }
+
 
         return array_filter([
             'symbol' => $this->symbol,

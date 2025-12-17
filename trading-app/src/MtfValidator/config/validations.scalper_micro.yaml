@@ -74,7 +74,7 @@ mtf_validation:
                     - all_of:
                           - ema_20_lt_50
                           - close_below_vwap_or_ma9
-                          - macd_hist_lt_eps: { eps: 1.0e-12 }
+                          - macd_hist_lt_eps: { eps: 0.005 }
                           - rsi_bearish
                           - rsi_gt_30
                           - atr_volatility_ok: { min_atr_pct: 0.0005, max_atr_pct: 0.03 }
@@ -99,8 +99,8 @@ mtf_validation:
                           - ema_20_lt_50
                           - near_vwap: { near_vwap_tolerance: 0.0012 }   # 0.12 %
                           - close_below_vwap_or_ma9
-                          - macd_hist_lt_eps: { eps: 1.0e-12 }
-                          - macd_hist_decreasing_n: { n: 1 }
+                          - macd_hist_lt_eps: { eps: 0.001 }
+                          - macd_hist_decreasing_n: { n: 1, eps: 0.001 }
                           - rsi_bearish
                           - rsi_gt_30
                           - atr_volatility_ok: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }
