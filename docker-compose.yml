@@ -270,7 +270,13 @@ services:
   redis:
     image: redis:7-alpine
     container_name: trading_app_redis
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    command: [
+      "redis-server",
+      "--save", "300", "10",
+      "--maxmemory", "450m",
+      "--maxmemory-policy", "allkeys-lru",
+      "--loglevel", "warning"
+    ]
     volumes:
       - trading-app-redis-data:/data
     ports:
@@ -279,6 +285,18 @@ services:
       - trading-app-net
       - shared-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   trading-app-php:
     build:
