@@ -62,7 +62,9 @@ final class DynamicLeverageService implements LeverageServiceInterface
 
         $floorConfig    = (float)($levConfig['floor'] ?? 1.0);
         $exchangeCapCfg = (float)($levConfig['exchange_cap'] ?? $maxLeverage);
-        $tfMultipliers  = (array)($levConfig['timeframe_multipliers'] ?? []);
+        // Multiplicateur par timeframe appliqué AU LEVIER (et uniquement au levier) : configuré côté defaults.
+        // Le builder utilise `leverage.timeframe_multipliers` pour gonfler/réduire sizing/notional/risk/TP.
+        $tfMultipliers  = (array)($defaults['timeframe_multipliers'] ?? []);
         $perSymbolCaps  = (array)($levConfig['per_symbol_caps'] ?? []);
         $roundingCfg    = (array)($levConfig['rounding'] ?? []);
 

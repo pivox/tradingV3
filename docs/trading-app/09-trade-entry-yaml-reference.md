@@ -53,6 +53,10 @@ Ces valeurs sont lues par :
     - `TradeEntryRequestBuilder` (base du `riskPct` du trade)
     - `DynamicLeverageService` (base du levier = `riskPct/stopPct`)
 
+- `timeframe_multipliers` (map tf→float)  
+  - utilisé **uniquement** par `DynamicLeverageService` pour moduler le **levier** selon `executionTf`
+  - valeur par défaut : `1.0` si la clé TF est absente
+
 - `initial_margin_usdt` (float)  
   - budget cible pour le plan (borné par le solde dispo)
 
@@ -153,26 +157,29 @@ Ces champs alimentent `OrderPlanBuilder` (limit-entry) :
 - `implausible_pct` (float) : garde “entry délirant vs mark”
 - `zone_max_deviation_pct` (float) : rejette une zone si trop éloignée du prix de référence (`entry_zone.rejected_by_deviation`)
 
-### Multiplicateurs timeframe (attention “double levier”)
+### Multiplicateurs timeframe (rôle exact des 2 maps)
 
-Le builder lit un multiplicateur `tfMultiplier` depuis :
+Il existe **deux** multiplications “par TF”, avec des rôles distincts :
 
-- `defaults.timeframe_multipliers[executionTf]` sinon
-- `leverage.timeframe_multipliers[executionTf]` sinon `1.0`
+1) **Sizing / notionnel / risque / TP** (au niveau du builder)  
+   - source : `trade_entry.leverage.timeframe_multipliers[executionTf]` (défaut `1.0`)  
+   - effets :
+     - `riskPct = (risk_pct_percent/100) * tfMult` (donc `riskUsdt` et la taille, donc le **notionnel**)
+     - `rMultiple = defaults.r_multiple * tfMult` (donc le **TP**)
+   - implémentation : `TradeEntryRequestBuilder`
 
-Ce multiplicateur est appliqué :
+2) **Levier** (au niveau du calcul dynamique)  
+   - source : `trade_entry.defaults.timeframe_multipliers[executionTf]` (défaut `1.0`)  
+   - effet : `leveragePreCaps = (riskPct/stopPct) * tfMult * volMult`  
+   - implémentation : `DynamicLeverageService`
 
-1) au **risque** (`riskPct = baseRiskPct * tfMultiplier`) dans `TradeEntryRequestBuilder`  
-2) au **levier** via `TradeEntryRequest->leverageMultiplier`, appliqué **après** `DynamicLeverageService` dans `OrderPlanBuilder`
-
-Or `DynamicLeverageService` applique déjà `leverage.timeframe_multipliers[executionTf]` en interne.  
-Conséquence : si vous utilisez `leverage.timeframe_multipliers`, le levier peut être **multiplié deux fois** (service + post-multiplication).
+Note : `TradeEntryRequest->leverageMultiplier` est positionné à `1.0` par le builder ; `OrderPlanBuilder` ne l’applique que si un appelant le force explicitement.
 
 Sources :
 
 - `trading-app/src/TradeEntry/Builder/TradeEntryRequestBuilder.php`
-- `trading-app/src/TradeEntry/OrderPlan/OrderPlanBuilder.php`
 - `trading-app/src/TradeEntry/Service/Leverage/DynamicLeverageService.php`
+- `trading-app/src/TradeEntry/OrderPlan/OrderPlanBuilder.php`
 
 ## `trade_entry.risk` (gestion risque “guard”)
 
@@ -193,15 +200,20 @@ Source : `trading-app/src/TradeEntry/Policy/DailyLossGuard.php`
 
 ## `trade_entry.leverage` (levier dynamique)
 
-Clés réellement utilisées par `DynamicLeverageService` :
+Clés du bloc `trade_entry.leverage` réellement consommées :
+
+Par `DynamicLeverageService` :
 
 - `floor` (float) : levier minimum appliqué après clamp
 - `exchange_cap` (float) : cap “soft” additionnel (avant cap exchange réel)
 - `per_symbol_caps` (list)
   - items : `{ symbol_regex: string, cap: float }`
   - si `symbol_regex` matche (regex encapsulée `/(...)/i`) et `cap > 0` → `leverage <= cap`
-- `timeframe_multipliers` (map tf→float) : utilisé **dans** le service (voir note “double levier” plus haut)
 - `rounding.mode` (string) : `ceil` | `floor` | `round` (défaut `ceil`)
+
+Par `TradeEntryRequestBuilder` (sizing/notionnel/TP) :
+
+- `timeframe_multipliers` (map tf→float) : modifie `riskPct` et `rMultiple` (voir section “Multiplicateurs timeframe”)
 
 Clés présentes dans certains YAML mais **ignorées** par le code actuel :
 

@@ -65,11 +65,13 @@ final class TradeEntryRequestBuilder
         $executionTf = strtolower($executionTf);
         $defaults = $config->getDefaults();
         $leverage = $config->getLeverage();
-        $multipliers = $defaults['timeframe_multipliers'] ?? ($leverage['timeframe_multipliers'] ?? []);
-        if (!\is_array($multipliers)) {
-            $multipliers = [];
+        // Multiplicateur "TF" utilisé au niveau builder (sizing/notional/risk/TP).
+        // NOTE: le levier dynamique a son propre multiplicateur (defaults.timeframe_multipliers) dans DynamicLeverageService.
+        $builderMultipliers = $leverage['timeframe_multipliers'] ?? [];
+        if (!\is_array($builderMultipliers)) {
+            $builderMultipliers = [];
         }
-        $tfMultiplier = (float)($multipliers[$executionTf] ?? 1.0);
+        $tfMultiplier = (float)($builderMultipliers[$executionTf] ?? 1.0);
 
         $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 2.0);
         $riskPct = max(0.0, $riskPctPercent / 100.0) * $tfMultiplier;
@@ -198,6 +200,12 @@ final class TradeEntryRequestBuilder
 
         $sideEnum = $side === 'LONG' ? Side::Long : Side::Short;
 
+        // TP: gonflage / réduction du R-multiple au niveau builder (influence TP théorique et alignement pivots)
+        $rMultiple = (float)($defaults['r_multiple'] ?? 2.0);
+        if (\is_finite($tfMultiplier) && $tfMultiplier > 0.0 && $tfMultiplier !== 1.0 && \is_finite($rMultiple) && $rMultiple > 0.0) {
+            $rMultiple *= $tfMultiplier;
+        }
+
         return new TradeEntryRequest(
             symbol: $symbol,
             side: $sideEnum,
@@ -207,7 +215,7 @@ final class TradeEntryRequestBuilder
             orderMode: (int)($defaults['order_mode'] ?? 4),
             initialMarginUsdt: $initialMargin,
             riskPct: $riskPct,
-            rMultiple: (float)($defaults['r_multiple'] ?? 2.0),
+            rMultiple: $rMultiple,
             entryLimitHint: $entryLimitHint,
             stopFrom: $stopFrom,
             stopFallback: $stopFallback,
@@ -226,7 +234,7 @@ final class TradeEntryRequestBuilder
             tpBufferTicks: $tpBufferTicks,
             tpMinKeepRatio: $tpMinKeepRatio,
             tpMaxExtraR: $tpMaxExtraR,
-            leverageMultiplier: $tfMultiplier > 0.0 ? $tfMultiplier : 1.0,
+            leverageMultiplier: 1.0,
         );
     }
 

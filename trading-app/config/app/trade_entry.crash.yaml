@@ -20,6 +20,12 @@ trade_entry:
         risk_pct_percent: 1.5           # Risque nominal par trade (plus bas que scalper)
         initial_margin_usdt: 20.0
         fallback_account_balance: 0.0
+        timeframe_multipliers:          # Multiplicateurs TF appliqués AU LEVIER (DynamicLeverageService)
+            '4h': 0.8
+            '1h': 0.9
+            '15m': 1.0
+            '5m': 1.1
+            '1m': 1.2
 
         # --- R-MULTIPLE / TP
         r_multiple: 1.0                 # R attendu modeste (on vise du "panic flush")
@@ -96,7 +102,7 @@ trade_entry:
             - { symbol_regex: "^(ETH|BNB)USDT$", cap: 20.0 }
             - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 4.0 }
 
-        timeframe_multipliers:
+        timeframe_multipliers:          # Multiplicateurs TF appliqués au SIZING/TP (builder)
             '4h': 0.8
             '1h': 0.9
             '15m': 1.0

@@ -30,13 +30,21 @@ Entrées minimales :
 Le builder lit `trade_entry.defaults.risk_pct_percent`.
 
 - `riskPct = (risk_pct_percent / 100) * tfMultiplier`
-- `tfMultiplier` est lu depuis :
-  - `defaults.timeframe_multipliers[executionTf]` sinon
-  - `leverage.timeframe_multipliers[executionTf]` sinon `1.0`
+- `tfMultiplier` (multiplicateur “builder”) est lu depuis :
+  - `trade_entry.leverage.timeframe_multipliers[executionTf]` sinon `1.0`
 
 Note fonctionnelle :
 
 - `riskPct` est stocké dans `TradeEntryRequest->riskPct` (un ratio 0..1 attendu ensuite).
+- Ce multiplicateur impacte directement le **notionnel** car `PositionSizer` dimensionne la taille à partir de `riskUsdt = budget * riskPct`.
+
+### Gonflage TP (R-multiple)
+
+Le builder applique le même `tfMultiplier` au TP “R multiple” :
+
+- `rMultiple_effectif = defaults.r_multiple * tfMultiplier`
+
+Conséquence : les TP (théorique + alignement pivots) sont plus loin / plus proches selon TF.
 
 ### Budget (initial_margin_usdt)
 
@@ -302,8 +310,8 @@ Formule :
 - `dynCap = min(maxLeverage, k_dynamic / stopPct)` (k_dynamic depuis defaults)
 - `volMult` (réduction selon volatilité) :
   - `volPct = atr/price`
-  - `volMult = clamp(1.25 - 75*volPct, 0.5, 1.25)`
-- `tfMult` depuis `leverage.timeframe_multipliers[executionTf]` (défaut 1.0)
+- `volMult = clamp(1.25 - 75*volPct, 0.5, 1.25)`
+- `tfMult` depuis `defaults.timeframe_multipliers[executionTf]` (défaut 1.0)
 - `leveragePreCaps = leverageBase * tfMult * volMult`
 - caps :
   - `exchange_cap` (config)
@@ -330,14 +338,12 @@ Ensuite, ajustement “target margin” :
 
 ### 3) Multiplicateur additionnel (leverageMultiplier)
 
-`TradeEntryRequestBuilder` positionne `leverageMultiplier=tfMultiplier` (voir section risk%).  
-`OrderPlanBuilder` applique ensuite :
+`TradeEntryRequestBuilder` positionne `leverageMultiplier=1.0` (ne varie pas par TF).  
+`OrderPlanBuilder` supporte néanmoins un multiplicateur additionnel si un appelant le fournit explicitement :
 
 - `leverage = leverage * leverageMultiplier` puis clamp `[minLeverage, maxLeverage]`.
 
 Conséquence :
 
-- selon la configuration, un même multiplicateur de TF peut impacter :
-  - le riskPct,
-  - le levier dynamique (via `tfMult`),
-  - et le scaling final (via `leverageMultiplier`).
+- le scaling TF du **levier** passe par `defaults.timeframe_multipliers` (dans `DynamicLeverageService`)
+- le scaling TF du **sizing/risque/TP** passe par `leverage.timeframe_multipliers` (dans `TradeEntryRequestBuilder`)

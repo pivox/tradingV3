@@ -36,7 +36,7 @@ Les profils TradeEntry (`config/app/trade_entry*.yaml`) décrivent les defaults 
 `TradeEntryRequestBuilder::fromMtfSignal()` consomme `SymbolResultDto` (symbol, side, execution_tf, price, ATR) et construit un `TradeEntryRequest`. Points importants :
 
 - **ATR requis** si `stop_from='atr'` : ordre rejeté (`null`) lorsque ATR absent ou ≤0 (log `atr_required_but_invalid`).
-- **Multiplicateur de timeframe** : `risk_pct` et `leverageMultiplier` tiennent compte de `defaults.timeframe_multipliers[execution_tf]`.
+- **Multiplicateur de timeframe (builder)** : `risk_pct` et le **R-multiple TP** tiennent compte de `leverage.timeframe_multipliers[execution_tf]`.
 - **Market entry** : si `market_entry.enabled=true` + TF autorisé + ADX1h ≥ min, alors `order_type` devient `market` (avec log `market_entry.decision`).
 - **Guard sur le spread** : pour les market orders, `PreTradeChecks` rejettera si `spreadPct > market_max_spread_pct`.
 - **Deviation overrides** : `ZoneDeviationOverrideStore` permet de pousser un `zone_max_deviation_pct` spécifique par mode/symbole (outil d’ops).
@@ -113,7 +113,7 @@ Pour `order_type=market`, on prend simplement `bestAsk` ou `bestBid`.
 `Service\Leverage\DynamicLeverageService` implémente `LeverageServiceInterface` :
 
 - Base = `risk_pct / stop_pct`.
-- Multi TF (`leverage.timeframe_multipliers`), multi-vol (ATR/price → `computeVolatilityMultiplier`), `k_dynamic / stop_pct` pour caper.
+- Multi TF (`defaults.timeframe_multipliers`), multi-vol (ATR/price → `computeVolatilityMultiplier`), `k_dynamic / stop_pct` pour caper.
 - Caps additionnels : `exchange_cap`, regex `per_symbol_caps`, `floor`, min/max exchange, rounding (`ceil|floor|round`).
 - Si `stopPct` absent → exception (log `order_plan.leverage.missing_stop_pct`).
 

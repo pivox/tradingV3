@@ -57,9 +57,9 @@ trade_entry:
         # --- Leverage helper ---
         k_dynamic: 10.0
 
-        # --- TF scaling ---
+        # --- TF scaling (appliqué AU LEVIER dynamique) ---
         timeframe_multipliers:
-            '1m': 4
+            '1m': 1.2
 
     # ============================
     # RISK MANAGEMENT
@@ -82,8 +82,8 @@ trade_entry:
         floor: 2.0
         exchange_cap: 10.0
         per_symbol_caps: []
-        timeframe_multipliers:
-            '1m': 1.2
+        timeframe_multipliers:          # Multiplicateurs TF appliqués au SIZING/TP (builder)
+            '1m': 4
         confidence_multiplier:
             enabled: false
         conviction:

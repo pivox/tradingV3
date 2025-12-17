@@ -23,7 +23,12 @@ trade_entry:
         risk_pct_percent: 5.0                    # % risque par défaut (converti en décimal)
         initial_margin_usdt: 40.0                 # Marge initiale en USDT
         fallback_account_balance: 0.0             # Solde de fallback si marge invalide
-        # NOTE: timeframe_multipliers déplacé côté leverage; ici retiré pour éviter double modulation sizing/budget
+        timeframe_multipliers:                    # Multiplicateurs TF appliqués AU LEVIER (DynamicLeverageService)
+            '4h': 1.0
+            '1h': 1.0
+            '15m': 1.0
+            '5m': 0.75
+            '1m': 0.5
         r_multiple: 2.0                           # Multiple R pour TP
         tp1_r: 2.0                                # Multiple R pour TP1 (alias de r_multiple)
 
@@ -86,7 +91,7 @@ trade_entry:
             # Certains shitcoins très volatils / illiquides : 5x
             - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 5.0 }
 
-        timeframe_multipliers:                       # Multiplicateurs par timeframe
+        timeframe_multipliers:                       # Multiplicateurs TF appliqués au SIZING/TP (builder)
             '4h': 1.0
             '1h': 1.0
             '15m': 1.0

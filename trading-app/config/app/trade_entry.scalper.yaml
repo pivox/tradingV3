@@ -19,6 +19,12 @@ trade_entry:
         risk_pct_percent: 7        # Risque par trade (% equity)
         initial_margin_usdt: 20.0    # Marge initiale minimale allouée
         fallback_account_balance: 0.0 # Si balance insuffisante, fallback budget
+        timeframe_multipliers:        # Multiplicateurs TF appliqués AU LEVIER (DynamicLeverageService)
+            '4h': 0.9
+            '1h': 1.0
+            '15m': 5
+            '5m': 10
+            '1m': 12
 
         # --- R-MULTIPLE corrigé (1.2 → 1.5)
         r_multiple: 1.3              # Ratio R attendu sur le trade
@@ -83,7 +89,7 @@ trade_entry:
 #            - { symbol_regex: "^(ETH|BNB)USDT$", cap: 25.0 }   # ETH/BNB → max 25x
 #            - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 5.0 } # Shitcoins → 5x max
 
-        timeframe_multipliers:
+        timeframe_multipliers:          # Multiplicateurs TF appliqués au SIZING/TP (builder)
             '4h': 0.9    # Contexte large → moins de levier
             '1h': 1.0    # Standard
             '15m': 5   # Execution médiane
