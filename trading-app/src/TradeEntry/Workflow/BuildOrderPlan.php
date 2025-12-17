@@ -83,7 +83,7 @@ final class BuildOrderPlan
             }
 
             // Cas anormal : le marché est proche de la zone mais le candidat est hors zone → bug logique
-            $this->positionsLogger->error('build_order_plan.entry_out_of_zone_after_clamp', [
+            $context = [
                 'symbol' => $req->symbol,
                 'decision_key' => $decisionKey,
                 'candidate' => $candidate,
@@ -93,9 +93,15 @@ final class BuildOrderPlan
                 'zone_dev_pct' => $zoneDeviation,
                 'zone_max_dev_pct' => $zoneMaxDeviationPct,
                 'reason' => 'entry_not_within_zone',
-            ]);
+            ];
 
-            throw new \RuntimeException('Prix d\'entrée hors zone calculée');
+            $this->positionsLogger->error('build_order_plan.entry_out_of_zone_after_clamp', $context);
+
+            throw new \App\TradeEntry\Exception\EntryZoneOutOfBoundsException(
+                message: 'Prix d\'entrée hors zone calculée',
+                context: $context,
+                reason: 'entry_not_within_zone'
+            );
         }
 
         $context = [

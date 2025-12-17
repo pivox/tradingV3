@@ -149,6 +149,10 @@ final class TradeEntryService
             $cid = sprintf('SKIP-ZONE-%s', substr(sha1(($decisionKey ?? '') . microtime(true)), 0, 12));
 
             $skipContext = $e->getContext();
+            // S'assurer que le reason de l'exception est dans le contexte pour la persistance
+            if (!isset($skipContext['reason'])) {
+                $skipContext['reason'] = $e->getReason();
+            }
             if ($lifecycleContext !== null) {
                 $skipContext = $this->augmentSkipContext($skipContext, $lifecycleContext);
             }
@@ -536,6 +540,9 @@ final class TradeEntryService
 
         [$mtfContext, $mtfLevel] = $this->extractMtfContext($lifecycleContext);
 
+        // Extraire le reason du contexte s'il existe, sinon utiliser la valeur par défaut
+        $reason = isset($context['reason']) && is_string($context['reason']) ? $context['reason'] : ZoneSkipEventDto::REASON;
+
         return new ZoneSkipEventDto(
             symbol: $request->symbol,
             happenedAt: new \DateTimeImmutable('now', new \DateTimeZone('UTC')),
@@ -554,6 +561,7 @@ final class TradeEntryService
             entryZoneWidthPct: $this->computeZoneWidthPct($zoneMin, $zoneMax),
             mtfContext: $mtfContext,
             mtfLevel: $mtfLevel,
+            reason: $reason,
         );
     }
 

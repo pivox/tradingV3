@@ -10,13 +10,16 @@ final class EntryZoneOutOfBoundsException extends \RuntimeException
     /** @var array<string,mixed> */
     private array $context;
 
+    private ?string $customReason = null;
+
     /**
      * @param array<string,mixed> $context
      */
-    public function __construct(string $message = 'Entry zone out of bounds', array $context = [], ?\Throwable $previous = null)
+    public function __construct(string $message = 'Entry zone out of bounds', array $context = [], ?\Throwable $previous = null, ?string $reason = null)
     {
         parent::__construct($message, 0, $previous);
         $this->context = $context;
+        $this->customReason = $reason;
     }
 
     /** @return array<string,mixed> */
@@ -27,7 +30,7 @@ final class EntryZoneOutOfBoundsException extends \RuntimeException
 
     public function getReason(): string
     {
-        return self::REASON;
+        return $this->customReason ?? self::REASON;
     }
 }
 
