@@ -1,13 +1,35 @@
 #!/usr/bin/env bash
 
-# Analyse complète des runs MTF depuis une heure donnée (UTC)
-# Usage: ./analyze_mtf_runs_since.sh [HH:MM]
-# Exemple: ./analyze_mtf_runs_since.sh 19:00
+# Analyse complète des runs MTF depuis une date/heure donnée (horodatage lu directement depuis les logs).
+# Usage:
+#   ./analyze_mtf_runs_since.sh [HH:MM]                 # date = aujourd'hui (UTC), heure = HH:MM
+#   ./analyze_mtf_runs_since.sh [YYYY-MM-DD] [HH:MM]    # date = YYYY-MM-DD, heure = HH:MM
+# Exemples:
+#   ./analyze_mtf_runs_since.sh 19:00
+#   ./analyze_mtf_runs_since.sh 2025-12-14 16:00
 
 set -u
 
-SINCE_HOUR="${1:-19:00}"
-DATE=$(date -u +%F)
+ARG1="${1:-}"
+ARG2="${2:-}"
+
+if [[ -z "$ARG1" ]]; then
+    DATE="$(date -u +%F)"
+    SINCE_HOUR="19:00"
+elif [[ "$ARG1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    DATE="$ARG1"
+    SINCE_HOUR="${ARG2:-19:00}"
+else
+    DATE="$(date -u +%F)"
+    SINCE_HOUR="$ARG1"
+fi
+
+if [[ ! "$SINCE_HOUR" =~ ^[0-9]{2}:[0-9]{2}$ ]]; then
+    echo "Invalid time format: \"$SINCE_HOUR\" (expected HH:MM)" >&2
+    echo "Usage: $0 [HH:MM]  OR  $0 [YYYY-MM-DD] [HH:MM]" >&2
+    exit 2
+fi
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$ROOT_DIR/var/log"
 DEV_LOG="$LOG_DIR/dev-$DATE.log"
@@ -92,13 +114,51 @@ if [[ "$DEV_LOG_EXISTS" == "true" ]]; then
         echo "Premier run               : $FIRST_RUN_TS"
         echo "Dernier run               : $LAST_RUN_TS"
         echo
-        echo "Détails des runs:"
-        echo "$RUN_LINES" | sed -E 's/^\[([^]]+)\].*run_id=([^ ]+).*mtf_execution=([0-9.]+)s.*/\1  run_id=\2  durée=\3s/' | head -20
-        if [[ $(echo "$RUN_LINES" | wc -l) -gt 20 ]]; then
-            echo "... (et $(($(echo "$RUN_LINES" | wc -l) - 20)) autres)"
-        fi
+        echo "Détails HTTP (routes):"
+        echo "$RUN_LINES" | head -20
+        if [[ $(echo "$RUN_LINES" | wc -l) -gt 20 ]]; then echo "... (et $(($(echo "$RUN_LINES" | wc -l) - 20)) autres)"; fi
     else
         echo "Aucun appel /api/mtf/run trouvé depuis ${SINCE_HOUR} UTC"
+    fi
+else
+    echo "Log dev indisponible"
+fi
+echo
+
+# ==========================================
+# 1bis. RUNNER EXECUTION (run_id / durée)
+# ==========================================
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🏃 MTF Runner (run_id / execution_time)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if [[ "$DEV_LOG_EXISTS" == "true" ]]; then
+    RUNNER_START_LINES=$(filter_since "$SINCE_HOUR" "$DEV_LOG" | rg_cmd "\\[MTF Runner\\] Starting execution" 2>/dev/null || true)
+    RUNNER_END_LINES=$(filter_since "$SINCE_HOUR" "$DEV_LOG" | rg_cmd "\\[MTF Runner\\] Execution completed" 2>/dev/null || true)
+    RUNNER_START_COUNT=$(echo "$RUNNER_START_LINES" | grep -v '^$' | wc -l | tr -d ' ' || echo "0")
+    RUNNER_END_COUNT=$(echo "$RUNNER_END_LINES" | grep -v '^$' | wc -l | tr -d ' ' || echo "0")
+
+    echo "Starts (runner)           : $RUNNER_START_COUNT"
+    echo "Completions (runner)      : $RUNNER_END_COUNT"
+    echo
+
+    if [[ -n "$RUNNER_END_LINES" && "$RUNNER_END_COUNT" -gt 0 ]]; then
+        echo "Dernières completions (max 20):"
+        echo "$RUNNER_END_LINES" \
+            | sed -E 's/^\[([^]]+)\].*run_id=([^ ]+).*execution_time=([0-9.]+).*/\1  run_id=\2  execution_time=\3s/' \
+            | tail -20
+    else
+        echo "Aucune completion runner trouvée depuis ${SINCE_HOUR} UTC"
+    fi
+    echo
+
+    if [[ -n "$RUNNER_START_LINES" ]]; then
+        START_IDS=$(echo "$RUNNER_START_LINES" | sed -E 's/.*run_id=([^ ]+).*/\1/' | sort -u)
+        END_IDS=$(echo "$RUNNER_END_LINES" | sed -E 's/.*run_id=([^ ]+).*/\1/' | sort -u)
+        MISSING_IDS=$(comm -23 <(echo "$START_IDS") <(echo "$END_IDS") 2>/dev/null || true)
+        if [[ -n "$MISSING_IDS" ]]; then
+            echo "⚠️  Runs démarrés sans completion dans les logs:"
+            echo "$MISSING_IDS" | sed 's/^/ - /'
+        fi
     fi
 else
     echo "Log dev indisponible"
@@ -558,4 +618,3 @@ echo
 echo "=========================================="
 echo "✅ Analyse terminée"
 echo "=========================================="
-

@@ -49,6 +49,47 @@ echo "First run                : $FIRST_RUN_TS"
 echo "Last run                 : $LAST_RUN_TS"
 echo
 
+echo "== Runner executions (dev log) =="
+RUNNER_START_LINES=$(rg_cmd "\\[MTF Runner\\] Starting execution" "$DEV_LOG" 2>/dev/null || true)
+RUNNER_END_LINES=$(rg_cmd "\\[MTF Runner\\] Execution completed" "$DEV_LOG" 2>/dev/null || true)
+RUNNER_START_COUNT=$(echo "$RUNNER_START_LINES" | grep -v '^$' | wc -l | tr -d ' ' || echo "0")
+RUNNER_END_COUNT=$(echo "$RUNNER_END_LINES" | grep -v '^$' | wc -l | tr -d ' ' || echo "0")
+echo "Runner starts            : $RUNNER_START_COUNT"
+echo "Runner completions       : $RUNNER_END_COUNT"
+
+if [[ "$RUNNER_END_COUNT" -gt 0 ]]; then
+  echo
+  echo "Execution time stats (seconds):"
+  echo "$RUNNER_END_LINES" | LC_ALL=C awk '
+    match($0, /execution_time=[0-9.]+/) {
+      s = substr($0, RSTART, RLENGTH)
+      sub(/^execution_time=/, "", s)
+      t = s + 0
+      if (count == 0 || t < min) min = t
+      if (count == 0 || t > max) max = t
+      sum += t
+      count += 1
+    }
+    END {
+      if (count > 0) {
+        printf("count=%d avg=%.3f min=%.3f max=%.3f\n", count, sum/count, min, max)
+      }
+    }
+  ' || true
+fi
+
+if [[ "$RUNNER_START_COUNT" -gt "$RUNNER_END_COUNT" ]]; then
+  START_IDS=$(echo "$RUNNER_START_LINES" | sed -E 's/.*run_id=([^ ]+).*/\1/' | sort -u)
+  END_IDS=$(echo "$RUNNER_END_LINES" | sed -E 's/.*run_id=([^ ]+).*/\1/' | sort -u)
+  MISSING_IDS=$(comm -23 <(echo "$START_IDS") <(echo "$END_IDS") 2>/dev/null || true)
+  if [[ -n "$MISSING_IDS" ]]; then
+    echo
+    echo "Runs started without completion (run_id):"
+    echo "$MISSING_IDS"
+  fi
+fi
+echo
+
 echo "== MTF context (mtf log) =="
 CONTEXT_REASON_COUNTS=$(rg_cmd "reason=" "$MTF_LOG" 2>/dev/null \
   | sed -E 's/.*reason=([^ ]*).*/\1/' \
