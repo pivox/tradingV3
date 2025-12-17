@@ -88,12 +88,24 @@ Fusion :
 
 ### Choix du pivot (VWAP vs SMA21)
 
-Paramètre :
+Paramètres (issus de `zoneCfg = array_merge(post_validation.entry_zone, entry.entry_zone)`) :
 
-- `entry.entry_zone.from` (prioritaire) :
-  - `sma21`/`ma21` → pivot = SMA21
-  - `vwap` → pivot = VWAP
-  - sinon fallback `vwap_anchor` (default true)
+- `from` (string) : “préférence” de pivot, **normalisé** par `trim()` + `lowercase`.
+- `vwap_anchor` (bool, défaut `true`) : utilisé **uniquement si** `from` est absent ou non reconnu.
+
+Valeurs **fonctionnelles reconnues** pour `from` (toute autre string est traitée comme “absente”) :
+
+- `from: 'sma21'` (ou alias `from: 'ma21'`) :
+  - tente **SMA21** en premier
+  - si SMA21 est indisponible/invalide → fallback **VWAP**
+- `from: 'vwap'` :
+  - tente **VWAP** en premier
+  - si VWAP est indisponible/invalide → fallback **SMA21**
+- `from` absent / invalide :
+  - si `vwap_anchor: true` → tente **VWAP**, puis fallback **SMA21**
+  - si `vwap_anchor: false` → tente **SMA21**, puis fallback **VWAP**
+
+Exemple (profil micro) : `trading-app/config/app/trade_entry.scalper_micro.yaml` contient `trade_entry.entry.entry_zone.from: 'sma21'` → la zone est **ancrée SMA21 si possible**, sinon ancrée VWAP.
 
 Pivot trouvé en cherchant dans `IndicatorProviderInterface::getListPivot(symbol, tf=pivotTf)` :
 
@@ -109,8 +121,8 @@ Si pivot absent/invalide :
 Paramètres :
 
 - `kAtr` : `zoneCfg.k_atr` ou `zoneCfg.offset_k` ou fallback `0.35`
-- `wMin` : `zoneCfg.w_min` ou fallback `0.0005` (0.05%)
-- `wMax` : `zoneCfg.w_max` ou fallback `0.0100` (1%)
+- `wMin` : `zoneCfg.w_min` ou fallback `0.0005` (0.05%) — **demi-largeur** min relative au pivot
+- `wMax` : `zoneCfg.w_max` (ou alias `zoneCfg.max_deviation_pct`) ou fallback `0.0100` (1%) — **demi-largeur** max relative au pivot
 
 Calcul :
 
@@ -329,4 +341,3 @@ Conséquence :
   - le riskPct,
   - le levier dynamique (via `tfMult`),
   - et le scaling final (via `leverageMultiplier`).
-

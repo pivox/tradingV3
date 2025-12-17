@@ -266,14 +266,64 @@ Clés lues (toutes optionnelles) :
 - `pivot_tf` (string) : timeframe pour VWAP/SMA21 (défaut `'5m'`)
 - `offset_atr_tf` (string) : timeframe ATR (défaut = `pivot_tf`)
 - `k_atr` (float) ou alias `offset_k` (float) : largeur relative à ATR (défaut `0.35`)
-- `w_min` (float) : largeur minimale relative au pivot (défaut `0.0005`)
-- `w_max` (float) ou alias `max_deviation_pct` (float) : largeur maximale relative (défaut `0.0100`)
-- `from` (string) : `vwap` | `sma21` | `ma21`
-  - sinon : fallback booléen `vwap_anchor` (défaut `true`)
-- `vwap_anchor` (bool) : utilisé uniquement si `from` absent/invalid
+- `w_min` (float) : **demi-largeur** minimale relative au pivot (défaut `0.0005`)
+- `w_max` (float) ou alias `max_deviation_pct` (float) : **demi-largeur** maximale relative (défaut `0.0100`)
+- `from` (string) : **sélection du pivot** (`vwap` | `sma21` | `ma21`) — voir détail ci-dessous
+- `vwap_anchor` (bool) : fallback uniquement si `from` absent/non reconnu (défaut `true`)
 - `asym_bias` (float) : clamp dans `[0.0 .. 0.95]` (défaut `0.0`)
 - `quantize_to_exchange_step` (bool, défaut `true`) : quantize des bornes si `pricePrecision` connu
 - `ttl_sec` (int, défaut `240`) : TTL stocké dans l’objet `EntryZone`
+
+### Sélection du pivot : `from` / `vwap_anchor` (comportement exact)
+
+Le champ `from` est normalisé côté code par `trim()` + `lowercase`.  
+Le système ne “valide” pas strictement la string, mais **seules certaines valeurs ont un effet fonctionnel**.
+
+Valeurs fonctionnelles reconnues :
+
+- `from: 'sma21'` : essaie **SMA21**, puis fallback **VWAP**
+- `from: 'ma21'` : alias strict de `sma21` (même comportement)
+- `from: 'vwap'` : essaie **VWAP**, puis fallback **SMA21**
+
+Si `from` est absent ou non reconnu :
+
+- `vwap_anchor: true` (défaut) : essaie **VWAP**, puis fallback **SMA21**
+- `vwap_anchor: false` : essaie **SMA21**, puis fallback **VWAP**
+
+Notes importantes :
+
+- `vwap_anchor` est **ignoré** dès que `from` est reconnu (`vwap|sma21|ma21`).
+- Si ni VWAP ni SMA21 n’est disponible (ou valeurs ≤0 / non finies) → la zone devient **ouverte** (`min=-∞`, `max=+∞`) avec `rationale='open zone (no pivot)'`.
+- Les valeurs sont lues depuis `IndicatorProviderInterface::getListPivot(symbol, tf=pivot_tf)` :
+  - VWAP : `indicators['vwap']`
+  - SMA21 : `indicators['sma'][21]`
+
+Que peut-on mettre dans `from` ?
+
+- Recommandé :
+  - `vwap` : ancrage “volume-weighted” (si VWAP dispo), fallback SMA21
+  - `sma21` : ancrage “mean reversion” sur MA21, fallback VWAP
+  - `ma21` : alias de `sma21` (préférer `sma21` pour éviter l’ambiguïté)
+- Toute autre valeur (ex: `ema21`, `hl2`, `median`) : **aucun effet**, traité comme “absent” → `vwap_anchor` décide de l’ordre.
+
+Exemple (micro scalper) :
+
+```yaml
+trade_entry:
+  entry:
+    entry_zone:
+      from: 'sma21' # SMA21 d'abord, puis VWAP si SMA21 indisponible
+  post_validation:
+    entry_zone:
+      vwap_anchor: false # sans effet ici, car `from` est reconnu
+```
+
+Clarification `max_deviation_pct` dans `entry_zone` :
+
+- `trade_entry.*.post_validation.entry_zone.max_deviation_pct` / `trade_entry.*.entry.entry_zone.max_deviation_pct` est un **alias de** `w_max` (borne max de demi-largeur de zone).
+- Ne pas confondre avec :
+  - `trade_entry.defaults.zone_max_deviation_pct` : garde “zone utilisable vs prix de référence” (sinon `entry_zone.rejected_by_deviation`)
+  - `trade_entry.defaults.max_deviation_pct` : clamp final de l’entrée autour du mark (dans `OrderPlanBuilder`)
 
 Remarque :
 
@@ -287,4 +337,3 @@ Ces blocs peuvent exister dans les YAML mais ne sont pas lus par le code actuel 
 
 - `trade_entry.entry.*` (budget, quantization, slippage_guard_bps, spread_guard_bps) hors `entry.entry_zone`
 - `trade_entry.post_validation.idempotency.*` (non utilisé ; l’idempotence clientOrderId est générée par `IdempotencyPolicy`)
-
