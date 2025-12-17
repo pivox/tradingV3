@@ -152,6 +152,65 @@ final class DailyLossGuard
         return ($state['date'] ?? '') === $this->today() && (bool)($state['locked'] ?? false);
     }
 
+    /**
+     * Réinitialise le daily loss limit pour un mode donné.
+     * Supprime le fichier de lock et réinitialise la baseline avec les valeurs actuelles du compte.
+     * 
+     * @param string|null $mode Mode de configuration (ex: 'regular', 'scalper'). Si null, utilise la config par défaut.
+     * @return array{date:string, start_measure:float, measure:string, measure_value:float, pnl_today:float, limit_usdt:float, locked:bool, mode:string}
+     */
+    public function reset(?string $mode = null): array
+    {
+        $config = $this->configResolver->resolve($mode);
+        $modeUsed = $this->configResolver->resolveMode($mode);
+        $risk = $config->getRisk();
+        $limitUsdt = isset($risk['daily_max_loss_usdt']) ? (float)$risk['daily_max_loss_usdt'] : 0.0;
+        if ($limitUsdt <= 0.0) {
+            $limitUsdt = 0.0;
+        }
+        $countUnrealized = (bool)($risk['daily_loss_count_unrealized'] ?? true);
+
+        // Supprimer le fichier de lock existant
+        $path = $this->getStatePath($modeUsed);
+        if (is_file($path)) {
+            @unlink($path);
+        }
+        // Supprimer aussi le fichier legacy si présent
+        $legacyPath = $this->lockDir . '/daily_loss_guard.json';
+        if (is_file($legacyPath) && $modeUsed === '') {
+            @unlink($legacyPath);
+        }
+
+        // Récupérer les valeurs actuelles du compte
+        $account = $this->providers->getAccountProvider()->getAccountInfo();
+        $equity = null;
+        $available = null;
+        if ($account !== null) {
+            try { $equity = $account->equity->toScale(8, 3)->toFloat(); } catch (\Throwable) { $equity = null; }
+            try { $available = $account->availableBalance->toScale(8, 3)->toFloat(); } catch (\Throwable) { $available = null; }
+        }
+
+        $measureName = $countUnrealized && $equity !== null ? 'equity' : 'available';
+        $measureValue = $measureName === 'equity' ? (float)($equity ?? 0.0) : (float)($available ?? 0.0);
+
+        // Créer un nouvel état avec la baseline actuelle
+        $today = $this->today();
+        $state = [
+            'date' => $today,
+            'start_measure' => $measureValue,
+            'measure' => $measureName,
+            'measure_value' => $measureValue,
+            'pnl_today' => 0.0,
+            'limit_usdt' => $limitUsdt,
+            'locked' => false,
+            'mode' => $modeUsed,
+        ];
+
+        $this->saveState($state, $modeUsed);
+
+        return $state;
+    }
+
     private function today(): string
     {
         // Always use UTC for consistency

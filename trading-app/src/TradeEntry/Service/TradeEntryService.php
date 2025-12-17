@@ -11,6 +11,7 @@ use App\Config\TradeEntryConfigResolver;
 use App\TradeEntry\Exception\EntryZoneOutOfBoundsException;
 use App\TradeEntry\Hook\PostExecutionHookInterface;
 use App\TradeEntry\Workflow\{BuildPreOrder, BuildOrderPlan, ExecuteOrderPlan};
+use App\TradeEntry\Message\OutOfZoneWatchMessage;
 use App\Logging\TradeLifecycleLogger;
 use App\Logging\TradeLifecycleReason;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
@@ -20,10 +21,11 @@ use App\Repository\IndicatorSnapshotRepository;
 use App\Common\Enum\Timeframe;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\Messenger\MessageBusInterface;
 
 final class TradeEntryService
 {
-    private const MIN_EXECUTABLE_LEVERAGE = 2;
+    private const MIN_EXECUTABLE_LEVERAGE = 1;
 
     public function __construct(
         private readonly BuildPreOrder $preflight,
@@ -36,6 +38,7 @@ final class TradeEntryService
         private readonly TradeLifecycleLogger $tradeLifecycleLogger,
         private readonly ZoneSkipPersistenceService $zoneSkipPersistence,
         private readonly IndicatorSnapshotRepository $indicatorSnapshotRepository,
+        private readonly MessageBusInterface $messageBus,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
@@ -174,6 +177,14 @@ final class TradeEntryService
                 mode: $mode,
                 extra: $skipContext,
                 contextBuilder: $lifecycleContext,
+            );
+
+            // Dispatch OutOfZoneWatchMessage (safe, non-blocking)
+            $this->safeDispatchOutOfZoneWatch(
+                traceId: $decisionKey ?? '',
+                request: $request,
+                skipContext: $skipContext,
+                mode: $mode,
             );
 
             return new ExecutionResult(
@@ -1061,5 +1072,108 @@ final class TradeEntryService
             $extra,
             static fn($value) => $value !== null && $value !== ''
         );
+    }
+
+    /**
+     * Dispatch OutOfZoneWatchMessage de manière safe (non-blocking).
+     * Ne doit jamais casser le flow existant si Messenger/PostgreSQL est down.
+     *
+     * @param string $traceId Decision key ou trace ID
+     * @param TradeEntryRequest $request Requête originale
+     * @param array<string,mixed> $skipContext Contexte du skip (contient zone_min, zone_max)
+     * @param string|null $mode Mode de configuration
+     */
+    private function safeDispatchOutOfZoneWatch(
+        string $traceId,
+        TradeEntryRequest $request,
+        array $skipContext,
+        ?string $mode,
+    ): void {
+        try {
+            // Extraire zone_min et zone_max du contexte
+            $zoneMin = isset($skipContext['zone_min']) && is_numeric($skipContext['zone_min'])
+                ? (float) $skipContext['zone_min']
+                : null;
+            $zoneMax = isset($skipContext['zone_max']) && is_numeric($skipContext['zone_max'])
+                ? (float) $skipContext['zone_max']
+                : null;
+
+            if ($zoneMin === null || $zoneMax === null || $zoneMin <= 0 || $zoneMax <= 0) {
+                $this->positionsLogger->debug('out_of_zone_watch.skip_invalid_zone', [
+                    'symbol' => $request->symbol,
+                    'trace_id' => $traceId,
+                    'zone_min' => $zoneMin,
+                    'zone_max' => $zoneMax,
+                ]);
+                return;
+            }
+
+            // Générer watchId unique
+            $watchId = sprintf('%s-%s-%d', $traceId, $request->symbol, time());
+
+            // Construire le payload execute_payload depuis TradeEntryRequest
+            $executePayload = [
+                'symbol' => $request->symbol,
+                'side' => strtolower($request->side->value),
+                'order_type' => $request->orderType,
+                'open_type' => $request->openType,
+                'order_mode' => $request->orderMode,
+                'initial_margin_usdt' => $request->initialMarginUsdt,
+                'risk_pct' => $request->riskPct > 1.0 ? $request->riskPct / 100.0 : $request->riskPct,
+                'r_multiple' => $request->rMultiple,
+                'entry_limit_hint' => $request->entryLimitHint,
+                'stop_from' => $request->stopFrom,
+                'stop_fallback' => $request->stopFallback,
+                'pivot_sl_policy' => $request->pivotSlPolicy,
+                'pivot_sl_buffer_pct' => $request->pivotSlBufferPct,
+                'pivot_sl_min_keep_ratio' => $request->pivotSlMinKeepRatio,
+                'atr_value' => $request->atrValue,
+                'atr_k' => $request->atrK,
+                'market_max_spread_pct' => $request->marketMaxSpreadPct,
+            ];
+
+            // Ajouter mode si présent
+            if ($mode !== null) {
+                $executePayload['mode'] = $mode;
+            }
+
+            // Nettoyer les valeurs null
+            $executePayload = array_filter($executePayload, fn($value) => $value !== null);
+
+            // TTL par défaut : 300 secondes (5 minutes)
+            $ttlSec = 300;
+
+            // Dry-run par défaut : true (sécurité)
+            $dryRun = true;
+
+            $message = new OutOfZoneWatchMessage(
+                watchId: $watchId,
+                traceId: $traceId,
+                symbol: $request->symbol,
+                side: strtolower($request->side->value),
+                zoneMin: $zoneMin,
+                zoneMax: $zoneMax,
+                ttlSec: $ttlSec,
+                dryRun: $dryRun,
+                executePayload: $executePayload,
+            );
+
+            $this->messageBus->dispatch($message);
+
+            $this->positionsLogger->info('out_of_zone_watch.dispatched', [
+                'watch_id' => $watchId,
+                'symbol' => $request->symbol,
+                'trace_id' => $traceId,
+                'zone_min' => $zoneMin,
+                'zone_max' => $zoneMax,
+            ]);
+        } catch (\Throwable $e) {
+            // IMPORTANT: ne jamais casser le flow existant
+            $this->positionsLogger->warning('out_of_zone_watch.dispatch_failed', [
+                'symbol' => $request->symbol,
+                'trace_id' => $traceId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
