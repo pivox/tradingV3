@@ -2,7 +2,7 @@
 # trade_entry.scalper_micro.yaml – Mode micro-structure only
 # Risque réduit, daily loss cap strict, nombre de trades limité
 # =====================================================================
-version: '0.1.2-micro-zone-tolerance-increased'
+version: '0.1.4-micro-atr-5m'
 
 meta:
     name: 'scalper_micro'
@@ -10,6 +10,7 @@ meta:
         Scalping micro-structure (5m/1m) sans contexte 1h/4h, maintenant centré sur des
         entry zones serrées (w_max 0.014) avec tolérance runtime augmentée (zone_max_deviation_pct 12%,
         entry max_deviation_pct 15%) pour réduire les rejets entry_zone.rejected_by_deviation.
+        Pivot: SMA21. ATR: 5m (au lieu de 1m) pour zone plus large et meilleure capture des prix.
 
 trade_entry:
 
@@ -19,7 +20,7 @@ trade_entry:
     defaults:
         # --- Sizing & Risk ---
         risk_pct_percent: 0.5             # 0.5 % du capital par trade
-        initial_margin_usdt: 66.0         # budget réduit pour micro-structure
+        initial_margin_usdt: 100.0         # budget réduit pour micro-structure
         fallback_account_balance: 0.0
         r_multiple: 1.2                   # TP resserré (profil micro)
         tp1_r: 1.2
@@ -58,8 +59,7 @@ trade_entry:
 
         # --- TF scaling ---
         timeframe_multipliers:
-            '5m': 1.0
-            '1m': 3
+            '1m': 4
 
     # ============================
     # RISK MANAGEMENT
@@ -83,8 +83,7 @@ trade_entry:
         exchange_cap: 10.0
         per_symbol_caps: []
         timeframe_multipliers:
-            '5m': 1.0
-            '1m': 0.8
+            '1m': 1.2
         confidence_multiplier:
             enabled: false
         conviction:
@@ -128,9 +127,9 @@ trade_entry:
         slippage_guard_bps: 8
         spread_guard_bps: 6
         entry_zone:
-            from: 'vwap'
-            offset_atr_tf: '1m'
-            offset_k: 2.0           # largeur de zone ~ 1 × ATR(1m)
+            from: 'sma21'
+            offset_atr_tf: '5m'
+            offset_k: 2.0           # largeur de zone ~ 1 × ATR(5m)
             max_deviation_pct: 0.15  # tolérance 15 % (augmentée pour réduire rejets runtime)
             ttl_sec: 180
             quantize_to_exchange_step: true
@@ -140,7 +139,7 @@ trade_entry:
     # ============================
     post_validation:
         entry_zone:
-            vwap_anchor: true
+            vwap_anchor: false
             k_atr: 0.35
             w_min: 0.0005
             w_max: 0.014
@@ -150,4 +149,4 @@ trade_entry:
             decision_key_tpl: "{symbol}:{timeframe}:{candle_open_ts}"
             max_attempts: 3
         meta: >
-            Zone d'entrée courte, pure micro-structure autour de VWAP / MA21 (5m/1m).
+            Zone d'entrée courte, pure micro-structure autour de SMA21 (5m/1m).

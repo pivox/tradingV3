@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Config;
 
+use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\ParameterBag\ParameterBagInterface;
 
 /**
@@ -22,7 +23,8 @@ final class MtfContractsConfigProvider
     private readonly string $configDir;
 
     public function __construct(
-        ParameterBagInterface $parameterBag
+        ParameterBagInterface $parameterBag,
+        private readonly LoggerInterface $logger
     ) {
         $this->configDir = $parameterBag->get('kernel.project_dir') . '/config/app';
     }
@@ -58,6 +60,17 @@ final class MtfContractsConfigProvider
         // Créer et mettre en cache
         $config = new MtfContractsConfig($path);
         $this->configCache[$cacheKey] = $config;
+        $version = null;
+        try {
+            $version = $config->all()['version'] ?? null;
+        } catch (\Throwable) {
+            $version = null;
+        }
+        $this->logger->info('[MTF_CONTRACTS] Config loaded', [
+            'profile' => $profile ?? 'default',
+            'path' => $path,
+            'version' => $version,
+        ]);
 
         return $config;
     }
@@ -98,4 +111,5 @@ final class MtfContractsConfigProvider
         $this->configCache = [];
     }
 }
+
 
