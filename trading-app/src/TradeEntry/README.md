@@ -36,7 +36,7 @@ Les profils TradeEntry (`config/app/trade_entry*.yaml`) décrivent les defaults 
 `TradeEntryRequestBuilder::fromMtfSignal()` consomme `SymbolResultDto` (symbol, side, execution_tf, price, ATR) et construit un `TradeEntryRequest`. Points importants :
 
 - **ATR requis** si `stop_from='atr'` : ordre rejeté (`null`) lorsque ATR absent ou ≤0 (log `atr_required_but_invalid`).
-- **Multiplicateur de timeframe (builder)** : `risk_pct` et le **R-multiple TP** tiennent compte de `leverage.timeframe_multipliers[execution_tf]`.
+- **Multiplicateur de timeframe (notionnel)** : `trade_entry.leverage.timeframe_multipliers[execution_tf]` gonfle le sizing (via `risk_pct`), ce qui augmente le notionnel et les montants SL/TP sans déplacer les prix SL/TP. L'effet sur le levier est indirect (marge cible).
 - **Market entry** : si `market_entry.enabled=true` + TF autorisé + ADX1h ≥ min, alors `order_type` devient `market` (avec log `market_entry.decision`).
 - **Guard sur le spread** : pour les market orders, `PreTradeChecks` rejettera si `spreadPct > market_max_spread_pct`.
 - **Deviation overrides** : `ZoneDeviationOverrideStore` permet de pousser un `zone_max_deviation_pct` spécifique par mode/symbole (outil d’ops).

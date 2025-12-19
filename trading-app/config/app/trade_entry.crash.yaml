@@ -102,7 +102,7 @@ trade_entry:
             - { symbol_regex: "^(ETH|BNB)USDT$", cap: 20.0 }
             - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 4.0 }
 
-        timeframe_multipliers:          # Multiplicateurs TF appliqués au SIZING/TP (builder)
+        timeframe_multipliers:          # Multiplicateurs TF appliqués au SIZING (exposition)
             '4h': 0.8
             '1h': 0.9
             '15m': 1.0

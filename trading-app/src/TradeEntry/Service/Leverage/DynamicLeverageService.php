@@ -62,9 +62,8 @@ final class DynamicLeverageService implements LeverageServiceInterface
 
         $floorConfig    = (float)($levConfig['floor'] ?? 1.0);
         $exchangeCapCfg = (float)($levConfig['exchange_cap'] ?? $maxLeverage);
-        // Multiplicateur par timeframe appliqué AU LEVIER (et uniquement au levier) : configuré côté defaults.
-        // Le builder utilise `leverage.timeframe_multipliers` pour gonfler/réduire sizing/notional/risk/TP.
-        $tfMultipliers  = (array)($defaults['timeframe_multipliers'] ?? []);
+        // Multiplicateur par timeframe appliqué AU LEVIER (DynamicLeverageService) : configuré côté defaults.
+        $defaultsTfMultipliers = (array)($defaults['timeframe_multipliers'] ?? []);
         $perSymbolCaps  = (array)($levConfig['per_symbol_caps'] ?? []);
         $roundingCfg    = (array)($levConfig['rounding'] ?? []);
 
@@ -78,7 +77,10 @@ final class DynamicLeverageService implements LeverageServiceInterface
             );
         }
         $tfKey = strtolower($executionTf);
-        $tfMult = (float)($tfMultipliers[$tfKey] ?? 1.0);
+        $tfMultDefaults = (float)($defaultsTfMultipliers[$tfKey] ?? 1.0);
+        if (!\is_finite($tfMultDefaults) || $tfMultDefaults <= 0.0) {
+            $tfMultDefaults = 1.0;
+        }
 
         // --- Base leverage : riskPct / stopPct
         $leverageBase = $riskPct / max($stopPct, 1e-9);
@@ -92,6 +94,7 @@ final class DynamicLeverageService implements LeverageServiceInterface
         $volMult = $this->computeVolatilityMultiplier($atr5mValue, $entryPrice);
 
         // Application TF + Vol
+        $tfMult = $tfMultDefaults;
         $leveragePreCaps = $leverageBase * $tfMult * $volMult;
 
         // Cap exchange global
@@ -137,7 +140,8 @@ final class DynamicLeverageService implements LeverageServiceInterface
             'stop_pct'          => $stopPct,
             'k_dynamic'         => $kDynamic,
             'leverage_base'     => $leverageBase,
-            'tf_mult_1m'        => $tfMult,
+            'tf_mult_defaults'  => $tfMultDefaults,
+            'tf_mult_effective' => $tfMult,
             'atr_value'         => $atr5mValue,
             'vol_mult'          => $volMult,
             'exchange_cap_cfg'  => $exchangeCapCfg,

@@ -91,7 +91,7 @@ trade_entry:
             # Certains shitcoins très volatils / illiquides : 5x
             - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 5.0 }
 
-        timeframe_multipliers:                       # Multiplicateurs TF appliqués au SIZING/TP (builder)
+        timeframe_multipliers:                       # Multiplicateurs TF appliqués au SIZING (exposition)
             '4h': 1.0
             '1h': 1.0
             '15m': 1.0
