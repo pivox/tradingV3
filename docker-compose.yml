@@ -32,44 +32,6 @@ services:
     #networks:
     #  - frontend-net
 
-
-  ##################################
-  # (Optionnel) API indicateurs techniques - commentée
-  ##################################
-  # python:
-  #   build: ./technical_indicator
-  #   container_name: indicator_api
-  #   working_dir: /app
-  #   command: [ "/app/entrypoint.sh" ]
-  #   environment:
-  #     - DB_HOST=db
-  #     - DB_PORT=3306
-  #     - DB_NAME=symfony_db
-  #     - DB_USER=symfony
-  #     - DB_PASSWORD=symfony
-  #     - UVICORN_HOST=0.0.0.0
-  #     - UVICORN_PORT=8000
-  #     - UVICORN_WORKERS=1
-  #     - FASTAPI_RELOAD=1
-  #     - WATCHFILES_FORCE_POLLING=1
-  #   volumes:
-  #     - ./technical_indicator/app:/app/app
-  #     - ./technical_indicator/indicators:/app/indicators
-  #   ports:
-  #     - "8888:8000"
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #   networks:
-  #     - backend-net
-  #     - shared-net
-  #   healthcheck:
-  #     test: [ "CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1" ]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 10
-  #     start_period: 10s
-
   ##################################
   # TEMPORAL STACK (isolé)
   ##################################
