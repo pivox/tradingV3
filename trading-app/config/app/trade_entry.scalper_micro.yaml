@@ -2,7 +2,7 @@
 # trade_entry.scalper_micro.yaml – Mode micro-structure only
 # Risque réduit, daily loss cap strict, nombre de trades limité
 # =====================================================================
-version: '0.1.4-micro-atr-5m'
+version: '0.1.5-micro-exec-multiplier-cap'
 
 meta:
     name: 'scalper_micro'
@@ -11,6 +11,8 @@ meta:
         entry zones serrées (w_max 0.014) avec tolérance runtime augmentée (zone_max_deviation_pct 12%,
         entry max_deviation_pct 15%) pour réduire les rejets entry_zone.rejected_by_deviation.
         Pivot: SMA21. ATR: 5m (au lieu de 1m) pour zone plus large et meilleure capture des prix.
+        TF multipliers appliques juste avant submit (size + leverage), capes par
+        max_loss_pct (perte SL <= initial_margin_usdt * pct).
 
 trade_entry:
 
@@ -20,10 +22,10 @@ trade_entry:
     defaults:
         # --- Sizing & Risk ---
         risk_pct_percent: 0.5             # 0.5 % du capital par trade
-        initial_margin_usdt: 130.0         # budget réduit pour micro-structure
+        initial_margin_usdt: 50.0         # budget réduit pour micro-structure
         fallback_account_balance: 0.0
-        r_multiple: 1.3                   # TP resserré (profil micro)
-        tp1_r: 1.3
+        r_multiple: 1.32                  # TP resserré (profil micro)
+        tp1_r: 1.2
 
         # --- Stop Loss ---
         stop_from: 'atr'
@@ -80,10 +82,11 @@ trade_entry:
     leverage:
         mode: dynamic_from_risk
         floor: 2.0
-        exchange_cap: 10.0
+        exchange_cap: 20.0              # Cap exchange applique seulement si TF multiplier = 1
+        max_loss_pct: 0.4               # Perte max au SL vs initial_margin_usdt (cap size+leverage)
         per_symbol_caps: []
-        timeframe_multipliers:          # Multiplicateurs TF appliqués au SIZING (exposition)
-            '1m': 4
+        timeframe_multipliers:          # Multiplicateurs TF appliques a la taille et au levier (avant submit)
+            '1m': 20
         confidence_multiplier:
             enabled: false
         conviction:
@@ -92,7 +95,8 @@ trade_entry:
             precision: 2
             mode: floor
         meta: >
-            Levier plafonné à 10× (aligné avec max_leverage), sans boosts de conviction.
+            Levier scale en execution (size+leverage), cap SL via max_loss_pct,
+            exchange_cap utilise si multiplier = 1.
 
     # ============================
     # DECISION ENGINE

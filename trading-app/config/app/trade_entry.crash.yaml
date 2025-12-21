@@ -96,13 +96,14 @@ trade_entry:
         mode: dynamic_from_risk
         floor: 3.0                # Plancher un peu plus bas (moins agressif)
         exchange_cap: 40.0        # Cap global plus modéré qu'en scalper
+        max_loss_pct: 0.0         # Perte max au SL vs initial_margin_usdt (0 = desactive)
 
         per_symbol_caps:
             - { symbol_regex: "^BTCUSDT$", cap: 30.0 }
             - { symbol_regex: "^(ETH|BNB)USDT$", cap: 20.0 }
             - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 4.0 }
 
-        timeframe_multipliers:          # Multiplicateurs TF appliqués au SIZING (exposition)
+        timeframe_multipliers:          # Multiplicateurs TF appliques a la taille et au levier (avant submit)
             '4h': 0.8
             '1h': 0.9
             '15m': 1.0

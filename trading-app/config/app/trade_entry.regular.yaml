@@ -81,6 +81,7 @@ trade_entry:
         mode: dynamic_from_risk                     # base = risk_pct / stop_pct (puis clamps)
         floor: 2.0                                   # Levier minimum (assuré >= 5)
         exchange_cap: 40.0                          # Levier maximum de l'exchange (acceptation de leviers élevés)
+        max_loss_pct: 0.0                            # Perte max au SL vs initial_margin_usdt (0 = desactive)
         per_symbol_caps:
             # BTC peut monter jusqu'à 40x
             - { symbol_regex: "^BTCUSDT$", cap: 40.0 }
@@ -91,7 +92,7 @@ trade_entry:
             # Certains shitcoins très volatils / illiquides : 5x
             - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 5.0 }
 
-        timeframe_multipliers:                       # Multiplicateurs TF appliqués au SIZING (exposition)
+        timeframe_multipliers:                       # Multiplicateurs TF appliques a la taille et au levier (avant submit)
             '4h': 1.0
             '1h': 1.0
             '15m': 1.0

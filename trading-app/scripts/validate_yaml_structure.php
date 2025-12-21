@@ -247,7 +247,7 @@ class YamlStructureValidator
 
             // Vérifier la structure de leverage
             if (isset($stdTe['leverage']) && isset($scalTe['leverage'])) {
-                $leverageSections = ['mode', 'floor', 'exchange_cap', 'per_symbol_caps', 'timeframe_multipliers', 'confidence_multiplier', 'conviction', 'rounding'];
+                $leverageSections = ['mode', 'floor', 'exchange_cap', 'max_loss_pct', 'per_symbol_caps', 'timeframe_multipliers', 'confidence_multiplier', 'conviction', 'rounding'];
                 foreach ($leverageSections as $subSection) {
                     if (isset($stdTe['leverage'][$subSection]) && !isset($scalTe['leverage'][$subSection])) {
                         $this->warnings[] = "⚠️  Sous-section manquante dans scalper: trade_entry.leverage.$subSection";
@@ -457,4 +457,3 @@ if ($totalErrors === 0 && $totalWarnings === 0) {
         exit(0);
     }
 }
-

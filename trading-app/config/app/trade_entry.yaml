@@ -79,10 +79,11 @@ trade_entry:
         mode: dynamic_from_risk                     # base = risk_pct / stop_pct (puis clamps)
         floor: 2.0                                   # Levier minimum (assuré >= 5)
         exchange_cap: 100.0                          # Levier maximum de l'exchange (acceptation de leviers élevés)
+        max_loss_pct: 0.0                            # Perte max au SL vs initial_margin_usdt (0 = desactive)
         per_symbol_caps:                            # Caps par symbole
             - { symbol_regex: "^(BTC|ETH|BNB).*", cap: 30.0 }
             - { symbol_regex: "^NVDAXUSDT$", cap: 5.0 }
-        timeframe_multipliers:                       # Multiplicateurs TF appliqués au SIZING (exposition)
+        timeframe_multipliers:                       # Multiplicateurs TF appliques a la taille et au levier (avant submit)
             '4h': 1.0
             '1h': 1.0
             '15m': 1.0
