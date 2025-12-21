@@ -52,6 +52,11 @@ final class TradeEntryController extends AbstractController
             $mode = isset($data['mode']) && is_string($data['mode']) ? $data['mode'] : null;
             $config = $this->tradeEntryConfigResolver->resolve($mode);
             $defaults = $config->getDefaults();
+            $levCfg = $config->getLeverage();
+            $leverageExchangeCap = isset($levCfg['exchange_cap']) ? (float)$levCfg['exchange_cap'] : null;
+            if ($leverageExchangeCap !== null && (!\is_finite($leverageExchangeCap) || $leverageExchangeCap <= 0.0)) {
+                $leverageExchangeCap = null;
+            }
             $riskPctDefault = (float)($defaults['risk_pct_percent'] ?? 2.0);
             $riskPct = isset($data['risk_pct']) ? (float)$data['risk_pct'] : $riskPctDefault;
             if ($riskPct > 1.0) {
@@ -102,6 +107,7 @@ final class TradeEntryController extends AbstractController
                 atrValue: isset($data['atr_value']) ? (float)$data['atr_value'] : null,
                 atrK: isset($data['atr_k']) ? (float)$data['atr_k'] : (float)($defaults['atr_k'] ?? 1.5),
                 marketMaxSpreadPct: $marketSpread,
+                leverageExchangeCap: $leverageExchangeCap,
             );
 
             $result = $this->service->buildAndExecute($requestDto, mode: $mode);

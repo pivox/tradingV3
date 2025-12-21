@@ -36,5 +36,6 @@ final class TradeEntryRequest
         public readonly float $tpMinKeepRatio = 0.95,
         public readonly ?float $tpMaxExtraR = null,
         public readonly float $leverageMultiplier = 1.0,
+        public readonly ?float $leverageExchangeCap = null,
     ) {}
 }

@@ -45,6 +45,11 @@ final class OrderPlanBuilder
         $sizeStep        = $volPrecision > 0 ? pow(10, -$volPrecision) : 1.0;
         $maxVolume       = $pre->maxVolume;
         $marketMaxVolume = $pre->marketMaxVolume;
+        $maxLeverageAllowed = $pre->maxLeverage;
+        if ($req->leverageExchangeCap !== null) {
+            $maxLeverageAllowed = (int)min((float)$maxLeverageAllowed, (float)$req->leverageExchangeCap);
+        }
+        $maxLeverageAllowed = max($pre->minLeverage, $maxLeverageAllowed);
 
         // --- Budget / risk ---
         $availableBudget = min(max((float)$req->initialMarginUsdt, 0.0), max((float)$pre->availableUsdt, 0.0));
@@ -612,7 +617,7 @@ final class OrderPlanBuilder
             $req->initialMarginUsdt,
             $pre->availableUsdt,
             $pre->minLeverage,
-            $pre->maxLeverage,
+            $maxLeverageAllowed,
             $stopPct,
             $atr15m,
             $req->executionTf,
@@ -626,7 +631,7 @@ final class OrderPlanBuilder
             $scaledLeverage = $leverage * $leverageMultiplier;
             $scaledLeverage = min(
                 max($scaledLeverage, (float)$pre->minLeverage),
-                (float)$pre->maxLeverage
+                (float)$maxLeverageAllowed
             );
             if ((int)$scaledLeverage !== (int)$leverage) {
                 $this->positionsLogger->debug('order_plan.leverage.multiplier_applied', [
@@ -653,7 +658,7 @@ final class OrderPlanBuilder
         $initialMargin = $notional / max(1.0, (float)$leverage);
         if ($initialMargin > $availableBudget) {
             $requiredLev = max(1.0, $notional / max($availableBudget, 1e-8));
-            $adjLev = min(max($requiredLev, (float)$pre->minLeverage), (float)$pre->maxLeverage);
+            $adjLev = min(max($requiredLev, (float)$pre->minLeverage), (float)$maxLeverageAllowed);
             if ($adjLev > (float)$leverage) {
                 $leverage = (int)ceil($adjLev);
                 $initialMargin = $notional / $leverage;
@@ -683,7 +688,7 @@ final class OrderPlanBuilder
             $desiredLeverage = $notional / max($targetMargin, 1e-9);
             $desiredLeverage = min(
                 max($desiredLeverage, (float)$pre->minLeverage),
-                (float)$pre->maxLeverage
+                (float)$maxLeverageAllowed
             );
 
             $candidateLeverage = max(1, (int)round($desiredLeverage));
