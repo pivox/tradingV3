@@ -28,7 +28,7 @@ Le module gère tous les cas : manque d’ATR, pivots éloignés, spreads trop
 Les profils TradeEntry (`config/app/trade_entry*.yaml`) décrivent les defaults utilisés par le builder :
 
 - `defaults` : risk_pct_percent, initial_margin_usdt, r_multiple, order_type (`limit` par défaut), open_type (`isolated`), order_mode (Bitmart `mode`), `stop_from` (`atr` ou `pivot`), fallback (`atr|risk|none`), `atr_k`, `market_max_spread_pct`, politiques TP, etc.
-- `leverage` : floor, exchange_cap, per_symbol_caps (regex), timeframe_multipliers, rounding.
+- `leverage` : floor, exchange_cap, max_loss_pct (cap SL vs initial_margin_usdt), per_symbol_caps (regex), timeframe_multipliers, rounding.
 - `decision` : `allowed_execution_timeframes` (guard côté TradeEntry).
 - `post_validation.entry_zone.*` : paramètres zone (pivot/vwap, k_atr, w_min/w_max, ttl…).
 - `market_entry` : autorise bascule en `order_type=market` (filtré par `allowed_execution_timeframes`, ADX, slippage).
@@ -36,7 +36,7 @@ Les profils TradeEntry (`config/app/trade_entry*.yaml`) décrivent les defaults 
 `TradeEntryRequestBuilder::fromMtfSignal()` consomme `SymbolResultDto` (symbol, side, execution_tf, price, ATR) et construit un `TradeEntryRequest`. Points importants :
 
 - **ATR requis** si `stop_from='atr'` : ordre rejeté (`null`) lorsque ATR absent ou ≤0 (log `atr_required_but_invalid`).
-- **Multiplicateur de timeframe (notionnel)** : `trade_entry.leverage.timeframe_multipliers[execution_tf]` gonfle le sizing (via `risk_pct`), ce qui augmente le notionnel et les montants SL/TP sans déplacer les prix SL/TP. L'effet sur le levier est indirect (marge cible).
+- **Multiplicateur de timeframe (execution)** : `trade_entry.leverage.timeframe_multipliers[execution_tf]` est appliqué juste avant la soumission (ExecutionBox) pour scaler `size` et `leverage` (fallback TF `5m`). Le plan (SL/TP/prix) n'est pas recalculé.
 - **Market entry** : si `market_entry.enabled=true` + TF autorisé + ADX1h ≥ min, alors `order_type` devient `market` (avec log `market_entry.decision`).
 - **Guard sur le spread** : pour les market orders, `PreTradeChecks` rejettera si `spreadPct > market_max_spread_pct`.
 - **Deviation overrides** : `ZoneDeviationOverrideStore` permet de pousser un `zone_max_deviation_pct` spécifique par mode/symbole (outil d’ops).
