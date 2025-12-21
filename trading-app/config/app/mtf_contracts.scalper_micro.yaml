@@ -14,7 +14,7 @@ mtf_contracts:
             # Le turnover (valeur échangée en 24h) est utilisé pour mesurer la liquidité réelle du contrat.
             # Plus il est élevé, plus le spread est serré et l'exécution est fiable.
 
-            min_turnover: 1400000      # Liquidité minimale en 24h : >= 1.4M USDT (filtre "MID").
+            min_turnover: 1500000      # Liquidité minimale en 24h : >= 1.5M USDT (filtre "MID").
             # Exclut les micro-caps trop illiquides et trop risqués.
 
             mid_max_turnover: 8000000  # Seuil supérieur des MID-caps. Au-delà → TOP liquidity.
@@ -33,7 +33,7 @@ mtf_contracts:
             open_unit: 'ms'            # open_timestamp également en millisecondes.
 
         limits:
-            top_n: 170                 # Nombre maximum de contrats très liquides (TOP) retenus.
+            top_n: 210                 # Nombre maximum de contrats très liquides (TOP) retenus.
 
             mid_n: 0                   # Désactive la sélection MID.
               # Donc seuls les contrats avec turnover > 8M seront retenus.
