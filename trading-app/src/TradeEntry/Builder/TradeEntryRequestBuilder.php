@@ -64,17 +64,19 @@ final class TradeEntryRequestBuilder
         }
         $executionTf = strtolower($executionTf);
         $defaults = $config->getDefaults();
-        $leverage = $config->getLeverage();
-        // Multiplicateur "TF" utilisé au niveau builder (sizing/notional/risk/TP).
-        // NOTE: le levier dynamique a son propre multiplicateur (defaults.timeframe_multipliers) dans DynamicLeverageService.
-        $builderMultipliers = $leverage['timeframe_multipliers'] ?? [];
-        if (!\is_array($builderMultipliers)) {
-            $builderMultipliers = [];
+
+        // Multiplicateur TF pour le TP (r_multiple), configuré côté defaults
+        $defaultsTfMultipliers = $defaults['timeframe_multipliers'] ?? [];
+        if (!\is_array($defaultsTfMultipliers)) {
+            $defaultsTfMultipliers = [];
         }
-        $tfMultiplier = (float)($builderMultipliers[$executionTf] ?? 1.0);
+        $tpTfMultiplier = (float)($defaultsTfMultipliers[$executionTf] ?? 1.0);
+        if (!\is_finite($tpTfMultiplier) || $tpTfMultiplier <= 0.0) {
+            $tpTfMultiplier = 1.0;
+        }
 
         $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 2.0);
-        $riskPct = max(0.0, $riskPctPercent / 100.0) * $tfMultiplier;
+        $riskPct = max(0.0, $riskPctPercent / 100.0);
         if ($riskPct <= 0.0) {
             return null;
         }
@@ -200,10 +202,16 @@ final class TradeEntryRequestBuilder
 
         $sideEnum = $side === 'LONG' ? Side::Long : Side::Short;
 
-        // TP: gonflage / réduction du R-multiple au niveau builder (influence TP théorique et alignement pivots)
+        // TP: R-multiple modulé par timeframe (defaults.timeframe_multipliers)
         $rMultiple = (float)($defaults['r_multiple'] ?? 2.0);
-        if (\is_finite($tfMultiplier) && $tfMultiplier > 0.0 && $tfMultiplier !== 1.0 && \is_finite($rMultiple) && $rMultiple > 0.0) {
-            $rMultiple *= $tfMultiplier;
+        if ($tpTfMultiplier !== 1.0 && \is_finite($rMultiple) && $rMultiple > 0.0) {
+            $rMultiple *= $tpTfMultiplier;
+        }
+
+        $leverage = $config->getLeverage();
+        $leverageExchangeCap = isset($leverage['exchange_cap']) ? (float)$leverage['exchange_cap'] : null;
+        if ($leverageExchangeCap !== null && (!\is_finite($leverageExchangeCap) || $leverageExchangeCap <= 0.0)) {
+            $leverageExchangeCap = null;
         }
 
         return new TradeEntryRequest(
@@ -235,6 +243,7 @@ final class TradeEntryRequestBuilder
             tpMinKeepRatio: $tpMinKeepRatio,
             tpMaxExtraR: $tpMaxExtraR,
             leverageMultiplier: 1.0,
+            leverageExchangeCap: $leverageExchangeCap,
         );
     }
 

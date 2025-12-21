@@ -25,7 +25,7 @@ use Symfony\Component\Messenger\MessageBusInterface;
 
 final class TradeEntryService
 {
-    private const MIN_EXECUTABLE_LEVERAGE = 1;
+    private const MIN_EXECUTABLE_LEVERAGE = 3;
 
     public function __construct(
         private readonly BuildPreOrder $preflight,
@@ -289,7 +289,7 @@ final class TradeEntryService
             'reason' => 'plan_constructed',
         ]);
 
-        $result = ($this->executor)($plan, $decisionKey, $lifecycleContext);
+        $result = ($this->executor)($plan, $decisionKey, $lifecycleContext, $mode, $request->executionTf);
         if ($result->status === 'submitted') {
             $this->logOrderSubmittedEvent($plan, $result, $request, $decisionKey, $mode, $lifecycleContext, $runId);
         } elseif ($result->status === 'skipped') {

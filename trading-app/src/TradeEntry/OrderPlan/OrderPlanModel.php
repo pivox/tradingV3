@@ -35,7 +35,9 @@ final class OrderPlanModel
         ?string $orderType = null,
         ?int    $orderMode = null,
         ?float  $entry     = null,
-        ?float  $takeProfit = null
+        ?float  $takeProfit = null,
+        ?int    $size = null,
+        ?int    $leverage = null
     ): self {
         return new self(
             $this->symbol,
@@ -46,8 +48,8 @@ final class OrderPlanModel
             $entry       ?? $this->entry,
             $this->stop,
             $takeProfit  ?? $this->takeProfit,
-            $this->size,
-            $this->leverage,
+            $size ?? $this->size,
+            $leverage ?? $this->leverage,
             $this->pricePrecision,
             $this->contractSize,
             $this->entryZoneLow,

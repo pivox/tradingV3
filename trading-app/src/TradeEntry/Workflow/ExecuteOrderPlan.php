@@ -17,7 +17,13 @@ final class ExecuteOrderPlan
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
-    public function __invoke(OrderPlanModel $plan, ?string $decisionKey = null, ?LifecycleContextBuilder $contextBuilder = null): ExecutionResult
+    public function __invoke(
+        OrderPlanModel $plan,
+        ?string $decisionKey = null,
+        ?LifecycleContextBuilder $contextBuilder = null,
+        ?string $mode = null,
+        ?string $executionTf = null
+    ): ExecutionResult
     {
         $this->positionsLogger->info('execute_order_plan.start', [
             'symbol' => $plan->symbol,
@@ -33,7 +39,7 @@ final class ExecuteOrderPlan
         ]);
 
         try {
-            $result = $this->execution->execute($plan, $decisionKey, $contextBuilder);
+            $result = $this->execution->execute($plan, $decisionKey, $contextBuilder, $mode, $executionTf);
 
             $context = [
                 'symbol' => $plan->symbol,
