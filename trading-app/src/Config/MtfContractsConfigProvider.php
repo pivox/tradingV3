@@ -111,5 +111,3 @@ final class MtfContractsConfigProvider
         $this->configCache = [];
     }
 }
-
-
