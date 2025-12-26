@@ -18,3 +18,8 @@ Cette première itération couvre **trading-app** (MTF validation + exécution).
 - `docs/trading-app/10-mtf-contracts-yaml-reference.md`
 - `docs/trading-app/11-validations-yaml-reference.md`
 - `docs/trading-app/12-api-mtf-run-flux-scalper-micro.md`
+- `docs/trading-app/user-stories.md` - User stories complètes du flux API → ordre placé
+
+## Présentation
+
+- `docs/presentation.md` - Présentation générale de l'application (format reveal.js)
