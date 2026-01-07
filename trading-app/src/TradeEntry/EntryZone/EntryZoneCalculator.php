@@ -60,6 +60,10 @@ final class EntryZoneCalculator
         $wMax = $this->wMaxOverride
             ?? (isset($zoneCfg['w_max']) && \is_numeric($zoneCfg['w_max']) ? (float)$zoneCfg['w_max']
                 : (isset($zoneCfg['max_deviation_pct']) && \is_numeric($zoneCfg['max_deviation_pct']) ? (float)$zoneCfg['max_deviation_pct'] : self::W_MAX));
+        $outsideTolerancePct = null;
+        if (isset($zoneCfg['outside_tolerance_pct']) && \is_numeric($zoneCfg['outside_tolerance_pct'])) {
+            $outsideTolerancePct = max(0.0, (float)$zoneCfg['outside_tolerance_pct']);
+        }
 
         // Gestion du pivot : entry.entry_zone.from a priorité, sinon fallback vwap_anchor
         $from = \is_string($zoneCfg['from'] ?? null) ? strtolower(trim((string)$zoneCfg['from'])) : null;
@@ -240,6 +244,7 @@ final class EntryZoneCalculator
                 'atr' => $atr,
                 'k_atr' => $kAtr,
                 'width_pct' => ($high - $low) / max($pivot, 1e-8),
+                'outside_tolerance_pct' => $outsideTolerancePct,
             ],
         );
     }

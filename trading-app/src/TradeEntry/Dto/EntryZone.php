@@ -17,7 +17,31 @@ final class EntryZone
 
     public function contains(float $price): bool
     {
-        return $price >= $this->min && $price <= $this->max;
+        if ($price >= $this->min && $price <= $this->max) {
+            return true;
+        }
+
+        $tolerance = $this->metadata['outside_tolerance_pct'] ?? null;
+        if (!\is_numeric($tolerance)) {
+            return false;
+        }
+        $tolerance = (float)$tolerance;
+        if ($tolerance <= 0.0 || $price <= 0.0) {
+            return false;
+        }
+        if ($tolerance > 1.0) {
+            $tolerance *= 0.01;
+        }
+        $tolerance = min($tolerance, 1.0);
+
+        if ($price > $this->max) {
+            return (($price - $this->max) / $price) <= $tolerance;
+        }
+        if ($price < $this->min) {
+            return (($this->min - $price) / $price) <= $tolerance;
+        }
+
+        return false;
     }
 
     public function getCreatedAt(): ?\DateTimeImmutable
