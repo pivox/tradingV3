@@ -8,6 +8,7 @@ use App\Contract\MtfValidator\Dto\TimeframeDecisionDto;
 use App\Common\Enum\Timeframe as TimeframeEnum;
 use App\Contract\Indicator\IndicatorEngineInterface;
 use App\Contract\Provider\KlineProviderInterface;
+use App\Contract\Provider\MainProviderInterface;
 use App\MtfValidator\ConditionLoader\ConditionRegistry as MtfConditionRegistry;
 use App\MtfValidator\ConditionLoader\TimeframeEvaluator as MtfTimeframeEvaluator;
 use App\MtfValidator\Service\Rule\TimeframeRuleEvaluator;
@@ -25,6 +26,7 @@ final class TimeframeValidationService
         private readonly ?MtfConditionRegistry $conditionRegistry = null,
         private readonly ?IndicatorEngineInterface $indicatorEngine = null,
         private readonly ?KlineProviderInterface $klineProvider = null,
+        private readonly ?MainProviderInterface $mainProvider = null,
     ) {
     }
 
@@ -281,6 +283,10 @@ final class TimeframeValidationService
         }
 
         $context = $this->indicatorEngine->buildContext($symbol, $timeframe, $klines, []);
+
+        // Enrichissement microstructure (spread / OFI) pour les gardes 1m.
+        // Best-effort: si indisponible (provider non injecté ou erreur API), on laisse la condition gérer missing_data.
+        $this->enrichMicrostructureContext(symbol: $symbol, timeframe: $timeframe, phase: $phase, context: $context);
 
         // Évaluation LONG / SHORT via TimeframeEvaluator (ConditionRegistry)
         $evaluation = $this->conditionTimeframeEvaluator->evaluate($timeframe, $context);
@@ -622,5 +628,104 @@ final class TimeframeValidationService
         }
 
         return $summary;
+    }
+
+    /**
+     * @param array<string,mixed> $context
+     */
+    private function enrichMicrostructureContext(string $symbol, string $timeframe, string $phase, array &$context): void
+    {
+        if ($phase !== 'execution') {
+            return;
+        }
+
+        if ($timeframe !== '1m') {
+            return;
+        }
+
+        if ($this->mainProvider === null) {
+            return;
+        }
+
+        // Déjà fourni par une autre couche → ne pas écraser.
+        $hasSpread = \array_key_exists('spread_bps', $context) && \is_numeric($context['spread_bps']);
+        $hasOfi = \array_key_exists('order_flow_imbalance', $context) && \is_numeric($context['order_flow_imbalance']);
+        if ($hasSpread && $hasOfi) {
+            return;
+        }
+
+        try {
+            $orderBook = $this->mainProvider->getContractProvider()->getOrderBook($symbol, 20);
+        } catch (\Throwable) {
+            return;
+        }
+
+        if (!\is_array($orderBook)) {
+            return;
+        }
+
+        $bids = $orderBook['bids'] ?? null;
+        $asks = $orderBook['asks'] ?? null;
+        if (!\is_array($bids) || !\is_array($asks) || $bids === [] || $asks === []) {
+            return;
+        }
+
+        // Best bid/ask (assume first level is best).
+        $bestBid = $this->extractPriceLevel($bids[0] ?? null);
+        $bestAsk = $this->extractPriceLevel($asks[0] ?? null);
+
+        if (!$hasSpread && $bestBid !== null && $bestAsk !== null && $bestBid > 0.0 && $bestAsk > 0.0) {
+            $mid = 0.5 * ($bestBid + $bestAsk);
+            if ($mid > 0.0) {
+                $context['spread_bps'] = 10000.0 * ($bestAsk - $bestBid) / $mid;
+            }
+        }
+
+        if (!$hasOfi) {
+            $bidQty = $this->sumOrderBookQty($bids, 20);
+            $askQty = $this->sumOrderBookQty($asks, 20);
+            $denom = $bidQty + $askQty;
+            if ($denom > 0.0) {
+                $context['order_flow_imbalance'] = ($bidQty - $askQty) / $denom;
+            }
+        }
+    }
+
+    private function extractPriceLevel(mixed $row): ?float
+    {
+        if (\is_array($row)) {
+            $price = $row[0] ?? $row['price'] ?? null;
+            return \is_numeric($price) ? (float) $price : null;
+        }
+        if (\is_object($row)) {
+            $price = $row->price ?? null;
+            return \is_numeric($price) ? (float) $price : null;
+        }
+        return null;
+    }
+
+    /**
+     * @param array<int,mixed> $levels
+     */
+    private function sumOrderBookQty(array $levels, int $limit): float
+    {
+        $sum = 0.0;
+        $n = 0;
+        foreach ($levels as $row) {
+            if ($n >= $limit) {
+                break;
+            }
+            $qty = null;
+            if (\is_array($row)) {
+                $qty = $row[1] ?? $row['qty'] ?? $row['size'] ?? null;
+            } elseif (\is_object($row)) {
+                $qty = $row->qty ?? $row->size ?? null;
+            }
+            if (\is_numeric($qty)) {
+                $sum += (float) $qty;
+                $n++;
+            }
+        }
+        return $sum;
     }
 }
