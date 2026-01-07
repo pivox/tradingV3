@@ -9,6 +9,7 @@ x-global-variables: &global-env
   BITMART_WS_DEVICE: "${BITMART_WS_DEVICE}"
   BITMART_API_MEMO: "${BITMART_API_MEMO}"
   BITMART_PUBLIC_API_URL: "${BITMART_PUBLIC_API_URL}"   # ← AJOUT ICI
+  BITMART_RATE_PUBLIC_KLINE: "9/2"
 
 services:
 
@@ -29,8 +30,8 @@ services:
   #     - REACT_APP_API_URL=http://localhost:8080           # Backend API base URL (for frontend http requests)
   #     - REACT_APP_POSITIONS_WS_BASE_URL=http://localhost:9000 # Websocket endpoint for positions updates
   #   command: sh -c "npm install --legacy-peer-deps && npm start" # Installs dependencies before starting dev server
-    #networks:
-    #  - frontend-net
+  #networks:
+  #  - frontend-net
 
   ##################################
   # TEMPORAL STACK (isolé)
@@ -128,103 +129,103 @@ services:
       - temporal-net
       - shared-net
 
-#  grafana:
-#    image: grafana/grafana:10.4.0
-#    container_name: grafana
-#    ports:
-#      - "3001:3000"
-#    environment:
-#      - GF_SECURITY_ADMIN_USER=admin
-#      - GF_SECURITY_ADMIN_PASSWORD=admin
-#    volumes:
-#      - grafana-data:/var/lib/grafana
-#      - ./monitoring/grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards
-#      - ./monitoring/grafana-datasources:/etc/grafana/provisioning/datasources
-#      - ./monitoring/grafana-provisioning/alerting:/etc/grafana/provisioning/alerting
-#      - ./monitoring/grafana-dashboards:/var/lib/grafana/dashboards
-#    depends_on:
-#      trading-app-db:
-#        condition: service_healthy
-#    networks:
-#      - shared-net
-#  loki:
-#    image: grafana/loki:2.9.3
-#    container_name: loki
-#    command: -config.file=/etc/loki/local-config.yaml
-#    volumes:
-#      - ./monitoring/loki-config.yaml:/etc/loki/local-config.yaml
-#      - loki-data:/loki
-#    ports:
-#      - "3100:3100"
-#    networks:
-#      - shared-net
-#
-#  promtail:
-#    image: grafana/promtail:2.9.3
-#    container_name: promtail
-#    command: -config.file=/etc/promtail/config.yaml
-#    volumes:
-#      - ./monitoring/promtail-config.yaml:/etc/promtail/config.yaml
-#      - ./trading-app/var/log:/var/log/symfony
-#    depends_on:
-#      - loki
-#    networks:
-#      - shared-net
+  #  grafana:
+  #    image: grafana/grafana:10.4.0
+  #    container_name: grafana
+  #    ports:
+  #      - "3001:3000"
+  #    environment:
+  #      - GF_SECURITY_ADMIN_USER=admin
+  #      - GF_SECURITY_ADMIN_PASSWORD=admin
+  #    volumes:
+  #      - grafana-data:/var/lib/grafana
+  #      - ./monitoring/grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards
+  #      - ./monitoring/grafana-datasources:/etc/grafana/provisioning/datasources
+  #      - ./monitoring/grafana-provisioning/alerting:/etc/grafana/provisioning/alerting
+  #      - ./monitoring/grafana-dashboards:/var/lib/grafana/dashboards
+  #    depends_on:
+  #      trading-app-db:
+  #        condition: service_healthy
+  #    networks:
+  #      - shared-net
+  #  loki:
+  #    image: grafana/loki:2.9.3
+  #    container_name: loki
+  #    command: -config.file=/etc/loki/local-config.yaml
+  #    volumes:
+  #      - ./monitoring/loki-config.yaml:/etc/loki/local-config.yaml
+  #      - loki-data:/loki
+  #    ports:
+  #      - "3100:3100"
+  #    networks:
+  #      - shared-net
+  #
+  #  promtail:
+  #    image: grafana/promtail:2.9.3
+  #    container_name: promtail
+  #    command: -config.file=/etc/promtail/config.yaml
+  #    volumes:
+  #      - ./monitoring/promtail-config.yaml:/etc/promtail/config.yaml
+  #      - ./trading-app/var/log:/var/log/symfony
+  #    depends_on:
+  #      - loki
+  #    networks:
+  #      - shared-net
 
 
   # --- Nouveau: listener des positions Bitmart via console Symfony
-#  symfony-positions-listener:
-#    build: ./symfony-app
-#    container_name: symfony_positions_listener
-#    working_dir: /var/www/html
-#    volumes:
-#      - ./symfony-app:/var/www/html
-#    env_file:
-#      - ./.env
-#    environment:
-#      <<: *global-env
-#      DATABASE_URL: ${DATABASE_URL:-mysql://symfony:symfony@db:3306/symfony_db}
-#    depends_on:
-#      db:
-#        condition: service_healthy
-#    command: >-
-#      sh -c "
-#      while true; do
-#        php bin/console bitmart:listen-positions || true;
-#        echo '[positions-listener] process ended, restarting in 5s...';
-#        sleep 5;
-#      done"
-#    restart: always
-#    networks:
-#      - backend-net
-#      - shared-net
-#
-#  # --- Nouveau: listener des ordres Bitmart via console Symfony
-#  symfony-orders-listener:
-#    build: ./symfony-app
-#    container_name: symfony_orders_listener
-#    working_dir: /var/www/html
-#    volumes:
-#      - ./symfony-app:/var/www/html
-#    env_file:
-#      - ./.env
-#    environment:
-#      <<: *global-env
-#      DATABASE_URL: ${DATABASE_URL:-mysql://symfony:symfony@db:3306/symfony_db}
-#    depends_on:
-#      db:
-#        condition: service_healthy
-#    command: >-
-#      sh -c "
-#      while true; do
-#        php bin/console bitmart:listen-orders || true;
-#        echo '[orders-listener] process ended, restarting in 5s...';
-#        sleep 5;
-#      done"
-#    restart: always
-#    networks:
-#      - backend-net
-#      - shared-net
+  #  symfony-positions-listener:
+  #    build: ./symfony-app
+  #    container_name: symfony_positions_listener
+  #    working_dir: /var/www/html
+  #    volumes:
+  #      - ./symfony-app:/var/www/html
+  #    env_file:
+  #      - ./.env
+  #    environment:
+  #      <<: *global-env
+  #      DATABASE_URL: ${DATABASE_URL:-mysql://symfony:symfony@db:3306/symfony_db}
+  #    depends_on:
+  #      db:
+  #        condition: service_healthy
+  #    command: >-
+  #      sh -c "
+  #      while true; do
+  #        php bin/console bitmart:listen-positions || true;
+  #        echo '[positions-listener] process ended, restarting in 5s...';
+  #        sleep 5;
+  #      done"
+  #    restart: always
+  #    networks:
+  #      - backend-net
+  #      - shared-net
+  #
+  #  # --- Nouveau: listener des ordres Bitmart via console Symfony
+  #  symfony-orders-listener:
+  #    build: ./symfony-app
+  #    container_name: symfony_orders_listener
+  #    working_dir: /var/www/html
+  #    volumes:
+  #      - ./symfony-app:/var/www/html
+  #    env_file:
+  #      - ./.env
+  #    environment:
+  #      <<: *global-env
+  #      DATABASE_URL: ${DATABASE_URL:-mysql://symfony:symfony@db:3306/symfony_db}
+  #    depends_on:
+  #      db:
+  #        condition: service_healthy
+  #    command: >-
+  #      sh -c "
+  #      while true; do
+  #        php bin/console bitmart:listen-orders || true;
+  #        echo '[orders-listener] process ended, restarting in 5s...';
+  #        sleep 5;
+  #      done"
+  #    restart: always
+  #    networks:
+  #      - backend-net
+  #      - shared-net
 
   ##################################
   # TRADING-APP (nouvelle application)
@@ -270,6 +271,9 @@ services:
       - ./trading-app:/var/www/html
       - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
       - ./investigation:/var/www/investigation
+      - app-cache:/var/www/html/var/cache
+      - var-bitmart:/var/www/html/var/bitmart
+      - var-lock:/var/www/html/var/lock
     environment:
       <<: *global-env
       DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
@@ -315,6 +319,9 @@ services:
     volumes:
       - ./trading-app:/var/www/html
       - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
+      - app-cache:/var/www/html/var/cache
+      - var-bitmart:/var/www/html/var/bitmart
+      - var-lock:/var/www/html/var/lock
     environment:
       <<: *global-env
       DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
@@ -355,6 +362,9 @@ services:
     volumes:
       - ./trading-app:/var/www/html
       - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
+      - app-cache:/var/www/html/var/cache
+      - var-bitmart:/var/www/html/var/bitmart
+      - var-lock:/var/www/html/var/lock
     environment:
       <<: *global-env
       DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
@@ -395,6 +405,9 @@ services:
     volumes:
       - ./trading-app:/var/www/html
       - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
+      - app-cache:/var/www/html/var/cache
+      - var-bitmart:/var/www/html/var/bitmart
+      - var-lock:/var/www/html/var/lock
     environment:
       <<: *global-env
       DATABASE_URL: ${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}
@@ -444,28 +457,16 @@ services:
 #      APP_CACHE_DIR: /var/www/html/var/cache/prod-ws
 #      APP_LOG_DIR: /var/www/html/var/log/ws
 #      LOG_LEVEL_MAIN: info
-#      LOG_LEVEL_SIGNALS: info
-#      LOG_LEVEL_POSITIONS: info
-#      LOG_LEVEL_INDICATORS: info
-#      LOG_LEVEL_HIGHCONVICTION: info
-#      LOG_LEVEL_PIPELINE_EXEC: info
-#      LOG_LEVEL_GLOBAL_SEVERITY: error
 #      ASYNC_LOGGING_ENABLED: '1'
-#      WS_TOPICS: "futures/order,futures/position,futures/asset:USDT"
+#      BITMART_WS_PUBLIC_URL: ${BITMART_WS_PUBLIC_URL}
+#      BITMART_WS_PRIVATE_URL: ${BITMART_WS_PRIVATE_URL}
+#      WS_FALLBACK_REFRESH_SEC: ${WS_FALLBACK_REFRESH_SEC:-5}
 #      APP_SECRET: d278711c5ab89bfbda10dd7d29427cf6
-#      TRADING_APP_BASE_URI: http://trading-app-nginx
-#      TRADING_APP_ORDER_SUBMITTED_PATH: /api/order-submitted
-#      WS_AGENT_HTTP_PORT: 8090
-#      WS_AGENT_BASE_URI: http://trading-app-ws-agent:8090
-#      MAILER_DSN: 'smtp://localhost'
-#      MESSENGER_TRANSPORT_DSN: doctrine://default?queue_name=log_messages
 #    depends_on:
 #      trading-app-db:
 #        condition: service_healthy
 #      trading-app-nginx:
 #        condition: service_started
-#    ports:
-#      - "8090:8090"
 #    networks:
 #      - trading-app-net
 #      - shared-net
@@ -473,8 +474,9 @@ services:
 #      sh -c "if [ ! -f vendor/autoload.php ]; then \
 #        echo '[trading-app-ws-agent] vendor missing -> composer install'; \
 #        composer install --no-dev --optimize-autoloader --no-interaction; \
-#      fi; php bin/console app:ws:agent"
+#      fi; php bin/console app:ws:daemon"
 #    restart: unless-stopped
+
 
   trading-app-nginx:
     image: nginx:latest
@@ -513,7 +515,7 @@ services:
 
 
 volumes:
-#  mysql-data:
+  #  mysql-data:
   trading-app-postgres-data:
   trading-app-redis-data:
   ws-cache:
@@ -521,12 +523,13 @@ volumes:
   var-bitmart:
   var-lock:
   temporal-postgres-data:
+  app-cache:
 
 
 networks:
   #frontend-net:
-   # driver: bridge
-    #name: tradingv3_frontend-net
+  # driver: bridge
+  #name: tradingv3_frontend-net
   temporal-net:
     driver: bridge
     name: tradingv3_temporal-net
