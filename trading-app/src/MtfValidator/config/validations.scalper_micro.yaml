@@ -1,11 +1,18 @@
 # =====================================================================
 # validations.scalper_micro.yaml – Profil SCALPER micro-structure only
-# Version C : Bias 5m + timing 1m, long/short symétriques
+# Version D : 5m momentum + 1m microstructure (spread + OFI)
 # =====================================================================
-version: '1.1.3-micro-macd-eps'
+version: '1.1.7-micro-spread-ofi-001'
+meta:
+    profile: 'scalper_micro'
+    purpose: 'micro scalping (5m momentum + 1m microstructure)'
+    notes:
+        - 'Adds 1m guards: spread_bps_lte + order_flow_imbalance_*'
+        - 'Keeps pragmatic mode with context=5m, execution=1m'
 
 mtf_validation:
     mode: 'pragmatic'
+#    context_timeframes: ['15m','5m']
     context_timeframes: ['5m']
     execution_timeframes: ['1m']
     execution_timeframe_default: '1m'
@@ -57,6 +64,22 @@ mtf_validation:
         start_from_timeframe: '5m'
 
         timeframe:
+#            '15m':
+#                long:
+#                    - all_of: # Scénario A
+#                        - ema20_over_50_with_tolerance_moderate
+#                        - close_above_vwap_or_ma9
+#                        - rsi_lt_70: { rsi_lt_70_threshold: 74 }
+#                        - atr_rel_in_range_15m
+#                        - any_of: [ macd_hist_gt_eps, macd_hist_slope_pos, macd_line_above_signal ]
+#                short:
+#                    - all_of:
+#                        - price_regime_ok_short
+#                        - any_of: [ ema_20_lt_50, ema_50_lt_200 ]
+#                        - any_of: [ macd_hist_decreasing_n, macd_hist_slope_neg, macd_line_below_signal ]
+#                        - close_below_vwap
+#                        - rsi_gt_softfloor: { rsi_softfloor_threshold: 20 }
+#                        - atr_rel_in_range_15m
 
             # -------------------------
             # 5m : CONTEXTE LOCAL
@@ -64,17 +87,15 @@ mtf_validation:
             '5m':
                 long:
                     - all_of:
-                          - ema20_over_50_with_tolerance_moderate
                           - close_above_vwap_or_ma9
-                          - macd_hist_gt_eps: { eps: 1.0e-12 }
+                          - macd_hist_gt_eps: { eps: 0.001 }
                           - rsi_bullish
                           - rsi_lt_70
                           - atr_volatility_ok: { min_atr_pct: 0.0005, max_atr_pct: 0.03 }
                 short:
                     - all_of:
-                          - ema_20_lt_50
                           - close_below_vwap_or_ma9
-                          - macd_hist_lt_eps: { eps: 0.005 }
+                          - macd_hist_lt_eps: { eps: 0.001 }
                           - rsi_bearish
                           - rsi_gt_30
                           - atr_volatility_ok: { min_atr_pct: 0.0005, max_atr_pct: 0.03 }
@@ -85,22 +106,20 @@ mtf_validation:
             '1m':
                 long:
                     - all_of:
-                          - ema20_over_50_with_tolerance_moderate
                           - near_vwap: { near_vwap_tolerance: 0.0012 }   # 0.12 %
+                          - spread_bps_lte: { max_spread_bps: 8 }
+                          - order_flow_imbalance_gte: { min_ofi: 0.15 }
                           - close_above_vwap_or_ma9
-                          - macd_hist_gt_eps: { eps: 1.0e-12 }
                           - macd_hist_increasing_n: { macd_hist_increasing_n: 1 }
                           - rsi_bullish
-                          - rsi_lt_70
                           - atr_volatility_ok: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }
 
                 short:
                     - all_of:
-                          - ema_20_lt_50
                           - near_vwap: { near_vwap_tolerance: 0.0012 }   # 0.12 %
+                          - spread_bps_lte: { max_spread_bps: 8 }
+                          - order_flow_imbalance_lte: { max_ofi: -0.15 }
                           - close_below_vwap_or_ma9
-                          - macd_hist_lt_eps: { eps: 0.001 }
                           - macd_hist_decreasing_n: { n: 1, eps: 0.001 }
                           - rsi_bearish
-                          - rsi_gt_30
                           - atr_volatility_ok: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }
