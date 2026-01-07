@@ -29,3 +29,7 @@ system.enableReadFromClosedExecutionV2:
 frontend.enableOpenAPIHTTPHandler:
   - value: true
     constraints: {}
+
+limit.workflowExecutionResultSize:
+  - value: 4194304
+    constraints: {}
