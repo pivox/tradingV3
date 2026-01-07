@@ -25,7 +25,7 @@ use Symfony\Component\Messenger\MessageBusInterface;
 
 final class TradeEntryService
 {
-    private const MIN_EXECUTABLE_LEVERAGE = 3;
+    private const MIN_EXECUTABLE_LEVERAGE = 0   ;
 
     public function __construct(
         private readonly BuildPreOrder $preflight,
@@ -363,11 +363,37 @@ final class TradeEntryService
         } catch (EntryZoneOutOfBoundsException $e) {
             $cid = 'SIM-SKIP-ZONE-' . substr(sha1($decisionKey), 0, 12);
 
+            $skipContext = $e->getContext();
+            if (!isset($skipContext['reason'])) {
+                $skipContext['reason'] = $e->getReason();
+            }
+            if ($lifecycleContext !== null) {
+                $skipContext = $this->augmentSkipContext($skipContext, $lifecycleContext);
+                $this->captureEntryZoneFromContext($lifecycleContext, $skipContext);
+            }
+            $this->persistZoneSkipEvent(
+                request: $request,
+                preflight: $preflight,
+                decisionKey: $decisionKey,
+                mode: $mode,
+                context: $skipContext,
+                lifecycleContext: $lifecycleContext,
+            );
+            $this->logSymbolSkippedEvent(
+                request: $request,
+                reasonCode: $e->getReason(),
+                decisionKey: $decisionKey,
+                mode: $mode,
+                extra: $skipContext,
+                contextBuilder: $lifecycleContext,
+                runId: $runId,
+            );
+
             $this->positionsLogger->info('order_journey.trade_entry.simulation_skipped', [
                 'symbol' => $request->symbol,
                 'decision_key' => $decisionKey,
                 'reason' => $e->getReason(),
-                'context' => $e->getContext(),
+                'context' => $skipContext,
             ]);
 
             return new ExecutionResult(
@@ -377,7 +403,7 @@ final class TradeEntryService
                 raw: [
                     'reason' => $e->getReason(),
                     'message' => $e->getMessage(),
-                    'context' => $e->getContext(),
+                    'context' => $skipContext,
                 ],
             );
         }
@@ -543,6 +569,17 @@ final class TradeEntryService
         // Extraire le reason du contexte s'il existe, sinon utiliser la valeur par défaut
         $reason = isset($context['reason']) && is_string($context['reason']) ? $context['reason'] : ZoneSkipEventDto::REASON;
 
+        $pivotSource = isset($context['pivot_source']) && \is_string($context['pivot_source'])
+            ? strtolower((string)$context['pivot_source'])
+            : null;
+        $pivotValue = isset($context['pivot']) && \is_numeric($context['pivot'])
+            ? (float)$context['pivot']
+            : null;
+        $vwapDistancePct = null;
+        if ($pivotSource === 'vwap' && $pivotValue !== null && $candidate > 0.0) {
+            $vwapDistancePct = round(abs($candidate - $pivotValue) / $candidate, 6);
+        }
+
         return new ZoneSkipEventDto(
             symbol: $request->symbol,
             happenedAt: new \DateTimeImmutable('now', new \DateTimeZone('UTC')),
@@ -557,7 +594,7 @@ final class TradeEntryService
             atrPct: $this->computeAtrPct($request->atrValue, $candidate),
             spreadBps: round($preflight->spreadPct * 10000, 4),
             volumeRatio: $preflight->volumeRatio,
-            vwapDistancePct: null,
+            vwapDistancePct: $vwapDistancePct,
             entryZoneWidthPct: $this->computeZoneWidthPct($zoneMin, $zoneMax),
             mtfContext: $mtfContext,
             mtfLevel: $mtfLevel,
@@ -803,11 +840,22 @@ final class TradeEntryService
         }
         $inZone = $direction === 'inside';
 
+        $pivotSource = isset($context['pivot_source']) && \is_string($context['pivot_source'])
+            ? strtolower((string)$context['pivot_source'])
+            : null;
+        $pivotValue = isset($context['pivot']) && \is_numeric($context['pivot'])
+            ? (float)$context['pivot']
+            : null;
+        $vwapDistancePct = null;
+        if ($pivotSource === 'vwap' && $pivotValue !== null) {
+            $vwapDistancePct = abs($candidate - $pivotValue) / $candidate;
+        }
+
         $builder->withEntryZone([
             'width_pct' => $widthPct,
             'atr_pct' => $context['zone_dev_pct'] ?? null,
             'atr_timeframe' => $context['context_tf'] ?? null,
-            'vwap_distance_pct' => null,
+            'vwap_distance_pct' => $vwapDistancePct !== null ? round($vwapDistancePct, 6) : null,
             'distance_from_zone_pct' => $distancePct,
             'zone_direction' => $direction,
             'in_zone' => $inZone,

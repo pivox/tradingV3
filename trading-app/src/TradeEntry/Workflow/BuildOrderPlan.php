@@ -59,6 +59,11 @@ final class BuildOrderPlan
                 : null;
             $zoneMaxDeviationPct = $this->normalizePercent($req->zoneMaxDeviationPct ?? 0.007);
 
+            $zoneMeta = $zone->getMetadata();
+            $pivot = isset($zoneMeta['pivot']) && \is_numeric($zoneMeta['pivot']) ? (float)$zoneMeta['pivot'] : null;
+            $pivotSource = isset($zoneMeta['pivot_source']) && \is_string($zoneMeta['pivot_source']) ? (string)$zoneMeta['pivot_source'] : null;
+            $pivotTf = isset($zoneMeta['timeframe']) && \is_string($zoneMeta['timeframe']) ? (string)$zoneMeta['timeframe'] : null;
+
             if ($zoneDeviation !== null && $zoneDeviation > $zoneMaxDeviationPct) {
                 // Cas nominal : la zone est trop éloignée du marché, on skippe proprement
                 $context = [
@@ -69,6 +74,9 @@ final class BuildOrderPlan
                     'zone_max' => $zone->max,
                     'zone_dev_pct' => $zoneDeviation,
                     'zone_max_dev_pct' => $zoneMaxDeviationPct,
+                    'pivot' => $pivot,
+                    'pivot_source' => $pivotSource,
+                    'pivot_tf' => $pivotTf,
                 ];
 
                 $this->positionsLogger->warning('build_order_plan.zone_skipped_for_execution', $context + [
@@ -92,6 +100,9 @@ final class BuildOrderPlan
                 'zone_max' => $zone->max,
                 'zone_dev_pct' => $zoneDeviation,
                 'zone_max_dev_pct' => $zoneMaxDeviationPct,
+                'pivot' => $pivot,
+                'pivot_source' => $pivotSource,
+                'pivot_tf' => $pivotTf,
                 'reason' => 'entry_not_within_zone',
             ];
 
