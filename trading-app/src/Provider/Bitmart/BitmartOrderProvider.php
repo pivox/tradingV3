@@ -689,19 +689,186 @@ final class BitmartOrderProvider implements OrderProviderInterface
     }
     public function submitLeverage(string $symbol, int $leverage, string $openType = 'isolated'): bool
     {
-        try {
-            $response = $this->bitmartClient->submitLeverage($symbol, $leverage, $openType);
+        $effectiveLeverage = $this->clampLeverageToContract($symbol, $leverage);
+        if ($effectiveLeverage !== $leverage) {
+            $this->logger->warning('[BitmartOrderProvider] Leverage clamped to contract bounds', [
+                'symbol' => $symbol,
+                'requested' => $leverage,
+                'effective' => $effectiveLeverage,
+                'open_type' => $openType,
+            ]);
+        }
 
-            return isset($response['data']['leverage']) && $response['data']['leverage'] === (string) $leverage;
+        try {
+            $response = $this->bitmartClient->submitLeverage($symbol, $effectiveLeverage, $openType);
+
+            return isset($response['data']['leverage']) && $response['data']['leverage'] === (string) $effectiveLeverage;
         } catch (\Exception $e) {
+            if ($this->isInvalidLeverageError($e)) {
+                $fallbackLeverage = $this->resolveBracketFallbackLeverage($symbol, $effectiveLeverage);
+                if ($fallbackLeverage !== null && $fallbackLeverage !== $effectiveLeverage) {
+                    $this->logger->warning('[BitmartOrderProvider] Retrying leverage using bracket cap', [
+                        'symbol' => $symbol,
+                        'requested' => $effectiveLeverage,
+                        'fallback' => $fallbackLeverage,
+                        'open_type' => $openType,
+                    ]);
+
+                    try {
+                        $response = $this->bitmartClient->submitLeverage($symbol, $fallbackLeverage, $openType);
+                        return isset($response['data']['leverage']) && $response['data']['leverage'] === (string) $fallbackLeverage;
+                    } catch (\Exception $retryException) {
+                        $this->logger->error("Erreur lors de la définition du levier (fallback)", [
+                            'symbol' => $symbol,
+                            'leverage' => $fallbackLeverage,
+                            'open_type' => $openType,
+                            'error' => $retryException->getMessage(),
+                            'original_error' => $e->getMessage(),
+                        ]);
+                        return false;
+                    }
+                }
+            }
+
             $this->logger->error("Erreur lors de la définition du levier", [
                 'symbol' => $symbol,
-                'leverage' => $leverage,
+                'leverage' => $effectiveLeverage,
                 'open_type' => $openType,
                 'error' => $e->getMessage()
             ]);
             return false;
         }
+    }
+
+    /**
+     * @return array{min: ?int, max: ?int}
+     */
+    private function resolveLeverageBounds(string $symbol): array
+    {
+        $min = null;
+        $max = null;
+        $symbolKey = strtoupper($symbol);
+
+        if ($this->contractRepository) {
+            $contract = $this->contractRepository->findBySymbol($symbolKey);
+            if ($contract) {
+                $min = $this->parseLeverageValue($contract->getMinLeverage(), 'ceil');
+                $max = $this->parseLeverageValue($contract->getMaxLeverage(), 'floor');
+            }
+        }
+
+        if ($min === null || $max === null) {
+            try {
+                $list = $this->bitmartClientPublic->getContractDetails($symbolKey);
+                $items = method_exists($list, 'toArray') ? $list->toArray() : (is_array($list) ? $list : []);
+                $first = $items[0] ?? null;
+
+                if ($first instanceof \App\Provider\Bitmart\Dto\ContractDto) {
+                    $min = $min ?? $this->parseLeverageValue($first->minLeverage, 'ceil');
+                    $max = $max ?? $this->parseLeverageValue($first->maxLeverage, 'floor');
+                } elseif (is_array($first)) {
+                    $min = $min ?? $this->parseLeverageValue($first['min_leverage'] ?? null, 'ceil');
+                    $max = $max ?? $this->parseLeverageValue($first['max_leverage'] ?? null, 'floor');
+                }
+            } catch (\Throwable) {
+                // Ignore and fallback to requested leverage.
+            }
+        }
+
+        if ($min !== null && $max !== null && $min > $max) {
+            [$min, $max] = [$max, $min];
+        }
+
+        return ['min' => $min, 'max' => $max];
+    }
+
+    private function clampLeverageToContract(string $symbol, int $leverage): int
+    {
+        $bounds = $this->resolveLeverageBounds($symbol);
+        $min = $bounds['min'];
+        $max = $bounds['max'];
+
+        $effective = $leverage;
+        if ($min !== null) {
+            $effective = max($effective, $min);
+        }
+        if ($max !== null) {
+            $effective = min($effective, $max);
+        }
+
+        return max(1, $effective);
+    }
+
+    private function resolveBracketFallbackLeverage(string $symbol, int $requestedLeverage): ?int
+    {
+        try {
+            $raw = $this->bitmartClientPublic->getLeverageBrackets($symbol);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (isset($raw['brackets']) && is_array($raw['brackets'])) {
+            $rows = $raw['brackets'];
+        } else {
+            $rows = $raw;
+        }
+
+        if (!is_array($rows)) {
+            return null;
+        }
+
+        $caps = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $caps[] = $this->parseLeverageValue(
+                $row['max_leverage'] ?? $row['maxLeverage'] ?? $row['max'] ?? null,
+                'floor'
+            );
+        }
+
+        $caps = array_values(array_filter($caps, static fn($value) => $value !== null));
+        if ($caps === []) {
+            return null;
+        }
+
+        $safeCap = min($caps);
+        if ($safeCap < $requestedLeverage) {
+            return $safeCap;
+        }
+
+        return null;
+    }
+
+    private function parseLeverageValue(mixed $value, string $rounding): ?int
+    {
+        if ($value instanceof \Brick\Math\BigDecimal) {
+            $value = $value->__toString();
+        }
+
+        if (is_int($value) || is_float($value)) {
+            $numeric = (float) $value;
+        } elseif (is_string($value) && $value !== '' && is_numeric($value)) {
+            $numeric = (float) $value;
+        } else {
+            return null;
+        }
+
+        if (!is_finite($numeric) || $numeric <= 0.0) {
+            return null;
+        }
+
+        $rounded = $rounding === 'ceil' ? (int) ceil($numeric) : (int) floor($numeric);
+
+        return max(1, $rounded);
+    }
+
+    private function isInvalidLeverageError(\Throwable $exception): bool
+    {
+        $message = $exception->getMessage();
+        return str_contains($message, 'Invalid Leverage')
+            || str_contains($message, '"code":40040');
     }
 
     public function getProviderName(): string
@@ -747,7 +914,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
             // Construire les données pour le watcher
             $orderData = [
                 'symbol' => $orderDto->symbol,
-                'side' => $orderDto->side,
+                'side' => $orderDto->side->value,
                 'size' => (int) \round($quantity),
                 'order_id' => $orderDto->orderId,
                 'client_order_id' => $intent?->getClientOrderId() ?? $payload['client_order_id'] ?? null,
@@ -756,7 +923,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 'tp_price' => $tpPrice,
                 'order_group_id' => $payload['order_group_id'] ?? $intent?->getOrderGroupId() ?? null,
                 'strategy_id' => $payload['strategy_id'] ?? null,
-                'status' => $orderDto->status,
+                'status' => $orderDto->status->value,
                 'filled_size' => (int) \round($filledQuantity),
                 'filled_notional' => $averagePrice !== null
                     ? $averagePrice * $filledQuantity

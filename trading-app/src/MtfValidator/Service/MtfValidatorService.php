@@ -80,7 +80,7 @@ class MtfValidatorService implements MtfValidatorInterface
                 ];
 
                 if (!$request->dryRun) {
-                    $this->messageBus->dispatch(new MtfResultProjectionMessage($runId, $mtfRunDto, $result));
+                  //  $this->messageBus->dispatch(new MtfResultProjectionMessage($runId, $mtfRunDto, $result));
                 }
 
                 if ($result->isTradable) {
