@@ -26,7 +26,9 @@
         </testsuite>
     </testsuites>
 
-    <coverage processUncoveredFiles="true">
+    <coverage includeUncoveredFiles="true" />
+
+    <source>
         <include>
             <directory suffix=".php">src</directory>
         </include>
@@ -35,9 +37,5 @@
             <directory>src/Entity</directory>
             <directory>src/Kernel.php</directory>
         </exclude>
-    </coverage>
-
-    <php>
-        <env name="APP_ENV" value="test" force="true" />
-    </php>
+    </source>
 </phpunit>
