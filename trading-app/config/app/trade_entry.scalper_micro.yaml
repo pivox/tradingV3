@@ -131,9 +131,11 @@ trade_entry:
         slippage_guard_bps: 8
         spread_guard_bps: 6
         entry_zone:
-            from: 'sma21'
+            from: 'vwap'
+            pivot_tf: '1m'
             offset_atr_tf: '5m'
             offset_k: 2.0           # largeur de zone ~ 1 × ATR(5m)
+            outside_tolerance_pct: 0.012
             max_deviation_pct: 0.15  # tolérance 15 % (augmentée pour réduire rejets runtime)
             ttl_sec: 180
             quantize_to_exchange_step: true
