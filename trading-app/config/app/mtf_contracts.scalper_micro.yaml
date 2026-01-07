@@ -1,4 +1,4 @@
-version: '0.0.067.120-11'   # Version du fichier de configuration pour traçabilité et debugging
+version: '0.0.067.120-12'   # Version du fichier de configuration pour traçabilité et debugging
 # Ce fichier sert de fallback par défaut.
 # Pour utiliser un profil spécifique, créer mtf_contracts.{profile}.yaml (ex: mtf_contracts.scalper.yaml)
 
@@ -33,7 +33,7 @@ mtf_contracts:
             open_unit: 'ms'            # open_timestamp également en millisecondes.
 
         limits:
-            top_n: 210                 # Nombre maximum de contrats très liquides (TOP) retenus.
+            top_n: 140                 # Nombre maximum de contrats très liquides (TOP) retenus.
 
             mid_n: 0                   # Désactive la sélection MID.
               # Donc seuls les contrats avec turnover > 8M seront retenus.
