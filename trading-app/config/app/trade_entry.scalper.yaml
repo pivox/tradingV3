@@ -20,10 +20,6 @@ trade_entry:
         initial_margin_usdt: 20.0    # Marge initiale minimale allouée
         fallback_account_balance: 0.0 # Si balance insuffisante, fallback budget
         timeframe_multipliers:        # Multiplicateurs TF appliqués AU LEVIER (DynamicLeverageService)
-            '4h': 0.9
-            '1h': 1.0
-            '15m': 5
-            '5m': 10
             '1m': 12
 
         # --- R-MULTIPLE corrigé (1.2 → 1.5)
@@ -91,10 +87,6 @@ trade_entry:
 #            - { symbol_regex: "^(NVDAXUSDT|1000RATSUSDT)$", cap: 5.0 } # Shitcoins → 5x max
 
         timeframe_multipliers:          # Multiplicateurs TF appliques a la taille et au levier (avant submit)
-            '4h': 0.9    # Contexte large → moins de levier
-            '1h': 1.0    # Standard
-            '15m': 5   # Execution médiane
-            '5m': 10    # Scalping dynamique
             '1m': 12    # Ultra scalping → levier légèrement supérieur
 
         confidence_multiplier:
@@ -142,7 +134,7 @@ trade_entry:
         enabled: true                # Autorise les entrées directes en taker
         allowed_execution_timeframes: ['1m','5m']  # TF autorisés pour market entry
         max_slippage_bps: 25         # Slippage max toléré (25 bps)
-        
+
 
 
     # ============================
