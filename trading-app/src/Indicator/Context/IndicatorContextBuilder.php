@@ -233,11 +233,28 @@ class IndicatorContextBuilder
             $macdHistLast3 = array_slice($macdHistSeries, 0, 3);
         }
 
+        $highSeries = null;
+        $lowSeries = null;
+        if ($hlcSeries !== null) {
+            $highFloats = array_values(array_map('floatval', $hlcSeries['highs']));
+            $lowFloats  = array_values(array_map('floatval', $hlcSeries['lows']));
+
+            // Garder une fenêtre raisonnable pour les conditions de structure (HH/HL/LL/LH, etc.)
+            $highTail = array_slice($highFloats, -60);
+            $lowTail  = array_slice($lowFloats, -60);
+
+            // latest-first pour cohérence avec macd_hist_series (conditions "N")
+            $highSeries = array_reverse($highTail);
+            $lowSeries  = array_reverse($lowTail);
+        }
+
 
         return array_filter([
             'symbol' => $this->symbol,
             'timeframe' => $this->timeframe,
             'close' => $close,
+            'high_series' => $highSeries,
+            'low_series' => $lowSeries,
             'ema' => $emaMap ?: null,
             'ema_prev' => $emaPrevMap ?: null,
             'ema_200_slope' => $ema200Slope,
