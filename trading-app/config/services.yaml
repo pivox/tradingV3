@@ -20,8 +20,8 @@ parameters:
     env(ORDER_TIMEOUT_SWITCH_DURATION): '15m'
     mode:
         - [name: 'regular', enabled: false, priority: 0]
-        - [name: 'scalper', enabled: false, priority: 1]
-        - [name: 'scalper_micro', enabled: true, priority: 2]
+        - [name: 'scalper', enabled: true, priority: 1]
+        - [name: 'scalper_micro', enabled: false, priority: 2]
 
     # Fallbacks when env vars are missing (useful in CLI/worker containers)
     router.default_uri: 'http://trading-app-nginx'
