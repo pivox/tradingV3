@@ -669,7 +669,7 @@ Toutes les opérations sont loggées via plusieurs canaux :
 1. **Séparation des contrats** : Interfaces dans `Contract/`, implémentations dans `Provider/`
 2. **Modularité** : Chaque provider est indépendant
 3. **Testabilité** : Interfaces facilement mockables
-4. **Extensibilité** : Ajout facile de nouveaux providers (Binance, etc.)
+4. **Extensibilité** : Ajout facile de nouveaux providers
 5. **Uniformité** : API cohérente entre tous les providers
 6. **Type Safety** : DTOs typés avec validation
 7. **Performance** : Ingestion optimisée via SQL JSON pour les batchs
