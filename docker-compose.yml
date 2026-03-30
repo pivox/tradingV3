@@ -42,8 +42,9 @@ services:
     environment:
       - POSTGRES_USER=temporal
       - POSTGRES_PASSWORD=temporal
+    # Reserved local host port for TradingV3 Temporal PostgreSQL.
     ports:
-      - "5434:5432"
+      - "5435:5432"
     networks:
       - temporal-net
     volumes:
@@ -501,8 +502,9 @@ services:
       - POSTGRES_PASSWORD=password
     volumes:
       - trading-app-postgres-data:/var/lib/postgresql/data
+    # Reserved local host port for TradingV3 application PostgreSQL.
     ports:
-      - "5433:5432"
+      - "5436:5432"
     networks:
       - trading-app-net
       - shared-net
