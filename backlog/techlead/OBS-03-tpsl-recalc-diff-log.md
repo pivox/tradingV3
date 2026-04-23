@@ -37,8 +37,8 @@ suppression et les inclure dans le log post-soumission.
 
 **Règle de niveau de log :**
 
-- `delta_tp1_pct < 1%` → niveau `INFO`
-- `delta_tp1_pct >= 1%` → niveau `WARNING`
+- `abs(delta_tp1_pct) < 1%` → niveau `INFO`
+- `abs(delta_tp1_pct) >= 1%` → niveau `WARNING`
 - Aucun ordre existant trouvé → flag `first_attach: true`, niveau `INFO`
 
 **Fichiers concernés :**
@@ -57,4 +57,5 @@ suppression et les inclure dans le log post-soumission.
       correctement (valeur relative, signée)
 - [ ] Si aucun ordre existant n'est trouvé à annuler, `previous` est `null`
       et `first_attach: true` est présent
-- [ ] Le niveau du log respecte la règle : `INFO` si delta < 1%, `WARNING` sinon
+- [ ] Le niveau du log respecte la règle : `INFO` si `abs(delta_tp1_pct) < 1%`, `WARNING` sinon
+      (la valeur absolue est utilisée pour détecter aussi bien les dégradations négatives que positives)
