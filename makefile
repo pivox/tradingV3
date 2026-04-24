@@ -1,21 +1,82 @@
 # Makefile — Trading App & MTF Audit Commands
 
-# Binaire compose (ex: COMPOSE="docker compose")
+# ===================================
+# Environment & Runtime Configuration
+# ===================================
+
+# Include root .env if present (sets RUNTIME, BITMART keys, etc.)
+# Copy .env.example to .env and fill in your values.
+-include .env
+
+# Docker Compose binary (override with: COMPOSE="docker compose")
 COMPOSE ?= docker-compose
 
-# Fichiers compose additionnels (ex: FILES='-f docker-compose.yml')
+# Additional compose files (e.g. FILES='-f docker-compose.override.yml')
 FILES ?=
 
 DC := $(COMPOSE) $(FILES)
 
-# Trading App service name
+# Trading App PHP service name in docker-compose
 TA_SVC ?= trading-app-php
+
+# Runtime mode: docker (default) or native
+#   docker  — PHP commands run inside the Docker container
+#   native  — PHP commands run directly on the host machine
+#
+# Override per-command:  RUNTIME=native make mtf-health-check
+# Override persistently: make env-native  (writes RUNTIME=native to .env)
+RUNTIME ?= docker
+
+ifeq ($(RUNTIME),native)
+  # Native: run PHP directly in trading-app/ on the host
+  CONSOLE     := cd trading-app && php bin/console
+  BASH_IN_APP := cd trading-app && bash
+  EXEC_IN_APP :=
+else
+  # Docker: execute inside the running PHP container
+  CONSOLE     := $(DC) exec -T $(TA_SVC) bin/console
+  BASH_IN_APP := $(DC) exec -T $(TA_SVC) bash
+  EXEC_IN_APP := $(DC) exec -T $(TA_SVC)
+endif
 
 # Defaults for investigation watch
 SYMBOLS ?=
 SINCE_MINUTES ?= 30
 FORMAT ?= table
 INTERVAL ?= 120
+
+# ===================================
+# Environment Switching
+# ===================================
+
+.PHONY: env-status env-native env-docker
+
+env-status: ## Show current runtime environment
+	@echo "RUNTIME : $(RUNTIME)"
+	@if [ "$(RUNTIME)" = "native" ]; then \
+		echo "Mode    : Native (PHP runs on host, trading-app/.env.local required)"; \
+	else \
+		echo "Mode    : Docker (PHP runs in container '$(TA_SVC)')"; \
+	fi
+
+env-native: ## Switch to native PHP runtime (sets RUNTIME=native in .env)
+	@touch .env
+	@if grep -q '^RUNTIME=' .env; then \
+		sed -i 's/^RUNTIME=.*/RUNTIME=native/' .env; \
+	else \
+		echo "RUNTIME=native" >> .env; \
+	fi
+	@echo "Switched to RUNTIME=native."
+	@echo "Next: copy trading-app/.env.native to trading-app/.env.local and fill in your values."
+
+env-docker: ## Switch to Docker PHP runtime (sets RUNTIME=docker in .env)
+	@touch .env
+	@if grep -q '^RUNTIME=' .env; then \
+		sed -i 's/^RUNTIME=.*/RUNTIME=docker/' .env; \
+	else \
+		echo "RUNTIME=docker" >> .env; \
+	fi
+	@echo "Switched to RUNTIME=docker."
 
 # ===================================
 # Trading App Build Commands
@@ -25,23 +86,18 @@ INTERVAL ?= 120
         rebuild-trading-app-dev rebuild-trading-app-prod \
         up-trading-app restart-trading-app
 
-# Build image with dev tooling (xdebug, dev composer deps)
 build-trading-app-dev: ## Build trading-app image for dev (APP_ENV=dev)
 	$(DC) build --build-arg APP_ENV=dev $(TA_SVC)
 
-# Build image optimized for production (no xdebug, no dev deps)
 build-trading-app-prod: ## Build trading-app image for prod (APP_ENV=prod)
 	$(DC) build --build-arg APP_ENV=prod $(TA_SVC)
 
-# Rebuild + restart only the PHP service (dev)
 rebuild-trading-app-dev: build-trading-app-dev ## Rebuild + restart trading-app for dev
 	$(DC) up -d --no-deps $(TA_SVC)
 
-# Rebuild + restart only the PHP service (prod)
 rebuild-trading-app-prod: build-trading-app-prod ## Rebuild + restart trading-app for prod
 	$(DC) up -d --no-deps $(TA_SVC)
 
-# Restart PHP service without rebuilding
 restart-trading-app: ## Restart trading-app PHP service
 	$(DC) restart $(TA_SVC)
 
@@ -49,17 +105,15 @@ restart-trading-app: ## Restart trading-app PHP service
 # Trading App Commands
 # ===================================
 
-PHP_EXEC=docker exec -it symfony_php php
-
 fetch-contracts:
-	$(PHP_EXEC) bin/console app:bitmart:fetch-contracts
+	$(CONSOLE) app:bitmart:fetch-contracts
 
 sync-symbol:
 	@if [ -z "$(symbol)" ]; then \
 		echo "❌ Veuillez spécifier le symbole : make sync-symbol symbol=BTCUSDT"; \
 		exit 1; \
 	fi
-	$(PHP_EXEC) bin/console bitmart:kline:sync-all --symbol=$(symbol)
+	$(CONSOLE) bitmart:kline:sync-all --symbol=$(symbol)
 
 sync-all-symbols:
 	bash scripts/sync_all.sh
@@ -69,17 +123,17 @@ latest:
 		echo "❌ Veuillez spécifier le symbole : make latest symbol=BTCUSDT [step=1]"; \
 		exit 1; \
 	fi
-	$(PHP_EXEC) bin/console bitmart:kline:latest $(symbol) $(step)
+	$(CONSOLE) bitmart:kline:latest $(symbol) $(step)
 
 
 show-positions: ## Affiche l'état actuel des positions ouvertes
-	docker-compose exec php php bin/console app:evaluate:positions
+	$(CONSOLE) app:evaluate:positions
 
 show-orders: ## Affiche l'état actuel des ordres ouvertes
-	docker-compose exec php php bin/console app:bitmart:orders:open
+	$(CONSOLE) app:bitmart:orders:open
 
 show-pipeline: ## Affiche en continu le pipeline des contrats
-	docker-compose exec php php bin/console app:monitor:contract-pipeline --interval=2
+	$(CONSOLE) app:monitor:contract-pipeline --interval=2
 
 .PHONY: watch-investigate
 watch-investigate: ## Boucle d'investigation toutes les 2m (SYMBOLS=SYM1,SYM2 [SINCE_MINUTES=30] [INTERVAL=120] [FORMAT=table|json])
@@ -88,7 +142,7 @@ watch-investigate: ## Boucle d'investigation toutes les 2m (SYMBOLS=SYM1,SYM2 [S
 		exit 1; \
 	fi
 	@echo "▶ investigate:no-order (watch) — SYMBOLS=$(SYMBOLS) SINCE_MINUTES=$(SINCE_MINUTES) INTERVAL=$(INTERVAL) FORMAT=$(FORMAT)"
-	$(DC) exec -T $(TA_SVC) bash bin/investigate_no_order_watch.sh --symbols=$(SYMBOLS) --since-minutes=$(SINCE_MINUTES) --format=$(FORMAT) --interval=$(INTERVAL)
+	$(BASH_IN_APP) bin/investigate_no_order_watch.sh --symbols=$(SYMBOLS) --since-minutes=$(SINCE_MINUTES) --format=$(FORMAT) --interval=$(INTERVAL)
 
 # ===================================
 # MTF Audit & Health Check Commands
@@ -154,15 +208,15 @@ mtf-audit-summary: ## 📊 Résumé complet: calibration + health-check + by-tim
 	@echo
 	@echo "1️⃣  Rapport de Calibration"
 	@echo "────────────────────────────────────────────────────────────────"
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=calibration $(TF_OPT) $(SYMBOLS_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=calibration $(TF_OPT) $(SYMBOLS_OPT)
 	@echo
 	@echo "2️⃣  Health Check ($(PERIOD))"
 	@echo "────────────────────────────────────────────────────────────────"
-	@$(DC) exec -T $(TA_SVC) bin/console mtf:health-check --period=$(PERIOD) $(TF_OPT) $(SYMBOLS_OPT)
+	@$(CONSOLE) mtf:health-check --period=$(PERIOD) $(TF_OPT) $(SYMBOLS_OPT)
 	@echo
 	@echo "3️⃣  Échecs par Timeframe"
 	@echo "────────────────────────────────────────────────────────────────"
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=by-timeframe $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=by-timeframe $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
 	@echo
 	@echo "════════════════════════════════════════════════════════════════"
 	@echo "✅ Résumé terminé"
@@ -174,68 +228,68 @@ mtf-audit-full: ## 📋 Lance tous les rapports stats:mtf-audit
 	@echo "════════════════════════════════════════════════════════════════"
 	@echo
 	@echo "1/7 - Top conditions (tous sides)"
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=all-sides $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=all-sides $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
 	@echo
 	@echo "2/7 - Top conditions par side"
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=by-side $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=by-side $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
 	@echo
 	@echo "3/7 - Poids par timeframe"
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=weights $(TF_OPT) $(SYMBOLS_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=weights $(TF_OPT) $(SYMBOLS_OPT)
 	@echo
 	@echo "4/7 - Rollup multi-niveaux"
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=rollup $(TF_OPT) $(SYMBOLS_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=rollup $(TF_OPT) $(SYMBOLS_OPT)
 	@echo
 	@echo "5/7 - Échecs par timeframe"
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=by-timeframe $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=by-timeframe $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
 	@echo
 	@echo "6/7 - Validations réussies"
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=success $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=success $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
 	@echo
 	@echo "7/7 - Calibration"
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=calibration $(TF_OPT) $(SYMBOLS_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=calibration $(TF_OPT) $(SYMBOLS_OPT)
 	@echo
 	@echo "════════════════════════════════════════════════════════════════"
 	@echo "✅ Tous les rapports terminés"
 	@echo "════════════════════════════════════════════════════════════════"
 
 mtf-audit-calibration: ## 🎯 Rapport de calibration (fail_pct moyen)
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=calibration $(TF_OPT) $(SYMBOLS_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=calibration $(TF_OPT) $(SYMBOLS_OPT)
 
 mtf-health-check: ## 🏥 Vérification de santé du système MTF
-	@$(DC) exec -T $(TA_SVC) bin/console mtf:health-check --period=$(PERIOD) $(TF_OPT) $(SYMBOLS_OPT)
+	@$(CONSOLE) mtf:health-check --period=$(PERIOD) $(TF_OPT) $(SYMBOLS_OPT)
 
 mtf-audit-by-timeframe: ## ⏱️  Échecs agrégés par timeframe
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=by-timeframe $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=by-timeframe $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
 
 mtf-audit-all-sides: ## 📊 Top conditions bloquantes (tous sides)
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=all-sides $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=all-sides $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
 
 mtf-audit-by-side: ## 📊 Top conditions par side (long/short)
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=by-side $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=by-side $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
 
 mtf-audit-weights: ## 📊 Poids (%) par condition et timeframe
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=weights $(TF_OPT) $(SYMBOLS_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=weights $(TF_OPT) $(SYMBOLS_OPT)
 
 mtf-audit-rollup: ## 📊 Agrégation multi-niveaux (condition → TF → side)
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=rollup $(TF_OPT) $(SYMBOLS_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=rollup $(TF_OPT) $(SYMBOLS_OPT)
 
 mtf-audit-success: ## ✅ Dernières validations réussies
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=success $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
+	@$(CONSOLE) stats:mtf-audit --report=success $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT)
 
 mtf-audit-export: ## 💾 Export tous les rapports en JSON (OUTPUT_DIR=/tmp/mtf-audit)
 	@echo "════════════════════════════════════════════════════════════════"
 	@echo "  Export MTF Audit en JSON"
 	@echo "════════════════════════════════════════════════════════════════"
 	@echo "📁 Répertoire: $(OUTPUT_DIR)"
-	@$(DC) exec -T $(TA_SVC) mkdir -p $(OUTPUT_DIR)
+	@$(EXEC_IN_APP) mkdir -p $(OUTPUT_DIR)
 	@echo
 	@echo "Exportation en cours..."
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=all-sides $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT) --format=json --output=$(OUTPUT_DIR)/all-sides.json
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=by-side $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT) --format=json --output=$(OUTPUT_DIR)/by-side.json
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=weights $(TF_OPT) $(SYMBOLS_OPT) --format=json --output=$(OUTPUT_DIR)/weights.json
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=rollup $(TF_OPT) $(SYMBOLS_OPT) --format=json --output=$(OUTPUT_DIR)/rollup.json
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=by-timeframe $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT) --format=json --output=$(OUTPUT_DIR)/by-timeframe.json
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=success $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT) --format=json --output=$(OUTPUT_DIR)/success.json
+	@$(CONSOLE) stats:mtf-audit --report=all-sides $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT) --format=json --output=$(OUTPUT_DIR)/all-sides.json
+	@$(CONSOLE) stats:mtf-audit --report=by-side $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT) --format=json --output=$(OUTPUT_DIR)/by-side.json
+	@$(CONSOLE) stats:mtf-audit --report=weights $(TF_OPT) $(SYMBOLS_OPT) --format=json --output=$(OUTPUT_DIR)/weights.json
+	@$(CONSOLE) stats:mtf-audit --report=rollup $(TF_OPT) $(SYMBOLS_OPT) --format=json --output=$(OUTPUT_DIR)/rollup.json
+	@$(CONSOLE) stats:mtf-audit --report=by-timeframe $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT) --format=json --output=$(OUTPUT_DIR)/by-timeframe.json
+	@$(CONSOLE) stats:mtf-audit --report=success $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT) --format=json --output=$(OUTPUT_DIR)/success.json
 
 # ===================================
 # Calibration ATR & Validation Helpers
@@ -243,18 +297,19 @@ mtf-audit-export: ## 💾 Export tous les rapports en JSON (OUTPUT_DIR=/tmp/mtf-
 
 calibrate-atr: ## 🎯 Calibre les seuils ATR/close par TF via DB et affiche un patch YAML
 	@echo "Calibration ATR/close — SINCE=$(SINCE) TFS=$(ATR_TFS)"
-	$(DC) exec -T $(TA_SVC) bin/console audit:atr:calibrate --since="$(SINCE)" -t $(ATR_TFS) --output-dir=var
+	$(CONSOLE) audit:atr:calibrate --since="$(SINCE)" -t $(ATR_TFS) --output-dir=var
 
 validate-contracts: ## 🔎 Valide les contrats actifs pour un TF (TF=15m,5m,1m,1h,4h) LIMIT=100
 	@if [ -z "$(TF)" ]; then \
 		echo "❌ Spécifiez le TF: make validate-contracts TF=15m [LIMIT=100]"; \
 		exit 1; \
 	fi
-	$(DC) exec -T $(TA_SVC) bin/console app:indicator:contracts:validate $(TF) --limit=$(LIMIT) -vv
-	@$(DC) exec -T $(TA_SVC) bin/console stats:mtf-audit --report=calibration $(TF_OPT) $(SYMBOLS_OPT) --format=json --output=$(OUTPUT_DIR)/calibration.json
-	@$(DC) exec -T $(TA_SVC) bin/console mtf:health-check --period=$(PERIOD) $(TF_OPT) $(SYMBOLS_OPT) --format=json --output=$(OUTPUT_DIR)/health-check.json
+	$(CONSOLE) app:indicator:contracts:validate $(TF) --limit=$(LIMIT) -vv
+	@$(CONSOLE) stats:mtf-audit --report=calibration $(TF_OPT) $(SYMBOLS_OPT) --format=json --output=$(OUTPUT_DIR)/calibration.json
+	@$(CONSOLE) stats:mtf-audit --report=success $(TF_OPT) $(SYMBOLS_OPT) $(LIMIT_OPT) --format=json --output=$(OUTPUT_DIR)/success.json
+	@$(CONSOLE) mtf:health-check --period=$(PERIOD) $(TF_OPT) $(SYMBOLS_OPT) --format=json --output=$(OUTPUT_DIR)/health-check.json
 	@echo
 	@echo "✅ Export terminé!"
-	@echo "📁 Fichiers disponibles dans: $(OUTPUT_DIR) (dans le conteneur)"
-	@$(DC) exec -T $(TA_SVC) ls -lh $(OUTPUT_DIR)/*.json 2>/dev/null || true
+	@echo "📁 Fichiers disponibles dans: $(OUTPUT_DIR)"
+	@$(EXEC_IN_APP) ls -lh $(OUTPUT_DIR)/*.json 2>/dev/null || true
 	@echo "════════════════════════════════════════════════════════════════"
