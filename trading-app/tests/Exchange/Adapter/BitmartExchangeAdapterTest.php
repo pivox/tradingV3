@@ -33,6 +33,16 @@ use Psr\Clock\ClockInterface;
 #[CoversClass(BitmartExchangeAdapter::class)]
 final class BitmartExchangeAdapterTest extends TestCase
 {
+    public function testDoesNotAdvertiseStandaloneTriggerOrders(): void
+    {
+        $registry = $this->createMock(ExchangeProviderRegistryInterface::class);
+        $adapter = new BitmartExchangeAdapter($registry, $this->fixedClock());
+
+        self::assertFalse($adapter->capabilities()->supportsTriggerOrders);
+        self::assertTrue($adapter->capabilities()->supportsAttachedStopLossOnEntry);
+        self::assertTrue($adapter->capabilities()->supportsAttachedTakeProfitOnEntry);
+    }
+
     public function testMapsLongEntryToLegacyOpenLongSide(): void
     {
         $capturedOptions = null;
@@ -57,6 +67,57 @@ final class BitmartExchangeAdapterTest extends TestCase
         $adapter->placeOrder($this->placeOrderRequest(ExchangePositionSide::SHORT, ExchangeOrderSide::SELL));
 
         self::assertSame(4, $capturedOptions['side'] ?? null);
+    }
+
+    public function testMapsReduceOnlyLongExitToLegacyCloseLongSide(): void
+    {
+        $capturedOptions = null;
+        $adapter = $this->createAdapter(function (array $options) use (&$capturedOptions): void {
+            $capturedOptions = $options;
+        });
+
+        $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::LONG,
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+        ));
+
+        self::assertSame(3, $capturedOptions['side'] ?? null);
+    }
+
+    public function testMapsReduceOnlyShortExitToLegacyCloseShortSide(): void
+    {
+        $capturedOptions = null;
+        $adapter = $this->createAdapter(function (array $options) use (&$capturedOptions): void {
+            $capturedOptions = $options;
+        });
+
+        $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::SHORT,
+            side: ExchangeOrderSide::BUY,
+            reduceOnly: true,
+            postOnly: false,
+        ));
+
+        self::assertSame(2, $capturedOptions['side'] ?? null);
+    }
+
+    public function testMapsFokToLegacyMode(): void
+    {
+        $capturedOptions = null;
+        $adapter = $this->createAdapter(function (array $options) use (&$capturedOptions): void {
+            $capturedOptions = $options;
+        });
+
+        $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::LONG,
+            side: ExchangeOrderSide::BUY,
+            timeInForce: ExchangeTimeInForce::FOK,
+            postOnly: false,
+        ));
+
+        self::assertSame(2, $capturedOptions['mode'] ?? null);
     }
 
     /**
@@ -95,15 +156,16 @@ final class BitmartExchangeAdapterTest extends TestCase
         $registry = $this->createMock(ExchangeProviderRegistryInterface::class);
         $registry->method('get')->willReturn($bundle);
 
-        return new BitmartExchangeAdapter($registry, new class implements ClockInterface {
-            public function now(): \DateTimeImmutable
-            {
-                return new \DateTimeImmutable('2026-01-01 00:00:00 UTC');
-            }
-        });
+        return new BitmartExchangeAdapter($registry, $this->fixedClock());
     }
 
-    private function placeOrderRequest(ExchangePositionSide $positionSide, ExchangeOrderSide $side): PlaceOrderRequest
+    private function placeOrderRequest(
+        ExchangePositionSide $positionSide,
+        ExchangeOrderSide $side,
+        ExchangeTimeInForce $timeInForce = ExchangeTimeInForce::GTC,
+        bool $reduceOnly = false,
+        bool $postOnly = true,
+    ): PlaceOrderRequest
     {
         return new PlaceOrderRequest(
             exchange: Exchange::BITMART,
@@ -112,16 +174,26 @@ final class BitmartExchangeAdapterTest extends TestCase
             side: $side,
             positionSide: $positionSide,
             orderType: ExchangeOrderType::LIMIT,
-            timeInForce: ExchangeTimeInForce::GTC,
+            timeInForce: $timeInForce,
             quantity: 10.0,
             price: 25000.0,
             stopPrice: null,
-            reduceOnly: false,
-            postOnly: true,
+            reduceOnly: $reduceOnly,
+            postOnly: $postOnly,
             leverage: 3,
             marginMode: 'isolated',
             clientOrderId: 'cid-1',
         );
+    }
+
+    private function fixedClock(): ClockInterface
+    {
+        return new class implements ClockInterface {
+            public function now(): \DateTimeImmutable
+            {
+                return new \DateTimeImmutable('2026-01-01 00:00:00 UTC');
+            }
+        };
     }
 
     private function providerOrder(): OrderDto

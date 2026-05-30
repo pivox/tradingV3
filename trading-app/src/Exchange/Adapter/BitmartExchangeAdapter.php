@@ -67,7 +67,7 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             supportsReduceOnly: true,
             supportsAttachedStopLossOnEntry: true,
             supportsAttachedTakeProfitOnEntry: true,
-            supportsTriggerOrders: true,
+            supportsTriggerOrders: false,
             supportsModifyOrder: true,
             requiresSeparateLeverageSubmit: true,
             supportsPerSymbolLeverage: true,
@@ -229,6 +229,8 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
 
         if ($request->timeInForce === ExchangeTimeInForce::IOC) {
             $options['mode'] = 3;
+        } elseif ($request->timeInForce === ExchangeTimeInForce::FOK) {
+            $options['mode'] = 2;
         } elseif ($request->postOnly) {
             $options['mode'] = 4;
         }
@@ -251,10 +253,10 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
     private function mapPositionIntentToLegacySide(PlaceOrderRequest $request): int
     {
         if ($request->reduceOnly && $request->positionSide === ExchangePositionSide::LONG) {
-            return 2;
+            return 3;
         }
         if ($request->reduceOnly && $request->positionSide === ExchangePositionSide::SHORT) {
-            return 3;
+            return 2;
         }
 
         return $request->positionSide === ExchangePositionSide::LONG ? 1 : 4;
