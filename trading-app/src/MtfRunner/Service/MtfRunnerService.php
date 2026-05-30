@@ -16,8 +16,10 @@ use App\Common\Enum\OrderSide;
 use App\Common\Enum\PositionSide;
 use App\Entity\Position;
 use App\MtfRunner\Dto\MtfRunnerRequestDto as RunnerRequestDto;
-use App\Indicator\Message\IndicatorSnapshotPersistRequestMessage;
+use App\MtfRunner\Application\Projection\IndicatorSnapshotPersistenceDispatcher;
+use App\MtfRunner\Application\Result\MtfRunResultEnricher;
 use App\MtfRunner\Service\FuturesOrderSyncService;
+use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\MtfValidator\Service\Dto\SymbolResultDto;
@@ -28,14 +30,12 @@ use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
 use App\TradeEntry\Service\TpSlTwoTargetsService;
 use App\TradeEntry\Types\Side as EntrySide;
 use App\MtfValidator\Service\PerformanceProfiler;
-use App\MtfValidator\Service\Helper\OrdersExtractor;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\Uuid;
 use SplQueue;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
-use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Process\Process;
 
 /**
@@ -64,7 +64,9 @@ final class MtfRunnerService
         private readonly LoggerInterface $logger,
         private readonly LoggerInterface $mtfLogger,
         private readonly LoggerInterface $positionsLogger,
-        private readonly MessageBusInterface $messageBus,
+        private readonly TradeDecisionDispatcherInterface $tradeDecisionDispatcher,
+        private readonly IndicatorSnapshotPersistenceDispatcher $indicatorSnapshotPersistenceDispatcher,
+        private readonly MtfRunResultEnricher $resultEnricher,
         #[Autowire('%kernel.project_dir%')]
         private readonly string $projectDir,
         private readonly ClockInterface $clock,
@@ -150,7 +152,7 @@ final class MtfRunnerService
                 : $this->runSequential($symbols, $request, $context);
             $profiler->increment('runner', 'mtf_execution', microtime(true) - $execStart);
 
-            $this->dispatchIndicatorSnapshotPersistence($result['results'] ?? [], $request, $runId);
+            $this->indicatorSnapshotPersistenceDispatcher->dispatch($result['results'] ?? [], $request, $runId);
 
             // 8. Mettre à jour les switches pour les symboles exclus (après traitement)
             if (!empty($excludedSymbols)) {
@@ -178,7 +180,7 @@ final class MtfRunnerService
             // 10. Post-processing : enrichir les résultats
             $postProcessStart = microtime(true);
             $results = $result['results'] ?? [];
-            $enriched = $this->enrichResults($results);
+            $enriched = $this->resultEnricher->enrich($results);
             $profiler->increment('runner', 'post_processing', microtime(true) - $postProcessStart);
 
             $executionTime = microtime(true) - $startTime;
@@ -635,6 +637,7 @@ final class MtfRunnerService
         );
 
         $response = $this->mtfValidator->run($mtfRequest);
+        $this->tradeDecisionDispatcher->dispatchFromResponse($mtfRequest, $response);
 
         $resultsMap = [];
         foreach ($response->results as $entry) {
@@ -1120,61 +1123,6 @@ final class MtfRunnerService
     }
 
     /**
-     * @param array<string,mixed> $results
-     */
-    private function dispatchIndicatorSnapshotPersistence(array $results, RunnerRequestDto $request, string $runId): void
-    {
-        $timeframes = $this->resolvePersistenceTimeframes($request);
-        if ($timeframes === []) {
-            return;
-        }
-
-        $symbols = [];
-        foreach (array_keys($results) as $symbol) {
-            if (!is_string($symbol) || $symbol === '' || strtoupper($symbol) === 'FINAL') {
-                continue;
-            }
-            $symbols[] = strtoupper($symbol);
-        }
-
-        if ($symbols === []) {
-            return;
-        }
-
-        try {
-            $this->messageBus->dispatch(new IndicatorSnapshotPersistRequestMessage(
-                $symbols,
-                $timeframes,
-                $runId,
-                $request->profile,
-                $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
-            ));
-
-            $this->logger->debug('[MTF Runner] Indicator persistence dispatched', [
-                'run_id' => $runId,
-                'symbols_count' => count($symbols),
-                'timeframes' => $timeframes,
-            ]);
-        } catch (\Throwable $exception) {
-            $this->logger->warning('[MTF Runner] Failed to dispatch indicator persistence job', [
-                'run_id' => $runId,
-                'error' => $exception->getMessage(),
-            ]);
-        }
-    }
-
-    /**
-     * @return string[]
-     */
-    private function resolvePersistenceTimeframes(RunnerRequestDto $request): array
-    {
-        if (is_string($request->currentTf) && $request->currentTf !== '') {
-            return [$request->currentTf];
-        }
-        return $this->mtfValidator->getListTimeframe($request->profile);
-    }
-
-    /**
      * Consomme les symboles depuis la queue des switches
      *
      * @return array<string>
@@ -1202,138 +1150,4 @@ final class MtfRunnerService
         return new ExchangeContext($exchange, $marketType);
     }
 
-    /**
-     * Enrichit les résultats avec summary_by_tf, rejected_by, last_validated, orders_placed
-     *
-     * @param array<string, array<string, mixed>> $results
-     * @return array{
-     *     summary_by_tf: array<string, array<string>>,
-     *     rejected_by: array<string>,
-     *     last_validated: array<int, array{symbol: string, side: mixed, timeframe: string|null}>,
-     *     orders_placed: array{count: array{total: int, submitted: int, simulated: int}, orders: array}
-     * }
-     */
-    private function enrichResults(array $results): array
-    {
-        // 1. Calculer summary_by_tf
-        $summaryByTfVrac = $this->buildSummaryByTimeframe($results);
-        $summaryByTf = [];
-        foreach (['1m', '5m', '15m', '1h', '4h'] as $tf) {
-            $summaryByTf[$tf] = $summaryByTfVrac[$tf] ?? [];
-        }
-
-        // 2. Extraire rejected_by et last_validated
-        $rejectedBy = [];
-        $lastValidated = [];
-
-        foreach ($results as $symbol => $symbolResult) {
-            if ($symbol === 'FINAL' || !is_string($symbol) || $symbol === '') {
-                continue;
-            }
-
-            if (!is_array($symbolResult)) {
-                continue;
-            }
-
-            $resultStatus = strtoupper((string)($symbolResult['status'] ?? ''));
-
-            if (!in_array($resultStatus, ['SUCCESS', 'COMPLETED', 'READY'], true)) {
-                $rejectedBy[] = $symbol;
-            }
-
-            if ($resultStatus === 'SUCCESS' || $resultStatus === 'COMPLETED') {
-                $executionTf = $symbolResult['execution_tf'] ?? null;
-                $signalSide = $symbolResult['signal_side'] ?? null;
-
-                $timeframe = $this->getPreviousTimeframe($executionTf);
-
-                $lastValidated[] = [
-                    'symbol' => $symbol,
-                    'side' => $signalSide,
-                    'timeframe' => $timeframe,
-                ];
-            }
-        }
-
-        sort($rejectedBy);
-        usort($lastValidated, function ($a, $b) {
-            return strcmp($a['symbol'] ?? '', $b['symbol'] ?? '');
-        });
-
-        // 3. Extraire orders_placed
-        $ordersPlaced = OrdersExtractor::extractPlacedOrders($results);
-        $ordersCount = OrdersExtractor::countOrdersByStatus($results);
-
-        return [
-            'summary_by_tf' => $summaryByTf,
-            'rejected_by' => $rejectedBy,
-            'last_validated' => $lastValidated,
-            'orders_placed' => [
-                'count' => $ordersCount,
-                'orders' => $ordersPlaced,
-            ],
-        ];
-    }
-
-    /**
-     * Construit un résumé groupé par dernier timeframe atteint
-     *
-     * @param array<string, array<string, mixed>> $results
-     * @return array<string, array<string>>
-     */
-    private function buildSummaryByTimeframe(array $results): array
-    {
-        $groups = [];
-        foreach ($results as $symbol => $info) {
-            if (!is_array($info)) {
-                continue;
-            }
-            $lastTf = $info['blocking_tf'] ?? $info['failed_timeframe'] ?? ($info['execution_tf'] ?? null);
-            $key = is_string($lastTf) && $lastTf !== '' ? $lastTf : 'N/A';
-            if (!isset($groups[$key])) {
-                $groups[$key] = [];
-            }
-            $groups[$key][] = (string)$symbol;
-        }
-
-        // Trier les TF de 4h -> 1m, puis N/A
-        $order = ['4h' => 5, '1h' => 4, '15m' => 3, '5m' => 2, '1m' => 1, 'N/A' => 0];
-        uksort($groups, function($a, $b) use ($order) {
-            return ($order[$b] ?? 0) - ($order[$a] ?? 0);
-        });
-
-        return $groups;
-    }
-
-    /**
-     * Calcule le timeframe précédent (tf-1) pour un timeframe donné.
-     * Retourne 'READY' pour '1m', null pour les timeframes non reconnus ou manquants.
-     *
-     * Mapping :
-     * - '15m' → '1h'
-     * - '5m' → '15m'
-     * - '1m' → 'READY'
-     * - '1h' → '4h'
-     * - '4h' → null (pas de timeframe supérieur)
-     *
-     * @param string|null $timeframe Le timeframe d'exécution
-     * @return string|null Le timeframe précédent ou 'READY' pour 1m
-     */
-    private function getPreviousTimeframe(?string $timeframe): ?string
-    {
-        if ($timeframe === null || $timeframe === '') {
-            return null;
-        }
-
-        $normalized = strtolower(trim($timeframe));
-
-        return match ($normalized) {
-            '15m' => '1h',
-            '5m' => '15m',
-            '1m' => 'READY',
-            '1h' => '4h',
-            '4h' => null,
-            default => null,
-        };
-    }
 }

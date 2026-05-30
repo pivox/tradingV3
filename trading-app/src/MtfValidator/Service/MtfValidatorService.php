@@ -4,27 +4,20 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Service;
 
-use App\Config\MtfValidationConfig;
 use App\Config\MtfValidationConfigProvider;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
-use App\MtfValidator\Message\MtfResultProjectionMessage;
-use App\MtfValidator\Message\MtfTradingDecisionMessage;
-use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use Ramsey\Uuid\Uuid;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
-use Symfony\Component\Messenger\MessageBusInterface;
 
 class MtfValidatorService implements MtfValidatorInterface
 {
     public function __construct(
         private readonly MtfValidatorCoreService $core,
         private readonly ClockInterface $clock,
-        private readonly EntityManagerInterface $em,
-        private readonly MessageBusInterface $messageBus,
         private readonly MtfValidationConfigProvider $mtfValidationConfigProvider,
         #[Autowire('%app.trade_entry_default_mode%')]
         private readonly string $defaultProfile,
@@ -79,13 +72,8 @@ class MtfValidatorService implements MtfValidatorInterface
                     'result' => $result,
                 ];
 
-                if (!$request->dryRun) {
-                  //  $this->messageBus->dispatch(new MtfResultProjectionMessage($runId, $mtfRunDto, $result));
-                }
-
                 if ($result->isTradable) {
                     $symbolsSuccessful++;
-                    $this->messageBus->dispatch(new MtfTradingDecisionMessage($runId, $mtfRunDto, $result));
                 } else {
                     $symbolsSkipped++;
                 }
@@ -97,10 +85,6 @@ class MtfValidatorService implements MtfValidatorInterface
                 ];
                 $symbolsFailed++;
             }
-        }
-
-        if (!$request->dryRun && $this->em->isOpen()) {
-            $this->em->flush();
         }
 
         $endedAt = $this->clock->now();

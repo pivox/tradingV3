@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Provider;
 
+use App\Provider\Redis\RedisPubSubClient;
 use Psr\Log\LoggerInterface;
-use Redis;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
@@ -32,7 +32,7 @@ final class OrderWatcherPublisher
 
     public function __construct(
         #[Autowire(service: 'App\Provider\Redis\RedisPubSubClient')]
-        private readonly ?Redis $redis = null,
+        private readonly ?RedisPubSubClient $redis = null,
         #[Autowire(service: 'monolog.logger.bitmart')]
         private readonly ?LoggerInterface $logger = null,
         #[Autowire('%env(string:REDIS_ORDER_WATCH_CHANNEL)%')]
@@ -114,4 +114,3 @@ final class OrderWatcherPublisher
         }
     }
 }
-

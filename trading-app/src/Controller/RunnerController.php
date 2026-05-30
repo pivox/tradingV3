@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Config\TradeEntryModeContext;
+use App\MtfRunner\Application\RunMtfCycleUseCase;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
-use App\MtfRunner\Service\MtfRunnerService;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -26,7 +26,7 @@ class RunnerController extends AbstractController
 //    #[Route('/runner')]
     public function index(
         Request $request,
-        MtfRunnerService $mtfRunnerService,
+        RunMtfCycleUseCase $runMtfCycle,
     ): JsonResponse
     {
         $apiStartTime = microtime(true);
@@ -100,7 +100,7 @@ class RunnerController extends AbstractController
                 'context_mode' => $data['context_mode'] ?? null,
                 'mode' => $data['mode'] ?? null,
             ]);
-            $result = $mtfRunnerService->run($runnerRequest);
+            $result = $runMtfCycle->run($runnerRequest);
 
             // Le résultat est déjà enrichi par MtfRunnerService
             $results = $result['results'] ?? [];
