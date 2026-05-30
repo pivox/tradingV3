@@ -40,19 +40,30 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
 
             $mtfRun = $this->buildRunDto($request, $response->runId, $result);
 
-            $this->messageBus->dispatch(new MtfTradingDecisionMessage(
-                $response->runId,
-                $mtfRun,
-                $result,
-            ));
+            try {
+                $this->messageBus->dispatch(new MtfTradingDecisionMessage(
+                    $response->runId,
+                    $mtfRun,
+                    $result,
+                ));
 
-            $this->mtfLogger->debug('[MTF Dispatcher] Trading decision dispatched', [
-                'run_id' => $response->runId,
-                'symbol' => $result->symbol,
-                'execution_tf' => $result->executionTimeframe,
-                'side' => $result->side,
-                'dry_run' => $request->dryRun,
-            ]);
+                $this->mtfLogger->debug('[MTF Dispatcher] Trading decision dispatched', [
+                    'run_id' => $response->runId,
+                    'symbol' => $result->symbol,
+                    'execution_tf' => $result->executionTimeframe,
+                    'side' => $result->side,
+                    'dry_run' => $request->dryRun,
+                ]);
+            } catch (\Throwable $exception) {
+                $this->mtfLogger->error('[MTF Dispatcher] Trading decision dispatch failed', [
+                    'run_id' => $response->runId,
+                    'symbol' => $result->symbol,
+                    'execution_tf' => $result->executionTimeframe,
+                    'side' => $result->side,
+                    'dry_run' => $request->dryRun,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
         }
     }
 

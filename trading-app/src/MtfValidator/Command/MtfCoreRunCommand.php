@@ -8,6 +8,7 @@ use App\Common\Enum\MarketType;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
+use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
 use App\Provider\Repository\ContractRepository;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\Uuid;
@@ -27,6 +28,7 @@ final class MtfCoreRunCommand extends Command
 {
     public function __construct(
         private readonly MtfValidatorInterface $mtfValidator,
+        private readonly TradeDecisionDispatcherInterface $tradeDecisionDispatcher,
         private readonly ContractRepository $contractRepository,
         private readonly LoggerInterface $mtfLogger,
     ) {
@@ -169,6 +171,7 @@ final class MtfCoreRunCommand extends Command
         try {
             /** @var MtfRunResponseDto $response */
             $response = $this->mtfValidator->run($requestDto);
+            $this->tradeDecisionDispatcher->dispatchFromResponse($requestDto, $response);
         } catch (\Throwable $e) {
             $io->error(sprintf('Erreur lors de l’exécution du validateur MTF: %s', $e->getMessage()));
             $this->mtfLogger->error('mtf:core:run failed', [
