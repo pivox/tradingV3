@@ -6,6 +6,7 @@ namespace App\MtfValidator\Command;
 
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
+use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -16,6 +17,7 @@ class MtfCoreTestCommand extends Command
 {
     public function __construct(
         private readonly MtfValidatorInterface $mtfValidator,
+        private readonly TradeDecisionDispatcherInterface $tradeDecisionDispatcher,
     ) {
         parent::__construct();
     }
@@ -29,6 +31,7 @@ class MtfCoreTestCommand extends Command
         );
 
         $response = $this->mtfValidator->run($request);
+        $this->tradeDecisionDispatcher->dispatchFromResponse($request, $response);
 
 
         return Command::SUCCESS;

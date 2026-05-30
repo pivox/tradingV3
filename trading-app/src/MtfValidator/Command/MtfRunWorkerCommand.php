@@ -9,6 +9,7 @@ use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -20,6 +21,7 @@ final class MtfRunWorkerCommand extends Command
 {
     public function __construct(
         private readonly MtfValidatorInterface $mtfValidator,
+        private readonly TradeDecisionDispatcherInterface $tradeDecisionDispatcher,
     )
     {
         parent::__construct();
@@ -99,8 +101,9 @@ final class MtfRunWorkerCommand extends Command
                 'validation_mode' => $validationMode,
             ]);
             $response = $this->mtfValidator->run($request);
+            $this->tradeDecisionDispatcher->dispatchFromResponse($request, $response);
 
-            // Convertir les résultats en map symbol => result (sans décision de trading, elle sera gérée via Messenger)
+            // Convertir les résultats en map symbol => result. Le dispatch trade est déclenché par l'orchestrateur worker.
             $resultsMap = [];
             foreach ($response->results as $entry) {
                 if (!isset($entry['symbol'], $entry['result'])) {

@@ -93,10 +93,12 @@ services:
 
     # Service Redis réel pour OrderWatcherPublisher (Pub/Sub)
     App\Provider\Redis\RedisPubSubClient:
-        class: Redis
+        class: App\Provider\Redis\RedisPubSubClient
         public: true
-        calls:
-            - [connect, ['%env(string:REDIS_HOST)%', '%env(int:REDIS_PORT)%']]
+        arguments:
+            $host: '%env(string:REDIS_HOST)%'
+            $port: '%env(int:REDIS_PORT)%'
+            $logger: '@monolog.logger.bitmart'
         tags:
             - { name: 'container.hot_path' }
 
@@ -142,8 +144,6 @@ services:
             $lockFactory: '@bitmart.throttle_lock_factory'
             $projectDir: '%kernel.project_dir%'
         public: true
-
-    App\Domain\Ports\Out\TradingProviderPort: '@App\Infrastructure\Trading\BitmartTradingProvider'
 
     # --- Exchange provider registry ---
 

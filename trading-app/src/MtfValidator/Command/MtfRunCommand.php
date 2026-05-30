@@ -30,15 +30,15 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Config\TradeEntryModeContext;
 use App\Provider\Context\ExchangeContext;
+use App\MtfRunner\Application\RunMtfCycleUseCase;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
-use App\MtfRunner\Service\MtfRunnerService;
 
     #[AsCommand(name: 'mtf:run', description: 'Exécute un cycle MTF pour une liste de symboles (dry-run par défaut) avec un output détaillé')]
 class MtfRunCommand extends Command
 {
     public function __construct(
         private readonly MtfValidatorInterface $mtfValidator,
-        private readonly MtfRunnerService $mtfRunnerService,
+        private readonly RunMtfCycleUseCase $runMtfCycle,
         private readonly MainProviderInterface $mainProvider,
         private readonly ContractRepository $contractRepository,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
@@ -217,7 +217,7 @@ class MtfRunCommand extends Command
                 'validation_mode' => $validationMode,
             ]);
 
-            $runnerResult = $this->mtfRunnerService->run($runnerRequest);
+            $runnerResult = $this->runMtfCycle->run($runnerRequest);
             $runnerSummary = is_array($runnerResult['summary'] ?? null) ? $runnerResult['summary'] : [];
             $details = is_array($runnerResult['results'] ?? null) ? $runnerResult['results'] : [];
             $errors = is_array($runnerResult['errors'] ?? null) ? $runnerResult['errors'] : [];
