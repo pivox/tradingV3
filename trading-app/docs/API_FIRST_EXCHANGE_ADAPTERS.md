@@ -62,11 +62,11 @@ La traduction actuelle conserve le comportement legacy:
 - `PlaceOrderRequest.side` est mappe vers `App\Common\Enum\OrderSide`.
 - `PlaceOrderRequest.positionSide` et `reduceOnly` sont transformes en code Bitmart legacy:
   - open long: `1`
-  - close long: `2`
-  - close short: `3`
+  - close short: `2`
+  - close long: `3`
   - open short: `4`
-- `postOnly` et `IOC` alimentent le champ legacy `mode`.
-- `clientOrderId`, `reduceOnly`, `postOnly`, SL/TP attaches et levier passent par `options`.
+- `postOnly`, `FOK` et `IOC` alimentent le champ legacy `mode`.
+- `clientOrderId`, SL/TP attaches et levier passent par `options`; les pseudo-flags `reduceOnly` et `postOnly` ne sont pas forwards tels quels au payload Bitmart.
 - `cancelOrder()` annule par exchange order id. L'annulation par client order id est annoncee comme non supportee dans les capabilities.
 
 La methode `reconcile()` est volontairement un placeholder. La reconciliation complete doit etre branchee quand les fills et l'etat local auront leur service dedie.

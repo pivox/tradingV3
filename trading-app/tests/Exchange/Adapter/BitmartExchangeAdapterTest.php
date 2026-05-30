@@ -39,6 +39,7 @@ final class BitmartExchangeAdapterTest extends TestCase
         $adapter = new BitmartExchangeAdapter($registry, $this->fixedClock());
 
         self::assertFalse($adapter->capabilities()->supportsTriggerOrders);
+        self::assertFalse($adapter->capabilities()->supportsModifyOrder);
         self::assertTrue($adapter->capabilities()->supportsAttachedStopLossOnEntry);
         self::assertTrue($adapter->capabilities()->supportsAttachedTakeProfitOnEntry);
     }
@@ -55,6 +56,8 @@ final class BitmartExchangeAdapterTest extends TestCase
         self::assertSame(ExchangeOrderStatus::PENDING, $result->status);
         self::assertSame(1, $capturedOptions['side'] ?? null);
         self::assertSame('cid-1', $capturedOptions['client_order_id'] ?? null);
+        self::assertArrayNotHasKey('reduce_only', $capturedOptions);
+        self::assertArrayNotHasKey('post_only', $capturedOptions);
     }
 
     public function testMapsShortEntryToLegacyOpenShortSide(): void
@@ -120,10 +123,70 @@ final class BitmartExchangeAdapterTest extends TestCase
         self::assertSame(2, $capturedOptions['mode'] ?? null);
     }
 
+    public function testRejectsStandaloneTriggerOrdersBeforeProviderSubmission(): void
+    {
+        $registry = $this->createMock(ExchangeProviderRegistryInterface::class);
+        $registry->expects($this->never())->method('get');
+        $adapter = new BitmartExchangeAdapter($registry, $this->fixedClock());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('does not support standalone trigger orders');
+
+        $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::LONG,
+            side: ExchangeOrderSide::SELL,
+            orderType: ExchangeOrderType::TRIGGER,
+            postOnly: false,
+        ));
+    }
+
+    public function testMapsReturnedShortEntryFromRawBitmartSideCode(): void
+    {
+        $adapter = $this->createAdapter(
+            static function (): void {
+            },
+            $this->providerOrder([
+                'client_order_id' => 'cid-1',
+                'side' => 4,
+            ]),
+        );
+
+        $result = $adapter->placeOrder($this->placeOrderRequest(ExchangePositionSide::SHORT, ExchangeOrderSide::SELL));
+
+        self::assertSame(ExchangeOrderSide::SELL, $result->order?->side);
+        self::assertSame(ExchangePositionSide::SHORT, $result->order?->positionSide);
+        self::assertFalse($result->order?->reduceOnly);
+    }
+
+    public function testMapsReturnedLongExitFromRawBitmartSideCode(): void
+    {
+        $adapter = $this->createAdapter(
+            static function (): void {
+            },
+            $this->providerOrder([
+                'client_order_id' => 'cid-1',
+                'side' => 3,
+                'mode' => 3,
+            ]),
+        );
+
+        $result = $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::LONG,
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+        ));
+
+        self::assertSame(ExchangeOrderSide::SELL, $result->order?->side);
+        self::assertSame(ExchangePositionSide::LONG, $result->order?->positionSide);
+        self::assertTrue($result->order?->reduceOnly);
+        self::assertSame(ExchangeTimeInForce::IOC, $result->order?->timeInForce);
+    }
+
     /**
      * @param callable(array<string,mixed>): void $captureOptions
      */
-    private function createAdapter(callable $captureOptions): BitmartExchangeAdapter
+    private function createAdapter(callable $captureOptions, ?OrderDto $providerOrder = null): BitmartExchangeAdapter
     {
         $orderProvider = $this->createMock(OrderProviderInterface::class);
         $orderProvider
@@ -142,7 +205,7 @@ final class BitmartExchangeAdapterTest extends TestCase
                     return true;
                 }),
             )
-            ->willReturn($this->providerOrder());
+            ->willReturn($providerOrder ?? $this->providerOrder());
 
         $bundle = new ExchangeProviderBundle(
             new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
@@ -163,6 +226,7 @@ final class BitmartExchangeAdapterTest extends TestCase
         ExchangePositionSide $positionSide,
         ExchangeOrderSide $side,
         ExchangeTimeInForce $timeInForce = ExchangeTimeInForce::GTC,
+        ExchangeOrderType $orderType = ExchangeOrderType::LIMIT,
         bool $reduceOnly = false,
         bool $postOnly = true,
     ): PlaceOrderRequest
@@ -173,7 +237,7 @@ final class BitmartExchangeAdapterTest extends TestCase
             symbol: 'BTCUSDT',
             side: $side,
             positionSide: $positionSide,
-            orderType: ExchangeOrderType::LIMIT,
+            orderType: $orderType,
             timeInForce: $timeInForce,
             quantity: 10.0,
             price: 25000.0,
@@ -196,7 +260,10 @@ final class BitmartExchangeAdapterTest extends TestCase
         };
     }
 
-    private function providerOrder(): OrderDto
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function providerOrder(array $metadata = ['client_order_id' => 'cid-1']): OrderDto
     {
         return new OrderDto(
             orderId: 'ex-1',
@@ -211,7 +278,7 @@ final class BitmartExchangeAdapterTest extends TestCase
             remainingQuantity: BigDecimal::of('10'),
             averagePrice: null,
             createdAt: new \DateTimeImmutable('2026-01-01 00:00:00 UTC'),
-            metadata: ['client_order_id' => 'cid-1'],
+            metadata: $metadata,
         );
     }
 }

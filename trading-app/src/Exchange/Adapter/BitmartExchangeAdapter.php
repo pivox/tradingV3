@@ -68,7 +68,7 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             supportsAttachedStopLossOnEntry: true,
             supportsAttachedTakeProfitOnEntry: true,
             supportsTriggerOrders: false,
-            supportsModifyOrder: true,
+            supportsModifyOrder: false,
             requiresSeparateLeverageSubmit: true,
             supportsPerSymbolLeverage: true,
         );
@@ -121,11 +121,12 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
     public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult
     {
         $this->assertRequestContext($request->exchange, $request->marketType);
+        $providerOrderType = $this->mapOrderTypeToProvider($request->orderType);
 
         $order = $this->bundle()->order()->placeOrder(
             symbol: $request->symbol,
             side: $this->mapOrderSideToProvider($request->side),
-            type: $this->mapOrderTypeToProvider($request->orderType),
+            type: $providerOrderType,
             quantity: $request->quantity,
             price: $request->price,
             stopPrice: $request->stopPrice,
@@ -223,8 +224,6 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             'client_order_id' => $request->clientOrderId,
             'side' => $this->mapPositionIntentToLegacySide($request),
             'open_type' => $request->marginMode,
-            'reduce_only' => $request->reduceOnly,
-            'post_only' => $request->postOnly,
         ];
 
         if ($request->timeInForce === ExchangeTimeInForce::IOC) {
@@ -264,14 +263,18 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
 
     private function mapOrder(OrderDto $order): ExchangeOrderDto
     {
+        [$side, $positionSide] = $this->mapOrderSideFromMetadata($order);
+        $bitmartSide = $this->intMetadata($order->metadata, 'side');
+        $mode = $this->intMetadata($order->metadata, 'mode');
+
         return new ExchangeOrderDto(
             exchange: $this->exchange(),
             marketType: $this->marketType(),
             symbol: $order->symbol,
             exchangeOrderId: $order->orderId,
             clientOrderId: $this->stringMetadata($order->metadata, 'client_order_id'),
-            side: $order->side === OrderSide::SELL ? ExchangeOrderSide::SELL : ExchangeOrderSide::BUY,
-            positionSide: null,
+            side: $side,
+            positionSide: $positionSide,
             orderType: $this->mapProviderOrderType($order->type),
             status: $this->mapProviderOrderStatus($order->status),
             quantity: $order->quantity->toFloat(),
@@ -280,9 +283,9 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             price: $order->price?->toFloat(),
             averagePrice: $order->averagePrice?->toFloat(),
             stopPrice: $order->stopPrice?->toFloat(),
-            reduceOnly: (bool) ($order->metadata['reduce_only'] ?? false),
-            postOnly: (bool) ($order->metadata['post_only'] ?? false),
-            timeInForce: null,
+            reduceOnly: \in_array($bitmartSide, [2, 3], true) || $this->boolMetadata($order->metadata, 'reduce_only'),
+            postOnly: $mode === 4 || $this->boolMetadata($order->metadata, 'post_only'),
+            timeInForce: $this->mapModeToTimeInForce($mode),
             createdAt: $order->createdAt,
             updatedAt: $order->updatedAt,
             metadata: $order->metadata,
@@ -322,8 +325,36 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             ExchangeOrderType::MARKET => OrderType::MARKET,
             ExchangeOrderType::STOP_LOSS,
             ExchangeOrderType::TAKE_PROFIT,
-            ExchangeOrderType::TRIGGER => OrderType::STOP,
+            ExchangeOrderType::TRIGGER => throw new \InvalidArgumentException(
+                'Bitmart adapter does not support standalone trigger orders through placeOrder',
+            ),
             ExchangeOrderType::LIMIT => OrderType::LIMIT,
+        };
+    }
+
+    /**
+     * @return array{0: ExchangeOrderSide, 1: ?ExchangePositionSide}
+     */
+    private function mapOrderSideFromMetadata(OrderDto $order): array
+    {
+        return match ($this->intMetadata($order->metadata, 'side')) {
+            1 => [ExchangeOrderSide::BUY, ExchangePositionSide::LONG],
+            2 => [ExchangeOrderSide::BUY, ExchangePositionSide::SHORT],
+            3 => [ExchangeOrderSide::SELL, ExchangePositionSide::LONG],
+            4 => [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT],
+            default => [
+                $order->side === OrderSide::SELL ? ExchangeOrderSide::SELL : ExchangeOrderSide::BUY,
+                null,
+            ],
+        };
+    }
+
+    private function mapModeToTimeInForce(?int $mode): ?ExchangeTimeInForce
+    {
+        return match ($mode) {
+            2 => ExchangeTimeInForce::FOK,
+            3 => ExchangeTimeInForce::IOC,
+            default => null,
         };
     }
 
@@ -357,6 +388,29 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
         $value = $metadata[$key] ?? null;
 
         return \is_scalar($value) && $value !== '' ? (string) $value : null;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function intMetadata(array $metadata, string $key): ?int
+    {
+        $value = $metadata[$key] ?? null;
+
+        return \is_scalar($value) && is_numeric($value) ? (int) $value : null;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function boolMetadata(array $metadata, string $key): bool
+    {
+        $value = $metadata[$key] ?? null;
+        if ($value === null) {
+            return false;
+        }
+
+        return \filter_var($value, \FILTER_VALIDATE_BOOLEAN, \FILTER_NULL_ON_FAILURE) ?? (bool) $value;
     }
 
     private function assertRequestContext(Exchange $exchange, MarketType $marketType): void
