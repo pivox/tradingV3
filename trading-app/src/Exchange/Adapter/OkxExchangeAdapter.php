@@ -164,7 +164,7 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
             ? $this->client->privatePost('/api/v5/trade/order-algo', $this->actions->algoOrder($instId, $request))
             : $this->client->privatePost('/api/v5/trade/order', $this->actions->order($instId, $request));
         $status = $this->responseStatus($response);
-        $exchangeOrderId = $this->responseOrderId($response, $isAlgo) ?? $request->clientOrderId;
+        $responseOrderId = $this->responseOrderId($response, $isAlgo);
         $accepted = $status !== ExchangeOrderStatus::REJECTED;
         if (!$accepted) {
             $existing = $this->findOpenOrderByClientOrderId($request->symbol, $this->actions->clientOrderId($request->clientOrderId));
@@ -184,6 +184,7 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
                 );
             }
         }
+        $exchangeOrderId = $accepted ? ($responseOrderId ?? $request->clientOrderId) : null;
 
         return new PlaceOrderResult(
             accepted: $accepted,
@@ -196,7 +197,7 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
                 exchange: $this->exchange(),
                 marketType: $this->marketType(),
                 symbol: strtoupper($request->symbol),
-                exchangeOrderId: $exchangeOrderId,
+                exchangeOrderId: $exchangeOrderId ?? $request->clientOrderId,
                 clientOrderId: $request->clientOrderId,
                 side: $request->side,
                 positionSide: $request->positionSide,

@@ -87,6 +87,25 @@ final class OkxExchangeAdapterTest extends TestCase
         self::assertEqualsWithDelta(24800.0, $stopOrders[0]->stopPrice, 0.000001);
     }
 
+    public function testRejectedStopLossAlgoDoesNotExposeConfirmedExchangeOrderId(): void
+    {
+        $client = new FakeOkxClient();
+        $client->rejectNextAlgoOrder = true;
+        $adapter = $this->adapter($client);
+
+        $result = $adapter->placeOrder($this->stopLossRequest());
+
+        self::assertFalse($result->accepted);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $result->status);
+        self::assertNull($result->exchangeOrderId);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $result->order?->status);
+        self::assertSame('cid-okx-sl', $result->order?->exchangeOrderId);
+        self::assertSame('/api/v5/trade/order-algo', $client->lastPostPath);
+        self::assertSame('true', $client->lastPostBody['reduceOnly'] ?? null);
+        self::assertSame('51008', $result->metadata['data'][0]['sCode'] ?? null);
+        self::assertSame('insufficient margin for protection', $result->metadata['data'][0]['sMsg'] ?? null);
+    }
+
     public function testMapsRestSnapshots(): void
     {
         $adapter = $this->adapter();
@@ -250,6 +269,8 @@ final class FakeOkxClient implements OkxRestClientInterface
 {
     public ?string $lastPostPath = null;
 
+    public bool $rejectNextAlgoOrder = false;
+
     /** @var array<mixed> */
     public array $lastPostBody = [];
 
@@ -349,12 +370,31 @@ final class FakeOkxClient implements OkxRestClientInterface
                 'clOrdId' => (string)($body['clOrdId'] ?? ''),
                 'sCode' => '0',
             ]]],
-            '/api/v5/trade/order-algo' => ['code' => '0', 'data' => [[
-                'algoId' => '90001',
-                'algoClOrdId' => (string)($body['algoClOrdId'] ?? ''),
-                'sCode' => '0',
-            ]]],
+            '/api/v5/trade/order-algo' => $this->algoOrderResponse($body),
             default => ['code' => '0', 'data' => [['sCode' => '0']]],
         };
+    }
+
+    /**
+     * @param array<string,mixed> $body
+     * @return array<string,mixed>
+     */
+    private function algoOrderResponse(array $body): array
+    {
+        if ($this->rejectNextAlgoOrder) {
+            $this->rejectNextAlgoOrder = false;
+
+            return ['code' => '0', 'data' => [[
+                'algoClOrdId' => (string)($body['algoClOrdId'] ?? ''),
+                'sCode' => '51008',
+                'sMsg' => 'insufficient margin for protection',
+            ]]];
+        }
+
+        return ['code' => '0', 'data' => [[
+            'algoId' => '90001',
+            'algoClOrdId' => (string)($body['algoClOrdId'] ?? ''),
+            'sCode' => '0',
+        ]]];
     }
 }
