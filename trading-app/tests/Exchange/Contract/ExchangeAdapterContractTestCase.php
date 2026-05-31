@@ -126,6 +126,47 @@ abstract class ExchangeAdapterContractTestCase extends TestCase
         self::assertGreaterThan(0.0, $positions[0]->size);
     }
 
+    public function testFilledClientOrderIdReplayDoesNotCreateSecondPositionWhenAdapterExecutesImmediateFills(): void
+    {
+        if (!$this->marketOrdersFillImmediately()) {
+            self::markTestSkipped('Adapter does not execute immediate fills in local contract tests.');
+        }
+
+        $adapter = $this->adapter();
+        $clientOrderId = $this->clientOrderId('filled-replay');
+        $first = $adapter->placeOrder($this->placeRequest(
+            clientOrderId: $clientOrderId,
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+        ));
+        $second = $adapter->placeOrder($this->placeRequest(
+            clientOrderId: $clientOrderId,
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+        ));
+
+        self::assertTrue($first->accepted);
+        self::assertSame(ExchangeOrderStatus::FILLED, $first->status);
+        self::assertTrue($second->accepted);
+        self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        self::assertSame(ExchangeOrderStatus::FILLED, $second->status);
+
+        $positions = $adapter->getOpenPositions($this->symbol());
+        self::assertCount(1, $positions);
+        self::assertEqualsWithDelta(1.0, $positions[0]->size, 0.000001);
+
+        if ($adapter instanceof ExchangeRestSnapshotProviderInterface) {
+            $snapshotClientOrderId = $this->snapshotClientOrderId($clientOrderId);
+            self::assertCount(1, array_filter(
+                $adapter->getOrdersSnapshot($this->symbol()),
+                static fn (ExchangeOrderDto $order): bool => $order->clientOrderId === $snapshotClientOrderId
+                    && !$order->reduceOnly,
+            ));
+        }
+    }
+
     public function testDuplicateClientOrderIdDoesNotCreateSecondActiveOrder(): void
     {
         $adapter = $this->adapter();
