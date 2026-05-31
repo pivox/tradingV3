@@ -470,6 +470,13 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             throw new \InvalidArgumentException('postOnly is only supported for limit orders on Bitmart');
         }
 
+        if (
+            $request->orderType === ExchangeOrderType::MARKET
+            && ($request->attachedStopLossPrice !== null || $request->attachedTakeProfitPrice !== null)
+        ) {
+            throw new \InvalidArgumentException('attached SL/TP on market orders must use the separate Bitmart protection flow');
+        }
+
         if ($request->postOnly && \in_array($request->timeInForce, [ExchangeTimeInForce::IOC, ExchangeTimeInForce::FOK], true)) {
             throw new \InvalidArgumentException('postOnly cannot be combined with IOC or FOK on Bitmart');
         }

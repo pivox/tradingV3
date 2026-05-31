@@ -158,6 +158,24 @@ final class BitmartExchangeAdapterTest extends TestCase
         ));
     }
 
+    public function testRejectsAttachedProtectionOnMarketOrders(): void
+    {
+        $registry = $this->createMock(ExchangeProviderRegistryInterface::class);
+        $registry->expects($this->never())->method('get');
+        $adapter = new BitmartExchangeAdapter($registry, $this->fixedClock());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('attached SL/TP on market orders');
+
+        $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::LONG,
+            side: ExchangeOrderSide::BUY,
+            orderType: ExchangeOrderType::MARKET,
+            postOnly: false,
+            attachedStopLossPrice: 24000.0,
+        ));
+    }
+
     public function testRejectsSidePositionMismatchBeforeProviderSubmission(): void
     {
         $registry = $this->createMock(ExchangeProviderRegistryInterface::class);
@@ -371,6 +389,8 @@ final class BitmartExchangeAdapterTest extends TestCase
         ExchangeOrderType $orderType = ExchangeOrderType::LIMIT,
         bool $reduceOnly = false,
         bool $postOnly = true,
+        ?float $attachedStopLossPrice = null,
+        ?float $attachedTakeProfitPrice = null,
     ): PlaceOrderRequest
     {
         return new PlaceOrderRequest(
@@ -389,6 +409,8 @@ final class BitmartExchangeAdapterTest extends TestCase
             leverage: 3,
             marginMode: 'isolated',
             clientOrderId: 'cid-1',
+            attachedStopLossPrice: $attachedStopLossPrice,
+            attachedTakeProfitPrice: $attachedTakeProfitPrice,
         );
     }
 

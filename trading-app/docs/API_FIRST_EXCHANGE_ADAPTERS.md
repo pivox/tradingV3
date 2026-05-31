@@ -67,6 +67,7 @@ La traduction actuelle conserve le comportement legacy:
   - open short: `4`
 - `postOnly`, `FOK` et `IOC` alimentent le champ legacy `mode`.
 - `clientOrderId`, SL/TP attaches et levier passent par `options`; les pseudo-flags `reduceOnly` et `postOnly` ne sont pas forwards tels quels au payload Bitmart.
+- Les SL/TP attaches ne sont acceptes que pour les entrees limit. Les entrees market doivent utiliser le flux de protection separe apres execution.
 - `cancelOrder()` annule par exchange order id. L'annulation par client order id est annoncee comme non supportee dans les capabilities.
 
 La methode `reconcile()` est volontairement un placeholder. La reconciliation complete doit etre branchee quand les fills et l'etat local auront leur service dedie.
