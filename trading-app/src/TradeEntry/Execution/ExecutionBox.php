@@ -255,7 +255,7 @@ final class ExecutionBox
                     // Utiliser la fenêtre locale forcée si définie, sinon fallback sur 60s
                     $watchSec = $watchWindowSec ?? ($cancelAfterTimeout ?? 60);
                     if ($watchSec <= 0) { $watchSec = 60; }
-                    $contextSnapshot = $contextBuilder?->toArray();
+                    $contextSnapshot = $this->watchLifecycleContext($contextBuilder, $plan->exchangeContext);
                     $this->bus->dispatch(
                         new LimitFillWatchMessage(
                             symbol: $plan->symbol,
@@ -938,6 +938,23 @@ final class ExecutionBox
         }
 
         return $provider;
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function watchLifecycleContext(
+        ?LifecycleContextBuilder $contextBuilder,
+        ?ExchangeContext $context,
+    ): ?array {
+        $snapshot = $contextBuilder?->toArray() ?? [];
+
+        if ($context !== null) {
+            $snapshot['exchange'] ??= $context->exchange->value;
+            $snapshot['market_type'] ??= $context->marketType->value;
+        }
+
+        return $snapshot !== [] ? $snapshot : null;
     }
 
     private function applyMakerTakerSwitch(
