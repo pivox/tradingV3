@@ -34,7 +34,7 @@ def _normalize_symbols(raw: Any) -> Optional[List[str]]:
 @dataclass
 class MtfJob:
     url: str
-    workers: int = 5
+    workers: int = 4
     dry_run: bool = True
     force_run: bool = False
     force_timeframe_check: bool = False
@@ -48,7 +48,7 @@ class MtfJob:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MtfJob":
         url = str(data.get("url"))
-        workers = int(data.get("workers", 5))
+        workers = int(data.get("workers", 4))
         dry_run = _to_bool(data.get("dry_run"), True)
         force_run = _to_bool(data.get("force_run"), False)
         force_timeframe_check = _to_bool(data.get("force_timeframe_check"), False)

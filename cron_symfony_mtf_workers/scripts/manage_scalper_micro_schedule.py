@@ -42,7 +42,7 @@ except AttributeError:  # pragma: no cover - compatibility with < 1.6
 
 DEFAULT_URL = os.getenv("SCALPER_MICRO_URL", "http://trading-app-nginx:80/api/mtf/run")
 # Nombre de workers désiré pour les appels MTF scalper_micro (override via SCALPER_MICRO_WORKERS_COUNT)
-DEFAULT_WORKERS = int(os.getenv("SCALPER_MICRO_WORKERS_COUNT", "8"))
+DEFAULT_WORKERS = int(os.getenv("SCALPER_MICRO_WORKERS_COUNT", "4"))
 DEFAULT_DRY_RUN = os.getenv("SCALPER_MICRO_DRY_RUN", "False").lower() not in {"0", "false", "no", "off"}
 
 
@@ -159,4 +159,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

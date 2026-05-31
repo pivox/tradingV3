@@ -822,7 +822,7 @@ final class MtfRunnerService
                 $process = new Process(
                     $this->buildWorkerCommand($symbol, $options),
                     $this->projectDir,
-                    ['APP_DEBUG' => '1']
+                    ['APP_DEBUG' => '0']
                 );
                 $process->start();
                 $workerStartTimes[$symbol] = $workerStart;
@@ -920,6 +920,8 @@ final class MtfRunnerService
         // PHP_BINARY peut pointer vers php-fpm dans un environnement FPM, ce qui ne fonctionne pas pour les commandes CLI
         $command = [
             'php',
+            '-d',
+            'memory_limit=512M',
             $this->projectDir . '/bin/console',
             'mtf:run-worker',
             '--symbols=' . $symbol,

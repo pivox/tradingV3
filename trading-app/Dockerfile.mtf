@@ -56,6 +56,6 @@ RUN if [ "$APP_ENV" = "prod" ]; then \
 COPY . .
 RUN chown -R www-data:www-data /var/www/html \
  && chmod -R 755 /var/www/html \
- && echo "memory_limit = 2G" >> /usr/local/etc/php/conf.d/memory.ini
+ && echo "memory_limit = 512M" >> /usr/local/etc/php/conf.d/memory.ini
 EXPOSE 9000
 CMD ["php-fpm"]

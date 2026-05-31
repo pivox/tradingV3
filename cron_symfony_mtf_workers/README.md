@@ -60,7 +60,7 @@ En production, on préfère la cible Docker (`Dockerfile` + `deploy.sh`) décrit
 | `TEMPORAL_NAMESPACE` | Namespace | `default` |
 | `TASK_QUEUE_NAME` | Task queue consommée par `worker.py` | `cron_symfony_mtf_workers` |
 | `MTF_WORKERS_URL` | URL par défaut de `/api/mtf/run` | `http://trading-app-nginx:80/api/mtf/run` |
-| `MTF_WORKERS_COUNT` | `workers` envoyés à l’API | `5` |
+| `MTF_WORKERS_COUNT` | `workers` envoyés à l’API | `4` |
 | `MTF_WORKERS_DRY_RUN` | Flag `dry_run` | `true` |
 | `REQUEST_TIMEOUT_SECONDS` | Timeout HTTP d’un job (niveau activité) | `900` (15 min, override possible par job) |
 
@@ -81,7 +81,7 @@ Chaque schedule définit ses propres overrides via `job.payload`. Voir `models/m
 | `MTF_WORKERS_WORKFLOW_ID` | `cron-symfony-mtf-workers-runner` | Workflow ID retransmis à Temporal |
 | `MTF_WORKERS_CRON` | `*/1 * * * *` | Cadence (1 minute) |
 | `MTF_WORKERS_URL` | `http://trading-app-nginx:80/api/mtf/run` | Endpoint Symfony |
-| `MTF_WORKERS_COUNT` | `5` | Nombre de workers parallèle côté runner |
+| `MTF_WORKERS_COUNT` | `4` | Nombre de workers parallèle côté runner |
 | `MTF_WORKERS_DRY_RUN` | `true` | On active `dry_run=1` par sécurité en staging |
 
 ```bash
@@ -107,7 +107,7 @@ python scripts/manage_mtf_workers_schedule.py delete       # supprime
 
 ### 4.3 Scalper Micro
 
-- **Objectif** : reproduire le run MTF avec le profil `scalper_micro` (8 workers) toutes les minutes.
+- **Objectif** : reproduire le run MTF avec le profil `scalper_micro` (4 workers) toutes les minutes.
 - **Script** : `scripts/manage_scalper_micro_schedule.py`.
 
 | Variable | Défaut |
@@ -115,7 +115,7 @@ python scripts/manage_mtf_workers_schedule.py delete       # supprime
 | `SCALPER_MICRO_SCHEDULE_ID` | `cron-symfony-mtf-workers-scalper-micro-1m` |
 | `SCALPER_MICRO_WORKFLOW_ID` | `cron-symfony-mtf-workers-scalper-micro-runner` |
 | `SCALPER_MICRO_CRON` | `*/1 * * * *` |
-| `SCALPER_MICRO_WORKERS_COUNT` | `8` |
+| `SCALPER_MICRO_WORKERS_COUNT` | `4` |
 | `SCALPER_MICRO_DRY_RUN` | `true` |
 
 > Le script force automatiquement `{"mtf_profile": "scalper_micro"}` dans la charge utile envoyée à Symfony.
