@@ -31,5 +31,5 @@ OKX_LIVE_ENABLED=0
 Local safety checks:
 
 ```bash
-./vendor/bin/phpunit tests/Exchange/Okx/OkxRestClientTest.php tests/Exchange/Adapter/OkxExchangeAdapterTest.php tests/Exchange/Contract/OkxExchangeAdapterContractTest.php
+./vendor/bin/phpunit tests/Exchange/Okx tests/Exchange/Adapter/OkxExchangeAdapterTest.php tests/Exchange/Contract/OkxExchangeAdapterContractTest.php
 ```

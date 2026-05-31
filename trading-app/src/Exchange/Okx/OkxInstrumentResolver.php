@@ -13,7 +13,13 @@ final class OkxInstrumentResolver
             throw new \InvalidArgumentException('OKX symbol cannot be blank');
         }
         if (str_contains($symbol, '-')) {
-            return str_ends_with($symbol, '-SWAP') ? $symbol : $symbol . '-SWAP';
+            $instrument = str_ends_with($symbol, '-SWAP') ? substr($symbol, 0, -5) : $symbol;
+            $parts = explode('-', $instrument);
+            if (\count($parts) === 2 && $parts[0] !== '' && \in_array($parts[1], ['USDT', 'USDC', 'USD'], true)) {
+                return $parts[0] . '-' . $parts[1] . '-SWAP';
+            }
+
+            throw new \InvalidArgumentException(sprintf('Unable to normalize OKX swap symbol "%s"', $symbol));
         }
 
         foreach (['USDT', 'USDC', 'USD'] as $quote) {
