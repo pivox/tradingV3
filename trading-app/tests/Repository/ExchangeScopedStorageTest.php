@@ -13,6 +13,8 @@ use App\Entity\MtfState;
 use App\Entity\OrderIntent;
 use App\Entity\OrderProtection;
 use App\Entity\Position;
+use App\MtfValidator\Entity\MtfAudit;
+use App\MtfValidator\Repository\MtfAuditRepository;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Entity\Contract;
 use App\Provider\Entity\Kline;
@@ -25,9 +27,11 @@ use App\Repository\PositionRepository;
 use App\Trading\Storage\FuturesOrderOrderStateRepository;
 use App\Trading\Storage\PositionPositionStateRepository;
 use Brick\Math\BigDecimal;
+use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
 use PHPUnit\Framework\Attributes\CoversNothing;
+use Ramsey\Uuid\Uuid;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
 #[CoversNothing]
@@ -56,6 +60,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
                 OrderProtection::class,
                 IndicatorSnapshot::class,
                 MtfState::class,
+                MtfAudit::class,
             ],
         );
 
@@ -78,6 +83,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
                     OrderProtection::class,
                     IndicatorSnapshot::class,
                     MtfState::class,
+                    MtfAudit::class,
                 ],
             );
             (new SchemaTool($this->em))->dropSchema($metadata);
@@ -247,6 +253,29 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame('short', $repository->getOrCreateForSymbol('BTCUSDT', $binanceContext)->get4hSide());
     }
 
+    public function testLatestValidationFailuresKeepFailedTimeframeAndExchangeScope(): void
+    {
+        if (!$this->em->getConnection()->getDatabasePlatform() instanceof PostgreSQLPlatform) {
+            self::markTestSkipped('MtfAuditRepository uses PostgreSQL-specific SQL.');
+        }
+
+        $openTime = new \DateTimeImmutable('2026-05-31 00:00:00', new \DateTimeZone('UTC'));
+        $this->em->persist($this->newMtfAudit('binance', '1M_VALIDATION_FAILED', $openTime, 'rsi_rejected'));
+        $this->em->flush();
+
+        /** @var MtfAuditRepository $repository */
+        $repository = $this->em->getRepository(MtfAudit::class);
+
+        $rows = $repository->getLatestValidationSuccessesPerSymbol('BTCUSDT', ['1m']);
+
+        self::assertCount(1, $rows);
+        self::assertSame('BTCUSDT', $rows[0]['symbol']);
+        self::assertSame('binance', $rows[0]['exchange']);
+        self::assertSame('perpetual', $rows[0]['market_type']);
+        self::assertSame('failed', $rows[0]['timeframes']['1m']['status']);
+        self::assertSame('rsi_rejected', $rows[0]['timeframes']['1m']['cause']);
+    }
+
     private function newKline(string $exchange, string $close, \DateTimeImmutable $openTime): Kline
     {
         return (new Kline())
@@ -309,5 +338,25 @@ final class ExchangeScopedStorageTest extends KernelTestCase
             ->setSize((int) $size)
             ->setFilledSize(0)
             ->setRawData(['exchange' => $exchange, 'market_type' => 'perpetual']);
+    }
+
+    private function newMtfAudit(
+        string $exchange,
+        string $step,
+        \DateTimeImmutable $candleOpenTs,
+        string $cause,
+    ): MtfAudit {
+        return (new MtfAudit())
+            ->setSymbol('BTCUSDT')
+            ->setRunId(Uuid::uuid4())
+            ->setStep($step)
+            ->setTimeframe(Timeframe::TF_1M)
+            ->setCandleOpenTs($candleOpenTs)
+            ->setCreatedAt($candleOpenTs->modify('+30 seconds'))
+            ->setCause($cause)
+            ->setDetails([
+                'exchange' => $exchange,
+                'market_type' => 'perpetual',
+            ]);
     }
 }

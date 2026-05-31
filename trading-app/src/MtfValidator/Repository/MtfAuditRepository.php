@@ -660,13 +660,24 @@ SQL;
             $symbolClause = ' AND UPPER(symbol) LIKE :search';
         }
 
-        $caseExpression = <<<SQL
+        $successCaseExpression = <<<SQL
 CASE
   WHEN UPPER(step) = '4H_VALIDATION_SUCCESS' THEN '4h'
   WHEN UPPER(step) = '1H_VALIDATION_SUCCESS' THEN '1h'
   WHEN UPPER(step) = '15M_VALIDATION_SUCCESS' THEN '15m'
   WHEN UPPER(step) = '5M_VALIDATION_SUCCESS' THEN '5m'
   WHEN UPPER(step) = '1M_VALIDATION_SUCCESS' THEN '1m'
+  ELSE NULL
+END
+SQL;
+
+        $failureCaseExpression = <<<SQL
+CASE
+  WHEN UPPER(step) = '4H_VALIDATION_FAILED' THEN '4h'
+  WHEN UPPER(step) = '1H_VALIDATION_FAILED' THEN '1h'
+  WHEN UPPER(step) = '15M_VALIDATION_FAILED' THEN '15m'
+  WHEN UPPER(step) = '5M_VALIDATION_FAILED' THEN '5m'
+  WHEN UPPER(step) = '1M_VALIDATION_FAILED' THEN '1m'
   ELSE NULL
 END
 SQL;
@@ -692,15 +703,15 @@ WITH success_events AS (
     id,
     symbol,
     {$scopeExpression},
-    {$caseExpression} AS timeframe,
+    {$successCaseExpression} AS timeframe,
     -- event_ts = candle_open_ts + durée du timeframe (pour obtenir le closeTime)
     COALESCE(
       CASE
-        WHEN {$caseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
-        WHEN {$caseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
-        WHEN {$caseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
-        WHEN {$caseExpression} = '5m' THEN candle_open_ts + INTERVAL '5 minutes'
-        WHEN {$caseExpression} = '1m' THEN candle_open_ts + INTERVAL '1 minute'
+        WHEN {$successCaseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
+        WHEN {$successCaseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
+        WHEN {$successCaseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
+        WHEN {$successCaseExpression} = '5m' THEN candle_open_ts + INTERVAL '5 minutes'
+        WHEN {$successCaseExpression} = '1m' THEN candle_open_ts + INTERVAL '1 minute'
         ELSE NULL
       END,
       NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC'
@@ -749,15 +760,15 @@ WITH failure_events AS (
     id,
     symbol,
     {$scopeExpression},
-    {$caseExpression} AS timeframe,
+    {$failureCaseExpression} AS timeframe,
     -- event_ts = candle_open_ts + durée du timeframe (pour obtenir le closeTime)
     COALESCE(
       CASE
-        WHEN {$caseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
-        WHEN {$caseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
-        WHEN {$caseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
-        WHEN {$caseExpression} = '5m' THEN candle_open_ts + INTERVAL '5 minutes'
-        WHEN {$caseExpression} = '1m' THEN candle_open_ts + INTERVAL '1 minute'
+        WHEN {$failureCaseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
+        WHEN {$failureCaseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
+        WHEN {$failureCaseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
+        WHEN {$failureCaseExpression} = '5m' THEN candle_open_ts + INTERVAL '5 minutes'
+        WHEN {$failureCaseExpression} = '1m' THEN candle_open_ts + INTERVAL '1 minute'
         ELSE NULL
       END,
       NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC'
