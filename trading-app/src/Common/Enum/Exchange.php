@@ -8,6 +8,7 @@ enum Exchange: string
 {
     case BITMART = 'bitmart';
     case BINANCE = 'binance';
+    case FAKE = 'fake';
 
     /**
      * Human readable label for logging/UI.
@@ -17,6 +18,7 @@ enum Exchange: string
         return match ($this) {
             self::BITMART => 'Bitmart',
             self::BINANCE => 'Binance',
+            self::FAKE => 'Fake Exchange',
         };
     }
 }

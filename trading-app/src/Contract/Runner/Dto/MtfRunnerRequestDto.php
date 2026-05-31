@@ -104,6 +104,8 @@ final class MtfRunnerRequestDto
     {
         return match (strtolower(trim($value))) {
             'bitmart' => Exchange::BITMART,
+            'binance' => Exchange::BINANCE,
+            'fake' => Exchange::FAKE,
             default => throw new \InvalidArgumentException(sprintf('Unsupported exchange "%s"', $value)),
         };
     }
@@ -117,5 +119,4 @@ final class MtfRunnerRequestDto
         };
     }
 }
-
 
