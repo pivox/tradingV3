@@ -21,6 +21,12 @@ Pour remettre l'etat fake a zero dans un environnement Symfony, supprimer le
 fichier `var/fake_exchange_state.dat` ou reconstruire le service
 `FakeExchangeStateStore`.
 
+Pour forcer un flux API-first local, le plan doit porter un contexte explicite
+`ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL)`. Sans contexte
+explicite, le chemin legacy Bitmart peut rester le fallback selon le service
+appelant. Les tests `ExchangeExecutionServiceTest` montrent le cablage attendu
+avec `OrderPlanModel::exchangeContext`.
+
 ## Tests De Contrat
 
 `ExchangeAdapterContractTestCase` contient les invariants communs:
@@ -28,7 +34,7 @@ fichier `var/fake_exchange_state.dat` ou reconstruire le service
 - identite exchange/marketType et coherence des capabilities;
 - placement, listing, lookup et cancel d'un limit order;
 - fill market local et creation de position quand l'adapter le permet;
-- idempotence par `clientOrderId`;
+- idempotence par `clientOrderId`, y compris replay d'un ordre deja fill;
 - placement, listing et cancel d'un stop reduce-only separe quand
   `supportsTriggerOrders=true`;
 - placement, listing et cancel d'un take-profit reduce-only separe quand
@@ -44,6 +50,61 @@ Commande large recommandee:
 
 ```bash
 php -d error_reporting='E_ALL & ~E_DEPRECATED' ./vendor/bin/phpunit tests/Exchange tests/TradeEntry/Execution/ExchangeExecutionServiceTest.php
+```
+
+## Idempotence, Retry Et Concurrence
+
+Cible contractuelle pour les adapters:
+
+- un `decisionKey` non vide produit toujours le meme `clientOrderId` via
+  `IdempotencyPolicy`;
+- un retry avec le meme `clientOrderId` et la meme intention doit retourner
+  l'ordre existant au lieu de creer une nouvelle entree;
+- un retry avec le meme `clientOrderId` mais une intention differente doit etre
+  rejete avec `duplicate_client_order_id_intent_mismatch` quand l'adapter sait
+  comparer l'intention stockee;
+- les terminaux acceptes (`FILLED`, `EXPIRED`, `CANCELLED`) doivent conserver
+  leur statut exchange au replay quand l'adapter a acces a l'historique;
+- un ordre `CANCELLED` avec `filledQuantity > 0` reste un fill metier: le flux
+  doit confirmer ou recreer la protection au lieu de traiter le retry comme un
+  ordre jamais execute;
+- un ordre originellement `REJECTED` reste rejete au replay. Ne pas supposer que
+  la raison exchange originale est conservee: Bitmart expose
+  `duplicate_client_order_id_original_rejected`, tandis que Fake conserve les
+  metadata locales disponibles.
+
+Etat actuel: Fake et Bitmart couvrent les replays d'historique et les mismatches
+d'intention dans les tests de contrat applicables. OKX et Hyperliquid ne
+rejouent aujourd'hui que les doublons encore visibles en open orders; si
+l'ordre original est deja fill/cancelled/expired, traiter le duplicate comme un
+cas a verifier manuellement dans l'historique REST de l'exchange avant toute
+nouvelle decision.
+
+Quand `OrderIntentManager` est disponible, `ExecuteOrderPlan` reserve le
+`decisionKey` avant l'envoi. Sur PostgreSQL, la reservation prend un advisory
+lock scope par `exchange::market_type` + `decision_key`, ce qui evite que deux
+workers creent deux intentions concurrentes. Le second worker doit observer:
+
+- `idempotent_in_flight` pour `DRAFT`, `VALIDATED` ou `READY_TO_SEND`;
+- `idempotent_sent_replay` pour `SENT`;
+- `idempotent_failed_not_replayed` pour `FAILED`;
+- `idempotent_cancelled_not_replayed` pour `CANCELLED`.
+
+Pour un retry apres timeout, ne pas generer de nouveau `clientOrderId` a la
+main. Rejouer le meme `decisionKey`, verifier l'`OrderIntent` existant, puis
+comparer l'etat exchange REST:
+
+1. si l'ordre est fill ou partiellement fill, confirmer la protection;
+2. si l'ordre est ouvert, verifier le watcher/cancel timeout;
+3. si l'ordre est cancelled/expired sans fill, ne pas resoumettre sans nouvelle
+   decision metier;
+4. si l'ordre est rejected, conserver la cause et corriger l'intention avant un
+   nouveau `decisionKey`.
+
+Tests a lancer pour cette zone:
+
+```bash
+php -d error_reporting='E_ALL & ~E_DEPRECATED' ./vendor/bin/phpunit tests/Exchange/Adapter/FakeExchangeAdapterTest.php tests/Exchange/Contract/FakeExchangeAdapterContractTest.php tests/TradeEntry/Execution/ExchangeExecutionServiceTest.php tests/TradeEntry/Idempotency/DecisionKeyFactoryTest.php
 ```
 
 ## Hyperliquid Testnet
@@ -108,6 +169,27 @@ doit rester visible dans `unprotected_positions`.
 - `protection.confirmed`
 - `protection.failed`
 - `emergency_close.*`
+
+Audit rapide apres incident:
+
+```bash
+rg "decision_key=<DECISION_KEY>|client_order_id=<CLIENT_ORDER_ID>" var/log/positions-*.log var/log/order-journey-*.log
+```
+
+Il n'existe pas encore de commande console de reconciliation live. Ne pas
+utiliser PHPUnit comme preuve d'audit incident: les tests ne lisent que des
+fixtures. En production/demo, comparer l'etat REST de l'exchange pour le symbole
+affecte:
+
+1. positions ouvertes;
+2. open orders SL/TRIGGER reduce-only;
+3. side de sortie et position side;
+4. quantite restante de SL versus taille de position.
+
+Si cette verification remonte l'equivalent de `unprotected_positions`, traiter
+le run comme critique tant qu'un SL actif reduce-only ne couvre pas toute la
+quantite. Avant mainnet, ajouter une commande console qui wrappe
+`ExchangeReconciliationService` sur un adapter/symbol reel.
 
 ## Emergency Close
 
