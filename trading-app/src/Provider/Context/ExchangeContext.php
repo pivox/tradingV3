@@ -23,6 +23,26 @@ final class ExchangeContext
         return new self($exchange, $marketType);
     }
 
+    public static function legacyDefault(): self
+    {
+        return new self(Exchange::BITMART, MarketType::PERPETUAL);
+    }
+
+    public static function resolve(?self $context): self
+    {
+        return $context ?? self::legacyDefault();
+    }
+
+    public static function exchangeValue(?self $context): string
+    {
+        return self::resolve($context)->exchange->value;
+    }
+
+    public static function marketTypeValue(?self $context): string
+    {
+        return self::resolve($context)->marketType->value;
+    }
+
     public function equals(self $other): bool
     {
         return $this->exchange === $other->exchange && $this->marketType === $other->marketType;
@@ -38,4 +58,3 @@ final class ExchangeContext
         return $this->key();
     }
 }
-

@@ -4,21 +4,29 @@ declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Repository\IndicatorSnapshotRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: IndicatorSnapshotRepository::class)]
 #[ORM\Table(name: 'indicator_snapshots')]
-#[ORM\Index(name: 'idx_ind_snap_symbol_tf', columns: ['symbol', 'timeframe'])]
+#[ORM\Index(name: 'idx_ind_snap_symbol_tf', columns: ['exchange', 'market_type', 'symbol', 'timeframe'])]
 #[ORM\Index(name: 'idx_ind_snap_kline_time', columns: ['kline_time'])]
-#[ORM\UniqueConstraint(name: 'ux_ind_snap_symbol_tf_time', columns: ['symbol', 'timeframe', 'kline_time'])]
+#[ORM\UniqueConstraint(name: 'ux_ind_snap_exchange_market_symbol_tf_time', columns: ['exchange', 'market_type', 'symbol', 'timeframe', 'kline_time'])]
 class IndicatorSnapshot
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
     private ?int $id = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
+    private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
+    private string $marketType = 'perpetual';
 
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
@@ -32,7 +40,7 @@ class IndicatorSnapshot
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE)]
     private \DateTimeImmutable $klineTime;
 
-    #[ORM\Column(type: Types::JSON)]
+    #[ORM\Column(name: '`values`', type: Types::JSON)]
     private array $values = [];
 
     #[ORM\Column(type: Types::STRING, length: 50)]
@@ -57,6 +65,28 @@ class IndicatorSnapshot
     public function getId(): ?int
     {
         return $this->id;
+    }
+
+    public function getExchange(): string
+    {
+        return $this->exchange;
+    }
+
+    public function setExchange(Exchange|string $exchange): static
+    {
+        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange);
+        return $this;
+    }
+
+    public function getMarketType(): string
+    {
+        return $this->marketType;
+    }
+
+    public function setMarketType(MarketType|string $marketType): static
+    {
+        $this->marketType = $marketType instanceof MarketType ? $marketType->value : strtolower($marketType);
+        return $this;
     }
 
     public function getSymbol(): string

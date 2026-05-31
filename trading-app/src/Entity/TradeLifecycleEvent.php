@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Repository\TradeLifecycleEventRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
@@ -56,8 +58,11 @@ class TradeLifecycleEvent
     #[ORM\Column(length: 64, nullable: true)]
     private ?string $planId = null;
 
-    #[ORM\Column(length: 32, nullable: true)]
-    private ?string $exchange = null;
+    #[ORM\Column(length: 32, options: ['default' => 'bitmart'])]
+    private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_type', length: 32, options: ['default' => 'perpetual'])]
+    private string $marketType = 'perpetual';
 
     #[ORM\Column(length: 64, nullable: true)]
     private ?string $accountId = null;
@@ -225,14 +230,26 @@ class TradeLifecycleEvent
         return $this;
     }
 
-    public function getExchange(): ?string
+    public function getExchange(): string
     {
         return $this->exchange;
     }
 
-    public function setExchange(?string $exchange): self
+    public function setExchange(Exchange|string|null $exchange): self
     {
-        $this->exchange = $exchange;
+        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange ?? 'bitmart');
+
+        return $this;
+    }
+
+    public function getMarketType(): string
+    {
+        return $this->marketType;
+    }
+
+    public function setMarketType(MarketType|string|null $marketType): self
+    {
+        $this->marketType = $marketType instanceof MarketType ? $marketType->value : strtolower($marketType ?? 'perpetual');
 
         return $this;
     }

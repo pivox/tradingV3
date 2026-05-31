@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace App\MtfRunner\Service;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Entity\FuturesOrder;
 use App\Entity\FuturesOrderTrade;
 use App\Entity\FuturesPlanOrder;
+use App\Provider\Context\ExchangeContext;
 use App\Repository\FuturesOrderRepository;
 use App\Repository\FuturesOrderTradeRepository;
 use App\Repository\FuturesPlanOrderRepository;
@@ -33,6 +36,7 @@ class FuturesOrderSyncService
         try {
             $orderId = $this->extractString($orderData, 'order_id');
             $clientOrderId = $this->extractString($orderData, 'client_order_id');
+            $context = $this->resolveContext($orderData);
 
             if (!$orderId && !$clientOrderId) {
                 $this->logger->warning('[FuturesOrderSync] Missing order_id and client_order_id', [
@@ -44,10 +48,10 @@ class FuturesOrderSyncService
             // Chercher l'ordre existant par order_id ou client_order_id
             $order = null;
             if ($orderId) {
-                $order = $this->futuresOrderRepository->findOneByOrderId($orderId);
+                $order = $this->futuresOrderRepository->findOneByOrderId($orderId, $context);
             }
             if (!$order && $clientOrderId) {
-                $order = $this->futuresOrderRepository->findOneByClientOrderId($clientOrderId);
+                $order = $this->futuresOrderRepository->findOneByClientOrderId($clientOrderId, $context);
             }
 
             if (!$order) {
@@ -55,6 +59,8 @@ class FuturesOrderSyncService
             }
 
             // Mapper les champs depuis l'API
+            $order->setExchange($context->exchange);
+            $order->setMarketType($context->marketType);
             $order->setOrderId($orderId);
             $order->setClientOrderId($clientOrderId);
             $order->setSymbol($this->extractString($orderData, 'symbol', ''));
@@ -136,6 +142,7 @@ class FuturesOrderSyncService
         try {
             $orderId = $this->extractString($orderData, 'order_id');
             $clientOrderId = $this->extractString($orderData, 'client_order_id');
+            $context = $this->resolveContext($orderData);
 
             if (!$orderId && !$clientOrderId) {
                 $this->logger->warning('[FuturesOrderSync] Missing order_id and client_order_id for plan order', [
@@ -147,10 +154,10 @@ class FuturesOrderSyncService
             // Chercher l'ordre planifié existant
             $planOrder = null;
             if ($orderId) {
-                $planOrder = $this->futuresPlanOrderRepository->findOneByOrderId($orderId);
+                $planOrder = $this->futuresPlanOrderRepository->findOneByOrderId($orderId, $context);
             }
             if (!$planOrder && $clientOrderId) {
-                $planOrder = $this->futuresPlanOrderRepository->findOneByClientOrderId($clientOrderId);
+                $planOrder = $this->futuresPlanOrderRepository->findOneByClientOrderId($clientOrderId, $context);
             }
 
             if (!$planOrder) {
@@ -158,6 +165,8 @@ class FuturesOrderSyncService
             }
 
             // Mapper les champs depuis l'API
+            $planOrder->setExchange($context->exchange);
+            $planOrder->setMarketType($context->marketType);
             $planOrder->setOrderId($orderId);
             $planOrder->setClientOrderId($clientOrderId);
             $planOrder->setSymbol($this->extractString($orderData, 'symbol', ''));
@@ -232,6 +241,7 @@ class FuturesOrderSyncService
     {
         try {
             $tradeId = $this->extractString($tradeData, 'trade_id');
+            $context = $this->resolveContext($tradeData);
             if (!$tradeId) {
                 // Essayer d'utiliser un identifiant alternatif ou générer un ID temporaire
                 $tradeId = $this->extractString($tradeData, 'id') 
@@ -243,12 +253,14 @@ class FuturesOrderSyncService
             }
 
             // Chercher le trade existant
-            $trade = $this->futuresOrderTradeRepository->findOneByTradeId($tradeId);
+            $trade = $this->futuresOrderTradeRepository->findOneByTradeId($tradeId, $context);
             if (!$trade) {
                 $trade = new FuturesOrderTrade();
             }
 
             // Mapper les champs depuis l'API
+            $trade->setExchange($context->exchange);
+            $trade->setMarketType($context->marketType);
             $trade->setTradeId($tradeId);
             $trade->setOrderId($this->extractString($tradeData, 'order_id', ''));
             $trade->setSymbol($this->extractString($tradeData, 'symbol', ''));
@@ -262,7 +274,7 @@ class FuturesOrderSyncService
             // Lier au FuturesOrder si l'order_id existe
             $orderId = $this->extractString($tradeData, 'order_id');
             if ($orderId) {
-                $futuresOrder = $this->futuresOrderRepository->findOneByOrderId($orderId);
+                $futuresOrder = $this->futuresOrderRepository->findOneByOrderId($orderId, $context);
                 if ($futuresOrder) {
                     $trade->setFuturesOrder($futuresOrder);
                 }
@@ -295,6 +307,8 @@ class FuturesOrderSyncService
         $filledSize = $eventData['deal_size'] ?? $eventData['filled_size'] ?? null;
 
         $normalized = [
+            'exchange' => $eventData['exchange'] ?? null,
+            'market_type' => $eventData['market_type'] ?? $eventData['marketType'] ?? null,
             'order_id' => $eventData['order_id'] ?? null,
             'client_order_id' => $eventData['client_order_id'] ?? null,
             'symbol' => $eventData['symbol'] ?? null,
@@ -382,6 +396,19 @@ class FuturesOrderSyncService
         }
         return (int) $value;
     }
+
+    /**
+     * @param array<string,mixed> $data
+     */
+    private function resolveContext(array $data): ExchangeContext
+    {
+        try {
+            return new ExchangeContext(
+                Exchange::from(strtolower((string)($data['exchange'] ?? ExchangeContext::exchangeValue(null)))),
+                MarketType::from(strtolower((string)($data['market_type'] ?? $data['marketType'] ?? ExchangeContext::marketTypeValue(null)))),
+            );
+        } catch (\ValueError) {
+            return ExchangeContext::legacyDefault();
+        }
+    }
 }
-
-

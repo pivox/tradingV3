@@ -4,19 +4,28 @@ declare(strict_types=1);
 
 namespace App\Provider\Entity;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Provider\Repository\ContractRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: ContractRepository::class)]
 #[ORM\Table(name: 'contracts')]
-#[ORM\UniqueConstraint(name: 'ux_contracts_symbol', columns: ['symbol'])]
+#[ORM\UniqueConstraint(name: 'ux_contracts_exchange_market_symbol', columns: ['exchange', 'market_type', 'symbol'])]
+#[ORM\Index(name: 'idx_contracts_exchange_market_symbol', columns: ['exchange', 'market_type', 'symbol'])]
 class Contract
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
     private ?int $id = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
+    private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
+    private string $marketType = 'perpetual';
 
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
@@ -140,6 +149,28 @@ class Contract
     public function getId(): ?int
     {
         return $this->id;
+    }
+
+    public function getExchange(): string
+    {
+        return $this->exchange;
+    }
+
+    public function setExchange(Exchange|string $exchange): static
+    {
+        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange);
+        return $this;
+    }
+
+    public function getMarketType(): string
+    {
+        return $this->marketType;
+    }
+
+    public function setMarketType(MarketType|string $marketType): static
+    {
+        $this->marketType = $marketType instanceof MarketType ? $marketType->value : strtolower($marketType);
+        return $this;
     }
 
     public function getSymbol(): string

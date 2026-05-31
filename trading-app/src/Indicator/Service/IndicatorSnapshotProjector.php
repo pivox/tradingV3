@@ -27,6 +27,8 @@ final class IndicatorSnapshotProjector
         $traceId = $this->traceIdProvider->getOrCreate($message->symbol);
 
         $snapshot = (new IndicatorSnapshot())
+            ->setExchange($message->exchange)
+            ->setMarketType($message->marketType)
             ->setSymbol(strtoupper($message->symbol))
             ->setTimeframe($timeframe)
             ->setKlineTime($klineTime->setTimezone(new \DateTimeZone('UTC')))
@@ -39,6 +41,8 @@ final class IndicatorSnapshotProjector
         $this->snapshotRepository->upsert($snapshot);
 
         $this->logger->info('[IndicatorSnapshotProjector] Snapshot persisted', [
+            'exchange' => $message->exchange,
+            'market_type' => $message->marketType,
             'symbol' => strtoupper($message->symbol),
             'timeframe' => $message->timeframe,
             'kline_time' => $message->klineTime,

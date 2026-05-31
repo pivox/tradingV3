@@ -6,6 +6,7 @@ namespace App\Repository;
 
 use App\Common\Enum\Timeframe;
 use App\Entity\IndicatorSnapshot;
+use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 use Psr\Log\LoggerInterface;
@@ -27,11 +28,19 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
     /**
      * Récupère le dernier snapshot d'indicateurs
      */
-    public function findLastBySymbolAndTimeframe(string $symbol, Timeframe $timeframe): ?IndicatorSnapshot
+    public function findLastBySymbolAndTimeframe(
+        string $symbol,
+        Timeframe $timeframe,
+        ?ExchangeContext $context = null,
+    ): ?IndicatorSnapshot
     {
         return $this->createQueryBuilder('i')
-            ->where('i.symbol = :symbol')
+            ->where('i.exchange = :exchange')
+            ->andWhere('i.marketType = :marketType')
+            ->andWhere('i.symbol = :symbol')
             ->andWhere('i.timeframe = :timeframe')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', $symbol)
             ->setParameter('timeframe', $timeframe)
             ->orderBy('i.klineTime', 'DESC')
@@ -47,13 +56,18 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
         string $symbol,
         Timeframe $timeframe,
         \DateTimeImmutable $startDate,
-        \DateTimeImmutable $endDate
+        \DateTimeImmutable $endDate,
+        ?ExchangeContext $context = null,
     ): array {
         return $this->createQueryBuilder('i')
-            ->where('i.symbol = :symbol')
+            ->where('i.exchange = :exchange')
+            ->andWhere('i.marketType = :marketType')
+            ->andWhere('i.symbol = :symbol')
             ->andWhere('i.timeframe = :timeframe')
             ->andWhere('i.klineTime >= :startDate')
             ->andWhere('i.klineTime <= :endDate')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', $symbol)
             ->setParameter('timeframe', $timeframe)
             ->setParameter('startDate', $startDate)
@@ -66,11 +80,20 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
     /**
      * Récupère les snapshots récents pour le calcul des indicateurs
      */
-    public function findRecentForIndicators(string $symbol, Timeframe $timeframe, int $limit = 100): array
+    public function findRecentForIndicators(
+        string $symbol,
+        Timeframe $timeframe,
+        int $limit = 100,
+        ?ExchangeContext $context = null,
+    ): array
     {
         return $this->createQueryBuilder('i')
-            ->where('i.symbol = :symbol')
+            ->where('i.exchange = :exchange')
+            ->andWhere('i.marketType = :marketType')
+            ->andWhere('i.symbol = :symbol')
             ->andWhere('i.timeframe = :timeframe')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', $symbol)
             ->setParameter('timeframe', $timeframe)
             ->orderBy('i.klineTime', 'DESC')
@@ -82,9 +105,16 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
     /**
      * Sauvegarde ou met à jour un snapshot d'indicateurs
      */
-    public function upsert(IndicatorSnapshot $snapshot): void
+    public function upsert(IndicatorSnapshot $snapshot, ?ExchangeContext $context = null): void
     {
+        if ($context !== null) {
+            $snapshot->setExchange($context->exchange);
+            $snapshot->setMarketType($context->marketType);
+        }
+
         $existing = $this->findOneBy([
+            'exchange' => $snapshot->getExchange(),
+            'marketType' => $snapshot->getMarketType(),
             'symbol' => $snapshot->getSymbol(),
             'timeframe' => $snapshot->getTimeframe(),
             'klineTime' => $snapshot->getKlineTime()
@@ -98,6 +128,8 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
             $existing->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
             $this->logger->debug('[IndicatorSnapshotRepository] Snapshot updated', [
                 'symbol' => $existing->getSymbol(),
+                'exchange' => $existing->getExchange(),
+                'market_type' => $existing->getMarketType(),
                 'timeframe' => $existing->getTimeframe()->value,
                 'kline_time' => $existing->getKlineTime()->format('Y-m-d H:i:s'),
                 'run_id' => $existing->getRunId(),
@@ -107,6 +139,8 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
             $this->getEntityManager()->persist($snapshot);
             $this->logger->debug('[IndicatorSnapshotRepository] Snapshot inserted', [
                 'symbol' => $snapshot->getSymbol(),
+                'exchange' => $snapshot->getExchange(),
+                'market_type' => $snapshot->getMarketType(),
                 'timeframe' => $snapshot->getTimeframe()->value,
                 'kline_time' => $snapshot->getKlineTime()->format('Y-m-d H:i:s'),
                 'run_id' => $snapshot->getRunId(),
@@ -115,5 +149,4 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
         }
     }
 }
-
 

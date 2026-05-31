@@ -1331,7 +1331,9 @@ SQL;
             $sql = <<<SQL
 SELECT id
 FROM klines
-WHERE symbol = :symbol
+WHERE exchange = 'bitmart'
+  AND market_type = 'perpetual'
+  AND symbol = :symbol
   AND timeframe = :timeframe
   AND open_time = :open_time
 LIMIT 1

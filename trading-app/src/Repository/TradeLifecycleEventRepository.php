@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Entity\TradeLifecycleEvent;
+use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -22,11 +23,16 @@ final class TradeLifecycleEventRepository extends ServiceEntityRepository
      * @param array<string, mixed> $criteria
      * @return TradeLifecycleEvent[]
      */
-    public function findRecentBy(array $criteria, int $limit = 50): array
+    public function findRecentBy(array $criteria, int $limit = 50, ?ExchangeContext $context = null): array
     {
         $qb = $this->createQueryBuilder('event')
             ->orderBy('event.happenedAt', 'DESC')
             ->setMaxResults($limit);
+
+        $criteria += [
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'marketType' => ExchangeContext::marketTypeValue($context),
+        ];
 
         foreach ($criteria as $field => $value) {
             $param = ':' . $field;
@@ -43,7 +49,7 @@ final class TradeLifecycleEventRepository extends ServiceEntityRepository
      * @param string[] $symbols
      * @return array<string, array{has_trade: bool, side: ?string, position_status: ?string, last_event: ?string, last_event_at: ?\DateTimeImmutable}>
      */
-    public function getActiveOrRecentBySymbols(array $symbols): array
+    public function getActiveOrRecentBySymbols(array $symbols, ?ExchangeContext $context = null): array
     {
         if (empty($symbols)) {
             return [];
@@ -52,8 +58,12 @@ final class TradeLifecycleEventRepository extends ServiceEntityRepository
         // Récupérer les derniers événements pour chaque symbole
         // On considère qu'un trade est actif s'il y a des événements récents (position_opened, order_placed, etc.)
         $qb = $this->createQueryBuilder('event')
-            ->where('event.symbol IN (:symbols)')
+            ->where('event.exchange = :exchange')
+            ->andWhere('event.marketType = :marketType')
+            ->andWhere('event.symbol IN (:symbols)')
             ->andWhere('event.eventType IN (:activeTypes)')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbols', $symbols)
             ->setParameter('activeTypes', ['position_opened', 'order_placed', 'order_filled', 'position_closed'])
             ->orderBy('event.happenedAt', 'DESC');

@@ -66,6 +66,8 @@ final class IndicatorSnapshotPersistRequestMessageHandler
                         $values,
                         'MTF_RUNNER',
                         $message->runId,
+                        $message->exchange,
+                        $message->marketType,
                     ));
                 } catch (\Throwable $exception) {
                     $this->logger->warning('[IndicatorPersistence] Projection failed', [

@@ -4,15 +4,17 @@ declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Repository\FuturesOrderTradeRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: FuturesOrderTradeRepository::class)]
 #[ORM\Table(name: 'futures_order_trade')]
-#[ORM\UniqueConstraint(name: 'ux_futures_order_trade_trade_id', columns: ['trade_id'])]
+#[ORM\UniqueConstraint(name: 'ux_futures_order_trade_exchange_market_trade_id', columns: ['exchange', 'market_type', 'trade_id'])]
 #[ORM\Index(name: 'idx_futures_order_trade_order_id', columns: ['order_id'])]
-#[ORM\Index(name: 'idx_futures_order_trade_symbol', columns: ['symbol'])]
+#[ORM\Index(name: 'idx_futures_order_trade_symbol', columns: ['exchange', 'market_type', 'symbol'])]
 class FuturesOrderTrade
 {
     #[ORM\Id]
@@ -25,6 +27,12 @@ class FuturesOrderTrade
 
     #[ORM\Column(type: Types::STRING, length: 80)]
     private string $orderId; // référence vers futures_order.order_id
+
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
+    private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
+    private string $marketType = 'perpetual';
 
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
@@ -91,6 +99,28 @@ class FuturesOrderTrade
     public function setOrderId(string $orderId): self
     {
         $this->orderId = $orderId;
+        return $this->touch();
+    }
+
+    public function getExchange(): string
+    {
+        return $this->exchange;
+    }
+
+    public function setExchange(Exchange|string $exchange): self
+    {
+        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange);
+        return $this->touch();
+    }
+
+    public function getMarketType(): string
+    {
+        return $this->marketType;
+    }
+
+    public function setMarketType(MarketType|string $marketType): self
+    {
+        $this->marketType = $marketType instanceof MarketType ? $marketType->value : strtolower($marketType);
         return $this->touch();
     }
 
@@ -215,4 +245,3 @@ class FuturesOrderTrade
         return $this;
     }
 }
-

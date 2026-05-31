@@ -5,12 +5,14 @@ AS $$
 BEGIN
 /*
   But : insérer un batch de klines Bitmart en JSON dans la table 'klines'
-  Idempotent grâce à (symbol, timeframe, open_time) unique.
+  Idempotent grâce à (exchange, market_type, symbol, timeframe, open_time) unique.
 
   Exemple de JSON :
   [
     {
       "symbol": "BTCUSDT",
+      "exchange": "bitmart",
+      "market_type": "perpetual",
       "timeframe": "15m",
       "open_time": "2025-10-14T09:45:00Z",
       "open_price": "111954.0",
@@ -24,12 +26,14 @@ BEGIN
 */
 
 INSERT INTO klines (
-    id, symbol, timeframe, open_time,
+    id, exchange, market_type, symbol, timeframe, open_time,
     open_price, high_price, low_price, close_price, volume,
     source, inserted_at, updated_at
 )
 SELECT
     nextval('klines_id_seq'),
+    COALESCE(NULLIF(t.exchange, ''), 'bitmart'),
+    COALESCE(NULLIF(t.market_type, ''), 'perpetual'),
     t.symbol,
     t.timeframe,
     (t.open_time)::timestamptz,
@@ -42,6 +46,8 @@ SELECT
     now(),
     now()
 FROM jsonb_to_recordset(p_payload) AS t(
+    exchange text,
+    market_type text,
     symbol text,
     timeframe text,
     open_time text,
@@ -52,6 +58,6 @@ FROM jsonb_to_recordset(p_payload) AS t(
     volume text,
     source text
   )
-ON CONFLICT (symbol, timeframe, open_time) DO NOTHING; -- idempotent, ignore doublons
+ON CONFLICT (exchange, market_type, symbol, timeframe, open_time) DO NOTHING; -- idempotent, ignore doublons
 END;
 $$;

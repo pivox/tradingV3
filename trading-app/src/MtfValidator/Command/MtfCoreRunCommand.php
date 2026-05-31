@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Command;
 
+use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
+use App\Provider\Context\ExchangeContext;
 use App\Provider\Repository\ContractRepository;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\Uuid;
@@ -129,6 +131,9 @@ final class MtfCoreRunCommand extends Command
         $exchange         = (string) $input->getOption('exchange');
         $marketType       = (string) $input->getOption('market-type');
         $mtfProfile       = (string) $input->getOption('mtf-profile');
+        $exchangeEnum     = Exchange::tryFrom(strtolower($exchange)) ?? Exchange::BITMART;
+        $marketTypeEnum   = MarketType::tryFrom(strtolower($marketType)) ?? MarketType::PERPETUAL;
+        $context          = new ExchangeContext($exchangeEnum, $marketTypeEnum);
 
         $symbolLimit = null;
         if ($symbolLimitInput !== null && $symbolLimitInput !== '') {
@@ -136,7 +141,7 @@ final class MtfCoreRunCommand extends Command
         }
 
         // 1) Récupération des symboles
-        $symbols = $this->resolveSymbolsList($symbolsOption, $mtfProfile, $symbolLimit, $io);
+        $symbols = $this->resolveSymbolsList($symbolsOption, $mtfProfile, $symbolLimit, $io, $context);
         if ($symbols === []) {
             $io->warning('Aucun symbole à traiter (liste vide).');
             return Command::SUCCESS;
@@ -164,7 +169,8 @@ final class MtfCoreRunCommand extends Command
             skipContextValidation: $skipContext,
             userId: $userId,
             ipAddress: $ipAddress,
-            marketType: MarketType::tryFrom($marketType),
+            exchange: $exchangeEnum,
+            marketType: $marketTypeEnum,
         );
 
         // 3) Exécution du validateur MTF
@@ -304,7 +310,8 @@ final class MtfCoreRunCommand extends Command
         string $symbolsOption,
         string $mtfProfile,
         ?int $limit,
-        SymfonyStyle $io
+        SymfonyStyle $io,
+        ExchangeContext $context,
     ): array {
         if ($symbolsOption !== '') {
             $symbols = \array_filter(
@@ -334,7 +341,7 @@ final class MtfCoreRunCommand extends Command
         // Sinon on va chercher les contrats actifs compatibles avec le profil MTF
         $io->writeln('Aucun symbole fourni, récupération des contrats actifs via ContractRepository...');
 
-        $contracts = $this->contractRepository->findActiveContracts($mtfProfile);
+        $contracts = $this->contractRepository->findActiveContracts($mtfProfile, $context);
 
         $symbols = [];
         foreach ($contracts as $contract) {

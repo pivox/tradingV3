@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Repository\TradeZoneEventRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: TradeZoneEventRepository::class)]
 #[ORM\Table(name: 'trade_zone_events')]
-#[ORM\Index(name: 'idx_zone_symbol', columns: ['symbol'])]
+#[ORM\Index(name: 'idx_zone_symbol', columns: ['exchange', 'market_type', 'symbol'])]
 #[ORM\Index(name: 'idx_zone_reason', columns: ['reason'])]
 #[ORM\Index(name: 'idx_zone_happened_at', columns: ['happened_at'])]
 class TradeZoneEvent
@@ -19,6 +21,12 @@ class TradeZoneEvent
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
     private ?int $id = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
+    private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
+    private string $marketType = 'perpetual';
 
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
@@ -103,6 +111,30 @@ class TradeZoneEvent
     public function getId(): ?int
     {
         return $this->id;
+    }
+
+    public function getExchange(): string
+    {
+        return $this->exchange;
+    }
+
+    public function setExchange(Exchange|string $exchange): self
+    {
+        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange);
+
+        return $this;
+    }
+
+    public function getMarketType(): string
+    {
+        return $this->marketType;
+    }
+
+    public function setMarketType(MarketType|string $marketType): self
+    {
+        $this->marketType = $marketType instanceof MarketType ? $marketType->value : strtolower($marketType);
+
+        return $this;
     }
 
     public function getSymbol(): string

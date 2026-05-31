@@ -6,6 +6,7 @@ namespace App\Provider\Repository;
 
 use App\Config\MtfContractsConfig;
 use App\Config\MtfContractsConfigProvider;
+use App\Provider\Context\ExchangeContext;
 use App\Provider\Entity\Contract;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\Connection;
@@ -34,9 +35,9 @@ class ContractRepository extends ServiceEntityRepository
      * 
      * @param string|null $profile Profil de configuration à utiliser (ex: 'scalper', 'regular'). Si null, utilise le fallback.
      */
-    public function findActiveContracts(?string $profile = null): array
+    public function findActiveContracts(?string $profile = null, ?ExchangeContext $context = null): array
     {
-        $symbols = $this->findSymbolsMixedLiquidity($profile);
+        $symbols = $this->findSymbolsMixedLiquidity($profile, $context);
         if ($symbols === []) {
             return [];
         }
@@ -45,6 +46,10 @@ class ContractRepository extends ServiceEntityRepository
         // qui ne sont pas reconnues par Doctrine DQL
         $qb = $this->createQueryBuilder('c')
             ->where('c.symbol IN (:symbols)')
+            ->andWhere('c.exchange = :exchange')
+            ->andWhere('c.marketType = :marketType')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbols', $symbols);
 
         $entities = $qb->getQuery()->getResult();
@@ -67,25 +72,37 @@ class ContractRepository extends ServiceEntityRepository
     /**
      * Récupère un contrat par son symbole
      */
-    public function findBySymbol(string $symbol): ?Contract
+    public function findBySymbol(string $symbol, ?ExchangeContext $context = null): ?Contract
     {
-        return $this->findOneBy(['symbol' => $symbol]);
+        return $this->findOneBy([
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'marketType' => ExchangeContext::marketTypeValue($context),
+            'symbol' => strtoupper($symbol),
+        ]);
     }
 
     /**
      * Récupère les contrats par devise de quote
      */
-    public function findByQuoteCurrency(string $quoteCurrency): array
+    public function findByQuoteCurrency(string $quoteCurrency, ?ExchangeContext $context = null): array
     {
-        return $this->findBy(['quoteCurrency' => $quoteCurrency]);
+        return $this->findBy([
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'marketType' => ExchangeContext::marketTypeValue($context),
+            'quoteCurrency' => $quoteCurrency,
+        ]);
     }
 
     /**
      * Récupère les contrats par statut
      */
-    public function findByStatus(string $status): array
+    public function findByStatus(string $status, ?ExchangeContext $context = null): array
     {
-        return $this->findBy(['status' => $status]);
+        return $this->findBy([
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'marketType' => ExchangeContext::marketTypeValue($context),
+            'status' => $status,
+        ]);
     }
 
     /**
@@ -93,18 +110,22 @@ class ContractRepository extends ServiceEntityRepository
      * 
      * @param string|null $profile Profil de configuration à utiliser (ex: 'scalper', 'regular'). Si null, utilise le fallback.
      */
-    public function countActiveContracts(?string $profile = null): int
+    public function countActiveContracts(?string $profile = null, ?ExchangeContext $context = null): int
     {
-        return count($this->findSymbolsMixedLiquidity($profile));
+        return count($this->findSymbolsMixedLiquidity($profile, $context));
     }
 
 
     /**
      * Récupère les statistiques des contrats
      */
-    public function getContractStats(): array
+    public function getContractStats(?ExchangeContext $context = null): array
     {
-        $qb = $this->createQueryBuilder('c');
+        $qb = $this->createQueryBuilder('c')
+            ->where('c.exchange = :exchange')
+            ->andWhere('c.marketType = :marketType')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context));
 
         $stats = $qb
             ->select([
@@ -126,19 +147,29 @@ class ContractRepository extends ServiceEntityRepository
     /**
      * UPSERT un contrat (insert ou update)
      */
-    public function upsertContract(array $contractData): Contract
+    public function upsertContract(array $contractData, ?ExchangeContext $context = null): Contract
     {
         $symbol = $contractData['symbol'] ?? '';
         if (!$symbol) {
             throw new \InvalidArgumentException('Symbol is required');
         }
 
-        $contract = $this->findBySymbol($symbol);
+        $exchange = strtolower((string) ($contractData['exchange'] ?? ExchangeContext::exchangeValue($context)));
+        $marketType = strtolower((string) ($contractData['market_type'] ?? $contractData['marketType'] ?? ExchangeContext::marketTypeValue($context)));
+
+        $contract = $this->findOneBy([
+            'exchange' => $exchange,
+            'marketType' => $marketType,
+            'symbol' => strtoupper((string) $symbol),
+        ]);
 
         if (!$contract) {
             $contract = new \App\Provider\Entity\Contract();
-            $contract->setSymbol($symbol);
+            $contract->setSymbol(strtoupper((string) $symbol));
         }
+
+        $contract->setExchange($exchange);
+        $contract->setMarketType($marketType);
 
         // Mettre à jour les données
         $contract->setName($contractData['name'] ?? null);
@@ -288,7 +319,7 @@ class ContractRepository extends ServiceEntityRepository
     /**
      * UPSERT plusieurs contrats en lot
      */
-    public function upsertContracts(array $contractsData): int
+    public function upsertContracts(array $contractsData, ?ExchangeContext $context = null): int
     {
         $upsertedCount = 0;
         $batchSize = 50;
@@ -304,7 +335,7 @@ class ContractRepository extends ServiceEntityRepository
                         $contractData = $this->normalizeContractDataArray($contractData);
                     }
 
-                    $this->upsertContract($contractData);
+                    $this->upsertContract($contractData, $context);
                     $upsertedCount++;
                 } catch (\Exception $e) {
                     // Log l'erreur mais continue avec les autres contrats
@@ -331,11 +362,16 @@ class ContractRepository extends ServiceEntityRepository
      * @param string|null $profile Profil de configuration à utiliser (ex: 'scalper', 'regular'). Si null, utilise le fallback.
      * @return string[]
      */
-    public function allActiveSymbolNames(array $symbols = [], bool $ignoreLimits = false, ?string $profile = null): array
+    public function allActiveSymbolNames(
+        array $symbols = [],
+        bool $ignoreLimits = false,
+        ?string $profile = null,
+        ?ExchangeContext $context = null,
+    ): array
     {
         $all = $ignoreLimits
-            ? $this->findAllActiveSymbolsWithoutLimits($profile)
-            : $this->findSymbolsMixedLiquidity($profile);           // liste ordonnée (TOP + MID)
+            ? $this->findAllActiveSymbolsWithoutLimits($profile, $context)
+            : $this->findSymbolsMixedLiquidity($profile, $context);           // liste ordonnée (TOP + MID)
         if ($symbols === []) {
             return $all;
         }
@@ -351,7 +387,7 @@ class ContractRepository extends ServiceEntityRepository
      * @param string|null $profile Profil de configuration à utiliser (ex: 'scalper', 'regular'). Si null, utilise le fallback.
      * @return string[]
      */
-    public function findAllActiveSymbolsWithoutLimits(?string $profile = null): array
+    public function findAllActiveSymbolsWithoutLimits(?string $profile = null, ?ExchangeContext $context = null): array
     {
         $config = $this->configProvider->getConfigForProfile($profile);
         
@@ -383,6 +419,8 @@ class ContractRepository extends ServiceEntityRepository
 SELECT c.symbol
 FROM contracts c
 WHERE c.status = :status
+  AND c.exchange = :exchange
+  AND c.market_type = :marketType
   AND c.quote_currency = :quoteCurrency
   AND {$turnoverExpr} >= :minTurnover
   AND (
@@ -409,6 +447,8 @@ ORDER BY {$turnoverExpr} DESC
 
         $stmt = $this->conn->prepare($sql);
         $stmt->bindValue('status', $status);
+        $stmt->bindValue('exchange', ExchangeContext::exchangeValue($context));
+        $stmt->bindValue('marketType', ExchangeContext::marketTypeValue($context));
         $stmt->bindValue('quoteCurrency', $quoteCurrency);
         $stmt->bindValue('minTurnover', $minTurnover);
         $stmt->bindValue('requireNotExpired', $requireNotExpired, ParameterType::BOOLEAN);
@@ -423,9 +463,13 @@ ORDER BY {$turnoverExpr} DESC
 
         return array_values(array_unique($symbols));
     }
-    public function findWithFilters(?string $status = null, ?string $symbol = null): array
+    public function findWithFilters(?string $status = null, ?string $symbol = null, ?ExchangeContext $context = null): array
     {
         $qb = $this->createQueryBuilder('c')
+            ->where('c.exchange = :exchange')
+            ->andWhere('c.marketType = :marketType')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->orderBy('c.symbol', 'ASC');
 
         if ($status) {
@@ -447,7 +491,7 @@ ORDER BY {$turnoverExpr} DESC
      * @param string|null $profile Profil de configuration à utiliser (ex: 'scalper', 'regular'). Si null, utilise le fallback.
      * @return string[]
      */
-    public function findSymbolsMixedLiquidity(?string $profile = null): array
+    public function findSymbolsMixedLiquidity(?string $profile = null, ?ExchangeContext $context = null): array
     {
         $config = $this->configProvider->getConfigForProfile($profile);
         
@@ -504,6 +548,8 @@ WITH base AS (
   SELECT c.symbol, {$turnoverExpr} AS t24
   FROM contracts c
   WHERE c.status = :status
+    AND c.exchange = :exchange
+    AND c.market_type = :marketType
     AND c.quote_currency = :quoteCurrency
     AND {$turnoverExpr} >= :minTurnover
     AND (
@@ -563,6 +609,8 @@ SELECT symbol FROM (
 
         // --- Bind communs ---
         $stmt->bindValue('status',         $status);
+        $stmt->bindValue('exchange',       ExchangeContext::exchangeValue($context));
+        $stmt->bindValue('marketType',     ExchangeContext::marketTypeValue($context));
         $stmt->bindValue('quoteCurrency',  $quoteCurrency);
         $stmt->bindValue('minTurnover',    $minTurnover);
         $stmt->bindValue('requireNotExpired', $requireNotExpired, ParameterType::BOOLEAN);

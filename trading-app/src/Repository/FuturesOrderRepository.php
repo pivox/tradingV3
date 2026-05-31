@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Entity\FuturesOrder;
+use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -18,14 +19,22 @@ final class FuturesOrderRepository extends ServiceEntityRepository
         parent::__construct($registry, FuturesOrder::class);
     }
 
-    public function findOneByOrderId(string $orderId): ?FuturesOrder
+    public function findOneByOrderId(string $orderId, ?ExchangeContext $context = null): ?FuturesOrder
     {
-        return $this->findOneBy(['orderId' => $orderId]);
+        return $this->findOneBy([
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'marketType' => ExchangeContext::marketTypeValue($context),
+            'orderId' => $orderId,
+        ]);
     }
 
-    public function findOneByClientOrderId(string $clientOrderId): ?FuturesOrder
+    public function findOneByClientOrderId(string $clientOrderId, ?ExchangeContext $context = null): ?FuturesOrder
     {
-        return $this->findOneBy(['clientOrderId' => $clientOrderId]);
+        return $this->findOneBy([
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'marketType' => ExchangeContext::marketTypeValue($context),
+            'clientOrderId' => $clientOrderId,
+        ]);
     }
 
     /**
@@ -34,10 +43,15 @@ final class FuturesOrderRepository extends ServiceEntityRepository
     public function findRecentBySymbol(
         string $symbol,
         int $limit = 200,
-        ?\DateTimeImmutable $since = null
+        ?\DateTimeImmutable $since = null,
+        ?ExchangeContext $context = null,
     ): array {
         $qb = $this->createQueryBuilder('o')
+            ->andWhere('o.exchange = :exchange')
+            ->andWhere('o.marketType = :marketType')
             ->andWhere('o.symbol = :symbol')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', strtoupper($symbol))
             ->orderBy('o.createdAt', 'DESC')
             ->setMaxResults($limit);

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Entity\Position;
+use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -18,9 +19,11 @@ class PositionRepository extends ServiceEntityRepository
         parent::__construct($registry, Position::class);
     }
 
-    public function findOneBySymbolSide(string $symbol, string $side): ?Position
+    public function findOneBySymbolSide(string $symbol, string $side, ?ExchangeContext $context = null): ?Position
     {
         return $this->findOneBy([
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'marketType' => ExchangeContext::marketTypeValue($context),
             'symbol' => strtoupper($symbol),
             'side' => strtoupper($side),
         ]);
@@ -37,21 +40,29 @@ class PositionRepository extends ServiceEntityRepository
      * Récupère toutes les positions ouvertes
      * @return Position[]
      */
-    public function findAllOpen(): array
+    public function findAllOpen(?ExchangeContext $context = null): array
     {
-        return $this->findBy(['status' => 'OPEN']);
+        return $this->findBy([
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'marketType' => ExchangeContext::marketTypeValue($context),
+            'status' => 'OPEN',
+        ]);
     }
 
     /**
      * Récupère les symboles uniques des positions ouvertes
      * @return string[]
      */
-    public function findOpenSymbols(): array
+    public function findOpenSymbols(?ExchangeContext $context = null): array
     {
         $qb = $this->createQueryBuilder('p');
         $results = $qb
             ->select('DISTINCT p.symbol')
-            ->where('p.status = :status')
+            ->where('p.exchange = :exchange')
+            ->andWhere('p.marketType = :marketType')
+            ->andWhere('p.status = :status')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('status', 'OPEN')
             ->getQuery()
             ->getResult();
@@ -71,10 +82,14 @@ class PositionRepository extends ServiceEntityRepository
      *
      * @return Position[]
      */
-    public function findHistoryBySymbol(string $symbol, ?int $limit = null): array
+    public function findHistoryBySymbol(string $symbol, ?int $limit = null, ?ExchangeContext $context = null): array
     {
         $qb = $this->createQueryBuilder('p')
+            ->andWhere('p.exchange = :exchange')
+            ->andWhere('p.marketType = :marketType')
             ->andWhere('p.symbol = :symbol')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', strtoupper($symbol))
             ->orderBy('p.insertedAt', 'DESC');
 
@@ -85,5 +100,4 @@ class PositionRepository extends ServiceEntityRepository
         return $qb->getQuery()->getResult();
     }
 }
-
 

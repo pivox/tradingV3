@@ -4,15 +4,19 @@
 BEGIN;
 
 -- Contrat pour fournir un tick_size (utilisé par le plancher ATR = tick*2)
-INSERT INTO contracts(symbol, tick_size, min_size, inserted_at, updated_at)
-VALUES ('ATRTEST', 0.1, 0.001, now(), now())
-ON CONFLICT (symbol) DO UPDATE SET
+INSERT INTO contracts(exchange, market_type, symbol, tick_size, min_size, inserted_at, updated_at)
+VALUES ('bitmart', 'perpetual', 'ATRTEST', 0.1, 0.001, now(), now())
+ON CONFLICT (exchange, market_type, symbol) DO UPDATE SET
   tick_size = EXCLUDED.tick_size,
   min_size = EXCLUDED.min_size,
   updated_at = now();
 
 -- Purge préalable
-DELETE FROM klines WHERE symbol = 'ATRTEST' AND timeframe IN ('1m','5m');
+DELETE FROM klines
+WHERE exchange = 'bitmart'
+  AND market_type = 'perpetual'
+  AND symbol = 'ATRTEST'
+  AND timeframe IN ('1m','5m');
 
 -- Paramètres
 -- Fenêtre: 180 bougies 1m (~3h)
@@ -106,8 +110,10 @@ volumes AS (
     i
   FROM outlier
 )
-INSERT INTO klines(symbol, timeframe, open_time, open_price, high_price, low_price, close_price, volume, source)
+INSERT INTO klines(exchange, market_type, symbol, timeframe, open_time, open_price, high_price, low_price, close_price, volume, source)
 SELECT
+  'bitmart',
+  'perpetual',
   symbol,
   '1m'::timeframe,
   open_time,
@@ -139,8 +145,10 @@ ohlc AS (
     j
   FROM series
 )
-INSERT INTO klines(symbol, timeframe, open_time, open_price, high_price, low_price, close_price, volume, source)
+INSERT INTO klines(exchange, market_type, symbol, timeframe, open_time, open_price, high_price, low_price, close_price, volume, source)
 SELECT
+  'bitmart',
+  'perpetual',
   symbol,
   '5m'::timeframe,
   open_time,
@@ -157,4 +165,3 @@ COMMIT;
 
 -- Utilisation:
 -- psql "$DATABASE_URL" -f trading-app/migrations/sql/seed_atr_dataset.sql
-

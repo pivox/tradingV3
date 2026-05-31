@@ -4,15 +4,17 @@ declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Repository\FuturesPlanOrderRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: FuturesPlanOrderRepository::class)]
 #[ORM\Table(name: 'futures_plan_order')]
-#[ORM\UniqueConstraint(name: 'ux_futures_plan_order_order_id', columns: ['order_id'])]
-#[ORM\UniqueConstraint(name: 'ux_futures_plan_order_client', columns: ['client_order_id'])]
-#[ORM\Index(name: 'idx_futures_plan_order_symbol', columns: ['symbol'])]
+#[ORM\UniqueConstraint(name: 'ux_futures_plan_order_exchange_market_order_id', columns: ['exchange', 'market_type', 'order_id'])]
+#[ORM\UniqueConstraint(name: 'ux_futures_plan_order_exchange_market_client', columns: ['exchange', 'market_type', 'client_order_id'])]
+#[ORM\Index(name: 'idx_futures_plan_order_symbol', columns: ['exchange', 'market_type', 'symbol'])]
 #[ORM\Index(name: 'idx_futures_plan_order_status', columns: ['status'])]
 class FuturesPlanOrder
 {
@@ -26,6 +28,12 @@ class FuturesPlanOrder
 
     #[ORM\Column(type: Types::STRING, length: 80, nullable: true)]
     private ?string $clientOrderId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
+    private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
+    private string $marketType = 'perpetual';
 
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
@@ -116,6 +124,28 @@ class FuturesPlanOrder
     public function setClientOrderId(?string $clientOrderId): self
     {
         $this->clientOrderId = $clientOrderId;
+        return $this->touch();
+    }
+
+    public function getExchange(): string
+    {
+        return $this->exchange;
+    }
+
+    public function setExchange(Exchange|string $exchange): self
+    {
+        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange);
+        return $this->touch();
+    }
+
+    public function getMarketType(): string
+    {
+        return $this->marketType;
+    }
+
+    public function setMarketType(MarketType|string $marketType): self
+    {
+        $this->marketType = $marketType instanceof MarketType ? $marketType->value : strtolower($marketType);
         return $this->touch();
     }
 
@@ -328,4 +358,3 @@ class FuturesPlanOrder
         return $this;
     }
 }
-
