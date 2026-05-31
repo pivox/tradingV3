@@ -24,6 +24,8 @@ use App\Repository\IndicatorSnapshotRepository;
 use App\Repository\MtfStateRepository;
 use App\Repository\OrderIntentRepository;
 use App\Repository\PositionRepository;
+use App\Service\OrderIntentManager;
+use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\Trading\Storage\FuturesOrderOrderStateRepository;
 use App\Trading\Storage\PositionPositionStateRepository;
 use Brick\Math\BigDecimal;
@@ -31,6 +33,7 @@ use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
 use PHPUnit\Framework\Attributes\CoversNothing;
+use Psr\Log\NullLogger;
 use Ramsey\Uuid\Uuid;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
@@ -195,6 +198,133 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame('binance', $intentRepository->findOneByClientOrderId('shared-client', $binanceContext)?->getExchange());
     }
 
+    public function testOrderIntentReservationBlocksReplayAfterFirstReservationWithoutMutatingIntent(): void
+    {
+        $manager = $this->orderIntentManager();
+        $params = $this->orderIntentParams();
+        $replayParams = $this->orderIntentParams(
+            decisionKey: (string) $params['decision_key'],
+            clientOrderId: 'cid-replay-mutated',
+            price: '200',
+            size: 2,
+        );
+
+        $first = $manager->reserveIntent($params);
+        $second = $manager->reserveIntent($replayParams);
+
+        self::assertTrue($first->created);
+        self::assertFalse($first->blocked);
+        self::assertFalse($second->created);
+        self::assertTrue($second->blocked);
+        self::assertSame('idempotent_in_flight', $second->reason);
+        self::assertSame($first->intent->getId(), $second->intent->getId());
+        self::assertSame('cid-reservation', $second->intent->getClientOrderId());
+        self::assertSame('100', $second->intent->getPrice());
+        self::assertSame(1, $second->intent->getSize());
+        self::assertCount(1, $this->em->getRepository(OrderIntent::class)->findBy([
+            'exchange' => 'bitmart',
+            'marketType' => 'perpetual',
+            'decisionKey' => $params['decision_key'],
+        ]));
+    }
+
+    public function testOrderIntentReservationReportsInFlightReasonForDraftValidatedAndReadyStates(): void
+    {
+        $manager = $this->orderIntentManager();
+        $cases = [
+            OrderIntent::STATUS_DRAFT,
+            OrderIntent::STATUS_VALIDATED,
+            OrderIntent::STATUS_READY_TO_SEND,
+        ];
+
+        foreach ($cases as $index => $status) {
+            $params = $this->orderIntentParams(
+                decisionKey: sprintf('bitmart:perpetual:BTCUSDT:1m:%d:long:scalper_micro:v1', 1764161200 + ($index * 60)),
+                clientOrderId: 'cid-' . strtolower($status),
+            );
+            $first = $manager->reserveIntent($params);
+
+            if ($status === OrderIntent::STATUS_VALIDATED) {
+                self::assertTrue($manager->validateIntent($first->intent));
+            } elseif ($status === OrderIntent::STATUS_READY_TO_SEND) {
+                self::assertTrue($manager->validateIntent($first->intent));
+                $manager->markReadyToSend($first->intent);
+            }
+
+            $second = $manager->reserveIntent($params);
+
+            self::assertTrue($second->blocked);
+            self::assertSame('idempotent_in_flight', $second->reason);
+            self::assertSame($first->intent->getId(), $second->intent->getId());
+        }
+    }
+
+    public function testOrderIntentReservationReportsReplayBlockReasonsByStatus(): void
+    {
+        $manager = $this->orderIntentManager();
+        $cases = [
+            OrderIntent::STATUS_SENT => 'idempotent_sent_replay',
+            OrderIntent::STATUS_FAILED => 'idempotent_failed_not_replayed',
+            OrderIntent::STATUS_CANCELLED => 'idempotent_cancelled_not_replayed',
+        ];
+
+        $index = 1;
+        foreach ($cases as $status => $expectedReason) {
+            $params = $this->orderIntentParams(
+                decisionKey: sprintf('bitmart:perpetual:BTCUSDT:1m:%d:long:scalper_micro:v1', 1764160800 + ($index * 60)),
+                clientOrderId: 'cid-' . strtolower($status),
+            );
+            ++$index;
+            $first = $manager->reserveIntent($params);
+
+            if ($status === OrderIntent::STATUS_SENT) {
+                $manager->markAsSent($first->intent, 'exchange-' . strtolower($status));
+            } elseif ($status === OrderIntent::STATUS_FAILED) {
+                $manager->markAsFailed($first->intent, 'forced failure');
+            } elseif ($status === OrderIntent::STATUS_CANCELLED) {
+                $manager->markAsCancelled($first->intent);
+            }
+
+            $second = $manager->reserveIntent($params);
+
+            self::assertTrue($second->blocked);
+            self::assertSame($expectedReason, $second->reason);
+            self::assertSame($first->intent->getId(), $second->intent->getId());
+        }
+    }
+
+    public function testOrderIntentReservationScopesSameDecisionKeyByExchangeAndMarket(): void
+    {
+        $manager = $this->orderIntentManager();
+        $decisionKey = 'shared:perpetual:BTCUSDT:1m:1764160800:long:scalper_micro:v1';
+
+        $bitmart = $manager->reserveIntent($this->orderIntentParams(
+            exchange: 'bitmart',
+            decisionKey: $decisionKey,
+            clientOrderId: 'cid-bitmart-shared-decision',
+        ));
+        $binance = $manager->reserveIntent($this->orderIntentParams(
+            exchange: 'binance',
+            decisionKey: $decisionKey,
+            clientOrderId: 'cid-binance-shared-decision',
+        ));
+        $bitmartSpot = $manager->reserveIntent($this->orderIntentParams(
+            exchange: 'bitmart',
+            marketType: 'spot',
+            decisionKey: $decisionKey,
+            clientOrderId: 'cid-bitmart-spot-shared-decision',
+        ));
+
+        self::assertTrue($bitmart->created);
+        self::assertTrue($binance->created);
+        self::assertTrue($bitmartSpot->created);
+        self::assertNotSame($bitmart->intent->getId(), $binance->intent->getId());
+        self::assertNotSame($bitmart->intent->getId(), $bitmartSpot->intent->getId());
+        self::assertSame('bitmart', $bitmart->intent->getExchange());
+        self::assertSame('binance', $binance->intent->getExchange());
+        self::assertSame('spot', $bitmartSpot->intent->getMarketType());
+    }
+
     public function testTradingStateReadsCanSelectExplicitExchangeContext(): void
     {
         $this->em->persist(
@@ -321,6 +451,50 @@ final class ExchangeScopedStorageTest extends KernelTestCase
             ->setPresetMode(OrderIntent::PRESET_MODE_NONE)
             ->setQuantization([])
             ->setStatus(OrderIntent::STATUS_DRAFT);
+    }
+
+    private function orderIntentManager(): OrderIntentManager
+    {
+        /** @var OrderIntentRepository $repository */
+        $repository = $this->em->getRepository(OrderIntent::class);
+
+        return new OrderIntentManager(
+            $repository,
+            $this->em,
+            new NullLogger(),
+            new DecisionKeyFactory(),
+        );
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function orderIntentParams(
+        string $exchange = 'bitmart',
+        string $marketType = 'perpetual',
+        string $decisionKey = 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper_micro:v1',
+        string $clientOrderId = 'cid-reservation',
+        string $price = '100',
+        int $size = 1,
+    ): array {
+        return [
+            'exchange' => $exchange,
+            'market_type' => $marketType,
+            'decision_key' => $decisionKey,
+            'symbol' => 'BTCUSDT',
+            'timeframe' => '1m',
+            'candle_open_ts' => '1764160800',
+            'strategy_profile' => 'scalper_micro',
+            'strategy_version' => 'v1',
+            'side' => 1,
+            'type' => OrderIntent::TYPE_LIMIT,
+            'open_type' => OrderIntent::OPEN_TYPE_ISOLATED,
+            'position_mode' => OrderIntent::POSITION_MODE_ONE_WAY,
+            'price' => $price,
+            'size' => $size,
+            'client_order_id' => $clientOrderId,
+            'preset_mode' => OrderIntent::PRESET_MODE_NONE,
+        ];
     }
 
     private function newFuturesOrder(string $exchange, string $orderId, string $size): FuturesOrder
