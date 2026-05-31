@@ -4,9 +4,11 @@ declare(strict_types=1);
 namespace App\TradeEntry\Workflow;
 
 use App\TradeEntry\Dto\ExecutionResult;
+use App\TradeEntry\Execution\ExchangeExecutionService;
 use App\TradeEntry\Execution\ExecutionBox;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\Logging\Dto\LifecycleContextBuilder;
+use App\Provider\Context\ExchangeContext;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -14,6 +16,7 @@ final class ExecuteOrderPlan
 {
     public function __construct(
         private readonly ExecutionBox $execution,
+        private readonly ExchangeExecutionService $exchangeExecution,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
     ) {}
 
@@ -39,7 +42,9 @@ final class ExecuteOrderPlan
         ]);
 
         try {
-            $result = $this->execution->execute($plan, $decisionKey, $contextBuilder, $mode, $executionTf);
+            $result = $this->shouldUseApiFirstExecution($plan)
+                ? $this->exchangeExecution->execute($plan, $decisionKey, $mode, $executionTf)
+                : $this->execution->execute($plan, $decisionKey, $contextBuilder, $mode, $executionTf);
 
             $context = [
                 'symbol' => $plan->symbol,
@@ -49,9 +54,11 @@ final class ExecuteOrderPlan
                 'exchange_order_id' => $result->exchangeOrderId,
             ];
 
-            if ($result->status === 'submitted') {
+            if ($this->isSubmitSuccess($result->status)) {
                 $this->positionsLogger->info('execute_order_plan.submitted', $context + ['decision_key' => $decisionKey]);
-            } elseif ($result->status === 'skipped') {
+            } elseif ($result->status === ExecutionResult::STATUS_ENTRY_SUBMITTED) {
+                $this->positionsLogger->info('execute_order_plan.entry_submitted', $context + ['decision_key' => $decisionKey, 'raw' => $result->raw]);
+            } elseif ($result->status === ExecutionResult::STATUS_SKIPPED) {
                 $this->positionsLogger->warning('execute_order_plan.skipped', $context + ['decision_key' => $decisionKey, 'raw' => $result->raw]);
             } else {
                 $this->positionsLogger->error('execute_order_plan.failed', $context + ['decision_key' => $decisionKey, 'raw' => $result->raw]);
@@ -73,5 +80,20 @@ final class ExecuteOrderPlan
             ]);
             throw $e;
         }
+    }
+
+    private function shouldUseApiFirstExecution(OrderPlanModel $plan): bool
+    {
+        $context = ExchangeContext::resolve($plan->exchangeContext);
+
+        return $plan->exchangeContext !== null || !$context->isLegacyDefault();
+    }
+
+    private function isSubmitSuccess(string $status): bool
+    {
+        return \in_array($status, [
+            ExecutionResult::STATUS_SUBMITTED,
+            ExecutionResult::STATUS_SUBMITTED_PROTECTED,
+        ], true);
     }
 }
