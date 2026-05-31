@@ -11,9 +11,12 @@ use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangePositionSide;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class FakeExchangeStateStore
 {
+    private ?string $stateFile;
+
     private int $nextOrderSequence = 1;
 
     /** @var array<string, ExchangeOrderDto> */
@@ -36,9 +39,15 @@ final class FakeExchangeStateStore
 
     private bool $rejectNextProtectionOrder = false;
 
-    public function __construct()
+    public function __construct(
+        #[Autowire('%kernel.project_dir%/var/fake_exchange_state.dat')]
+        ?string $stateFile = null,
+    )
     {
-        $this->reset();
+        $this->stateFile = $stateFile;
+        if (!$this->restore()) {
+            $this->reset();
+        }
     }
 
     public function reset(): void
@@ -62,6 +71,7 @@ final class FakeExchangeStateStore
                 metadata: ['source' => 'fake_exchange'],
             ),
         ];
+        $this->persist();
     }
 
     public function nextOrderId(): string
@@ -75,6 +85,7 @@ final class FakeExchangeStateStore
         if ($order->clientOrderId !== null && trim($order->clientOrderId) !== '') {
             $this->clientOrderIndex[$this->clientOrderKey($order->symbol, $order->clientOrderId)] = $order->exchangeOrderId;
         }
+        $this->persist();
     }
 
     public function getOrder(string $exchangeOrderId): ?ExchangeOrderDto
@@ -129,11 +140,13 @@ final class FakeExchangeStateStore
     public function savePosition(ExchangePositionDto $position): void
     {
         $this->positions[$this->positionKey($position->symbol, $position->side)] = $position;
+        $this->persist();
     }
 
     public function removePosition(string $symbol, ExchangePositionSide $side): void
     {
         unset($this->positions[$this->positionKey($symbol, $side)]);
+        $this->persist();
     }
 
     public function getPosition(string $symbol, ExchangePositionSide $side): ?ExchangePositionDto
@@ -180,11 +193,13 @@ final class FakeExchangeStateStore
         }
 
         $this->orderBooks[strtoupper($symbol)] = ['bid' => $bid, 'ask' => $ask];
+        $this->persist();
     }
 
     public function appendEvent(FakeExchangeEvent $event): void
     {
         $this->events[] = $event;
+        $this->persist();
     }
 
     /**
@@ -205,6 +220,7 @@ final class FakeExchangeStateStore
     public function rejectNextProtectionOrder(): void
     {
         $this->rejectNextProtectionOrder = true;
+        $this->persist();
     }
 
     public function consumeProtectionRejectionFlag(): bool
@@ -214,6 +230,7 @@ final class FakeExchangeStateStore
         }
 
         $this->rejectNextProtectionOrder = false;
+        $this->persist();
 
         return true;
     }
@@ -245,5 +262,58 @@ final class FakeExchangeStateStore
             ExchangeOrderStatus::OPEN,
             ExchangeOrderStatus::PARTIALLY_FILLED,
         ], true);
+    }
+
+    private function restore(): bool
+    {
+        if ($this->stateFile === null || !is_file($this->stateFile)) {
+            return false;
+        }
+
+        $raw = file_get_contents($this->stateFile);
+        if ($raw === false || $raw === '') {
+            return false;
+        }
+
+        $state = @unserialize($raw, ['allowed_classes' => true]);
+        if (!\is_array($state)) {
+            return false;
+        }
+
+        $this->nextOrderSequence = \is_int($state['nextOrderSequence'] ?? null) ? $state['nextOrderSequence'] : 1;
+        $this->orders = \is_array($state['orders'] ?? null) ? $state['orders'] : [];
+        $this->clientOrderIndex = \is_array($state['clientOrderIndex'] ?? null) ? $state['clientOrderIndex'] : [];
+        $this->positions = \is_array($state['positions'] ?? null) ? $state['positions'] : [];
+        $this->balances = \is_array($state['balances'] ?? null) ? $state['balances'] : [];
+        $this->orderBooks = \is_array($state['orderBooks'] ?? null) ? $state['orderBooks'] : [];
+        $this->events = \is_array($state['events'] ?? null) ? $state['events'] : [];
+        $this->rejectNextProtectionOrder = \is_bool($state['rejectNextProtectionOrder'] ?? null)
+            ? $state['rejectNextProtectionOrder']
+            : false;
+
+        return true;
+    }
+
+    private function persist(): void
+    {
+        if ($this->stateFile === null) {
+            return;
+        }
+
+        $directory = \dirname($this->stateFile);
+        if (!is_dir($directory)) {
+            mkdir($directory, 0775, true);
+        }
+
+        file_put_contents($this->stateFile, serialize([
+            'nextOrderSequence' => $this->nextOrderSequence,
+            'orders' => $this->orders,
+            'clientOrderIndex' => $this->clientOrderIndex,
+            'positions' => $this->positions,
+            'balances' => $this->balances,
+            'orderBooks' => $this->orderBooks,
+            'events' => $this->events,
+            'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
+        ]), \LOCK_EX);
     }
 }

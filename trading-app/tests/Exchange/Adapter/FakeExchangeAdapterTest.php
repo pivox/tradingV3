@@ -253,6 +253,30 @@ final class FakeExchangeAdapterTest extends TestCase
         ));
     }
 
+    public function testPartialProtectionFillCancelsSiblingOrder(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+            attachedTakeProfitPrice: 25200.0,
+        ));
+        $stopLoss = array_values(array_filter(
+            $this->adapter->getOpenOrders('BTCUSDT'),
+            static fn ($order): bool => $order->orderType === ExchangeOrderType::STOP_LOSS,
+        ))[0];
+
+        $this->scenario->fillOrder($stopLoss->exchangeOrderId, 0.4, 24800.0);
+        $openOrders = $this->adapter->getOpenOrders('BTCUSDT');
+
+        self::assertCount(1, $openOrders);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $openOrders[0]->orderType);
+        self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $openOrders[0]->status);
+        self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertEqualsWithDelta(0.6, $this->adapter->getOpenPositions('BTCUSDT')[0]->size, 0.000001);
+    }
+
     public function testStandaloneProtectionOrderIsReduceOnlyEvenWhenPayloadOmitsFlag(): void
     {
         $result = $this->adapter->placeOrder($this->request(
@@ -344,6 +368,34 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertCount(1, $this->adapter->getOpenOrders('ETHUSDT'));
     }
 
+    public function testCancelWithMismatchedExchangeIdDoesNotFallBackToClientId(): void
+    {
+        $eth = $this->adapter->placeOrder($this->request(
+            symbol: 'ETHUSDT',
+            price: 1800.0,
+            clientOrderId: 'shared-client-id',
+            postOnly: true,
+        ));
+        $this->adapter->placeOrder($this->request(
+            symbol: 'BTCUSDT',
+            price: 24950.0,
+            clientOrderId: 'shared-client-id',
+            postOnly: true,
+        ));
+
+        $cancelled = $this->adapter->cancelOrder(new CancelOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: $eth->exchangeOrderId,
+            clientOrderId: 'shared-client-id',
+        ));
+
+        self::assertFalse($cancelled->cancelled);
+        self::assertCount(1, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(1, $this->adapter->getOpenOrders('ETHUSDT'));
+    }
+
     public function testPartialReduceRecomputesRemainingPositionMargin(): void
     {
         $this->adapter->placeOrder($this->request(
@@ -366,6 +418,26 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertNotNull($position);
         self::assertEqualsWithDelta(0.6, $position->size, 0.000001);
         self::assertEqualsWithDelta(($position->entryPrice * 0.6) / 3.0, $position->margin, 0.000001);
+    }
+
+    public function testStateStoreCanPersistAcrossServiceInstances(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_state_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $adapter = $this->adapterForState($state);
+            $adapter->placeOrder($this->request(price: 24950.0, postOnly: true));
+
+            $restoredAdapter = $this->adapterForState(new FakeExchangeStateStore($stateFile));
+
+            self::assertCount(1, $restoredAdapter->getOpenOrders('BTCUSDT'));
+            self::assertSame('cid-1', $restoredAdapter->getOpenOrders('BTCUSDT')[0]->clientOrderId);
+        } finally {
+            @unlink($stateFile);
+        }
     }
 
     private function request(
@@ -412,5 +484,13 @@ final class FakeExchangeAdapterTest extends TestCase
                 return new \DateTimeImmutable('2026-01-01 00:00:00 UTC');
             }
         };
+    }
+
+    private function adapterForState(FakeExchangeStateStore $state): FakeExchangeAdapter
+    {
+        $book = new FakeExchangeOrderBook($state);
+        $engine = new FakeExchangeMatchingEngine($state, $book, $this->fixedClock());
+
+        return new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
     }
 }

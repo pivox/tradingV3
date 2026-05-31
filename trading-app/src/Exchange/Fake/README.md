@@ -1,6 +1,6 @@
 # Fake Exchange Adapter
 
-`FakeExchangeAdapter` is a local, process-memory exchange implementation for API-first tests. It is registered in the exchange adapter registry as `fake/perpetual` and never calls external networks.
+`FakeExchangeAdapter` is a local exchange implementation for API-first tests. It is registered in the exchange adapter registry as `fake/perpetual` and never calls external networks.
 
 Supported scenarios:
 
@@ -24,4 +24,4 @@ curl http://localhost:8082/fake-exchange/positions?symbol=BTCUSDT
 curl http://localhost:8082/fake-exchange/events
 ```
 
-The state store is intentionally in memory. Tests should call `reset()` before each scenario.
+The HTTP service state is stored in `var/fake_exchange_state.dat` so multi-step curl scenarios survive PHP-FPM request boundaries. Tests can instantiate `FakeExchangeStateStore` without a file path for isolated in-memory state, and should call `reset()` before each scenario when sharing a store.

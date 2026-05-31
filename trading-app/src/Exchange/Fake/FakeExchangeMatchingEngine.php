@@ -97,7 +97,7 @@ final readonly class FakeExchangeMatchingEngine
         if ($request->exchangeOrderId !== null && trim($request->exchangeOrderId) !== '') {
             $order = $this->stateStore->getOrder($request->exchangeOrderId);
             if ($order instanceof ExchangeOrderDto && $order->symbol !== strtoupper($request->symbol)) {
-                $order = null;
+                return $this->cancelNotActive($request);
             }
         }
         if (!$order instanceof ExchangeOrderDto && $request->clientOrderId !== null && trim($request->clientOrderId) !== '') {
@@ -105,14 +105,7 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         if (!$order instanceof ExchangeOrderDto || !$this->isActiveStatus($order->status)) {
-            return new CancelOrderResult(
-                cancelled: false,
-                symbol: strtoupper($request->symbol),
-                exchangeOrderId: $request->exchangeOrderId,
-                clientOrderId: $request->clientOrderId,
-                status: ExchangeOrderStatus::UNKNOWN,
-                metadata: ['reason' => 'order_not_active'],
-            );
+            return $this->cancelNotActive($request);
         }
 
         $cancelled = $this->withOrderStatus($order, ExchangeOrderStatus::CANCELLED, $order->metadata);
@@ -407,6 +400,18 @@ final readonly class FakeExchangeMatchingEngine
         return $cancelled;
     }
 
+    private function cancelNotActive(CancelOrderRequest $request): CancelOrderResult
+    {
+        return new CancelOrderResult(
+            cancelled: false,
+            symbol: strtoupper($request->symbol),
+            exchangeOrderId: $request->exchangeOrderId,
+            clientOrderId: $request->clientOrderId,
+            status: ExchangeOrderStatus::UNKNOWN,
+            metadata: ['reason' => 'order_not_active'],
+        );
+    }
+
     private function applyPositionFill(ExchangeOrderDto $order, float $fillQuantity, float $executionPrice): void
     {
         if ($order->positionSide === null) {
@@ -440,6 +445,9 @@ final readonly class FakeExchangeMatchingEngine
                 $this->clock->now(),
                 ['order_id' => $order->exchangeOrderId, 'size' => $remainingSize],
             ));
+            if ($this->isTriggerOrder($order)) {
+                $this->cancelSiblingProtectionOrders($order);
+            }
 
             return;
         }
