@@ -107,19 +107,40 @@ final class BitmartOrderProvider implements ContextualOrderProviderInterface
                 'options' => $options,
             ];
 
-            $intent = $this->intentManager->createIntent($payload, $quantization, $rawInputs);
+            $managedUpstream = isset($options['order_intent_id']) && is_numeric($options['order_intent_id']);
+            if ($this->intentManager !== null && $managedUpstream) {
+                $intent = $this->intentManager->findIntentById((int) $options['order_intent_id']);
+                if (!$intent instanceof OrderIntent) {
+                    $this->logger->error('[BitmartOrderProvider] Upstream order intent not found', [
+                        'order_intent_id' => $options['order_intent_id'],
+                        'client_order_id' => $payload['client_order_id'] ?? null,
+                    ]);
 
-            // Valider l'intent (validation basique)
-            $validationErrors = $this->validateOrderParams($payload);
-            if (!$this->intentManager->validateIntent($intent, $validationErrors)) {
-                // Validation échouée, mais on continue quand même l'envoi
-                $this->logger->warning('[BitmartOrderProvider] Intent validation failed but continuing', [
-                    'client_order_id' => $intent->getClientOrderId(),
-                    'errors' => $validationErrors,
-                ]);
+                    return null;
+                }
+            } elseif ($this->intentManager !== null) {
+                $reservation = $this->intentManager->reserveIntent($payload, $quantization, $rawInputs);
+                if ($reservation->blocked) {
+                    return $this->dtoForBlockedIntent($reservation->intent, $symbol, $side, $type, $quantity, $price, $stopPrice, $context);
+                }
+
+                $intent = $reservation->intent;
+                $validationErrors = $this->intentManager->validateOrderParams($payload);
+                if (!$this->intentManager->validateIntent($intent, $validationErrors)) {
+                    $this->logger->warning('[BitmartOrderProvider] Intent validation failed, order submission blocked', [
+                        'client_order_id' => $intent->getClientOrderId(),
+                        'decision_key' => $intent->getDecisionKey(),
+                        'errors' => $validationErrors,
+                    ]);
+
+                    return null;
+                }
+
+                $this->intentManager->markReadyToSend($intent);
             }
-
-            $this->intentManager->markReadyToSend($intent);
+            if ($intent instanceof OrderIntent) {
+                $payload['client_order_id'] = $intent->getClientOrderId();
+            }
 
             $orderPayload = $this->toExchangeOrderPayload($payload);
 
@@ -130,13 +151,15 @@ final class BitmartOrderProvider implements ContextualOrderProviderInterface
                 $orderId = (string) $response['data']['order_id'];
 
                 // Marquer l'intent comme SENT
-                try {
-                    $this->intentManager->markAsSent($intent, $orderId);
-                } catch (\Throwable $e) {
-                    $this->logger->warning('[BitmartOrderProvider] Failed to mark intent as sent', [
-                        'order_id' => $orderId,
-                        'error' => $e->getMessage(),
-                    ]);
+                if ($intent instanceof OrderIntent && $this->intentManager !== null) {
+                    try {
+                        $this->intentManager->markAsSent($intent, $orderId);
+                    } catch (\Throwable $e) {
+                        $this->logger->warning('[BitmartOrderProvider] Failed to mark intent as sent', [
+                            'order_id' => $orderId,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
                 }
 
                 // Synchroniser la réponse de soumission si disponible
@@ -349,6 +372,60 @@ final class BitmartOrderProvider implements ContextualOrderProviderInterface
         }
 
         return count($errors) > 0 ? $errors : null;
+    }
+
+    private function dtoForBlockedIntent(
+        OrderIntent $intent,
+        string $symbol,
+        OrderSide $side,
+        OrderType $type,
+        float $quantity,
+        ?float $price,
+        ?float $stopPrice,
+        ExchangeContext $context,
+    ): ?OrderDto {
+        $orderId = $intent->getExchangeOrderId() ?? $intent->getOrderId();
+        if ($orderId === null || trim($orderId) === '') {
+            $this->logger->warning('[BitmartOrderProvider] Idempotent replay blocked before exchange submission', [
+                'order_intent_id' => $intent->getId(),
+                'client_order_id' => $intent->getClientOrderId(),
+                'decision_key' => $intent->getDecisionKey(),
+                'status' => $intent->getStatus(),
+            ]);
+
+            return null;
+        }
+
+        $existing = $this->getOrder($symbol, $orderId, $context);
+        if ($existing instanceof OrderDto) {
+            return $existing;
+        }
+
+        return OrderDto::fromArray([
+            'order_id' => $orderId,
+            'symbol' => $symbol,
+            'side' => $side->value,
+            'type' => $type->value,
+            'status' => 'pending',
+            'quantity' => (string) $quantity,
+            'price' => $price !== null ? (string) $price : null,
+            'stop_price' => $stopPrice !== null ? (string) $stopPrice : null,
+            'filled_quantity' => '0',
+            'remaining_quantity' => (string) $quantity,
+            'average_price' => null,
+            'created_at' => $intent->getCreatedAt()->format('Y-m-d H:i:s'),
+            'updated_at' => null,
+            'filled_at' => null,
+            'metadata' => [
+                'provider' => 'bitmart',
+                'idempotent_replay' => true,
+                'order_intent_id' => $intent->getId(),
+                'client_order_id' => $intent->getClientOrderId(),
+                'decision_key' => $intent->getDecisionKey(),
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
+            ],
+        ]);
     }
 
     public function getOrder(string $symbol, string $orderId, ?ExchangeContext $context = null): ?OrderDto
@@ -962,6 +1039,12 @@ final class BitmartOrderProvider implements ContextualOrderProviderInterface
             $payload['exchange'],
             $payload['market_type'],
             $payload['marketType'],
+            $payload['decision_key'],
+            $payload['order_intent_id'],
+            $payload['strategy_profile'],
+            $payload['strategy_version'],
+            $payload['timeframe'],
+            $payload['candle_open_ts'],
         );
 
         return $payload;

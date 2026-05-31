@@ -17,6 +17,7 @@ use App\Contract\Provider\MainProviderInterface;
 use App\Common\Enum\Timeframe;
 use App\Logging\LifecycleContextFactory;
 use App\Provider\Context\ExchangeContext;
+use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -43,6 +44,7 @@ final class TradingDecisionHandler
         private readonly AuditLoggerInterface $auditLogger,
         private readonly LifecycleContextFactory $lifecycleContextFactory,
         private readonly ?MainProviderInterface $mainProvider = null,
+        private readonly ?DecisionKeyFactory $decisionKeyFactory = null,
     ) {}
 
     public function handleTradingDecision(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto, string $runId): SymbolResultDto
@@ -55,8 +57,15 @@ final class TradingDecisionHandler
             return $symbolResult;
         }
 
-        $decisionKey = $this->generateDecisionKey($symbolResult->symbol);
         $exchangeContext = ExchangeContext::fromArray($mtfRunDto->options);
+        $resolvedMode = $this->tradeEntryConfigResolver->resolveMode($symbolResult->tradeEntryModeUsed);
+        $tradeEntryConfig = $this->tradeEntryConfigResolver->resolve($symbolResult->tradeEntryModeUsed);
+        $decisionKey = $this->generateDecisionKey(
+            symbolResult: $symbolResult,
+            exchangeContext: $exchangeContext,
+            strategyProfile: $resolvedMode,
+            strategyVersion: $tradeEntryConfig->getVersion(),
+        );
         // trade_id global pour ce cycle de trade (zone → ouverture → clôture)
         try {
             $tradeId = sprintf(
@@ -69,9 +78,6 @@ final class TradingDecisionHandler
         }
         // Force ATR to the 5m timeframe so downstream sizing/guards stay consistent across execution TFs.
         $forcedAtr5m = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '5m', context: $exchangeContext);
-
-        $resolvedMode = $this->tradeEntryConfigResolver->resolveMode($symbolResult->tradeEntryModeUsed);
-        $tradeEntryConfig = $this->tradeEntryConfigResolver->resolve($symbolResult->tradeEntryModeUsed);
 
         $this->mtfLogger->info('order_journey.signal_ready', [
             'symbol' => $symbolResult->symbol,
@@ -866,12 +872,83 @@ final class TradingDecisionHandler
         }
     }
 
-    private function generateDecisionKey(string $symbol): string
+    private function generateDecisionKey(
+        SymbolResultDto $symbolResult,
+        ExchangeContext $exchangeContext,
+        string $strategyProfile,
+        string $strategyVersion,
+    ): string {
+        $factory = $this->decisionKeyFactory ?? new DecisionKeyFactory();
+        $timeframe = $symbolResult->executionTf;
+        $evaluatedAt = $this->extractEvaluatedAt($symbolResult);
+
+        return $factory->key(
+            context: $exchangeContext,
+            symbol: $symbolResult->symbol,
+            timeframe: $timeframe,
+            candleOpenTs: $this->extractCandleOpenTs($symbolResult, $timeframe),
+            side: $symbolResult->signalSide,
+            strategyProfile: $strategyProfile,
+            strategyVersion: $strategyVersion,
+            evaluatedAt: $evaluatedAt,
+        );
+    }
+
+    private function extractEvaluatedAt(SymbolResultDto $symbolResult): ?\DateTimeImmutable
     {
-        try {
-            return sprintf('mtf:%s:%s', $symbol, bin2hex(random_bytes(6)));
-        } catch (\Throwable) {
-            return uniqid('mtf:' . $symbol . ':', true);
+        $context = $symbolResult->context ?? [];
+        $candidate = $context['evaluated_at'] ?? null;
+        if (\is_string($candidate) && trim($candidate) !== '') {
+            try {
+                return new \DateTimeImmutable($candidate, new \DateTimeZone('UTC'));
+            } catch (\Throwable) {
+                return null;
+            }
         }
+
+        return null;
+    }
+
+    private function extractCandleOpenTs(SymbolResultDto $symbolResult, ?string $timeframe): mixed
+    {
+        $context = $symbolResult->context ?? [];
+        foreach (['candle_open_ts', 'kline_time'] as $key) {
+            if (isset($context[$key])) {
+                return $context[$key];
+            }
+        }
+
+        foreach (['execution', 'context'] as $section) {
+            $decisions = $context[$section]['timeframe_decisions'] ?? null;
+            if (!\is_array($decisions)) {
+                continue;
+            }
+
+            foreach ($decisions as $decision) {
+                if (!\is_array($decision) || strtolower((string)($decision['timeframe'] ?? '')) !== strtolower((string)$timeframe)) {
+                    continue;
+                }
+
+                $extra = $decision['extra'] ?? [];
+                if (\is_array($extra)) {
+                    foreach (['candle_open_ts', 'kline_time'] as $key) {
+                        if (isset($extra[$key])) {
+                            return $extra[$key];
+                        }
+                    }
+
+                    $indicatorContext = $extra['indicator_context'] ?? null;
+                    if (\is_array($indicatorContext)) {
+                        foreach (['candle_open_ts', 'kline_time'] as $key) {
+                            if (isset($indicatorContext[$key])) {
+                                return $indicatorContext[$key];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 }

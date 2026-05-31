@@ -3,10 +3,13 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Workflow;
 
+use App\Entity\OrderIntent;
+use App\Service\OrderIntentManager;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\ExchangeExecutionService;
 use App\TradeEntry\Execution\ExecutionBox;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
+use App\TradeEntry\Policy\IdempotencyPolicy;
 use App\Logging\Dto\LifecycleContextBuilder;
 use App\Provider\Context\ExchangeContext;
 use Psr\Log\LoggerInterface;
@@ -18,6 +21,8 @@ final class ExecuteOrderPlan
         private readonly ExecutionBox $execution,
         private readonly ExchangeExecutionService $exchangeExecution,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
+        private readonly ?OrderIntentManager $orderIntentManager = null,
+        private readonly ?IdempotencyPolicy $idempotency = null,
     ) {}
 
     public function __invoke(
@@ -41,14 +46,83 @@ final class ExecuteOrderPlan
             'reason' => 'send_plan_to_execution_box',
         ]);
 
+        $intent = null;
+        $clientOrderId = null;
+
         try {
-            $result = $this->shouldUseApiFirstExecution($plan)
-                ? $this->exchangeExecution->execute($plan, $decisionKey, $mode, $executionTf)
-                : $this->execution->execute($plan, $decisionKey, $contextBuilder, $mode, $executionTf);
+            $useApiFirstExecution = $this->shouldUseApiFirstExecution($plan);
+            $executionPlan = $useApiFirstExecution
+                ? $this->exchangeExecution->preparePlan($plan, $mode, $executionTf, $decisionKey)
+                : $this->execution->preparePlan($plan, $mode, $executionTf, $decisionKey);
+
+            if ($decisionKey !== null && trim($decisionKey) !== '' && $this->orderIntentManager !== null) {
+                $clientOrderId = ($this->idempotency ?? new IdempotencyPolicy())->newClientOrderId($decisionKey);
+                $reservation = $this->orderIntentManager->reserveIntent(
+                    orderParams: $this->intentOrderParams($executionPlan, $decisionKey, $clientOrderId),
+                    quantization: $this->intentQuantization($executionPlan),
+                    rawInputs: [
+                        'source' => 'execute_order_plan',
+                        'decision_key' => $decisionKey,
+                        'mode' => $mode,
+                        'execution_tf' => $executionTf,
+                        'plan' => $this->intentPlanPayload($executionPlan),
+                    ],
+                );
+
+                if ($reservation->blocked) {
+                    $this->positionsLogger->warning('execute_order_plan.idempotent_replay_blocked', [
+                        'symbol' => $executionPlan->symbol,
+                        'decision_key' => $decisionKey,
+                        'client_order_id' => $reservation->intent->getClientOrderId(),
+                        'exchange_order_id' => $reservation->intent->getExchangeOrderId() ?? $reservation->intent->getOrderId(),
+                        'order_intent_id' => $reservation->intent->getId(),
+                        'status' => $reservation->intent->getStatus(),
+                        'reason' => $reservation->reason,
+                    ]);
+
+                    return new ExecutionResult(
+                        clientOrderId: $reservation->intent->getClientOrderId(),
+                        exchangeOrderId: $reservation->intent->getExchangeOrderId() ?? $reservation->intent->getOrderId(),
+                        status: ExecutionResult::STATUS_SKIPPED,
+                        raw: [
+                            'reason' => $reservation->reason ?? 'idempotent_replay',
+                            'decision_key' => $decisionKey,
+                            'order_intent_id' => $reservation->intent->getId(),
+                            'existing_status' => $reservation->intent->getStatus(),
+                        ],
+                    );
+                }
+
+                $intent = $reservation->intent;
+                $validationErrors = $this->orderIntentManager->validateOrderParams($this->intentOrderParams($executionPlan, $decisionKey, $clientOrderId));
+                if (!$this->orderIntentManager->validateIntent($intent, $validationErrors)) {
+                    return new ExecutionResult(
+                        clientOrderId: $intent->getClientOrderId(),
+                        exchangeOrderId: null,
+                        status: ExecutionResult::STATUS_SKIPPED,
+                        raw: [
+                            'reason' => 'order_intent_validation_failed',
+                            'decision_key' => $decisionKey,
+                            'order_intent_id' => $intent->getId(),
+                            'validation_errors' => $validationErrors,
+                        ],
+                    );
+                }
+
+                $this->orderIntentManager->markReadyToSend($intent);
+            }
+
+            $result = $useApiFirstExecution
+                ? $this->exchangeExecution->execute($executionPlan, $decisionKey, $mode, $executionTf, $clientOrderId, $intent?->getId(), true)
+                : $this->execution->execute($executionPlan, $decisionKey, $contextBuilder, $mode, $executionTf, $clientOrderId, $intent?->getId(), true);
+
+            if ($intent instanceof OrderIntent && $this->orderIntentManager !== null) {
+                $this->syncIntentAfterExecution($intent, $result);
+            }
 
             $context = [
-                'symbol' => $plan->symbol,
-                'side' => $plan->side->value,
+                'symbol' => $executionPlan->symbol,
+                'side' => $executionPlan->side->value,
                 'status' => $result->status,
                 'client_order_id' => $result->clientOrderId,
                 'exchange_order_id' => $result->exchangeOrderId,
@@ -71,6 +145,10 @@ final class ExecuteOrderPlan
 
             return $result;
         } catch (\Throwable $e) {
+            if ($intent instanceof OrderIntent && $this->orderIntentManager !== null) {
+                $this->markIntentFailedAfterException($intent, $e);
+            }
+
             $this->positionsLogger->error('execute_order_plan.exception', [
                 'symbol' => $plan->symbol,
                 'message' => $e->getMessage(),
@@ -94,6 +172,152 @@ final class ExecuteOrderPlan
         return \in_array($status, [
             ExecutionResult::STATUS_SUBMITTED,
             ExecutionResult::STATUS_SUBMITTED_PROTECTED,
+        ], true);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function intentOrderParams(OrderPlanModel $plan, string $decisionKey, string $clientOrderId): array
+    {
+        $context = ExchangeContext::resolve($plan->exchangeContext);
+
+        return [
+            'exchange' => $context->exchange->value,
+            'market_type' => $context->marketType->value,
+            'decision_key' => $decisionKey,
+            'symbol' => $plan->symbol,
+            'timeframe' => $this->parsedDecisionKeyPart($decisionKey, 3),
+            'candle_open_ts' => $this->parsedDecisionKeyPart($decisionKey, 4),
+            'strategy_profile' => $this->parsedDecisionKeyPart($decisionKey, 6),
+            'strategy_version' => $this->parsedDecisionKeyPart($decisionKey, 7),
+            'side' => $plan->side->value === 'long' ? 1 : 4,
+            'type' => $plan->orderType,
+            'open_type' => $plan->openType,
+            'leverage' => $plan->leverage,
+            'position_mode' => OrderIntent::POSITION_MODE_HEDGE,
+            'price' => $plan->orderType === 'limit' ? (string) $plan->entry : null,
+            'size' => $plan->size,
+            'client_order_id' => $clientOrderId,
+            'preset_mode' => ($plan->stop > 0.0 || $plan->takeProfit > 0.0)
+                ? OrderIntent::PRESET_MODE_PRESET_ON_ENTRY
+                : OrderIntent::PRESET_MODE_NONE,
+            'preset_stop_loss_price' => $plan->stop > 0.0 ? (string) $plan->stop : null,
+            'preset_take_profit_price' => $plan->takeProfit > 0.0 ? (string) $plan->takeProfit : null,
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function intentQuantization(OrderPlanModel $plan): array
+    {
+        return [
+            'price_precision' => $plan->pricePrecision,
+            'contract_size' => $plan->contractSize,
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function intentPlanPayload(OrderPlanModel $plan): array
+    {
+        return [
+            'symbol' => $plan->symbol,
+            'side' => $plan->side->value,
+            'order_type' => $plan->orderType,
+            'open_type' => $plan->openType,
+            'order_mode' => $plan->orderMode,
+            'entry' => $plan->entry,
+            'stop' => $plan->stop,
+            'take_profit' => $plan->takeProfit,
+            'size' => $plan->size,
+            'leverage' => $plan->leverage,
+        ];
+    }
+
+    private function parsedDecisionKeyPart(string $decisionKey, int $index): ?string
+    {
+        $parts = explode(':', $decisionKey, 8);
+
+        return $parts[$index] ?? null;
+    }
+
+    private function syncIntentAfterExecution(OrderIntent $intent, ExecutionResult $result): void
+    {
+        if ($this->orderIntentManager === null) {
+            return;
+        }
+
+        try {
+            if ($result->exchangeOrderId !== null && $this->shouldMarkIntentSent($result)) {
+                $this->orderIntentManager->markAsSent($intent, $result->exchangeOrderId);
+                return;
+            }
+
+            if ($result->exchangeOrderId !== null && $this->shouldMarkIntentCancelled($result)) {
+                $this->orderIntentManager->markAsCancelled($intent);
+                return;
+            }
+
+            if ($result->status === ExecutionResult::STATUS_SKIPPED || $result->status === ExecutionResult::STATUS_ERROR) {
+                $this->orderIntentManager->markAsFailed(
+                    $intent,
+                    (string)($result->raw['reason'] ?? $result->status),
+                );
+            }
+        } catch (\Throwable $e) {
+            $this->positionsLogger->warning('execute_order_plan.intent_status_sync_failed', [
+                'order_intent_id' => $intent->getId(),
+                'client_order_id' => $intent->getClientOrderId(),
+                'status' => $result->status,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function markIntentFailedAfterException(OrderIntent $intent, \Throwable $e): void
+    {
+        if ($this->orderIntentManager === null) {
+            return;
+        }
+
+        try {
+            $this->orderIntentManager->markAsFailed(
+                $intent,
+                substr('execution_exception: ' . $e->getMessage(), 0, 500),
+            );
+        } catch (\Throwable $syncError) {
+            $this->positionsLogger->warning('execute_order_plan.intent_exception_sync_failed', [
+                'order_intent_id' => $intent->getId(),
+                'client_order_id' => $intent->getClientOrderId(),
+                'error' => $syncError->getMessage(),
+                'execution_error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function shouldMarkIntentSent(ExecutionResult $result): bool
+    {
+        return \in_array($result->status, [
+            ExecutionResult::STATUS_SUBMITTED,
+            ExecutionResult::STATUS_SUBMITTED_PROTECTED,
+            ExecutionResult::STATUS_ENTRY_SUBMITTED,
+            ExecutionResult::STATUS_FAILED_UNPROTECTED_CLOSED,
+            ExecutionResult::STATUS_CRITICAL_UNPROTECTED_POSITION,
+        ], true);
+    }
+
+    private function shouldMarkIntentCancelled(ExecutionResult $result): bool
+    {
+        if ($result->status !== ExecutionResult::STATUS_ERROR) {
+            return false;
+        }
+
+        return \in_array((string)($result->raw['reason'] ?? ''), [
+            'entry_pending_cancelled_without_fill',
+            'entry_closed_without_fill',
         ], true);
     }
 }
