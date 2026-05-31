@@ -10,7 +10,6 @@ use App\Contract\Provider\OrderProviderDecoratorInterface;
 use App\Contract\Provider\OrderProviderInterface;
 use App\Logging\TradeLifecycleLogger;
 use App\Logging\TradeLifecycleReason;
-use App\Provider\Bitmart\BitmartOrderProvider;
 use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Message\LimitFillWatchMessage;
 use Brick\Math\RoundingMode;
@@ -61,10 +60,10 @@ final class LimitFillWatchMessageHandler
 
             if ($status === OrderStatus::FILLED || $status === OrderStatus::PARTIALLY_FILLED) {
                 // Position ouverte: désarmer le dead-man switch pour ce symbole
-                $bitmartProvider = $this->unwrapOrderProvider($orderProvider);
-                if ($bitmartProvider instanceof BitmartOrderProvider) {
+                $deadmanProvider = $this->unwrapOrderProvider($orderProvider);
+                if (method_exists($deadmanProvider, 'cancelAllAfter')) {
                     try {
-                        $bitmartProvider->cancelAllAfter($message->symbol, 0);
+                        $deadmanProvider->cancelAllAfter($message->symbol, 0);
                         $this->positionsLogger->info('limit_watch.deadman_disarmed', [
                             'symbol' => $message->symbol,
                             'exchange_order_id' => $message->exchangeOrderId,

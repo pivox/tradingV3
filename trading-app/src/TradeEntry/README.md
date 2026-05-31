@@ -130,8 +130,8 @@ Pour `order_type=market`, on prend simplement `bestAsk` ou `bestBid`.
 3. **Market orders** :
    - Soumission via `executeMarketOrder()` avec watchers WS/REST (timeouts 3s WS, 10s total) + vérification via `getPlanOrders`.
 4. **Limit orders** :
-   - `TpSlAttacher::presetInSubmitPayload()` encode SL/TP directement dans le `placeOrder`.
-   - `orderModePolicy` force MakerOnly (mode=4) ou Taker (mode=3) selon config.
+   - `TpSlAttacher::presetInSubmitPayload()` délègue l'encodage legacy Bitmart à `BitmartLegacyOrderMapper`.
+   - `orderModePolicy` force MakerOnly ou Taker selon config, puis l'adapter convertit vers le mode exchange.
    - Dead-man switch Bitmart désactivé (`cancel_after_timeout=0`), un watcher interne (`LimitFillWatchMessage`) annule l’ordre si non rempli sous 120s.
    - `MakerTakerSwitchPolicy` peut convertir une LIMIT en IOC taker si la zone expire ou si le spread est trop élevé (cf. `applyMakerTakerSwitch`).
    - `applyEndOfZoneFallback()` autorise un passage en taker (market ou limit capée) lorsque la zone va expirer, le spread ≤ `maxSpreadBps` et le prix reste dans la zone.
