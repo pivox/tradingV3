@@ -41,6 +41,11 @@ abstract class ExchangeAdapterContractTestCase extends TestCase
         return false;
     }
 
+    protected function snapshotClientOrderId(string $clientOrderId): string
+    {
+        return $clientOrderId;
+    }
+
     public function testAdapterIdentityAndCapabilitiesAreConsistent(): void
     {
         $adapter = $this->adapter();
@@ -74,9 +79,10 @@ abstract class ExchangeAdapterContractTestCase extends TestCase
         self::assertNotNull($placed->exchangeOrderId);
 
         $openOrders = $adapter->getOpenOrders($this->symbol());
+        $snapshotClientOrderId = $this->snapshotClientOrderId($clientOrderId);
         self::assertCount(1, array_filter(
             $openOrders,
-            static fn (ExchangeOrderDto $order): bool => $order->clientOrderId === $clientOrderId,
+            static fn (ExchangeOrderDto $order): bool => $order->clientOrderId === $snapshotClientOrderId,
         ));
         self::assertNotNull($adapter->getOrder($this->symbol(), (string) $placed->exchangeOrderId));
 
@@ -139,9 +145,60 @@ abstract class ExchangeAdapterContractTestCase extends TestCase
         ));
 
         self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        $snapshotClientOrderId = $this->snapshotClientOrderId($clientOrderId);
         self::assertCount(1, array_filter(
             $adapter->getOpenOrders($this->symbol()),
-            static fn (ExchangeOrderDto $order): bool => $order->clientOrderId === $clientOrderId,
+            static fn (ExchangeOrderDto $order): bool => $order->clientOrderId === $snapshotClientOrderId,
+        ));
+    }
+
+    public function testStandaloneReduceOnlyStopCanBePlacedListedAndCancelledWhenSupported(): void
+    {
+        $adapter = $this->adapter();
+        if (!$adapter->capabilities()->supportsTriggerOrders) {
+            self::markTestSkipped('Adapter does not advertise standalone trigger orders.');
+        }
+
+        $clientOrderId = $this->clientOrderId('stop-listed');
+        $stop = $adapter->placeOrder($this->placeRequest(
+            clientOrderId: $clientOrderId,
+            orderType: ExchangeOrderType::STOP_LOSS,
+            price: null,
+            stopPrice: 24800.0,
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+        ));
+
+        self::assertTrue($stop->accepted);
+        self::assertSame($clientOrderId, $stop->clientOrderId);
+        self::assertNotNull($stop->exchangeOrderId);
+
+        $snapshotClientOrderId = $this->snapshotClientOrderId($clientOrderId);
+        $listedStops = array_values(array_filter(
+            $adapter->getOpenOrders($this->symbol()),
+            static fn (ExchangeOrderDto $order): bool => $order->clientOrderId === $snapshotClientOrderId
+                && $order->orderType === ExchangeOrderType::STOP_LOSS
+                && $order->reduceOnly
+                && $order->stopPrice !== null,
+        ));
+
+        self::assertCount(1, $listedStops);
+        self::assertSame($stop->exchangeOrderId, $listedStops[0]->exchangeOrderId);
+        self::assertEqualsWithDelta(24800.0, $listedStops[0]->stopPrice, 0.000001);
+
+        $cancelled = $adapter->cancelOrder(new CancelOrderRequest(
+            exchange: $this->exchange(),
+            marketType: $this->marketType(),
+            symbol: $this->symbol(),
+            exchangeOrderId: $adapter->capabilities()->supportsCancelByClientOrderId ? null : $stop->exchangeOrderId,
+            clientOrderId: $clientOrderId,
+        ));
+
+        self::assertTrue($cancelled->cancelled);
+        self::assertCount(0, array_filter(
+            $adapter->getOpenOrders($this->symbol()),
+            static fn (ExchangeOrderDto $order): bool => $order->exchangeOrderId === $stop->exchangeOrderId,
         ));
     }
 

@@ -134,6 +134,17 @@ final class OkxExchangeAdapterTest extends TestCase
         self::assertTrue($algo->cancelled);
         self::assertSame('/api/v5/trade/cancel-algos', $client->lastPostPath);
         self::assertSame('90001', $client->lastPostBody[0]['algoId'] ?? null);
+
+        $algoByClientId = $adapter->cancelOrder(new CancelOrderRequest(
+            exchange: Exchange::OKX,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: null,
+            clientOrderId: 'OKXSL',
+        ));
+        self::assertTrue($algoByClientId->cancelled);
+        self::assertSame('/api/v5/trade/cancel-algos', $client->lastPostPath);
+        self::assertSame('OKXSL', $client->lastPostBody[0]['algoClOrdId'] ?? null);
     }
 
     public function testLiveAndDemoTradingAreDisabledByDefault(): void

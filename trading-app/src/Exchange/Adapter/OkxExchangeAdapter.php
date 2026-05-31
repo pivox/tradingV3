@@ -166,6 +166,24 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
         $status = $this->responseStatus($response);
         $exchangeOrderId = $this->responseOrderId($response, $isAlgo) ?? $request->clientOrderId;
         $accepted = $status !== ExchangeOrderStatus::REJECTED;
+        if (!$accepted) {
+            $existing = $this->findOpenOrderByClientOrderId($request->symbol, $this->actions->clientOrderId($request->clientOrderId));
+            if ($existing instanceof ExchangeOrderDto) {
+                return new PlaceOrderResult(
+                    accepted: true,
+                    symbol: $request->symbol,
+                    clientOrderId: $request->clientOrderId,
+                    exchangeOrderId: $existing->exchangeOrderId,
+                    status: $existing->status,
+                    submittedAt: $this->clock->now(),
+                    order: $existing,
+                    metadata: [
+                        'idempotent_replay_after_reject' => true,
+                        'source_response' => $response,
+                    ],
+                );
+            }
+        }
 
         return new PlaceOrderResult(
             accepted: $accepted,
@@ -205,7 +223,7 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
         $this->assertContext($request->exchange, $request->marketType);
         $this->config->assertTradingConfigured();
         $instId = $this->instruments->instId($request->symbol);
-        $isAlgo = $request->exchangeOrderId !== null && str_starts_with($request->exchangeOrderId, 'algo:');
+        $isAlgo = $this->isAlgoCancelRequest($instId, $request);
         $response = $isAlgo
             ? $this->client->privatePost('/api/v5/trade/cancel-algos', [$this->actions->cancelAlgo($instId, $request)])
             : $this->client->privatePost('/api/v5/trade/cancel-order', $this->actions->cancelOrder($instId, $request));
@@ -226,6 +244,44 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
     {
         foreach ($this->getOpenOrders($symbol) as $order) {
             if ($order->exchangeOrderId === $exchangeOrderId || $order->clientOrderId === $exchangeOrderId) {
+                return $order;
+            }
+        }
+
+        return null;
+    }
+
+    private function isAlgoCancelRequest(string $instId, CancelOrderRequest $request): bool
+    {
+        if ($request->exchangeOrderId !== null && str_starts_with($request->exchangeOrderId, 'algo:')) {
+            return true;
+        }
+        if ($request->exchangeOrderId !== null && trim($request->exchangeOrderId) !== '') {
+            return false;
+        }
+        if ($request->clientOrderId === null || trim($request->clientOrderId) === '') {
+            return false;
+        }
+
+        $clientOrderId = $this->actions->clientOrderId($request->clientOrderId);
+        $query = [
+            'instType' => 'SWAP',
+            'instId' => $instId,
+            'ordType' => 'conditional',
+        ];
+        foreach ($this->dataRows($this->client->privateGet('/api/v5/trade/orders-algo-pending', $query)) as $row) {
+            if ((string)($row['algoClOrdId'] ?? '') === $clientOrderId) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function findOpenOrderByClientOrderId(string $symbol, string $clientOrderId): ?ExchangeOrderDto
+    {
+        foreach ($this->getOpenOrders($symbol) as $order) {
+            if ($order->clientOrderId === $clientOrderId) {
                 return $order;
             }
         }

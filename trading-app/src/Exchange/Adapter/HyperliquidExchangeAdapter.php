@@ -161,6 +161,24 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         $status = $this->extractOrderStatus($response);
         $exchangeOrderId = $this->extractOrderId($response) ?? $request->clientOrderId;
         $accepted = $status !== ExchangeOrderStatus::REJECTED;
+        if (!$accepted) {
+            $existing = $this->findOpenOrderByClientOrderId($request->symbol, $this->actions->cloid($request->clientOrderId));
+            if ($existing instanceof ExchangeOrderDto) {
+                return new PlaceOrderResult(
+                    accepted: true,
+                    symbol: $request->symbol,
+                    clientOrderId: $request->clientOrderId,
+                    exchangeOrderId: $existing->exchangeOrderId,
+                    status: $existing->status,
+                    submittedAt: $this->clock->now(),
+                    order: $existing,
+                    metadata: [
+                        'idempotent_replay_after_reject' => true,
+                        'source_response' => $response,
+                    ],
+                );
+            }
+        }
 
         return new PlaceOrderResult(
             accepted: $accepted,
@@ -524,6 +542,17 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         }
 
         return $this->clock->now();
+    }
+
+    private function findOpenOrderByClientOrderId(string $symbol, string $clientOrderId): ?ExchangeOrderDto
+    {
+        foreach ($this->getOpenOrders($symbol) as $order) {
+            if ($order->clientOrderId === $clientOrderId) {
+                return $order;
+            }
+        }
+
+        return null;
     }
 
     /**
