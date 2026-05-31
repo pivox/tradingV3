@@ -9,6 +9,7 @@ enum Exchange: string
     case BITMART = 'bitmart';
     case BINANCE = 'binance';
     case FAKE = 'fake';
+    case HYPERLIQUID = 'hyperliquid';
 
     /**
      * Human readable label for logging/UI.
@@ -19,6 +20,7 @@ enum Exchange: string
             self::BITMART => 'Bitmart',
             self::BINANCE => 'Binance',
             self::FAKE => 'Fake Exchange',
+            self::HYPERLIQUID => 'Hyperliquid',
         };
     }
 }

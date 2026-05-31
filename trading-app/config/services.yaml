@@ -35,6 +35,12 @@ parameters:
     env(LOG_LEVEL_INDICATORS): 'info'
     env(LOG_LEVEL_HIGHCONVICTION): 'info'
     env(LOG_LEVEL_PIPELINE_EXEC): 'info'
+    env(HYPERLIQUID_ENV): 'testnet'
+    env(HYPERLIQUID_PRIVATE_KEY): ''
+    env(HYPERLIQUID_ACCOUNT_ADDRESS): ''
+    env(HYPERLIQUID_API_BASE_URI): ''
+    env(HYPERLIQUID_WS_URI): ''
+    env(HYPERLIQUID_MAINNET_ENABLED): '0'
     app.trade_entry_default_mode: 'scalper_micro'
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
@@ -127,6 +133,16 @@ services:
             $apiSecret: '%env(BITMART_SECRET_KEY)%'
             $apiMemo: '%env(BITMART_API_MEMO)%'
         public: true
+
+    App\Exchange\Hyperliquid\HyperliquidConfig:
+        arguments:
+            $environment: '%env(string:HYPERLIQUID_ENV)%'
+            $accountAddress: '%env(string:HYPERLIQUID_ACCOUNT_ADDRESS)%'
+            $privateKey: '%env(string:HYPERLIQUID_PRIVATE_KEY)%'
+            $apiBaseUri: '%env(string:HYPERLIQUID_API_BASE_URI)%'
+            $wsUri: '%env(string:HYPERLIQUID_WS_URI)%'
+            $mainnetEnabled: '%env(bool:HYPERLIQUID_MAINNET_ENABLED)%'
+
     # Provider pour la configuration des contrats MTF (support par profil avec fallback)
     App\Config\MtfContractsConfigProvider:
         public: true
