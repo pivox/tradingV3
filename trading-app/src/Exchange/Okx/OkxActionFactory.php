@@ -114,12 +114,37 @@ final class OkxActionFactory
     /**
      * @return array<string,string>
      */
-    public function setLeverage(string $instId, int $leverage, string $marginMode): array
-    {
-        return [
+    public function setLeverage(
+        string $instId,
+        int $leverage,
+        string $marginMode,
+        ?ExchangePositionSide $positionSide = null,
+    ): array {
+        $body = [
             'instId' => $instId,
             'lever' => (string) $leverage,
             'mgnMode' => $this->tdMode($marginMode),
+        ];
+        if ($positionSide !== null) {
+            $body['posSide'] = $this->posSide($positionSide);
+        }
+
+        return $body;
+    }
+
+    /**
+     * @return list<array<string,string>>
+     */
+    public function setLeverageRequests(string $instId, int $leverage, string $marginMode): array
+    {
+        $base = $this->setLeverage($instId, $leverage, $marginMode);
+        if ($base['mgnMode'] !== 'isolated') {
+            return [$base];
+        }
+
+        return [
+            $this->setLeverage($instId, $leverage, $marginMode, ExchangePositionSide::LONG),
+            $this->setLeverage($instId, $leverage, $marginMode, ExchangePositionSide::SHORT),
         ];
     }
 

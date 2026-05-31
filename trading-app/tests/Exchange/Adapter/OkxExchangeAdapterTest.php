@@ -166,6 +166,36 @@ final class OkxExchangeAdapterTest extends TestCase
         self::assertSame('OKXSL', $client->lastPostBody[0]['algoClOrdId'] ?? null);
     }
 
+    public function testSetLeverageSubmitsPerSymbolMarginMode(): void
+    {
+        $client = new FakeOkxClient();
+        $adapter = $this->adapter($client);
+
+        self::assertTrue($adapter->setLeverage('BTCUSDT', 5, ' Isolated '));
+        self::assertCount(2, $client->postBodies);
+        self::assertSame('/api/v5/account/set-leverage', $client->lastPostPath);
+        self::assertSame(['long', 'short'], array_column($client->postBodies, 'posSide'));
+        foreach ($client->postBodies as $body) {
+            self::assertSame('BTC-USDT-SWAP', $body['instId'] ?? null);
+            self::assertSame('5', $body['lever'] ?? null);
+            self::assertSame('isolated', $body['mgnMode'] ?? null);
+        }
+    }
+
+    public function testSetLeverageReportsRejectedResponse(): void
+    {
+        $client = new FakeOkxClient();
+        $client->rejectNextSetLeverage = true;
+        $adapter = $this->adapter($client);
+
+        self::assertFalse($adapter->setLeverage('BTCUSDT', 3, ' Cross '));
+        self::assertSame('/api/v5/account/set-leverage', $client->lastPostPath);
+        self::assertSame('BTC-USDT-SWAP', $client->lastPostBody['instId'] ?? null);
+        self::assertSame('3', $client->lastPostBody['lever'] ?? null);
+        self::assertSame('cross', $client->lastPostBody['mgnMode'] ?? null);
+        self::assertArrayNotHasKey('posSide', $client->lastPostBody);
+    }
+
     public function testLiveAndDemoTradingAreDisabledByDefault(): void
     {
         $live = new OkxConfig(environment: 'live');
@@ -271,8 +301,13 @@ final class FakeOkxClient implements OkxRestClientInterface
 
     public bool $rejectNextAlgoOrder = false;
 
+    public bool $rejectNextSetLeverage = false;
+
     /** @var array<mixed> */
     public array $lastPostBody = [];
+
+    /** @var list<array<mixed>> */
+    public array $postBodies = [];
 
     public function publicGet(string $path, array $query = []): array
     {
@@ -363,6 +398,7 @@ final class FakeOkxClient implements OkxRestClientInterface
     {
         $this->lastPostPath = $path;
         $this->lastPostBody = $body;
+        $this->postBodies[] = $body;
 
         return match ($path) {
             '/api/v5/trade/order' => ['code' => '0', 'data' => [[
@@ -371,6 +407,7 @@ final class FakeOkxClient implements OkxRestClientInterface
                 'sCode' => '0',
             ]]],
             '/api/v5/trade/order-algo' => $this->algoOrderResponse($body),
+            '/api/v5/account/set-leverage' => $this->setLeverageResponse(),
             default => ['code' => '0', 'data' => [['sCode' => '0']]],
         };
     }
@@ -396,5 +433,19 @@ final class FakeOkxClient implements OkxRestClientInterface
             'algoClOrdId' => (string)($body['algoClOrdId'] ?? ''),
             'sCode' => '0',
         ]]];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function setLeverageResponse(): array
+    {
+        if ($this->rejectNextSetLeverage) {
+            $this->rejectNextSetLeverage = false;
+
+            return ['code' => '51000', 'msg' => 'invalid leverage', 'data' => []];
+        }
+
+        return ['code' => '0', 'data' => [['sCode' => '0']]];
     }
 }

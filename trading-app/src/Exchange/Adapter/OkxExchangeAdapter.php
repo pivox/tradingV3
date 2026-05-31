@@ -311,13 +311,14 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
     public function setLeverage(string $symbol, int $leverage, string $marginMode): bool
     {
         $this->config->assertTradingConfigured();
-        $response = $this->client->privatePost('/api/v5/account/set-leverage', $this->actions->setLeverage(
-            $this->instruments->instId($symbol),
-            $leverage,
-            $marginMode,
-        ));
+        foreach ($this->actions->setLeverageRequests($this->instruments->instId($symbol), $leverage, $marginMode) as $body) {
+            $response = $this->client->privatePost('/api/v5/account/set-leverage', $body);
+            if ($this->responseStatus($response) === ExchangeOrderStatus::REJECTED) {
+                return false;
+            }
+        }
 
-        return $this->responseStatus($response) !== ExchangeOrderStatus::REJECTED;
+        return true;
     }
 
     public function reconcile(?string $symbol = null): ExchangeReconciliationResult
