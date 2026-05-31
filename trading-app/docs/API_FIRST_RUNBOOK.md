@@ -11,6 +11,8 @@ des fills deterministes.
 
 ```bash
 php -d error_reporting='E_ALL & ~E_DEPRECATED' ./vendor/bin/phpunit tests/Exchange/Contract/FakeExchangeAdapterContractTest.php
+php -d error_reporting='E_ALL & ~E_DEPRECATED' ./vendor/bin/phpunit tests/Exchange/Contract/HyperliquidExchangeAdapterContractTest.php
+php -d error_reporting='E_ALL & ~E_DEPRECATED' ./vendor/bin/phpunit tests/Exchange/Contract/OkxExchangeAdapterContractTest.php
 php -d error_reporting='E_ALL & ~E_DEPRECATED' ./vendor/bin/phpunit tests/Exchange/Adapter/FakeExchangeAdapterTest.php
 ```
 
@@ -26,6 +28,8 @@ fichier `var/fake_exchange_state.dat` ou reconstruire le service
 - placement, listing, lookup et cancel d'un limit order;
 - fill market local et creation de position quand l'adapter le permet;
 - idempotence par `clientOrderId`;
+- placement, listing et cancel d'un stop reduce-only separe quand
+  `supportsTriggerOrders=true`;
 - confirmation d'un stop reduce-only separe quand `supportsTriggerOrders=true`;
 - snapshots REST positions/fills quand l'adapter implemente
   `ExchangeRestSnapshotProviderInterface`.
