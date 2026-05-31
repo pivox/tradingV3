@@ -39,6 +39,7 @@ services:
   postgresql:
     image: postgres:13
     container_name: temporal_postgresql
+    mem_limit: 512m
     environment:
       - POSTGRES_USER=temporal
       - POSTGRES_PASSWORD=temporal
@@ -54,10 +55,17 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
 
   temporal:
     image: temporalio/auto-setup:1.25
     container_name: temporal_server
+    mem_limit: 768m
     depends_on:
       postgresql:
         condition: service_healthy
@@ -91,10 +99,17 @@ services:
       timeout: 5s
       retries: 60
       start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 256M
 
   temporal-ui:
     image: temporalio/ui:2.39.0
     container_name: temporal_ui
+    mem_limit: 256m
     depends_on:
       temporal:
         condition: service_healthy
@@ -109,6 +124,12 @@ services:
       - temporal-net
       - shared-net
     restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
 
   ##################################
   # WORKERS (ajoutés depuis docker-compose.workers.yml)
@@ -117,6 +138,7 @@ services:
   cron-symfony-mtf-workers:
     build: ./cron_symfony_mtf_workers
     container_name: cron_symfony_mtf_workers
+    mem_limit: 256m
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
       - TASK_QUEUE_NAME=cron_symfony_mtf_workers
@@ -129,6 +151,12 @@ services:
     networks:
       - temporal-net
       - shared-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
 
   #  grafana:
   #    image: grafana/grafana:10.4.0
@@ -234,6 +262,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: trading_app_redis
+    mem_limit: 512m
     command: [
       "redis-server",
       "--save", "300", "10",
@@ -267,6 +296,7 @@ services:
       context: ./trading-app
       dockerfile: Dockerfile.mtf
     container_name: trading_app_php
+    mem_limit: 768m
     working_dir: /var/www/html
     volumes:
       - ./trading-app:/var/www/html
@@ -310,12 +340,19 @@ services:
         echo '[trading-app-php] vendor missing -> composer install'; \
         composer install --no-dev --optimize-autoloader --no-interaction; \
       fi; php-fpm"
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 256M
 
   trading-app-messenger-order-timeout:
     build:
       context: ./trading-app
       dockerfile: Dockerfile.mtf
     container_name: trading_app_messenger-timeout
+    mem_limit: 512m
     working_dir: /var/www/html
     volumes:
       - ./trading-app:/var/www/html
@@ -351,14 +388,21 @@ services:
       sh -c "if [ ! -f vendor/autoload.php ]; then \
         echo '[trading-app-messenger] vendor missing -> composer install'; \
         composer install --no-dev --optimize-autoloader --no-interaction; \
-      fi; php bin/console messenger:consume order_timeout --sleep=1 --failure-limit=5 --time-limit=3600"
+      fi; php bin/console messenger:consume order_timeout --sleep=1 --failure-limit=5 --time-limit=3600 --memory-limit=256M"
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
 
   trading-app-messenger-trading:
     build:
       context: ./trading-app
       dockerfile: Dockerfile.mtf
     container_name: trading_app_messenger-trading
+    mem_limit: 512m
     working_dir: /var/www/html
     volumes:
       - ./trading-app:/var/www/html
@@ -394,14 +438,21 @@ services:
       sh -c "if [ ! -f vendor/autoload.php ]; then \
         echo '[trading-app-messenger] vendor missing -> composer install'; \
         composer install --no-dev --optimize-autoloader --no-interaction; \
-      fi; php bin/console messenger:consume mtf_decision --sleep=1 --failure-limit=5 --time-limit=3600"
+      fi; php bin/console messenger:consume mtf_decision --sleep=1 --failure-limit=5 --time-limit=3600 --memory-limit=256M"
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
 
   trading-app-messenger-projection:
     build:
       context: ./trading-app
       dockerfile: Dockerfile.mtf
     container_name: trading_app_messenger-projection
+    mem_limit: 512m
     working_dir: /var/www/html
     volumes:
       - ./trading-app:/var/www/html
@@ -434,8 +485,14 @@ services:
       sh -c "if [ ! -f vendor/autoload.php ]; then \
         echo '[trading-app-messenger] vendor missing -> composer install'; \
         composer install --no-dev --optimize-autoloader --no-interaction; \
-      fi; php bin/console messenger:consume mtf_projection --sleep=1 --failure-limit=5 --time-limit=3600"
+      fi; php bin/console messenger:consume mtf_projection --sleep=1 --failure-limit=5 --time-limit=3600 --memory-limit=256M"
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
 
 #  trading-app-ws-agent:
 #    build:
@@ -482,6 +539,7 @@ services:
   trading-app-nginx:
     image: nginx:latest
     container_name: trading_app_nginx
+    mem_limit: 128m
     ports:
       - "8082:80"
     volumes:
@@ -492,10 +550,17 @@ services:
     networks:
       - trading-app-net
       - shared-net
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 32M
 
   trading-app-db:
     image: postgres:15
     container_name: trading_app_postgres
+    mem_limit: 1g
     environment:
       - POSTGRES_DB=trading_app
       - POSTGRES_USER=postgres
@@ -514,6 +579,12 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
 
 
 volumes:
