@@ -39,7 +39,7 @@ class KlineRepository extends ServiceEntityRepository
      * Chaque ligne = un "chunk" (symbol, step en minutes, from/to en secondes epoch)
      *
      * @param string $symbol        ex: 'BTCUSDT'
-     * @param string $timeframe     ex: '1m','5m','15m','1h','4h','1d'
+     * @param string $timeframe     ex: '1m','5m','15m','30m','1h','4h','1d'
      * @param \DateTimeImmutable $startUtc
      * @param \DateTimeImmutable $endUtc
      * @param int $maxPerReq        (par défaut 500)
@@ -73,6 +73,8 @@ bounds AS (
                 + make_interval(mins => (floor(extract(minute from start_utc)::numeric / 5) * 5)::int)
             WHEN '15m' THEN date_trunc('hour', start_utc)
                 + make_interval(mins => (floor(extract(minute from start_utc)::numeric / 15) * 15)::int)
+            WHEN '30m' THEN date_trunc('hour', start_utc)
+                + make_interval(mins => (floor(extract(minute from start_utc)::numeric / 30) * 30)::int)
             WHEN '1h' THEN date_trunc('hour', start_utc)
             WHEN '4h' THEN date_trunc('day', start_utc)
                 + make_interval(hours => (floor(extract(hour from start_utc)::numeric / 4) * 4)::int)
@@ -84,6 +86,8 @@ bounds AS (
                 + make_interval(mins => (floor(extract(minute from end_utc)::numeric / 5) * 5)::int)
             WHEN '15m' THEN date_trunc('hour', end_utc)
                 + make_interval(mins => (floor(extract(minute from end_utc)::numeric / 15) * 15)::int)
+            WHEN '30m' THEN date_trunc('hour', end_utc)
+                + make_interval(mins => (floor(extract(minute from end_utc)::numeric / 30) * 30)::int)
             WHEN '1h' THEN date_trunc('hour', end_utc)
             WHEN '4h' THEN date_trunc('day', end_utc)
                 + make_interval(hours => (floor(extract(hour from end_utc)::numeric / 4) * 4)::int)
