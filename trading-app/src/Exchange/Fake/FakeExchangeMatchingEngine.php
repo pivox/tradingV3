@@ -16,6 +16,7 @@ use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
+use App\Exchange\Enum\ExchangeTimeInForce;
 use Psr\Clock\ClockInterface;
 
 final readonly class FakeExchangeMatchingEngine
@@ -76,6 +77,14 @@ final readonly class FakeExchangeMatchingEngine
 
         if ($request->orderType === ExchangeOrderType::MARKET || $this->wouldCross($request)) {
             $order = $this->fillOrder($order->exchangeOrderId) ?? $order;
+        } elseif ($this->shouldExpireIfNotFilledImmediately($request)) {
+            $order = $this->withOrderStatus(
+                $order,
+                ExchangeOrderStatus::EXPIRED,
+                array_replace($order->metadata, ['reason' => 'immediate_execution_not_available']),
+            );
+            $this->stateStore->saveOrder($order);
+            $this->appendEvent('order.expired', $order, ['reason' => 'immediate_execution_not_available']);
         }
 
         return $this->placeResult(true, $request, $order);
@@ -183,15 +192,17 @@ final readonly class FakeExchangeMatchingEngine
     {
         $filled = [];
         foreach ($this->stateStore->getOpenOrders($symbol) as $order) {
-            if ($order->orderType !== ExchangeOrderType::LIMIT || $order->price === null || $order->postOnly) {
+            if ($order->orderType === ExchangeOrderType::LIMIT) {
+                if ($order->price === null || $order->postOnly || !$this->limitOrderCrossesBook($order)) {
+                    continue;
+                }
+            } elseif (!$this->triggerOrderCrossesBook($order)) {
                 continue;
             }
 
-            if ($this->limitOrderCrossesBook($order)) {
-                $updated = $this->fillOrder($order->exchangeOrderId);
-                if ($updated instanceof ExchangeOrderDto) {
-                    $filled[] = $updated;
-                }
+            $updated = $this->fillOrder($order->exchangeOrderId);
+            if ($updated instanceof ExchangeOrderDto) {
+                $filled[] = $updated;
             }
         }
 
@@ -543,6 +554,28 @@ final readonly class FakeExchangeMatchingEngine
             : $order->price <= $top->bid;
     }
 
+    private function triggerOrderCrossesBook(ExchangeOrderDto $order): bool
+    {
+        if (!$this->isTriggerOrder($order) || $order->stopPrice === null) {
+            return false;
+        }
+
+        $midPrice = $this->midPrice($order->symbol);
+
+        return match ($order->orderType) {
+            ExchangeOrderType::STOP_LOSS => $order->positionSide === ExchangePositionSide::SHORT
+                ? $midPrice >= $order->stopPrice
+                : $midPrice <= $order->stopPrice,
+            ExchangeOrderType::TAKE_PROFIT => $order->positionSide === ExchangePositionSide::SHORT
+                ? $midPrice <= $order->stopPrice
+                : $midPrice >= $order->stopPrice,
+            ExchangeOrderType::TRIGGER => $order->side === ExchangeOrderSide::BUY
+                ? $midPrice >= $order->stopPrice
+                : $midPrice <= $order->stopPrice,
+            default => false,
+        };
+    }
+
     private function executionPrice(ExchangeOrderDto $order): float
     {
         if ($order->price !== null) {
@@ -580,6 +613,21 @@ final readonly class FakeExchangeMatchingEngine
             ExchangeOrderType::TAKE_PROFIT,
             ExchangeOrderType::TRIGGER,
         ], true);
+    }
+
+    private function isTriggerOrder(ExchangeOrderDto $order): bool
+    {
+        return \in_array($order->orderType, [
+            ExchangeOrderType::STOP_LOSS,
+            ExchangeOrderType::TAKE_PROFIT,
+            ExchangeOrderType::TRIGGER,
+        ], true);
+    }
+
+    private function shouldExpireIfNotFilledImmediately(PlaceOrderRequest $request): bool
+    {
+        return $request->orderType === ExchangeOrderType::LIMIT
+            && \in_array($request->timeInForce, [ExchangeTimeInForce::IOC, ExchangeTimeInForce::FOK], true);
     }
 
     private function isActiveStatus(ExchangeOrderStatus $status): bool

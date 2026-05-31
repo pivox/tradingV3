@@ -101,6 +101,21 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
     }
 
+    public function testNonCrossingIocLimitExpiresWithoutResting(): void
+    {
+        $result = $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::LIMIT,
+            price: 24950.0,
+            postOnly: false,
+            timeInForce: ExchangeTimeInForce::IOC,
+        ));
+
+        self::assertTrue($result->accepted);
+        self::assertSame(ExchangeOrderStatus::EXPIRED, $result->status);
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertSame('immediate_execution_not_available', $result->order?->metadata['reason'] ?? null);
+    }
+
     public function testCanPartiallyFillThenCompleteOrder(): void
     {
         $placed = $this->adapter->placeOrder($this->request(price: 24950.0, postOnly: true));
@@ -154,6 +169,25 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertCount(1, $this->scenario->events('protection_order.rejected'));
     }
 
+    public function testMovePriceTriggersAttachedStopLossAndClosesPosition(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+        ));
+
+        $result = $this->scenario->movePrice('BTCUSDT', 24790.0, 0.0);
+
+        self::assertCount(1, $result['matched_orders']);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $result['matched_orders'][0]->orderType);
+        self::assertSame(ExchangeOrderStatus::FILLED, $result['matched_orders'][0]->status);
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(1, $this->scenario->events('position.closed'));
+    }
+
     public function testStandaloneProtectionOrderIsReduceOnlyEvenWhenPayloadOmitsFlag(): void
     {
         $result = $this->adapter->placeOrder($this->request(
@@ -190,6 +224,7 @@ final class FakeExchangeAdapterTest extends TestCase
         ExchangeOrderSide $side = ExchangeOrderSide::BUY,
         bool $reduceOnly = false,
         bool $postOnly = false,
+        ExchangeTimeInForce $timeInForce = ExchangeTimeInForce::GTC,
         ?float $stopPrice = null,
         ?float $attachedStopLossPrice = null,
         ?float $attachedTakeProfitPrice = null,
@@ -201,7 +236,7 @@ final class FakeExchangeAdapterTest extends TestCase
             side: $side,
             positionSide: $positionSide,
             orderType: $orderType,
-            timeInForce: ExchangeTimeInForce::GTC,
+            timeInForce: $timeInForce,
             quantity: 1.0,
             price: $price,
             stopPrice: $stopPrice,
