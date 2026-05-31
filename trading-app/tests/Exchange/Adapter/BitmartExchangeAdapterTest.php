@@ -17,6 +17,7 @@ use App\Contract\Provider\KlineProviderInterface;
 use App\Contract\Provider\OrderProviderInterface;
 use App\Contract\Provider\SystemProviderInterface;
 use App\Exchange\Adapter\BitmartExchangeAdapter;
+use App\Exchange\Dto\CancelOrderRequest;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
@@ -140,6 +141,23 @@ final class BitmartExchangeAdapterTest extends TestCase
         ));
     }
 
+    public function testRejectsPostOnlyMarketOrders(): void
+    {
+        $registry = $this->createMock(ExchangeProviderRegistryInterface::class);
+        $registry->expects($this->never())->method('get');
+        $adapter = new BitmartExchangeAdapter($registry, $this->fixedClock());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('postOnly is only supported for limit orders');
+
+        $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::LONG,
+            side: ExchangeOrderSide::BUY,
+            orderType: ExchangeOrderType::MARKET,
+            postOnly: true,
+        ));
+    }
+
     public function testRejectsSidePositionMismatchBeforeProviderSubmission(): void
     {
         $registry = $this->createMock(ExchangeProviderRegistryInterface::class);
@@ -233,6 +251,24 @@ final class BitmartExchangeAdapterTest extends TestCase
         self::assertSame(ExchangeTimeInForce::GTC, $result->order?->timeInForce);
     }
 
+    public function testMapsReturnedPostOnlyModeAsGtc(): void
+    {
+        $adapter = $this->createAdapter(
+            static function (): void {
+            },
+            $this->providerOrder([
+                'client_order_id' => 'cid-1',
+                'side' => 1,
+                'mode' => 4,
+            ]),
+        );
+
+        $result = $adapter->placeOrder($this->placeOrderRequest(ExchangePositionSide::LONG, ExchangeOrderSide::BUY));
+
+        self::assertTrue($result->order?->postOnly);
+        self::assertSame(ExchangeTimeInForce::GTC, $result->order?->timeInForce);
+    }
+
     public function testFallbackSubmitOnlyOrderPreservesSubmittedIntent(): void
     {
         $adapter = $this->createAdapter(
@@ -261,6 +297,29 @@ final class BitmartExchangeAdapterTest extends TestCase
         self::assertTrue($result->order?->metadata['submit_only'] ?? false);
     }
 
+    public function testCancelFailureWithExchangeOrderIdDoesNotReportClientIdUnsupported(): void
+    {
+        $orderProvider = $this->createMock(OrderProviderInterface::class);
+        $orderProvider
+            ->expects($this->once())
+            ->method('cancelOrder')
+            ->with('BTCUSDT', 'ex-1')
+            ->willReturn(false);
+
+        $adapter = $this->createAdapterWithOrderProvider($orderProvider);
+
+        $result = $adapter->cancelOrder(new CancelOrderRequest(
+            exchange: Exchange::BITMART,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: 'ex-1',
+            clientOrderId: 'cid-1',
+        ));
+
+        self::assertFalse($result->cancelled);
+        self::assertSame('exchange_order_cancel_failed', $result->metadata['reason'] ?? null);
+    }
+
     /**
      * @param callable(array<string,mixed>): void $captureOptions
      */
@@ -285,6 +344,11 @@ final class BitmartExchangeAdapterTest extends TestCase
             )
             ->willReturn($providerOrder ?? $this->providerOrder());
 
+        return $this->createAdapterWithOrderProvider($orderProvider);
+    }
+
+    private function createAdapterWithOrderProvider(OrderProviderInterface $orderProvider): BitmartExchangeAdapter
+    {
         $bundle = new ExchangeProviderBundle(
             new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
             $this->createMock(KlineProviderInterface::class),

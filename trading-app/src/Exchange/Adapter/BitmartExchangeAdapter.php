@@ -175,9 +175,7 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             exchangeOrderId: $request->exchangeOrderId,
             clientOrderId: $request->clientOrderId,
             status: $cancelled ? ExchangeOrderStatus::CANCELLED : ExchangeOrderStatus::UNKNOWN,
-            metadata: $request->clientOrderId !== null && !$cancelled
-                ? ['reason' => 'cancel_by_client_order_id_not_supported']
-                : [],
+            metadata: $this->cancelFailureMetadata($request, $cancelled),
         );
     }
 
@@ -215,6 +213,26 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
     private function bundle(): \App\Provider\Registry\ExchangeProviderBundle
     {
         return $this->providerRegistry->get($this->context);
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function cancelFailureMetadata(CancelOrderRequest $request, bool $cancelled): array
+    {
+        if ($cancelled) {
+            return [];
+        }
+
+        if ($request->exchangeOrderId !== null && trim($request->exchangeOrderId) !== '') {
+            return ['reason' => 'exchange_order_cancel_failed'];
+        }
+
+        if ($request->clientOrderId !== null && trim($request->clientOrderId) !== '') {
+            return ['reason' => 'cancel_by_client_order_id_not_supported'];
+        }
+
+        return [];
     }
 
     /**
@@ -375,6 +393,7 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             1 => ExchangeTimeInForce::GTC,
             2 => ExchangeTimeInForce::FOK,
             3 => ExchangeTimeInForce::IOC,
+            4 => ExchangeTimeInForce::GTC,
             default => null,
         };
     }
@@ -447,6 +466,10 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
 
     private function assertRequestIntent(PlaceOrderRequest $request): void
     {
+        if ($request->postOnly && $request->orderType !== ExchangeOrderType::LIMIT) {
+            throw new \InvalidArgumentException('postOnly is only supported for limit orders on Bitmart');
+        }
+
         if ($request->postOnly && \in_array($request->timeInForce, [ExchangeTimeInForce::IOC, ExchangeTimeInForce::FOK], true)) {
             throw new \InvalidArgumentException('postOnly cannot be combined with IOC or FOK on Bitmart');
         }
