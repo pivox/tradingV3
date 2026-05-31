@@ -12,6 +12,7 @@ use App\Common\Enum\OrderType;
 use App\Contract\Provider\AccountProviderInterface;
 use App\Contract\Provider\ContractProviderInterface;
 use App\Contract\Provider\Dto\OrderDto;
+use App\Contract\Provider\Dto\SymbolBidAskDto;
 use App\Contract\Provider\ExchangeProviderRegistryInterface;
 use App\Contract\Provider\KlineProviderInterface;
 use App\Contract\Provider\OrderProviderInterface;
@@ -333,6 +334,32 @@ final class BitmartExchangeAdapterTest extends TestCase
         self::assertTrue($result->order?->metadata['submit_only'] ?? false);
     }
 
+    public function testGetOpenOrdersIncludesBitmartPlanOrders(): void
+    {
+        $adapter = $this->createAdapterWithOrderProvider(new PlanOrderProviderStub([
+            [
+                'plan_order_id' => 'plan-sl-1',
+                'symbol' => 'BTCUSDT',
+                'side' => 3,
+                'state' => 1,
+                'size' => '10',
+                'trigger_price' => '24800',
+            ],
+        ]));
+
+        $orders = $adapter->getOpenOrders('BTCUSDT');
+
+        self::assertCount(1, $orders);
+        self::assertSame('plan-sl-1', $orders[0]->exchangeOrderId);
+        self::assertSame(ExchangeOrderType::TRIGGER, $orders[0]->orderType);
+        self::assertSame(ExchangeOrderStatus::PENDING, $orders[0]->status);
+        self::assertSame(ExchangeOrderSide::SELL, $orders[0]->side);
+        self::assertSame(ExchangePositionSide::LONG, $orders[0]->positionSide);
+        self::assertTrue($orders[0]->reduceOnly);
+        self::assertEqualsWithDelta(24800.0, $orders[0]->stopPrice, 0.000001);
+        self::assertEqualsWithDelta(10.0, $orders[0]->remainingQuantity, 0.000001);
+    }
+
     public function testCancelFailureWithExchangeOrderIdDoesNotReportClientIdUnsupported(): void
     {
         $orderProvider = $this->createMock(OrderProviderInterface::class);
@@ -462,5 +489,70 @@ final class BitmartExchangeAdapterTest extends TestCase
             createdAt: new \DateTimeImmutable('2026-01-01 00:00:00 UTC'),
             metadata: $metadata,
         );
+    }
+}
+
+final readonly class PlanOrderProviderStub implements OrderProviderInterface
+{
+    /**
+     * @param array<int,array<string,mixed>> $planOrders
+     */
+    public function __construct(private array $planOrders)
+    {
+    }
+
+    public function placeOrder(
+        string $symbol,
+        OrderSide $side,
+        OrderType $type,
+        float $quantity,
+        ?float $price = null,
+        ?float $stopPrice = null,
+        array $options = []
+    ): ?OrderDto {
+        throw new \RuntimeException('placeOrder should not be called');
+    }
+
+    public function cancelOrder(string $symbol, string $orderId): bool
+    {
+        throw new \RuntimeException('cancelOrder should not be called');
+    }
+
+    public function getOrder(string $symbol, string $orderId): ?OrderDto
+    {
+        return null;
+    }
+
+    public function getOpenOrders(?string $symbol = null): array
+    {
+        return [];
+    }
+
+    public function getOrderHistory(string $symbol, int $limit = 100): array
+    {
+        return [];
+    }
+
+    public function cancelAllOrders(string $symbol): bool
+    {
+        return true;
+    }
+
+    public function getOrderBookTop(string $symbol): SymbolBidAskDto
+    {
+        throw new \RuntimeException('getOrderBookTop should not be called');
+    }
+
+    public function submitLeverage(string $symbol, int $leverage, string $openType = 'isolated'): bool
+    {
+        return true;
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    public function getPlanOrders(?string $symbol = null): array
+    {
+        return $this->planOrders;
     }
 }

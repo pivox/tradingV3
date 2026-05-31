@@ -292,9 +292,9 @@ final class TradeEntryService
         ]);
 
         $result = ($this->executor)($plan, $decisionKey, $lifecycleContext, $mode, $request->executionTf);
-        if ($result->status === 'submitted') {
+        if ($this->isSubmittedStatus($result->status)) {
             $this->logOrderSubmittedEvent($plan, $result, $request, $decisionKey, $mode, $lifecycleContext, $runId);
-        } elseif ($result->status === 'skipped') {
+        } elseif ($result->status === ExecutionResult::STATUS_SKIPPED) {
             $this->logSymbolSkippedEvent(
                 request: $request,
                 reasonCode: (string)($result->raw['reason'] ?? TradeLifecycleReason::SUBMIT_FAILED),
@@ -315,15 +315,18 @@ final class TradeEntryService
             'reason' => 'execution_finished',
         ]);
 
-        $metric = match ($result->status) {
-            'submitted' => 'submitted',
-            'skipped' => 'skipped',
+        $metric = match (true) {
+            $this->isSubmittedStatus($result->status) => 'submitted',
+            $result->status === ExecutionResult::STATUS_SKIPPED => 'skipped',
+            $result->status === ExecutionResult::STATUS_ENTRY_SUBMITTED => 'entry_submitted',
+            $result->status === ExecutionResult::STATUS_FAILED_UNPROTECTED_CLOSED => 'failed_unprotected_closed',
+            $result->status === ExecutionResult::STATUS_CRITICAL_UNPROTECTED_POSITION => 'critical_unprotected_position',
             default => 'errors',
         };
         $this->metrics->incr($metric);
 
         // Appeler le hook si fourni et si l'ordre a été soumis
-        if ($hook !== null && $result->status === 'submitted') {
+        if ($hook !== null && $this->shouldRunSubmittedHook($result->status)) {
             $hook->onSubmitted($request, $result, $decisionKey);
         }
 
@@ -615,6 +618,19 @@ final class TradeEntryService
         }
 
         return ($zoneMax - $zoneMin) / $mid;
+    }
+
+    private function isSubmittedStatus(string $status): bool
+    {
+        return \in_array($status, [
+            ExecutionResult::STATUS_SUBMITTED,
+            ExecutionResult::STATUS_SUBMITTED_PROTECTED,
+        ], true);
+    }
+
+    private function shouldRunSubmittedHook(string $status): bool
+    {
+        return $this->isSubmittedStatus($status) || $status === ExecutionResult::STATUS_ENTRY_SUBMITTED;
     }
 
     private function computeAtrPct(?float $atrValue, float $referencePrice): ?float

@@ -14,6 +14,8 @@ use App\Contract\Provider\Dto\OrderDto;
 use App\Contract\Provider\Dto\PositionDto;
 use App\Contract\Provider\Dto\SymbolBidAskDto;
 use App\Contract\Provider\ExchangeProviderRegistryInterface;
+use App\Contract\Provider\OrderProviderDecoratorInterface;
+use App\Contract\Provider\OrderProviderInterface;
 use App\Exchange\Contract\ExchangeAdapterInterface;
 use App\Exchange\Dto\CancelOrderRequest;
 use App\Exchange\Dto\CancelOrderResult;
@@ -112,10 +114,19 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
 
     public function getOpenOrders(?string $symbol = null): array
     {
-        return array_values(array_map(
+        $orders = array_values(array_map(
             fn (OrderDto $order): ExchangeOrderDto => $this->mapOrder($order),
             $this->bundle()->order()->getOpenOrders($symbol),
         ));
+
+        foreach ($this->getPlanOrders($symbol) as $planOrder) {
+            $mapped = $this->mapPlanOrder($planOrder);
+            if ($mapped instanceof ExchangeOrderDto) {
+                $orders[] = $mapped;
+            }
+        }
+
+        return $orders;
     }
 
     public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult
@@ -213,6 +224,117 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
     private function bundle(): \App\Provider\Registry\ExchangeProviderBundle
     {
         return $this->providerRegistry->get($this->context);
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function getPlanOrders(?string $symbol): array
+    {
+        $orderProvider = $this->unwrapOrderProvider($this->bundle()->order());
+        if (!method_exists($orderProvider, 'getPlanOrders')) {
+            return [];
+        }
+
+        try {
+            /** @var array<int,array<string,mixed>> $planOrders */
+            $planOrders = $orderProvider->getPlanOrders($symbol);
+            return $planOrders;
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    private function unwrapOrderProvider(OrderProviderInterface $provider): OrderProviderInterface
+    {
+        while ($provider instanceof OrderProviderDecoratorInterface) {
+            $provider = $provider->innerOrderProvider();
+        }
+
+        return $provider;
+    }
+
+    /**
+     * @param array<string,mixed> $planOrder
+     */
+    private function mapPlanOrder(array $planOrder): ?ExchangeOrderDto
+    {
+        $orderId = $planOrder['plan_order_id'] ?? $planOrder['order_id'] ?? null;
+        $triggerPrice = $planOrder['trigger_price']
+            ?? $planOrder['preset_stop_loss_price']
+            ?? $planOrder['preset_take_profit_price']
+            ?? null;
+        if ($orderId === null || $triggerPrice === null || $triggerPrice === '') {
+            return null;
+        }
+
+        [$side, $positionSide] = $this->mapOrderSideFromMetadata(
+            new OrderDto(
+                orderId: (string) $orderId,
+                symbol: (string) ($planOrder['symbol'] ?? ''),
+                side: OrderSide::BUY,
+                type: OrderType::STOP,
+                status: ProviderOrderStatus::PENDING,
+                quantity: \Brick\Math\BigDecimal::of('0'),
+                price: null,
+                stopPrice: null,
+                filledQuantity: \Brick\Math\BigDecimal::of('0'),
+                remainingQuantity: \Brick\Math\BigDecimal::of('0'),
+                averagePrice: null,
+                createdAt: $this->clock->now(),
+            ),
+            $planOrder,
+        );
+        $quantity = $this->floatPlanOrderValue($planOrder, ['size', 'quantity', 'vol', 'volume']);
+
+        return new ExchangeOrderDto(
+            exchange: $this->exchange(),
+            marketType: $this->marketType(),
+            symbol: strtoupper((string) ($planOrder['symbol'] ?? '')),
+            exchangeOrderId: (string) $orderId,
+            clientOrderId: isset($planOrder['client_order_id']) ? (string) $planOrder['client_order_id'] : null,
+            side: $side,
+            positionSide: $positionSide,
+            orderType: ExchangeOrderType::TRIGGER,
+            status: $this->mapPlanOrderStatus($planOrder['state'] ?? $planOrder['status'] ?? null),
+            quantity: $quantity,
+            filledQuantity: 0.0,
+            remainingQuantity: $quantity,
+            price: null,
+            averagePrice: null,
+            stopPrice: (float) $triggerPrice,
+            reduceOnly: true,
+            postOnly: false,
+            timeInForce: ExchangeTimeInForce::GTC,
+            createdAt: $this->clock->now(),
+            metadata: ['source' => 'bitmart_plan_order'] + $planOrder,
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $planOrder
+     * @param string[] $keys
+     */
+    private function floatPlanOrderValue(array $planOrder, array $keys): float
+    {
+        foreach ($keys as $key) {
+            if (isset($planOrder[$key]) && is_numeric($planOrder[$key])) {
+                return (float) $planOrder[$key];
+            }
+        }
+
+        return 0.0;
+    }
+
+    private function mapPlanOrderStatus(mixed $state): ExchangeOrderStatus
+    {
+        return match ((int) $state) {
+            2 => ExchangeOrderStatus::PARTIALLY_FILLED,
+            3 => ExchangeOrderStatus::FILLED,
+            4 => ExchangeOrderStatus::CANCELLED,
+            5 => ExchangeOrderStatus::REJECTED,
+            default => ExchangeOrderStatus::PENDING,
+        };
     }
 
     /**

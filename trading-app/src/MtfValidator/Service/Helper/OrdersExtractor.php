@@ -10,7 +10,7 @@ namespace App\MtfValidator\Service\Helper;
 final class OrdersExtractor
 {
     /**
-     * Extrait tous les ordres placés (submitted et simulated) depuis les résultats MTF
+     * Extrait tous les ordres places depuis les resultats MTF.
      * 
      * @param array<string, array<string, mixed>> $results Résultats MTF par symbole
      * @return array<int, array{
@@ -47,8 +47,14 @@ final class OrdersExtractor
                 continue;
             }
 
-            // Inclure les ordres submitted et simulated
-            if (!in_array($status, ['submitted', 'simulated'], true)) {
+            if (!in_array($status, [
+                'submitted',
+                'submitted_protected',
+                'entry_submitted',
+                'failed_unprotected_closed',
+                'critical_unprotected_position',
+                'simulated',
+            ], true)) {
                 continue;
             }
 
@@ -81,7 +87,48 @@ final class OrdersExtractor
     public static function extractSubmittedOrders(array $results): array
     {
         $allOrders = self::extractPlacedOrders($results);
-        return array_filter($allOrders, fn($order) => $order['status'] === 'submitted');
+        return array_filter($allOrders, fn($order) => in_array($order['status'], ['submitted', 'submitted_protected'], true));
+    }
+
+    /**
+     * Extrait les entrees soumises mais pas encore protegees/fill.
+     *
+     * @param array<string, array<string, mixed>> $results Résultats MTF par symbole
+     * @return array<int, array{
+     *     symbol: string,
+     *     status: string,
+     *     client_order_id: ?string,
+     *     exchange_order_id: ?string,
+     *     decision_key: ?string,
+     *     raw: array
+     * }>
+     */
+    public static function extractPendingEntryOrders(array $results): array
+    {
+        $allOrders = self::extractPlacedOrders($results);
+        return array_filter($allOrders, fn($order) => $order['status'] === 'entry_submitted');
+    }
+
+    /**
+     * Extrait les entrees qui ont ete remplies puis fermees/alertees par le garde-fou protection.
+     *
+     * @param array<string, array<string, mixed>> $results Résultats MTF par symbole
+     * @return array<int, array{
+     *     symbol: string,
+     *     status: string,
+     *     client_order_id: ?string,
+     *     exchange_order_id: ?string,
+     *     decision_key: ?string,
+     *     raw: array
+     * }>
+     */
+    public static function extractProtectionFailureOrders(array $results): array
+    {
+        $allOrders = self::extractPlacedOrders($results);
+        return array_filter($allOrders, fn($order) => in_array($order['status'], [
+            'failed_unprotected_closed',
+            'critical_unprotected_position',
+        ], true));
     }
 
     /**
@@ -107,19 +154,22 @@ final class OrdersExtractor
      * Compte les ordres par statut
      * 
      * @param array<string, array<string, mixed>> $results Résultats MTF par symbole
-     * @return array{total: int, submitted: int, simulated: int}
+     * @return array{total: int, submitted: int, pending: int, protection_failed: int, simulated: int}
      */
     public static function countOrdersByStatus(array $results): array
     {
         $allOrders = self::extractPlacedOrders($results);
         $submitted = count(self::extractSubmittedOrders($results));
+        $pending = count(self::extractPendingEntryOrders($results));
+        $protectionFailed = count(self::extractProtectionFailureOrders($results));
         $simulated = count(self::extractSimulatedOrders($results));
 
         return [
             'total' => count($allOrders),
             'submitted' => $submitted,
+            'pending' => $pending,
+            'protection_failed' => $protectionFailed,
             'simulated' => $simulated,
         ];
     }
 }
-

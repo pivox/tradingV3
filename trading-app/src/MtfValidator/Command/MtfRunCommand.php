@@ -869,12 +869,20 @@ class MtfRunCommand extends Command
         $io->definitionList(
             ['Total' => (string) $ordersCount['total']],
             ['Soumis (réels)' => (string) $ordersCount['submitted']],
+            ['En attente protection/fill' => (string) ($ordersCount['pending'] ?? 0)],
+            ['Protection échouée / emergency' => (string) ($ordersCount['protection_failed'] ?? 0)],
             ['Simulés (dry-run)' => (string) $ordersCount['simulated']],
         );
 
         $io->writeln('<comment>Détails des ordres:</comment>');
         foreach ($ordersPlaced as $order) {
-            $statusLabel = $order['status'] === 'submitted' ? '<fg=green>SOUMIS</>' : '<fg=yellow>SIMULÉ</>';
+            $statusLabel = match ($order['status']) {
+                'submitted', 'submitted_protected' => '<fg=green>SOUMIS</>',
+                'entry_submitted' => '<fg=cyan>EN ATTENTE</>',
+                'failed_unprotected_closed' => '<fg=red>FERMÉ URGENCE</>',
+                'critical_unprotected_position' => '<fg=red>CRITIQUE</>',
+                default => '<fg=yellow>SIMULÉ</>',
+            };
             $io->writeln(sprintf(
                 '  <info>%s</info> - %s',
                 $order['symbol'],
