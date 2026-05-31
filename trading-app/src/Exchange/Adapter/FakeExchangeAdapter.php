@@ -12,19 +12,22 @@ use App\Exchange\Dto\CancelOrderRequest;
 use App\Exchange\Dto\CancelOrderResult;
 use App\Exchange\Dto\ExchangeBalanceDto;
 use App\Exchange\Dto\ExchangeCapabilities;
+use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Dto\ExchangeReconciliationResult;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Dto\PlaceOrderResult;
+use App\Exchange\Fake\FakeExchangeEvent;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
 #[AutoconfigureTag('app.exchange_adapter')]
-final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface
+final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, ExchangeRestSnapshotProviderInterface
 {
     public function __construct(
         private FakeExchangeStateStore $stateStore,
@@ -87,6 +90,43 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface
         return $this->stateStore->getOpenOrders($symbol);
     }
 
+    /**
+     * @return ExchangeOrderDto[]
+     */
+    public function getOrdersSnapshot(?string $symbol = null): array
+    {
+        return $this->stateStore->getOrders($symbol);
+    }
+
+    /**
+     * @return ExchangeFillDto[]
+     */
+    public function getFillsSnapshot(?string $symbol = null): array
+    {
+        $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
+        $fills = [];
+        foreach ($this->stateStore->events() as $index => $event) {
+            if (!\in_array($event->type, ['order.filled', 'order.partially_filled'], true)) {
+                continue;
+            }
+            if ($normalizedSymbol !== null && $event->symbol !== $normalizedSymbol) {
+                continue;
+            }
+
+            $fill = $this->fillFromEvent($event, $index);
+            if ($fill instanceof ExchangeFillDto) {
+                $fills[] = $fill;
+            }
+        }
+
+        return $fills;
+    }
+
+    public function hasAuthoritativePositionSnapshot(?string $symbol = null): bool
+    {
+        return true;
+    }
+
     public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult
     {
         return $this->matchingEngine->submit($request);
@@ -137,6 +177,50 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface
                 'source' => 'fake_exchange',
                 'events_seen' => \count($this->stateStore->events()),
             ],
+        );
+    }
+
+    private function fillFromEvent(FakeExchangeEvent $event, int $index): ?ExchangeFillDto
+    {
+        $orderId = $event->payload['order_id'] ?? null;
+        if (!\is_scalar($orderId) || trim((string)$orderId) === '') {
+            return null;
+        }
+
+        $order = $this->stateStore->getOrder((string)$orderId);
+        if (!$order instanceof ExchangeOrderDto) {
+            return null;
+        }
+
+        $fillQuantity = isset($event->payload['fill_quantity']) && is_numeric($event->payload['fill_quantity'])
+            ? (float)$event->payload['fill_quantity']
+            : max(0.0, $order->filledQuantity);
+        $fillPrice = isset($event->payload['fill_price']) && is_numeric($event->payload['fill_price'])
+            ? (float)$event->payload['fill_price']
+            : ($order->averagePrice ?? $order->price ?? 0.0);
+
+        return new ExchangeFillDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: $order->symbol,
+            exchangeOrderId: $order->exchangeOrderId,
+            clientOrderId: $order->clientOrderId,
+            fillId: 'fake-fill-' . substr(hash('sha256', implode(':', [
+                (string)($event->payload['event_sequence'] ?? $index),
+                $event->type,
+                $order->exchangeOrderId,
+                $event->occurredAt->format('U.u'),
+                (string)$fillQuantity,
+                (string)$fillPrice,
+            ])), 0, 32),
+            side: $order->side,
+            positionSide: $order->positionSide,
+            quantity: $fillQuantity,
+            price: $fillPrice,
+            fee: null,
+            feeCurrency: null,
+            filledAt: $event->occurredAt,
+            metadata: ['source' => 'fake_exchange_rest_reconciliation'],
         );
     }
 }
