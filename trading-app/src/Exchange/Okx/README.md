@@ -27,3 +27,9 @@ OKX_WS_PRIVATE_URI=wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999
 OKX_DEMO_TRADING_ENABLED=0
 OKX_LIVE_ENABLED=0
 ```
+
+Local safety checks:
+
+```bash
+./vendor/bin/phpunit tests/Exchange/Okx/OkxRestClientTest.php tests/Exchange/Adapter/OkxExchangeAdapterTest.php tests/Exchange/Contract/OkxExchangeAdapterContractTest.php
+```
