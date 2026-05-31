@@ -48,7 +48,9 @@ final readonly class MainProvider implements MainProviderInterface
 
     public function getOrderProvider(): OrderProviderInterface
     {
-        return $this->bundle()->order();
+        $bundle = $this->bundle();
+
+        return new ContextualOrderProvider($bundle->order(), $bundle->context());
     }
 
     public function getAccountProvider(): AccountProviderInterface

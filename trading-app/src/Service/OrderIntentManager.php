@@ -187,14 +187,18 @@ final class OrderIntentManager
     /**
      * Trouve un OrderIntent par client_order_id ou order_id
      */
-    public function findIntent(?string $clientOrderId = null, ?string $orderId = null): ?OrderIntent
+    public function findIntent(
+        ?string $clientOrderId = null,
+        ?string $orderId = null,
+        ?ExchangeContext $context = null,
+    ): ?OrderIntent
     {
         if ($clientOrderId !== null) {
-            return $this->orderIntentRepository->findOneByClientOrderId($clientOrderId);
+            return $this->orderIntentRepository->findOneByClientOrderId($clientOrderId, $context);
         }
 
         if ($orderId !== null) {
-            return $this->orderIntentRepository->findOneByOrderId($orderId);
+            return $this->orderIntentRepository->findOneByOrderId($orderId, $context);
         }
 
         return null;

@@ -6,9 +6,11 @@ namespace App\Provider\Bitmart;
 
 use App\Common\Enum\OrderSide;
 use App\Common\Enum\OrderType;
+use App\Contract\Provider\ContextualOrderProviderInterface;
 use App\Contract\Provider\Dto\OrderDto;
 use App\Contract\Provider\Dto\SymbolBidAskDto;
 use App\Contract\Provider\OrderProviderInterface;
+use App\Provider\Context\ExchangeContext;
 use App\Provider\Bitmart\Http\BitmartHttpClientPrivate;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
 use App\Provider\Repository\ContractRepository;
@@ -17,6 +19,7 @@ use App\Service\OrderIntentManager;
 use App\Provider\OrderWatcherPublisher;
 use App\Entity\OrderIntent;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
@@ -28,7 +31,8 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
         OrderProviderInterface::class => '@app.provider.bitmart.order'
     ]
 )]
-final class BitmartOrderProvider implements OrderProviderInterface
+#[AsAlias(id: OrderProviderInterface::class)]
+final class BitmartOrderProvider implements ContextualOrderProviderInterface
 {
     private const RETRY_ATTEMPTS = 3;
     private const RETRY_SLEEP_US = 250_000; // 250ms
@@ -57,6 +61,8 @@ final class BitmartOrderProvider implements OrderProviderInterface
     ): ?OrderDto {
         $intent = null;
         try {
+            $context = ExchangeContext::fromArray($options);
+
             // Bitmart Futures V2 expects:
             //  - side: numeric (1=open_long, 4=open_short) for entry orders
             //  - size: stringified contract size quantity
@@ -115,10 +121,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
 
             $this->intentManager->markReadyToSend($intent);
 
-            $orderPayload = $payload;
-            if (isset($orderPayload['leverage'])) {
-                unset($orderPayload['leverage']);
-            }
+            $orderPayload = $this->toExchangeOrderPayload($payload);
 
             $response = $this->bitmartClient->submitOrder($orderPayload);
 
@@ -139,7 +142,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 // Synchroniser la réponse de soumission si disponible
                 if ($this->syncService && isset($response['data'])) {
                     try {
-                        $this->syncService->syncOrderFromApi($response['data']);
+                        $this->syncService->syncOrderFromApi($this->withContextData($response['data'], $context));
                     } catch (\Throwable $e) {
                         // Log mais ne pas bloquer le flux
                         $this->logger->warning('[BitmartOrderProvider] Failed to sync order on submit', [
@@ -152,7 +155,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 // Short retry loop for eventual consistency on order-detail
                 $orderDto = null;
                 for ($i = 0; $i < 3; $i++) {
-                    $orderDto = $this->getOrder($symbol, $orderId);
+                    $orderDto = $this->getOrder($symbol, $orderId, $context);
                     if ($orderDto !== null) {
                         break;
                     }
@@ -185,6 +188,8 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     'metadata' => [
                         'provider' => 'bitmart',
                         'submit_only' => true,
+                        'exchange' => $context->exchange->value,
+                        'market_type' => $context->marketType->value,
                     ],
                 ]);
                 
@@ -226,12 +231,12 @@ final class BitmartOrderProvider implements OrderProviderInterface
         }
     }
 
-    public function cancelOrder(string $symbol, string $orderId): bool
+    public function cancelOrder(string $symbol, string $orderId, ?ExchangeContext $context = null): bool
     {
         // Trouver l'OrderIntent associé si disponible
         $intent = null;
         if ($this->intentManager) {
-            $intent = $this->intentManager->findIntent(orderId: $orderId);
+            $intent = $this->intentManager->findIntent(orderId: $orderId, context: $context);
         }
 
         $lastError = null;
@@ -346,7 +351,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
         return count($errors) > 0 ? $errors : null;
     }
 
-    public function getOrder(string $symbol, string $orderId): ?OrderDto
+    public function getOrder(string $symbol, string $orderId, ?ExchangeContext $context = null): ?OrderDto
     {
         $lastError = null;
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
@@ -357,9 +362,10 @@ final class BitmartOrderProvider implements OrderProviderInterface
                         return null;
                     }
                     // Synchroniser l'ordre dans la base de données
+                    $orderData = $this->withContextData($response['data'], $context);
                     if ($this->syncService) {
                         try {
-                            $this->syncService->syncOrderFromApi($response['data']);
+                            $this->syncService->syncOrderFromApi($orderData);
                         } catch (\Throwable $e) {
                             // Log mais ne pas bloquer le flux
                             $this->logger->warning('[BitmartOrderProvider] Failed to sync order detail', [
@@ -368,7 +374,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                             ]);
                         }
                     }
-                    return OrderDto::fromArray($response['data']);
+                    return OrderDto::fromArray($orderData);
                 }
                 $lastError = new \RuntimeException('Invalid order detail response structure.');
             } catch (\Throwable $e) {
@@ -389,7 +395,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
         return null;
     }
 
-    public function getOpenOrders(?string $symbol = null): array
+    public function getOpenOrders(?string $symbol = null, ?ExchangeContext $context = null): array
     {
         $lastError = null;
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
@@ -426,7 +432,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     if ($this->syncService) {
                         foreach ($orders as $orderData) {
                             try {
-                                $this->syncService->syncOrderFromApi($orderData);
+                                $this->syncService->syncOrderFromApi($this->withContextData($orderData, $context));
                             } catch (\Throwable $e) {
                                 // Log mais ne pas bloquer le flux
                                 $this->logger->warning('[BitmartOrderProvider] Failed to sync open order', [
@@ -436,7 +442,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                             }
                         }
                     }
-                    return array_map(fn($order) => OrderDto::fromArray($order), $orders);
+                    return array_map(fn($order) => OrderDto::fromArray($this->withContextData($order, $context)), $orders);
                 }
 
                 // Si code 30000 ou data vide, c'est normal (pas d'ordres)
@@ -537,7 +543,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
         return [];
     }
 
-    public function getOrderHistory(string $symbol, int $limit = 100): array
+    public function getOrderHistory(string $symbol, int $limit = 100, ?ExchangeContext $context = null): array
     {
         $lastError = null;
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
@@ -580,7 +586,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                     if ($this->syncService) {
                         foreach ($orders as $orderData) {
                             try {
-                                $this->syncService->syncOrderFromApi($orderData);
+                                $this->syncService->syncOrderFromApi($this->withContextData($orderData, $context));
                             } catch (\Throwable $e) {
                                 // Log mais ne pas bloquer le flux
                                 $this->logger->warning('[BitmartOrderProvider] Failed to sync history order', [
@@ -590,7 +596,7 @@ final class BitmartOrderProvider implements OrderProviderInterface
                             }
                         }
                     }
-                    return array_map(fn($order) => OrderDto::fromArray($order), $orders);
+                    return array_map(fn($order) => OrderDto::fromArray($this->withContextData($order, $context)), $orders);
                 }
 
                 // Si code 30000 ou data vide, c'est normal (pas d'historique d'ordres)
@@ -928,6 +934,8 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 'filled_notional' => $averagePrice !== null
                     ? $averagePrice * $filledQuantity
                     : null,
+                'exchange' => $payload['exchange'] ?? $intent?->getExchange(),
+                'market_type' => $payload['market_type'] ?? $payload['marketType'] ?? $intent?->getMarketType(),
             ];
 
             // Nettoyer les valeurs null pour les champs optionnels
@@ -941,5 +949,34 @@ final class BitmartOrderProvider implements OrderProviderInterface
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function toExchangeOrderPayload(array $payload): array
+    {
+        unset(
+            $payload['leverage'],
+            $payload['exchange'],
+            $payload['market_type'],
+            $payload['marketType'],
+        );
+
+        return $payload;
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     * @return array<string,mixed>
+     */
+    private function withContextData(array $data, ?ExchangeContext $context): array
+    {
+        $context ??= ExchangeContext::fromArray($data);
+        $data['exchange'] ??= $context->exchange->value;
+        $data['market_type'] ??= $context->marketType->value;
+
+        return $data;
     }
 }
