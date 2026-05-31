@@ -369,8 +369,7 @@ class MtfRunCommand extends Command
                 $process = new Process(
                     $this->buildWorkerCommand($symbol, $options),
                     $this->projectDir,
-                    // Forcer l'affichage des traces pour diagnostiquer les erreurs des workers
-                    ['APP_DEBUG' => '1']
+                    ['APP_DEBUG' => '0']
                 );
                 $process->start();
                 $active[] = ['symbol' => $symbol, 'process' => $process];
@@ -629,6 +628,8 @@ class MtfRunCommand extends Command
     {
         $command = [
             PHP_BINARY,
+            '-d',
+            'memory_limit=512M',
             $this->projectDir . '/bin/console',
             'mtf:run-worker',
             '--symbols=' . $symbol,
