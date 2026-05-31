@@ -176,6 +176,24 @@ final class BitmartExchangeAdapterTest extends TestCase
         ));
     }
 
+    public function testRejectsAttachedProtectionOnReduceOnlyOrders(): void
+    {
+        $registry = $this->createMock(ExchangeProviderRegistryInterface::class);
+        $registry->expects($this->never())->method('get');
+        $adapter = new BitmartExchangeAdapter($registry, $this->fixedClock());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('attached SL/TP is only supported for entry orders');
+
+        $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::LONG,
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+            attachedTakeProfitPrice: 26000.0,
+        ));
+    }
+
     public function testRejectsSidePositionMismatchBeforeProviderSubmission(): void
     {
         $registry = $this->createMock(ExchangeProviderRegistryInterface::class);

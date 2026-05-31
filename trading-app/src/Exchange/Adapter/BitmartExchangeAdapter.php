@@ -477,6 +477,10 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             throw new \InvalidArgumentException('attached SL/TP on market orders must use the separate Bitmart protection flow');
         }
 
+        if ($request->reduceOnly && ($request->attachedStopLossPrice !== null || $request->attachedTakeProfitPrice !== null)) {
+            throw new \InvalidArgumentException('attached SL/TP is only supported for entry orders on Bitmart');
+        }
+
         if ($request->postOnly && \in_array($request->timeInForce, [ExchangeTimeInForce::IOC, ExchangeTimeInForce::FOK], true)) {
             throw new \InvalidArgumentException('postOnly cannot be combined with IOC or FOK on Bitmart');
         }
