@@ -59,7 +59,7 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
     {
         return new ExchangeCapabilities(
             supportsTestnet: true,
-            supportsWebSocketPrivate: true,
+            supportsWebSocketPrivate: false,
             supportsClientOrderId: true,
             supportsCancelByClientOrderId: true,
             supportsPostOnly: true,
