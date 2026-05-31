@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace App\Trading\Storage;
 
-use App\Common\Enum\Exchange;
-use App\Common\Enum\MarketType;
 use App\Entity\Position;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\PositionRepository;
@@ -21,10 +19,14 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
         private readonly EntityManagerInterface $em,
     ) {}
 
-    public function findLocalOpenPosition(string $symbol, string $side): ?PositionDto
+    public function findLocalOpenPosition(
+        string $symbol,
+        string $side,
+        ?ExchangeContext $context = null,
+    ): ?PositionDto
     {
         /** @var Position|null $entity */
-        $entity = $this->repository->findOneBySymbolSide($symbol, $side);
+        $entity = $this->repository->findOneBySymbolSide($symbol, $side, $context);
         if ($entity === null || $entity->getStatus() !== 'OPEN') {
             return null;
         }
@@ -36,14 +38,18 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
      * @param string[]|null $symbols
      * @return PositionDto[]
      */
-    public function findLocalOpenPositions(?array $symbols = null): array
+    public function findLocalOpenPositions(
+        ?array $symbols = null,
+        ?ExchangeContext $context = null,
+    ): array
     {
+        $context = ExchangeContext::resolve($context);
         $qb = $this->repository->createQueryBuilder('p')
             ->where('p.exchange = :exchange')
             ->andWhere('p.marketType = :marketType')
             ->andWhere('p.status = :status')
-            ->setParameter('exchange', ExchangeContext::exchangeValue(null))
-            ->setParameter('marketType', ExchangeContext::marketTypeValue(null))
+            ->setParameter('exchange', $context->exchange->value)
+            ->setParameter('marketType', $context->marketType->value)
             ->setParameter('status', 'OPEN');
 
         if ($symbols !== null && $symbols !== []) {
@@ -109,14 +115,16 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
     public function findLocalClosedPositions(
         ?array $symbols = null,
         ?\DateTimeInterface $from = null,
-        ?\DateTimeInterface $to = null
+        ?\DateTimeInterface $to = null,
+        ?ExchangeContext $context = null,
     ): array {
+        $context = ExchangeContext::resolve($context);
         $qb = $this->repository->createQueryBuilder('p')
             ->where('p.exchange = :exchange')
             ->andWhere('p.marketType = :marketType')
             ->andWhere('p.status = :status')
-            ->setParameter('exchange', ExchangeContext::exchangeValue(null))
-            ->setParameter('marketType', ExchangeContext::marketTypeValue(null))
+            ->setParameter('exchange', $context->exchange->value)
+            ->setParameter('marketType', $context->marketType->value)
             ->setParameter('status', 'CLOSED')
             ->orderBy('p.updatedAt', 'DESC');
 
@@ -174,14 +182,18 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
             unrealizedPnl: BigDecimal::of($entity->getUnrealizedPnl() ?? '0'),
             leverage: $leverage,
             openedAt: $entity->getInsertedAt(),
-            raw: $payload
+            raw: array_replace($payload, [
+                'exchange' => $entity->getExchange(),
+                'market_type' => $entity->getMarketType(),
+            ])
         );
     }
 
     private function mapDtoToOpenEntity(PositionDto $dto, Position $entity): void
     {
-        $entity->setExchange((string)($dto->raw['exchange'] ?? ExchangeContext::exchangeValue(null)));
-        $entity->setMarketType((string)($dto->raw['market_type'] ?? $dto->raw['marketType'] ?? ExchangeContext::marketTypeValue(null)));
+        $context = $this->resolveContext($dto->raw);
+        $entity->setExchange($context->exchange);
+        $entity->setMarketType($context->marketType);
         $entity->setStatus('OPEN');
         $entity->setSize($dto->size->__toString());
         $entity->setAvgEntryPrice($dto->entryPrice->__toString());
@@ -198,14 +210,7 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
      */
     private function resolveContext(array $raw): ExchangeContext
     {
-        try {
-            return new ExchangeContext(
-                Exchange::from(strtolower((string)($raw['exchange'] ?? ExchangeContext::exchangeValue(null)))),
-                MarketType::from(strtolower((string)($raw['market_type'] ?? $raw['marketType'] ?? ExchangeContext::marketTypeValue(null)))),
-            );
-        } catch (\ValueError) {
-            return ExchangeContext::legacyDefault();
-        }
+        return ExchangeContext::fromArray($raw);
     }
 
     private function mapEntityToHistoryDto(Position $entity): ?PositionHistoryEntryDto
@@ -245,7 +250,10 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
             fees: $fees,
             openedAt: $entity->getInsertedAt(),
             closedAt: $closedAt,
-            raw: $payload['raw_history'] ?? $payload
+            raw: array_replace($payload['raw_history'] ?? $payload, [
+                'exchange' => $entity->getExchange(),
+                'market_type' => $entity->getMarketType(),
+            ])
         );
     }
 }

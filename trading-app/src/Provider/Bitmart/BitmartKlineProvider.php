@@ -11,6 +11,7 @@ use App\Provider\Entity\Kline;
 use App\Provider\Bitmart\Dto\KlineDto as BitmartRawKlineDto;
 use App\Provider\Bitmart\Dto\ListKlinesDto;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
+use App\Provider\Context\ExchangeContext;
 use App\Provider\Repository\KlineRepository;
 use Brick\Math\BigDecimal;
 use Psr\Clock\ClockInterface;
@@ -34,9 +35,19 @@ final class BitmartKlineProvider implements KlineProviderInterface
         private readonly ClockInterface $clock,
     ) {}
 
-    public function getKlines(string $symbol, Timeframe $timeframe, int $limit = 499): array
+    public function getKlines(
+        string $symbol,
+        Timeframe $timeframe,
+        int $limit = 499,
+        ?ExchangeContext $context = null,
+    ): array
     {
-        $dbKlines = $this->klineRepository->getKlines($symbol, $timeframe, $limit);
+        $context = ExchangeContext::resolve($context);
+        $dbKlines = $this->klineRepository->getKlines($symbol, $timeframe, $limit, $context);
+
+        if (!$context->isLegacyDefault()) {
+            return $this->mapEntitiesToDtos($dbKlines);
+        }
 
         if ($this->isDatasetFresh($dbKlines, $timeframe, $limit)) {
             return $this->mapEntitiesToDtos($dbKlines);
@@ -55,7 +66,7 @@ final class BitmartKlineProvider implements KlineProviderInterface
             $klines = $this->mapFetchedKlines($klinesDataAsc, $symbol, $timeframe);
 
             if (!empty($klines)) {
-                $this->klineRepository->upsertKlines($klines);
+                $this->klineRepository->upsertKlines($klines, $context);
                 return $klines;
             }
         } catch (ServerExceptionInterface $e) {
@@ -93,8 +104,26 @@ final class BitmartKlineProvider implements KlineProviderInterface
         Timeframe $timeframe,
         \DateTimeImmutable $start,
         \DateTimeImmutable $end,
-        int $limit = 500
+        int $limit = 500,
+        ?ExchangeContext $context = null,
     ): array {
+        $context = ExchangeContext::resolve($context);
+
+        if (!$context->isLegacyDefault()) {
+            $entities = $this->klineRepository->findBySymbolTimeframeAndDateRange(
+                $symbol,
+                $timeframe,
+                $start,
+                $end,
+                $context,
+            );
+
+            return array_map(
+                fn(Kline $kline): ContractKlineDto => $this->mapEntityToDto($kline),
+                array_slice($entities, 0, $limit),
+            );
+        }
+
         try {
             $step = $this->convertTimeframeToStep($timeframe);
             $startTs = $start->getTimestamp();
@@ -117,10 +146,14 @@ final class BitmartKlineProvider implements KlineProviderInterface
         }
     }
 
-    public function getLastKline(string $symbol, Timeframe $timeframe): ?ContractKlineDto
+    public function getLastKline(
+        string $symbol,
+        Timeframe $timeframe,
+        ?ExchangeContext $context = null,
+    ): ?ContractKlineDto
     {
         try {
-            $kline = $this->klineRepository->findLastBySymbolAndTimeframe($symbol, $timeframe);
+            $kline = $this->klineRepository->findLastBySymbolAndTimeframe($symbol, $timeframe, $context);
             if (!$kline) {
                 return null;
             }
@@ -136,10 +169,10 @@ final class BitmartKlineProvider implements KlineProviderInterface
         }
     }
 
-    public function saveKline(ContractKlineDto $kline): void
+    public function saveKline(ContractKlineDto $kline, ?ExchangeContext $context = null): void
     {
         try {
-            $this->klineRepository->upsertKlines([$kline]);
+            $this->klineRepository->upsertKlines([$kline], $context);
         } catch (\Exception $e) {
             $this->logger->error("Erreur lors de la sauvegarde d'une kline", [
                 'symbol' => $kline->symbol,
@@ -150,10 +183,15 @@ final class BitmartKlineProvider implements KlineProviderInterface
         }
     }
 
-    public function saveKlines(array $klines, string $symbol, Timeframe $timeframe): void
+    public function saveKlines(
+        array $klines,
+        string $symbol,
+        Timeframe $timeframe,
+        ?ExchangeContext $context = null,
+    ): void
     {
         try {
-            $this->klineRepository->upsertKlines($klines);
+            $this->klineRepository->upsertKlines($klines, $context);
         } catch (\Exception $e) {
             $this->logger->error("Erreur lors de la sauvegarde des klines", [
                 'count' => count($klines),
@@ -291,13 +329,17 @@ final class BitmartKlineProvider implements KlineProviderInterface
     }
 
 
-    public function hasGaps(string $symbol, Timeframe $timeframe): bool
+    public function hasGaps(
+        string $symbol,
+        Timeframe $timeframe,
+        ?ExchangeContext $context = null,
+    ): bool
     {
         try {
             $endTime = new \DateTimeImmutable();
             $startTime = $endTime->sub(new \DateInterval('P7D')); // 7 jours en arrière
 
-            $gaps = $this->klineRepository->getMissingKlineChunks($symbol, $timeframe->value, $startTime, $endTime, 1);
+            $gaps = $this->klineRepository->getMissingKlineChunks($symbol, $timeframe->value, $startTime, $endTime, 1, $context);
             return !empty($gaps);
         } catch (\Exception $e) {
             $this->logger->error("Erreur lors de la vérification des gaps", [
@@ -309,13 +351,17 @@ final class BitmartKlineProvider implements KlineProviderInterface
         }
     }
 
-    public function getGaps(string $symbol, Timeframe $timeframe): array
+    public function getGaps(
+        string $symbol,
+        Timeframe $timeframe,
+        ?ExchangeContext $context = null,
+    ): array
     {
         try {
             $endTime = new \DateTimeImmutable();
             $startTime = $endTime->sub(new \DateInterval('P7D')); // 7 jours en arrière
 
-            return $this->klineRepository->getMissingKlineChunks($symbol, $timeframe->value, $startTime, $endTime, 100);
+            return $this->klineRepository->getMissingKlineChunks($symbol, $timeframe->value, $startTime, $endTime, 100, $context);
         } catch (\Exception $e) {
             $this->logger->error("Erreur lors de la récupération des gaps", [
                 'symbol' => $symbol,

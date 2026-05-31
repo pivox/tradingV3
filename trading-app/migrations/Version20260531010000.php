@@ -6,6 +6,7 @@ namespace DoctrineMigrations;
 
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\Migrations\AbstractMigration;
+use Doctrine\Migrations\Exception\IrreversibleMigration;
 
 final class Version20260531010000 extends AbstractMigration
 {
@@ -48,6 +49,8 @@ final class Version20260531010000 extends AbstractMigration
 
     public function down(Schema $schema): void
     {
+        $this->abortDownIfLegacyDuplicatesExist();
+
         $this->dropScopedIndexes();
         $this->createLegacyIndexes();
 
@@ -209,6 +212,41 @@ final class Version20260531010000 extends AbstractMigration
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_zone_symbol ON trade_zone_events (symbol)');
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_trade_lifecycle_symbol_happened_at ON trade_lifecycle_event (symbol, happened_at DESC)');
         $this->addSql('CREATE UNIQUE INDEX IF NOT EXISTS uniq_trade_lifecycle_event_dedup ON trade_lifecycle_event (exchange, account_id, run_id, symbol, event_type, order_id, happened_at)');
+    }
+
+    private function abortDownIfLegacyDuplicatesExist(): void
+    {
+        $checks = [
+            ['contracts', 'symbol', 'symbol IS NOT NULL'],
+            ['klines', 'symbol, timeframe, open_time', 'symbol IS NOT NULL AND timeframe IS NOT NULL AND open_time IS NOT NULL'],
+            ['positions', 'symbol, side', 'symbol IS NOT NULL AND side IS NOT NULL'],
+            ['futures_order', 'order_id', 'order_id IS NOT NULL'],
+            ['futures_order', 'client_order_id', 'client_order_id IS NOT NULL'],
+            ['futures_plan_order', 'order_id', 'order_id IS NOT NULL'],
+            ['futures_plan_order', 'client_order_id', 'client_order_id IS NOT NULL'],
+            ['futures_order_trade', 'trade_id', 'trade_id IS NOT NULL'],
+            ['order_intent', 'client_order_id', 'client_order_id IS NOT NULL'],
+            ['indicator_snapshots', 'symbol, timeframe, kline_time', 'symbol IS NOT NULL AND timeframe IS NOT NULL AND kline_time IS NOT NULL'],
+            ['trade_lifecycle_event', 'exchange, account_id, run_id, symbol, event_type, order_id, happened_at', 'exchange IS NOT NULL AND run_id IS NOT NULL AND symbol IS NOT NULL AND event_type IS NOT NULL AND happened_at IS NOT NULL'],
+        ];
+
+        foreach ($checks as [$table, $legacyKey, $where]) {
+            $sql = sprintf(
+                "SELECT COUNT(*) FROM (SELECT %s FROM %s WHERE %s GROUP BY %s HAVING COUNT(DISTINCT exchange || ':' || market_type) > 1) duplicates",
+                $legacyKey,
+                $table,
+                $where,
+                $legacyKey,
+            );
+
+            if ((int) $this->connection->fetchOne($sql) > 0) {
+                throw new IrreversibleMigration(sprintf(
+                    'Cannot rollback exchange/market scoping: table "%s" contains rows that would collide on the legacy key (%s).',
+                    $table,
+                    $legacyKey,
+                ));
+            }
+        }
     }
 
     private function refreshKlineIngestFunction(): void

@@ -6,6 +6,7 @@ namespace App\MtfValidator\Repository;
 
 use App\Entity\MtfState;
 use App\MtfValidator\Entity\MtfAudit;
+use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\ParameterType;
@@ -690,7 +691,8 @@ WITH success_events AS (
     ) AS event_ts,
     candle_open_ts,
     created_at,
-    cause
+    cause,
+    details
   FROM mtf_audit
   WHERE UPPER(step) IN (:step_values)
   {$symbolClause}
@@ -704,11 +706,12 @@ ranked_success AS (
     candle_open_ts,
     created_at,
     cause,
+    details,
     ROW_NUMBER() OVER (PARTITION BY symbol, timeframe ORDER BY event_ts DESC, created_at DESC) AS rn
   FROM success_events
   WHERE timeframe IS NOT NULL
 )
-SELECT id, symbol, timeframe, event_ts, candle_open_ts, created_at, cause
+SELECT id, symbol, timeframe, event_ts, candle_open_ts, created_at, cause, details
 FROM ranked_success
 WHERE rn = 1
 SQL;
@@ -828,6 +831,7 @@ SQL;
                 'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
                 'cause' => $row['cause'] ?? null,
                 'audit_id' => isset($row['id']) ? (int)$row['id'] : null,
+                'details' => $row['details'] ?? null,
                 '_latest_ts' => $latestDt?->getTimestamp(),
             ];
         }
@@ -933,7 +937,12 @@ SQL;
                         $tfSeconds = $tfSecondsMap[$tf] ?? 0;
                         if ($tfSeconds > 0) {
                             $expectedOpenTime = $eventTs->modify("-{$tfSeconds} seconds");
-                            $klineId = $this->findKlineId($entry['symbol'], $tf, $expectedOpenTime);
+                            $klineId = $this->findKlineId(
+                                $entry['symbol'],
+                                $tf,
+                                $expectedOpenTime,
+                                $this->resolveExchangeContextFromDetails($tfData['details'] ?? null),
+                            );
                             $tfData['kline_id'] = $klineId;
                             // Conserver l'indicateur d'existence si possible via klines (id non null)
                             $tfData['kline_exists'] = $klineId !== null ? true : ($tfData['kline_exists'] ?? null);
@@ -943,6 +952,9 @@ SQL;
                 $ordered[$tf] = $tfData;
                 if (is_array($ordered[$tf]) && array_key_exists('_latest_ts', $ordered[$tf])) {
                     unset($ordered[$tf]['_latest_ts']);
+                }
+                if (is_array($ordered[$tf]) && array_key_exists('details', $ordered[$tf])) {
+                    unset($ordered[$tf]['details']);
                 }
             }
             $entry['timeframes'] = $ordered;
@@ -1325,20 +1337,51 @@ SQL;
     /**
      * Retourne l'ID de la bougie (table klines) si elle existe pour (symbol, timeframe, open_time).
      */
-    private function findKlineId(string $symbol, string $timeframe, \DateTimeImmutable $openTime): ?int
+    private function resolveExchangeContextFromDetails(mixed $details): ExchangeContext
     {
+        if (\is_string($details) && $details !== '') {
+            try {
+                $decoded = json_decode($details, true, 512, JSON_THROW_ON_ERROR);
+                $details = \is_array($decoded) ? $decoded : [];
+            } catch (\JsonException) {
+                $details = [];
+            }
+        }
+
+        if (!\is_array($details)) {
+            return ExchangeContext::legacyDefault();
+        }
+
+        $options = $details['extra']['options'] ?? $details['options'] ?? null;
+        if (\is_array($options)) {
+            return ExchangeContext::fromArray($options);
+        }
+
+        return ExchangeContext::fromArray($details);
+    }
+
+    private function findKlineId(
+        string $symbol,
+        string $timeframe,
+        \DateTimeImmutable $openTime,
+        ?ExchangeContext $context = null,
+    ): ?int
+    {
+        $context = ExchangeContext::resolve($context);
         try {
             $sql = <<<SQL
 SELECT id
 FROM klines
-WHERE exchange = 'bitmart'
-  AND market_type = 'perpetual'
+WHERE exchange = :exchange
+  AND market_type = :market_type
   AND symbol = :symbol
   AND timeframe = :timeframe
   AND open_time = :open_time
 LIMIT 1
 SQL;
             $id = $this->conn->fetchOne($sql, [
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
                 'symbol' => $symbol,
                 'timeframe' => $timeframe,
                 'open_time' => $openTime->format('Y-m-d H:i:sP'),

@@ -59,17 +59,46 @@ class KlineRepository extends ServiceEntityRepository
         try {
             $rows = $conn->fetchAllAssociative(
                 <<<SQL
-WITH expected AS (
-    SELECT generate_series(
-        CAST(:start_utc AS timestamptz),
-        CAST(:end_utc AS timestamptz),
-        (:step_minutes || ' minutes')::interval
-    ) AS open_time
+WITH input AS (
+    SELECT
+        CAST(:start_utc AS timestamptz) AS start_utc,
+        CAST(:end_utc AS timestamptz) AS end_utc,
+        (:step_minutes || ' minutes')::interval AS step_interval
+),
+bounds AS (
+    SELECT
+        CASE :timeframe
+            WHEN '1m' THEN date_trunc('minute', start_utc)
+            WHEN '5m' THEN date_trunc('hour', start_utc)
+                + make_interval(mins => (floor(extract(minute from start_utc)::numeric / 5) * 5)::int)
+            WHEN '15m' THEN date_trunc('hour', start_utc)
+                + make_interval(mins => (floor(extract(minute from start_utc)::numeric / 15) * 15)::int)
+            WHEN '1h' THEN date_trunc('hour', start_utc)
+            WHEN '4h' THEN date_trunc('day', start_utc)
+                + make_interval(hours => (floor(extract(hour from start_utc)::numeric / 4) * 4)::int)
+            WHEN '1d' THEN date_trunc('day', start_utc)
+        END AS start_at,
+        CASE :timeframe
+            WHEN '1m' THEN date_trunc('minute', end_utc)
+            WHEN '5m' THEN date_trunc('hour', end_utc)
+                + make_interval(mins => (floor(extract(minute from end_utc)::numeric / 5) * 5)::int)
+            WHEN '15m' THEN date_trunc('hour', end_utc)
+                + make_interval(mins => (floor(extract(minute from end_utc)::numeric / 15) * 15)::int)
+            WHEN '1h' THEN date_trunc('hour', end_utc)
+            WHEN '4h' THEN date_trunc('day', end_utc)
+                + make_interval(hours => (floor(extract(hour from end_utc)::numeric / 4) * 4)::int)
+            WHEN '1d' THEN date_trunc('day', end_utc)
+        END AS end_at,
+        step_interval
+    FROM input
+),
+expected AS (
+    SELECT generate_series(start_at, end_at, step_interval) AS open_time, step_interval
+    FROM bounds
+    WHERE end_at >= start_at
 ),
 missing AS (
-    SELECT
-        e.open_time,
-        ROW_NUMBER() OVER (ORDER BY e.open_time) AS rn
+    SELECT e.open_time, e.step_interval
     FROM expected e
     LEFT JOIN klines k
         ON k.exchange = :exchange
@@ -79,11 +108,18 @@ missing AS (
        AND k.open_time = e.open_time
     WHERE k.id IS NULL
 ),
+contiguous AS (
+    SELECT
+        open_time,
+        open_time - ((ROW_NUMBER() OVER (ORDER BY open_time))::int * step_interval) AS run_key
+    FROM missing
+),
 chunked AS (
     SELECT
         open_time,
-        FLOOR((rn - 1) / :max_per_req) AS chunk_id
-    FROM missing
+        run_key,
+        FLOOR(((ROW_NUMBER() OVER (PARTITION BY run_key ORDER BY open_time) - 1)::numeric) / :max_per_req) AS chunk_id
+    FROM contiguous
 )
 SELECT
     :symbol AS symbol,
@@ -91,7 +127,7 @@ SELECT
     EXTRACT(EPOCH FROM MIN(open_time))::bigint AS "from",
     EXTRACT(EPOCH FROM MAX(open_time))::bigint AS "to"
 FROM chunked
-GROUP BY chunk_id
+GROUP BY run_key, chunk_id
 ORDER BY "from", "to"
 SQL,
                 [

@@ -7,6 +7,7 @@ namespace App\Tests\Repository;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Common\Enum\Timeframe;
+use App\Entity\FuturesOrder;
 use App\Entity\IndicatorSnapshot;
 use App\Entity\OrderIntent;
 use App\Entity\OrderProtection;
@@ -19,6 +20,8 @@ use App\Provider\Repository\KlineRepository;
 use App\Repository\IndicatorSnapshotRepository;
 use App\Repository\OrderIntentRepository;
 use App\Repository\PositionRepository;
+use App\Trading\Storage\FuturesOrderOrderStateRepository;
+use App\Trading\Storage\PositionPositionStateRepository;
 use Brick\Math\BigDecimal;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
@@ -44,6 +47,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
             fn (string $class) => $this->em->getClassMetadata($class),
             [
                 Contract::class,
+                FuturesOrder::class,
                 Kline::class,
                 Position::class,
                 OrderIntent::class,
@@ -64,6 +68,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
                 fn (string $class) => $this->em->getClassMetadata($class),
                 [
                     Contract::class,
+                    FuturesOrder::class,
                     Kline::class,
                     Position::class,
                     OrderIntent::class,
@@ -180,6 +185,44 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame('binance', $intentRepository->findOneByClientOrderId('shared-client', $binanceContext)?->getExchange());
     }
 
+    public function testTradingStateReadsCanSelectExplicitExchangeContext(): void
+    {
+        $this->em->persist(
+            (new Position('ETHUSDT', 'LONG'))
+                ->setSize('1')
+                ->setAvgEntryPrice('100')
+                ->setUnrealizedPnl('0')
+        );
+        $this->em->persist(
+            (new Position('ETHUSDT', 'LONG', Exchange::BINANCE, MarketType::PERPETUAL))
+                ->setSize('2')
+                ->setAvgEntryPrice('200')
+                ->setUnrealizedPnl('0')
+                ->mergePayload(['exchange' => 'binance', 'market_type' => 'perpetual'])
+        );
+        $this->em->persist($this->newFuturesOrder('bitmart', 'shared-order', '1'));
+        $this->em->persist($this->newFuturesOrder('binance', 'shared-order', '2'));
+        $this->em->flush();
+
+        $binanceContext = new ExchangeContext(Exchange::BINANCE, MarketType::PERPETUAL);
+        $positionState = new PositionPositionStateRepository(
+            $this->em->getRepository(Position::class),
+            $this->em,
+        );
+        $orderState = new FuturesOrderOrderStateRepository(
+            $this->em->getRepository(FuturesOrder::class),
+            $this->em,
+        );
+
+        self::assertSame('1', $positionState->findLocalOpenPosition('ETHUSDT', 'LONG')?->size->__toString());
+        self::assertSame('2', $positionState->findLocalOpenPosition('ETHUSDT', 'LONG', $binanceContext)?->size->__toString());
+        self::assertCount(1, $positionState->findLocalOpenPositions(['ETHUSDT'], $binanceContext));
+
+        self::assertSame('1', $orderState->findLocalOrder('ETHUSDT', 'shared-order')?->quantity->__toString());
+        self::assertSame('2', $orderState->findLocalOrder('ETHUSDT', 'shared-order', $binanceContext)?->quantity->__toString());
+        self::assertCount(1, $orderState->findLocalOpenOrders(['ETHUSDT'], $binanceContext));
+    }
+
     private function newKline(string $exchange, string $close, \DateTimeImmutable $openTime): Kline
     {
         return (new Kline())
@@ -225,5 +268,22 @@ final class ExchangeScopedStorageTest extends KernelTestCase
             ->setPresetMode(OrderIntent::PRESET_MODE_NONE)
             ->setQuantization([])
             ->setStatus(OrderIntent::STATUS_DRAFT);
+    }
+
+    private function newFuturesOrder(string $exchange, string $orderId, string $size): FuturesOrder
+    {
+        return (new FuturesOrder())
+            ->setExchange($exchange)
+            ->setMarketType(MarketType::PERPETUAL)
+            ->setSymbol('ETHUSDT')
+            ->setOrderId($orderId)
+            ->setClientOrderId($exchange . '-client')
+            ->setStatus('new')
+            ->setSide(1)
+            ->setType('market')
+            ->setPrice('100')
+            ->setSize((int) $size)
+            ->setFilledSize(0)
+            ->setRawData(['exchange' => $exchange, 'market_type' => 'perpetual']);
     }
 }

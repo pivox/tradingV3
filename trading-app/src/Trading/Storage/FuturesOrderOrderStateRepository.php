@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace App\Trading\Storage;
 
-use App\Common\Enum\Exchange;
-use App\Common\Enum\MarketType;
 use App\Entity\FuturesOrder;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\FuturesOrderRepository;
@@ -20,10 +18,14 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
         private readonly EntityManagerInterface $em,
     ) {}
 
-    public function findLocalOrder(string $symbol, string $orderId): ?OrderDto
+    public function findLocalOrder(
+        string $symbol,
+        string $orderId,
+        ?ExchangeContext $context = null,
+    ): ?OrderDto
     {
         /** @var FuturesOrder|null $entity */
-        $entity = $this->repository->findOneByOrderId($orderId);
+        $entity = $this->repository->findOneByOrderId($orderId, $context);
         if ($entity === null || strtoupper($entity->getSymbol()) !== strtoupper($symbol)) {
             return null;
         }
@@ -35,8 +37,12 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
      * @param string[]|null $symbols
      * @return OrderDto[]
      */
-    public function findLocalOpenOrders(?array $symbols = null): array
+    public function findLocalOpenOrders(
+        ?array $symbols = null,
+        ?ExchangeContext $context = null,
+    ): array
     {
+        $context = ExchangeContext::resolve($context);
         // Statuts considérés comme "ouverts" : pending, partially_filled
         $openStatuses = ['pending', 'partially_filled', 'new', 'sent'];
 
@@ -44,8 +50,8 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
             ->where('o.exchange = :exchange')
             ->andWhere('o.marketType = :marketType')
             ->andWhere('o.status IN (:statuses)')
-            ->setParameter('exchange', ExchangeContext::exchangeValue(null))
-            ->setParameter('marketType', ExchangeContext::marketTypeValue(null))
+            ->setParameter('exchange', $context->exchange->value)
+            ->setParameter('marketType', $context->marketType->value)
             ->setParameter('statuses', $openStatuses);
 
         if ($symbols !== null && $symbols !== []) {
@@ -149,14 +155,18 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
             avgFilledPrice: $avgFilledPrice,
             createdAt: $createdAt ?? new \DateTimeImmutable('now'),
             updatedAt: $updatedAt,
-            raw: $entity->getRawData()
+            raw: array_replace($entity->getRawData(), [
+                'exchange' => $entity->getExchange(),
+                'market_type' => $entity->getMarketType(),
+            ])
         );
     }
 
     private function mapDtoToEntity(OrderDto $dto, FuturesOrder $entity): void
     {
-        $entity->setExchange((string)($dto->raw['exchange'] ?? ExchangeContext::exchangeValue(null)));
-        $entity->setMarketType((string)($dto->raw['market_type'] ?? $dto->raw['marketType'] ?? ExchangeContext::marketTypeValue(null)));
+        $context = $this->resolveContext($dto->raw);
+        $entity->setExchange($context->exchange);
+        $entity->setMarketType($context->marketType);
         $entity->setSymbol($dto->symbol);
         $entity->setClientOrderId($dto->clientOrderId);
         $entity->setSide($this->mapOrderSideToNumericSide($dto->side));
@@ -187,14 +197,7 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
      */
     private function resolveContext(array $raw): ExchangeContext
     {
-        try {
-            return new ExchangeContext(
-                Exchange::from(strtolower((string)($raw['exchange'] ?? ExchangeContext::exchangeValue(null)))),
-                MarketType::from(strtolower((string)($raw['market_type'] ?? $raw['marketType'] ?? ExchangeContext::marketTypeValue(null)))),
-            );
-        } catch (\ValueError) {
-            return ExchangeContext::legacyDefault();
-        }
+        return ExchangeContext::fromArray($raw);
     }
 
     /**

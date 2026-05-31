@@ -11,6 +11,7 @@ use App\Repository\MtfStateRepository;
 use App\Repository\SignalRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use App\Logging\TraceIdProvider;
+use App\Provider\Context\ExchangeContext;
 use Ramsey\Uuid\Uuid;
 
 final class MtfResultProjector
@@ -74,9 +75,12 @@ final class MtfResultProjector
         $audit->setTraceId($traceId);
 
         // Details JSON : on met un résumé exploitable
+        $exchangeContext = ExchangeContext::fromArray($input->options);
         $details = [
             'profile'      => $result->profile,
             'mode'         => $result->mode,
+            'exchange'     => $exchangeContext->exchange->value,
+            'market_type'  => $exchangeContext->marketType->value,
             'is_tradable'  => $result->isTradable,
             'side'         => $result->side,
             'execution_tf' => $result->executionTimeframe,

@@ -28,6 +28,29 @@ final class ExchangeContext
         return new self(Exchange::BITMART, MarketType::PERPETUAL);
     }
 
+    public static function fromValues(mixed $exchange = null, mixed $marketType = null): self
+    {
+        try {
+            return new self(
+                Exchange::from(self::normalize($exchange, Exchange::BITMART->value)),
+                MarketType::from(self::normalize($marketType, MarketType::PERPETUAL->value)),
+            );
+        } catch (\ValueError) {
+            return self::legacyDefault();
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     */
+    public static function fromArray(array $data): self
+    {
+        return self::fromValues(
+            $data['exchange'] ?? null,
+            $data['market_type'] ?? $data['marketType'] ?? null,
+        );
+    }
+
     public static function resolve(?self $context): self
     {
         return $context ?? self::legacyDefault();
@@ -53,8 +76,26 @@ final class ExchangeContext
         return sprintf('%s::%s', $this->exchange->value, $this->marketType->value);
     }
 
+    public function isLegacyDefault(): bool
+    {
+        return $this->equals(self::legacyDefault());
+    }
+
     public function __toString(): string
     {
         return $this->key();
+    }
+
+    private static function normalize(mixed $value, string $fallback): string
+    {
+        if ($value instanceof Exchange || $value instanceof MarketType) {
+            return $value->value;
+        }
+
+        if (!\is_string($value) || $value === '') {
+            return $fallback;
+        }
+
+        return strtolower($value);
     }
 }
