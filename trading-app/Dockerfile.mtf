@@ -53,6 +53,7 @@ RUN if [ "$APP_ENV" = "prod" ]; then \
     else \
       composer install --optimize-autoloader --no-scripts --no-interaction; \
     fi
+COPY php-fpm.d/zz-trading-pool.conf /usr/local/etc/php-fpm.d/zz-trading-pool.conf
 COPY . .
 RUN chown -R www-data:www-data /var/www/html \
  && chmod -R 755 /var/www/html \
