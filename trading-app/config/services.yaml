@@ -41,6 +41,15 @@ parameters:
     env(HYPERLIQUID_API_BASE_URI): ''
     env(HYPERLIQUID_WS_URI): ''
     env(HYPERLIQUID_MAINNET_ENABLED): '0'
+    env(OKX_ENV): 'demo'
+    env(OKX_API_KEY): ''
+    env(OKX_API_SECRET): ''
+    env(OKX_API_PASSPHRASE): ''
+    env(OKX_API_BASE_URI): ''
+    env(OKX_WS_PUBLIC_URI): ''
+    env(OKX_WS_PRIVATE_URI): ''
+    env(OKX_DEMO_TRADING_ENABLED): '0'
+    env(OKX_LIVE_ENABLED): '0'
     app.trade_entry_default_mode: 'scalper_micro'
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
@@ -142,6 +151,18 @@ services:
             $apiBaseUri: '%env(string:HYPERLIQUID_API_BASE_URI)%'
             $wsUri: '%env(string:HYPERLIQUID_WS_URI)%'
             $mainnetEnabled: '%env(bool:HYPERLIQUID_MAINNET_ENABLED)%'
+
+    App\Exchange\Okx\OkxConfig:
+        arguments:
+            $environment: '%env(string:OKX_ENV)%'
+            $apiKey: '%env(string:OKX_API_KEY)%'
+            $apiSecret: '%env(string:OKX_API_SECRET)%'
+            $apiPassphrase: '%env(string:OKX_API_PASSPHRASE)%'
+            $apiBaseUri: '%env(string:OKX_API_BASE_URI)%'
+            $wsPublicUri: '%env(string:OKX_WS_PUBLIC_URI)%'
+            $wsPrivateUri: '%env(string:OKX_WS_PRIVATE_URI)%'
+            $demoTradingEnabled: '%env(bool:OKX_DEMO_TRADING_ENABLED)%'
+            $liveEnabled: '%env(bool:OKX_LIVE_ENABLED)%'
 
     # Provider pour la configuration des contrats MTF (support par profil avec fallback)
     App\Config\MtfContractsConfigProvider:

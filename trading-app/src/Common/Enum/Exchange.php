@@ -10,6 +10,7 @@ enum Exchange: string
     case BINANCE = 'binance';
     case FAKE = 'fake';
     case HYPERLIQUID = 'hyperliquid';
+    case OKX = 'okx';
 
     /**
      * Human readable label for logging/UI.
@@ -21,6 +22,7 @@ enum Exchange: string
             self::BINANCE => 'Binance',
             self::FAKE => 'Fake Exchange',
             self::HYPERLIQUID => 'Hyperliquid',
+            self::OKX => 'OKX',
         };
     }
 }
