@@ -121,7 +121,9 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
     public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult
     {
         $this->assertRequestContext($request->exchange, $request->marketType);
+        $this->assertRequestIntent($request);
         $providerOrderType = $this->mapOrderTypeToProvider($request->orderType);
+        $legacyOptions = $this->buildLegacyOrderOptions($request);
 
         $order = $this->bundle()->order()->placeOrder(
             symbol: $request->symbol,
@@ -130,7 +132,7 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             quantity: $request->quantity,
             price: $request->price,
             stopPrice: $request->stopPrice,
-            options: $this->buildLegacyOrderOptions($request),
+            options: $legacyOptions,
         );
 
         if (!$order instanceof OrderDto) {
@@ -145,7 +147,7 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             );
         }
 
-        $mapped = $this->mapOrder($order);
+        $mapped = $this->mapOrder($order, $this->buildSubmittedOrderMetadata($request, $legacyOptions));
 
         return new PlaceOrderResult(
             accepted: true,
@@ -249,6 +251,19 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
         return $options;
     }
 
+    /**
+     * @param array<string,mixed> $legacyOptions
+     * @return array<string,mixed>
+     */
+    private function buildSubmittedOrderMetadata(PlaceOrderRequest $request, array $legacyOptions): array
+    {
+        return $legacyOptions + [
+            'mode' => $request->timeInForce === ExchangeTimeInForce::GTC && !$request->postOnly ? 1 : null,
+            'post_only' => $request->postOnly,
+            'reduce_only' => $request->reduceOnly,
+        ];
+    }
+
     private function mapPositionIntentToLegacySide(PlaceOrderRequest $request): int
     {
         if ($request->reduceOnly && $request->positionSide === ExchangePositionSide::LONG) {
@@ -261,18 +276,22 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
         return $request->positionSide === ExchangePositionSide::LONG ? 1 : 4;
     }
 
-    private function mapOrder(OrderDto $order): ExchangeOrderDto
+    /**
+     * @param array<string,mixed> $submittedMetadata
+     */
+    private function mapOrder(OrderDto $order, array $submittedMetadata = []): ExchangeOrderDto
     {
-        [$side, $positionSide] = $this->mapOrderSideFromMetadata($order);
-        $bitmartSide = $this->intMetadata($order->metadata, 'side');
-        $mode = $this->intMetadata($order->metadata, 'mode');
+        $metadata = array_replace($submittedMetadata, $order->metadata);
+        [$side, $positionSide] = $this->mapOrderSideFromMetadata($order, $metadata);
+        $bitmartSide = $this->intMetadata($metadata, 'side');
+        $mode = $this->intMetadata($metadata, 'mode');
 
         return new ExchangeOrderDto(
             exchange: $this->exchange(),
             marketType: $this->marketType(),
             symbol: $order->symbol,
             exchangeOrderId: $order->orderId,
-            clientOrderId: $this->stringMetadata($order->metadata, 'client_order_id'),
+            clientOrderId: $this->stringMetadata($metadata, 'client_order_id'),
             side: $side,
             positionSide: $positionSide,
             orderType: $this->mapProviderOrderType($order->type),
@@ -283,12 +302,12 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             price: $order->price?->toFloat(),
             averagePrice: $order->averagePrice?->toFloat(),
             stopPrice: $order->stopPrice?->toFloat(),
-            reduceOnly: \in_array($bitmartSide, [2, 3], true) || $this->boolMetadata($order->metadata, 'reduce_only'),
-            postOnly: $mode === 4 || $this->boolMetadata($order->metadata, 'post_only'),
+            reduceOnly: \in_array($bitmartSide, [2, 3], true) || $this->boolMetadata($metadata, 'reduce_only'),
+            postOnly: $mode === 4 || $this->boolMetadata($metadata, 'post_only'),
             timeInForce: $this->mapModeToTimeInForce($mode),
             createdAt: $order->createdAt,
             updatedAt: $order->updatedAt,
-            metadata: $order->metadata,
+            metadata: $metadata,
         );
     }
 
@@ -333,11 +352,12 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
     }
 
     /**
+     * @param array<string,mixed> $metadata
      * @return array{0: ExchangeOrderSide, 1: ?ExchangePositionSide}
      */
-    private function mapOrderSideFromMetadata(OrderDto $order): array
+    private function mapOrderSideFromMetadata(OrderDto $order, array $metadata): array
     {
-        return match ($this->intMetadata($order->metadata, 'side')) {
+        return match ($this->intMetadata($metadata, 'side')) {
             1 => [ExchangeOrderSide::BUY, ExchangePositionSide::LONG],
             2 => [ExchangeOrderSide::BUY, ExchangePositionSide::SHORT],
             3 => [ExchangeOrderSide::SELL, ExchangePositionSide::LONG],
@@ -352,6 +372,7 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
     private function mapModeToTimeInForce(?int $mode): ?ExchangeTimeInForce
     {
         return match ($mode) {
+            1 => ExchangeTimeInForce::GTC,
             2 => ExchangeTimeInForce::FOK,
             3 => ExchangeTimeInForce::IOC,
             default => null,
@@ -420,6 +441,29 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
                 'Bitmart adapter cannot handle "%s::%s"',
                 $exchange->value,
                 $marketType->value,
+            ));
+        }
+    }
+
+    private function assertRequestIntent(PlaceOrderRequest $request): void
+    {
+        if ($request->postOnly && \in_array($request->timeInForce, [ExchangeTimeInForce::IOC, ExchangeTimeInForce::FOK], true)) {
+            throw new \InvalidArgumentException('postOnly cannot be combined with IOC or FOK on Bitmart');
+        }
+
+        $expectedSide = match ([$request->reduceOnly, $request->positionSide]) {
+            [false, ExchangePositionSide::LONG] => ExchangeOrderSide::BUY,
+            [false, ExchangePositionSide::SHORT] => ExchangeOrderSide::SELL,
+            [true, ExchangePositionSide::LONG] => ExchangeOrderSide::SELL,
+            [true, ExchangePositionSide::SHORT] => ExchangeOrderSide::BUY,
+        };
+
+        if ($request->side !== $expectedSide) {
+            throw new \InvalidArgumentException(sprintf(
+                'Invalid order side "%s" for %s %s position intent',
+                $request->side->value,
+                $request->reduceOnly ? 'reduce-only' : 'entry',
+                $request->positionSide->value,
             ));
         }
     }

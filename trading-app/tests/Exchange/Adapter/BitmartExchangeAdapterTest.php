@@ -123,6 +123,39 @@ final class BitmartExchangeAdapterTest extends TestCase
         self::assertSame(2, $capturedOptions['mode'] ?? null);
     }
 
+    public function testRejectsPostOnlyWithIocOrFok(): void
+    {
+        $registry = $this->createMock(ExchangeProviderRegistryInterface::class);
+        $registry->expects($this->never())->method('get');
+        $adapter = new BitmartExchangeAdapter($registry, $this->fixedClock());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('postOnly cannot be combined with IOC or FOK');
+
+        $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::LONG,
+            side: ExchangeOrderSide::BUY,
+            timeInForce: ExchangeTimeInForce::IOC,
+            postOnly: true,
+        ));
+    }
+
+    public function testRejectsSidePositionMismatchBeforeProviderSubmission(): void
+    {
+        $registry = $this->createMock(ExchangeProviderRegistryInterface::class);
+        $registry->expects($this->never())->method('get');
+        $adapter = new BitmartExchangeAdapter($registry, $this->fixedClock());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid order side "buy" for entry short position intent');
+
+        $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::SHORT,
+            side: ExchangeOrderSide::BUY,
+            postOnly: false,
+        ));
+    }
+
     public function testRejectsStandaloneTriggerOrdersBeforeProviderSubmission(): void
     {
         $registry = $this->createMock(ExchangeProviderRegistryInterface::class);
@@ -134,7 +167,7 @@ final class BitmartExchangeAdapterTest extends TestCase
 
         $adapter->placeOrder($this->placeOrderRequest(
             positionSide: ExchangePositionSide::LONG,
-            side: ExchangeOrderSide::SELL,
+            side: ExchangeOrderSide::BUY,
             orderType: ExchangeOrderType::TRIGGER,
             postOnly: false,
         ));
@@ -181,6 +214,51 @@ final class BitmartExchangeAdapterTest extends TestCase
         self::assertSame(ExchangePositionSide::LONG, $result->order?->positionSide);
         self::assertTrue($result->order?->reduceOnly);
         self::assertSame(ExchangeTimeInForce::IOC, $result->order?->timeInForce);
+    }
+
+    public function testMapsReturnedGtcMode(): void
+    {
+        $adapter = $this->createAdapter(
+            static function (): void {
+            },
+            $this->providerOrder([
+                'client_order_id' => 'cid-1',
+                'side' => 1,
+                'mode' => 1,
+            ]),
+        );
+
+        $result = $adapter->placeOrder($this->placeOrderRequest(ExchangePositionSide::LONG, ExchangeOrderSide::BUY));
+
+        self::assertSame(ExchangeTimeInForce::GTC, $result->order?->timeInForce);
+    }
+
+    public function testFallbackSubmitOnlyOrderPreservesSubmittedIntent(): void
+    {
+        $adapter = $this->createAdapter(
+            static function (): void {
+            },
+            $this->providerOrder([
+                'provider' => 'bitmart',
+                'submit_only' => true,
+            ]),
+        );
+
+        $result = $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::LONG,
+            side: ExchangeOrderSide::SELL,
+            timeInForce: ExchangeTimeInForce::IOC,
+            reduceOnly: true,
+            postOnly: false,
+        ));
+
+        self::assertSame('cid-1', $result->order?->clientOrderId);
+        self::assertSame(ExchangeOrderSide::SELL, $result->order?->side);
+        self::assertSame(ExchangePositionSide::LONG, $result->order?->positionSide);
+        self::assertTrue($result->order?->reduceOnly);
+        self::assertSame(ExchangeTimeInForce::IOC, $result->order?->timeInForce);
+        self::assertSame(3, $result->order?->metadata['side'] ?? null);
+        self::assertTrue($result->order?->metadata['submit_only'] ?? false);
     }
 
     /**
