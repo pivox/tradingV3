@@ -27,6 +27,7 @@ final class TimeframeValidationService
         private readonly ?IndicatorEngineInterface $indicatorEngine = null,
         private readonly ?KlineProviderInterface $klineProvider = null,
         private readonly ?MainProviderInterface $mainProvider = null,
+        private readonly ?MtfValidationEngineMetrics $validationEngineMetrics = null,
     ) {
     }
 
@@ -67,6 +68,7 @@ final class TimeframeValidationService
 
         $decision = null;
         $engine = 'yaml';
+        $fallbackContext = null;
 
         // Si l'engine ConditionRegistry est disponible, on l'utilise en priorité.
         if ($this->canUseConditionRegistryEngine()) {
@@ -89,7 +91,22 @@ final class TimeframeValidationService
                         'error'     => $e->getMessage(),
                     ]);
                 }
-                // Fallback silencieux vers l'ancien moteur YAML.
+
+                $fallbackCount = $this->validationEngineMetrics?->recordConditionRegistryFallback(
+                    symbol: $symbol,
+                    timeframe: $timeframe,
+                    phase: $phase,
+                    mode: $mode,
+                    error: $e,
+                );
+                $fallbackContext = [
+                    'metric' => MtfValidationEngineMetrics::CONDITION_REGISTRY_FALLBACK_COUNT,
+                    'fallback_count' => $fallbackCount,
+                    'source_engine' => 'condition_registry',
+                    'fallback_engine' => 'yaml',
+                    'exception' => $e::class,
+                    'error' => $e->getMessage(),
+                ];
             }
         }
 
@@ -105,11 +122,34 @@ final class TimeframeValidationService
                 rulesConfig: $rulesConfig,
             );
             $engine = 'yaml';
+
+            if ($fallbackContext !== null) {
+                $decision = $this->withValidationEngineFallback($decision, $fallbackContext);
+            }
         }
 
         $this->logInvalidContextTimeframe($symbol, $timeframe, $phase, $mode, $decision, $engine);
 
         return $decision;
+    }
+
+    /**
+     * @param array<string,mixed> $fallbackContext
+     */
+    private function withValidationEngineFallback(
+        TimeframeDecisionDto $decision,
+        array $fallbackContext,
+    ): TimeframeDecisionDto {
+        return new TimeframeDecisionDto(
+            timeframe: $decision->timeframe,
+            phase: $decision->phase,
+            signal: $decision->signal,
+            valid: $decision->valid,
+            invalidReason: $decision->invalidReason,
+            rulesPassed: $decision->rulesPassed,
+            rulesFailed: $decision->rulesFailed,
+            extra: $decision->extra + ['validation_engine_fallback' => $fallbackContext],
+        );
     }
 
     /**
