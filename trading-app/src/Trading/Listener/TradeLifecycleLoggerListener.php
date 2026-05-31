@@ -7,6 +7,7 @@ namespace App\Trading\Listener;
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\MainProviderInterface;
 use App\Logging\TradeLifecycleLogger;
+use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeLifecycleEventRepository;
 use App\Trading\Event\OrderStateChangedEvent;
 use App\Trading\Event\PositionClosedEvent;
@@ -28,6 +29,7 @@ final class TradeLifecycleLoggerListener
     public function onPositionOpened(PositionOpenedEvent $event): void
     {
         $position = $event->position;
+        $marketType = $this->marketTypeFromExtra($event->extra);
 
         $positionId = $position->raw['position_id']
             ?? $position->raw['positionId']
@@ -46,6 +48,7 @@ final class TradeLifecycleLoggerListener
                 'source' => 'trading_state_sync',
                 'raw'    => $position->raw,
             ], $event->extra),
+            marketType: $marketType,
         );
     }
 
@@ -55,6 +58,7 @@ final class TradeLifecycleLoggerListener
     public function onPositionClosed(PositionClosedEvent $event): void
     {
         $history = $event->positionHistory;
+        $marketType = $this->marketTypeFromExtra($event->extra);
 
         $positionId = $history->raw['position_id']
             ?? $history->raw['positionId']
@@ -88,6 +92,12 @@ final class TradeLifecycleLoggerListener
             if ($event->runId !== null) {
                 $criteria['runId'] = $event->runId;
             }
+            if ($event->exchange !== null) {
+                $criteria['exchange'] = $event->exchange;
+            }
+            if ($marketType !== null) {
+                $criteria['marketType'] = $marketType;
+            }
             $recent = $this->tradeLifecycleRepository->findRecentBy($criteria, 10);
             foreach ($recent as $lifecycleEvent) {
                 $extra = $lifecycleEvent->getExtra();
@@ -113,7 +123,9 @@ final class TradeLifecycleLoggerListener
 
         if ($this->mainProvider !== null) {
             try {
-                $klineProvider = $this->mainProvider->getKlineProvider();
+                $klineProvider = $this->mainProvider
+                    ->forContext(ExchangeContext::fromValues($event->exchange, $marketType))
+                    ->getKlineProvider();
                 $klines = $klineProvider->getKlinesInWindow(
                     $history->symbol,
                     Timeframe::TF_1M,
@@ -190,6 +202,7 @@ final class TradeLifecycleLoggerListener
                 'fees' => $history->fees?->__toString(),
                 'raw'  => $history->raw,
             ], $event->extra),
+            marketType: $marketType,
         );
     }
 
@@ -199,6 +212,7 @@ final class TradeLifecycleLoggerListener
     public function onOrderStateChanged(OrderStateChangedEvent $event): void
     {
         $order = $event->order;
+        $marketType = $this->marketTypeFromExtra($event->extra);
 
         // Détection simple "expired" : ordre qui passe d'OPEN -> CLOSED/CANCELED sans aucun fill
         $isClosedState = \in_array(strtoupper($event->newStatus), ['CANCELED', 'CLOSED', 'REJECTED', 'CANCELLED'], true);
@@ -219,6 +233,7 @@ final class TradeLifecycleLoggerListener
                 runId: $event->runId,
                 exchange: $event->exchange,
                 accountId: $event->accountId,
+                marketType: $marketType,
                 extra: array_merge([
                     'previous_status' => $event->previousStatus,
                     'new_status'      => $event->newStatus,
@@ -245,5 +260,15 @@ final class TradeLifecycleLoggerListener
             configVersion: $event->configVersion,
             extra: $event->extra,
         );
+    }
+
+    /**
+     * @param array<string,mixed> $extra
+     */
+    private function marketTypeFromExtra(array $extra): ?string
+    {
+        $marketType = $extra['market_type'] ?? $extra['marketType'] ?? null;
+
+        return \is_string($marketType) && $marketType !== '' ? $marketType : null;
     }
 }

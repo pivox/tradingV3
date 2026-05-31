@@ -35,7 +35,13 @@ final class BuildOrderPlan
         ]);
 
         // Compute entry zone first, then create the plan with zone so builder can clamp entry if needed
-        $zone = $this->zones->compute($req->symbol, $req->side, $pre->pricePrecision, $decisionKey);
+        $zone = $this->zones->compute(
+            symbol: $req->symbol,
+            side: $req->side,
+            pricePrecision: $pre->pricePrecision,
+            decisionKey: $decisionKey,
+            context: $req->exchangeContext,
+        );
         $plan = $this->box->create($req, $pre, $decisionKey, $zone);
         $candidate = $plan->entry > 0.0 ? $plan->entry : ($req->side === Side::Long ? $pre->bestAsk : $pre->bestBid);
 

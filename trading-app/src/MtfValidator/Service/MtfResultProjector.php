@@ -127,8 +127,9 @@ final class MtfResultProjector
 
     private function projectState(string $runId, MtfRunDto $input, MtfResultDto $result): void
     {
+        $exchangeContext = ExchangeContext::fromArray($input->options);
         // On récupère ou crée l'état pour le symbole
-        $state = $this->mtfStateRepository->getOrCreateForSymbol($result->symbol);
+        $state = $this->mtfStateRepository->getOrCreateForSymbol($result->symbol, $exchangeContext);
 
         $evaluatedAt = $result->evaluatedAt;
 

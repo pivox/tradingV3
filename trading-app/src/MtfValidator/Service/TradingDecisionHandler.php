@@ -138,6 +138,7 @@ final class TradingDecisionHandler
             $symbolResult->currentPrice,
             (\is_float($atrForTf) && $atrForTf > 0.0) ? $atrForTf : $forcedAtr5m,
             $resolvedMode, // Passer le mode (même mécanisme que validations.{mode}.yaml)
+            exchangeContext: $exchangeContext,
         );
 
         if ($tradeRequest === null) {

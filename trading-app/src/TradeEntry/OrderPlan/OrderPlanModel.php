@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\OrderPlan;
 
+use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Types\Side;
 
 final class OrderPlanModel
@@ -29,6 +30,7 @@ final class OrderPlanModel
         public readonly ?float $stopRisk = null,
         public readonly ?float $stopPivot = null,
         public readonly ?string $stopFinalSource = null,
+        public readonly ?ExchangeContext $exchangeContext = null,
     ) {}
 
     public function copyWith(
@@ -60,6 +62,7 @@ final class OrderPlanModel
             $this->stopRisk,
             $this->stopPivot,
             $this->stopFinalSource,
+            $this->exchangeContext,
         );
     }
 }

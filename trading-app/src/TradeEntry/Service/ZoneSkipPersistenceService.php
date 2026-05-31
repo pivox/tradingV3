@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\TradeEntry\Service;
 
 use App\Entity\TradeZoneEvent;
+use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeZoneEventRepository;
 use App\TradeEntry\Dto\ZoneSkipEventDto;
 
@@ -29,8 +30,11 @@ final class ZoneSkipPersistenceService
             zoneMaxDevPct: $dto->zoneMaxDevPct,
             happenedAt: $dto->happenedAt,
         );
+        $context = ExchangeContext::resolve($dto->exchangeContext);
 
         $event
+            ->setExchange($context->exchange)
+            ->setMarketType($context->marketType)
             ->setDecisionKey($dto->decisionKey)
             ->setTimeframe($dto->timeframe)
             ->setConfigProfile($dto->configProfile)

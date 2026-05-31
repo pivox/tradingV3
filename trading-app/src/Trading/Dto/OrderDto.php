@@ -8,6 +8,7 @@ use App\Common\Enum\OrderSide;
 use App\Common\Enum\OrderStatus;
 use App\Common\Enum\OrderType;
 use App\Contract\Provider\Dto\OrderDto as ProviderOrderDto;
+use App\Provider\Context\ExchangeContext;
 use Brick\Math\BigDecimal;
 
 /**
@@ -34,8 +35,10 @@ final class OrderDto
     /**
      * Mappe depuis un ProviderOrderDto
      */
-    public static function fromProviderDto(ProviderOrderDto $providerDto): self
+    public static function fromProviderDto(ProviderOrderDto $providerDto, ?ExchangeContext $context = null): self
     {
+        $context = ExchangeContext::resolve($context);
+
         return new self(
             orderId: $providerDto->orderId,
             clientOrderId: $providerDto->metadata['client_order_id'] ?? null,
@@ -49,9 +52,11 @@ final class OrderDto
             avgFilledPrice: $providerDto->averagePrice,
             createdAt: $providerDto->createdAt,
             updatedAt: $providerDto->updatedAt,
-            raw: $providerDto->metadata
+            raw: array_replace($providerDto->metadata, [
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
+            ])
         );
     }
 }
-
 

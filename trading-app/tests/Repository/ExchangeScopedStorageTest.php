@@ -9,6 +9,7 @@ use App\Common\Enum\MarketType;
 use App\Common\Enum\Timeframe;
 use App\Entity\FuturesOrder;
 use App\Entity\IndicatorSnapshot;
+use App\Entity\MtfState;
 use App\Entity\OrderIntent;
 use App\Entity\OrderProtection;
 use App\Entity\Position;
@@ -18,6 +19,7 @@ use App\Provider\Entity\Kline;
 use App\Provider\Repository\ContractRepository;
 use App\Provider\Repository\KlineRepository;
 use App\Repository\IndicatorSnapshotRepository;
+use App\Repository\MtfStateRepository;
 use App\Repository\OrderIntentRepository;
 use App\Repository\PositionRepository;
 use App\Trading\Storage\FuturesOrderOrderStateRepository;
@@ -53,6 +55,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
                 OrderIntent::class,
                 OrderProtection::class,
                 IndicatorSnapshot::class,
+                MtfState::class,
             ],
         );
 
@@ -74,6 +77,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
                     OrderIntent::class,
                     OrderProtection::class,
                     IndicatorSnapshot::class,
+                    MtfState::class,
                 ],
             );
             (new SchemaTool($this->em))->dropSchema($metadata);
@@ -221,6 +225,26 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame('1', $orderState->findLocalOrder('ETHUSDT', 'shared-order')?->quantity->__toString());
         self::assertSame('2', $orderState->findLocalOrder('ETHUSDT', 'shared-order', $binanceContext)?->quantity->__toString());
         self::assertCount(1, $orderState->findLocalOpenOrders(['ETHUSDT'], $binanceContext));
+    }
+
+    public function testMtfStateRepositoryScopesStateByExchangeAndMarketType(): void
+    {
+        /** @var MtfStateRepository $repository */
+        $repository = $this->em->getRepository(MtfState::class);
+        $binanceContext = new ExchangeContext(Exchange::BINANCE, MarketType::PERPETUAL);
+
+        $bitmart = $repository->getOrCreateForSymbol('BTCUSDT');
+        $bitmart->set4hSide('long');
+
+        $binance = $repository->getOrCreateForSymbol('BTCUSDT', $binanceContext);
+        $binance->set4hSide('short');
+        $this->em->flush();
+
+        self::assertNotSame($bitmart->getId(), $binance->getId());
+        self::assertSame('bitmart', $repository->getOrCreateForSymbol('BTCUSDT')->getExchange());
+        self::assertSame('long', $repository->getOrCreateForSymbol('BTCUSDT')->get4hSide());
+        self::assertSame('binance', $repository->getOrCreateForSymbol('BTCUSDT', $binanceContext)->getExchange());
+        self::assertSame('short', $repository->getOrCreateForSymbol('BTCUSDT', $binanceContext)->get4hSide());
     }
 
     private function newKline(string $exchange, string $close, \DateTimeImmutable $openTime): Kline

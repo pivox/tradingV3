@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Dto;
 
+use App\Provider\Context\ExchangeContext;
+
 final class ZoneSkipEventDto
 {
     public const REASON = 'skipped_out_of_zone';
@@ -32,5 +34,6 @@ final class ZoneSkipEventDto
         public readonly ?float $proposedZoneMaxPct = null,
         public readonly ?string $category = null,
         public readonly string $reason = self::REASON,
+        public readonly ?ExchangeContext $exchangeContext = null,
     ) {}
 }

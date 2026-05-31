@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Dto;
 
+use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Types\Side;
 
 final class TpSlTwoTargetsRequest
@@ -23,5 +24,6 @@ final class TpSlTwoTargetsRequest
         public readonly ?bool $pullbackClear = null,
         public readonly ?bool $lateEntry = null,
         public readonly ?bool $dryRun = false,
+        public readonly ?ExchangeContext $exchangeContext = null,
     ) {}
 }

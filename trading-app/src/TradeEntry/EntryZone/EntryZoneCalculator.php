@@ -8,6 +8,7 @@ use App\TradeEntry\Types\Side;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\TradeEntry\Pricing\TickQuantizer;
 use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContext};
+use App\Provider\Context\ExchangeContext;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -32,7 +33,14 @@ final class EntryZoneCalculator
         #[Autowire(service: 'monolog.logger.positions')] private readonly ?LoggerInterface $positionsLogger = null,
     ) {}
 
-    public function compute(string $symbol, ?Side $side = null, ?int $pricePrecision = null, ?string $decisionKey = null, ?string $mode = null): EntryZone
+    public function compute(
+        string $symbol,
+        ?Side $side = null,
+        ?int $pricePrecision = null,
+        ?string $decisionKey = null,
+        ?string $mode = null,
+        ?ExchangeContext $context = null,
+    ): EntryZone
     {
         // Lecture config selon le mode (même mécanisme que validations.{mode}.yaml)
         $config = $this->getConfigForMode($mode);
@@ -100,8 +108,8 @@ final class EntryZoneCalculator
         }
 
         // 1) Récupère ATR et liste pivot (vwap/sma...)
-        $atr = $this->indicators->getAtr(symbol: $symbol, tf: $atrTf);
-        $list = $this->indicators->getListPivot(symbol: $symbol, tf: $pivotTf);
+        $atr = $this->indicators->getAtr(symbol: $symbol, tf: $atrTf, context: $context);
+        $list = $this->indicators->getListPivot(symbol: $symbol, tf: $pivotTf, context: $context);
 
         $ind = $list?->toArray() ?? [];
         $pivot = null;

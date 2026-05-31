@@ -6,6 +6,7 @@ namespace App\TradeEntry\Service;
 use App\Config\{IndicatorConfig, SignalConfig, TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContext};
 use App\Contract\Provider\MainProviderInterface;
 use App\Entity\Position;
+use App\Provider\Context\ExchangeContext;
 use App\Repository\PositionRepository;
 use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
 use App\TradeEntry\Policy\PreTradeChecks;
@@ -50,11 +51,14 @@ final class TpSlTwoTargetsService
     public function __invoke(TpSlTwoTargetsRequest $req, ?string $decisionKey = null, ?string $mode = null): array
     {
         $symbol = strtoupper($req->symbol);
+        $exchangeContext = ExchangeContext::resolve($req->exchangeContext);
+        $providers = $this->providers->forContext($exchangeContext);
 
         // 1) Prétraitement/exchange state
         $dummy = new \App\TradeEntry\Dto\TradeEntryRequest(
             symbol: $symbol,
             side: $req->side,
+            exchangeContext: $exchangeContext,
         );
         $pre = $this->pretrade->run($dummy);
 
@@ -69,7 +73,7 @@ final class TpSlTwoTargetsService
 
         if ($entryPrice === null || $size === null) {
             // Essayer d'abord depuis l'exchange (AccountProvider)
-            $accountProvider = $this->providers->getAccountProvider();
+            $accountProvider = $providers->getAccountProvider();
             if ($accountProvider !== null) {
                 try {
                     $openPositions = $accountProvider->getOpenPositions($symbol);
@@ -104,7 +108,7 @@ final class TpSlTwoTargetsService
 
             // Fallback sur la base de données locale si toujours pas trouvé
             if ($entryPrice === null || $size === null) {
-                $pos = $this->resolvePosition($symbol, $req->side);
+                $pos = $this->resolvePosition($symbol, $req->side, $exchangeContext);
                 if ($pos instanceof Position) {
                     if ($entryPrice === null) {
                         $entryPrice = (float)($pos->getAvgEntryPrice() ?? 0.0);
@@ -499,7 +503,7 @@ final class TpSlTwoTargetsService
 
         // 4) Annulations (SL si différent, TP existants)
         $cancelled = [];
-        $orderProvider = $this->providers->getOrderProvider();
+        $orderProvider = $providers->getOrderProvider();
         $isDryRun = $req->dryRun ?? false;
 
         if ($isDryRun) {
@@ -613,7 +617,7 @@ final class TpSlTwoTargetsService
             if ($this->indicatorProvider !== null) {
                 try {
                     $tf = $this->resolveAtrTimeframe();
-                    $atrAbs = $this->indicatorProvider->getAtr(symbol: $symbol, tf: $tf);
+                    $atrAbs = $this->indicatorProvider->getAtr(symbol: $symbol, tf: $tf, context: $exchangeContext);
                 } catch (\Throwable) {
                     $atrAbs = null;
                 }
@@ -812,10 +816,10 @@ final class TpSlTwoTargetsService
         ];
     }
 
-    private function resolvePosition(string $symbol, EntrySide $side): ?Position
+    private function resolvePosition(string $symbol, EntrySide $side, ?ExchangeContext $context = null): ?Position
     {
         // Position entity side is LONG|SHORT
-        $pos = $this->positions->findOneBySymbolSide($symbol, $side === EntrySide::Long ? 'LONG' : 'SHORT');
+        $pos = $this->positions->findOneBySymbolSide($symbol, $side === EntrySide::Long ? 'LONG' : 'SHORT', $context);
         return $pos;
     }
 

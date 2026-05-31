@@ -34,10 +34,12 @@ final class TradeLifecycleLogger
         ?string $configProfile = null,
         ?string $configVersion = null,
         ?string $planId = null,
+        ?string $marketType = null,
     ): void {
         $event = $this->newEvent($symbol, TradeLifecycleEventType::ORDER_SUBMITTED)
             ->setRunId($runId)
             ->setExchange($exchange)
+            ->setMarketType($marketType)
             ->setAccountId($accountId)
             ->setOrderId($orderId)
             ->setClientOrderId($clientOrderId)
@@ -66,10 +68,12 @@ final class TradeLifecycleLogger
         ?string $exchange = null,
         ?string $accountId = null,
         array $extra = [],
+        ?string $marketType = null,
     ): void {
         $event = $this->newEvent($symbol, TradeLifecycleEventType::ORDER_EXPIRED)
             ->setRunId($runId)
             ->setExchange($exchange)
+            ->setMarketType($marketType)
             ->setAccountId($accountId)
             ->setOrderId($orderId)
             ->setClientOrderId($clientOrderId)
@@ -93,10 +97,12 @@ final class TradeLifecycleLogger
         ?string $exchange = null,
         ?string $accountId = null,
         array $extra = [],
+        ?string $marketType = null,
     ): void {
         $event = $this->newEvent($symbol, TradeLifecycleEventType::POSITION_OPENED)
             ->setRunId($runId)
             ->setExchange($exchange)
+            ->setMarketType($marketType)
             ->setAccountId($accountId)
             ->setPositionId($positionId)
             ->setSide($side)
@@ -118,9 +124,13 @@ final class TradeLifecycleLogger
         ?string $configProfile = null,
         ?string $configVersion = null,
         array $extra = [],
+        ?string $exchange = null,
+        ?string $marketType = null,
     ): void {
         $event = $this->newEvent($symbol, TradeLifecycleEventType::SYMBOL_SKIPPED)
             ->setRunId($runId)
+            ->setExchange($exchange)
+            ->setMarketType($marketType)
             ->setReasonCode($reasonCode)
             ->setTimeframe($timeframe)
             ->setConfigProfile($configProfile)
@@ -139,12 +149,14 @@ final class TradeLifecycleLogger
         ?string $accountId = null,
         ?string $reasonCode = null,
         ?array $extra = null,
+        ?string $marketType = null,
     ): void {
         $event = $this->newEvent($symbol, TradeLifecycleEventType::POSITION_CLOSED)
             ->setPositionId($positionId)
             ->setSide($side)
             ->setRunId($runId)
             ->setExchange($exchange)
+            ->setMarketType($marketType)
             ->setAccountId($accountId)
             ->setReasonCode($reasonCode);
 

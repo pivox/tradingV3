@@ -29,6 +29,7 @@ final class Version20260531010000 extends AbstractMigration
             'order_protection',
             'indicator_snapshots',
             'trade_zone_events',
+            'mtf_state',
         ];
 
         foreach ($tables as $table) {
@@ -66,6 +67,7 @@ final class Version20260531010000 extends AbstractMigration
             'order_protection',
             'indicator_snapshots',
             'trade_zone_events',
+            'mtf_state',
         ];
 
         foreach ($tables as $table) {
@@ -102,6 +104,8 @@ final class Version20260531010000 extends AbstractMigration
             'idx_ind_snap_symbol_tf',
             'ux_ind_snap_symbol_tf_time',
             'idx_zone_symbol',
+            'idx_mtf_state_symbol',
+            'ux_mtf_state_symbol',
             'idx_trade_lifecycle_symbol_happened_at',
             'uniq_trade_lifecycle_event_dedup',
         ];
@@ -117,6 +121,7 @@ final class Version20260531010000 extends AbstractMigration
             $this->addSql(sprintf('ALTER TABLE order_intent DROP CONSTRAINT IF EXISTS %s', $name));
             $this->addSql(sprintf('ALTER TABLE indicator_snapshots DROP CONSTRAINT IF EXISTS %s', $name));
             $this->addSql(sprintf('ALTER TABLE trade_zone_events DROP CONSTRAINT IF EXISTS %s', $name));
+            $this->addSql(sprintf('ALTER TABLE mtf_state DROP CONSTRAINT IF EXISTS %s', $name));
             $this->addSql(sprintf('ALTER TABLE trade_lifecycle_event DROP CONSTRAINT IF EXISTS %s', $name));
             $this->addSql(sprintf('DROP INDEX IF EXISTS %s', $name));
         }
@@ -153,6 +158,8 @@ final class Version20260531010000 extends AbstractMigration
         $this->addSql('CREATE UNIQUE INDEX IF NOT EXISTS ux_ind_snap_exchange_market_symbol_tf_time ON indicator_snapshots (exchange, market_type, symbol, timeframe, kline_time)');
 
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_zone_exchange_market_symbol ON trade_zone_events (exchange, market_type, symbol)');
+        $this->addSql('CREATE INDEX IF NOT EXISTS idx_mtf_state_exchange_market_symbol ON mtf_state (exchange, market_type, symbol)');
+        $this->addSql('CREATE UNIQUE INDEX IF NOT EXISTS ux_mtf_state_exchange_market_symbol ON mtf_state (exchange, market_type, symbol)');
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_trade_lifecycle_exchange_market_symbol_happened_at ON trade_lifecycle_event (exchange, market_type, symbol, happened_at DESC)');
         $this->addSql('CREATE UNIQUE INDEX IF NOT EXISTS uniq_trade_lifecycle_event_dedup ON trade_lifecycle_event (exchange, market_type, account_id, run_id, symbol, event_type, order_id, happened_at)');
     }
@@ -180,6 +187,8 @@ final class Version20260531010000 extends AbstractMigration
             'idx_ind_snap_exchange_market_symbol_tf',
             'ux_ind_snap_exchange_market_symbol_tf_time',
             'idx_zone_exchange_market_symbol',
+            'idx_mtf_state_exchange_market_symbol',
+            'ux_mtf_state_exchange_market_symbol',
             'idx_trade_lifecycle_exchange_market_symbol_happened_at',
             'uniq_trade_lifecycle_event_dedup',
         ];
@@ -210,6 +219,8 @@ final class Version20260531010000 extends AbstractMigration
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_ind_snap_symbol_tf ON indicator_snapshots (symbol, timeframe)');
         $this->addSql('CREATE UNIQUE INDEX IF NOT EXISTS ux_ind_snap_symbol_tf_time ON indicator_snapshots (symbol, timeframe, kline_time)');
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_zone_symbol ON trade_zone_events (symbol)');
+        $this->addSql('CREATE INDEX IF NOT EXISTS idx_mtf_state_symbol ON mtf_state (symbol)');
+        $this->addSql('CREATE UNIQUE INDEX IF NOT EXISTS ux_mtf_state_symbol ON mtf_state (symbol)');
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_trade_lifecycle_symbol_happened_at ON trade_lifecycle_event (symbol, happened_at DESC)');
         $this->addSql('CREATE UNIQUE INDEX IF NOT EXISTS uniq_trade_lifecycle_event_dedup ON trade_lifecycle_event (exchange, account_id, run_id, symbol, event_type, order_id, happened_at)');
     }
@@ -227,6 +238,7 @@ final class Version20260531010000 extends AbstractMigration
             ['futures_order_trade', 'trade_id', 'trade_id IS NOT NULL'],
             ['order_intent', 'client_order_id', 'client_order_id IS NOT NULL'],
             ['indicator_snapshots', 'symbol, timeframe, kline_time', 'symbol IS NOT NULL AND timeframe IS NOT NULL AND kline_time IS NOT NULL'],
+            ['mtf_state', 'symbol', 'symbol IS NOT NULL'],
             ['trade_lifecycle_event', 'exchange, account_id, run_id, symbol, event_type, order_id, happened_at', 'exchange IS NOT NULL AND run_id IS NOT NULL AND symbol IS NOT NULL AND event_type IS NOT NULL AND happened_at IS NOT NULL'],
         ];
 

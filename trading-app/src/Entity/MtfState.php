@@ -4,20 +4,28 @@ declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Repository\MtfStateRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: MtfStateRepository::class)]
 #[ORM\Table(name: 'mtf_state')]
-#[ORM\Index(name: 'idx_mtf_state_symbol', columns: ['symbol'])]
-#[ORM\UniqueConstraint(name: 'ux_mtf_state_symbol', columns: ['symbol'])]
+#[ORM\Index(name: 'idx_mtf_state_exchange_market_symbol', columns: ['exchange', 'market_type', 'symbol'])]
+#[ORM\UniqueConstraint(name: 'ux_mtf_state_exchange_market_symbol', columns: ['exchange', 'market_type', 'symbol'])]
 class MtfState
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
     private ?int $id = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
+    private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
+    private string $marketType = 'perpetual';
 
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
@@ -53,6 +61,30 @@ class MtfState
         return $this->id;
     }
 
+    public function getExchange(): string
+    {
+        return $this->exchange;
+    }
+
+    public function setExchange(Exchange|string $exchange): static
+    {
+        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange);
+
+        return $this;
+    }
+
+    public function getMarketType(): string
+    {
+        return $this->marketType;
+    }
+
+    public function setMarketType(MarketType|string $marketType): static
+    {
+        $this->marketType = $marketType instanceof MarketType ? $marketType->value : strtolower($marketType);
+
+        return $this;
+    }
+
     public function getSymbol(): string
     {
         return $this->symbol;
@@ -60,7 +92,7 @@ class MtfState
 
     public function setSymbol(string $symbol): static
     {
-        $this->symbol = $symbol;
+        $this->symbol = strtoupper($symbol);
         return $this;
     }
 

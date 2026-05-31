@@ -6,6 +6,7 @@ namespace App\Trading\Dto;
 
 use App\Common\Enum\PositionSide;
 use App\Contract\Provider\Dto\PositionDto as ProviderPositionDto;
+use App\Provider\Context\ExchangeContext;
 use Brick\Math\BigDecimal;
 
 /**
@@ -28,8 +29,10 @@ final class PositionDto
     /**
      * Mappe depuis un ProviderPositionDto
      */
-    public static function fromProviderDto(ProviderPositionDto $providerDto): self
+    public static function fromProviderDto(ProviderPositionDto $providerDto, ?ExchangeContext $context = null): self
     {
+        $context = ExchangeContext::resolve($context);
+
         return new self(
             symbol: $providerDto->symbol,
             side: $providerDto->side,
@@ -39,9 +42,11 @@ final class PositionDto
             unrealizedPnl: $providerDto->unrealizedPnl,
             leverage: $providerDto->leverage,
             openedAt: $providerDto->openedAt,
-            raw: $providerDto->metadata
+            raw: array_replace($providerDto->metadata, [
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
+            ])
         );
     }
 }
-
 

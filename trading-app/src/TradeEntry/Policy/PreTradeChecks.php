@@ -6,6 +6,7 @@ namespace App\TradeEntry\Policy;
 use App\Common\Enum\Timeframe;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\Provider\MainProviderInterface;
+use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Dto\{PreflightReport, TradeEntryRequest};
 use App\TradeEntry\Service\MarketStructureSampler;
 use App\TradeEntry\Pricing\TickQuantizer;
@@ -30,24 +31,26 @@ final readonly class PreTradeChecks
     public function run(TradeEntryRequest $req): PreflightReport
     {
         $symbol = $req->symbol;
+        $context = ExchangeContext::resolve($req->exchangeContext);
+        $providers = $this->providers->forContext($context);
 
         $this->positionsLogger->debug('pretrade.fetch_contract', [
             'symbol' => $symbol,
             'reason' => 'load_contract_specifications',
         ]);
-        $specs = $this->providers->getContractProvider()->getContractDetails($symbol);
+        $specs = $providers->getContractProvider()->getContractDetails($symbol);
 
         $this->positionsLogger->debug('pretrade.fetch_order_book', [
             'symbol' => $symbol,
             'reason' => 'load_order_book_snapshot',
         ]);
-        $orderBook = $this->providers->getOrderProvider()->getOrderBookTop($symbol)->toArray();
+        $orderBook = $providers->getOrderProvider()->getOrderBookTop($symbol)->toArray();
 
         $this->positionsLogger->debug('pretrade.fetch_balance', [
             'symbol' => $symbol,
             'reason' => 'load_available_balance',
         ]);
-        $available = $this->providers->getAccountProvider()->getAccountBalance() ?? 0.0;
+        $available = $providers->getAccountProvider()->getAccountBalance() ?? 0.0;
 
         $bestBid = $orderBook['bid'];
         $bestAsk = $orderBook['ask'];
@@ -102,7 +105,7 @@ final readonly class PreTradeChecks
             $markPrice = $lastPrice;
         }
 
-        $pivotLevels = $this->fetchPivotLevels($symbol);
+        $pivotLevels = $this->fetchPivotLevels($symbol, $context);
 
         $marketSnapshot = $this->marketStructureSampler->sample($symbol, $specs->contractSize->toFloat(), $mid);
 
@@ -230,10 +233,14 @@ final readonly class PreTradeChecks
     /**
      * @return array<string,float>|null
      */
-    private function fetchPivotLevels(string $symbol): ?array
+    private function fetchPivotLevels(string $symbol, ?ExchangeContext $context = null): ?array
     {
         try {
-            $dto = $this->indicatorProvider->getListPivot(symbol: $symbol, tf: Timeframe::TF_1D->value);
+            $dto = $this->indicatorProvider->getListPivot(
+                symbol: $symbol,
+                tf: Timeframe::TF_1D->value,
+                context: $context,
+            );
             if (!$dto instanceof \App\Contract\Indicator\Dto\ListIndicatorDto) {
                 return null;
             }

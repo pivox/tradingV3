@@ -7,6 +7,7 @@ namespace App\Trading\Sync;
 use App\Contract\Provider\AccountProviderInterface;
 use App\Contract\Provider\MainProviderInterface;
 use App\Contract\Provider\OrderProviderInterface;
+use App\Provider\Context\ExchangeContext;
 use App\Trading\Dto\OrderDto as TradingOrderDto;
 use App\Trading\Dto\PositionDto as TradingPositionDto;
 use App\Trading\Dto\PositionHistoryEntryDto;
@@ -20,35 +21,13 @@ use Psr\Log\LoggerInterface;
 
 final class TradingStateSyncRunner
 {
-    private ?AccountProviderInterface $accountProvider = null;
-    private ?OrderProviderInterface $orderProvider = null;
-
     public function __construct(
         private readonly ?MainProviderInterface $mainProvider,
         private readonly PositionStateRepositoryInterface $positionStateRepository,
         private readonly OrderStateRepositoryInterface $orderStateRepository,
         private readonly ?EventDispatcherInterface $eventDispatcher = null,
         private readonly ?LoggerInterface $logger = null,
-    ) {
-        // Récupérer les providers depuis MainProvider si disponible
-        if ($this->mainProvider !== null) {
-            try {
-                $this->accountProvider = $this->mainProvider->getAccountProvider();
-            } catch (\Throwable $e) {
-                $this->logger?->warning('[TradingStateSync] AccountProvider not available', [
-                    'error' => $e->getMessage(),
-                ]);
-            }
-
-            try {
-                $this->orderProvider = $this->mainProvider->getOrderProvider();
-            } catch (\Throwable $e) {
-                $this->logger?->warning('[TradingStateSync] OrderProvider not available', [
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
-    }
+    ) {}
 
     /**
      * Synchronise les positions et ordres depuis l'exchange vers la BDD
@@ -56,22 +35,28 @@ final class TradingStateSyncRunner
      * @param string $context Contexte de la synchronisation (pour logging)
      * @param string[]|null $symbols Symboles à synchroniser (null = tous)
      */
-    public function syncAndDispatch(string $context, ?array $symbols = null): void
+    public function syncAndDispatch(string $context, ?array $symbols = null, ?ExchangeContext $exchangeContext = null): void
     {
+        $exchangeContext = ExchangeContext::resolve($exchangeContext);
+        $accountProvider = $this->resolveAccountProvider($exchangeContext);
+        $orderProvider = $this->resolveOrderProvider($exchangeContext);
+
         $this->logger?->info('[TradingStateSync] Starting sync', [
             'context' => $context,
             'symbols' => $symbols,
+            'exchange' => $exchangeContext->exchange->value,
+            'market_type' => $exchangeContext->marketType->value,
         ]);
 
         try {
             // 1. Synchroniser les positions ouvertes
-            if ($this->accountProvider !== null) {
-                $this->syncPositions($symbols);
+            if ($accountProvider !== null) {
+                $this->syncPositions($symbols, $exchangeContext, $accountProvider);
             }
 
             // 2. Synchroniser les ordres ouverts
-            if ($this->orderProvider !== null) {
-                $this->syncOrders($symbols);
+            if ($orderProvider !== null) {
+                $this->syncOrders($symbols, $exchangeContext, $orderProvider);
             }
 
             $this->logger?->info('[TradingStateSync] Sync completed', [
@@ -92,15 +77,15 @@ final class TradingStateSyncRunner
      * 
      * @param string[]|null $symbols
      */
-    private function syncPositions(?array $symbols = null): void
+    private function syncPositions(
+        ?array $symbols,
+        ExchangeContext $context,
+        AccountProviderInterface $accountProvider,
+    ): void
     {
-        if ($this->accountProvider === null) {
-            return;
-        }
-
         try {
             // Récupérer les positions ouvertes depuis l'exchange
-            $openPositions = $this->accountProvider->getOpenPositions();
+            $openPositions = $accountProvider->getOpenPositions();
 
             // Filtrer par symboles si spécifié
             if ($symbols !== null && $symbols !== []) {
@@ -115,7 +100,7 @@ final class TradingStateSyncRunner
             ]);
 
             // Récupérer les positions actuellement en BDD pour détecter les nouvelles/fermetures
-            $localOpenPositions = $this->positionStateRepository->findLocalOpenPositions($symbols);
+            $localOpenPositions = $this->positionStateRepository->findLocalOpenPositions($symbols, $context);
             $localPositionsMap = [];
             foreach ($localOpenPositions as $localPos) {
                 $key = strtoupper($localPos->symbol) . '_' . strtoupper($localPos->side->value);
@@ -128,7 +113,7 @@ final class TradingStateSyncRunner
             // Sauvegarder les positions ouvertes depuis l'exchange
             foreach ($openPositions as $providerPosition) {
                 try {
-                    $tradingPosition = TradingPositionDto::fromProviderDto($providerPosition);
+                    $tradingPosition = TradingPositionDto::fromProviderDto($providerPosition, $context);
                     $key = strtoupper($tradingPosition->symbol) . '_' . strtoupper($tradingPosition->side->value);
                     
                     // Vérifier si c'est une nouvelle position (pas présente en BDD)
@@ -142,9 +127,9 @@ final class TradingStateSyncRunner
                         $this->eventDispatcher->dispatch(new PositionOpenedEvent(
                             position: $tradingPosition,
                             runId: null,
-                            exchange: null,
+                            exchange: $context->exchange->value,
                             accountId: null,
-                            extra: []
+                            extra: ['market_type' => $context->marketType->value]
                         ));
                     }
                 } catch (\Throwable $e) {
@@ -167,12 +152,12 @@ final class TradingStateSyncRunner
                 }
 
                 if (!$found) {
-                    // Position fermée : récupérer les données réelles depuis l'API BitMart
+                    // Position fermée : récupérer les données réelles depuis le provider courant
                     try {
                         // 1. Récupérer les trades (fills) pour ce symbole
                         // 2. Récupérer le transaction history avec flow_type=2 (realized PnL)
                         // 3. Optionnellement récupérer l'order history pour les métadonnées
-                        $history = $this->createHistoryFromApiData($localPos);
+                        $history = $this->createHistoryFromApiData($localPos, $accountProvider, $context);
                         
                         if ($history !== null) {
                             $this->positionStateRepository->saveClosedPosition($history);
@@ -187,10 +172,10 @@ final class TradingStateSyncRunner
                                 $this->eventDispatcher->dispatch(new PositionClosedEvent(
                                     positionHistory: $history,
                                     runId: null,
-                                    exchange: null,
+                                    exchange: $context->exchange->value,
                                     accountId: null,
                                     reasonCode: $reasonCode,
-                                    extra: []
+                                    extra: ['market_type' => $context->marketType->value]
                                 ));
                             }
                         }
@@ -216,15 +201,15 @@ final class TradingStateSyncRunner
      * 
      * @param string[]|null $symbols
      */
-    private function syncOrders(?array $symbols = null): void
+    private function syncOrders(
+        ?array $symbols,
+        ExchangeContext $context,
+        OrderProviderInterface $orderProvider,
+    ): void
     {
-        if ($this->orderProvider === null) {
-            return;
-        }
-
         try {
             // Récupérer les ordres ouverts depuis l'exchange
-            $openOrders = $this->orderProvider->getOpenOrders();
+            $openOrders = $orderProvider->getOpenOrders();
 
             // Filtrer par symboles si spécifié
             if ($symbols !== null && $symbols !== []) {
@@ -239,7 +224,7 @@ final class TradingStateSyncRunner
             ]);
 
             // Récupérer les ordres locaux pour détecter les changements de statut
-            $localOpenOrders = $this->orderStateRepository->findLocalOpenOrders($symbols);
+            $localOpenOrders = $this->orderStateRepository->findLocalOpenOrders($symbols, $context);
             $localOrdersMap = [];
             foreach ($localOpenOrders as $localOrder) {
                 $localOrdersMap[$localOrder->orderId] = $localOrder;
@@ -248,7 +233,7 @@ final class TradingStateSyncRunner
             // Sauvegarder les ordres ouverts et détecter les changements de statut
             foreach ($openOrders as $providerOrder) {
                 try {
-                    $tradingOrder = TradingOrderDto::fromProviderDto($providerOrder);
+                    $tradingOrder = TradingOrderDto::fromProviderDto($providerOrder, $context);
                     $previousOrder = $localOrdersMap[$tradingOrder->orderId] ?? null;
                     
                     // Sauvegarder l'ordre
@@ -265,9 +250,9 @@ final class TradingStateSyncRunner
                                 previousStatus: $previousStatus,
                                 newStatus: $newStatus,
                                 runId: null,
-                                exchange: null,
+                                exchange: $context->exchange->value,
                                 accountId: null,
-                                extra: []
+                                extra: ['market_type' => $context->marketType->value]
                             ));
                         }
                     }
@@ -288,27 +273,25 @@ final class TradingStateSyncRunner
     }
 
     /**
-     * Crée un PositionHistoryEntryDto depuis les données API BitMart
-     * Utilise GET /contract/private/trades et GET /contract/private/transaction-history
+     * Crée un PositionHistoryEntryDto depuis les données API du provider courant.
      */
-    private function createHistoryFromApiData(TradingPositionDto $localPos): ?PositionHistoryEntryDto
+    private function createHistoryFromApiData(
+        TradingPositionDto $localPos,
+        AccountProviderInterface $accountProvider,
+        ExchangeContext $context,
+    ): ?PositionHistoryEntryDto
     {
         try {
-            if ($this->accountProvider === null) {
-                $this->logger?->warning('[TradingStateSync] Cannot create history: AccountProvider not available');
-                return null;
-            }
-
             $symbol = $localPos->symbol;
             
             // 1. Récupérer les trades (fills) pour ce symbole
             // Limiter aux 7 derniers jours pour éviter trop de données
             $endTime = time();
             $startTime = $endTime - (7 * 24 * 60 * 60); // 7 jours
-            $trades = $this->accountProvider->getTrades($symbol, 200, $startTime, $endTime);
+            $trades = $accountProvider->getTrades($symbol, 200, $startTime, $endTime);
             
             // 2. Récupérer le transaction history avec flow_type=2 (realized PnL)
-            $transactions = $this->accountProvider->getTransactionHistory($symbol, 2, 200, $startTime, $endTime);
+            $transactions = $accountProvider->getTransactionHistory($symbol, 2, 200, $startTime, $endTime);
             
             // 3. Calculer les données agrégées depuis les trades
             $totalFilledSize = \Brick\Math\BigDecimal::zero();
@@ -376,6 +359,8 @@ final class TradingStateSyncRunner
                 openedAt: $localPos->openedAt,
                 closedAt: $closedAt,
                 raw: array_merge($localPos->raw, [
+                    'exchange' => $context->exchange->value,
+                    'market_type' => $context->marketType->value,
                     'closed_detected_at' => $closedAt->format('Y-m-d H:i:s'),
                     'source' => 'trading_state_sync_api',
                     'trades_count' => count($trades),
@@ -392,5 +377,42 @@ final class TradingStateSyncRunner
             return null;
         }
     }
-}
 
+    private function resolveAccountProvider(ExchangeContext $context): ?AccountProviderInterface
+    {
+        if ($this->mainProvider === null) {
+            return null;
+        }
+
+        try {
+            return $this->mainProvider->forContext($context)->getAccountProvider();
+        } catch (\Throwable $e) {
+            $this->logger?->warning('[TradingStateSync] AccountProvider not available for context', [
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    private function resolveOrderProvider(ExchangeContext $context): ?OrderProviderInterface
+    {
+        if ($this->mainProvider === null) {
+            return null;
+        }
+
+        try {
+            return $this->mainProvider->forContext($context)->getOrderProvider();
+        } catch (\Throwable $e) {
+            $this->logger?->warning('[TradingStateSync] OrderProvider not available for context', [
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+}
