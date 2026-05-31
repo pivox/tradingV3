@@ -302,6 +302,7 @@ services:
     volumes:
       - ./trading-app:/var/www/html
       - ./trading-app/php/conf.d:/usr/local/etc/php/conf.d
+      - ./trading-app/php-fpm.d/zz-trading-pool.conf:/usr/local/etc/php-fpm.d/zz-trading-pool.conf:ro
       - ./investigation:/var/www/investigation
       - app-cache:/var/www/html/var/cache
       - var-bitmart:/var/www/html/var/bitmart
