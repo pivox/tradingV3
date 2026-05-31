@@ -231,6 +231,113 @@ abstract class ExchangeAdapterContractTestCase extends TestCase
         ));
     }
 
+    public function testStandaloneReduceOnlyTakeProfitCanBePlacedListedAndCancelledWhenSupported(): void
+    {
+        $adapter = $this->adapter();
+        if (!$adapter->capabilities()->supportsTriggerOrders) {
+            self::markTestSkipped('Adapter does not advertise standalone trigger orders.');
+        }
+
+        $clientOrderId = $this->clientOrderId('take-profit-listed');
+        $takeProfit = $adapter->placeOrder($this->placeRequest(
+            clientOrderId: $clientOrderId,
+            orderType: ExchangeOrderType::TAKE_PROFIT,
+            price: null,
+            stopPrice: 26000.0,
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+        ));
+
+        self::assertTrue($takeProfit->accepted);
+        self::assertSame($clientOrderId, $takeProfit->clientOrderId);
+        self::assertNotNull($takeProfit->exchangeOrderId);
+
+        $snapshotClientOrderId = $this->snapshotClientOrderId($clientOrderId);
+        $listedTakeProfits = array_values(array_filter(
+            $adapter->getOpenOrders($this->symbol()),
+            static fn (ExchangeOrderDto $order): bool => $order->clientOrderId === $snapshotClientOrderId
+                && $order->orderType === ExchangeOrderType::TAKE_PROFIT
+                && $order->reduceOnly
+                && $order->stopPrice !== null,
+        ));
+
+        self::assertCount(1, $listedTakeProfits);
+        self::assertSame($takeProfit->exchangeOrderId, $listedTakeProfits[0]->exchangeOrderId);
+        self::assertEqualsWithDelta(26000.0, $listedTakeProfits[0]->stopPrice, 0.000001);
+
+        $cancelled = $adapter->cancelOrder(new CancelOrderRequest(
+            exchange: $this->exchange(),
+            marketType: $this->marketType(),
+            symbol: $this->symbol(),
+            exchangeOrderId: $adapter->capabilities()->supportsCancelByClientOrderId ? null : $takeProfit->exchangeOrderId,
+            clientOrderId: $clientOrderId,
+        ));
+
+        self::assertTrue($cancelled->cancelled);
+        self::assertCount(0, array_filter(
+            $adapter->getOpenOrders($this->symbol()),
+            static fn (ExchangeOrderDto $order): bool => $order->exchangeOrderId === $takeProfit->exchangeOrderId,
+        ));
+    }
+
+    public function testAttachedProtectionOnEntryIsConfirmedWhenSupported(): void
+    {
+        $adapter = $this->adapter();
+        $capabilities = $adapter->capabilities();
+        if (!$capabilities->supportsAttachedStopLossOnEntry && !$capabilities->supportsAttachedTakeProfitOnEntry) {
+            self::markTestSkipped('Adapter does not advertise attached entry protection.');
+        }
+        if (!$this->marketOrdersFillImmediately()) {
+            self::markTestSkipped('Attached protection confirmation requires a locally filled entry.');
+        }
+
+        $stopLoss = $capabilities->supportsAttachedStopLossOnEntry ? 24800.0 : null;
+        $takeProfit = $capabilities->supportsAttachedTakeProfitOnEntry ? 26000.0 : null;
+
+        $placed = $adapter->placeOrder(new PlaceOrderRequest(
+            exchange: $this->exchange(),
+            marketType: $this->marketType(),
+            symbol: $this->symbol(),
+            side: ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::MARKET,
+            timeInForce: ExchangeTimeInForce::IOC,
+            quantity: 1.0,
+            price: null,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: false,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: $this->clientOrderId('attached-protection'),
+            attachedStopLossPrice: $stopLoss,
+            attachedTakeProfitPrice: $takeProfit,
+        ));
+
+        self::assertTrue($placed->accepted);
+        self::assertNotNull($placed->exchangeOrderId);
+        self::assertSame(ExchangeOrderStatus::FILLED, $placed->status);
+
+        $openOrders = $adapter->getOpenOrders($this->symbol());
+        if ($stopLoss !== null) {
+            self::assertNotEmpty($this->matchingProtectionOrders(
+                $openOrders,
+                [ExchangeOrderType::STOP_LOSS, ExchangeOrderType::TRIGGER],
+                $stopLoss,
+                1.0,
+            ), 'Attached stop-loss must be visible as a reduce-only protection order.');
+        }
+        if ($takeProfit !== null) {
+            self::assertNotEmpty($this->matchingProtectionOrders(
+                $openOrders,
+                [ExchangeOrderType::TAKE_PROFIT, ExchangeOrderType::TRIGGER],
+                $takeProfit,
+                1.0,
+            ), 'Attached take-profit must be visible as a reduce-only protection order.');
+        }
+    }
+
     public function testStandaloneReduceOnlyStopCanBeConfirmedWhenSupported(): void
     {
         $adapter = $this->adapter();
@@ -329,5 +436,24 @@ abstract class ExchangeAdapterContractTestCase extends TestCase
             marginMode: 'isolated',
             clientOrderId: $clientOrderId,
         );
+    }
+
+    /**
+     * @param ExchangeOrderDto[] $orders
+     * @param ExchangeOrderType[] $types
+     * @return ExchangeOrderDto[]
+     */
+    private function matchingProtectionOrders(array $orders, array $types, float $stopPrice, float $minQuantity): array
+    {
+        return array_values(array_filter(
+            $orders,
+            static fn (ExchangeOrderDto $order): bool => $order->reduceOnly
+                && $order->side === ExchangeOrderSide::SELL
+                && $order->positionSide === ExchangePositionSide::LONG
+                && \in_array($order->orderType, $types, true)
+                && $order->stopPrice !== null
+                && abs($order->stopPrice - $stopPrice) <= 0.000001
+                && $order->remainingQuantity >= $minQuantity - 0.000001,
+        ));
     }
 }
