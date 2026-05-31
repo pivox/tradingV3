@@ -188,6 +188,71 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertCount(1, $this->scenario->events('position.closed'));
     }
 
+    public function testMovePriceTriggersAttachedTakeProfitAndClosesPosition(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+            attachedTakeProfitPrice: 25200.0,
+        ));
+
+        $result = $this->scenario->movePrice('BTCUSDT', 25210.0, 0.0);
+
+        self::assertCount(1, $result['matched_orders']);
+        self::assertSame(ExchangeOrderType::TAKE_PROFIT, $result['matched_orders'][0]->orderType);
+        self::assertSame(ExchangeOrderStatus::FILLED, $result['matched_orders'][0]->status);
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
+    }
+
+    public function testReduceOnlyProtectionFillIsCappedToRemainingPositionSize(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+        ));
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'manual-reduce',
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+            quantity: 0.6,
+        ));
+
+        $result = $this->scenario->movePrice('BTCUSDT', 24790.0, 0.0);
+
+        self::assertCount(1, $result['matched_orders']);
+        self::assertSame(ExchangeOrderStatus::CANCELLED, $result['matched_orders'][0]->status);
+        self::assertEqualsWithDelta(0.4, $result['matched_orders'][0]->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.6, $result['matched_orders'][0]->remainingQuantity, 0.000001);
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+    }
+
+    public function testTriggeringOneAttachedProtectionCancelsSiblingOrder(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+            attachedTakeProfitPrice: 25200.0,
+        ));
+        self::assertCount(2, $this->adapter->getOpenOrders('BTCUSDT'));
+
+        $this->scenario->movePrice('BTCUSDT', 24790.0, 0.0);
+
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(1, array_filter(
+            $this->scenario->events('order.cancelled'),
+            static fn ($event): bool => ($event->payload['reason'] ?? null) === 'sibling_protection_filled',
+        ));
+    }
+
     public function testStandaloneProtectionOrderIsReduceOnlyEvenWhenPayloadOmitsFlag(): void
     {
         $result = $this->adapter->placeOrder($this->request(
@@ -206,6 +271,35 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertCount(1, $this->scenario->events('protection_order.created'));
     }
 
+    public function testStandaloneProtectionOrderRequiresStopPrice(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('trigger orders require a stop price');
+
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::STOP_LOSS,
+            price: null,
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: false,
+            postOnly: false,
+        ));
+    }
+
+    public function testReduceOnlyOrderRejectsAttachedProtection(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('attached SL/TP is only supported for entry orders');
+
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+        ));
+    }
+
     public function testClientOrderIdReplayDoesNotCreateSecondActiveOrder(): void
     {
         $first = $this->adapter->placeOrder($this->request(price: 24950.0, postOnly: true));
@@ -216,7 +310,66 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertCount(1, $this->adapter->getOpenOrders('BTCUSDT'));
     }
 
+    public function testCrossingLimitFillsAtBookPriceInsteadOfLimitPrice(): void
+    {
+        $result = $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::LIMIT,
+            price: 26000.0,
+            postOnly: false,
+        ));
+        $position = $this->adapter->getOpenPositions('BTCUSDT')[0] ?? null;
+
+        self::assertSame(ExchangeOrderStatus::FILLED, $result->status);
+        self::assertEqualsWithDelta(25000.5, $result->order?->averagePrice, 0.000001);
+        self::assertEqualsWithDelta(25000.5, $position?->entryPrice, 0.000001);
+    }
+
+    public function testCancelWithWrongSymbolDoesNotCancelExchangeOrderId(): void
+    {
+        $placed = $this->adapter->placeOrder($this->request(
+            symbol: 'ETHUSDT',
+            price: 1800.0,
+            postOnly: true,
+        ));
+
+        $cancelled = $this->adapter->cancelOrder(new CancelOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: $placed->exchangeOrderId,
+        ));
+
+        self::assertFalse($cancelled->cancelled);
+        self::assertSame(ExchangeOrderStatus::UNKNOWN, $cancelled->status);
+        self::assertCount(1, $this->adapter->getOpenOrders('ETHUSDT'));
+    }
+
+    public function testPartialReduceRecomputesRemainingPositionMargin(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+        ));
+
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'reduce-1',
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+            quantity: 0.4,
+        ));
+        $position = $this->adapter->getOpenPositions('BTCUSDT')[0] ?? null;
+
+        self::assertNotNull($position);
+        self::assertEqualsWithDelta(0.6, $position->size, 0.000001);
+        self::assertEqualsWithDelta(($position->entryPrice * 0.6) / 3.0, $position->margin, 0.000001);
+    }
+
     private function request(
+        string $symbol = 'BTCUSDT',
         ExchangeOrderType $orderType = ExchangeOrderType::LIMIT,
         ?float $price = 24950.0,
         string $clientOrderId = 'cid-1',
@@ -225,6 +378,7 @@ final class FakeExchangeAdapterTest extends TestCase
         bool $reduceOnly = false,
         bool $postOnly = false,
         ExchangeTimeInForce $timeInForce = ExchangeTimeInForce::GTC,
+        float $quantity = 1.0,
         ?float $stopPrice = null,
         ?float $attachedStopLossPrice = null,
         ?float $attachedTakeProfitPrice = null,
@@ -232,12 +386,12 @@ final class FakeExchangeAdapterTest extends TestCase
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
             marketType: MarketType::PERPETUAL,
-            symbol: 'BTCUSDT',
+            symbol: $symbol,
             side: $side,
             positionSide: $positionSide,
             orderType: $orderType,
             timeInForce: $timeInForce,
-            quantity: 1.0,
+            quantity: $quantity,
             price: $price,
             stopPrice: $stopPrice,
             reduceOnly: $reduceOnly,

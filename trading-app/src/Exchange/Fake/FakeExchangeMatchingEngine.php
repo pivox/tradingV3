@@ -96,6 +96,9 @@ final readonly class FakeExchangeMatchingEngine
         $order = null;
         if ($request->exchangeOrderId !== null && trim($request->exchangeOrderId) !== '') {
             $order = $this->stateStore->getOrder($request->exchangeOrderId);
+            if ($order instanceof ExchangeOrderDto && $order->symbol !== strtoupper($request->symbol)) {
+                $order = null;
+            }
         }
         if (!$order instanceof ExchangeOrderDto && $request->clientOrderId !== null && trim($request->clientOrderId) !== '') {
             $order = $this->stateStore->getOrderByClientOrderId($request->symbol, $request->clientOrderId);
@@ -132,8 +135,21 @@ final readonly class FakeExchangeMatchingEngine
             return $order;
         }
 
-        $fillQuantity = $quantity ?? $order->remainingQuantity;
-        $fillQuantity = min($fillQuantity, $order->remainingQuantity);
+        $requestedFillQuantity = min($quantity ?? $order->remainingQuantity, $order->remainingQuantity);
+        $fillQuantity = $requestedFillQuantity;
+        $cancelReduceRemainder = false;
+        if ($order->reduceOnly) {
+            $position = $order->positionSide !== null
+                ? $this->stateStore->getPosition($order->symbol, $order->positionSide)
+                : null;
+            if (!$position instanceof ExchangePositionDto || $position->size <= 0.00000001) {
+                return $this->cancelOpenOrder($order, 'no_position_to_reduce');
+            }
+
+            $fillQuantity = min($requestedFillQuantity, $position->size);
+            $cancelReduceRemainder = $fillQuantity < $requestedFillQuantity - 0.00000001;
+        }
+
         if ($fillQuantity <= 0.0) {
             return $order;
         }
@@ -142,9 +158,13 @@ final readonly class FakeExchangeMatchingEngine
         $newFilled = $order->filledQuantity + $fillQuantity;
         $newRemaining = max(0.0, $order->quantity - $newFilled);
         $averagePrice = $this->averagePrice($order, $fillQuantity, $executionPrice, $newFilled);
-        $status = $newRemaining <= 0.00000001
-            ? ExchangeOrderStatus::FILLED
-            : ExchangeOrderStatus::PARTIALLY_FILLED;
+        $status = $this->fillStatus($newRemaining, $cancelReduceRemainder);
+        $metadata = $cancelReduceRemainder
+            ? array_replace($order->metadata, [
+                'reason' => 'reduce_only_position_size_capped',
+                'reduce_only_cancelled_remainder' => true,
+            ])
+            : $order->metadata;
 
         $updated = new ExchangeOrderDto(
             exchange: $order->exchange,
@@ -167,7 +187,7 @@ final readonly class FakeExchangeMatchingEngine
             timeInForce: $order->timeInForce,
             createdAt: $order->createdAt,
             updatedAt: $this->clock->now(),
-            metadata: $order->metadata,
+            metadata: $metadata,
         );
 
         $this->stateStore->saveOrder($updated);
@@ -178,7 +198,11 @@ final readonly class FakeExchangeMatchingEngine
             ['fill_quantity' => $fillQuantity, 'fill_price' => $executionPrice],
         );
 
-        if ($status === ExchangeOrderStatus::FILLED) {
+        if ($cancelReduceRemainder) {
+            $this->appendEvent('order.cancelled', $updated, ['reason' => 'reduce_only_position_size_capped']);
+        }
+
+        if ($status === ExchangeOrderStatus::FILLED && !$updated->reduceOnly && !$this->isTriggerOrder($updated)) {
             $updated = $this->createAttachedProtectionOrders($updated);
         }
 
@@ -370,6 +394,19 @@ final readonly class FakeExchangeMatchingEngine
         );
     }
 
+    private function cancelOpenOrder(ExchangeOrderDto $order, string $reason): ExchangeOrderDto
+    {
+        $cancelled = $this->withOrderStatus(
+            $order,
+            ExchangeOrderStatus::CANCELLED,
+            array_replace($order->metadata, ['reason' => $reason]),
+        );
+        $this->stateStore->saveOrder($cancelled);
+        $this->appendEvent('order.cancelled', $cancelled, ['reason' => $reason]);
+
+        return $cancelled;
+    }
+
     private function applyPositionFill(ExchangeOrderDto $order, float $fillQuantity, float $executionPrice): void
     {
         if ($order->positionSide === null) {
@@ -391,6 +428,7 @@ final readonly class FakeExchangeMatchingEngine
                     $this->clock->now(),
                     ['order_id' => $order->exchangeOrderId],
                 ));
+                $this->cancelSiblingProtectionOrders($order);
 
                 return;
             }
@@ -438,6 +476,26 @@ final readonly class FakeExchangeMatchingEngine
         ));
     }
 
+    private function cancelSiblingProtectionOrders(ExchangeOrderDto $filledProtectionOrder): void
+    {
+        $parentOrderId = $this->stringMetadata($filledProtectionOrder->metadata, 'parent_order_id');
+        if ($parentOrderId === null) {
+            return;
+        }
+
+        foreach ($this->stateStore->getOpenOrders($filledProtectionOrder->symbol) as $candidate) {
+            if (
+                $candidate->exchangeOrderId === $filledProtectionOrder->exchangeOrderId
+                || !$this->isTriggerOrder($candidate)
+                || $this->stringMetadata($candidate->metadata, 'parent_order_id') !== $parentOrderId
+            ) {
+                continue;
+            }
+
+            $this->cancelOpenOrder($candidate, 'sibling_protection_filled');
+        }
+    }
+
     private function positionWithSize(ExchangePositionDto $position, float $size): ExchangePositionDto
     {
         return new ExchangePositionDto(
@@ -450,7 +508,7 @@ final readonly class FakeExchangeMatchingEngine
             markPrice: $position->markPrice,
             unrealizedPnl: $position->unrealizedPnl,
             realizedPnl: $position->realizedPnl,
-            margin: $position->margin,
+            margin: ($size * $position->entryPrice) / max($position->leverage ?? 1.0, 1.0),
             leverage: $position->leverage,
             openedAt: $position->openedAt,
             updatedAt: $this->clock->now(),
@@ -508,6 +566,14 @@ final readonly class FakeExchangeMatchingEngine
     {
         if ($request->postOnly && $request->orderType !== ExchangeOrderType::LIMIT) {
             throw new \InvalidArgumentException('postOnly is only supported for limit orders');
+        }
+
+        if ($this->isStandaloneProtection($request) && $request->stopPrice === null) {
+            throw new \InvalidArgumentException('trigger orders require a stop price');
+        }
+
+        if ($request->reduceOnly && ($request->attachedStopLossPrice !== null || $request->attachedTakeProfitPrice !== null)) {
+            throw new \InvalidArgumentException('attached SL/TP is only supported for entry orders');
         }
 
         $reduceIntent = $request->reduceOnly || $this->isStandaloneProtection($request);
@@ -578,6 +644,16 @@ final readonly class FakeExchangeMatchingEngine
 
     private function executionPrice(ExchangeOrderDto $order): float
     {
+        if (
+            $order->orderType === ExchangeOrderType::LIMIT
+            && !$order->postOnly
+            && $this->limitOrderCrossesBook($order)
+        ) {
+            $top = $this->orderBook->top($order->symbol);
+
+            return $order->side === ExchangeOrderSide::BUY ? $top->ask : $top->bid;
+        }
+
         if ($order->price !== null) {
             return $order->price;
         }
@@ -630,6 +706,17 @@ final readonly class FakeExchangeMatchingEngine
             && \in_array($request->timeInForce, [ExchangeTimeInForce::IOC, ExchangeTimeInForce::FOK], true);
     }
 
+    private function fillStatus(float $remainingQuantity, bool $cancelReduceRemainder): ExchangeOrderStatus
+    {
+        if ($cancelReduceRemainder) {
+            return ExchangeOrderStatus::CANCELLED;
+        }
+
+        return $remainingQuantity <= 0.00000001
+            ? ExchangeOrderStatus::FILLED
+            : ExchangeOrderStatus::PARTIALLY_FILLED;
+    }
+
     private function isActiveStatus(ExchangeOrderStatus $status): bool
     {
         return \in_array($status, [
@@ -647,5 +734,15 @@ final readonly class FakeExchangeMatchingEngine
         $value = $metadata[$key] ?? null;
 
         return \is_scalar($value) && is_numeric($value) ? (float) $value : null;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function stringMetadata(array $metadata, string $key): ?string
+    {
+        $value = $metadata[$key] ?? null;
+
+        return \is_scalar($value) && $value !== '' ? (string) $value : null;
     }
 }
