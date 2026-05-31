@@ -9,6 +9,7 @@ use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Dto\ExchangeReconciliationResult;
+use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
@@ -193,19 +194,18 @@ final readonly class ExchangeReconciliationService
     {
         $unprotected = [];
         foreach ($positions as $position) {
-            $hasProtection = false;
+            $coveredQuantity = 0.0;
             foreach ($adapter->getOpenOrders($position->symbol) as $order) {
-                if (!$this->isProtectionOrder($order)) {
+                if (!$this->isConfirmedStopLossProtection($order, $position)) {
                     continue;
                 }
-                if ($order->positionSide !== $position->side || $order->remainingQuantity <= 0.0) {
-                    continue;
+                $coveredQuantity += $order->remainingQuantity;
+                if ($coveredQuantity + 0.00000001 >= $position->size) {
+                    break;
                 }
-                $hasProtection = true;
-                break;
             }
 
-            if (!$hasProtection) {
+            if ($coveredQuantity + 0.00000001 < $position->size) {
                 $unprotected[] = [
                     'symbol' => $position->symbol,
                     'side' => $position->side->value,
@@ -216,6 +216,58 @@ final readonly class ExchangeReconciliationService
         }
 
         return $unprotected;
+    }
+
+    private function isConfirmedStopLossProtection(ExchangeOrderDto $order, ExchangePositionDto $position): bool
+    {
+        if (!$this->activeOrderStatus($order->status)) {
+            return false;
+        }
+        if (!$order->reduceOnly) {
+            return false;
+        }
+        if (!\in_array($order->orderType, [ExchangeOrderType::STOP_LOSS, ExchangeOrderType::TRIGGER], true)) {
+            return false;
+        }
+        if ($order->positionSide !== $position->side || $order->side !== $this->exitOrderSide($position->side)) {
+            return false;
+        }
+        if ($order->stopPrice === null || $order->remainingQuantity <= 0.00000001) {
+            return false;
+        }
+        if (!$this->stopPriceLooksProtective($order, $position)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function stopPriceLooksProtective(ExchangeOrderDto $order, ExchangePositionDto $position): bool
+    {
+        if ($order->stopPrice === null) {
+            return false;
+        }
+        if ($position->entryPrice <= 0.0) {
+            return $order->orderType === ExchangeOrderType::STOP_LOSS;
+        }
+
+        return $position->side === ExchangePositionSide::SHORT
+            ? $order->stopPrice >= $position->entryPrice
+            : $order->stopPrice <= $position->entryPrice;
+    }
+
+    private function activeOrderStatus(ExchangeOrderStatus $status): bool
+    {
+        return \in_array($status, [
+            ExchangeOrderStatus::PENDING,
+            ExchangeOrderStatus::OPEN,
+            ExchangeOrderStatus::PARTIALLY_FILLED,
+        ], true);
+    }
+
+    private function exitOrderSide(ExchangePositionSide $side): ExchangeOrderSide
+    {
+        return $side === ExchangePositionSide::SHORT ? ExchangeOrderSide::BUY : ExchangeOrderSide::SELL;
     }
 
     private function isProtectionOrder(ExchangeOrderDto $order): bool
