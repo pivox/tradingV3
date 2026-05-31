@@ -61,8 +61,15 @@ final class TimeframeValidationServiceFallbackTest extends TestCase
         $klineProvider
             ->expects(self::once())
             ->method('getKlines')
-            ->with('BTCUSDT', Timeframe::TF_5M, 250)
-            ->willReturn([['open' => 1, 'high' => 1, 'low' => 1, 'close' => 1, 'volume' => 1]]);
+            ->with('BTCUSDT', Timeframe::TF_5M, 251)
+            ->willReturn([[
+                'open' => 1,
+                'high' => 1,
+                'low' => 1,
+                'close' => 1,
+                'volume' => 1,
+                'open_time' => new \DateTimeImmutable('2026-05-31 00:00:00', new \DateTimeZone('UTC')),
+            ]]);
 
         $service = new TimeframeValidationService(
             new TimeframeRuleEvaluator($ruleEngine),
@@ -104,6 +111,95 @@ final class TimeframeValidationServiceFallbackTest extends TestCase
         ));
     }
 
+    public function testConditionRegistryWindowDropsTrailingUntimestampedExtraKline(): void
+    {
+        $ruleEngine = new YamlRuleEngine();
+        $logger = new class extends AbstractLogger {
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+            }
+        };
+
+        $conditionRegistry = $this->createMock(MtfConditionRegistry::class);
+        $conditionRegistry
+            ->expects(self::once())
+            ->method('load');
+
+        $conditionEvaluator = $this->createMock(MtfTimeframeEvaluator::class);
+        $conditionEvaluator
+            ->expects(self::once())
+            ->method('evaluate')
+            ->willReturn([
+                'passed' => [
+                    'long' => true,
+                    'short' => false,
+                ],
+                'long' => [
+                    'conditions' => [],
+                ],
+                'short' => [
+                    'conditions' => [],
+                ],
+            ]);
+
+        $indicatorEngine = $this->createMock(IndicatorEngineInterface::class);
+        $indicatorEngine
+            ->expects(self::once())
+            ->method('buildContext')
+            ->with(
+                'BTCUSDT',
+                '1m',
+                self::callback(function (array $klines): bool {
+                    self::assertCount(250, $klines);
+                    self::assertSame(250.0, (float) $klines[249]['close']);
+
+                    return true;
+                }),
+                [],
+            )
+            ->willReturn(['close' => 250.0]);
+
+        $klineProvider = $this->createMock(KlineProviderInterface::class);
+        $klineProvider
+            ->expects(self::once())
+            ->method('getKlines')
+            ->with('BTCUSDT', Timeframe::TF_1M, 251)
+            ->willReturn($this->untimestampedKlinesWithOpenExtra());
+
+        $service = new TimeframeValidationService(
+            new TimeframeRuleEvaluator($ruleEngine),
+            $ruleEngine,
+            $logger,
+            $conditionEvaluator,
+            $conditionRegistry,
+            $indicatorEngine,
+            $klineProvider,
+        );
+
+        $decision = $service->validateTimeframe(
+            symbol: 'BTCUSDT',
+            timeframe: '1m',
+            phase: 'context',
+            mode: 'scalper',
+            mtfConfig: [
+                'rules' => [],
+                'validation' => [
+                    'timeframe' => [
+                        '1m' => [
+                            'long' => [],
+                            'short' => [],
+                        ],
+                    ],
+                ],
+                'filters_mandatory' => [],
+            ],
+            indicators: [],
+        );
+
+        self::assertTrue($decision->valid);
+        self::assertSame('long', $decision->signal);
+    }
+
     /**
      * @return array<string,mixed>
      */
@@ -139,5 +235,25 @@ final class TimeframeValidationServiceFallbackTest extends TestCase
             ],
             'filters_mandatory' => [],
         ];
+    }
+
+    /**
+     * @return array<int,array<string,float>>
+     */
+    private function untimestampedKlinesWithOpenExtra(): array
+    {
+        $klines = [];
+        for ($i = 1; $i <= 251; $i++) {
+            $close = $i === 251 ? 10000.0 : (float) $i;
+            $klines[] = [
+                'open' => $close,
+                'high' => $close + 1.0,
+                'low' => max(0.0, $close - 1.0),
+                'close' => $close,
+                'volume' => 100.0,
+            ];
+        }
+
+        return $klines;
     }
 }

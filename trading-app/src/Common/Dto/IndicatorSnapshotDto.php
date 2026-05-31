@@ -32,6 +32,7 @@ final readonly class IndicatorSnapshotDto
         public ?string $runId = null,
         public ?float $adx = null,
         public ?float $close = null,
+        public ?\DateTimeImmutable $updatedAt = null,
     ) {
     }
 
@@ -60,6 +61,7 @@ final readonly class IndicatorSnapshotDto
             'run_id' => $this->runId,
             'adx' => $this->adx,
             'close' => $this->close,
+            'updated_at' => $this->updatedAt?->format('Y-m-d H:i:s'),
         ];
     }
 
@@ -88,7 +90,25 @@ final readonly class IndicatorSnapshotDto
             runId: $data['run_id'] ?? null,
             adx: isset($data['adx']) && is_numeric($data['adx']) ? (float)$data['adx'] : null,
             close: isset($data['close']) && is_numeric($data['close']) ? (float)$data['close'] : null,
+            updatedAt: self::nullableDateTime($data['updated_at'] ?? null),
         );
+    }
+
+    private static function nullableDateTime(mixed $value): ?\DateTimeImmutable
+    {
+        if ($value instanceof \DateTimeImmutable) {
+            return $value->setTimezone(new \DateTimeZone('UTC'));
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return \DateTimeImmutable::createFromInterface($value)->setTimezone(new \DateTimeZone('UTC'));
+        }
+
+        if (\is_string($value) && $value !== '') {
+            return new \DateTimeImmutable($value, new \DateTimeZone('UTC'));
+        }
+
+        return null;
     }
 
     public function isMacdBullish(): bool
@@ -127,7 +147,7 @@ final readonly class IndicatorSnapshotDto
         return $price->minus($this->ma21)->abs();
     }
 
-    public function isPriceNearMa21(BigDecimal $price, BigDecimal $atrMultiplier = null): bool
+    public function isPriceNearMa21(BigDecimal $price, ?BigDecimal $atrMultiplier = null): bool
     {
         if ($this->ma21 === null || $this->atr === null) {
             return false;
@@ -140,4 +160,3 @@ final readonly class IndicatorSnapshotDto
         return $distance !== null && $distance->isLessThanOrEqualTo($maxDistance);
     }
 }
-

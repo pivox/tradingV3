@@ -34,6 +34,9 @@ use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 #[AsAlias(id: IndicatorProviderInterface::class)]
 final class IndicatorProviderService implements IndicatorProviderInterface
     {
+        private const INDICATOR_WINDOW_SIZE = 250;
+        private const CONDITION_WINDOW_SIZE = 150;
+
         private array $atrList = [];
         /** @var array<string,array{dto: ListIndicatorDto,last_kline_time: \DateTimeInterface}> */
         private array $listPivot = [];
@@ -127,24 +130,34 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             ?ExchangeContext $context = null,
         ): IndicatorSnapshotDto
         {
+            return $this->getSnapshotAt($symbol, $timeframe, $context, $this->clock->now());
+        }
+
+        private function getSnapshotAt(
+            string $symbol,
+            string $timeframe,
+            ?ExchangeContext $context,
+            \DateTimeInterface $at,
+        ): IndicatorSnapshotDto
+        {
             $context = ExchangeContext::resolve($context);
             $tf = Timeframe::from($timeframe);
+            $now = $this->toUtcImmutable($at);
             $existing = $this->getSnapshotFromDatabaseOnly($symbol, $tf->value, $context);
             if ($existing instanceof IndicatorSnapshotDto) {
-                $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
                 if (!$this->isSnapshotStale($existing, $now, $tf)) {
                     return $existing;
                 }
             }
 
-            $klines = $this->klineProvider->getKlines($symbol, $tf, 251, $context);
+            $klines = $this->fetchClosedKlines($symbol, $tf, self::INDICATOR_WINDOW_SIZE, $now, $context);
             if (empty($klines)) {
                 throw new \RuntimeException("Aucune kline pour $symbol/$timeframe");
             }
 
             $klinesCount = count($klines);
-            if ($klinesCount < 249) {
-                throw new NotEnoughKlinesException($symbol, $timeframe, 249, $klinesCount);
+            if ($klinesCount < self::INDICATOR_WINDOW_SIZE) {
+                throw new NotEnoughKlinesException($symbol, $timeframe, self::INDICATOR_WINDOW_SIZE, $klinesCount);
             }
 
             // Normalize arrays for calculation
@@ -200,7 +213,8 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 ma9: $ma9 !== null ? \Brick\Math\BigDecimal::of((string)$ma9) : null,
                 ma21: $ma21 !== null ? \Brick\Math\BigDecimal::of((string)$ma21) : null,
                 meta: ['key' => $symbol . '-' . $tf->value],
-                source: 'PHP'
+                source: 'PHP',
+                updatedAt: $now,
             );
 
             $this->saveIndicatorSnapshot($snapshot, $context);
@@ -402,7 +416,13 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             $timeframeEnum = Timeframe::from($timeframe);
 
             // 2️⃣ Récupère les klines normalisées
-            $klines = $this->klineProvider->getKlines($symbol, $timeframeEnum, 150, $context);
+            $klines = $this->fetchClosedKlines(
+                $symbol,
+                $timeframeEnum,
+                self::CONDITION_WINDOW_SIZE,
+                $this->clock->now(),
+                $context,
+            );
 
             // 2️⃣ Convertit les klines en format array pour le contexte
             $klinesArray = [];
@@ -464,8 +484,14 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
             try {
                 $tfEnum = Timeframe::from((string)$tf);
-                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 250, $context);
-                if (empty($klines)) {
+                $klines = $this->fetchClosedKlines(
+                    (string)$symbol,
+                    $tfEnum,
+                    self::INDICATOR_WINDOW_SIZE,
+                    $this->clock->now(),
+                    $context,
+                );
+                if (count($klines) < self::INDICATOR_WINDOW_SIZE) {
                     return null;
                 }
 
@@ -516,8 +542,14 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 }
 
                 try {
-                    $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 250, $context);
-                    if (empty($klines)) {
+                    $klines = $this->fetchClosedKlines(
+                        (string)$symbol,
+                        $tfEnum,
+                        self::INDICATOR_WINDOW_SIZE,
+                        $this->clock->now(),
+                        $context,
+                    );
+                    if (count($klines) < self::INDICATOR_WINDOW_SIZE) {
                         return null;
                     }
 
@@ -567,10 +599,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 return false;
             }
 
-            $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
-            $maxAge = $now->getTimestamp() - $timeframe->getStepInSeconds();
-
-            return $lastTime->getTimestamp() >= $maxAge;
+            return $this->isClosedKlineFresh($lastTime, $this->clock->now(), $timeframe);
         }
 
         /**
@@ -622,17 +651,23 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
                 // 1️⃣ si rien en DB → on calcule à partir des klines
                 if ($snapshot === null || $this->isSnapshotStale($snapshot, $at, Timeframe::from((string)$tf))) {
-                    $snapshot = $this->getSnapshot($symbol, (string)$tf, $context);
+                    $snapshot = $this->getSnapshotAt($symbol, (string)$tf, $context, $at);
                 }
 
                 // 2️⃣ mapping vers le format attendu par le MTF
                 $tfEnum = Timeframe::from((string)$tf);
-                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 251, $context);
+                $klines = $this->fetchClosedKlines(
+                    (string)$symbol,
+                    $tfEnum,
+                    self::INDICATOR_WINDOW_SIZE,
+                    $at,
+                    $context,
+                );
 
                 $klinesCount = count($klines);
-                if ($klinesCount < 249) {
+                if ($klinesCount < self::INDICATOR_WINDOW_SIZE) {
                     //dd($symbol, $tf, $klinesCount);
-                    throw new NotEnoughKlinesException((string)$symbol, (string)$tf, 249, $klinesCount);
+                    throw new NotEnoughKlinesException((string)$symbol, (string)$tf, self::INDICATOR_WINDOW_SIZE, $klinesCount);
                 }
 
                 $closes = [];
@@ -717,6 +752,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             'symbol'     => $entity->getSymbol(),
             'timeframe'  => $entity->getTimeframe()->value,
             'kline_time' => $entity->getKlineTime()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
+            'updated_at' => $entity->getUpdatedAt()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
         ]);
 
         return IndicatorSnapshotDto::fromArray($data);
@@ -729,13 +765,108 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         \DateTimeInterface $at,
         Timeframe $tf
     ): bool {
-        // On considère le snapshot périmé s'il est plus vieux qu'un "step" de TF
-        $snapshotTs = $snapshot->klineTime->getTimestamp();
-        $atTs = $at->getTimestamp();
+        if (!$this->isClosedKlineFresh($snapshot->klineTime, $at, $tf)) {
+            return true;
+        }
 
-        return ($atTs - $snapshotTs) > $tf->getStepInSeconds();
+        return !$this->wasSnapshotWrittenAfterCandleClose($snapshot, $tf);
     }
 
+    /**
+     * @return array<int,mixed>
+     */
+    private function fetchClosedKlines(
+        string $symbol,
+        Timeframe $timeframe,
+        int $windowSize,
+        \DateTimeInterface $at,
+        ?ExchangeContext $context,
+    ): array {
+        $klines = $this->klineProvider->getKlines($symbol, $timeframe, $windowSize + 1, $context);
 
+        return $this->closedKlineWindow($klines, $timeframe, $at, $windowSize);
+    }
+
+    /**
+     * @param array<int,mixed> $klines
+     * @return array<int,mixed>
+     */
+    private function closedKlineWindow(
+        array $klines,
+        Timeframe $timeframe,
+        \DateTimeInterface $at,
+        int $windowSize,
+    ): array {
+        $lastClosedOpenTs = $this->lastClosedKlineOpenTime($at, $timeframe)->getTimestamp();
+        $closed = [];
+        $hasOpenTime = false;
+
+        foreach ($klines as $kline) {
+            $openTime = $this->extractKlineOpenTime($kline);
+            if ($openTime === null) {
+                continue;
+            }
+
+            $hasOpenTime = true;
+            $openTs = $this->toUtcImmutable($openTime)->getTimestamp();
+            if ($openTs <= $lastClosedOpenTs) {
+                $closed[] = [
+                    'open_ts' => $openTs,
+                    'kline' => $kline,
+                ];
+            }
+        }
+
+        if (!$hasOpenTime) {
+            return \array_slice(\array_slice($klines, 0, max(0, \count($klines) - 1)), -$windowSize);
+        }
+
+        \usort(
+            $closed,
+            static fn (array $a, array $b): int => $a['open_ts'] <=> $b['open_ts'],
+        );
+
+        return \array_map(
+            static fn (array $row): mixed => $row['kline'],
+            \array_slice($closed, -$windowSize),
+        );
+    }
+
+    private function isClosedKlineFresh(
+        \DateTimeInterface $klineOpenTime,
+        \DateTimeInterface $at,
+        Timeframe $timeframe,
+    ): bool {
+        return $this->toUtcImmutable($klineOpenTime)->getTimestamp()
+            === $this->lastClosedKlineOpenTime($at, $timeframe)->getTimestamp();
+    }
+
+    private function wasSnapshotWrittenAfterCandleClose(IndicatorSnapshotDto $snapshot, Timeframe $timeframe): bool
+    {
+        if (!$snapshot->updatedAt instanceof \DateTimeInterface) {
+            return true;
+        }
+
+        $snapshotWrittenTs = $this->toUtcImmutable($snapshot->updatedAt)->getTimestamp();
+        $candleCloseTs = $this->toUtcImmutable($snapshot->klineTime)->getTimestamp()
+            + $timeframe->getStepInSeconds();
+
+        return $snapshotWrittenTs >= $candleCloseTs;
+    }
+
+    private function lastClosedKlineOpenTime(\DateTimeInterface $at, Timeframe $timeframe): \DateTimeImmutable
+    {
+        $atTs = $this->toUtcImmutable($at)->getTimestamp();
+        $step = $timeframe->getStepInSeconds();
+        $currentOpenTs = intdiv($atTs, $step) * $step;
+
+        return (new \DateTimeImmutable('@' . ($currentOpenTs - $step)))
+            ->setTimezone(new \DateTimeZone('UTC'));
+    }
+
+    private function toUtcImmutable(\DateTimeInterface $dateTime): \DateTimeImmutable
+    {
+        return \DateTimeImmutable::createFromInterface($dateTime)->setTimezone(new \DateTimeZone('UTC'));
+    }
 
 }

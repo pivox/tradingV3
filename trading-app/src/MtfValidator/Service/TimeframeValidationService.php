@@ -13,11 +13,14 @@ use App\MtfValidator\ConditionLoader\ConditionRegistry as MtfConditionRegistry;
 use App\MtfValidator\ConditionLoader\TimeframeEvaluator as MtfTimeframeEvaluator;
 use App\MtfValidator\Service\Rule\TimeframeRuleEvaluator;
 use App\MtfValidator\Service\Rule\YamlRuleEngine;
+use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class TimeframeValidationService
 {
+    private const CONDITION_REGISTRY_KLINE_WINDOW_SIZE = 250;
+
     public function __construct(
         private readonly TimeframeRuleEvaluator $tfEvaluator,
         private readonly YamlRuleEngine $ruleEngine,
@@ -28,6 +31,7 @@ final class TimeframeValidationService
         private readonly ?KlineProviderInterface $klineProvider = null,
         private readonly ?MainProviderInterface $mainProvider = null,
         private readonly ?MtfValidationEngineMetrics $validationEngineMetrics = null,
+        private readonly ?ClockInterface $clock = null,
     ) {
     }
 
@@ -308,7 +312,7 @@ final class TimeframeValidationService
             );
         }
 
-        $klines = $this->klineProvider->getKlines($symbol, $tfEnum, 250);
+        $klines = $this->fetchClosedKlinesForConditionRegistry($symbol, $tfEnum);
         if ($klines === []) {
             return new TimeframeDecisionDto(
                 timeframe: $timeframe,
@@ -767,5 +771,110 @@ final class TimeframeValidationService
             }
         }
         return $sum;
+    }
+
+    /**
+     * @return array<int,mixed>
+     */
+    private function fetchClosedKlinesForConditionRegistry(string $symbol, TimeframeEnum $timeframe): array
+    {
+        if ($this->klineProvider === null) {
+            return [];
+        }
+
+        $klines = $this->klineProvider->getKlines(
+            $symbol,
+            $timeframe,
+            self::CONDITION_REGISTRY_KLINE_WINDOW_SIZE + 1,
+        );
+        $lastClosedOpenTs = $this->lastClosedKlineOpenTime($this->nowUtc(), $timeframe)->getTimestamp();
+        $closed = [];
+        $hasOpenTime = false;
+
+        foreach ($klines as $kline) {
+            $openTime = $this->extractKlineOpenTime($kline);
+            if ($openTime === null) {
+                continue;
+            }
+
+            $hasOpenTime = true;
+            $openTs = $this->toUtcImmutable($openTime)->getTimestamp();
+            if ($openTs <= $lastClosedOpenTs) {
+                $closed[] = [
+                    'open_ts' => $openTs,
+                    'kline' => $kline,
+                ];
+            }
+        }
+
+        if (!$hasOpenTime) {
+            return \array_slice(
+                \array_slice($klines, 0, max(0, \count($klines) - 1)),
+                -self::CONDITION_REGISTRY_KLINE_WINDOW_SIZE,
+            );
+        }
+
+        \usort(
+            $closed,
+            static fn (array $a, array $b): int => $a['open_ts'] <=> $b['open_ts'],
+        );
+
+        return \array_map(
+            static fn (array $row): mixed => $row['kline'],
+            \array_slice($closed, -self::CONDITION_REGISTRY_KLINE_WINDOW_SIZE),
+        );
+    }
+
+    private function extractKlineOpenTime(mixed $kline): ?\DateTimeImmutable
+    {
+        if (\is_object($kline)) {
+            if (property_exists($kline, 'openTime') && $kline->openTime instanceof \DateTimeInterface) {
+                return \DateTimeImmutable::createFromInterface($kline->openTime);
+            }
+
+            if (method_exists($kline, 'getOpenTime')) {
+                $candidate = $kline->getOpenTime();
+                if ($candidate instanceof \DateTimeInterface) {
+                    return \DateTimeImmutable::createFromInterface($candidate);
+                }
+            }
+        }
+
+        if (\is_array($kline)) {
+            $candidate = $kline['openTime'] ?? $kline['open_time'] ?? null;
+            if ($candidate instanceof \DateTimeInterface) {
+                return \DateTimeImmutable::createFromInterface($candidate);
+            }
+            if (\is_numeric($candidate)) {
+                $timestamp = (int) $candidate;
+                if ($timestamp > 9999999999) {
+                    $timestamp = (int) round($timestamp / 1000);
+                }
+
+                return (new \DateTimeImmutable('@' . $timestamp))->setTimezone(new \DateTimeZone('UTC'));
+            }
+        }
+
+        return null;
+    }
+
+    private function lastClosedKlineOpenTime(\DateTimeInterface $at, TimeframeEnum $timeframe): \DateTimeImmutable
+    {
+        $atTs = $this->toUtcImmutable($at)->getTimestamp();
+        $step = $timeframe->getStepInSeconds();
+        $currentOpenTs = intdiv($atTs, $step) * $step;
+
+        return (new \DateTimeImmutable('@' . ($currentOpenTs - $step)))
+            ->setTimezone(new \DateTimeZone('UTC'));
+    }
+
+    private function nowUtc(): \DateTimeImmutable
+    {
+        return $this->toUtcImmutable($this->clock?->now() ?? new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
+    }
+
+    private function toUtcImmutable(\DateTimeInterface $dateTime): \DateTimeImmutable
+    {
+        return \DateTimeImmutable::createFromInterface($dateTime)->setTimezone(new \DateTimeZone('UTC'));
     }
 }
