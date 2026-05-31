@@ -11,6 +11,7 @@ des fills deterministes.
 
 ```bash
 php -d error_reporting='E_ALL & ~E_DEPRECATED' ./vendor/bin/phpunit tests/Exchange/Contract/FakeExchangeAdapterContractTest.php
+php -d error_reporting='E_ALL & ~E_DEPRECATED' ./vendor/bin/phpunit tests/Exchange/Contract/BitmartExchangeAdapterContractTest.php
 php -d error_reporting='E_ALL & ~E_DEPRECATED' ./vendor/bin/phpunit tests/Exchange/Contract/HyperliquidExchangeAdapterContractTest.php
 php -d error_reporting='E_ALL & ~E_DEPRECATED' ./vendor/bin/phpunit tests/Exchange/Contract/OkxExchangeAdapterContractTest.php
 php -d error_reporting='E_ALL & ~E_DEPRECATED' ./vendor/bin/phpunit tests/Exchange/Adapter/FakeExchangeAdapterTest.php
