@@ -15,9 +15,11 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Entity(repositoryClass: OrderIntentRepository::class)]
 #[ORM\Table(name: 'order_intent')]
 #[ORM\UniqueConstraint(name: 'ux_order_intent_exchange_market_client_order_id', columns: ['exchange', 'market_type', 'client_order_id'])]
+#[ORM\UniqueConstraint(name: 'ux_order_intent_exchange_market_active_decision_key', columns: ['exchange', 'market_type', 'decision_key'], options: ['where' => "decision_key IS NOT NULL AND status IN ('DRAFT','VALIDATED','READY_TO_SEND','SENT')"])]
 #[ORM\Index(name: 'idx_order_intent_symbol', columns: ['exchange', 'market_type', 'symbol'])]
 #[ORM\Index(name: 'idx_order_intent_status', columns: ['status'])]
 #[ORM\Index(name: 'idx_order_intent_client_order_id', columns: ['client_order_id'])]
+#[ORM\Index(name: 'idx_order_intent_exchange_market_decision_key', columns: ['exchange', 'market_type', 'decision_key'])]
 class OrderIntent
 {
     public const STATUS_DRAFT = 'DRAFT';
@@ -51,8 +53,23 @@ class OrderIntent
     #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
     private string $marketType = 'perpetual';
 
+    #[ORM\Column(name: 'decision_key', type: Types::STRING, length: 255, nullable: true)]
+    private ?string $decisionKey = null;
+
+    #[ORM\Column(name: 'strategy_profile', type: Types::STRING, length: 80, nullable: true)]
+    private ?string $strategyProfile = null;
+
+    #[ORM\Column(name: 'strategy_version', type: Types::STRING, length: 80, nullable: true)]
+    private ?string $strategyVersion = null;
+
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
+
+    #[ORM\Column(type: Types::STRING, length: 16, nullable: true)]
+    private ?string $timeframe = null;
+
+    #[ORM\Column(name: 'candle_open_ts', type: Types::DATETIMETZ_IMMUTABLE, nullable: true)]
+    private ?\DateTimeImmutable $candleOpenTs = null;
 
     #[ORM\Column(type: Types::INTEGER)]
     private int $side; // 1=open_long, 2=close_long, 3=close_short, 4=open_short
@@ -95,6 +112,9 @@ class OrderIntent
 
     #[ORM\Column(type: Types::STRING, length: 80, nullable: true)]
     private ?string $orderId = null; // Order ID de l'exchange après envoi
+
+    #[ORM\Column(name: 'exchange_order_id', type: Types::STRING, length: 80, nullable: true)]
+    private ?string $exchangeOrderId = null;
 
     #[ORM\Column(type: Types::STRING, length: 500, nullable: true)]
     private ?string $failureReason = null; // Raison de l'échec
@@ -146,6 +166,42 @@ class OrderIntent
         return $this->touch();
     }
 
+    public function getDecisionKey(): ?string
+    {
+        return $this->decisionKey;
+    }
+
+    public function setDecisionKey(?string $decisionKey): self
+    {
+        $decisionKey = $decisionKey !== null ? trim($decisionKey) : null;
+        $this->decisionKey = $decisionKey !== '' ? $decisionKey : null;
+        return $this->touch();
+    }
+
+    public function getStrategyProfile(): ?string
+    {
+        return $this->strategyProfile;
+    }
+
+    public function setStrategyProfile(?string $strategyProfile): self
+    {
+        $strategyProfile = $strategyProfile !== null ? trim($strategyProfile) : null;
+        $this->strategyProfile = $strategyProfile !== '' ? $strategyProfile : null;
+        return $this->touch();
+    }
+
+    public function getStrategyVersion(): ?string
+    {
+        return $this->strategyVersion;
+    }
+
+    public function setStrategyVersion(?string $strategyVersion): self
+    {
+        $strategyVersion = $strategyVersion !== null ? trim($strategyVersion) : null;
+        $this->strategyVersion = $strategyVersion !== '' ? $strategyVersion : null;
+        return $this->touch();
+    }
+
     public function getSymbol(): string
     {
         return $this->symbol;
@@ -154,6 +210,29 @@ class OrderIntent
     public function setSymbol(string $symbol): self
     {
         $this->symbol = strtoupper($symbol);
+        return $this->touch();
+    }
+
+    public function getTimeframe(): ?string
+    {
+        return $this->timeframe;
+    }
+
+    public function setTimeframe(?string $timeframe): self
+    {
+        $timeframe = $timeframe !== null ? strtolower(trim($timeframe)) : null;
+        $this->timeframe = $timeframe !== '' ? $timeframe : null;
+        return $this->touch();
+    }
+
+    public function getCandleOpenTs(): ?\DateTimeImmutable
+    {
+        return $this->candleOpenTs;
+    }
+
+    public function setCandleOpenTs(?\DateTimeImmutable $candleOpenTs): self
+    {
+        $this->candleOpenTs = $candleOpenTs;
         return $this->touch();
     }
 
@@ -346,6 +425,17 @@ class OrderIntent
         return $this->touch();
     }
 
+    public function getExchangeOrderId(): ?string
+    {
+        return $this->exchangeOrderId;
+    }
+
+    public function setExchangeOrderId(?string $exchangeOrderId): self
+    {
+        $this->exchangeOrderId = $exchangeOrderId;
+        return $this->touch();
+    }
+
     public function getFailureReason(): ?string
     {
         return $this->failureReason;
@@ -454,6 +544,7 @@ class OrderIntent
         $this->setStatus(self::STATUS_SENT);
         if ($orderId !== null) {
             $this->setOrderId($orderId);
+            $this->setExchangeOrderId($orderId);
         }
         $this->setSentAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
         return $this->touch();

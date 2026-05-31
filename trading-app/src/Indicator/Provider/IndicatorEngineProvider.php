@@ -112,7 +112,13 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
         if (isset($options['stop_loss'])) $builder->stopLoss((float)$options['stop_loss']);
         if (isset($options['atr_k'])) $builder->atrK((float)$options['atr_k']);
 
-        return $builder->build();
+        $context = $builder->build();
+        if ($lastOpenTime instanceof \DateTimeImmutable) {
+            $context['kline_time'] = $lastOpenTime->format('Y-m-d H:i:s');
+            $context['candle_open_ts'] = $lastOpenTime->getTimestamp();
+        }
+
+        return $context;
     }
 
     public function evaluateYaml(string $timeframe, array $context): array

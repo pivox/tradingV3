@@ -51,11 +51,15 @@ final class ExecutionBox
         ?string $decisionKey = null,
         ?LifecycleContextBuilder $contextBuilder = null,
         ?string $mode = null,
-        ?string $executionTf = null
+        ?string $executionTf = null,
+        ?string $clientOrderId = null,
+        ?int $orderIntentId = null,
+        bool $planPrepared = false,
     ): ExecutionResult
     {
-        $this->orderModePolicy->enforce($plan);
-        $plan = $this->applyTimeframeMultiplier($plan, $mode, $executionTf, $decisionKey);
+        if (!$planPrepared) {
+            $plan = $this->preparePlan($plan, $mode, $executionTf, $decisionKey);
+        }
         $this->positionsLogger->debug('execution.start', [
             'symbol' => $plan->symbol,
             'side' => $plan->side->value,
@@ -68,7 +72,7 @@ final class ExecutionBox
         ]);
 
         if ($plan->size < 1) {
-            $clientOrderId = $this->idempotency->newClientOrderId();
+            $clientOrderId ??= $this->idempotency->newClientOrderId($decisionKey);
             $this->positionsLogger->warning('execution.size_below_min', [
                 'symbol' => $plan->symbol,
                 'size' => $plan->size,
@@ -91,7 +95,7 @@ final class ExecutionBox
         }
 
         if ($plan->leverage < 1) {
-            $clientOrderId = $this->idempotency->newClientOrderId();
+            $clientOrderId ??= $this->idempotency->newClientOrderId($decisionKey);
             $this->positionsLogger->warning('execution.leverage_below_min', [
                 'symbol' => $plan->symbol,
                 'leverage' => $plan->leverage,
@@ -113,7 +117,7 @@ final class ExecutionBox
             );
         }
 
-        $clientOrderId = $this->idempotency->newClientOrderId();
+        $clientOrderId ??= $this->idempotency->newClientOrderId($decisionKey);
 
         $this->positionsLogger->debug('execution.leverage_submit', [
             'symbol' => $plan->symbol,
@@ -132,12 +136,13 @@ final class ExecutionBox
 
         // Router vers le flux market si nécessaire
         if ($plan->orderType === 'market') {
-            return $this->executeMarketOrder($plan, $clientOrderId, $decisionKey, $leverageResult);
+            return $this->executeMarketOrder($plan, $clientOrderId, $decisionKey, $leverageResult, $orderIntentId);
         }
 
        // $plan = $this->enforceTakeProfitCap($plan, $decisionKey);
 
         $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
+        $payload = $this->withIntentMetadata($payload, $decisionKey, $orderIntentId);
 
         // Mapper side BitMart (1,2,3,4) vers OrderSide enum
         $side = match($payload['side']) {
@@ -351,6 +356,17 @@ final class ExecutionBox
         );
     }
 
+    public function preparePlan(
+        OrderPlanModel $plan,
+        ?string $mode = null,
+        ?string $executionTf = null,
+        ?string $decisionKey = null,
+    ): OrderPlanModel {
+        $this->orderModePolicy->enforce($plan);
+
+        return $this->applyTimeframeMultiplier($plan, $mode, $executionTf, $decisionKey);
+    }
+
     /**
      * Prépare les options Bitmart pour l'appel placeOrder.
      *
@@ -369,6 +385,8 @@ final class ExecutionBox
         ];
 
         foreach ([
+            'decision_key',
+            'order_intent_id',
             'preset_take_profit_price',
             'preset_take_profit_price_type',
             'preset_stop_loss_price',
@@ -383,6 +401,22 @@ final class ExecutionBox
             $options,
             static fn($value) => $value !== null && $value !== ''
         );
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function withIntentMetadata(array $payload, ?string $decisionKey, ?int $orderIntentId): array
+    {
+        if ($decisionKey !== null && trim($decisionKey) !== '') {
+            $payload['decision_key'] = $decisionKey;
+        }
+        if ($orderIntentId !== null) {
+            $payload['order_intent_id'] = $orderIntentId;
+        }
+
+        return $payload;
     }
 
     private function applyTimeframeMultiplier(
@@ -568,7 +602,8 @@ final class ExecutionBox
         OrderPlanModel $plan,
         string $clientOrderId,
         ?string $decisionKey,
-        bool $leverageResult
+        bool $leverageResult,
+        ?int $orderIntentId = null,
     ): ExecutionResult {
         $this->positionsLogger->info('execution.market_order.start', [
             'symbol' => $plan->symbol,
@@ -580,6 +615,7 @@ final class ExecutionBox
 
         // 1) Soumettre l'ordre market sans TP/SL
         $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
+        $payload = $this->withIntentMetadata($payload, $decisionKey, $orderIntentId);
         $side = match($payload['side']) {
             1 => OrderSide::BUY,
             2 => OrderSide::SELL,

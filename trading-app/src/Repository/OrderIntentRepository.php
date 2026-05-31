@@ -28,13 +28,32 @@ final class OrderIntentRepository extends ServiceEntityRepository
         ]);
     }
 
-    public function findOneByOrderId(string $orderId, ?ExchangeContext $context = null): ?OrderIntent
+    public function findOneByDecisionKey(string $decisionKey, ?ExchangeContext $context = null): ?OrderIntent
     {
         return $this->findOneBy([
             'exchange' => ExchangeContext::exchangeValue($context),
             'marketType' => ExchangeContext::marketTypeValue($context),
-            'orderId' => $orderId,
-        ]);
+            'decisionKey' => $decisionKey,
+        ], ['createdAt' => 'DESC']);
+    }
+
+    public function findOneByOrderId(string $orderId, ?ExchangeContext $context = null): ?OrderIntent
+    {
+        return $this->createQueryBuilder('oi')
+            ->where('oi.exchange = :exchange')
+            ->andWhere('oi.marketType = :marketType')
+            ->andWhere('(oi.orderId = :orderId OR oi.exchangeOrderId = :orderId)')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
+            ->setParameter('orderId', $orderId)
+            ->setMaxResults(1)
+            ->getQuery()
+            ->getOneOrNullResult();
+    }
+
+    public function findOneById(int $id): ?OrderIntent
+    {
+        return $this->find($id);
     }
 
     /**

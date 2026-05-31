@@ -387,6 +387,11 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             $options['preset_take_profit_price'] = (string) $request->attachedTakeProfitPrice;
             $options['preset_take_profit_price_type'] = 1;
         }
+        foreach (['decision_key', 'order_intent_id'] as $metadataKey) {
+            if (isset($request->metadata[$metadataKey]) && $request->metadata[$metadataKey] !== null && $request->metadata[$metadataKey] !== '') {
+                $options[$metadataKey] = $request->metadata[$metadataKey];
+            }
+        }
 
         return $options;
     }

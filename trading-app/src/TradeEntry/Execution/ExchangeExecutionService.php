@@ -44,20 +44,25 @@ final class ExchangeExecutionService
         ?string $decisionKey = null,
         ?string $mode = null,
         ?string $executionTf = null,
+        ?string $clientOrderId = null,
+        ?int $orderIntentId = null,
+        bool $planPrepared = false,
     ): ExecutionResult
     {
-        $this->orderModePolicy->enforce($plan);
-        $plan = $this->applyTimeframeMultiplier($plan, $mode, $executionTf, $decisionKey);
+        if (!$planPrepared) {
+            $plan = $this->preparePlan($plan, $mode, $executionTf, $decisionKey);
+        }
+
         if ($plan->size < 1) {
-            return $this->skipBelowMinimum($plan, $decisionKey, 'size_below_min', 'size', $plan->size, 1);
+            return $this->skipBelowMinimum($plan, $decisionKey, 'size_below_min', 'size', $plan->size, 1, $clientOrderId);
         }
         if ($plan->leverage < 1) {
-            return $this->skipBelowMinimum($plan, $decisionKey, 'leverage_below_min', 'leverage', $plan->leverage, 1);
+            return $this->skipBelowMinimum($plan, $decisionKey, 'leverage_below_min', 'leverage', $plan->leverage, 1, $clientOrderId);
         }
 
         $context = ExchangeContext::resolve($plan->exchangeContext);
         $adapter = $this->adapters->get($context->exchange, $context->marketType);
-        $clientOrderId = $this->idempotency->newClientOrderId();
+        $clientOrderId ??= $this->idempotency->newClientOrderId($decisionKey);
         $capabilities = $adapter->capabilities();
         if ($this->shouldRejectUnprotectableBitmartMarket($context, $plan, $capabilities)) {
             $this->positionsLogger->error('exchange_execution.entry_rejected_unprotectable_market', [
@@ -116,6 +121,7 @@ final class ExchangeExecutionService
                 attachStopLoss: $attachedStopLossRequested,
                 attachTakeProfit: $attachedTakeProfitRequested,
                 decisionKey: $decisionKey,
+                orderIntentId: $orderIntentId,
             ));
         } catch (\Throwable $e) {
             $this->positionsLogger->error('exchange_execution.entry_submit_failed', [
@@ -244,6 +250,17 @@ final class ExchangeExecutionService
         return $this->executionResultFromProtection($clientOrderId, $entryResult, $protection, $leverageSet);
     }
 
+    public function preparePlan(
+        OrderPlanModel $plan,
+        ?string $mode = null,
+        ?string $executionTf = null,
+        ?string $decisionKey = null,
+    ): OrderPlanModel {
+        $this->orderModePolicy->enforce($plan);
+
+        return $this->applyTimeframeMultiplier($plan, $mode, $executionTf, $decisionKey);
+    }
+
     private function executionResultFromProtection(
         string $clientOrderId,
         PlaceOrderResult $entryResult,
@@ -273,6 +290,7 @@ final class ExchangeExecutionService
         bool $attachStopLoss,
         bool $attachTakeProfit,
         ?string $decisionKey,
+        ?int $orderIntentId,
     ): PlaceOrderRequest {
         $orderType = $plan->orderType === 'market' ? ExchangeOrderType::MARKET : ExchangeOrderType::LIMIT;
 
@@ -296,6 +314,7 @@ final class ExchangeExecutionService
             attachedTakeProfitPrice: $attachTakeProfit ? $plan->takeProfit : null,
             metadata: [
                 'decision_key' => $decisionKey,
+                'order_intent_id' => $orderIntentId,
                 'source' => 'exchange_execution_service',
             ],
         );
@@ -319,8 +338,9 @@ final class ExchangeExecutionService
         string $field,
         int $value,
         int $minRequired,
+        ?string $clientOrderId = null,
     ): ExecutionResult {
-        $clientOrderId = $this->idempotency->newClientOrderId();
+        $clientOrderId ??= $this->idempotency->newClientOrderId($decisionKey);
         $this->positionsLogger->warning('exchange_execution.' . $reason, [
             'symbol' => $plan->symbol,
             $field => $value,

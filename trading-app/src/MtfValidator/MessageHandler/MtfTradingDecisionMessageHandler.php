@@ -47,8 +47,12 @@ final class MtfTradingDecisionMessageHandler
             tradingDecision: null,
             error: null,
             context: [
+                'evaluated_at' => $result->evaluatedAt->format(\DateTimeInterface::ATOM),
+                'profile' => $result->profile,
+                'mode' => $result->mode,
                 'context' => $result->context->toArray(),
                 'execution' => $result->execution->toArray(),
+                'extra' => $result->extra,
             ],
             currentPrice: null,
             atr: null,
