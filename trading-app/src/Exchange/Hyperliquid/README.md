@@ -11,6 +11,7 @@ First API-first Hyperliquid integration slice.
 - Trading actions are built in official `/exchange` wire format (`order`, `cancel`, `cancelByCloid`, `updateLeverage`).
 - Market orders are sent as IOC limit orders with a 5% slippage cap derived from the current L2 top. Stop-loss/take-profit trigger market orders use the same 5% cap around `stopPrice`.
 - Internal app client order IDs are deterministically mapped to Hyperliquid Cloid values (`0x` + 128-bit hex) before they reach `/exchange`.
+- Private WebSocket support is not advertised yet; keep reconciliation on REST snapshots until a Hyperliquid WS client and normalizer are added.
 - Live signing is intentionally not enabled by the default REST client. Inject a signed `HyperliquidRestClientInterface` implementation before sending real testnet orders.
 
 Environment:

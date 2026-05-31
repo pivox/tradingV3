@@ -33,6 +33,7 @@ final class HyperliquidExchangeAdapterTest extends TestCase
         $capabilities = $this->adapter()->capabilities();
 
         self::assertTrue($capabilities->supportsTestnet);
+        self::assertFalse($capabilities->supportsWebSocketPrivate);
         self::assertTrue($capabilities->supportsClientOrderId);
         self::assertTrue($capabilities->supportsCancelByClientOrderId);
         self::assertFalse($capabilities->supportsAttachedStopLossOnEntry);
