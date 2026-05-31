@@ -6,10 +6,20 @@ namespace App\Tests\Exchange\Reconciliation;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Contract\Provider\Dto\SymbolBidAskDto;
 use App\Exchange\Adapter\FakeExchangeAdapter;
+use App\Exchange\Contract\ExchangeAdapterInterface;
+use App\Exchange\Dto\CancelOrderRequest;
+use App\Exchange\Dto\CancelOrderResult;
+use App\Exchange\Dto\ExchangeBalanceDto;
+use App\Exchange\Dto\ExchangeCapabilities;
+use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Dto\ExchangeOrderDto;
+use App\Exchange\Dto\ExchangePositionDto;
+use App\Exchange\Dto\ExchangeReconciliationResult;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Enum\ExchangeOrderSide;
+use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
@@ -20,10 +30,12 @@ use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
 use App\Exchange\Event\ExchangeOrderFilled;
 use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionUpdated;
+use App\Exchange\Event\ExchangeProtectionOrderCreated;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Reconciliation\ExchangeReconciliationService;
+use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
@@ -85,6 +97,138 @@ final class ExchangeReconciliationServiceTest extends TestCase
         self::assertTrue($store->contains(ExchangePositionClosed::class));
     }
 
+    public function testRestReconciliationDoesNotFlagPositionCoveredByStopLoss(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $adapter = $this->adapter($state);
+        $adapter->placeOrder($this->marketRequest(attachedStopLossPrice: 24800.0));
+        $store = new RecordingProjectionStore();
+        $service = new ExchangeReconciliationService(
+            new ExchangeEventBus($store, new NullLogger()),
+            $store,
+            $this->fixedClock(),
+            new NullLogger(),
+        );
+
+        $result = $service->reconcile($adapter, 'BTCUSDT');
+
+        self::assertSame([], $result->metadata['unprotected_positions'] ?? null);
+        self::assertTrue($store->contains(ExchangeProtectionOrderCreated::class));
+    }
+
+    public function testRestReconciliationIgnoresTakeProfitWrongSideAndUndersizedProtectionForSlCoverage(): void
+    {
+        $position = $this->position(size: 2.0);
+        $adapter = new SnapshotReconciliationAdapter(
+            positions: [$position],
+            orders: [
+                $this->protectionOrder(
+                    orderType: ExchangeOrderType::TAKE_PROFIT,
+                    side: ExchangeOrderSide::SELL,
+                    remainingQuantity: 2.0,
+                    stopPrice: 26000.0,
+                ),
+                $this->protectionOrder(
+                    orderType: ExchangeOrderType::TRIGGER,
+                    side: ExchangeOrderSide::SELL,
+                    remainingQuantity: 2.0,
+                    stopPrice: 26000.0,
+                ),
+                $this->protectionOrder(
+                    orderType: ExchangeOrderType::STOP_LOSS,
+                    side: ExchangeOrderSide::SELL,
+                    remainingQuantity: 2.0,
+                    stopPrice: 26000.0,
+                ),
+                $this->protectionOrder(
+                    orderType: ExchangeOrderType::STOP_LOSS,
+                    side: ExchangeOrderSide::BUY,
+                    remainingQuantity: 2.0,
+                    stopPrice: 24800.0,
+                ),
+                $this->protectionOrder(
+                    orderType: ExchangeOrderType::STOP_LOSS,
+                    side: ExchangeOrderSide::SELL,
+                    remainingQuantity: 1.0,
+                    stopPrice: 24800.0,
+                ),
+            ],
+        );
+        $store = new RecordingProjectionStore();
+        $service = new ExchangeReconciliationService(
+            new ExchangeEventBus($store, new NullLogger()),
+            $store,
+            $this->fixedClock(),
+            new NullLogger(),
+        );
+
+        $result = $service->reconcile($adapter, 'BTCUSDT');
+
+        self::assertCount(1, $result->metadata['unprotected_positions'] ?? []);
+        self::assertSame('BTCUSDT', $result->metadata['unprotected_positions'][0]['symbol'] ?? null);
+    }
+
+    public function testRestReconciliationAcceptsSplitStopLossCoverage(): void
+    {
+        $position = $this->position(size: 2.0);
+        $adapter = new SnapshotReconciliationAdapter(
+            positions: [$position],
+            orders: [
+                $this->protectionOrder(
+                    orderType: ExchangeOrderType::STOP_LOSS,
+                    side: ExchangeOrderSide::SELL,
+                    remainingQuantity: 1.0,
+                    stopPrice: 24800.0,
+                ),
+                $this->protectionOrder(
+                    orderType: ExchangeOrderType::TRIGGER,
+                    side: ExchangeOrderSide::SELL,
+                    remainingQuantity: 1.0,
+                    stopPrice: 24790.0,
+                ),
+            ],
+        );
+        $store = new RecordingProjectionStore();
+        $service = new ExchangeReconciliationService(
+            new ExchangeEventBus($store, new NullLogger()),
+            $store,
+            $this->fixedClock(),
+            new NullLogger(),
+        );
+
+        $result = $service->reconcile($adapter, 'BTCUSDT');
+
+        self::assertSame([], $result->metadata['unprotected_positions'] ?? null);
+    }
+
+    public function testRestReconciliationDoesNotTrustGenericTriggerWhenEntryPriceIsMissing(): void
+    {
+        $position = $this->position(size: 1.0, side: ExchangePositionSide::SHORT, entryPrice: 0.0);
+        $adapter = new SnapshotReconciliationAdapter(
+            positions: [$position],
+            orders: [
+                $this->protectionOrder(
+                    orderType: ExchangeOrderType::TRIGGER,
+                    side: ExchangeOrderSide::BUY,
+                    positionSide: ExchangePositionSide::SHORT,
+                    remainingQuantity: 1.0,
+                    stopPrice: 20000.0,
+                ),
+            ],
+        );
+        $store = new RecordingProjectionStore();
+        $service = new ExchangeReconciliationService(
+            new ExchangeEventBus($store, new NullLogger()),
+            $store,
+            $this->fixedClock(),
+            new NullLogger(),
+        );
+
+        $result = $service->reconcile($adapter, 'BTCUSDT');
+
+        self::assertCount(1, $result->metadata['unprotected_positions'] ?? []);
+    }
+
     private function adapter(FakeExchangeStateStore $state): FakeExchangeAdapter
     {
         $book = new FakeExchangeOrderBook($state);
@@ -93,7 +237,7 @@ final class ExchangeReconciliationServiceTest extends TestCase
         return new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
     }
 
-    private function marketRequest(): PlaceOrderRequest
+    private function marketRequest(?float $attachedStopLossPrice = null): PlaceOrderRequest
     {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
@@ -111,6 +255,59 @@ final class ExchangeReconciliationServiceTest extends TestCase
             leverage: 3,
             marginMode: 'isolated',
             clientOrderId: 'cid-1',
+            attachedStopLossPrice: $attachedStopLossPrice,
+        );
+    }
+
+    private function position(
+        float $size,
+        ExchangePositionSide $side = ExchangePositionSide::LONG,
+        float $entryPrice = 25000.0,
+    ): ExchangePositionDto {
+        return new ExchangePositionDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: $side,
+            size: $size,
+            entryPrice: $entryPrice,
+            markPrice: 25000.0,
+            unrealizedPnl: 0.0,
+            realizedPnl: 0.0,
+            margin: 1000.0,
+            leverage: 3.0,
+            openedAt: $this->fixedClock()->now(),
+            updatedAt: $this->fixedClock()->now(),
+        );
+    }
+
+    private function protectionOrder(
+        ExchangeOrderType $orderType,
+        ExchangeOrderSide $side,
+        float $remainingQuantity,
+        float $stopPrice,
+        ExchangePositionSide $positionSide = ExchangePositionSide::LONG,
+    ): ExchangeOrderDto {
+        return new ExchangeOrderDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: 'protection-' . $orderType->value . '-' . $side->value . '-' . (string)$remainingQuantity,
+            clientOrderId: null,
+            side: $side,
+            positionSide: $positionSide,
+            orderType: $orderType,
+            status: ExchangeOrderStatus::OPEN,
+            quantity: $remainingQuantity,
+            filledQuantity: 0.0,
+            remainingQuantity: $remainingQuantity,
+            price: null,
+            averagePrice: null,
+            stopPrice: $stopPrice,
+            reduceOnly: true,
+            postOnly: false,
+            timeInForce: null,
+            createdAt: $this->fixedClock()->now(),
         );
     }
 
@@ -122,6 +319,141 @@ final class ExchangeReconciliationServiceTest extends TestCase
                 return new \DateTimeImmutable('2026-01-01 00:00:00 UTC');
             }
         };
+    }
+}
+
+final readonly class SnapshotReconciliationAdapter implements ExchangeAdapterInterface, ExchangeRestSnapshotProviderInterface
+{
+    /**
+     * @param ExchangePositionDto[] $positions
+     * @param ExchangeOrderDto[] $orders
+     * @param ExchangeFillDto[] $fills
+     */
+    public function __construct(
+        private array $positions,
+        private array $orders,
+        private array $fills = [],
+    ) {
+    }
+
+    public function exchange(): Exchange
+    {
+        return Exchange::FAKE;
+    }
+
+    public function marketType(): MarketType
+    {
+        return MarketType::PERPETUAL;
+    }
+
+    public function capabilities(): ExchangeCapabilities
+    {
+        return new ExchangeCapabilities(
+            supportsClientOrderId: true,
+            supportsReduceOnly: true,
+            supportsTriggerOrders: true,
+        );
+    }
+
+    public function getBalances(): array
+    {
+        return [
+            new ExchangeBalanceDto(
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                currency: 'USDT',
+                available: 1000.0,
+            ),
+        ];
+    }
+
+    public function getOpenPositions(?string $symbol = null): array
+    {
+        $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
+
+        return array_values(array_filter(
+            $this->positions,
+            static fn (ExchangePositionDto $position): bool => $normalizedSymbol === null || $position->symbol === $normalizedSymbol,
+        ));
+    }
+
+    public function getOpenOrders(?string $symbol = null): array
+    {
+        $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
+
+        return array_values(array_filter(
+            $this->orders,
+            static fn (ExchangeOrderDto $order): bool => $normalizedSymbol === null || $order->symbol === $normalizedSymbol,
+        ));
+    }
+
+    public function getOrdersSnapshot(?string $symbol = null): array
+    {
+        return $this->getOpenOrders($symbol);
+    }
+
+    public function getFillsSnapshot(?string $symbol = null): array
+    {
+        $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
+
+        return array_values(array_filter(
+            $this->fills,
+            static fn (ExchangeFillDto $fill): bool => $normalizedSymbol === null || $fill->symbol === $normalizedSymbol,
+        ));
+    }
+
+    public function hasAuthoritativePositionSnapshot(?string $symbol = null): bool
+    {
+        return true;
+    }
+
+    public function placeOrder(PlaceOrderRequest $request): \App\Exchange\Dto\PlaceOrderResult
+    {
+        throw new \BadMethodCallException('Snapshot adapter is read-only.');
+    }
+
+    public function cancelOrder(CancelOrderRequest $request): CancelOrderResult
+    {
+        throw new \BadMethodCallException('Snapshot adapter is read-only.');
+    }
+
+    public function getOrder(string $symbol, string $exchangeOrderId): ?ExchangeOrderDto
+    {
+        foreach ($this->getOpenOrders($symbol) as $order) {
+            if ($order->exchangeOrderId === $exchangeOrderId) {
+                return $order;
+            }
+        }
+
+        return null;
+    }
+
+    public function getOrderBookTop(string $symbol): SymbolBidAskDto
+    {
+        return new SymbolBidAskDto(
+            symbol: strtoupper($symbol),
+            bid: 24999.5,
+            ask: 25000.5,
+            timestamp: new \DateTimeImmutable('2026-01-01 00:00:00 UTC'),
+        );
+    }
+
+    public function setLeverage(string $symbol, int $leverage, string $marginMode): bool
+    {
+        return true;
+    }
+
+    public function reconcile(?string $symbol = null): ExchangeReconciliationResult
+    {
+        $now = new \DateTimeImmutable('2026-01-01 00:00:00 UTC');
+
+        return new ExchangeReconciliationResult(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: $symbol !== null ? strtoupper($symbol) : null,
+            startedAt: $now,
+            completedAt: $now,
+        );
     }
 }
 

@@ -98,6 +98,11 @@ Sur les donnees persistantes, chercher les positions ouvertes sans ordre de
 protection actif via les tables `futures_order`, `futures_plan_order`,
 `order_protection` et `trade_lifecycle_event`. Les events utiles a lire:
 
+La reconciliation REST ne considere une position couverte que si un SL actif
+reduce-only couvre la quantite ouverte avec le bon side de sortie et la bonne
+position side. Un TP seul, un mauvais side ou une quantite restante insuffisante
+doit rester visible dans `unprotected_positions`.
+
 - `exchange_execution.entry_submitted`
 - `exchange_execution.entry_filled`
 - `protection.confirmed`
