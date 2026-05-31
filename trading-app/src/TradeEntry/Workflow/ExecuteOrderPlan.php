@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\TradeEntry\Workflow;
 
 use App\Entity\OrderIntent;
+use App\Exchange\Adapter\BitmartLegacyOrderMapper;
 use App\Service\OrderIntentManager;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\ExchangeExecutionService;
@@ -17,13 +18,18 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class ExecuteOrderPlan
 {
+    private readonly BitmartLegacyOrderMapper $bitmartOrders;
+
     public function __construct(
         private readonly ExecutionBox $execution,
         private readonly ExchangeExecutionService $exchangeExecution,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         private readonly ?OrderIntentManager $orderIntentManager = null,
         private readonly ?IdempotencyPolicy $idempotency = null,
-    ) {}
+        ?BitmartLegacyOrderMapper $bitmartOrders = null,
+    ) {
+        $this->bitmartOrders = $bitmartOrders ?? new BitmartLegacyOrderMapper();
+    }
 
     public function __invoke(
         OrderPlanModel $plan,
@@ -191,20 +197,7 @@ final class ExecuteOrderPlan
             'candle_open_ts' => $this->parsedDecisionKeyPart($decisionKey, 4),
             'strategy_profile' => $this->parsedDecisionKeyPart($decisionKey, 6),
             'strategy_version' => $this->parsedDecisionKeyPart($decisionKey, 7),
-            'side' => $plan->side->value === 'long' ? 1 : 4,
-            'type' => $plan->orderType,
-            'open_type' => $plan->openType,
-            'leverage' => $plan->leverage,
-            'position_mode' => OrderIntent::POSITION_MODE_HEDGE,
-            'price' => $plan->orderType === 'limit' ? (string) $plan->entry : null,
-            'size' => $plan->size,
-            'client_order_id' => $clientOrderId,
-            'preset_mode' => ($plan->stop > 0.0 || $plan->takeProfit > 0.0)
-                ? OrderIntent::PRESET_MODE_PRESET_ON_ENTRY
-                : OrderIntent::PRESET_MODE_NONE,
-            'preset_stop_loss_price' => $plan->stop > 0.0 ? (string) $plan->stop : null,
-            'preset_take_profit_price' => $plan->takeProfit > 0.0 ? (string) $plan->takeProfit : null,
-        ];
+        ] + $this->bitmartOrders->orderIntentExecutionParams($plan, $clientOrderId);
     }
 
     /**

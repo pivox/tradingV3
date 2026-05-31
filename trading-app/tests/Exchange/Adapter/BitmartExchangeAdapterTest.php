@@ -125,6 +125,27 @@ final class BitmartExchangeAdapterTest extends TestCase
         self::assertSame(2, $capturedOptions['mode'] ?? null);
     }
 
+    public function testMapsAttachedProtectionToLegacyPresetOptions(): void
+    {
+        $capturedOptions = null;
+        $adapter = $this->createAdapter(function (array $options) use (&$capturedOptions): void {
+            $capturedOptions = $options;
+        });
+
+        $adapter->placeOrder($this->placeOrderRequest(
+            positionSide: ExchangePositionSide::LONG,
+            side: ExchangeOrderSide::BUY,
+            attachedStopLossPrice: 24000.0,
+            attachedTakeProfitPrice: 26000.0,
+        ));
+
+        self::assertSame('24000', $capturedOptions['preset_stop_loss_price'] ?? null);
+        self::assertSame(1, $capturedOptions['preset_stop_loss_price_type'] ?? null);
+        self::assertSame('26000', $capturedOptions['preset_take_profit_price'] ?? null);
+        self::assertSame(1, $capturedOptions['preset_take_profit_price_type'] ?? null);
+        self::assertSame('cid-1', $capturedOptions['client_order_id'] ?? null);
+    }
+
     public function testRejectsPostOnlyWithIocOrFok(): void
     {
         $registry = $this->createMock(ExchangeProviderRegistryInterface::class);

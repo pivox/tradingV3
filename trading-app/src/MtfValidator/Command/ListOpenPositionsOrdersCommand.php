@@ -10,7 +10,6 @@ use App\Contract\Provider\OrderProviderInterface;
 use App\Contract\Provider\MainProviderInterface;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
-use App\Provider\Bitmart\BitmartOrderProvider;
 use App\Provider\Context\ExchangeContext;
 use Brick\Math\RoundingMode;
 use Psr\Log\LoggerInterface;
@@ -246,14 +245,12 @@ Exemples:
                 }
 
                 // 3. Récupération des ordres planifiés (TP/SL)
-                // Note: getPlanOrders() est spécifique à BitmartOrderProvider
                 $io->section('Récupération des ordres planifiés (TP/SL)...');
                 try {
                     $planOrders = [];
-                    // Vérifier si le provider supporte getPlanOrders (méthode spécifique BitMart)
-                    $bitmartProvider = $this->unwrapOrderProvider($orderProvider);
-                    if ($bitmartProvider instanceof BitmartOrderProvider) {
-                        $planOrders = $bitmartProvider->getPlanOrders($symbol);
+                    $planOrderProvider = $this->unwrapOrderProvider($orderProvider);
+                    if (method_exists($planOrderProvider, 'getPlanOrders')) {
+                        $planOrders = $planOrderProvider->getPlanOrders($symbol);
                     } else {
                         $io->note('Le provider ne supporte pas la récupération des ordres planifiés (TP/SL)');
                         $data['plan_orders'] = [];

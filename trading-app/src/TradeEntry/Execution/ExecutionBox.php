@@ -3,13 +3,11 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Execution;
 
-use App\Common\Enum\OrderSide;
-use App\Common\Enum\OrderType;
 use App\Contract\Provider\MainProviderInterface;
 use App\Contract\Provider\OrderProviderDecoratorInterface;
 use App\Contract\Provider\OrderProviderInterface;
+use App\Exchange\Adapter\BitmartLegacyOrderMapper;
 use App\Provider\Context\ExchangeContext;
-use App\Provider\Bitmart\BitmartOrderProvider;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Message\LimitFillWatchMessage;
 use App\TradeEntry\Pricing\TickQuantizer;
@@ -43,6 +41,7 @@ final class ExecutionBox
         private readonly TradeEntryConfigResolver $tradeEntryConfigResolver,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         private readonly MessageBusInterface $bus,
+        private readonly BitmartLegacyOrderMapper $bitmartOrders,
         private readonly ?TpSlTwoTargetsService $tpSlService = null,
     ) {}
 
@@ -144,22 +143,15 @@ final class ExecutionBox
         $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
         $payload = $this->withIntentMetadata($payload, $decisionKey, $orderIntentId);
 
-        // Mapper side BitMart (1,2,3,4) vers OrderSide enum
-        $side = match($payload['side']) {
-            1 => OrderSide::BUY,   // open_long
-            2 => OrderSide::SELL,  // close_long
-            3 => OrderSide::BUY,   // close_short
-            4 => OrderSide::SELL,  // open_short
-        };
+        $side = $this->bitmartOrders->providerSide($payload);
 
         // Extra visibility before submit
-        // Convertir le type du plan en enum OrderType pour le provider
-        $enforcedOrderType = ($plan->orderType === 'market') ? OrderType::MARKET : OrderType::LIMIT;
+        $enforcedOrderType = $this->bitmartOrders->providerOrderType($plan);
 
         $this->positionsLogger->debug('execution.presubmit_check', [
             'symbol' => $plan->symbol,
             'side_enum' => $side->value,
-            'side_numeric' => $payload['side'],
+            'legacy_side' => $payload['side'],
             'type' => $payload['type'],
             'size' => (int)$payload['size'],
             'price' => $payload['price'] ?? null,
@@ -174,9 +166,8 @@ final class ExecutionBox
         ]);
 
         $orderPayload = $payload;
-        // Utiliser le type du plan (déjà dans payload via TpSlAttacher, mais s'assurer de la cohérence)
-        $orderPayload['type'] = ($plan->orderType === 'market') ? OrderType::MARKET->value : OrderType::LIMIT->value;
-        $orderPayload['mode'] = (int)$plan->orderMode;
+        $orderPayload['type'] = $enforcedOrderType->value;
+        $orderPayload['mode'] = $this->bitmartOrders->enforcedOrderMode($plan);
 
         // Politique: forcer une fenêtre de surveillance locale à 120s pour les LIMIT
         // et désactiver le dead-man switch exchange (cancel-all-after) afin d'éviter
@@ -207,7 +198,7 @@ final class ExecutionBox
             'attempt_label' => $attemptLabel,
             'decision_key' => $decisionKey,
         ]);
-        $orderOptions = $this->extractOrderOptions($orderPayload);
+        $orderOptions = $this->bitmartOrders->orderOptions($orderPayload);
         if ($cancelAfterTimeout !== null && $cancelAfterTimeout > 0) {
             // cas général (non utilisé ici car on désarme côté exchange)
             $orderOptions['cancel_after_timeout'] = $cancelAfterTimeout;
@@ -365,42 +356,6 @@ final class ExecutionBox
         $this->orderModePolicy->enforce($plan);
 
         return $this->applyTimeframeMultiplier($plan, $mode, $executionTf, $decisionKey);
-    }
-
-    /**
-     * Prépare les options Bitmart pour l'appel placeOrder.
-     *
-     * @param array<string, mixed> $payload
-     *
-     * @return array<string, mixed>
-     */
-    private function extractOrderOptions(array $payload): array
-    {
-        $options = [
-            'side' => $payload['side'],
-            'mode' => $payload['mode'] ?? null,
-            'open_type' => $payload['open_type'],
-            'client_order_id' => $payload['client_order_id'],
-            'leverage' => $payload['leverage'] ?? null,
-        ];
-
-        foreach ([
-            'decision_key',
-            'order_intent_id',
-            'preset_take_profit_price',
-            'preset_take_profit_price_type',
-            'preset_stop_loss_price',
-            'preset_stop_loss_price_type',
-        ] as $key) {
-            if (isset($payload[$key])) {
-                $options[$key] = $payload[$key];
-            }
-        }
-
-        return array_filter(
-            $options,
-            static fn($value) => $value !== null && $value !== ''
-        );
     }
 
     /**
@@ -616,17 +571,11 @@ final class ExecutionBox
         // 1) Soumettre l'ordre market sans TP/SL
         $payload = $this->tpSl->presetInSubmitPayload($plan, $clientOrderId);
         $payload = $this->withIntentMetadata($payload, $decisionKey, $orderIntentId);
-        $side = match($payload['side']) {
-            1 => OrderSide::BUY,
-            2 => OrderSide::SELL,
-            3 => OrderSide::BUY,
-            4 => OrderSide::SELL,
-        };
+        $side = $this->bitmartOrders->providerSide($payload);
 
-        $orderOptions = $this->extractOrderOptions($payload);
-        // Retirer TP/SL du payload pour market
-        unset($orderOptions['preset_take_profit_price'], $orderOptions['preset_take_profit_price_type']);
-        unset($orderOptions['preset_stop_loss_price'], $orderOptions['preset_stop_loss_price_type']);
+        $orderOptions = $this->bitmartOrders->withoutAttachedProtectionOptions(
+            $this->bitmartOrders->orderOptions($payload),
+        );
 
         $this->positionsLogger->debug('execution.market_order.submit', [
             'symbol' => $plan->symbol,
@@ -639,7 +588,7 @@ final class ExecutionBox
         $orderResult = $providers->getOrderProvider()->placeOrder(
             symbol: $plan->symbol,
             side: $side,
-            type: OrderType::MARKET,
+            type: $this->bitmartOrders->providerOrderType($plan),
             quantity: (float)$plan->size,
             price: null,
             stopPrice: null,
@@ -755,24 +704,6 @@ final class ExecutionBox
             // 5) Vérifier les plans TP/SL
             $this->verifyPlanOrders($plan->symbol, $tpSlResult['submitted'], $decisionKey, $plan->exchangeContext);
 
-            // 6) Désarmer le dead-man switch symbolique (cancel-all-after) une fois la position ouverte et TP/SL soumis.
-           /* $orderProvider = $this->providers->getOrderProvider();
-            if ($orderProvider instanceof \App\Provider\Bitmart\BitmartOrderProvider) {
-                try {
-                    $orderProvider->cancelAllAfter($plan->symbol, 0);
-                    $this->positionsLogger->info('execution.deadman_disarmed', [
-                        'symbol' => $plan->symbol,
-                        'reason' => 'position_opened_tp_sl_active',
-                        'decision_key' => $decisionKey,
-                    ]);
-                } catch (\Throwable $e) {
-                    $this->positionsLogger->warning('execution.deadman_disarm_failed', [
-                        'symbol' => $plan->symbol,
-                        'error' => $e->getMessage(),
-                        'decision_key' => $decisionKey,
-                    ]);
-                }
-            }*/
         } catch (\Throwable $e) {
             $this->positionsLogger->error('execution.market_order.tp_sl_submit_failed', [
                 'symbol' => $plan->symbol,
@@ -919,9 +850,8 @@ final class ExecutionBox
     ): void
     {
         $orderProvider = $this->providersFor($context)->getOrderProvider();
-        $bitmartProvider = $this->unwrapOrderProvider($orderProvider);
-        // Vérifier si le provider supporte getPlanOrders (spécifique BitMart)
-        if (!$bitmartProvider instanceof BitmartOrderProvider) {
+        $planOrderProvider = $this->unwrapOrderProvider($orderProvider);
+        if (!method_exists($planOrderProvider, 'getPlanOrders')) {
             $this->positionsLogger->debug('execution.market_order.verify_skip', [
                 'symbol' => $symbol,
                 'reason' => 'getPlanOrders_not_available',
@@ -931,7 +861,7 @@ final class ExecutionBox
         }
 
         try {
-            $planOrders = $bitmartProvider->getPlanOrders($symbol);
+            $planOrders = $planOrderProvider->getPlanOrders($symbol);
             $submittedIds = array_column($submitted, 'order_id');
             $foundIds = [];
 
@@ -1036,8 +966,7 @@ final class ExecutionBox
             'reason' => 'end_of_zone_fallback',
         ]);
 
-        // BitMart Futures V2: IOC = mode=3 ; MakerOnly = mode=4 ; type reste 'limit'
-        return $plan->copyWith(orderType: 'limit', orderMode: 3, entry: $cap);
+        return $plan->copyWith(orderType: 'limit', orderMode: $this->bitmartOrders->legacyIocMode(), entry: $cap);
     }
 
     /**
