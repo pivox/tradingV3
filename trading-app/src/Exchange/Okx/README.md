@@ -12,7 +12,7 @@ API-first OKX demo integration slice for SWAP instruments.
 - REST private calls are signed with `OK-ACCESS-*` headers. Demo calls include `x-simulated-trading: 1`.
 - Internal symbols are normalized as SWAP instruments, for example `BTCUSDT` to `BTC-USDT-SWAP`.
 - Entry orders use `/api/v5/trade/order`; standalone stop-loss/take-profit protection uses `/api/v5/trade/order-algo` conditional orders.
-- WebSocket private ingestion is intentionally not implemented in this slice.
+- WebSocket private payload normalization is available for `orders`, `fills`, and `positions` messages. A real OKX private WS client is not implemented yet, so the adapter still does not advertise private WS support.
 
 Environment:
 

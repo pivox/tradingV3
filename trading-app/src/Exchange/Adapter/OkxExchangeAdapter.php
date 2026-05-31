@@ -25,6 +25,7 @@ use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Okx\OkxActionFactory;
 use App\Exchange\Okx\OkxConfig;
+use App\Exchange\Okx\OkxFillId;
 use App\Exchange\Okx\OkxInstrumentResolver;
 use App\Exchange\Okx\OkxRestClientInterface;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
@@ -358,7 +359,7 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
                 symbol: $this->instruments->symbol((string)($row['instId'] ?? '')),
                 exchangeOrderId: (string)($row['ordId'] ?? ''),
                 clientOrderId: isset($row['clOrdId']) ? (string) $row['clOrdId'] : null,
-                fillId: isset($row['tradeId']) ? (string) $row['tradeId'] : null,
+                fillId: OkxFillId::fromTradeId($row['instId'] ?? '', $row['tradeId'] ?? null),
                 side: $this->orderSide($row['side'] ?? null),
                 positionSide: $this->nullablePositionSide($row['posSide'] ?? null),
                 quantity: $this->float($row['fillSz'] ?? null),
