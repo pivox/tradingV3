@@ -19,6 +19,7 @@ use App\Exchange\Event\ExchangeEventNormalizerRegistry;
 use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
 use App\Exchange\Event\ExchangeOrderFilled;
 use App\Exchange\Event\ExchangePositionOpened;
+use App\Exchange\Event\ExchangePositionUpdated;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOrderBook;
@@ -39,6 +40,7 @@ use Psr\Log\NullLogger;
 #[CoversClass(FakeExchangeEventNormalizer::class)]
 #[CoversClass(ExchangeOrderFilled::class)]
 #[CoversClass(ExchangePositionOpened::class)]
+#[CoversClass(ExchangePositionUpdated::class)]
 final class ExchangeWsIngestionServiceTest extends TestCase
 {
     public function testDrainsFakePrivateEventsThroughNormalizerAndBus(): void
@@ -69,6 +71,35 @@ final class ExchangeWsIngestionServiceTest extends TestCase
         self::assertTrue($store->contains(ExchangePositionOpened::class));
     }
 
+    public function testDrainsPositionUpdateEventsThroughNormalizerAndBus(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $adapter = $this->adapter($state);
+        $adapter->placeOrder($this->marketRequest(symbol: 'BTCUSDT', clientOrderId: 'entry-cid'));
+        $adapter->placeOrder($this->marketRequest(
+            symbol: 'BTCUSDT',
+            clientOrderId: 'reduce-cid',
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            quantity: 4.0,
+        ));
+
+        $store = new RecordingProjectionStore();
+        $service = new ExchangeWsIngestionService(
+            new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer($state)]),
+            new ExchangeEventBus($store, new NullLogger()),
+            new NullLogger(),
+        );
+
+        $result = $service->drain(new FakeExchangeWsClient($state), 'BTCUSDT');
+        $positionUpdates = $store->eventsOf(ExchangePositionUpdated::class);
+
+        self::assertGreaterThanOrEqual(1, $result->eventsProjected);
+        self::assertCount(1, $positionUpdates);
+        self::assertSame(ExchangePositionSide::LONG, $positionUpdates[0]->side());
+        self::assertEqualsWithDelta(6.0, $positionUpdates[0]->size(), 0.000001);
+    }
+
     private function adapter(FakeExchangeStateStore $state): FakeExchangeAdapter
     {
         $book = new FakeExchangeOrderBook($state);
@@ -77,20 +108,25 @@ final class ExchangeWsIngestionServiceTest extends TestCase
         return new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
     }
 
-    private function marketRequest(string $symbol, string $clientOrderId): PlaceOrderRequest
-    {
+    private function marketRequest(
+        string $symbol,
+        string $clientOrderId,
+        ExchangeOrderSide $side = ExchangeOrderSide::BUY,
+        bool $reduceOnly = false,
+        float $quantity = 10.0,
+    ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
             marketType: MarketType::PERPETUAL,
             symbol: $symbol,
-            side: ExchangeOrderSide::BUY,
+            side: $side,
             positionSide: ExchangePositionSide::LONG,
             orderType: ExchangeOrderType::MARKET,
             timeInForce: ExchangeTimeInForce::GTC,
-            quantity: 10.0,
+            quantity: $quantity,
             price: null,
             stopPrice: null,
-            reduceOnly: false,
+            reduceOnly: $reduceOnly,
             postOnly: false,
             leverage: 3,
             marginMode: 'isolated',
@@ -141,5 +177,18 @@ final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInte
         }
 
         return false;
+    }
+
+    /**
+     * @template T of ExchangeEventInterface
+     * @param class-string<T> $class
+     * @return T[]
+     */
+    public function eventsOf(string $class): array
+    {
+        return array_values(array_filter(
+            $this->events,
+            static fn (ExchangeEventInterface $event): bool => $event instanceof $class,
+        ));
     }
 }
