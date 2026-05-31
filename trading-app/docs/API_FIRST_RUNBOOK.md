@@ -50,6 +50,9 @@ avec `OrderPlanModel::exchangeContext`.
 - snapshots REST positions/fills quand l'adapter implemente
   `ExchangeRestSnapshotProviderInterface`.
 
+Les tests d'ingestion WS Fake couvrent aussi la projection d'un fill d'ordre,
+l'ouverture de position et la mise a jour de position apres reduce-only partiel.
+
 Commande large recommandee:
 
 ```bash
