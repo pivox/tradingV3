@@ -16,6 +16,7 @@ final class ValidationsYamlValidator
     private array $definedRules = [];
     private array $availableConditions = [];
     private array $visitedRules = []; // Pour détecter les références circulaires
+    private array $reportedCycles = [];
 
     public function __construct(
         private readonly MtfValidationConfig $config,
@@ -36,6 +37,7 @@ final class ValidationsYamlValidator
         $rules = $this->config->getRules();
         $this->definedRules = array_keys($rules);
         $this->validateRules($rules, $result);
+        $this->validateRuleReferenceCycles($rules, $result);
 
         // 3. Valider execution_selector
         if (isset($config['execution_selector'])) {
@@ -385,6 +387,103 @@ final class ValidationsYamlValidator
         ));
     }
 
+    /**
+     * @param array<string,mixed> $rules
+     */
+    private function validateRuleReferenceCycles(array $rules, ValidationResult $result): void
+    {
+        $checked = [];
+        $this->reportedCycles = [];
+
+        foreach (array_keys($rules) as $ruleName) {
+            $this->detectRuleCycle((string) $ruleName, $rules, [], $checked, $result);
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $rules
+     * @param string[] $stack
+     * @param array<string,bool> $checked
+     */
+    private function detectRuleCycle(
+        string $ruleName,
+        array $rules,
+        array $stack,
+        array &$checked,
+        ValidationResult $result,
+    ): void {
+        if (isset($checked[$ruleName])) {
+            return;
+        }
+
+        $cycleIndex = array_search($ruleName, $stack, true);
+        if ($cycleIndex !== false) {
+            $cycle = array_slice($stack, (int) $cycleIndex);
+            $cycle[] = $ruleName;
+            $cycleKey = implode('>', $cycle);
+            if (!isset($this->reportedCycles[$cycleKey])) {
+                $this->reportedCycles[$cycleKey] = true;
+                $result->addError(new ValidationError(
+                    'circular_reference',
+                    sprintf("Référence circulaire détectée: %s", implode(' -> ', $cycle)),
+                    sprintf('mtf_validation.rules.%s', $ruleName),
+                    $ruleName,
+                    ['cycle' => $cycle],
+                ));
+            }
+            return;
+        }
+
+        $stack[] = $ruleName;
+        foreach ($this->extractRuleReferences($rules[$ruleName] ?? null, $ruleName) as $reference) {
+            if (array_key_exists($reference, $rules)) {
+                $this->detectRuleCycle($reference, $rules, $stack, $checked, $result);
+            }
+        }
+
+        $checked[$ruleName] = true;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function extractRuleReferences(mixed $spec, ?string $ownerRule = null): array
+    {
+        if (\is_string($spec)) {
+            if ($ownerRule === $spec && \in_array($spec, $this->availableConditions, true)) {
+                return [];
+            }
+
+            return [$spec];
+        }
+
+        if (!\is_array($spec)) {
+            return [];
+        }
+
+        $references = [];
+        foreach (['any_of', 'all_of'] as $logicalKey) {
+            if (isset($spec[$logicalKey]) && \is_array($spec[$logicalKey])) {
+                foreach ($spec[$logicalKey] as $item) {
+                    array_push($references, ...$this->extractRuleReferences($item, $ownerRule));
+                }
+            }
+        }
+
+        if (\count($spec) === 1) {
+            $key = array_key_first($spec);
+            if (\is_string($key) && !\in_array($key, ['any_of', 'all_of'], true)) {
+                if ($ownerRule === $key && \in_array($key, $this->availableConditions, true)) {
+                    return array_values(array_unique($references));
+                }
+
+                $references[] = $key;
+            }
+        }
+
+        return array_values(array_unique($references));
+    }
+
     private function validateExecutionSelector(array $selector, ValidationResult $result): void
     {
         // Vérifier si le nouveau format per_timeframe est utilisé
@@ -412,6 +511,11 @@ final class ValidationsYamlValidator
                 continue;
             }
 
+            if ($groupName === 'allow_1m_only_for') {
+                $this->validateAllow1mOnlyFor($items, $result);
+                continue;
+            }
+
             if (!is_array($items)) {
                 $result->addError(new ValidationError(
                     'invalid_type',
@@ -426,6 +530,47 @@ final class ValidationsYamlValidator
                 $itemPath = "mtf_validation.execution_selector.{$groupName}[{$index}]";
                 $this->validateExecutionSelectorItem($item, $itemPath, $result);
             }
+        }
+    }
+
+    private function validateAllow1mOnlyFor(mixed $config, ValidationResult $result): void
+    {
+        $path = 'mtf_validation.execution_selector.allow_1m_only_for';
+        if (!\is_array($config)) {
+            $result->addError(new ValidationError(
+                'invalid_type',
+                'allow_1m_only_for doit être un tableau',
+                $path,
+                null,
+                ['type' => gettype($config)],
+            ));
+            return;
+        }
+
+        if (isset($config['enabled']) && !\is_bool($config['enabled'])) {
+            $result->addError(new ValidationError(
+                'invalid_type',
+                'allow_1m_only_for.enabled doit être booléen',
+                "{$path}.enabled",
+                null,
+                ['type' => gettype($config['enabled'])],
+            ));
+        }
+
+        $conditions = $config['conditions'] ?? [];
+        if (!\is_array($conditions)) {
+            $result->addError(new ValidationError(
+                'invalid_type',
+                'allow_1m_only_for.conditions doit être un tableau',
+                "{$path}.conditions",
+                null,
+                ['type' => gettype($conditions)],
+            ));
+            return;
+        }
+
+        foreach ($conditions as $index => $condition) {
+            $this->validateExecutionSelectorItem($condition, "{$path}.conditions[{$index}]", $result);
         }
     }
 
@@ -897,4 +1042,3 @@ final class ValidationsYamlValidator
         }
     }
 }
-

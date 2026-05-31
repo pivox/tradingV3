@@ -50,6 +50,7 @@ parameters:
     env(OKX_WS_PRIVATE_URI): ''
     env(OKX_DEMO_TRADING_ENABLED): '0'
     env(OKX_LIVE_ENABLED): '0'
+    env(MTF_VALIDATION_FALLBACK_ALERT_THRESHOLD): '1'
     app.trade_entry_default_mode: 'scalper_micro'
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
@@ -314,6 +315,10 @@ services:
     App\MtfValidator\ConditionLoader\TimeframeEvaluator:
         arguments:
             $registry: '@App\MtfValidator\ConditionLoader\ConditionRegistry'
+
+    App\MtfValidator\Service\TimeframeValidationService:
+        arguments:
+            $mtfLogger: '@monolog.logger.mtf'
 
     # Execution selector (decide 15m/5m/1m)
     App\MtfValidator\Execution\ExecutionSelector:

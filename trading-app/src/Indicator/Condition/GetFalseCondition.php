@@ -7,9 +7,9 @@ use App\Indicator\Attribute\AsIndicatorCondition;
 use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
-#[AsIndicatorCondition(timeframes: ['15m','5m','1m','1h','4h'], name: ExpectedRMultipleLtCondition::NAME)]
+#[AsIndicatorCondition(timeframes: ['15m','5m','1m','1h','4h'], name: GetFalseCondition::NAME)]
 #[AutoconfigureTag('app.indicator.condition')]
-#[AsTaggedItem(index: ExpectedRMultipleLtCondition::NAME)]
+#[AsTaggedItem(index: GetFalseCondition::NAME)]
 class GetFalseCondition extends AbstractCondition
 {
     const NAME = 'get_false';

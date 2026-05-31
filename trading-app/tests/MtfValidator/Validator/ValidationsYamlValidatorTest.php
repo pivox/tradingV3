@@ -6,10 +6,16 @@ namespace App\Tests\MtfValidator\Validator;
 
 use App\Config\MtfValidationConfig;
 use App\MtfValidator\ConditionLoader\ConditionRegistry;
+use App\MtfValidator\Validator\ValidationError;
+use App\MtfValidator\Validator\ValidationResult;
 use App\MtfValidator\Validator\ValidationsYamlValidator;
+use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 
+#[CoversClass(ValidationsYamlValidator::class)]
+#[CoversClass(ValidationResult::class)]
+#[CoversClass(ValidationError::class)]
 class ValidationsYamlValidatorTest extends TestCase
 {
     private MtfValidationConfig $config;
@@ -236,6 +242,62 @@ class ValidationsYamlValidatorTest extends TestCase
         $this->assertFalse($result->hasErrors());
     }
 
+    public function testValidateRuleDelegatingToHomonymousPhpConditionIsNotCircular(): void
+    {
+        $rules = [
+            'near_vwap' => ['near_vwap' => true],
+        ];
+        $config = [
+            'rules' => $rules,
+            'validation' => [
+                'timeframe' => [
+                    '5m' => [
+                        'long' => [
+                            ['all_of' => ['near_vwap']],
+                        ],
+                        'short' => [],
+                    ],
+                ],
+            ],
+        ];
+
+        $this->config->method('getConfig')->willReturn($config);
+        $this->config->method('getRules')->willReturn($rules);
+        $this->config->method('getValidation')->willReturn($config['validation']);
+        $this->registry->method('names')->willReturn(['near_vwap']);
+
+        $validator = new ValidationsYamlValidator($this->config, $this->registry);
+        $result = $validator->validate();
+
+        $this->assertFalse($result->hasErrors());
+    }
+
+    public function testValidateAllow1mOnlyForCurrentFormat(): void
+    {
+        $config = [
+            'rules' => [],
+            'execution_selector' => [
+                'allow_1m_only_for' => [
+                    'enabled' => false,
+                    'conditions' => [
+                        ['scalping' => true],
+                    ],
+                ],
+            ],
+            'validation' => [],
+        ];
+
+        $this->config->method('getConfig')->willReturn($config);
+        $this->config->method('getRules')->willReturn([]);
+        $this->config->method('getValidation')->willReturn([]);
+        $this->registry->method('names')->willReturn(['scalping']);
+
+        $validator = new ValidationsYamlValidator($this->config, $this->registry);
+        $result = $validator->validate();
+
+        $this->assertFalse($result->hasErrors());
+    }
+
     public function testValidateExecutionSelectorInvalidValueType(): void
     {
         $config = [
@@ -262,4 +324,3 @@ class ValidationsYamlValidatorTest extends TestCase
         $this->assertNotEmpty(array_filter($errorMessages, fn($m) => str_contains($m, 'numérique') || str_contains($m, 'booléen')));
     }
 }
-

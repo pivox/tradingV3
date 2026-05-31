@@ -8,9 +8,14 @@ use App\MtfValidator\Service\Rule\TimeframeRuleEvaluator;
 use App\MtfValidator\Service\Rule\YamlRuleEngine;
 use App\MtfValidator\Service\TimeframeValidationService;
 use App\Contract\MtfValidator\Dto\TimeframeDecisionDto;
+use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
+#[CoversClass(TimeframeValidationService::class)]
+#[CoversClass(TimeframeRuleEvaluator::class)]
+#[CoversClass(YamlRuleEngine::class)]
+#[CoversClass(TimeframeDecisionDto::class)]
 final class TimeframeValidationServiceScalperTest extends TestCase
 {
     private TimeframeValidationService $service;
@@ -97,9 +102,9 @@ final class TimeframeValidationServiceScalperTest extends TestCase
 
         self::assertInstanceOf(TimeframeDecisionDto::class, $decision);
         self::assertSame('5m', $decision->timeframe);
-        self::assertSame('VALID', $decision->status);
-        self::assertSame('LONG', $decision->side);
-        self::assertNull($decision->reason);
+        self::assertTrue($decision->valid);
+        self::assertSame('long', $decision->signal);
+        self::assertNull($decision->invalidReason);
     }
 
     public function testScalper5mLong_FailsWhenRsiTooHigh(): void
@@ -164,8 +169,8 @@ final class TimeframeValidationServiceScalperTest extends TestCase
         );
 
         self::assertSame('5m', $decision->timeframe);
-        self::assertSame('INVALID', $decision->status);
-        self::assertNull($decision->side);
-        self::assertSame('NO_LONG_NO_SHORT', $decision->reason);
+        self::assertFalse($decision->valid);
+        self::assertSame('invalid', $decision->signal);
+        self::assertSame('NO_LONG_NO_SHORT', $decision->invalidReason);
     }
 }

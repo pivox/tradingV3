@@ -74,6 +74,11 @@ RunnerController / mtf:run
 - Interprète le YAML (rules, filters, `filters_mandatory`).
 - Peut basculer sur le moteur ConditionRegistry compilé si disponible.
 - Retourne un `TimeframeDecisionDto` pour chaque TF inspecté (`valid`, `signal`, `invalidReason`, conditions passées/échouées).
+- Si le moteur ConditionRegistry échoue et que le fallback YAML est utilisé, le compteur
+  `mtf.validation.engine.fallback_count` est incrémenté via `MtfValidationEngineMetrics`.
+  Le seuil d'alerte est configurable avec `MTF_VALIDATION_FALLBACK_ALERT_THRESHOLD`
+  (défaut `1`). Le fallback est aussi ajouté dans `TimeframeDecisionDto.extra.validation_engine_fallback`
+  pour faciliter l'audit d'un run.
 
 ### 3.4 `TradingDecisionHandler`
 - Reçoit un `SymbolResultDto`.
@@ -116,6 +121,12 @@ Les repositories `MtfSwitchRepository`, `MtfLockRepository`, `MtfAuditRepository
 - **Tests PHPUnit**
   - `tests/MtfValidator/Service/*` : tests unitaires/métier.
   - `tests/MtfValidator/Integration/*` : autowiring, pipeline complet.
+- **Validation YAML / ConditionRegistry**
+  - `bin/console app:validate:mtf-config --mode=all` vérifie que les références YAML
+    pointent vers des règles ou conditions disponibles dans le registry.
+  - Surveiller les logs `monolog.logger.mtf` pour le metric
+    `mtf.validation.engine.fallback_count`; tout fallback indique une dérive possible
+    entre YAML, conditions taguées `AsIndicatorCondition` et moteur compilé.
 - **Endpoints REST (`MtfController`)**
   - `/mtf/status`, `/mtf/lock/status`, `/mtf/audit`, `/mtf/sync-contracts` fournissent des diagnostics runtime.
 
