@@ -81,6 +81,67 @@ final class ExchangeExecutionServiceTest extends TestCase
         self::assertEqualsWithDelta(24800.0, $stopOrders[0]->stopPrice, 0.000001);
     }
 
+    public function testSameDecisionKeyTwiceReplaysFilledEntryWithoutOpeningSecondPosition(): void
+    {
+        $first = $this->service()->execute($this->plan(orderType: 'market'), 'decision-idempotent');
+        $second = $this->service()->execute($this->plan(orderType: 'market'), 'decision-idempotent');
+
+        $entryOrders = array_filter(
+            $this->adapter->getOrdersSnapshot('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => $order->clientOrderId === $first->clientOrderId && !$order->reduceOnly,
+        );
+
+        self::assertSame($first->clientOrderId, $second->clientOrderId);
+        self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        self::assertSame(ExecutionResult::STATUS_SUBMITTED_PROTECTED, $first->status);
+        self::assertSame(ExecutionResult::STATUS_SUBMITTED_PROTECTED, $second->status);
+        self::assertTrue($second->raw['order']['metadata']['idempotent_replay'] ?? false);
+        self::assertCount(1, $entryOrders);
+        self::assertCount(1, $this->stopLossOrders($this->adapter));
+        self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertEqualsWithDelta(1.0, $this->adapter->getOpenPositions('BTCUSDT')[0]->size, 0.000001);
+    }
+
+    public function testSameDecisionKeyWithChangedStopRejectsDuplicateIntentWithoutEmergencyClose(): void
+    {
+        $first = $this->service()->execute($this->plan(orderType: 'market'), 'decision-changed-intent');
+        $second = $this->service()->execute(
+            $this->plan(orderType: 'market', stop: 24700.0),
+            'decision-changed-intent',
+        );
+
+        self::assertSame(ExecutionResult::STATUS_SUBMITTED_PROTECTED, $first->status);
+        self::assertSame(ExecutionResult::STATUS_ERROR, $second->status);
+        self::assertSame('entry_rejected_exchange', $second->raw['reason']);
+        self::assertSame('duplicate_client_order_id_intent_mismatch', $second->raw['order']['metadata']['reason'] ?? null);
+        self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(1, $this->stopLossOrders($this->adapter));
+        self::assertEqualsWithDelta(24800.0, $this->stopLossOrders($this->adapter)[0]->stopPrice, 0.000001);
+    }
+
+    public function testSameDecisionKeyReplaysCancelledPartialEntryAsProtectedFill(): void
+    {
+        $adapter = new PartialFillOnEntryAdapter($this->adapter);
+        $first = $this->service($adapter)->execute(
+            $this->plan(orderType: 'limit', entry: 24950.0),
+            'decision-partial-replay',
+        );
+        $second = $this->service($adapter)->execute(
+            $this->plan(orderType: 'limit', entry: 24950.0),
+            'decision-partial-replay',
+        );
+
+        self::assertSame(ExecutionResult::STATUS_SUBMITTED_PROTECTED, $first->status);
+        self::assertSame(ExecutionResult::STATUS_SUBMITTED_PROTECTED, $second->status);
+        self::assertSame($first->clientOrderId, $second->clientOrderId);
+        self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        self::assertSame(ExchangeOrderStatus::CANCELLED->value, $second->raw['order']['status']);
+        self::assertEqualsWithDelta(0.4, $second->raw['order']['order']['filled_quantity'], 0.000001);
+        self::assertCount(1, $this->stopLossOrders($this->adapter));
+        self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertEqualsWithDelta(0.4, $this->adapter->getOpenPositions('BTCUSDT')[0]->size, 0.000001);
+    }
+
     public function testBitmartMarketEntryWithoutSeparateProtectionIsRejectedBeforeSubmit(): void
     {
         $adapter = new BitmartMarketRejectAdapter();
@@ -391,6 +452,8 @@ YAML);
     private function plan(
         string $orderType,
         float $entry = 25000.0,
+        float $stop = 24800.0,
+        float $takeProfit = 25200.0,
         int $orderMode = 1,
         ?ExchangeContext $exchangeContext = null,
         int $size = 1,
@@ -405,8 +468,8 @@ YAML);
             openType: 'isolated',
             orderMode: $orderMode,
             entry: $entry,
-            stop: 24800.0,
-            takeProfit: 25200.0,
+            stop: $stop,
+            takeProfit: $takeProfit,
             size: $size,
             leverage: $leverage,
             pricePrecision: 2,

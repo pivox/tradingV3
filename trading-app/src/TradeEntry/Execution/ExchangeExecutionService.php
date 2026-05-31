@@ -363,10 +363,14 @@ final class ExchangeExecutionService
 
     private function entryFilled(PlaceOrderResult $result): bool
     {
-        return \in_array($result->status, [
+        if (\in_array($result->status, [
             ExchangeOrderStatus::FILLED,
             ExchangeOrderStatus::PARTIALLY_FILLED,
-        ], true);
+        ], true)) {
+            return true;
+        }
+
+        return ($result->order?->filledQuantity ?? 0.0) > 0.00000001;
     }
 
     private function entryActive(PlaceOrderResult $result): bool

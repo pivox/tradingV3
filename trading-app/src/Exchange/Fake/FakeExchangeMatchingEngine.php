@@ -33,24 +33,28 @@ final readonly class FakeExchangeMatchingEngine
         $this->assertRequestContext($request);
         $this->assertRequestIntent($request);
 
-        $existing = $this->stateStore->findActiveOrderByClientOrderId($request->symbol, $request->clientOrderId);
+        $existing = $this->stateStore->getOrderByClientOrderId($request->symbol, $request->clientOrderId);
         if ($existing instanceof ExchangeOrderDto) {
+            if (!$this->orderMatchesRequest($existing, $request)) {
+                return $this->intentMismatchReplayResult($request, $existing);
+            }
+
             return new PlaceOrderResult(
-                accepted: true,
+                accepted: $this->isAcceptedReplayStatus($existing->status),
                 symbol: $existing->symbol,
                 clientOrderId: $request->clientOrderId,
                 exchangeOrderId: $existing->exchangeOrderId,
                 status: $existing->status,
                 submittedAt: $this->clock->now(),
                 order: $existing,
-                metadata: ['idempotent_replay' => true],
+                metadata: array_replace($existing->metadata, ['idempotent_replay' => true]),
             );
         }
 
         if ($request->postOnly && $this->wouldCross($request)) {
-            $order = $this->buildOrder($request, ExchangeOrderStatus::REJECTED, [
+            $order = $this->buildOrder($request, ExchangeOrderStatus::REJECTED, array_replace($this->requestMetadata($request), [
                 'reason' => 'post_only_would_cross',
-            ]);
+            ]));
             $this->stateStore->saveOrder($order);
             $this->appendEvent('order.rejected', $order, ['reason' => 'post_only_would_cross']);
 
@@ -58,9 +62,9 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         if ($this->isStandaloneProtection($request) && $this->stateStore->consumeProtectionRejectionFlag()) {
-            $order = $this->buildOrder($request, ExchangeOrderStatus::REJECTED, [
+            $order = $this->buildOrder($request, ExchangeOrderStatus::REJECTED, array_replace($this->requestMetadata($request), [
                 'reason' => 'protection_rejected_by_scenario',
-            ]);
+            ]));
             $this->stateStore->saveOrder($order);
             $this->appendEvent('protection_order.rejected', $order, ['reason' => 'protection_rejected_by_scenario']);
 
@@ -267,6 +271,23 @@ final readonly class FakeExchangeMatchingEngine
             'attached_stop_loss_price' => $request->attachedStopLossPrice,
             'attached_take_profit_price' => $request->attachedTakeProfitPrice,
         ], static fn (mixed $value): bool => $value !== null) + $request->metadata;
+    }
+
+    private function intentMismatchReplayResult(PlaceOrderRequest $request, ExchangeOrderDto $existing): PlaceOrderResult
+    {
+        return new PlaceOrderResult(
+            accepted: false,
+            symbol: $existing->symbol,
+            clientOrderId: $request->clientOrderId,
+            exchangeOrderId: $existing->exchangeOrderId,
+            status: ExchangeOrderStatus::REJECTED,
+            submittedAt: $this->clock->now(),
+            order: $existing,
+            metadata: array_replace($existing->metadata, [
+                'reason' => 'duplicate_client_order_id_intent_mismatch',
+                'idempotent_replay' => true,
+            ]),
+        );
     }
 
     private function createAttachedProtectionOrders(ExchangeOrderDto $entryOrder): ExchangeOrderDto
@@ -732,6 +753,95 @@ final readonly class FakeExchangeMatchingEngine
             ExchangeOrderStatus::OPEN,
             ExchangeOrderStatus::PARTIALLY_FILLED,
         ], true);
+    }
+
+    private function isAcceptedReplayStatus(ExchangeOrderStatus $status): bool
+    {
+        return !\in_array($status, [
+            ExchangeOrderStatus::REJECTED,
+            ExchangeOrderStatus::UNKNOWN,
+        ], true);
+    }
+
+    private function orderMatchesRequest(ExchangeOrderDto $order, PlaceOrderRequest $request): bool
+    {
+        if ($order->side !== $request->side || $order->positionSide !== $request->positionSide) {
+            return false;
+        }
+        if ($order->orderType !== $request->orderType) {
+            return false;
+        }
+        if (abs($order->quantity - $request->quantity) > 0.00000001) {
+            return false;
+        }
+        if ($request->orderType !== ExchangeOrderType::MARKET && !$this->nullableFloatMatches($order->price, $request->price)) {
+            return false;
+        }
+        if (!$this->nullableFloatMatches($order->stopPrice, $request->stopPrice)) {
+            return false;
+        }
+        if ($order->reduceOnly !== ($request->reduceOnly || $this->isStandaloneProtection($request))) {
+            return false;
+        }
+        if ($order->postOnly !== $request->postOnly || $order->timeInForce !== $request->timeInForce) {
+            return false;
+        }
+        if (!$this->metadataPriceMatches($order->metadata, 'attached_stop_loss_price', $request->attachedStopLossPrice)) {
+            return false;
+        }
+        if (!$this->metadataPriceMatches($order->metadata, 'attached_take_profit_price', $request->attachedTakeProfitPrice)) {
+            return false;
+        }
+        if (\array_key_exists('leverage', $order->metadata) && !$this->metadataFloatMatches($order->metadata, 'leverage', $request->leverage)) {
+            return false;
+        }
+        $storedMarginMode = $order->metadata['margin_mode'] ?? null;
+        if ($storedMarginMode !== null && $storedMarginMode !== '' && $storedMarginMode !== $request->marginMode) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function nullableFloatMatches(?float $left, ?float $right): bool
+    {
+        if ($left === null || $right === null) {
+            return $left === null && $right === null;
+        }
+
+        return abs($left - $right) <= 0.00000001;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function metadataPriceMatches(array $metadata, string $key, ?float $expected): bool
+    {
+        $actual = $metadata[$key] ?? null;
+        if ($expected === null) {
+            return $actual === null || $actual === '' || (is_numeric($actual) && abs((float)$actual) <= 0.00000001);
+        }
+        if (!is_numeric($actual)) {
+            return false;
+        }
+
+        return abs((float)$actual - $expected) <= 0.00000001;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function metadataFloatMatches(array $metadata, string $key, ?float $expected): bool
+    {
+        $actual = $metadata[$key] ?? null;
+        if ($expected === null) {
+            return $actual === null || $actual === '' || (is_numeric($actual) && abs((float)$actual) <= 0.00000001);
+        }
+        if (!is_numeric($actual)) {
+            return false;
+        }
+
+        return abs((float)$actual - $expected) <= 0.00000001;
     }
 
     /**

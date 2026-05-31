@@ -8,6 +8,7 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Dto\CancelOrderRequest;
+use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
@@ -332,6 +333,143 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
         self::assertTrue($second->metadata['idempotent_replay'] ?? false);
         self::assertCount(1, $this->adapter->getOpenOrders('BTCUSDT'));
+    }
+
+    public function testFilledClientOrderIdReplayDoesNotCreateSecondEntry(): void
+    {
+        $first = $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-filled',
+            postOnly: false,
+        ));
+        $second = $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-filled',
+            postOnly: false,
+        ));
+
+        self::assertTrue($first->accepted);
+        self::assertSame(ExchangeOrderStatus::FILLED, $first->status);
+
+        $entryOrders = array_filter(
+            $this->adapter->getOrdersSnapshot('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => $order->clientOrderId === 'cid-filled' && !$order->reduceOnly,
+        );
+
+        self::assertTrue($second->accepted);
+        self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        self::assertSame(ExchangeOrderStatus::FILLED, $second->status);
+        self::assertTrue($second->metadata['idempotent_replay'] ?? false);
+        self::assertCount(1, $entryOrders);
+        self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertEqualsWithDelta(1.0, $this->adapter->getOpenPositions('BTCUSDT')[0]->size, 0.000001);
+    }
+
+    public function testRejectedClientOrderIdReplayPreservesTerminalFailure(): void
+    {
+        $first = $this->adapter->placeOrder($this->request(
+            price: 26000.0,
+            clientOrderId: 'cid-rejected',
+            postOnly: true,
+        ));
+        $second = $this->adapter->placeOrder($this->request(
+            price: 26000.0,
+            clientOrderId: 'cid-rejected',
+            postOnly: true,
+        ));
+
+        self::assertFalse($first->accepted);
+        self::assertFalse($second->accepted);
+        self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $second->status);
+        self::assertSame('post_only_would_cross', $second->metadata['reason'] ?? null);
+        self::assertTrue($second->metadata['idempotent_replay'] ?? false);
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+    }
+
+    public function testFilledClientOrderIdReplayRejectsChangedIntent(): void
+    {
+        $first = $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-filled-changed',
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+        ));
+        $changed = $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-filled-changed',
+            postOnly: false,
+            attachedStopLossPrice: 24700.0,
+        ));
+
+        self::assertTrue($first->accepted);
+        self::assertSame(ExchangeOrderStatus::FILLED, $first->status);
+        self::assertFalse($changed->accepted);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $changed->status);
+        self::assertSame('duplicate_client_order_id_intent_mismatch', $changed->metadata['reason'] ?? null);
+        self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(1, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertEqualsWithDelta(24800.0, $this->adapter->getOpenOrders('BTCUSDT')[0]->stopPrice, 0.000001);
+    }
+
+    public function testExpiredClientOrderIdReplayPreservesAcceptedTerminalStatus(): void
+    {
+        $first = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-expired',
+            postOnly: false,
+            timeInForce: ExchangeTimeInForce::IOC,
+        ));
+        $second = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-expired',
+            postOnly: false,
+            timeInForce: ExchangeTimeInForce::IOC,
+        ));
+
+        self::assertTrue($first->accepted);
+        self::assertSame(ExchangeOrderStatus::EXPIRED, $first->status);
+        self::assertTrue($second->accepted);
+        self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        self::assertSame(ExchangeOrderStatus::EXPIRED, $second->status);
+        self::assertTrue($second->metadata['idempotent_replay'] ?? false);
+    }
+
+    public function testCancelledPartialClientOrderIdReplayPreservesFilledSemantics(): void
+    {
+        $first = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-partial-cancelled',
+            postOnly: true,
+        ));
+        self::assertNotNull($first->exchangeOrderId);
+
+        $this->scenario->fillOrder($first->exchangeOrderId, 0.4, 24950.0);
+        $this->adapter->cancelOrder(new CancelOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: $first->exchangeOrderId,
+            clientOrderId: 'cid-partial-cancelled',
+        ));
+
+        $second = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-partial-cancelled',
+            postOnly: true,
+        ));
+
+        self::assertTrue($second->accepted);
+        self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        self::assertSame(ExchangeOrderStatus::CANCELLED, $second->status);
+        self::assertSame(ExchangeOrderStatus::CANCELLED, $second->order?->status);
+        self::assertEqualsWithDelta(0.4, $second->order?->filledQuantity, 0.000001);
+        self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertEqualsWithDelta(0.4, $this->adapter->getOpenPositions('BTCUSDT')[0]->size, 0.000001);
     }
 
     public function testCrossingLimitFillsAtBookPriceInsteadOfLimitPrice(): void
