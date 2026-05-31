@@ -16,6 +16,7 @@ use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Okx\OkxActionFactory;
 use App\Exchange\Okx\OkxConfig;
+use App\Exchange\Okx\OkxFillId;
 use App\Exchange\Okx\OkxInstrumentResolver;
 use App\Exchange\Okx\OkxRestClientInterface;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -26,6 +27,7 @@ use Psr\Clock\ClockInterface;
 #[CoversClass(OkxActionFactory::class)]
 #[CoversClass(OkxInstrumentResolver::class)]
 #[CoversClass(OkxConfig::class)]
+#[CoversClass(OkxFillId::class)]
 final class OkxExchangeAdapterTest extends TestCase
 {
     public function testCapabilitiesAdvertiseDemoAndProtectionBoundaries(): void
@@ -123,7 +125,7 @@ final class OkxExchangeAdapterTest extends TestCase
         self::assertSame(ExchangePositionSide::LONG, $positions[0]->side);
         self::assertSame(0.2, $positions[0]->size);
         self::assertCount(1, $fills);
-        self::assertSame('fill-1', $fills[0]->fillId);
+        self::assertSame(OkxFillId::fromTradeId('BTC-USDT-SWAP', 'fill-1'), $fills[0]->fillId);
         self::assertSame(ExchangeOrderSide::BUY, $fills[0]->side);
     }
 
