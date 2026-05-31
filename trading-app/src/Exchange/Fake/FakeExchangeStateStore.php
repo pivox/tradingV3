@@ -198,6 +198,36 @@ final class FakeExchangeStateStore
 
     public function appendEvent(FakeExchangeEvent $event): void
     {
+        $payload = $event->payload;
+        if (!\array_key_exists('event_sequence', $event->payload)) {
+            $payload = ['event_sequence' => \count($this->events) + 1] + $payload;
+        }
+
+        $orderId = $payload['order_id'] ?? null;
+        if (!\array_key_exists('order_snapshot', $payload) && \is_scalar($orderId)) {
+            $order = $this->getOrder((string)$orderId);
+            if ($order instanceof ExchangeOrderDto) {
+                $payload['order_snapshot'] = $this->orderSnapshot($order);
+            }
+        }
+        $orderSnapshot = $payload['order_snapshot'] ?? null;
+        if (
+            !\array_key_exists('position_snapshot', $payload)
+            && \is_array($orderSnapshot)
+            && \in_array($event->type, ['position.opened', 'position.updated'], true)
+            && \is_string($orderSnapshot['position_side'] ?? null)
+        ) {
+            try {
+                $position = $this->getPosition($event->symbol, ExchangePositionSide::from($orderSnapshot['position_side']));
+            } catch (\ValueError) {
+                $position = null;
+            }
+            if ($position instanceof ExchangePositionDto) {
+                $payload['position_snapshot'] = $this->positionSnapshot($position);
+            }
+        }
+
+        $event = new FakeExchangeEvent($event->type, $event->symbol, $event->occurredAt, $payload);
         $this->events[] = $event;
         $this->persist();
     }
@@ -262,6 +292,59 @@ final class FakeExchangeStateStore
             ExchangeOrderStatus::OPEN,
             ExchangeOrderStatus::PARTIALLY_FILLED,
         ], true);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function orderSnapshot(ExchangeOrderDto $order): array
+    {
+        return [
+            'exchange' => $order->exchange->value,
+            'market_type' => $order->marketType->value,
+            'symbol' => $order->symbol,
+            'exchange_order_id' => $order->exchangeOrderId,
+            'client_order_id' => $order->clientOrderId,
+            'side' => $order->side->value,
+            'position_side' => $order->positionSide?->value,
+            'order_type' => $order->orderType->value,
+            'status' => $order->status->value,
+            'quantity' => $order->quantity,
+            'filled_quantity' => $order->filledQuantity,
+            'remaining_quantity' => $order->remainingQuantity,
+            'price' => $order->price,
+            'average_price' => $order->averagePrice,
+            'stop_price' => $order->stopPrice,
+            'reduce_only' => $order->reduceOnly,
+            'post_only' => $order->postOnly,
+            'time_in_force' => $order->timeInForce?->value,
+            'created_at' => $order->createdAt->format(\DateTimeInterface::ATOM),
+            'updated_at' => $order->updatedAt?->format(\DateTimeInterface::ATOM),
+            'metadata' => $order->metadata,
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function positionSnapshot(ExchangePositionDto $position): array
+    {
+        return [
+            'exchange' => $position->exchange->value,
+            'market_type' => $position->marketType->value,
+            'symbol' => $position->symbol,
+            'side' => $position->side->value,
+            'size' => $position->size,
+            'entry_price' => $position->entryPrice,
+            'mark_price' => $position->markPrice,
+            'unrealized_pnl' => $position->unrealizedPnl,
+            'realized_pnl' => $position->realizedPnl,
+            'margin' => $position->margin,
+            'leverage' => $position->leverage,
+            'opened_at' => $position->openedAt?->format(\DateTimeInterface::ATOM),
+            'updated_at' => $position->updatedAt?->format(\DateTimeInterface::ATOM),
+            'metadata' => $position->metadata,
+        ];
     }
 
     private function restore(): bool
