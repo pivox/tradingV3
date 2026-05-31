@@ -81,6 +81,8 @@ final class ContextualOrderProviderTest extends TestCase
         $spot = new ExchangeContext(Exchange::BITMART, MarketType::SPOT);
         $provider = new ContextualOrderProvider($inner, $spot);
 
+        self::assertSame($inner, $provider->innerOrderProvider());
+
         $provider->placeOrder('BTCUSDT', OrderSide::BUY, OrderType::LIMIT, 1.0, options: ['client_order_id' => 'ctx-test']);
 
         self::assertSame('bitmart', $inner->lastOptions['exchange']);

@@ -9,15 +9,21 @@ use App\Common\Enum\OrderType;
 use App\Contract\Provider\ContextualOrderProviderInterface;
 use App\Contract\Provider\Dto\OrderDto;
 use App\Contract\Provider\Dto\SymbolBidAskDto;
+use App\Contract\Provider\OrderProviderDecoratorInterface;
 use App\Contract\Provider\OrderProviderInterface;
 use App\Provider\Context\ExchangeContext;
 
-final readonly class ContextualOrderProvider implements OrderProviderInterface
+final readonly class ContextualOrderProvider implements OrderProviderDecoratorInterface
 {
     public function __construct(
         private OrderProviderInterface $inner,
         private ExchangeContext $context,
     ) {
+    }
+
+    public function innerOrderProvider(): OrderProviderInterface
+    {
+        return $this->inner;
     }
 
     public function placeOrder(

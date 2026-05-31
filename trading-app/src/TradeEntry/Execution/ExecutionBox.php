@@ -6,7 +6,10 @@ namespace App\TradeEntry\Execution;
 use App\Common\Enum\OrderSide;
 use App\Common\Enum\OrderType;
 use App\Contract\Provider\MainProviderInterface;
+use App\Contract\Provider\OrderProviderDecoratorInterface;
+use App\Contract\Provider\OrderProviderInterface;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Bitmart\BitmartOrderProvider;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Message\LimitFillWatchMessage;
 use App\TradeEntry\Pricing\TickQuantizer;
@@ -880,8 +883,9 @@ final class ExecutionBox
     ): void
     {
         $orderProvider = $this->providersFor($context)->getOrderProvider();
+        $bitmartProvider = $this->unwrapOrderProvider($orderProvider);
         // Vérifier si le provider supporte getPlanOrders (spécifique BitMart)
-        if (!$orderProvider instanceof \App\Provider\Bitmart\BitmartOrderProvider) {
+        if (!$bitmartProvider instanceof BitmartOrderProvider) {
             $this->positionsLogger->debug('execution.market_order.verify_skip', [
                 'symbol' => $symbol,
                 'reason' => 'getPlanOrders_not_available',
@@ -891,7 +895,7 @@ final class ExecutionBox
         }
 
         try {
-            $planOrders = $orderProvider->getPlanOrders($symbol);
+            $planOrders = $bitmartProvider->getPlanOrders($symbol);
             $submittedIds = array_column($submitted, 'order_id');
             $foundIds = [];
 
@@ -925,6 +929,15 @@ final class ExecutionBox
                 'decision_key' => $decisionKey,
             ]);
         }
+    }
+
+    private function unwrapOrderProvider(OrderProviderInterface $provider): OrderProviderInterface
+    {
+        while ($provider instanceof OrderProviderDecoratorInterface) {
+            $provider = $provider->innerOrderProvider();
+        }
+
+        return $provider;
     }
 
     private function applyMakerTakerSwitch(

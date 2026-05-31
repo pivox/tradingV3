@@ -6,8 +6,12 @@ namespace App\TradeEntry\MessageHandler;
 use App\Common\Enum\OrderStatus;
 use App\Contract\Provider\Dto\OrderDto;
 use App\Contract\Provider\MainProviderInterface;
+use App\Contract\Provider\OrderProviderDecoratorInterface;
+use App\Contract\Provider\OrderProviderInterface;
 use App\Logging\TradeLifecycleLogger;
 use App\Logging\TradeLifecycleReason;
+use App\Provider\Bitmart\BitmartOrderProvider;
+use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Message\LimitFillWatchMessage;
 use Brick\Math\RoundingMode;
 use Psr\Log\LoggerInterface;
@@ -33,7 +37,10 @@ final class LimitFillWatchMessageHandler
 
     public function __invoke(LimitFillWatchMessage $message): void
     {
-        $orderProvider = $this->provider->getOrderProvider();
+        $context = $message->lifecycleContext !== null
+            ? ExchangeContext::fromArray($message->lifecycleContext)
+            : null;
+        $orderProvider = $this->provider->forContext($context)->getOrderProvider();
 
         try {
             $order = $orderProvider->getOrder($message->symbol, $message->exchangeOrderId);
@@ -54,9 +61,10 @@ final class LimitFillWatchMessageHandler
 
             if ($status === OrderStatus::FILLED || $status === OrderStatus::PARTIALLY_FILLED) {
                 // Position ouverte: désarmer le dead-man switch pour ce symbole
-                if ($orderProvider instanceof \App\Provider\Bitmart\BitmartOrderProvider) {
+                $bitmartProvider = $this->unwrapOrderProvider($orderProvider);
+                if ($bitmartProvider instanceof BitmartOrderProvider) {
                     try {
-                        $orderProvider->cancelAllAfter($message->symbol, 0);
+                        $bitmartProvider->cancelAllAfter($message->symbol, 0);
                         $this->positionsLogger->info('limit_watch.deadman_disarmed', [
                             'symbol' => $message->symbol,
                             'exchange_order_id' => $message->exchangeOrderId,
@@ -154,6 +162,15 @@ final class LimitFillWatchMessageHandler
         }
 
         $this->rescheduleWatch($message, $message->cancelIssued, $maxTriesBeforeCancel, $maxAllowedTries);
+    }
+
+    private function unwrapOrderProvider(OrderProviderInterface $provider): OrderProviderInterface
+    {
+        while ($provider instanceof OrderProviderDecoratorInterface) {
+            $provider = $provider->innerOrderProvider();
+        }
+
+        return $provider;
     }
 
     private function logOrderExpiredLifecycle(
