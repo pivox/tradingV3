@@ -31,6 +31,11 @@ fichier `var/fake_exchange_state.dat` ou reconstruire le service
 - idempotence par `clientOrderId`;
 - placement, listing et cancel d'un stop reduce-only separe quand
   `supportsTriggerOrders=true`;
+- placement, listing et cancel d'un take-profit reduce-only separe quand
+  `supportsTriggerOrders=true`;
+- confirmation de protections SL/TP attachees apres fill local quand l'adapter
+  annonce `supportsAttachedStopLossOnEntry` ou
+  `supportsAttachedTakeProfitOnEntry`;
 - confirmation d'un stop reduce-only separe quand `supportsTriggerOrders=true`;
 - snapshots REST positions/fills quand l'adapter implemente
   `ExchangeRestSnapshotProviderInterface`.
