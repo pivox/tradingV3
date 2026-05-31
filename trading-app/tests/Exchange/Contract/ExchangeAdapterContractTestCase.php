@@ -41,6 +41,16 @@ abstract class ExchangeAdapterContractTestCase extends TestCase
         return false;
     }
 
+    protected function supportsLocalFillHook(): bool
+    {
+        return false;
+    }
+
+    protected function fillOrderForContract(string $exchangeOrderId, ?float $quantity = null, ?float $price = null): ?ExchangeOrderDto
+    {
+        return null;
+    }
+
     protected function snapshotClientOrderId(string $clientOrderId): string
     {
         return $clientOrderId;
@@ -124,6 +134,75 @@ abstract class ExchangeAdapterContractTestCase extends TestCase
         self::assertCount(1, $positions);
         self::assertSame(ExchangePositionSide::LONG, $positions[0]->side);
         self::assertGreaterThan(0.0, $positions[0]->size);
+    }
+
+    public function testPartialFillUpdatesPositionWhenAdapterExposesLocalFillHook(): void
+    {
+        if (!$this->supportsLocalFillHook()) {
+            self::markTestSkipped('Adapter does not expose a local fill hook for contract tests.');
+        }
+
+        $adapter = $this->adapter();
+        $placed = $adapter->placeOrder($this->placeRequest(
+            clientOrderId: $this->clientOrderId('partial-position'),
+            orderType: ExchangeOrderType::LIMIT,
+            price: $this->restingLimitPrice(),
+            postOnly: true,
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+
+        $partial = $this->fillOrderForContract($placed->exchangeOrderId, 0.4, $this->restingLimitPrice());
+
+        self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $partial?->status);
+        self::assertEqualsWithDelta(0.4, $partial?->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.6, $partial?->remainingQuantity, 0.000001);
+
+        $positions = $adapter->getOpenPositions($this->symbol());
+        self::assertCount(1, $positions);
+        self::assertSame(ExchangePositionSide::LONG, $positions[0]->side);
+        self::assertEqualsWithDelta(0.4, $positions[0]->size, 0.000001);
+
+        $filled = $this->fillOrderForContract($placed->exchangeOrderId, null, $this->restingLimitPrice());
+        self::assertSame(ExchangeOrderStatus::FILLED, $filled?->status);
+        $filledPositions = $adapter->getOpenPositions($this->symbol());
+        self::assertCount(1, $filledPositions);
+        self::assertSame(ExchangePositionSide::LONG, $filledPositions[0]->side);
+        self::assertEqualsWithDelta(1.0, $filledPositions[0]->size, 0.000001);
+    }
+
+    public function testReduceOnlyMarketOrderClosesPositionWhenAdapterExecutesImmediateFills(): void
+    {
+        $adapter = $this->adapter();
+        if (!$this->marketOrdersFillImmediately()) {
+            self::markTestSkipped('Adapter does not execute immediate fills in local contract tests.');
+        }
+        if (!$adapter->capabilities()->supportsReduceOnly) {
+            self::markTestSkipped('Adapter does not advertise reduce-only orders.');
+        }
+
+        $entry = $adapter->placeOrder($this->placeRequest(
+            clientOrderId: $this->clientOrderId('close-entry'),
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+        ));
+        self::assertSame(ExchangeOrderStatus::FILLED, $entry->status);
+        self::assertCount(1, $adapter->getOpenPositions($this->symbol()));
+
+        $close = $adapter->placeOrder($this->placeRequest(
+            clientOrderId: $this->clientOrderId('close-reduce'),
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+        ));
+
+        self::assertTrue($close->accepted);
+        self::assertSame(ExchangeOrderStatus::FILLED, $close->status);
+        self::assertTrue($close->order?->reduceOnly);
+        self::assertEqualsWithDelta(1.0, $close->order?->filledQuantity, 0.000001);
+        self::assertCount(0, $adapter->getOpenPositions($this->symbol()));
     }
 
     public function testFilledClientOrderIdReplayDoesNotCreateSecondPositionWhenAdapterExecutesImmediateFills(): void

@@ -34,6 +34,10 @@ avec `OrderPlanModel::exchangeContext`.
 - identite exchange/marketType et coherence des capabilities;
 - placement, listing, lookup et cancel d'un limit order;
 - fill market local et creation de position quand l'adapter le permet;
+- partial fill local et mise a jour de la position quand l'adapter expose un
+  hook de fill deterministe;
+- close reduce-only local et disparition de la position quand l'adapter execute
+  les market orders immediatement;
 - idempotence par `clientOrderId`, y compris replay d'un ordre deja fill;
 - placement, listing et cancel d'un stop reduce-only separe quand
   `supportsTriggerOrders=true`;
