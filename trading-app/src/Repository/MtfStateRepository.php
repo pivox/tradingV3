@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Entity\MtfState;
+use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\ORM\QueryBuilder;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
@@ -18,12 +20,19 @@ class MtfStateRepository extends ServiceEntityRepository
         parent::__construct($registry, MtfState::class);
     }
 
-    public function getOrCreateForSymbol(string $symbol): MtfState
+    public function getOrCreateForSymbol(string $symbol, ?ExchangeContext $context = null): MtfState
     {
-        $state = $this->findOneBy(['symbol' => $symbol]);
+        $context = ExchangeContext::resolve($context);
+        $state = $this->findOneBy([
+            'exchange' => $context->exchange->value,
+            'marketType' => $context->marketType->value,
+            'symbol' => strtoupper($symbol),
+        ]);
         if (!$state) {
             $state = new MtfState();
             $state->setSymbol($symbol);
+            $state->setExchange($context->exchange);
+            $state->setMarketType($context->marketType);
             $em = $this->getEntityManager();
             // Eviter les erreurs en cascade si l'EntityManager est fermé
             $isOpen = true;
@@ -47,41 +56,41 @@ class MtfStateRepository extends ServiceEntityRepository
         return $state;
     }
 
-    public function update4hValidation(string $symbol, \DateTimeImmutable $klineTime, ?string $side): void
+    public function update4hValidation(string $symbol, \DateTimeImmutable $klineTime, ?string $side, ?ExchangeContext $context = null): void
     {
-        $state = $this->getOrCreateForSymbol($symbol);
+        $state = $this->getOrCreateForSymbol($symbol, $context);
         $state->setK4hTime($klineTime);
         $state->set4hSide($side);
         $this->getEntityManager()->flush();
     }
 
-    public function update1hValidation(string $symbol, \DateTimeImmutable $klineTime, ?string $side): void
+    public function update1hValidation(string $symbol, \DateTimeImmutable $klineTime, ?string $side, ?ExchangeContext $context = null): void
     {
-        $state = $this->getOrCreateForSymbol($symbol);
+        $state = $this->getOrCreateForSymbol($symbol, $context);
         $state->setK1hTime($klineTime);
         $state->set1hSide($side);
         $this->getEntityManager()->flush();
     }
 
-    public function update15mValidation(string $symbol, \DateTimeImmutable $klineTime, ?string $side): void
+    public function update15mValidation(string $symbol, \DateTimeImmutable $klineTime, ?string $side, ?ExchangeContext $context = null): void
     {
-        $state = $this->getOrCreateForSymbol($symbol);
+        $state = $this->getOrCreateForSymbol($symbol, $context);
         $state->setK15mTime($klineTime);
         $state->set15mSide($side);
         $this->getEntityManager()->flush();
     }
 
-    public function updateExecutionSides(string $symbol, ?string $side5m, ?string $side1m): void
+    public function updateExecutionSides(string $symbol, ?string $side5m, ?string $side1m, ?ExchangeContext $context = null): void
     {
-        $state = $this->getOrCreateForSymbol($symbol);
+        $state = $this->getOrCreateForSymbol($symbol, $context);
         $state->set5mSide($side5m);
         $state->set1mSide($side1m);
         $this->getEntityManager()->flush();
     }
 
-    public function isSymbolReadyForExecution(string $symbol): bool
+    public function isSymbolReadyForExecution(string $symbol, ?ExchangeContext $context = null): bool
     {
-        $state = $this->findOneBy(['symbol' => $symbol]);
+        $state = $this->findOneBy($this->criteria($symbol, $context));
         if (!$state) {
             return false;
         }
@@ -89,19 +98,23 @@ class MtfStateRepository extends ServiceEntityRepository
         return $state->areParentTimeframesValidated() && $state->hasConsistentSides();
     }
 
-    public function getSymbolsReadyForExecution(): array
+    public function getSymbolsReadyForExecution(?ExchangeContext $context = null): array
     {
-        return $this->createQueryBuilder('s')
-            ->where('s.k4hTime IS NOT NULL')
+        $qb = $this->scope($this->createQueryBuilder('s'), $context);
+
+        return $qb
+            ->andWhere('s.k4hTime IS NOT NULL')
             ->andWhere('s.k1hTime IS NOT NULL')
             ->andWhere('s.k15mTime IS NOT NULL')
             ->getQuery()
             ->getResult();
     }
 
-    public function getSymbolsWithInconsistentSides(): array
+    public function getSymbolsWithInconsistentSides(?ExchangeContext $context = null): array
     {
-        $states = $this->findAll();
+        $states = $this->scope($this->createQueryBuilder('s'), $context)
+            ->getQuery()
+            ->getResult();
         $inconsistent = [];
 
         foreach ($states as $state) {
@@ -113,9 +126,9 @@ class MtfStateRepository extends ServiceEntityRepository
         return $inconsistent;
     }
 
-    public function resetSymbolState(string $symbol): void
+    public function resetSymbolState(string $symbol, ?ExchangeContext $context = null): void
     {
-        $state = $this->findOneBy(['symbol' => $symbol]);
+        $state = $this->findOneBy($this->criteria($symbol, $context));
         if ($state) {
             $state->setK4hTime(null);
             $state->setK1hTime(null);
@@ -125,16 +138,16 @@ class MtfStateRepository extends ServiceEntityRepository
         }
     }
 
-    public function getSymbolsWithValidatedTimeframes(): array
+    public function getSymbolsWithValidatedTimeframes(?ExchangeContext $context = null): array
     {
-        return $this->createQueryBuilder('s')
-            ->where('s.k4hTime IS NOT NULL OR s.k1hTime IS NOT NULL OR s.k15mTime IS NOT NULL')
+        return $this->scope($this->createQueryBuilder('s'), $context)
+            ->andWhere('s.k4hTime IS NOT NULL OR s.k1hTime IS NOT NULL OR s.k15mTime IS NOT NULL')
             ->orderBy('s.symbol')
             ->getQuery()
             ->getResult();
     }
 
-    public function getSymbolsByTimeframeValidation(string $timeframe): array
+    public function getSymbolsByTimeframeValidation(string $timeframe, ?ExchangeContext $context = null): array
     {
         $field = match ($timeframe) {
             '4h' => 'k4hTime',
@@ -143,8 +156,8 @@ class MtfStateRepository extends ServiceEntityRepository
             default => throw new \InvalidArgumentException("Invalid timeframe: {$timeframe}")
         };
 
-        return $this->createQueryBuilder('s')
-            ->where("s.{$field} IS NOT NULL")
+        return $this->scope($this->createQueryBuilder('s'), $context)
+            ->andWhere("s.{$field} IS NOT NULL")
             ->orderBy('s.symbol')
             ->getQuery()
             ->getResult();
@@ -156,26 +169,26 @@ class MtfStateRepository extends ServiceEntityRepository
      * @param string $startFromTimeframe '4h' ou '1h'
      * @return MtfState[]
      */
-    public function getStatesForDashboard(string $startFromTimeframe = '4h'): array
+    public function getStatesForDashboard(string $startFromTimeframe = '4h', ?ExchangeContext $context = null): array
     {
-        $qb = $this->createQueryBuilder('s');
+        $qb = $this->scope($this->createQueryBuilder('s'), $context);
 
         if ($startFromTimeframe === '1h') {
             // Pour 1h, on récupère tous les états qui ont au moins k1hTime
-            $qb->where('s.k1hTime IS NOT NULL')
+            $qb->andWhere('s.k1hTime IS NOT NULL')
                ->orderBy('s.symbol', 'ASC');
         } else {
             // Pour 4h, on récupère tous les états qui ont au moins k4hTime
-            $qb->where('s.k4hTime IS NOT NULL')
+            $qb->andWhere('s.k4hTime IS NOT NULL')
                ->orderBy('s.symbol', 'ASC');
         }
 
         return $qb->getQuery()->getResult();
     }
 
-    public function getSummary(string $startFromTimeframe = '4h'): array
+    public function getSummary(string $startFromTimeframe = '4h', ?ExchangeContext $context = null): array
     {
-        $qb   = $this->createQueryBuilder('s');
+        $qb   = $this->scope($this->createQueryBuilder('s'), $context);
         $expr = $qb->expr();
 
         if ($startFromTimeframe === '1h') {
@@ -240,7 +253,7 @@ DQL;
 
             $qb
                 ->addSelect($caseRuleRank . ' AS HIDDEN ruleRank')
-                ->where($expr->orX($rule1, $rule2, $rule3, $rule4))
+                ->andWhere($expr->orX($rule1, $rule2, $rule3, $rule4))
                 ->orderBy('ruleRank', 'ASC')
                 ->addOrderBy('s.k1hTime', 'DESC');
         } else {
@@ -251,6 +264,29 @@ DQL;
         return $qb->getQuery()->getResult();
     }
 
+    /**
+     * @return array{exchange:string,marketType:string,symbol:string}
+     */
+    private function criteria(string $symbol, ?ExchangeContext $context = null): array
+    {
+        $context = ExchangeContext::resolve($context);
+
+        return [
+            'exchange' => $context->exchange->value,
+            'marketType' => $context->marketType->value,
+            'symbol' => strtoupper($symbol),
+        ];
+    }
+
+    private function scope(QueryBuilder $qb, ?ExchangeContext $context = null): QueryBuilder
+    {
+        $context = ExchangeContext::resolve($context);
+
+        return $qb
+            ->andWhere('s.exchange = :exchange')
+            ->andWhere('s.marketType = :marketType')
+            ->setParameter('exchange', $context->exchange->value)
+            ->setParameter('marketType', $context->marketType->value);
+    }
+
 }
-
-

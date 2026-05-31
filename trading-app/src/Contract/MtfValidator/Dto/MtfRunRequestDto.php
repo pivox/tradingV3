@@ -64,12 +64,12 @@ final class MtfRunRequestDto
 
         $exchange = null;
         if (is_string($exchangeRaw) && $exchangeRaw !== '') {
-            $exchange = Exchange::tryFrom(strtoupper($exchangeRaw)) ?? null;
+            $exchange = Exchange::tryFrom(strtolower($exchangeRaw)) ?? null;
         }
 
         $marketType = null;
         if (is_string($marketTypeRaw) && $marketTypeRaw !== '') {
-            $marketType = MarketType::tryFrom(strtoupper($marketTypeRaw)) ?? null;
+            $marketType = MarketType::tryFrom(strtolower($marketTypeRaw)) ?? null;
         }
 
         return new self(

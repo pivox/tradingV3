@@ -24,6 +24,7 @@ use App\Indicator\Core\Trend\Sma as CoreSma;
 use App\Indicator\Core\Volatility\Bollinger as CoreBollinger;
 use App\Indicator\Core\Volume\Vwap as CoreVwap;
 use App\Indicator\Registry\ConditionRegistry;
+use App\Provider\Context\ExchangeContext;
 use App\Repository\IndicatorSnapshotRepository;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
@@ -120,10 +121,15 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         }
 
 
-        public function getSnapshot(string $symbol, string $timeframe): IndicatorSnapshotDto
+        public function getSnapshot(
+            string $symbol,
+            string $timeframe,
+            ?ExchangeContext $context = null,
+        ): IndicatorSnapshotDto
         {
+            $context = ExchangeContext::resolve($context);
             $tf = Timeframe::from($timeframe);
-            $existing = $this->getSnapshotFromDatabaseOnly($symbol, $tf->value);
+            $existing = $this->getSnapshotFromDatabaseOnly($symbol, $tf->value, $context);
             if ($existing instanceof IndicatorSnapshotDto) {
                 $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
                 if (!$this->isSnapshotStale($existing, $now, $tf)) {
@@ -131,7 +137,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 }
             }
 
-            $klines = $this->klineProvider->getKlines($symbol, $tf, 251);
+            $klines = $this->klineProvider->getKlines($symbol, $tf, 251, $context);
             if (empty($klines)) {
                 throw new \RuntimeException("Aucune kline pour $symbol/$timeframe");
             }
@@ -197,21 +203,29 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 source: 'PHP'
             );
 
-            $this->saveIndicatorSnapshot($snapshot);
+            $this->saveIndicatorSnapshot($snapshot, $context);
 
             return $snapshot;
         }
 
-        public function saveIndicatorSnapshot(IndicatorSnapshotDto $snapshotDto): void
+        public function saveIndicatorSnapshot(
+            IndicatorSnapshotDto $snapshotDto,
+            ?ExchangeContext $context = null,
+        ): void
         {
+            $context = ExchangeContext::resolve($context);
             $this->logger?->debug('[IndicatorProvider] Preparing snapshot persistence', [
                 'symbol' => $snapshotDto->symbol,
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
                 'timeframe' => $snapshotDto->timeframe->value,
                 'kline_time' => $snapshotDto->klineTime->format('Y-m-d H:i:s'),
                 'source' => $snapshotDto->source,
             ]);
 
             $snapshot = (new IndicatorSnapshot())
+                ->setExchange($context->exchange)
+                ->setMarketType($context->marketType)
                 ->setSymbol($snapshotDto->symbol)
                 ->setTimeframe($snapshotDto->timeframe)
                 ->setKlineTime($snapshotDto->klineTime)
@@ -236,10 +250,12 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             $snapshot->setValue('meta', $snapshotDto->meta);
             $snapshot->setUpdatedAt(new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
 
-            $this->snapshotRepository->upsert($snapshot);
+            $this->snapshotRepository->upsert($snapshot, $context);
 
             $this->logger?->info('[IndicatorProvider] Snapshot persisted', [
                 'symbol' => $snapshotDto->symbol,
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
                 'timeframe' => $snapshotDto->timeframe->value,
                 'kline_time' => $snapshotDto->klineTime->format('Y-m-d H:i:s'),
                 'run_id' => $snapshotDto->meta['run_id'] ?? null,
@@ -375,13 +391,18 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             ];
         }
 
-        public function evaluateConditions(string $symbol, string $timeframe): array
+        public function evaluateConditions(
+            string $symbol,
+            string $timeframe,
+            ?ExchangeContext $context = null,
+        ): array
         {
+            $context = ExchangeContext::resolve($context);
             // 1️⃣ Convertit le timeframe string en enum
             $timeframeEnum = Timeframe::from($timeframe);
 
             // 2️⃣ Récupère les klines normalisées
-            $klines = $this->klineProvider->getKlines($symbol, $timeframeEnum, 150);
+            $klines = $this->klineProvider->getKlines($symbol, $timeframeEnum, 150, $context);
 
             // 2️⃣ Convertit les klines en format array pour le contexte
             $klinesArray = [];
@@ -420,12 +441,18 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             return $results;
         }
 
-        public function getAtr(?string $key = null, ?string $symbol = null, ?string $tf = null): ?float
+        public function getAtr(
+            ?string $key = null,
+            ?string $symbol = null,
+            ?string $tf = null,
+            ?ExchangeContext $context = null,
+        ): ?float
         {
+            $context = ExchangeContext::resolve($context);
             $period = 14; // défaut (trading.yml)
             $method = 'wilder';
 
-            $cacheKey = sprintf('%s|%s|%s', $key ?? '*', $symbol ?? '*', $tf ?? '*');
+            $cacheKey = sprintf('%s|%s|%s|%s', $context->key(), $key ?? '*', $symbol ?? '*', $tf ?? '*');
             if (array_key_exists($cacheKey, $this->atrList)) {
                 $cached = $this->atrList[$cacheKey];
                 return is_numeric($cached) ? (float)$cached : null;
@@ -437,7 +464,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
             try {
                 $tfEnum = Timeframe::from((string)$tf);
-                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 250);
+                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 250, $context);
                 if (empty($klines)) {
                     return null;
                 }
@@ -462,9 +489,15 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             }
         }
 
-            public function getListPivot(?string $key = null, ?string $symbol = null, ?string $tf = null): ?ListIndicatorDto
+            public function getListPivot(
+                ?string $key = null,
+                ?string $symbol = null,
+                ?string $tf = null,
+                ?ExchangeContext $context = null,
+            ): ?ListIndicatorDto
             {
-                $cacheKey = sprintf('%s|%s|%s', $key ?? '*', $symbol ?? '*', $tf ?? '*');
+                $context = ExchangeContext::resolve($context);
+                $cacheKey = sprintf('%s|%s|%s|%s', $context->key(), $key ?? '*', $symbol ?? '*', $tf ?? '*');
                 if ($symbol === null || $tf === null) {
                     return null;
                 }
@@ -483,7 +516,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 }
 
                 try {
-                    $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 250);
+                    $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 250, $context);
                     if (empty($klines)) {
                         return null;
                     }
@@ -577,22 +610,24 @@ final class IndicatorProviderService implements IndicatorProviderInterface
     public function getIndicatorsForSymbolAndTimeframes(
         string $symbol,
         array $timeframes,
-        \DateTimeInterface $at
+        \DateTimeInterface $at,
+        ?ExchangeContext $context = null,
     ): array {
+        $context = ExchangeContext::resolve($context);
         $result = [];
 
         foreach ($timeframes as $tf) {
             try {
-                $snapshot = $this->getSnapshotFromDatabaseOnly($symbol, $tf);
+                $snapshot = $this->getSnapshotFromDatabaseOnly($symbol, $tf, $context);
 
                 // 1️⃣ si rien en DB → on calcule à partir des klines
                 if ($snapshot === null || $this->isSnapshotStale($snapshot, $at, Timeframe::from((string)$tf))) {
-                    $snapshot = $this->getSnapshot($symbol, (string)$tf);
+                    $snapshot = $this->getSnapshot($symbol, (string)$tf, $context);
                 }
 
                 // 2️⃣ mapping vers le format attendu par le MTF
                 $tfEnum = Timeframe::from((string)$tf);
-                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 251);
+                $klines = $this->klineProvider->getKlines((string)$symbol, $tfEnum, 251, $context);
 
                 $klinesCount = count($klines);
                 if ($klinesCount < 249) {
@@ -629,6 +664,8 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             } catch (\Throwable $e) {
                 $this->logger->warning('IndicatorProvider: failed to fetch indicators', [
                     'symbol'    => $symbol,
+                    'exchange' => $context->exchange->value,
+                    'market_type' => $context->marketType->value,
                     'timeframe' => $tf,
                     'error'     => $e->getMessage(),
                 ]);
@@ -644,21 +681,28 @@ final class IndicatorProviderService implements IndicatorProviderInterface
     /**
      * Snapshot indicateurs depuis la base UNIQUEMENT (aucun appel Bitmart).
      */
-    private function getSnapshotFromDatabaseOnly(string $symbol, string $timeframe): ?IndicatorSnapshotDto
+    private function getSnapshotFromDatabaseOnly(
+        string $symbol,
+        string $timeframe,
+        ?ExchangeContext $context = null,
+    ): ?IndicatorSnapshotDto
     {
+        $context = ExchangeContext::resolve($context);
         try {
             $tfEnum = Timeframe::from($timeframe);
         } catch (\ValueError $e) {
             // TF inconnu par l'enum → on log et on sort
             $this->logger->warning('IndicatorProvider: invalid timeframe', [
                 'symbol'    => $symbol,
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
                 'timeframe' => $timeframe,
             ]);
 
             return null;
         }
 
-        $entity = $this->snapshotRepository->findLastBySymbolAndTimeframe($symbol, $tfEnum);
+        $entity = $this->snapshotRepository->findLastBySymbolAndTimeframe($symbol, $tfEnum, $context);
 
         if ($entity === null) {
             return null;

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Trading\Storage;
 
 use App\Entity\FuturesOrder;
+use App\Provider\Context\ExchangeContext;
 use App\Repository\FuturesOrderRepository;
 use App\Trading\Dto\OrderDto;
 use Brick\Math\BigDecimal;
@@ -17,10 +18,14 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
         private readonly EntityManagerInterface $em,
     ) {}
 
-    public function findLocalOrder(string $symbol, string $orderId): ?OrderDto
+    public function findLocalOrder(
+        string $symbol,
+        string $orderId,
+        ?ExchangeContext $context = null,
+    ): ?OrderDto
     {
         /** @var FuturesOrder|null $entity */
-        $entity = $this->repository->findOneByOrderId($orderId);
+        $entity = $this->repository->findOneByOrderId($orderId, $context);
         if ($entity === null || strtoupper($entity->getSymbol()) !== strtoupper($symbol)) {
             return null;
         }
@@ -32,13 +37,21 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
      * @param string[]|null $symbols
      * @return OrderDto[]
      */
-    public function findLocalOpenOrders(?array $symbols = null): array
+    public function findLocalOpenOrders(
+        ?array $symbols = null,
+        ?ExchangeContext $context = null,
+    ): array
     {
+        $context = ExchangeContext::resolve($context);
         // Statuts considérés comme "ouverts" : pending, partially_filled
         $openStatuses = ['pending', 'partially_filled', 'new', 'sent'];
 
         $qb = $this->repository->createQueryBuilder('o')
-            ->where('o.status IN (:statuses)')
+            ->where('o.exchange = :exchange')
+            ->andWhere('o.marketType = :marketType')
+            ->andWhere('o.status IN (:statuses)')
+            ->setParameter('exchange', $context->exchange->value)
+            ->setParameter('marketType', $context->marketType->value)
             ->setParameter('statuses', $openStatuses);
 
         if ($symbols !== null && $symbols !== []) {
@@ -61,13 +74,14 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
     {
         /** @var FuturesOrder|null $entity */
         $entity = null;
+        $context = $this->resolveContext($order->raw);
 
         if ($order->clientOrderId !== null) {
-            $entity = $this->repository->findOneByClientOrderId($order->clientOrderId);
+            $entity = $this->repository->findOneByClientOrderId($order->clientOrderId, $context);
         }
 
         if ($entity === null && $order->orderId !== '') {
-            $entity = $this->repository->findOneByOrderId($order->orderId);
+            $entity = $this->repository->findOneByOrderId($order->orderId, $context);
         }
 
         if ($entity === null) {
@@ -141,12 +155,18 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
             avgFilledPrice: $avgFilledPrice,
             createdAt: $createdAt ?? new \DateTimeImmutable('now'),
             updatedAt: $updatedAt,
-            raw: $entity->getRawData()
+            raw: array_replace($entity->getRawData(), [
+                'exchange' => $entity->getExchange(),
+                'market_type' => $entity->getMarketType(),
+            ])
         );
     }
 
     private function mapDtoToEntity(OrderDto $dto, FuturesOrder $entity): void
     {
+        $context = $this->resolveContext($dto->raw);
+        $entity->setExchange($context->exchange);
+        $entity->setMarketType($context->marketType);
         $entity->setSymbol($dto->symbol);
         $entity->setClientOrderId($dto->clientOrderId);
         $entity->setSide($this->mapOrderSideToNumericSide($dto->side));
@@ -170,6 +190,14 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
         }
 
         $entity->setRawData($dto->raw);
+    }
+
+    /**
+     * @param array<string,mixed> $raw
+     */
+    private function resolveContext(array $raw): ExchangeContext
+    {
+        return ExchangeContext::fromArray($raw);
     }
 
     /**

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Repository\OrderIntentRepository;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
@@ -12,7 +14,8 @@ use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: OrderIntentRepository::class)]
 #[ORM\Table(name: 'order_intent')]
-#[ORM\Index(name: 'idx_order_intent_symbol', columns: ['symbol'])]
+#[ORM\UniqueConstraint(name: 'ux_order_intent_exchange_market_client_order_id', columns: ['exchange', 'market_type', 'client_order_id'])]
+#[ORM\Index(name: 'idx_order_intent_symbol', columns: ['exchange', 'market_type', 'symbol'])]
 #[ORM\Index(name: 'idx_order_intent_status', columns: ['status'])]
 #[ORM\Index(name: 'idx_order_intent_client_order_id', columns: ['client_order_id'])]
 class OrderIntent
@@ -42,6 +45,12 @@ class OrderIntent
     #[ORM\Column(type: Types::BIGINT)]
     private ?int $id = null;
 
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
+    private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
+    private string $marketType = 'perpetual';
+
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
 
@@ -66,7 +75,7 @@ class OrderIntent
     #[ORM\Column(type: Types::INTEGER)]
     private int $size; // Nombre de contrats
 
-    #[ORM\Column(type: Types::STRING, length: 80, unique: true)]
+    #[ORM\Column(type: Types::STRING, length: 80)]
     private string $clientOrderId; // Généré unique
 
     #[ORM\Column(type: Types::STRING, length: 30)]
@@ -113,6 +122,28 @@ class OrderIntent
     public function getId(): ?int
     {
         return $this->id;
+    }
+
+    public function getExchange(): string
+    {
+        return $this->exchange;
+    }
+
+    public function setExchange(Exchange|string $exchange): self
+    {
+        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange);
+        return $this->touch();
+    }
+
+    public function getMarketType(): string
+    {
+        return $this->marketType;
+    }
+
+    public function setMarketType(MarketType|string $marketType): self
+    {
+        $this->marketType = $marketType instanceof MarketType ? $marketType->value : strtolower($marketType);
+        return $this->touch();
     }
 
     public function getSymbol(): string
@@ -338,6 +369,8 @@ class OrderIntent
     {
         if (!$this->protections->contains($protection)) {
             $this->protections->add($protection);
+            $protection->setExchange($this->exchange);
+            $protection->setMarketType($this->marketType);
             $protection->setOrderIntent($this);
         }
         return $this->touch();

@@ -16,6 +16,7 @@ use App\TradeEntry\Service\TradeEntryService;
 use App\Contract\Provider\MainProviderInterface;
 use App\Common\Enum\Timeframe;
 use App\Logging\LifecycleContextFactory;
+use App\Provider\Context\ExchangeContext;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -55,6 +56,7 @@ final class TradingDecisionHandler
         }
 
         $decisionKey = $this->generateDecisionKey($symbolResult->symbol);
+        $exchangeContext = ExchangeContext::fromArray($mtfRunDto->options);
         // trade_id global pour ce cycle de trade (zone → ouverture → clôture)
         try {
             $tradeId = sprintf(
@@ -66,7 +68,7 @@ final class TradingDecisionHandler
             $tradeId = uniqid('trd:' . strtolower($symbolResult->symbol) . ':', true);
         }
         // Force ATR to the 5m timeframe so downstream sizing/guards stay consistent across execution TFs.
-        $forcedAtr5m = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '5m');
+        $forcedAtr5m = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '5m', context: $exchangeContext);
 
         $resolvedMode = $this->tradeEntryConfigResolver->resolveMode($symbolResult->tradeEntryModeUsed);
         $tradeEntryConfig = $this->tradeEntryConfigResolver->resolve($symbolResult->tradeEntryModeUsed);
@@ -100,12 +102,12 @@ final class TradingDecisionHandler
         
         // ATR du TF d'exécution (fallbacks hiérarchiques)
         $atrForTf = null;
-        try { $atrForTf = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: $effectiveTf); } catch (\Throwable) {}
+        try { $atrForTf = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: $effectiveTf, context: $exchangeContext); } catch (\Throwable) {}
         if (!\is_float($atrForTf) || $atrForTf <= 0.0) {
             // Fallbacks : 5m puis 15m
-            try { $atrForTf = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '5m'); } catch (\Throwable) {}
+            try { $atrForTf = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '5m', context: $exchangeContext); } catch (\Throwable) {}
             if (!\is_float($atrForTf) || $atrForTf <= 0.0) {
-                try { $atrForTf = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '15m'); } catch (\Throwable) {}
+                try { $atrForTf = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '15m', context: $exchangeContext); } catch (\Throwable) {}
             }
         }
 
@@ -136,6 +138,7 @@ final class TradingDecisionHandler
             $symbolResult->currentPrice,
             (\is_float($atrForTf) && $atrForTf > 0.0) ? $atrForTf : $forcedAtr5m,
             $resolvedMode, // Passer le mode (même mécanisme que validations.{mode}.yaml)
+            exchangeContext: $exchangeContext,
         );
 
         if ($tradeRequest === null) {
@@ -293,6 +296,8 @@ final class TradingDecisionHandler
         ?TradeEntryConfig $tradeEntryConfig = null
     ): bool
     {
+        $exchangeContext = ExchangeContext::fromArray($mtfRunDto->options);
+
         if ($symbolResult->executionTf === null) {
             $this->mtfLogger->info('order_journey.preconditions.blocked', [
                 'symbol' => $symbolResult->symbol,
@@ -393,7 +398,7 @@ final class TradingDecisionHandler
         $symbol = $symbolResult->symbol;
         $price = $symbolResult->currentPrice ?? null;
         $atr15m = null;
-        try { $atr15m = $this->indicatorProvider->getAtr(symbol: $symbol, tf: '15m'); } catch (\Throwable) {}
+        try { $atr15m = $this->indicatorProvider->getAtr(symbol: $symbol, tf: '15m', context: $exchangeContext); } catch (\Throwable) {}
         $atrPct15mBps = ($atr15m !== null && $price !== null && $price > 0.0)
             ? (10000.0 * $atr15m / $price) : null;
 
@@ -424,7 +429,7 @@ final class TradingDecisionHandler
             // Fallback: récupérer la dernière close kline 15m via MainProvider si disponible
             try {
                 if ($this->mainProvider !== null) {
-                    $klines = $this->mainProvider->getKlineProvider()->getKlines($symbol, Timeframe::TF_15M, 2);
+                    $klines = $this->mainProvider->getKlineProvider()->getKlines($symbol, Timeframe::TF_15M, 2, $exchangeContext);
                     if (!empty($klines)) {
                         $last = end($klines);
                         if (\is_object($last) && isset($last->close)) {
@@ -444,7 +449,7 @@ final class TradingDecisionHandler
         $atrForMa21 = null;
 
         try {
-            $snap = $this->indicatorProvider->getSnapshot($symbol, '15m');
+            $snap = $this->indicatorProvider->getSnapshot($symbol, '15m', $exchangeContext);
             // rsi
             if (isset($snap->rsi) && is_float($snap->rsi)) {
                 $context['rsi'] = $snap->rsi;
@@ -513,7 +518,7 @@ final class TradingDecisionHandler
 
         // ADX 1h
         try {
-            $list1h = $this->indicatorProvider->getListPivot(symbol: $symbol, tf: '1h');
+            $list1h = $this->indicatorProvider->getListPivot(symbol: $symbol, tf: '1h', context: $exchangeContext);
             if ($list1h !== null) {
                 $ind = $list1h->toArray();
                 $adx1h = $ind['adx'] ?? null;
@@ -527,7 +532,7 @@ final class TradingDecisionHandler
 
         // ADX 5m for forbid_drop_to_5m_if_any.adx_5m_lt
         try {
-            $list5m = $this->indicatorProvider->getListPivot(symbol: $symbol, tf: '5m');
+            $list5m = $this->indicatorProvider->getListPivot(symbol: $symbol, tf: '5m', context: $exchangeContext);
             if ($list5m !== null) {
                 $ind5m = $list5m->toArray();
                 $adx5m = $ind5m['adx'] ?? null;
@@ -570,7 +575,7 @@ final class TradingDecisionHandler
 
         // Volume ratio derived from recent klines if available
         if ($context['volume_ratio'] === null) {
-            $volumeRatio = $this->computeVolumeRatio($symbol);
+            $volumeRatio = $this->computeVolumeRatio($symbol, $exchangeContext);
             if ($volumeRatio !== null) {
                 $context['volume_ratio'] = $volumeRatio;
             }
@@ -581,7 +586,7 @@ final class TradingDecisionHandler
 
     private function estimateEntryZoneWidthPct(string $symbol, ?float $referencePrice, ?float $atr15m, ?TradeEntryConfig $tradeEntryConfig = null): ?float
     {
-        [$pivotCandidate, $atrFromSnapshot] = $this->fetchEntryZonePivotAndAtr($symbol);
+        [$pivotCandidate, $atrFromSnapshot] = $this->fetchEntryZonePivotAndAtr($symbol, $exchangeContext);
         $pivot = $pivotCandidate ?? $referencePrice;
         if (!\is_finite((float) ($pivot ?? 0)) || $pivot === null || $pivot <= 0.0) {
             return null;
@@ -620,13 +625,13 @@ final class TradingDecisionHandler
     /**
      * @return array{0:?float,1:?float}
      */
-    private function fetchEntryZonePivotAndAtr(string $symbol): array
+    private function fetchEntryZonePivotAndAtr(string $symbol, ExchangeContext $context): array
     {
         $pivot = null;
         $atr = null;
 
         try {
-            $snap5m = $this->indicatorProvider->getSnapshot($symbol, '5m');
+            $snap5m = $this->indicatorProvider->getSnapshot($symbol, '5m', $context);
             if ($snap5m->vwap !== null) {
                 $pivot = (float) ((string) $snap5m->vwap);
             }
@@ -689,14 +694,14 @@ final class TradingDecisionHandler
         return 10000.0 * ($ask - $bid) / $mid;
     }
 
-    private function computeVolumeRatio(string $symbol): ?float
+    private function computeVolumeRatio(string $symbol, ExchangeContext $context): ?float
     {
         if ($this->mainProvider === null) {
             return null;
         }
 
         try {
-            $klines = $this->mainProvider->getKlineProvider()->getKlines($symbol, Timeframe::TF_15M, 25);
+            $klines = $this->mainProvider->getKlineProvider()->getKlines($symbol, Timeframe::TF_15M, 25, $context);
         } catch (\Throwable) {
             return null;
         }

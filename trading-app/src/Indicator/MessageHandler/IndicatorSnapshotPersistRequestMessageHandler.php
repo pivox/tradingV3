@@ -8,6 +8,7 @@ use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Indicator\Message\IndicatorSnapshotPersistRequestMessage;
 use App\Indicator\Message\IndicatorSnapshotProjectionMessage;
 use App\Indicator\Service\IndicatorSnapshotProjector;
+use App\Provider\Context\ExchangeContext;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Messenger\Attribute\AsMessageHandler;
@@ -33,6 +34,7 @@ final class IndicatorSnapshotPersistRequestMessageHandler
         }
 
         $referenceTime = $this->resolveReferenceTime($message->requestedAt);
+        $exchangeContext = ExchangeContext::fromValues($message->exchange, $message->marketType);
 
         foreach ($symbols as $symbol) {
             try {
@@ -40,10 +42,13 @@ final class IndicatorSnapshotPersistRequestMessageHandler
                     $symbol,
                     $timeframes,
                     $referenceTime,
+                    $exchangeContext,
                 );
             } catch (\Throwable $exception) {
                 $this->logger->warning('[IndicatorPersistence] Failed to fetch indicators', [
                     'symbol' => $symbol,
+                    'exchange' => $exchangeContext->exchange->value,
+                    'market_type' => $exchangeContext->marketType->value,
                     'timeframes' => $timeframes,
                     'error' => $exception->getMessage(),
                 ]);
@@ -66,6 +71,8 @@ final class IndicatorSnapshotPersistRequestMessageHandler
                         $values,
                         'MTF_RUNNER',
                         $message->runId,
+                        $message->exchange,
+                        $message->marketType,
                     ));
                 } catch (\Throwable $exception) {
                     $this->logger->warning('[IndicatorPersistence] Projection failed', [

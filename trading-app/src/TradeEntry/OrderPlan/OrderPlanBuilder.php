@@ -553,7 +553,12 @@ final class OrderPlanBuilder
 
         $pivotLevels = \is_array($pre->pivotLevels) && !empty($pre->pivotLevels) ? $pre->pivotLevels : null;
         if ($pivotLevels === null) {
-            $list15 = $this->indicatorProvider->getListPivot(key: 'pivot', symbol: $req->symbol, tf: '15m');
+            $list15 = $this->indicatorProvider->getListPivot(
+                key: 'pivot',
+                symbol: $req->symbol,
+                tf: '15m',
+                context: $req->exchangeContext,
+            );
             if ($list15 !== null) {
                 $indicators = $list15->indicators;
                 if (\is_array($indicators['pivot_levels'] ?? null) && !empty($indicators['pivot_levels'])) {
@@ -608,7 +613,7 @@ final class OrderPlanBuilder
         // --- Levier dynamique ---
         $stopPct = abs($stop - $entry) / max($entry, 1e-9);
 
-        $atr15m = $this->indicatorProvider->getAtr(symbol: $req->symbol, tf: '15m');
+        $atr15m = $this->indicatorProvider->getAtr(symbol: $req->symbol, tf: '15m', context: $req->exchangeContext);
         $leverage = $this->leverageService->computeLeverage(
             $req->symbol,
             $entry,
@@ -781,6 +786,7 @@ final class OrderPlanBuilder
             stopRisk: $stopRisk,
             stopPivot: $stopPivot,
             stopFinalSource: $stopFinalSource,
+            exchangeContext: $req->exchangeContext,
         );
 
         $this->positionsLogger->info('order_plan.model_ready', [

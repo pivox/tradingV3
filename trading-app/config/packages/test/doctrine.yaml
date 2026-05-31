@@ -18,3 +18,8 @@ doctrine:
                 dir: '%kernel.project_dir%/src/Entity'
                 prefix: 'App\Entity'
                 alias: App
+            Provider:
+                is_bundle: false
+                dir: '%kernel.project_dir%/src/Provider/Entity'
+                prefix: 'App\Provider\Entity'
+                alias: Provider

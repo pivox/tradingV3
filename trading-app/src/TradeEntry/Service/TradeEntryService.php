@@ -19,6 +19,7 @@ use App\TradeEntry\Types\Side;
 use App\Logging\Dto\LifecycleContextBuilder;
 use App\Repository\IndicatorSnapshotRepository;
 use App\Common\Enum\Timeframe;
+use App\Provider\Context\ExchangeContext;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Messenger\MessageBusInterface;
@@ -221,7 +222,8 @@ final class TradeEntryService
                     $zone,
                     $request->symbol,
                     $currentPrice,
-                    $ttlRemaining
+                    $ttlRemaining,
+                    $request->exchangeContext,
                 );
 
                 if (is_array($fallbackDecision)) {
@@ -502,6 +504,8 @@ final class TradeEntryService
                 timeframe: $request->executionTf,
                 configProfile: $mode,
                 extra: $payload,
+                exchange: ExchangeContext::exchangeValue($request->exchangeContext),
+                marketType: ExchangeContext::marketTypeValue($request->exchangeContext),
             );
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('trade_lifecycle.skip_log_failed', [
@@ -599,6 +603,7 @@ final class TradeEntryService
             mtfContext: $mtfContext,
             mtfLevel: $mtfLevel,
             reason: $reason,
+            exchangeContext: $request->exchangeContext,
         );
     }
 
@@ -679,7 +684,8 @@ final class TradeEntryService
                     $tfEnum = Timeframe::from($request->executionTf);
                     $snapshot = $this->indicatorSnapshotRepository->findLastBySymbolAndTimeframe(
                         strtoupper($plan->symbol),
-                        $tfEnum
+                        $tfEnum,
+                        $request->exchangeContext,
                     );
                     if ($snapshot !== null) {
                         $entryPrice = $plan->entry;
@@ -716,11 +722,12 @@ final class TradeEntryService
                 qty: (string) $plan->size,
                 price: $price,
                 runId: $runId,
-                exchange: null,
+                exchange: ExchangeContext::exchangeValue($request->exchangeContext),
                 accountId: null,
                 extra: $extra,
                 timeframe: $request->executionTf,
                 configProfile: $mode,
+                marketType: ExchangeContext::marketTypeValue($request->exchangeContext),
             );
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('trade_lifecycle.submit_log_failed', [

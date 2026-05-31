@@ -62,7 +62,9 @@ RETURN QUERY
 SELECT e.open_time
 FROM expected e
          LEFT JOIN klines k
-                   ON k.symbol = p_symbol
+                   ON k.exchange = 'bitmart'
+                       AND k.market_type = 'perpetual'
+                       AND k.symbol = p_symbol
                        AND k.timeframe = p_timeframe
                        AND k.open_time = e.open_time
 WHERE k.open_time IS NULL
@@ -91,4 +93,3 @@ END;
 $$;
 
 alter function missing_kline_opentimes(text, text, timestamp, timestamp) owner to postgres;
-

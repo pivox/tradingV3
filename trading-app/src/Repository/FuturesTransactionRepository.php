@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Entity\FuturesTransaction;
+use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -24,10 +25,15 @@ final class FuturesTransactionRepository extends ServiceEntityRepository
     public function findRecentBySymbol(
         string $symbol,
         int $limit = 200,
-        ?\DateTimeImmutable $since = null
+        ?\DateTimeImmutable $since = null,
+        ?ExchangeContext $context = null,
     ): array {
         $qb = $this->createQueryBuilder('t')
+            ->andWhere('t.exchange = :exchange')
+            ->andWhere('t.marketType = :marketType')
             ->andWhere('t.symbol = :symbol')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', strtoupper($symbol))
             ->orderBy('t.happenedAt', 'DESC')
             ->setMaxResults($limit);
@@ -43,11 +49,19 @@ final class FuturesTransactionRepository extends ServiceEntityRepository
     /**
      * @return FuturesTransaction[]
      */
-    public function findBySymbolSince(string $symbol, \DateTimeImmutable $since): array
+    public function findBySymbolSince(
+        string $symbol,
+        \DateTimeImmutable $since,
+        ?ExchangeContext $context = null,
+    ): array
     {
         return $this->createQueryBuilder('t')
+            ->andWhere('t.exchange = :exchange')
+            ->andWhere('t.marketType = :marketType')
             ->andWhere('t.symbol = :symbol')
             ->andWhere('t.happenedAt >= :since')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', strtoupper($symbol))
             ->setParameter('since', $since)
             ->orderBy('t.happenedAt', 'ASC')

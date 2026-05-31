@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Dto;
 
+use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Types\Side;
 
 final class TradeEntryRequest
@@ -37,5 +38,6 @@ final class TradeEntryRequest
         public readonly ?float $tpMaxExtraR = null,
         public readonly float $leverageMultiplier = 1.0,
         public readonly ?float $leverageExchangeCap = null,
+        public readonly ?ExchangeContext $exchangeContext = null,
     ) {}
 }

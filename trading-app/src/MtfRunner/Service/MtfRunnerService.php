@@ -104,13 +104,13 @@ final class MtfRunnerService
         ]);
 
         try {
-            // 1. Résoudre les symboles
-            $resolveStart = microtime(true);
-            $symbols = $this->resolveSymbols($request->symbols, $request->profile);
-            $profiler->increment('runner', 'resolve_symbols', microtime(true) - $resolveStart);
-
-            // 2. Créer le contexte
+            // 1. Créer le contexte
             $context = $this->createContext($request);
+
+            // 2. Résoudre les symboles
+            $resolveStart = microtime(true);
+            $symbols = $this->resolveSymbols($request->symbols, $request->profile, $context);
+            $profiler->increment('runner', 'resolve_symbols', microtime(true) - $resolveStart);
 
             // 3. Synchroniser les tables depuis l'exchange (si demandé)
             $syncTables = true;
@@ -225,7 +225,7 @@ final class MtfRunnerService
      * @param string|null $profile Profil de configuration à utiliser pour récupérer les contrats actifs
      * @return string[]
      */
-    public function resolveSymbols(array $inputSymbols, ?string $profile = null): array
+    public function resolveSymbols(array $inputSymbols, ?string $profile = null, ?ExchangeContext $context = null): array
     {
         $symbols = [];
 
@@ -241,7 +241,7 @@ final class MtfRunnerService
         // Si aucun symbole fourni, récupérer depuis la base de données
         if (empty($symbols)) {
             try {
-                $fetched = $this->contractRepository->allActiveSymbolNames([], false, $profile);
+                $fetched = $this->contractRepository->allActiveSymbolNames([], false, $profile, $context);
                 if (!empty($fetched)) {
                     $symbols = array_values(array_unique(array_map('strval', $fetched)));
                 }
@@ -515,7 +515,7 @@ final class MtfRunnerService
 
             // 1. Synchroniser les positions
             if ($accountProvider) {
-                $openPositions = $this->syncPositions($accountProvider);
+                $openPositions = $this->syncPositions($accountProvider, $context);
             }
 
             // 2. Synchroniser les ordres
@@ -539,7 +539,7 @@ final class MtfRunnerService
     /**
      * Synchronise les positions depuis l'exchange vers la table positions
      */
-    private function syncPositions($accountProvider): array
+    private function syncPositions($accountProvider, ExchangeContext $context): array
     {
         $openPositions = [];
 
@@ -555,9 +555,9 @@ final class MtfRunnerService
                     $side = strtoupper($positionDto->side->value);
 
                     // Chercher ou créer la position
-                    $position = $this->positionRepository->findOneBySymbolSide($symbol, $side);
+                    $position = $this->positionRepository->findOneBySymbolSide($symbol, $side, $context);
                     if (!$position) {
-                        $position = new Position($symbol, $side);
+                        $position = new Position($symbol, $side, $context->exchange, $context->marketType);
                     }
 
                     // Mettre à jour les données
@@ -567,6 +567,8 @@ final class MtfRunnerService
                     $position->setUnrealizedPnl($positionDto->unrealizedPnl->__toString());
                     $position->setStatus('OPEN');
                     $position->mergePayload([
+                        'exchange' => $context->exchange->value,
+                        'market_type' => $context->marketType->value,
                         'mark_price' => $positionDto->markPrice->__toString(),
                         'margin' => $positionDto->margin->__toString(),
                         'realized_pnl' => $positionDto->realizedPnl->__toString(),

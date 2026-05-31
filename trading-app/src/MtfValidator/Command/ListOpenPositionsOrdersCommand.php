@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace App\MtfValidator\Command;
 
 use App\Contract\Provider\AccountProviderInterface;
+use App\Contract\Provider\OrderProviderDecoratorInterface;
 use App\Contract\Provider\OrderProviderInterface;
 use App\Contract\Provider\MainProviderInterface;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Provider\Bitmart\BitmartOrderProvider;
 use App\Provider\Context\ExchangeContext;
 use Brick\Math\RoundingMode;
 use Psr\Log\LoggerInterface;
@@ -26,8 +28,8 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 class ListOpenPositionsOrdersCommand extends Command
 {
     public function __construct(
-        private readonly ?AccountProviderInterface $accountProvider = null,
         private readonly LoggerInterface $mtfLogger,
+        private readonly ?AccountProviderInterface $accountProvider = null,
         private readonly ?OrderProviderInterface $orderProvider = null,
         private readonly ?MainProviderInterface $mainProvider = null,
     ) {
@@ -249,10 +251,9 @@ Exemples:
                 try {
                     $planOrders = [];
                     // Vérifier si le provider supporte getPlanOrders (méthode spécifique BitMart)
-                    if ($orderProvider instanceof \App\Provider\Bitmart\BitmartOrderProvider) {
-                        /** @var \App\Provider\Bitmart\BitmartOrderProvider $orderProvider */
-                        $orderProvider = $orderProvider;
-                        $planOrders = $orderProvider->getPlanOrders($symbol);
+                    $bitmartProvider = $this->unwrapOrderProvider($orderProvider);
+                    if ($bitmartProvider instanceof BitmartOrderProvider) {
+                        $planOrders = $bitmartProvider->getPlanOrders($symbol);
                     } else {
                         $io->note('Le provider ne supporte pas la récupération des ordres planifiés (TP/SL)');
                         $data['plan_orders'] = [];
@@ -359,5 +360,14 @@ Exemples:
 
             return Command::FAILURE;
         }
+    }
+
+    private function unwrapOrderProvider(OrderProviderInterface $provider): OrderProviderInterface
+    {
+        while ($provider instanceof OrderProviderDecoratorInterface) {
+            $provider = $provider->innerOrderProvider();
+        }
+
+        return $provider;
     }
 }

@@ -16,6 +16,8 @@ final class IndicatorSnapshotProjectionMessage
         public readonly array $values,
         public readonly string $source = 'PHP',
         public readonly ?string $runId = null,
+        public readonly string $exchange = 'bitmart',
+        public readonly string $marketType = 'perpetual',
     ) {
     }
 }

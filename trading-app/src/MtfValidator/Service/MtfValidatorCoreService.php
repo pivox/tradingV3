@@ -12,6 +12,7 @@ use App\Contract\MtfValidator\Dto\MtfResultDto;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\Indicator\Exception\NotEnoughKlinesException;
+use App\Provider\Context\ExchangeContext;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 
@@ -31,6 +32,7 @@ class MtfValidatorCoreService
     public function validate(MtfRunDto $input): MtfResultDto
     {
         $now = $input->now ?? $this->clock->now();
+        $exchangeContext = ExchangeContext::fromArray($input->options);
 
         // 1. Config
         $rawConfig = $this->configProvider->getConfigForProfile($input->profile);
@@ -71,10 +73,13 @@ class MtfValidatorCoreService
                 $input->symbol,
                 $allTimeframes,
                 $now,
+                $exchangeContext,
             );
         } catch (NotEnoughKlinesException $e) {
             $this->mtfLogger->info('MTF not enough klines', [
                 'symbol'             => $input->symbol,
+                'exchange'           => $exchangeContext->exchange->value,
+                'market_type'         => $exchangeContext->marketType->value,
                 'profile'            => $input->profile,
                 'mode'               => $mode,
                 'timeframe'          => $e->getTimeframe(),

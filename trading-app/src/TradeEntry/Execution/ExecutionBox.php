@@ -6,6 +6,10 @@ namespace App\TradeEntry\Execution;
 use App\Common\Enum\OrderSide;
 use App\Common\Enum\OrderType;
 use App\Contract\Provider\MainProviderInterface;
+use App\Contract\Provider\OrderProviderDecoratorInterface;
+use App\Contract\Provider\OrderProviderInterface;
+use App\Provider\Context\ExchangeContext;
+use App\Provider\Bitmart\BitmartOrderProvider;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Message\LimitFillWatchMessage;
 use App\TradeEntry\Pricing\TickQuantizer;
@@ -117,7 +121,8 @@ final class ExecutionBox
             'open_type' => $plan->openType,
             'decision_key' => $decisionKey,
         ]);
-        $leverageResult = $this->providers->getOrderProvider()->submitLeverage($plan->symbol, $plan->leverage, $plan->openType);
+        $providers = $this->providersFor($plan->exchangeContext);
+        $leverageResult = $providers->getOrderProvider()->submitLeverage($plan->symbol, $plan->leverage, $plan->openType);
         $this->positionsLogger->debug('execution.leverage_response', [
             'symbol' => $plan->symbol,
             'result' => $leverageResult,
@@ -214,7 +219,7 @@ final class ExecutionBox
         $this->positionsLogger->debug('execution.order_submit', $attemptPayload);
         // Single-channel logging only
 
-        $orderResult = $this->providers->getOrderProvider()->placeOrder(
+        $orderResult = $providers->getOrderProvider()->placeOrder(
             symbol: $orderPayload['symbol'],
             side: $side,
             type: $enforcedOrderType,
@@ -250,7 +255,7 @@ final class ExecutionBox
                     // Utiliser la fenêtre locale forcée si définie, sinon fallback sur 60s
                     $watchSec = $watchWindowSec ?? ($cancelAfterTimeout ?? 60);
                     if ($watchSec <= 0) { $watchSec = 60; }
-                    $contextSnapshot = $contextBuilder?->toArray();
+                    $contextSnapshot = $this->watchLifecycleContext($contextBuilder, $plan->exchangeContext);
                     $this->bus->dispatch(
                         new LimitFillWatchMessage(
                             symbol: $plan->symbol,
@@ -594,7 +599,8 @@ final class ExecutionBox
             'decision_key' => $decisionKey,
         ]);
 
-        $orderResult = $this->providers->getOrderProvider()->placeOrder(
+        $providers = $this->providersFor($plan->exchangeContext);
+        $orderResult = $providers->getOrderProvider()->placeOrder(
             symbol: $plan->symbol,
             side: $side,
             type: OrderType::MARKET,
@@ -627,7 +633,7 @@ final class ExecutionBox
         ]);
 
         // 2) Attendre l'exécution (3s WS strict, 10s total avec REST fallback)
-        $filled = $this->waitForMarketOrderFill($orderId, $clientOrderId, $plan->symbol, $decisionKey);
+        $filled = $this->waitForMarketOrderFill($orderId, $clientOrderId, $plan->symbol, $decisionKey, $plan->exchangeContext);
         if (!$filled) {
             $this->positionsLogger->error('execution.market_order.fill_timeout', [
                 'symbol' => $plan->symbol,
@@ -644,7 +650,7 @@ final class ExecutionBox
         }
 
         // 3) Récupérer le prix d'entrée exact depuis la position
-        $entryPrice = $this->getPositionEntryPrice($plan->symbol, $plan->side, $decisionKey);
+        $entryPrice = $this->getPositionEntryPrice($plan->symbol, $plan->side, $decisionKey, $plan->exchangeContext);
         if ($entryPrice === null) {
             $this->positionsLogger->error('execution.market_order.entry_price_not_found', [
                 'symbol' => $plan->symbol,
@@ -695,6 +701,7 @@ final class ExecutionBox
             pullbackClear: null,
             lateEntry: null,
             dryRun: false,
+            exchangeContext: $plan->exchangeContext,
         );
 
         $tpSlResult = null;
@@ -710,7 +717,7 @@ final class ExecutionBox
             ]);
 
             // 5) Vérifier les plans TP/SL
-            $this->verifyPlanOrders($plan->symbol, $tpSlResult['submitted'], $decisionKey);
+            $this->verifyPlanOrders($plan->symbol, $tpSlResult['submitted'], $decisionKey, $plan->exchangeContext);
 
             // 6) Désarmer le dead-man switch symbolique (cancel-all-after) une fois la position ouverte et TP/SL soumis.
            /* $orderProvider = $this->providers->getOrderProvider();
@@ -755,8 +762,15 @@ final class ExecutionBox
     /**
      * Attend l'exécution d'un ordre market (3s WS strict, 10s total avec REST fallback).
      */
-    private function waitForMarketOrderFill(string $orderId, string $clientOrderId, string $symbol, ?string $decisionKey): bool
+    private function waitForMarketOrderFill(
+        string $orderId,
+        string $clientOrderId,
+        string $symbol,
+        ?string $decisionKey,
+        ?ExchangeContext $context = null,
+    ): bool
     {
+        $providers = $this->providersFor($context);
         $startTime = time();
         $wsDeadline = $startTime + self::MARKET_FILL_TIMEOUT_WS_STRICT;
         $totalDeadline = $startTime + self::MARKET_FILL_TIMEOUT_TOTAL;
@@ -775,7 +789,7 @@ final class ExecutionBox
         $maxPollInterval = 1.0; // 1s max
 
         while (time() < $totalDeadline) {
-            $order = $this->providers->getOrderProvider()->getOrder($symbol, $orderId);
+            $order = $providers->getOrderProvider()->getOrder($symbol, $orderId);
             if ($order !== null) {
                 $status = $order->status;
                 if ($status === OrderStatus::FILLED || $status === OrderStatus::PARTIALLY_FILLED) {
@@ -812,9 +826,14 @@ final class ExecutionBox
     /**
      * Récupère le prix d'entrée exact depuis la position.
      */
-    private function getPositionEntryPrice(string $symbol, \App\TradeEntry\Types\Side $side, ?string $decisionKey): ?float
+    private function getPositionEntryPrice(
+        string $symbol,
+        \App\TradeEntry\Types\Side $side,
+        ?string $decisionKey,
+        ?ExchangeContext $context = null,
+    ): ?float
     {
-        $accountProvider = $this->providers->getAccountProvider();
+        $accountProvider = $this->providersFor($context)->getAccountProvider();
         if ($accountProvider === null) {
             return null;
         }
@@ -856,11 +875,17 @@ final class ExecutionBox
     /**
      * Vérifie que les plans TP/SL sont bien actifs.
      */
-    private function verifyPlanOrders(string $symbol, array $submitted, ?string $decisionKey): void
+    private function verifyPlanOrders(
+        string $symbol,
+        array $submitted,
+        ?string $decisionKey,
+        ?ExchangeContext $context = null,
+    ): void
     {
-        $orderProvider = $this->providers->getOrderProvider();
+        $orderProvider = $this->providersFor($context)->getOrderProvider();
+        $bitmartProvider = $this->unwrapOrderProvider($orderProvider);
         // Vérifier si le provider supporte getPlanOrders (spécifique BitMart)
-        if (!$orderProvider instanceof \App\Provider\Bitmart\BitmartOrderProvider) {
+        if (!$bitmartProvider instanceof BitmartOrderProvider) {
             $this->positionsLogger->debug('execution.market_order.verify_skip', [
                 'symbol' => $symbol,
                 'reason' => 'getPlanOrders_not_available',
@@ -870,7 +895,7 @@ final class ExecutionBox
         }
 
         try {
-            $planOrders = $orderProvider->getPlanOrders($symbol);
+            $planOrders = $bitmartProvider->getPlanOrders($symbol);
             $submittedIds = array_column($submitted, 'order_id');
             $foundIds = [];
 
@@ -904,6 +929,32 @@ final class ExecutionBox
                 'decision_key' => $decisionKey,
             ]);
         }
+    }
+
+    private function unwrapOrderProvider(OrderProviderInterface $provider): OrderProviderInterface
+    {
+        while ($provider instanceof OrderProviderDecoratorInterface) {
+            $provider = $provider->innerOrderProvider();
+        }
+
+        return $provider;
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function watchLifecycleContext(
+        ?LifecycleContextBuilder $contextBuilder,
+        ?ExchangeContext $context,
+    ): ?array {
+        $snapshot = $contextBuilder?->toArray() ?? [];
+
+        if ($context !== null) {
+            $snapshot['exchange'] ??= $context->exchange->value;
+            $snapshot['market_type'] ??= $context->marketType->value;
+        }
+
+        return $snapshot !== [] ? $snapshot : null;
     }
 
     private function applyMakerTakerSwitch(
@@ -965,13 +1016,14 @@ final class ExecutionBox
         EntryZone $zone,
         string $symbol,
         float $currentPrice,
-        int $ttlRemainingSec
+        int $ttlRemainingSec,
+        ?ExchangeContext $context = null,
     ): ?array {
         if (!$cfg->enabled || $ttlRemainingSec > $cfg->ttlThresholdSec) {
             return null;
         }
 
-        $orderBook = $this->providers->getOrderProvider()->getOrderBookTop($symbol);
+        $orderBook = $this->providersFor($context)->getOrderProvider()->getOrderBookTop($symbol);
         $spreadBps = SpreadHelper::calculateSpreadBps($orderBook);
 
         if ($spreadBps > $cfg->maxSpreadBps) {
@@ -999,5 +1051,10 @@ final class ExecutionBox
             'order_type' => $cfg->takerOrderType,
             'reason' => 'end_of_zone_fallback',
         ];
+    }
+
+    private function providersFor(?ExchangeContext $context = null): MainProviderInterface
+    {
+        return $this->providers->forContext($context);
     }
 }

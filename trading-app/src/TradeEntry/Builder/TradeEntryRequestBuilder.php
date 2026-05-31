@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\TradeEntry\Builder;
 
 use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContext, ZoneDeviationOverrideStore};
+use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Types\Side;
 use Psr\Log\LoggerInterface;
@@ -42,7 +43,8 @@ final class TradeEntryRequestBuilder
         ?float $price = null,
         ?float $atr = null,
         ?string $mode = null,
-        ?array $metrics = null
+        ?array $metrics = null,
+        ?ExchangeContext $exchangeContext = null,
     ): ?TradeEntryRequest {
         $side = strtoupper((string)$signalSide);
         if (!in_array($side, ['LONG', 'SHORT'], true)) {
@@ -244,6 +246,7 @@ final class TradeEntryRequestBuilder
             tpMaxExtraR: $tpMaxExtraR,
             leverageMultiplier: 1.0,
             leverageExchangeCap: $leverageExchangeCap,
+            exchangeContext: $exchangeContext,
         );
     }
 

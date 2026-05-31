@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Provider\Entity;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Provider\Repository\KlineRepository;
 use Brick\Math\BigDecimal;
 use Doctrine\DBAL\Types\Types;
@@ -11,15 +13,21 @@ use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: KlineRepository::class)]
 #[ORM\Table(name: 'klines')]
-#[ORM\Index(name: 'idx_klines_symbol_tf', columns: ['symbol', 'timeframe'])]
+#[ORM\Index(name: 'idx_klines_symbol_tf', columns: ['exchange', 'market_type', 'symbol', 'timeframe'])]
 #[ORM\Index(name: 'idx_klines_open_time', columns: ['open_time'])]
-#[ORM\UniqueConstraint(name: 'ux_klines_symbol_tf_open', columns: ['symbol', 'timeframe', 'open_time'])]
+#[ORM\UniqueConstraint(name: 'ux_klines_exchange_market_symbol_tf_open', columns: ['exchange', 'market_type', 'symbol', 'timeframe', 'open_time'])]
 class Kline implements \JsonSerializable
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
     private ?int $id = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
+    private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
+    private string $marketType = 'perpetual';
 
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
@@ -63,6 +71,28 @@ class Kline implements \JsonSerializable
     public function getId(): ?int
     {
         return $this->id;
+    }
+
+    public function getExchange(): string
+    {
+        return $this->exchange;
+    }
+
+    public function setExchange(Exchange|string $exchange): static
+    {
+        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange);
+        return $this;
+    }
+
+    public function getMarketType(): string
+    {
+        return $this->marketType;
+    }
+
+    public function setMarketType(MarketType|string $marketType): static
+    {
+        $this->marketType = $marketType instanceof MarketType ? $marketType->value : strtolower($marketType);
+        return $this;
     }
 
     public function getSymbol(): string
@@ -260,6 +290,8 @@ class Kline implements \JsonSerializable
     public function jsonSerialize(): mixed
     {
         return [
+            'exchange' => $this->exchange,
+            'marketType' => $this->marketType,
             'timeframe' => $this->timeframe->value,
             'openTime' => $this->openTime->format(DATE_RFC3339),
             'openPrice' => $this->openPrice,

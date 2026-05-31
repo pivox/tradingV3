@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Entity\TradeZoneEvent;
+use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -30,10 +31,14 @@ final class TradeZoneEventRepository extends ServiceEntityRepository
     /**
      * @return TradeZoneEvent[]
      */
-    public function findRecentForSymbol(string $symbol, int $limit = 100): array
+    public function findRecentForSymbol(string $symbol, int $limit = 100, ?ExchangeContext $context = null): array
     {
         return $this->createQueryBuilder('event')
+            ->andWhere('event.exchange = :exchange')
+            ->andWhere('event.marketType = :marketType')
             ->andWhere('event.symbol = :symbol')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', strtoupper($symbol))
             ->orderBy('event.happenedAt', 'DESC')
             ->setMaxResults($limit)
@@ -44,14 +49,23 @@ final class TradeZoneEventRepository extends ServiceEntityRepository
     /**
      * @return array<int, array{zoneDevPct: float, zoneMaxDevPct: float, happenedAt: \DateTimeImmutable}>
      */
-    public function getDeviationSeries(string $symbol, \DateTimeImmutable $since, int $limit = 500): array
+    public function getDeviationSeries(
+        string $symbol,
+        \DateTimeImmutable $since,
+        int $limit = 500,
+        ?ExchangeContext $context = null,
+    ): array
     {
         $qb = $this->createQueryBuilder('event')
             ->select('event.zoneDevPct AS zoneDevPct', 'event.zoneMaxDevPct AS zoneMaxDevPct', 'event.happenedAt AS happenedAt')
+            ->andWhere('event.exchange = :exchange')
+            ->andWhere('event.marketType = :marketType')
             ->andWhere('event.symbol = :symbol')
             ->andWhere('event.happenedAt >= :since')
             ->orderBy('event.happenedAt', 'DESC')
             ->setMaxResults($limit)
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', strtoupper($symbol))
             ->setParameter('since', $since);
 
@@ -64,14 +78,18 @@ final class TradeZoneEventRepository extends ServiceEntityRepository
     /**
      * @return array<int, array{symbol: string, avgDevPct: float, avgMaxDevPct: float, events: int}>
      */
-    public function getAggregatedStats(\DateTimeImmutable $since): array
+    public function getAggregatedStats(\DateTimeImmutable $since, ?ExchangeContext $context = null): array
     {
         $rows = $this->createQueryBuilder('event')
             ->select('event.symbol AS symbol')
             ->addSelect('AVG(event.zoneDevPct) AS avgDevPct')
             ->addSelect('AVG(event.zoneMaxDevPct) AS avgMaxDevPct')
             ->addSelect('COUNT(event.id) AS events')
+            ->andWhere('event.exchange = :exchange')
+            ->andWhere('event.marketType = :marketType')
             ->andWhere('event.happenedAt >= :since')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->groupBy('event.symbol')
             ->setParameter('since', $since)
             ->getQuery()
@@ -93,7 +111,7 @@ final class TradeZoneEventRepository extends ServiceEntityRepository
      * @param string[] $symbols
      * @return array<string, array{reason: string, happened_at: \DateTimeImmutable}>
      */
-    public function getLastReasonBySymbols(array $symbols): array
+    public function getLastReasonBySymbols(array $symbols, ?ExchangeContext $context = null): array
     {
         if (empty($symbols)) {
             return [];
@@ -103,11 +121,17 @@ final class TradeZoneEventRepository extends ServiceEntityRepository
         // On utilise une sous-requête pour obtenir le dernier événement par symbole
         $subQb = $this->createQueryBuilder('event2')
             ->select('MAX(event2.happenedAt)')
-            ->where('event2.symbol = event.symbol');
+            ->where('event2.exchange = event.exchange')
+            ->andWhere('event2.marketType = event.marketType')
+            ->andWhere('event2.symbol = event.symbol');
 
         $qb = $this->createQueryBuilder('event')
-            ->where('event.symbol IN (:symbols)')
+            ->where('event.exchange = :exchange')
+            ->andWhere('event.marketType = :marketType')
+            ->andWhere('event.symbol IN (:symbols)')
             ->andWhere('event.happenedAt = (' . $subQb->getDQL() . ')')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbols', $symbols)
             ->orderBy('event.symbol', 'ASC');
 

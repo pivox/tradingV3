@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Provider\Repository;
 
 use App\Common\Enum\Timeframe;
+use App\Provider\Context\ExchangeContext;
 use App\Provider\Entity\Kline;
 use App\Provider\Bitmart\Dto\KlineDto;
 use App\Provider\Bitmart\Dto\ListKlinesDto;
@@ -38,7 +39,7 @@ class KlineRepository extends ServiceEntityRepository
      * Chaque ligne = un "chunk" (symbol, step en minutes, from/to en secondes epoch)
      *
      * @param string $symbol        ex: 'BTCUSDT'
-     * @param string $timeframe     ex: '1m','5m','15m','1h','4h','1d'
+     * @param string $timeframe     ex: '1m','5m','15m','30m','1h','4h','1d'
      * @param \DateTimeImmutable $startUtc
      * @param \DateTimeImmutable $endUtc
      * @param int $maxPerReq        (par défaut 500)
@@ -49,23 +50,100 @@ class KlineRepository extends ServiceEntityRepository
         string $timeframe,
         \DateTimeImmutable $startUtc,
         \DateTimeImmutable $endUtc,
-        int $maxPerReq = 500
+        int $maxPerReq = 500,
+        ?ExchangeContext $context = null,
     ): array {
         $conn = $this->getConnection();
+        $step = Timeframe::from($timeframe)->getStepInMinutes();
 
         try {
-            // Appel direct de la fonction PostgreSQL avec les paramètres
             $rows = $conn->fetchAllAssociative(
-                'SELECT symbol, step, "from", "to"
-                 FROM get_missing_kline_chunks(?, ?, ?, ?, ?)
-                 ORDER BY "from", "to"',
+                <<<SQL
+WITH input AS (
+    SELECT
+        CAST(:start_utc AS timestamptz) AS start_utc,
+        CAST(:end_utc AS timestamptz) AS end_utc,
+        (:step_minutes || ' minutes')::interval AS step_interval
+),
+bounds AS (
+    SELECT
+        CASE :timeframe
+            WHEN '1m' THEN date_trunc('minute', start_utc)
+            WHEN '5m' THEN date_trunc('hour', start_utc)
+                + make_interval(mins => (floor(extract(minute from start_utc)::numeric / 5) * 5)::int)
+            WHEN '15m' THEN date_trunc('hour', start_utc)
+                + make_interval(mins => (floor(extract(minute from start_utc)::numeric / 15) * 15)::int)
+            WHEN '30m' THEN date_trunc('hour', start_utc)
+                + make_interval(mins => (floor(extract(minute from start_utc)::numeric / 30) * 30)::int)
+            WHEN '1h' THEN date_trunc('hour', start_utc)
+            WHEN '4h' THEN date_trunc('day', start_utc)
+                + make_interval(hours => (floor(extract(hour from start_utc)::numeric / 4) * 4)::int)
+            WHEN '1d' THEN date_trunc('day', start_utc)
+        END AS start_at,
+        CASE :timeframe
+            WHEN '1m' THEN date_trunc('minute', end_utc)
+            WHEN '5m' THEN date_trunc('hour', end_utc)
+                + make_interval(mins => (floor(extract(minute from end_utc)::numeric / 5) * 5)::int)
+            WHEN '15m' THEN date_trunc('hour', end_utc)
+                + make_interval(mins => (floor(extract(minute from end_utc)::numeric / 15) * 15)::int)
+            WHEN '30m' THEN date_trunc('hour', end_utc)
+                + make_interval(mins => (floor(extract(minute from end_utc)::numeric / 30) * 30)::int)
+            WHEN '1h' THEN date_trunc('hour', end_utc)
+            WHEN '4h' THEN date_trunc('day', end_utc)
+                + make_interval(hours => (floor(extract(hour from end_utc)::numeric / 4) * 4)::int)
+            WHEN '1d' THEN date_trunc('day', end_utc)
+        END AS end_at,
+        step_interval
+    FROM input
+),
+expected AS (
+    SELECT generate_series(start_at, end_at, step_interval) AS open_time, step_interval
+    FROM bounds
+    WHERE end_at >= start_at
+),
+missing AS (
+    SELECT e.open_time, e.step_interval
+    FROM expected e
+    LEFT JOIN klines k
+        ON k.exchange = :exchange
+       AND k.market_type = :market_type
+       AND k.symbol = :symbol
+       AND k.timeframe = :timeframe
+       AND k.open_time = e.open_time
+    WHERE k.id IS NULL
+),
+contiguous AS (
+    SELECT
+        open_time,
+        open_time - ((ROW_NUMBER() OVER (ORDER BY open_time))::int * step_interval) AS run_key
+    FROM missing
+),
+chunked AS (
+    SELECT
+        open_time,
+        run_key,
+        FLOOR(((ROW_NUMBER() OVER (PARTITION BY run_key ORDER BY open_time) - 1)::numeric) / :max_per_req) AS chunk_id
+    FROM contiguous
+)
+SELECT
+    :symbol AS symbol,
+    :step_minutes AS step,
+    EXTRACT(EPOCH FROM MIN(open_time))::bigint AS "from",
+    EXTRACT(EPOCH FROM MAX(open_time))::bigint AS "to"
+FROM chunked
+GROUP BY run_key, chunk_id
+ORDER BY "from", "to"
+SQL,
                 [
-                    $symbol,
-                    $timeframe,
-                    $startUtc->format('Y-m-d H:i:sP'),
-                    $endUtc->format('Y-m-d H:i:sP'),
-                    $maxPerReq
-                ]
+                    'exchange' => ExchangeContext::exchangeValue($context),
+                    'market_type' => ExchangeContext::marketTypeValue($context),
+                    'symbol' => strtoupper($symbol),
+                    'timeframe' => $timeframe,
+                    'start_utc' => $startUtc->format('Y-m-d H:i:sP'),
+                    'end_utc' => $endUtc->format('Y-m-d H:i:sP'),
+                    'step_minutes' => $step,
+                    'max_per_req' => max(1, $maxPerReq),
+                ],
             );
 
             // Normalisation typée
@@ -92,11 +170,20 @@ class KlineRepository extends ServiceEntityRepository
      *
      * @return Kline[]
      */
-    public function getKlines(string $symbol, Timeframe $timeframe, int $limit = 1000): array
+    public function getKlines(
+        string $symbol,
+        Timeframe $timeframe,
+        int $limit = 1000,
+        ?ExchangeContext $context = null,
+    ): array
     {
         return $this->createQueryBuilder('k')
-            ->where('k.symbol = :symbol')
+            ->where('k.exchange = :exchange')
+            ->andWhere('k.marketType = :marketType')
+            ->andWhere('k.symbol = :symbol')
             ->andWhere('k.timeframe = :timeframe')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', $symbol)
             ->setParameter('timeframe', $timeframe)
             ->orderBy('k.openTime', 'DESC')
@@ -108,19 +195,32 @@ class KlineRepository extends ServiceEntityRepository
     /**
      * Récupère les klines pour un symbole et timeframe
      */
-    public function findBySymbolAndTimeframe(string $symbol, Timeframe $timeframe, int $limit = 1000): array
+    public function findBySymbolAndTimeframe(
+        string $symbol,
+        Timeframe $timeframe,
+        int $limit = 1000,
+        ?ExchangeContext $context = null,
+    ): array
     {
-        return $this->getKlines($symbol, $timeframe, $limit);
+        return $this->getKlines($symbol, $timeframe, $limit, $context);
     }
 
     /**
      * Récupère la dernière kline pour un symbole et timeframe
      */
-    public function findLastBySymbolAndTimeframe(string $symbol, Timeframe $timeframe): ?Kline
+    public function findLastBySymbolAndTimeframe(
+        string $symbol,
+        Timeframe $timeframe,
+        ?ExchangeContext $context = null,
+    ): ?Kline
     {
         return $this->createQueryBuilder('k')
-            ->where('k.symbol = :symbol')
+            ->where('k.exchange = :exchange')
+            ->andWhere('k.marketType = :marketType')
+            ->andWhere('k.symbol = :symbol')
             ->andWhere('k.timeframe = :timeframe')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', $symbol)
             ->setParameter('timeframe', $timeframe)
             ->orderBy('k.openTime', 'DESC')
@@ -136,13 +236,18 @@ class KlineRepository extends ServiceEntityRepository
         string $symbol,
         Timeframe $timeframe,
         \DateTimeImmutable $startDate,
-        \DateTimeImmutable $endDate
+        \DateTimeImmutable $endDate,
+        ?ExchangeContext $context = null,
     ): array {
         return $this->createQueryBuilder('k')
-            ->where('k.symbol = :symbol')
+            ->where('k.exchange = :exchange')
+            ->andWhere('k.marketType = :marketType')
+            ->andWhere('k.symbol = :symbol')
             ->andWhere('k.timeframe = :timeframe')
             ->andWhere('k.openTime >= :startDate')
             ->andWhere('k.openTime <= :endDate')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', $symbol)
             ->setParameter('timeframe', $timeframe)
             ->setParameter('startDate', $startDate)
@@ -155,13 +260,17 @@ class KlineRepository extends ServiceEntityRepository
     /**
      * Vérifie s'il y a des gaps dans les données
      */
-    public function hasGaps(string $symbol, Timeframe $timeframe): bool
+    public function hasGaps(string $symbol, Timeframe $timeframe, ?ExchangeContext $context = null): bool
     {
         $qb = $this->createQueryBuilder('k');
 
         $result = $qb->select('COUNT(k.id) as count')
-            ->where('k.symbol = :symbol')
+            ->where('k.exchange = :exchange')
+            ->andWhere('k.marketType = :marketType')
+            ->andWhere('k.symbol = :symbol')
             ->andWhere('k.timeframe = :timeframe')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', $symbol)
             ->setParameter('timeframe', $timeframe)
             ->getQuery()
@@ -184,9 +293,16 @@ class KlineRepository extends ServiceEntityRepository
     /**
      * Sauvegarde ou met à jour une kline
      */
-    public function upsert(Kline $kline): void
+    public function upsert(Kline $kline, ?ExchangeContext $context = null): void
     {
+        if ($context !== null) {
+            $kline->setExchange($context->exchange);
+            $kline->setMarketType($context->marketType);
+        }
+
         $existing = $this->findOneBy([
+            'exchange' => $kline->getExchange(),
+            'marketType' => $kline->getMarketType(),
             'symbol' => $kline->getSymbol(),
             'timeframe' => $kline->getTimeframe(),
             'openTime' => $kline->getOpenTime()
@@ -217,7 +333,12 @@ class KlineRepository extends ServiceEntityRepository
      * Sauvegarde plusieurs klines (DTOs) en lot.
      * @param KlineDto[] $klineDtos
      */
-    public function saveKlines(ListKlinesDto $listKlinesDto, string $symbol, Timeframe $timeframe): void
+    public function saveKlines(
+        ListKlinesDto $listKlinesDto,
+        string $symbol,
+        Timeframe $timeframe,
+        ?ExchangeContext $context = null,
+    ): void
     {
         $em = $this->getEntityManager();
         $batchSize = 100;
@@ -225,6 +346,8 @@ class KlineRepository extends ServiceEntityRepository
 
         foreach ($listKlinesDto as $klineDto) {
             $kline = new \App\Provider\Entity\Kline();
+            $kline->setExchange(ExchangeContext::exchangeValue($context));
+            $kline->setMarketType(ExchangeContext::marketTypeValue($context));
             $kline->setSymbol($symbol);
             $kline->setTimeframe($timeframe);
             $kline->setOpenTime($klineDto->openTime);
@@ -253,11 +376,20 @@ class KlineRepository extends ServiceEntityRepository
     /**
      * Récupère les klines les plus récentes pour le calcul des indicateurs
      */
-    public function findRecentForIndicators(string $symbol, Timeframe $timeframe, int $requiredPeriods = 200): array
+    public function findRecentForIndicators(
+        string $symbol,
+        Timeframe $timeframe,
+        int $requiredPeriods = 200,
+        ?ExchangeContext $context = null,
+    ): array
     {
         return $this->createQueryBuilder('k')
-            ->where('k.symbol = :symbol')
+            ->where('k.exchange = :exchange')
+            ->andWhere('k.marketType = :marketType')
+            ->andWhere('k.symbol = :symbol')
             ->andWhere('k.timeframe = :timeframe')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', $symbol)
             ->setParameter('timeframe', $timeframe)
             ->orderBy('k.openTime', 'DESC')
@@ -266,9 +398,19 @@ class KlineRepository extends ServiceEntityRepository
             ->getResult();
     }
 
-    public function findWithFilters(?string $symbol = null, ?string $timeframe = null, ?string $dateFrom = null, ?string $dateTo = null): array
+    public function findWithFilters(
+        ?string $symbol = null,
+        ?string $timeframe = null,
+        ?string $dateFrom = null,
+        ?string $dateTo = null,
+        ?ExchangeContext $context = null,
+    ): array
     {
         $qb = $this->createQueryBuilder('k')
+            ->where('k.exchange = :exchange')
+            ->andWhere('k.marketType = :marketType')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->orderBy('k.openTime', 'DESC')
             ->setMaxResults(1000); // Limiter pour les performances
 
@@ -297,22 +439,30 @@ class KlineRepository extends ServiceEntityRepository
         return $qb->getQuery()->getResult();
     }
 
-    public function countKlines(string $symbol, Timeframe $timeframe)
+    public function countKlines(string $symbol, Timeframe $timeframe, ?ExchangeContext $context = null)
     {
         return $this->createQueryBuilder('k')
             ->select('COUNT(k.id)')
-            ->where('k.symbol = :symbol')
+            ->where('k.exchange = :exchange')
+            ->andWhere('k.marketType = :marketType')
+            ->andWhere('k.symbol = :symbol')
             ->andWhere('k.timeframe = :timeframe')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('symbol', $symbol)
             ->setParameter('timeframe', $timeframe)
             ->getQuery()
             ->getSingleScalarResult();
     }
 
-    public function getKlinesStats()
+    public function getKlinesStats(?ExchangeContext $context = null)
     {
         return $this->createQueryBuilder('k')
             ->select('k.symbol, k.timeframe, COUNT(k.id) as count, MAX(k.openTime) as earliest, MIN(k.openTime) as latest')
+            ->where('k.exchange = :exchange')
+            ->andWhere('k.marketType = :marketType')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->groupBy('k.symbol, k.timeframe')
             ->orderBy('k.symbol, k.timeframe')
             ->getQuery()
@@ -324,7 +474,7 @@ class KlineRepository extends ServiceEntityRepository
      *
      * @param \App\Contract\Provider\Dto\KlineDto[] $klines
      */
-    public function upsertKlines(array $klines): int
+    public function upsertKlines(array $klines, ?ExchangeContext $context = null): int
     {
         if (empty($klines)) {
             return 0;
@@ -332,6 +482,8 @@ class KlineRepository extends ServiceEntityRepository
 
         $this->logger->info('Starting klines upsert', [
             'count' => \count($klines),
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'market_type' => ExchangeContext::marketTypeValue($context),
             'symbol' => $klines[0]->symbol ?? 'unknown',
             'timeframe' => $klines[0]->timeframe->value ?? 'unknown',
         ]);
@@ -349,12 +501,14 @@ class KlineRepository extends ServiceEntityRepository
                     continue;
                 }
 
-                $placeholders[] = "(nextval('klines_id_seq'),?,?,?,?,?,?,?,?,?,?,?)";
+                $placeholders[] = "(nextval('klines_id_seq'),?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
                 $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
                 $openTime = $klineDto->openTime->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:sP');
                 $nowStr = $now->format('Y-m-d H:i:sP');
 
+                $params[] = ExchangeContext::exchangeValue($context);
+                $params[] = ExchangeContext::marketTypeValue($context);
                 $params[] = $klineDto->symbol;
                 $params[] = $klineDto->timeframe->value;
                 $params[] = $openTime;
@@ -375,6 +529,8 @@ class KlineRepository extends ServiceEntityRepository
             $sql = '
                 INSERT INTO klines (
                     id,
+                    exchange,
+                    market_type,
                     symbol,
                     timeframe,
                     open_time,
@@ -387,7 +543,7 @@ class KlineRepository extends ServiceEntityRepository
                     inserted_at,
                     updated_at
                 ) VALUES ' . \implode(',', $placeholders) . '
-                ON CONFLICT (symbol, timeframe, open_time) DO UPDATE SET
+                ON CONFLICT (exchange, market_type, symbol, timeframe, open_time) DO UPDATE SET
                     open_price = EXCLUDED.open_price,
                     high_price = EXCLUDED.high_price,
                     low_price  = EXCLUDED.low_price,
@@ -412,6 +568,8 @@ class KlineRepository extends ServiceEntityRepository
         $this->logger->info('Klines upsert completed', [
             'total_upserted' => $totalUpserted,
             'total_input' => \count($klines),
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'market_type' => ExchangeContext::marketTypeValue($context),
         ]);
 
         return $totalUpserted;
@@ -434,7 +592,12 @@ class KlineRepository extends ServiceEntityRepository
      *                 'dry_run' => true
      *               ]
      */
-    public function cleanupOldKlines(?string $symbol, int $keepLimit, bool $dryRun): array
+    public function cleanupOldKlines(
+        ?string $symbol,
+        int $keepLimit,
+        bool $dryRun,
+        ?ExchangeContext $context = null,
+    ): array
     {
         $conn = $this->getConnection();
         $stats = [
@@ -448,7 +611,7 @@ class KlineRepository extends ServiceEntityRepository
             $timeframes = array_map(fn($tf) => $tf->value, Timeframe::cases());
 
             foreach ($timeframes as $tf) {
-                $tfStats = $this->cleanupForTimeframe($symbol, $tf, $keepLimit, $dryRun, $conn);
+                $tfStats = $this->cleanupForTimeframe($symbol, $tf, $keepLimit, $dryRun, $conn, $context);
                 
                 if ($tfStats['total'] > 0) {
                     $stats['timeframes'][$tf] = $tfStats;
@@ -458,6 +621,8 @@ class KlineRepository extends ServiceEntityRepository
 
             $this->logger->info('[Cleanup] Klines cleanup completed', [
                 'dry_run' => $dryRun,
+                'exchange' => ExchangeContext::exchangeValue($context),
+                'market_type' => ExchangeContext::marketTypeValue($context),
                 'symbol' => $symbol ?? 'ALL',
                 'keep_limit' => $keepLimit,
                 'total_to_delete' => $stats['total_to_delete'],
@@ -477,11 +642,28 @@ class KlineRepository extends ServiceEntityRepository
     /**
      * Nettoie les klines pour un timeframe spécifique
      */
-    private function cleanupForTimeframe(?string $symbol, string $timeframe, int $keepLimit, bool $dryRun, Connection $conn): array
+    private function cleanupForTimeframe(
+        ?string $symbol,
+        string $timeframe,
+        int $keepLimit,
+        bool $dryRun,
+        Connection $conn,
+        ?ExchangeContext $context = null,
+    ): array
     {
         $symbolFilter = $symbol ? 'AND symbol = :symbol' : '';
-        $params = ['timeframe' => $timeframe, 'keep_limit' => $keepLimit];
-        $types = ['timeframe' => \Doctrine\DBAL\ParameterType::STRING, 'keep_limit' => \Doctrine\DBAL\ParameterType::INTEGER];
+        $params = [
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'market_type' => ExchangeContext::marketTypeValue($context),
+            'timeframe' => $timeframe,
+            'keep_limit' => $keepLimit,
+        ];
+        $types = [
+            'exchange' => \Doctrine\DBAL\ParameterType::STRING,
+            'market_type' => \Doctrine\DBAL\ParameterType::STRING,
+            'timeframe' => \Doctrine\DBAL\ParameterType::STRING,
+            'keep_limit' => \Doctrine\DBAL\ParameterType::INTEGER,
+        ];
 
         if ($symbol) {
             $params['symbol'] = $symbol;
@@ -498,7 +680,9 @@ WITH ranked AS (
     open_time,
     ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY open_time DESC) AS rn
   FROM klines
-  WHERE timeframe = :timeframe
+  WHERE exchange = :exchange
+    AND market_type = :market_type
+    AND timeframe = :timeframe
     {$symbolFilter}
 )
 SELECT 
@@ -547,7 +731,9 @@ WHERE id IN (
       id,
       ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY open_time DESC) AS rn
     FROM klines
-    WHERE timeframe = :timeframe
+    WHERE exchange = :exchange
+      AND market_type = :market_type
+      AND timeframe = :timeframe
       {$symbolFilter}
   ) ranked
   WHERE rn > :keep_limit

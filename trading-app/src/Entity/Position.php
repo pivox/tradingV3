@@ -4,20 +4,28 @@ declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Repository\PositionRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: PositionRepository::class)]
 #[ORM\Table(name: 'positions')]
-#[ORM\UniqueConstraint(name: 'ux_positions_symbol_side', columns: ['symbol', 'side'])]
-#[ORM\Index(name: 'idx_positions_symbol', columns: ['symbol'])]
+#[ORM\UniqueConstraint(name: 'ux_positions_exchange_market_symbol_side', columns: ['exchange', 'market_type', 'symbol', 'side'])]
+#[ORM\Index(name: 'idx_positions_symbol', columns: ['exchange', 'market_type', 'symbol'])]
 class Position
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
     private ?int $id = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
+    private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
+    private string $marketType = 'perpetual';
 
     #[ORM\Column(type: Types::STRING, length: 50)]
     private string $symbol;
@@ -49,8 +57,15 @@ class Position
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, options: ['default' => 'CURRENT_TIMESTAMP'])]
     private \DateTimeImmutable $updatedAt;
 
-    public function __construct(string $symbol, string $side)
+    public function __construct(
+        string $symbol,
+        string $side,
+        Exchange|string $exchange = Exchange::BITMART,
+        MarketType|string $marketType = MarketType::PERPETUAL,
+    )
     {
+        $this->setExchange($exchange);
+        $this->setMarketType($marketType);
         $this->symbol = strtoupper($symbol);
         $this->side = strtoupper($side);
         $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
@@ -61,6 +76,28 @@ class Position
     public function getId(): ?int
     {
         return $this->id;
+    }
+
+    public function getExchange(): string
+    {
+        return $this->exchange;
+    }
+
+    public function setExchange(Exchange|string $exchange): self
+    {
+        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange);
+        return $this;
+    }
+
+    public function getMarketType(): string
+    {
+        return $this->marketType;
+    }
+
+    public function setMarketType(MarketType|string $marketType): self
+    {
+        $this->marketType = $marketType instanceof MarketType ? $marketType->value : strtolower($marketType);
+        return $this;
     }
 
     public function getSymbol(): string
@@ -155,5 +192,4 @@ class Position
         return $this;
     }
 }
-
 

@@ -6,6 +6,7 @@ namespace App\Service;
 
 use App\Entity\OrderIntent;
 use App\Entity\OrderProtection;
+use App\Provider\Context\ExchangeContext;
 use App\Repository\OrderIntentRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
@@ -32,6 +33,8 @@ final class OrderIntentManager
     ): OrderIntent {
         $intent = new OrderIntent();
 
+        $intent->setExchange((string)($orderParams['exchange'] ?? ExchangeContext::exchangeValue(null)));
+        $intent->setMarketType((string)($orderParams['market_type'] ?? $orderParams['marketType'] ?? ExchangeContext::marketTypeValue(null)));
         $intent->setSymbol($orderParams['symbol'] ?? '');
         $intent->setSide((int)($orderParams['side'] ?? 1));
         $intent->setType($orderParams['type'] ?? OrderIntent::TYPE_LIMIT);
@@ -67,6 +70,8 @@ final class OrderIntentManager
         // Ajouter les protections TP/SL si présentes
         if (isset($orderParams['preset_take_profit_price'])) {
             $tp = new OrderProtection();
+            $tp->setExchange($intent->getExchange());
+            $tp->setMarketType($intent->getMarketType());
             $tp->setType(OrderProtection::TYPE_TAKE_PROFIT);
             $tp->setPrice((string)$orderParams['preset_take_profit_price']);
             $tp->setPriceType($orderParams['preset_take_profit_price_type'] ?? 1);
@@ -75,6 +80,8 @@ final class OrderIntentManager
 
         if (isset($orderParams['preset_stop_loss_price'])) {
             $sl = new OrderProtection();
+            $sl->setExchange($intent->getExchange());
+            $sl->setMarketType($intent->getMarketType());
             $sl->setType(OrderProtection::TYPE_STOP_LOSS);
             $sl->setPrice((string)$orderParams['preset_stop_loss_price']);
             $sl->setPriceType($orderParams['preset_stop_loss_price_type'] ?? 1);
@@ -86,6 +93,8 @@ final class OrderIntentManager
 
         $this->logger->debug('[OrderIntentManager] Created intent', [
             'client_order_id' => $clientOrderId,
+            'exchange' => $intent->getExchange(),
+            'market_type' => $intent->getMarketType(),
             'symbol' => $intent->getSymbol(),
             'status' => $intent->getStatus(),
         ]);
@@ -178,14 +187,18 @@ final class OrderIntentManager
     /**
      * Trouve un OrderIntent par client_order_id ou order_id
      */
-    public function findIntent(?string $clientOrderId = null, ?string $orderId = null): ?OrderIntent
+    public function findIntent(
+        ?string $clientOrderId = null,
+        ?string $orderId = null,
+        ?ExchangeContext $context = null,
+    ): ?OrderIntent
     {
         if ($clientOrderId !== null) {
-            return $this->orderIntentRepository->findOneByClientOrderId($clientOrderId);
+            return $this->orderIntentRepository->findOneByClientOrderId($clientOrderId, $context);
         }
 
         if ($orderId !== null) {
-            return $this->orderIntentRepository->findOneByOrderId($orderId);
+            return $this->orderIntentRepository->findOneByOrderId($orderId, $context);
         }
 
         return null;
@@ -201,4 +214,3 @@ final class OrderIntentManager
         return sprintf('INTENT_%s_%d_%s', $symbol, $timestamp, $random);
     }
 }
-

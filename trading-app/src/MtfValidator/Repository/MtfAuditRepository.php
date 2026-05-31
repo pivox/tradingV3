@@ -6,6 +6,7 @@ namespace App\MtfValidator\Repository;
 
 use App\Entity\MtfState;
 use App\MtfValidator\Entity\MtfAudit;
+use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\ParameterType;
@@ -659,7 +660,7 @@ SQL;
             $symbolClause = ' AND UPPER(symbol) LIKE :search';
         }
 
-        $caseExpression = <<<SQL
+        $successCaseExpression = <<<SQL
 CASE
   WHEN UPPER(step) = '4H_VALIDATION_SUCCESS' THEN '4h'
   WHEN UPPER(step) = '1H_VALIDATION_SUCCESS' THEN '1h'
@@ -670,27 +671,55 @@ CASE
 END
 SQL;
 
+        $failureCaseExpression = <<<SQL
+CASE
+  WHEN UPPER(step) = '4H_VALIDATION_FAILED' THEN '4h'
+  WHEN UPPER(step) = '1H_VALIDATION_FAILED' THEN '1h'
+  WHEN UPPER(step) = '15M_VALIDATION_FAILED' THEN '15m'
+  WHEN UPPER(step) = '5M_VALIDATION_FAILED' THEN '5m'
+  WHEN UPPER(step) = '1M_VALIDATION_FAILED' THEN '1m'
+  ELSE NULL
+END
+SQL;
+
+        $scopeExpression = <<<SQL
+COALESCE(
+  NULLIF(details->>'exchange', ''),
+  NULLIF(details->'extra'->'options'->>'exchange', ''),
+  'bitmart'
+) AS exchange,
+COALESCE(
+  NULLIF(details->>'market_type', ''),
+  NULLIF(details->>'marketType', ''),
+  NULLIF(details->'extra'->'options'->>'market_type', ''),
+  NULLIF(details->'extra'->'options'->>'marketType', ''),
+  'perpetual'
+) AS market_type
+SQL;
+
         $successSql = <<<SQL
 WITH success_events AS (
   SELECT
     id,
     symbol,
-    {$caseExpression} AS timeframe,
+    {$scopeExpression},
+    {$successCaseExpression} AS timeframe,
     -- event_ts = candle_open_ts + durée du timeframe (pour obtenir le closeTime)
     COALESCE(
       CASE
-        WHEN {$caseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
-        WHEN {$caseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
-        WHEN {$caseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
-        WHEN {$caseExpression} = '5m' THEN candle_open_ts + INTERVAL '5 minutes'
-        WHEN {$caseExpression} = '1m' THEN candle_open_ts + INTERVAL '1 minute'
+        WHEN {$successCaseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
+        WHEN {$successCaseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
+        WHEN {$successCaseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
+        WHEN {$successCaseExpression} = '5m' THEN candle_open_ts + INTERVAL '5 minutes'
+        WHEN {$successCaseExpression} = '1m' THEN candle_open_ts + INTERVAL '1 minute'
         ELSE NULL
       END,
       NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC'
     ) AS event_ts,
     candle_open_ts,
     created_at,
-    cause
+    cause,
+    details
   FROM mtf_audit
   WHERE UPPER(step) IN (:step_values)
   {$symbolClause}
@@ -699,16 +728,19 @@ ranked_success AS (
   SELECT
     id,
     symbol,
+    exchange,
+    market_type,
     timeframe,
     event_ts,
     candle_open_ts,
     created_at,
     cause,
-    ROW_NUMBER() OVER (PARTITION BY symbol, timeframe ORDER BY event_ts DESC, created_at DESC) AS rn
+    details,
+    ROW_NUMBER() OVER (PARTITION BY exchange, market_type, symbol, timeframe ORDER BY event_ts DESC, created_at DESC) AS rn
   FROM success_events
   WHERE timeframe IS NOT NULL
 )
-SELECT id, symbol, timeframe, event_ts, candle_open_ts, created_at, cause
+SELECT id, symbol, exchange, market_type, timeframe, event_ts, candle_open_ts, created_at, cause, details
 FROM ranked_success
 WHERE rn = 1
 SQL;
@@ -727,15 +759,16 @@ WITH failure_events AS (
   SELECT
     id,
     symbol,
-    {$caseExpression} AS timeframe,
+    {$scopeExpression},
+    {$failureCaseExpression} AS timeframe,
     -- event_ts = candle_open_ts + durée du timeframe (pour obtenir le closeTime)
     COALESCE(
       CASE
-        WHEN {$caseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
-        WHEN {$caseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
-        WHEN {$caseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
-        WHEN {$caseExpression} = '5m' THEN candle_open_ts + INTERVAL '5 minutes'
-        WHEN {$caseExpression} = '1m' THEN candle_open_ts + INTERVAL '1 minute'
+        WHEN {$failureCaseExpression} = '4h' THEN candle_open_ts + INTERVAL '4 hours'
+        WHEN {$failureCaseExpression} = '1h' THEN candle_open_ts + INTERVAL '1 hour'
+        WHEN {$failureCaseExpression} = '15m' THEN candle_open_ts + INTERVAL '15 minutes'
+        WHEN {$failureCaseExpression} = '5m' THEN candle_open_ts + INTERVAL '5 minutes'
+        WHEN {$failureCaseExpression} = '1m' THEN candle_open_ts + INTERVAL '1 minute'
         ELSE NULL
       END,
       NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC'
@@ -751,16 +784,18 @@ ranked_failure AS (
   SELECT
     id,
     symbol,
+    exchange,
+    market_type,
     timeframe,
     event_ts,
     candle_open_ts,
     created_at,
     cause,
-    ROW_NUMBER() OVER (PARTITION BY symbol, timeframe ORDER BY event_ts DESC, created_at DESC) AS rn
+    ROW_NUMBER() OVER (PARTITION BY exchange, market_type, symbol, timeframe ORDER BY event_ts DESC, created_at DESC) AS rn
   FROM failure_events
   WHERE timeframe IS NOT NULL
 )
-SELECT id, symbol, timeframe, event_ts, candle_open_ts, created_at, cause
+SELECT id, symbol, exchange, market_type, timeframe, event_ts, candle_open_ts, created_at, cause
 FROM ranked_failure
 WHERE rn = 1
 SQL;
@@ -772,6 +807,7 @@ WITH ready_events AS (
   SELECT
     id,
     symbol,
+    {$scopeExpression},
     -- Pour READY, on utilise directement candle_open_ts (pas de timeframe spécifique)
     COALESCE(candle_open_ts, NULLIF(details->>'kline_time', '')::timestamp AT TIME ZONE 'UTC') AS event_ts,
     created_at
@@ -786,12 +822,14 @@ ranked_ready AS (
   SELECT
     id,
     symbol,
+    exchange,
+    market_type,
     event_ts,
     created_at,
-    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY event_ts DESC, created_at DESC) AS rn
+    ROW_NUMBER() OVER (PARTITION BY exchange, market_type, symbol ORDER BY event_ts DESC, created_at DESC) AS rn
   FROM ready_events
 )
-SELECT id, symbol, event_ts, created_at
+SELECT id, symbol, exchange, market_type, event_ts, created_at
 FROM ranked_ready
 WHERE rn = 1
 SQL;
@@ -802,14 +840,19 @@ SQL;
 
         foreach ($successRows as $row) {
             $symbol = (string)($row['symbol'] ?? '');
+            $exchange = $this->normalizeScopeValue($row['exchange'] ?? null, 'bitmart');
+            $marketType = $this->normalizeScopeValue($row['market_type'] ?? null, 'perpetual');
+            $resultKey = $this->auditScopeKey($symbol, $exchange, $marketType);
             $timeframe = (string)($row['timeframe'] ?? '');
             if ($symbol === '' || !in_array($timeframe, $normalizedTfs, true)) {
                 continue;
             }
 
-            if (!isset($results[$symbol])) {
-                $results[$symbol] = [
+            if (!isset($results[$resultKey])) {
+                $results[$resultKey] = [
                     'symbol' => $symbol,
+                    'exchange' => $exchange,
+                    'market_type' => $marketType,
                     'timeframes' => [],
                     'ready' => null,
                 ];
@@ -822,26 +865,32 @@ SQL;
                 $latestDt = $createdDt;
             }
 
-            $results[$symbol]['timeframes'][$timeframe] = [
+            $results[$resultKey]['timeframes'][$timeframe] = [
                 'status' => 'success',
                 'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
                 'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
                 'cause' => $row['cause'] ?? null,
                 'audit_id' => isset($row['id']) ? (int)$row['id'] : null,
+                'details' => $row['details'] ?? null,
                 '_latest_ts' => $latestDt?->getTimestamp(),
             ];
         }
 
         foreach ($failureRows as $row) {
             $symbol = (string)($row['symbol'] ?? '');
+            $exchange = $this->normalizeScopeValue($row['exchange'] ?? null, 'bitmart');
+            $marketType = $this->normalizeScopeValue($row['market_type'] ?? null, 'perpetual');
+            $resultKey = $this->auditScopeKey($symbol, $exchange, $marketType);
             $timeframe = (string)($row['timeframe'] ?? '');
             if ($symbol === '' || !in_array($timeframe, $normalizedTfs, true)) {
                 continue;
             }
 
-            if (!isset($results[$symbol])) {
-                $results[$symbol] = [
+            if (!isset($results[$resultKey])) {
+                $results[$resultKey] = [
                     'symbol' => $symbol,
+                    'exchange' => $exchange,
+                    'market_type' => $marketType,
                     'timeframes' => [],
                     'ready' => null,
                 ];
@@ -855,12 +904,12 @@ SQL;
             }
             $latestTimestamp = $latestDt?->getTimestamp();
 
-            $existing = $results[$symbol]['timeframes'][$timeframe] ?? null;
+            $existing = $results[$resultKey]['timeframes'][$timeframe] ?? null;
             $existingTimestamp = is_array($existing) ? ($existing['_latest_ts'] ?? null) : null;
 
             if ($latestTimestamp === null) {
                 if ($existing === null) {
-                    $results[$symbol]['timeframes'][$timeframe] = [
+                    $results[$resultKey]['timeframes'][$timeframe] = [
                         'status' => 'failed',
                         'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
                         'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
@@ -874,7 +923,7 @@ SQL;
                 || $existingTimestamp === null
                 || $latestTimestamp >= $existingTimestamp
             ) {
-                $results[$symbol]['timeframes'][$timeframe] = [
+                $results[$resultKey]['timeframes'][$timeframe] = [
                     'status' => 'failed',
                     'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
                     'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
@@ -887,19 +936,24 @@ SQL;
 
         foreach ($readyRows as $row) {
             $symbol = (string)($row['symbol'] ?? '');
+            $exchange = $this->normalizeScopeValue($row['exchange'] ?? null, 'bitmart');
+            $marketType = $this->normalizeScopeValue($row['market_type'] ?? null, 'perpetual');
+            $resultKey = $this->auditScopeKey($symbol, $exchange, $marketType);
             if ($symbol === '') {
                 continue;
             }
 
-            if (!isset($results[$symbol])) {
-                $results[$symbol] = [
+            if (!isset($results[$resultKey])) {
+                $results[$resultKey] = [
                     'symbol' => $symbol,
+                    'exchange' => $exchange,
+                    'market_type' => $marketType,
                     'timeframes' => [],
                     'ready' => null,
                 ];
             }
 
-            $results[$symbol]['ready'] = [
+            $results[$resultKey]['ready'] = [
                 'event_ts' => $this->normalizeTimestamp($row['event_ts'] ?? null),
                 'created_at' => $this->normalizeTimestamp($row['created_at'] ?? null),
                 'audit_id' => isset($row['id']) ? (int)$row['id'] : null,
@@ -933,7 +987,12 @@ SQL;
                         $tfSeconds = $tfSecondsMap[$tf] ?? 0;
                         if ($tfSeconds > 0) {
                             $expectedOpenTime = $eventTs->modify("-{$tfSeconds} seconds");
-                            $klineId = $this->findKlineId($entry['symbol'], $tf, $expectedOpenTime);
+                            $klineId = $this->findKlineId(
+                                $entry['symbol'],
+                                $tf,
+                                $expectedOpenTime,
+                                ExchangeContext::fromValues($entry['exchange'] ?? null, $entry['market_type'] ?? null),
+                            );
                             $tfData['kline_id'] = $klineId;
                             // Conserver l'indicateur d'existence si possible via klines (id non null)
                             $tfData['kline_exists'] = $klineId !== null ? true : ($tfData['kline_exists'] ?? null);
@@ -943,6 +1002,9 @@ SQL;
                 $ordered[$tf] = $tfData;
                 if (is_array($ordered[$tf]) && array_key_exists('_latest_ts', $ordered[$tf])) {
                     unset($ordered[$tf]['_latest_ts']);
+                }
+                if (is_array($ordered[$tf]) && array_key_exists('details', $ordered[$tf])) {
+                    unset($ordered[$tf]['details']);
                 }
             }
             $entry['timeframes'] = $ordered;
@@ -1322,21 +1384,41 @@ SQL;
         return null;
     }
 
+    private function auditScopeKey(string $symbol, string $exchange, string $marketType): string
+    {
+        return sprintf('%s|%s|%s', strtoupper($symbol), strtolower($exchange), strtolower($marketType));
+    }
+
+    private function normalizeScopeValue(mixed $value, string $fallback): string
+    {
+        return \is_string($value) && $value !== '' ? strtolower($value) : $fallback;
+    }
+
     /**
      * Retourne l'ID de la bougie (table klines) si elle existe pour (symbol, timeframe, open_time).
      */
-    private function findKlineId(string $symbol, string $timeframe, \DateTimeImmutable $openTime): ?int
+    private function findKlineId(
+        string $symbol,
+        string $timeframe,
+        \DateTimeImmutable $openTime,
+        ?ExchangeContext $context = null,
+    ): ?int
     {
+        $context = ExchangeContext::resolve($context);
         try {
             $sql = <<<SQL
 SELECT id
 FROM klines
-WHERE symbol = :symbol
+WHERE exchange = :exchange
+  AND market_type = :market_type
+  AND symbol = :symbol
   AND timeframe = :timeframe
   AND open_time = :open_time
 LIMIT 1
 SQL;
             $id = $this->conn->fetchOne($sql, [
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
                 'symbol' => $symbol,
                 'timeframe' => $timeframe,
                 'open_time' => $openTime->format('Y-m-d H:i:sP'),

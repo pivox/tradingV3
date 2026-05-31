@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Entity\OrderIntent;
+use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -18,23 +19,40 @@ final class OrderIntentRepository extends ServiceEntityRepository
         parent::__construct($registry, OrderIntent::class);
     }
 
-    public function findOneByClientOrderId(string $clientOrderId): ?OrderIntent
+    public function findOneByClientOrderId(string $clientOrderId, ?ExchangeContext $context = null): ?OrderIntent
     {
-        return $this->findOneBy(['clientOrderId' => $clientOrderId]);
+        return $this->findOneBy([
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'marketType' => ExchangeContext::marketTypeValue($context),
+            'clientOrderId' => $clientOrderId,
+        ]);
     }
 
-    public function findOneByOrderId(string $orderId): ?OrderIntent
+    public function findOneByOrderId(string $orderId, ?ExchangeContext $context = null): ?OrderIntent
     {
-        return $this->findOneBy(['orderId' => $orderId]);
+        return $this->findOneBy([
+            'exchange' => ExchangeContext::exchangeValue($context),
+            'marketType' => ExchangeContext::marketTypeValue($context),
+            'orderId' => $orderId,
+        ]);
     }
 
     /**
      * @return OrderIntent[]
      */
-    public function findByStatus(string $status, ?string $symbol = null, int $limit = 100): array
+    public function findByStatus(
+        string $status,
+        ?string $symbol = null,
+        int $limit = 100,
+        ?ExchangeContext $context = null,
+    ): array
     {
         $qb = $this->createQueryBuilder('oi')
-            ->where('oi.status = :status')
+            ->where('oi.exchange = :exchange')
+            ->andWhere('oi.marketType = :marketType')
+            ->andWhere('oi.status = :status')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('status', $status)
             ->orderBy('oi.createdAt', 'DESC')
             ->setMaxResults($limit);
@@ -50,9 +68,9 @@ final class OrderIntentRepository extends ServiceEntityRepository
     /**
      * @return OrderIntent[]
      */
-    public function findReadyToSend(?string $symbol = null, int $limit = 50): array
+    public function findReadyToSend(?string $symbol = null, int $limit = 50, ?ExchangeContext $context = null): array
     {
-        return $this->findByStatus(OrderIntent::STATUS_READY_TO_SEND, $symbol, $limit);
+        return $this->findByStatus(OrderIntent::STATUS_READY_TO_SEND, $symbol, $limit, $context);
     }
 
     public function save(OrderIntent $intent): void
@@ -68,14 +86,22 @@ final class OrderIntentRepository extends ServiceEntityRepository
      *
      * @return string[]
      */
-    public function findDistinctSymbolsSince(\DateTimeImmutable $since, int $max = 50): array
+    public function findDistinctSymbolsSince(
+        \DateTimeImmutable $since,
+        int $max = 50,
+        ?ExchangeContext $context = null,
+    ): array
     {
         // Utilise un GROUP BY pour satisfaire PostgreSQL (ORDER BY sur une colonne agrégée)
         $qb = $this->createQueryBuilder('oi')
             ->select('oi.symbol AS symbol, MAX(oi.createdAt) AS lastCreatedAt')
-            ->where('oi.createdAt >= :since')
+            ->where('oi.exchange = :exchange')
+            ->andWhere('oi.marketType = :marketType')
+            ->andWhere('oi.createdAt >= :since')
             // On ne retient que les intents réellement envoyés ou finalisés côté exchange
             ->andWhere('oi.status IN (:statuses)')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('since', $since)
             ->setParameter('statuses', [
                 OrderIntent::STATUS_SENT,

@@ -36,7 +36,9 @@ final readonly class MainProvider implements MainProviderInterface
     }
     public function getKlineProvider(): KlineProviderInterface
     {
-        return $this->bundle()->kline();
+        $bundle = $this->bundle();
+
+        return new ContextualKlineProvider($bundle->kline(), $bundle->context());
     }
 
     public function getContractProvider(): ContractProviderInterface
@@ -46,7 +48,9 @@ final readonly class MainProvider implements MainProviderInterface
 
     public function getOrderProvider(): OrderProviderInterface
     {
-        return $this->bundle()->order();
+        $bundle = $this->bundle();
+
+        return new ContextualOrderProvider($bundle->order(), $bundle->context());
     }
 
     public function getAccountProvider(): AccountProviderInterface

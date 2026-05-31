@@ -182,7 +182,7 @@ class MtfRunCommand extends Command
 
             if (empty($symbols)) {
                 // Utiliser ignoreLimits=true pour récupérer TOUS les symboles actifs sans limite top_n/mid_n
-                $symbols = $this->contractRepository->allActiveSymbolNames([], false, $profile);
+                $symbols = $this->contractRepository->allActiveSymbolNames([], false, $profile, $context);
                 if ($limit > 0) {
                     $symbols = array_slice($symbols, 0, $limit);
                 }
