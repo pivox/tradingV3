@@ -147,6 +147,11 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
         );
 
         if (!$order instanceof OrderDto) {
+            $existing = $this->findOrderByClientOrderId($request->symbol, $request->clientOrderId);
+            if ($existing instanceof ExchangeOrderDto) {
+                return $this->idempotentReplayResult($request, $existing, ['reason' => 'provider_returned_null']);
+            }
+
             return new PlaceOrderResult(
                 accepted: false,
                 symbol: $request->symbol,
@@ -159,6 +164,15 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
         }
 
         $mapped = $this->mapOrder($order, $this->buildSubmittedOrderMetadata($request, $legacyOptions));
+        if ($mapped->clientOrderId === $request->clientOrderId && !$this->orderMatchesRequest($mapped, $request)) {
+            return $this->intentMismatchResult($request, $mapped, ['source_order' => $order->metadata]);
+        }
+        if ($mapped->status === ExchangeOrderStatus::REJECTED) {
+            $existing = $this->findOrderByClientOrderId($request->symbol, $request->clientOrderId);
+            if ($existing instanceof ExchangeOrderDto) {
+                return $this->idempotentReplayResult($request, $existing, ['source_order' => $order->metadata]);
+            }
+        }
 
         return new PlaceOrderResult(
             accepted: true,
@@ -355,6 +369,189 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
         }
 
         return [];
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function idempotentReplayResult(PlaceOrderRequest $request, ExchangeOrderDto $existing, array $metadata): PlaceOrderResult
+    {
+        if ($existing->status === ExchangeOrderStatus::REJECTED) {
+            return new PlaceOrderResult(
+                accepted: false,
+                symbol: $request->symbol,
+                clientOrderId: $request->clientOrderId,
+                exchangeOrderId: $existing->exchangeOrderId,
+                status: ExchangeOrderStatus::REJECTED,
+                submittedAt: $this->clock->now(),
+                order: $existing,
+                metadata: ['reason' => 'duplicate_client_order_id_original_rejected'] + $metadata,
+            );
+        }
+
+        if (!$this->orderMatchesRequest($existing, $request)) {
+            return $this->intentMismatchResult($request, $existing, $metadata);
+        }
+
+        return new PlaceOrderResult(
+            accepted: true,
+            symbol: $request->symbol,
+            clientOrderId: $request->clientOrderId,
+            exchangeOrderId: $existing->exchangeOrderId,
+            status: $existing->status,
+            submittedAt: $this->clock->now(),
+            order: $existing,
+            metadata: ['idempotent_replay_after_reject' => true] + $metadata,
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function intentMismatchResult(PlaceOrderRequest $request, ExchangeOrderDto $existing, array $metadata): PlaceOrderResult
+    {
+        return new PlaceOrderResult(
+            accepted: false,
+            symbol: $request->symbol,
+            clientOrderId: $request->clientOrderId,
+            exchangeOrderId: $existing->exchangeOrderId,
+            status: ExchangeOrderStatus::REJECTED,
+            submittedAt: $this->clock->now(),
+            order: $existing,
+            metadata: ['reason' => 'duplicate_client_order_id_intent_mismatch'] + $metadata,
+        );
+    }
+
+    private function findOrderByClientOrderId(string $symbol, string $clientOrderId): ?ExchangeOrderDto
+    {
+        foreach ($this->bundle()->order()->getOpenOrders($symbol) as $order) {
+            if (!$order instanceof OrderDto) {
+                continue;
+            }
+            $mapped = $this->mapOrder($order);
+            if ($mapped->clientOrderId === $clientOrderId) {
+                return $mapped;
+            }
+        }
+
+        foreach ($this->bundle()->order()->getOrderHistory($symbol, 100) as $order) {
+            if (!$order instanceof OrderDto) {
+                continue;
+            }
+            $mapped = $this->mapOrder($order);
+            if ($mapped->clientOrderId === $clientOrderId) {
+                return $mapped;
+            }
+        }
+
+        return null;
+    }
+
+    private function orderMatchesRequest(ExchangeOrderDto $order, PlaceOrderRequest $request): bool
+    {
+        if ($order->side !== $request->side || $order->positionSide !== $request->positionSide) {
+            return false;
+        }
+        if ($order->orderType !== $request->orderType) {
+            return false;
+        }
+        if (abs($order->quantity - $request->quantity) > 0.00000001) {
+            return false;
+        }
+        if ($request->orderType !== ExchangeOrderType::MARKET && !$this->nullableFloatMatches($order->price, $request->price)) {
+            return false;
+        }
+        if (!$this->nullableFloatMatches($this->zeroAsNull($order->stopPrice), $request->stopPrice)) {
+            return false;
+        }
+        if ($order->reduceOnly !== $request->reduceOnly || !$this->postOnlyMatches($order, $request)) {
+            return false;
+        }
+        $storedTimeInForce = $this->storedTimeInForce($order, $request);
+        if (!$storedTimeInForce instanceof ExchangeTimeInForce) {
+            return false;
+        }
+        if ($storedTimeInForce !== $request->timeInForce) {
+            return false;
+        }
+        if (!$this->metadataPriceMatches($order->metadata, 'preset_stop_loss_price', $request->attachedStopLossPrice)) {
+            return false;
+        }
+        if (!$this->metadataPriceMatches($order->metadata, 'preset_take_profit_price', $request->attachedTakeProfitPrice)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function storedTimeInForce(ExchangeOrderDto $order, PlaceOrderRequest $request): ?ExchangeTimeInForce
+    {
+        if ($order->timeInForce instanceof ExchangeTimeInForce) {
+            return $order->timeInForce;
+        }
+        if ($request->orderType === ExchangeOrderType::MARKET) {
+            return ExchangeTimeInForce::IOC;
+        }
+        if ($request->postOnly) {
+            return ExchangeTimeInForce::GTC;
+        }
+
+        return null;
+    }
+
+    private function postOnlyMatches(ExchangeOrderDto $order, PlaceOrderRequest $request): bool
+    {
+        if ($order->postOnly === $request->postOnly) {
+            return true;
+        }
+
+        if ($request->postOnly && !$order->postOnly && !$this->metadataHasPostOnlyIntent($order->metadata)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function metadataHasPostOnlyIntent(array $metadata): bool
+    {
+        return \array_key_exists('post_only', $metadata) || \array_key_exists('mode', $metadata);
+    }
+
+    private function zeroAsNull(?float $value): ?float
+    {
+        if ($value !== null && abs($value) <= 0.00000001) {
+            return null;
+        }
+
+        return $value;
+    }
+
+    private function nullableFloatMatches(?float $left, ?float $right): bool
+    {
+        if ($left === null || $right === null) {
+            return $left === null && $right === null;
+        }
+
+        return abs($left - $right) <= 0.00000001;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function metadataPriceMatches(array $metadata, string $key, ?float $expected): bool
+    {
+        $actual = $metadata[$key] ?? null;
+        if ($expected === null) {
+            return $actual === null || $actual === '' || (is_numeric($actual) && abs((float)$actual) <= 0.00000001);
+        }
+        if (!is_numeric($actual)) {
+            return false;
+        }
+
+        return abs((float)$actual - $expected) <= 0.00000001;
     }
 
     /**

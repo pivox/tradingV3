@@ -140,11 +140,40 @@ abstract class ExchangeAdapterContractTestCase extends TestCase
         $second = $adapter->placeOrder($this->placeRequest(
             clientOrderId: $clientOrderId,
             orderType: ExchangeOrderType::LIMIT,
-            price: $this->restingLimitPrice() - 10.0,
+            price: $this->restingLimitPrice(),
             postOnly: true,
         ));
 
         self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        $snapshotClientOrderId = $this->snapshotClientOrderId($clientOrderId);
+        self::assertCount(1, array_filter(
+            $adapter->getOpenOrders($this->symbol()),
+            static fn (ExchangeOrderDto $order): bool => $order->clientOrderId === $snapshotClientOrderId,
+        ));
+    }
+
+    public function testDuplicateClientOrderIdWithChangedIntentDoesNotCreateSecondActiveOrder(): void
+    {
+        $adapter = $this->adapter();
+        $clientOrderId = $this->clientOrderId('duplicate-changed');
+
+        $first = $adapter->placeOrder($this->placeRequest(
+            clientOrderId: $clientOrderId,
+            orderType: ExchangeOrderType::LIMIT,
+            price: $this->restingLimitPrice(),
+            postOnly: true,
+        ));
+        $second = $adapter->placeOrder($this->placeRequest(
+            clientOrderId: $clientOrderId,
+            orderType: ExchangeOrderType::LIMIT,
+            price: $this->restingLimitPrice() - 10.0,
+            postOnly: true,
+        ));
+
+        if ($second->accepted) {
+            self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        }
+
         $snapshotClientOrderId = $this->snapshotClientOrderId($clientOrderId);
         self::assertCount(1, array_filter(
             $adapter->getOpenOrders($this->symbol()),
@@ -281,6 +310,7 @@ abstract class ExchangeAdapterContractTestCase extends TestCase
         ?float $stopPrice = null,
         ExchangeOrderSide $side = ExchangeOrderSide::BUY,
         bool $reduceOnly = false,
+        ?ExchangeTimeInForce $timeInForce = null,
     ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: $this->exchange(),
@@ -289,7 +319,7 @@ abstract class ExchangeAdapterContractTestCase extends TestCase
             side: $side,
             positionSide: ExchangePositionSide::LONG,
             orderType: $orderType,
-            timeInForce: $orderType === ExchangeOrderType::MARKET ? ExchangeTimeInForce::IOC : ExchangeTimeInForce::GTC,
+            timeInForce: $timeInForce ?? ($orderType === ExchangeOrderType::MARKET ? ExchangeTimeInForce::IOC : ExchangeTimeInForce::GTC),
             quantity: 1.0,
             price: $price,
             stopPrice: $stopPrice,
