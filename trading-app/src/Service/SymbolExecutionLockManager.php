@@ -58,9 +58,12 @@ final class SymbolExecutionLockManager
             );
             $lock->setPayload(array_replace($payload, ['source' => 'existing_open_exposure']));
             $this->entityManager->persist($lock);
-            $this->entityManager->flush();
 
-            return SymbolExecutionLockReservation::blocked($lock, $this->lockMetadata($lock, $intent, 'existing_open_exposure'));
+            return SymbolExecutionLockReservation::blocked(
+                $lock,
+                $this->lockMetadata($lock, $intent, 'existing_open_exposure'),
+                true,
+            );
         }
 
         $lock = new SymbolExecutionLock(

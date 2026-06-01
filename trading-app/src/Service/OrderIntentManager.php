@@ -106,7 +106,7 @@ final class OrderIntentManager
                     );
 
                     if ($lockReservation->blocked) {
-                        $this->detachIntentGraph($intent);
+                        $this->detachBlockedIntent($intent, $lockReservation);
                         $connection->commit();
 
                         $blockingIntent = $lockReservation->lock->getOwnerOrderIntent() ?? $intent;
@@ -179,7 +179,7 @@ final class OrderIntentManager
                     );
 
                     if ($lockReservation->blocked) {
-                        $this->detachIntentGraph($intent);
+                        $this->detachBlockedIntent($intent, $lockReservation);
                         $connection->commit();
 
                         $blockingIntent = $lockReservation->lock->getOwnerOrderIntent() ?? $intent;
@@ -540,6 +540,15 @@ final class OrderIntentManager
         }
 
         $this->entityManager->detach($intent);
+    }
+
+    private function detachBlockedIntent(OrderIntent $intent, SymbolExecutionLockReservation $lockReservation): void
+    {
+        $this->detachIntentGraph($intent);
+
+        if ($lockReservation->syntheticLockCreated) {
+            $this->entityManager->flush();
+        }
     }
 
     private function lockDecisionKey(ExchangeContext $context, string $decisionKey): void

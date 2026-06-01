@@ -13,6 +13,7 @@ final class SymbolExecutionLockReservation
         public readonly bool $created,
         public readonly bool $blocked,
         public readonly array $metadata = [],
+        public readonly bool $syntheticLockCreated = false,
     ) {
     }
 
@@ -21,8 +22,8 @@ final class SymbolExecutionLockReservation
         return new self($lock, true, false);
     }
 
-    public static function blocked(SymbolExecutionLock $lock, array $metadata): self
+    public static function blocked(SymbolExecutionLock $lock, array $metadata, bool $syntheticLockCreated = false): self
     {
-        return new self($lock, false, true, $metadata);
+        return new self($lock, false, true, $metadata, $syntheticLockCreated);
     }
 }

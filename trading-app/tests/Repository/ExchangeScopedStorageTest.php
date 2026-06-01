@@ -561,6 +561,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame('existing_open_exposure', $reservation->metadata['lock']['blocking_reason'] ?? null);
         self::assertNotNull($lock);
         self::assertNull($lock->getOwnerOrderIntentId());
+        self::assertSame(0, $this->em->getRepository(OrderIntent::class)->count([]));
     }
 
     public function testBlockedReservationDetachesCascadedProtections(): void
