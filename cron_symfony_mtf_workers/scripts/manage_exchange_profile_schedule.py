@@ -265,8 +265,8 @@ async def create_schedule(client: Any, config: ScheduleConfig) -> None:
     if not config.skip_runtime_check:
         runtime_check = run_runtime_check(config.exchange, config.market_type)
 
-    for warning in validate_live_guardrails(config.dry_run, runtime_check):
-        print(f"WARNING: {warning}")
+        for warning in validate_live_guardrails(config.dry_run, runtime_check):
+            print(f"WARNING: {warning}")
 
     Schedule, ScheduleActionStartWorkflow, SchedulePolicy, ScheduleSpec, overlap = temporal_schedule_classes()
     schedule = Schedule(

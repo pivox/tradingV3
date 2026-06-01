@@ -6,9 +6,11 @@ import pytest
 
 import scripts.manage_exchange_profile_schedule as schedule_manager
 from scripts.manage_exchange_profile_schedule import (
+    ScheduleConfig,
     async_main,
     build_job,
     build_parser,
+    create_schedule,
     generate_schedule_id,
     generate_workflow_id,
     parse_runtime_check_output,
@@ -191,3 +193,52 @@ def test_create_dry_run_schedule_preview_skips_temporal_and_runtime_check(monkey
     output = capsys.readouterr().out
     assert "[DRY-RUN] would create schedule cron-mtf-okx-scalper-1m" in output
     assert "'exchange': 'okx'" in output
+
+
+def test_create_live_schedule_with_runtime_check_bypass_skips_guardrail_validation(monkeypatch):
+    def fail_runtime_check(exchange, market_type):
+        raise AssertionError("explicit runtime-check bypass must not run Docker runtime checks")
+
+    class DummyScheduleClass:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class CapturingClient:
+        def __init__(self):
+            self.created = []
+
+        async def create_schedule(self, schedule_id, schedule):
+            self.created.append((schedule_id, schedule))
+
+    monkeypatch.setattr(schedule_manager, "run_runtime_check", fail_runtime_check)
+    monkeypatch.setattr(
+        schedule_manager,
+        "temporal_schedule_classes",
+        lambda: (
+            DummyScheduleClass,
+            DummyScheduleClass,
+            DummyScheduleClass,
+            DummyScheduleClass,
+            "buffer_one",
+        ),
+    )
+
+    config = ScheduleConfig(
+        command="create",
+        exchange="okx",
+        market_type="perpetual",
+        profile="scalper",
+        workers=4,
+        dry_run=False,
+        cron="*/1 * * * *",
+        schedule_id="cron-mtf-okx-scalper-1m",
+        workflow_id="mtf-okx-scalper-runner",
+        dry_run_schedule=False,
+        skip_runtime_check=True,
+    )
+    client = CapturingClient()
+
+    asyncio.run(create_schedule(client, config))
+
+    assert client.created[0][0] == "cron-mtf-okx-scalper-1m"
