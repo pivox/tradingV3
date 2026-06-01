@@ -128,10 +128,15 @@ final class RiskSummaryQuery
              "SELECT id, exchange, market_type, symbol, side, type, status, trigger_price, price, size, client_order_id, order_id, plan_type, raw_data, updated_at
               FROM futures_plan_order
              WHERE LOWER(COALESCE(status, '')) IN ('new', 'open', 'pending', 'submitted', 'active', 'live', 'untriggered', '1')
-                OR CAST(raw_data AS TEXT) LIKE '%\"state\":1%'
-                OR CAST(raw_data AS TEXT) LIKE '%\"state\": 1%'
-                OR CAST(raw_data AS TEXT) LIKE '%\"state\":\"1\"%'
-                OR CAST(raw_data AS TEXT) LIKE '%\"state\": \"1\"%'
+                OR (
+                    (status IS NULL OR TRIM(status) = '' OR LOWER(TRIM(status)) NOT IN ('cancelled', 'canceled', 'closed', 'filled', 'failed', 'rejected', 'expired', 'triggered', 'executed', 'completed', 'complete'))
+                    AND (
+                        CAST(raw_data AS TEXT) LIKE '%\"state\":1%'
+                        OR CAST(raw_data AS TEXT) LIKE '%\"state\": 1%'
+                        OR CAST(raw_data AS TEXT) LIKE '%\"state\":\"1\"%'
+                        OR CAST(raw_data AS TEXT) LIKE '%\"state\": \"1\"%'
+                    )
+                )
               ORDER BY updated_at DESC
               LIMIT 100",
         );
@@ -170,21 +175,33 @@ final class RiskSummaryQuery
                 ON fo.exchange = oi.exchange
                AND fo.market_type = oi.market_type
                AND (
-                   fo.order_id = op.order_id
-                   OR fo.order_id = oi.order_id
-                   OR fo.order_id = oi.exchange_order_id
-                   OR fo.client_order_id = op.client_order_id
-                   OR fo.client_order_id = oi.client_order_id
+                   (op.order_id IS NOT NULL AND op.order_id <> '' AND fo.order_id = op.order_id)
+                   OR (op.client_order_id IS NOT NULL AND op.client_order_id <> '' AND fo.client_order_id = op.client_order_id)
                )
              WHERE LOWER(COALESCE(op.type, '')) = 'stop_loss'
                AND op.price > 0
                AND oi.status = 'SENT'
                AND (
-                   LOWER(COALESCE(fpo.status, '')) IN ('new', 'open', 'pending', 'submitted', 'active', 'live', 'untriggered', '1')
-                   OR CAST(fpo.raw_data AS TEXT) LIKE '%\"state\":1%'
-                   OR CAST(fpo.raw_data AS TEXT) LIKE '%\"state\": 1%'
-                   OR CAST(fpo.raw_data AS TEXT) LIKE '%\"state\":\"1\"%'
-                   OR CAST(fpo.raw_data AS TEXT) LIKE '%\"state\": \"1\"%'
+                   (
+                       (
+                           LOWER(COALESCE(fpo.status, '')) IN ('new', 'open', 'pending', 'submitted', 'active', 'live', 'untriggered', '1')
+                           OR (
+                               (fpo.status IS NULL OR TRIM(fpo.status) = '' OR LOWER(TRIM(fpo.status)) NOT IN ('cancelled', 'canceled', 'closed', 'filled', 'failed', 'rejected', 'expired', 'triggered', 'executed', 'completed', 'complete'))
+                               AND (
+                                   CAST(fpo.raw_data AS TEXT) LIKE '%\"state\":1%'
+                                   OR CAST(fpo.raw_data AS TEXT) LIKE '%\"state\": 1%'
+                                   OR CAST(fpo.raw_data AS TEXT) LIKE '%\"state\":\"1\"%'
+                                   OR CAST(fpo.raw_data AS TEXT) LIKE '%\"state\": \"1\"%'
+                               )
+                           )
+                       )
+                       AND (
+                           LOWER(COALESCE(fpo.type, '')) LIKE '%stop%'
+                           OR LOWER(COALESCE(fpo.plan_type, '')) LIKE '%stop%'
+                           OR LOWER(COALESCE(fpo.client_order_id, '')) LIKE '%sl%'
+                           OR LOWER(COALESCE(fpo.order_id, '')) LIKE '%sl%'
+                       )
+                   )
                    OR LOWER(COALESCE(fo.status, '')) IN ('new', 'open', 'pending', 'sent', 'submitted', 'partially_filled', 'partially-filled', '1', '2')
                )
              ORDER BY op.updated_at DESC
