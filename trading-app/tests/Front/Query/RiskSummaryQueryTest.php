@@ -229,7 +229,7 @@ SQL);
             'exchange' => 'bitmart',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
-            'side' => 3,
+            'side' => 2,
             'type' => 'stop_loss',
             'status' => 'active',
             'trigger_price' => '13.90',
@@ -272,7 +272,7 @@ SQL);
             'exchange' => 'bitmart',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
-            'side' => 3,
+            'side' => 2,
             'type' => 'stop_loss',
             'status' => 'active',
             'trigger_price' => '13.90',
@@ -330,6 +330,104 @@ SQL);
             'price' => '13.90',
             'client_order_id' => 'failed-sl-protection',
             'order_id' => 'exchange-failed-sl-protection',
+            'updated_at' => '2026-06-01 10:01:00',
+        ]);
+
+        $view = (new RiskSummaryQuery(
+            $this->connection,
+            new MockClock('2026-06-01 10:05:00 UTC'),
+        ))->getSummary();
+
+        self::assertFalse($view->positions[0]['has_stop_loss']);
+        self::assertSame(1, $view->criticalAlertCount);
+    }
+
+    public function testNumericOpenPlanOrderStatusCanProtectPosition(): void
+    {
+        $this->connection->insert('positions', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 'LONG',
+            'size' => '42',
+            'avg_entry_price' => '14.25',
+            'leverage' => 8,
+            'unrealized_pnl' => '-3.10',
+            'status' => 'OPEN',
+            'payload' => json_encode(['source' => 'exchange'], JSON_THROW_ON_ERROR),
+            'updated_at' => '2026-06-01 10:00:00',
+        ]);
+        $this->connection->insert('futures_plan_order', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 2,
+            'type' => 'stop_loss',
+            'status' => '1',
+            'trigger_price' => '13.90',
+            'price' => '13.90',
+            'size' => 42,
+            'client_order_id' => 'numeric-open-sl-plan-order',
+            'order_id' => 'exchange-numeric-open-sl-plan-order',
+            'plan_type' => 'stop_loss',
+            'raw_data' => '{}',
+            'updated_at' => '2026-06-01 10:01:00',
+        ]);
+
+        $view = (new RiskSummaryQuery(
+            $this->connection,
+            new MockClock('2026-06-01 10:05:00 UTC'),
+        ))->getSummary();
+
+        self::assertTrue($view->positions[0]['has_stop_loss']);
+        self::assertSame(0, $view->criticalAlertCount);
+    }
+
+    public function testSentOrderProtectionWithCancelledPlanDoesNotSuppressMissingStopLossAlert(): void
+    {
+        $this->connection->insert('positions', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 'LONG',
+            'size' => '42',
+            'avg_entry_price' => '14.25',
+            'leverage' => 8,
+            'unrealized_pnl' => '-3.10',
+            'status' => 'OPEN',
+            'payload' => json_encode(['source' => 'exchange'], JSON_THROW_ON_ERROR),
+            'updated_at' => '2026-06-01 10:00:00',
+        ]);
+        $this->connection->insert('order_intent', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 1,
+            'status' => 'SENT',
+            'updated_at' => '2026-06-01 09:59:00',
+        ]);
+        $this->connection->insert('order_protection', [
+            'order_intent_id' => 1,
+            'type' => 'stop_loss',
+            'price' => '13.90',
+            'client_order_id' => 'stale-sl-protection',
+            'order_id' => 'exchange-stale-sl-protection',
+            'updated_at' => '2026-06-01 10:01:00',
+        ]);
+        $this->connection->insert('futures_plan_order', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 2,
+            'type' => 'stop_loss',
+            'status' => 'cancelled',
+            'trigger_price' => '13.90',
+            'price' => '13.90',
+            'size' => 42,
+            'client_order_id' => 'stale-sl-protection',
+            'order_id' => 'exchange-stale-sl-protection',
+            'plan_type' => 'stop_loss',
+            'raw_data' => '{}',
             'updated_at' => '2026-06-01 10:01:00',
         ]);
 

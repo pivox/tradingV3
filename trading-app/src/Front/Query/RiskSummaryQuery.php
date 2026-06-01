@@ -124,12 +124,12 @@ final class RiskSummaryQuery
     private function loadOpenPlanOrders(): array
     {
         return $this->db->fetchAll(
-            ['futures_plan_order'],
-            "SELECT id, exchange, market_type, symbol, side, type, status, trigger_price, price, size, client_order_id, order_id, plan_type, raw_data, updated_at
-             FROM futures_plan_order
-             WHERE LOWER(COALESCE(status, '')) IN ('new', 'open', 'pending', 'submitted', 'active', 'live', 'untriggered')
-             ORDER BY updated_at DESC
-             LIMIT 100",
+             ['futures_plan_order'],
+             "SELECT id, exchange, market_type, symbol, side, type, status, trigger_price, price, size, client_order_id, order_id, plan_type, raw_data, updated_at
+              FROM futures_plan_order
+             WHERE LOWER(COALESCE(status, '')) IN ('new', 'open', 'pending', 'submitted', 'active', 'live', 'untriggered', '1')
+              ORDER BY updated_at DESC
+              LIMIT 100",
         );
     }
 
@@ -139,14 +139,35 @@ final class RiskSummaryQuery
     private function loadStopLossProtections(): array
     {
         return $this->db->fetchAll(
-            ['order_protection', 'order_intent'],
-            "SELECT op.id, oi.exchange, oi.market_type, oi.symbol, oi.side, op.type, op.price, op.client_order_id, op.order_id, op.updated_at
+            ['order_protection', 'order_intent', 'futures_plan_order', 'futures_order'],
+            "SELECT op.id,
+                    oi.exchange,
+                    oi.market_type,
+                    oi.symbol,
+                    COALESCE(fpo.side, fo.side, oi.side) AS side,
+                    op.type,
+                    op.price,
+                    op.client_order_id,
+                    op.order_id,
+                    op.updated_at
              FROM order_protection op
              INNER JOIN order_intent oi ON oi.id = op.order_intent_id
+             LEFT JOIN futures_plan_order fpo
+                ON fpo.exchange = oi.exchange
+               AND fpo.market_type = oi.market_type
+               AND (fpo.order_id = op.order_id OR fpo.client_order_id = op.client_order_id)
+             LEFT JOIN futures_order fo
+                ON fo.exchange = oi.exchange
+               AND fo.market_type = oi.market_type
+               AND (fo.order_id = op.order_id OR fo.client_order_id = op.client_order_id)
              WHERE LOWER(COALESCE(op.type, '')) = 'stop_loss'
                AND op.price > 0
                AND oi.status = 'SENT'
                AND COALESCE(op.order_id, op.client_order_id, '') <> ''
+               AND (
+                   LOWER(COALESCE(fpo.status, '')) IN ('new', 'open', 'pending', 'submitted', 'active', 'live', 'untriggered', '1')
+                   OR LOWER(COALESCE(fo.status, '')) IN ('new', 'open', 'pending', 'sent', 'submitted', 'partially_filled', 'partially-filled', '1', '2')
+               )
              ORDER BY op.updated_at DESC
              LIMIT 100",
         );
@@ -282,8 +303,8 @@ final class RiskSummaryQuery
     {
         if (is_numeric($side)) {
             return match ((int) $side) {
-                1, 3 => 'LONG',
-                2, 4 => 'SHORT',
+                1, 2 => 'LONG',
+                3, 4 => 'SHORT',
                 default => null,
             };
         }

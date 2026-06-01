@@ -55,6 +55,74 @@ CREATE TABLE mtf_run_symbol (
     created_at DATETIME NOT NULL
 )
 SQL);
+        $this->connection->executeStatement(<<<'SQL'
+CREATE TABLE order_intent (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    exchange VARCHAR(32) NOT NULL,
+    market_type VARCHAR(32) NOT NULL,
+    symbol VARCHAR(50) NOT NULL,
+    timeframe VARCHAR(10) NULL,
+    side INTEGER NULL,
+    type VARCHAR(20) NULL,
+    status VARCHAR(30) NOT NULL,
+    price NUMERIC NULL,
+    size INTEGER NULL,
+    client_order_id VARCHAR(80) NULL,
+    order_id VARCHAR(80) NULL,
+    exchange_order_id VARCHAR(80) NULL,
+    failure_reason TEXT NULL,
+    decision_key VARCHAR(255) NULL,
+    strategy_profile VARCHAR(80) NULL,
+    strategy_version VARCHAR(80) NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    sent_at DATETIME NULL
+)
+SQL);
+        $this->connection->executeStatement(<<<'SQL'
+CREATE TABLE trade_zone_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    exchange VARCHAR(32) NOT NULL,
+    market_type VARCHAR(32) NOT NULL,
+    symbol VARCHAR(50) NOT NULL,
+    happened_at DATETIME NOT NULL,
+    reason VARCHAR(80) NOT NULL,
+    decision_key VARCHAR(255) NULL,
+    timeframe VARCHAR(10) NULL,
+    config_profile VARCHAR(80) NULL,
+    zone_min NUMERIC NULL,
+    zone_max NUMERIC NULL,
+    candidate_price NUMERIC NULL,
+    zone_dev_pct NUMERIC NULL,
+    zone_max_dev_pct NUMERIC NULL,
+    atr_pct NUMERIC NULL,
+    spread_bps NUMERIC NULL,
+    volume_ratio NUMERIC NULL,
+    vwap_distance_pct NUMERIC NULL,
+    entry_zone_width_pct NUMERIC NULL,
+    mtf_level VARCHAR(20) NULL,
+    category VARCHAR(80) NULL
+)
+SQL);
+        $this->connection->executeStatement(<<<'SQL'
+CREATE TABLE trade_lifecycle_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol VARCHAR(50) NOT NULL,
+    event_type VARCHAR(80) NOT NULL,
+    run_id VARCHAR(80) NULL,
+    order_id VARCHAR(80) NULL,
+    client_order_id VARCHAR(80) NULL,
+    side VARCHAR(10) NULL,
+    qty NUMERIC NULL,
+    price NUMERIC NULL,
+    timeframe VARCHAR(10) NULL,
+    config_profile VARCHAR(80) NULL,
+    config_version VARCHAR(80) NULL,
+    reason_code VARCHAR(80) NULL,
+    extra TEXT NULL,
+    happened_at DATETIME NOT NULL
+)
+SQL);
     }
 
     public function testRejectedSymbolShowsReadablePrimaryReason(): void
@@ -96,5 +164,50 @@ SQL);
         self::assertSame('ETHUSDT', $view->symbols[0]['symbol']);
         self::assertSame('Filtres obligatoires non validés', $view->symbols[0]['primary_reason']);
         self::assertSame(['rsi_bullish', 'near_vwap'], $view->symbols[0]['failed_rules']);
+    }
+
+    public function testDetailFindsLifecycleRowsThroughOrderIntentOrderIds(): void
+    {
+        $this->connection->insert('order_intent', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'timeframe' => '1m',
+            'side' => 1,
+            'type' => 'limit',
+            'status' => 'SENT',
+            'price' => '14.2',
+            'size' => 1,
+            'client_order_id' => 'client-order-1',
+            'order_id' => null,
+            'exchange_order_id' => 'exchange-order-1',
+            'failure_reason' => null,
+            'decision_key' => 'decision-1',
+            'strategy_profile' => 'scalper_micro',
+            'strategy_version' => 'test',
+            'created_at' => '2026-06-01 10:00:00',
+            'updated_at' => '2026-06-01 10:01:00',
+            'sent_at' => '2026-06-01 10:01:00',
+        ]);
+        $this->connection->insert('trade_lifecycle_event', [
+            'symbol' => 'LINKUSDT',
+            'event_type' => 'order_submitted',
+            'run_id' => null,
+            'order_id' => 'exchange-order-1',
+            'client_order_id' => null,
+            'side' => 'LONG',
+            'qty' => '1',
+            'price' => '14.2',
+            'timeframe' => '1m',
+            'config_profile' => 'scalper_micro',
+            'config_version' => 'test',
+            'reason_code' => null,
+            'extra' => '{}',
+            'happened_at' => '2026-06-01 10:02:00',
+        ]);
+
+        $detail = (new DecisionSummaryQuery($this->connection))->detail('decision-1');
+
+        self::assertSame(['exchange-order-1'], array_column($detail['lifecycle_events'], 'order_id'));
     }
 }

@@ -76,13 +76,31 @@ final class DecisionSummaryQuery
                 ['decisionKey' => $decisionKey, 'decisionPrefix' => $decisionKey . '%'],
             ),
             'lifecycle_events' => $this->db->fetchAll(
-                ['trade_lifecycle_event'],
+                ['trade_lifecycle_event', 'order_intent'],
                 "SELECT id, symbol, event_type, run_id, order_id, client_order_id, side, qty, price, timeframe,
                         config_profile, config_version, reason_code, extra, happened_at
                  FROM trade_lifecycle_event
                  WHERE CAST(extra AS TEXT) LIKE :needle
                     OR client_order_id = :decisionKey
                     OR order_id = :decisionKey
+                    OR client_order_id IN (
+                        SELECT client_order_id
+                        FROM order_intent
+                        WHERE decision_key = :decisionKey
+                          AND client_order_id IS NOT NULL
+                    )
+                    OR order_id IN (
+                        SELECT order_id
+                        FROM order_intent
+                        WHERE decision_key = :decisionKey
+                          AND order_id IS NOT NULL
+                    )
+                    OR order_id IN (
+                        SELECT exchange_order_id
+                        FROM order_intent
+                        WHERE decision_key = :decisionKey
+                          AND exchange_order_id IS NOT NULL
+                    )
                  ORDER BY happened_at DESC
                  LIMIT 50",
                 ['needle' => '%' . $decisionKey . '%', 'decisionKey' => $decisionKey],
