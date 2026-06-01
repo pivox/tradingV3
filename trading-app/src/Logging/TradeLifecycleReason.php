@@ -17,6 +17,7 @@ final class TradeLifecycleReason
 
     // Position guards
     public const LEVERAGE_TOO_LOW = 'leverage_too_low';
+    public const CROSS_PROFILE_SYMBOL_LOCKED = 'cross_profile_symbol_locked';
 
     // Expiration / cancel-after
     public const CANCEL_AFTER_TIMEOUT = 'cancel_after_timeout';

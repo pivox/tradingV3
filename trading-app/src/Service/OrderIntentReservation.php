@@ -13,6 +13,7 @@ final class OrderIntentReservation
         public readonly bool $created,
         public readonly bool $blocked,
         public readonly ?string $reason = null,
+        public readonly array $metadata = [],
     ) {
     }
 
@@ -26,8 +27,8 @@ final class OrderIntentReservation
         return new self($intent, false, false);
     }
 
-    public static function blocked(OrderIntent $intent, string $reason): self
+    public static function blocked(OrderIntent $intent, string $reason, array $metadata = []): self
     {
-        return new self($intent, false, true, $reason);
+        return new self($intent, false, true, $reason, $metadata);
     }
 }

@@ -13,6 +13,7 @@ use App\Entity\MtfState;
 use App\Entity\OrderIntent;
 use App\Entity\OrderProtection;
 use App\Entity\Position;
+use App\Entity\SymbolExecutionLock;
 use App\MtfValidator\Entity\MtfAudit;
 use App\MtfValidator\Repository\MtfAuditRepository;
 use App\Provider\Context\ExchangeContext;
@@ -20,15 +21,18 @@ use App\Provider\Entity\Contract;
 use App\Provider\Entity\Kline;
 use App\Provider\Repository\ContractRepository;
 use App\Provider\Repository\KlineRepository;
+use App\Repository\FuturesOrderRepository;
 use App\Repository\IndicatorSnapshotRepository;
 use App\Repository\MtfStateRepository;
 use App\Repository\OrderIntentRepository;
 use App\Repository\PositionRepository;
 use App\Service\OrderIntentManager;
+use App\Service\SymbolExecutionLockManager;
 use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\Trading\Storage\FuturesOrderOrderStateRepository;
 use App\Trading\Storage\PositionPositionStateRepository;
 use Brick\Math\BigDecimal;
+use Doctrine\DBAL\Platforms\SqlitePlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
@@ -61,6 +65,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
                 Position::class,
                 OrderIntent::class,
                 OrderProtection::class,
+                SymbolExecutionLock::class,
                 IndicatorSnapshot::class,
                 MtfState::class,
                 MtfAudit::class,
@@ -70,6 +75,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $schemaTool = new SchemaTool($this->em);
         $schemaTool->dropSchema($metadata);
         $schemaTool->createSchema($metadata);
+        $this->normalizeSqlitePartialUniqueIndexes();
     }
 
     protected function tearDown(): void
@@ -84,6 +90,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
                     Position::class,
                     OrderIntent::class,
                     OrderProtection::class,
+                    SymbolExecutionLock::class,
                     IndicatorSnapshot::class,
                     MtfState::class,
                     MtfAudit::class,
@@ -238,9 +245,11 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         ];
 
         foreach ($cases as $index => $status) {
+            $symbol = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'][$index];
             $params = $this->orderIntentParams(
-                decisionKey: sprintf('bitmart:perpetual:BTCUSDT:1m:%d:long:scalper_micro:v1', 1764161200 + ($index * 60)),
+                decisionKey: sprintf('bitmart:perpetual:%s:1m:%d:long:scalper_micro:v1', $symbol, 1764161200 + ($index * 60)),
                 clientOrderId: 'cid-' . strtolower($status),
+                symbol: $symbol,
             );
             $first = $manager->reserveIntent($params);
 
@@ -270,9 +279,16 @@ final class ExchangeScopedStorageTest extends KernelTestCase
 
         $index = 1;
         foreach ($cases as $status => $expectedReason) {
+            $symbol = match ($status) {
+                OrderIntent::STATUS_SENT => 'BTCUSDT',
+                OrderIntent::STATUS_FAILED => 'ETHUSDT',
+                OrderIntent::STATUS_CANCELLED => 'SOLUSDT',
+                default => 'XRPUSDT',
+            };
             $params = $this->orderIntentParams(
-                decisionKey: sprintf('bitmart:perpetual:BTCUSDT:1m:%d:long:scalper_micro:v1', 1764160800 + ($index * 60)),
+                decisionKey: sprintf('bitmart:perpetual:%s:1m:%d:long:scalper_micro:v1', $symbol, 1764160800 + ($index * 60)),
                 clientOrderId: 'cid-' . strtolower($status),
+                symbol: $symbol,
             );
             ++$index;
             $first = $manager->reserveIntent($params);
@@ -323,6 +339,374 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame('bitmart', $bitmart->intent->getExchange());
         self::assertSame('binance', $binance->intent->getExchange());
         self::assertSame('spot', $bitmartSpot->intent->getMarketType());
+    }
+
+    public function testOrderIntentReservationBlocksDifferentProfileOnSameExchangeMarketSymbol(): void
+    {
+        $manager = $this->orderIntentManager();
+
+        $scalper = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            clientOrderId: 'cid-scalper',
+            strategyProfile: 'scalper',
+        ));
+        $scalperMicro = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            clientOrderId: 'cid-scalper-micro',
+            strategyProfile: 'scalper_micro',
+        ));
+
+        self::assertTrue($scalper->created);
+        self::assertFalse($scalper->blocked);
+        self::assertFalse($scalperMicro->created);
+        self::assertTrue($scalperMicro->blocked);
+        self::assertSame('cross_profile_symbol_locked', $scalperMicro->reason);
+        self::assertSame([
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'current_profile' => 'scalper_micro',
+            'blocking_profile' => 'scalper',
+            'blocking_order_intent_id' => $scalper->intent->getId(),
+            'blocking_decision_key' => $scalper->intent->getDecisionKey(),
+        ], $scalperMicro->metadata['lock'] ?? null);
+    }
+
+    public function testReduceOnlyCloseIntentBypassesGlobalSymbolLock(): void
+    {
+        $manager = $this->orderIntentManager();
+
+        $entry = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            clientOrderId: 'cid-entry-lock-owner',
+            strategyProfile: 'scalper',
+        ));
+        $closeParams = $this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:close:manual:v1',
+            clientOrderId: 'cid-reduce-only-close',
+            strategyProfile: 'manual_close',
+        );
+        $closeParams['side'] = 2;
+        $closeParams['reduce_only'] = true;
+
+        $close = $manager->reserveIntent($closeParams);
+
+        self::assertTrue($entry->created);
+        self::assertTrue($close->created);
+        self::assertFalse($close->blocked);
+        self::assertSame(2, $close->intent->getSide());
+
+        /** @var \App\Repository\SymbolExecutionLockRepository $lockRepository */
+        $lockRepository = $this->em->getRepository(SymbolExecutionLock::class);
+        $lock = $lockRepository->findActive('bitmart', 'perpetual', 'BTCUSDT');
+
+        self::assertSame($entry->intent->getId(), $lock?->getOwnerOrderIntentId());
+    }
+
+    public function testOrderIntentReservationWithoutDecisionKeyStillUsesGlobalSymbolLock(): void
+    {
+        $manager = $this->orderIntentManager();
+
+        $first = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: '',
+            clientOrderId: 'cid-no-decision-first',
+            strategyProfile: 'scalper',
+        ));
+        $second = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: '',
+            clientOrderId: 'cid-no-decision-second',
+            strategyProfile: 'scalper_micro',
+        ));
+
+        self::assertTrue($first->created);
+        self::assertTrue($second->blocked);
+        self::assertSame('cross_profile_symbol_locked', $second->reason);
+        self::assertSame($first->intent->getId(), $second->intent->getId());
+    }
+
+    public function testOrderIntentReservationAllowsSameSymbolOnDifferentExchangeMarketOrSymbol(): void
+    {
+        $manager = $this->orderIntentManager();
+
+        $bitmart = $manager->reserveIntent($this->orderIntentParams(
+            exchange: 'bitmart',
+            marketType: 'perpetual',
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            clientOrderId: 'cid-bitmart-btc',
+            strategyProfile: 'scalper',
+        ));
+        $okx = $manager->reserveIntent($this->orderIntentParams(
+            exchange: 'okx',
+            marketType: 'perpetual',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160800:long:scalper_micro:v1',
+            clientOrderId: 'cid-okx-btc',
+            strategyProfile: 'scalper_micro',
+        ));
+        $spot = $manager->reserveIntent($this->orderIntentParams(
+            exchange: 'bitmart',
+            marketType: 'spot',
+            decisionKey: 'bitmart:spot:BTCUSDT:1m:1764160800:long:scalper_micro:v1',
+            clientOrderId: 'cid-bitmart-spot-btc',
+            strategyProfile: 'scalper_micro',
+        ));
+        $eth = $manager->reserveIntent($this->orderIntentParams(
+            exchange: 'bitmart',
+            marketType: 'perpetual',
+            decisionKey: 'bitmart:perpetual:ETHUSDT:1m:1764160800:long:scalper_micro:v1',
+            clientOrderId: 'cid-bitmart-eth',
+            symbol: 'ETHUSDT',
+            strategyProfile: 'scalper_micro',
+        ));
+
+        self::assertTrue($bitmart->created);
+        self::assertTrue($okx->created);
+        self::assertTrue($spot->created);
+        self::assertTrue($eth->created);
+    }
+
+    public function testOrderIntentFailureAndCancellationReleaseSymbolLock(): void
+    {
+        $manager = $this->orderIntentManager();
+
+        $first = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            clientOrderId: 'cid-first-failed',
+            strategyProfile: 'scalper',
+        ));
+        $manager->markAsFailed($first->intent, 'exchange rejected');
+
+        $afterFailure = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            clientOrderId: 'cid-after-failure',
+            strategyProfile: 'scalper_micro',
+        ));
+        self::assertTrue($afterFailure->created);
+
+        $manager->markAsCancelled($afterFailure->intent);
+        $afterCancel = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160920:long:regular:v1',
+            clientOrderId: 'cid-after-cancel',
+            strategyProfile: 'regular',
+        ));
+
+        self::assertTrue($afterCancel->created);
+    }
+
+    public function testOrderIntentValidationFailureReleasesSymbolLock(): void
+    {
+        $manager = $this->orderIntentManager();
+        $invalidParams = $this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            clientOrderId: 'cid-validation-failed',
+            size: 0,
+            strategyProfile: 'scalper',
+        );
+
+        $reservation = $manager->reserveIntent($invalidParams);
+        $errors = $manager->validateOrderParams($invalidParams);
+
+        self::assertTrue($reservation->created);
+        self::assertNotNull($errors);
+        self::assertFalse($manager->validateIntent($reservation->intent, $errors));
+
+        $afterValidationFailure = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            clientOrderId: 'cid-after-validation-failure',
+            strategyProfile: 'scalper_micro',
+        ));
+
+        self::assertTrue($afterValidationFailure->created);
+    }
+
+    public function testOrderIntentCancellationReleasesLockDespiteStaleOpenOrderRow(): void
+    {
+        $manager = $this->orderIntentManager();
+
+        $first = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            clientOrderId: 'cid-cancelled-stale-order',
+            strategyProfile: 'scalper',
+        ));
+        $manager->markAsSent($first->intent, 'exchange-cancelled-stale-order');
+        $this->em->persist(
+            $this->newFuturesOrder('bitmart', 'exchange-cancelled-stale-order', '1', 'BTCUSDT')
+                ->setClientOrderId($first->intent->getClientOrderId())
+                ->setStatus('pending')
+        );
+        $this->em->flush();
+
+        $manager->markAsCancelled($first->intent);
+
+        $afterCancellation = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            clientOrderId: 'cid-after-cancelled-stale-order',
+            strategyProfile: 'scalper_micro',
+        ));
+
+        self::assertTrue($afterCancellation->created);
+    }
+
+    public function testOrderIntentCancellationKeepsLockWhenPositionIsOpen(): void
+    {
+        $manager = $this->orderIntentManager();
+
+        $first = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            clientOrderId: 'cid-cancelled-open-position',
+            strategyProfile: 'scalper',
+        ));
+        $this->em->persist((new Position('BTCUSDT', 'LONG'))->setSize('1'));
+        $this->em->flush();
+
+        $manager->markAsCancelled($first->intent);
+        $afterCancellation = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            clientOrderId: 'cid-after-cancelled-open-position',
+            strategyProfile: 'scalper_micro',
+        ));
+
+        self::assertTrue($afterCancellation->blocked);
+        self::assertSame('cross_profile_symbol_locked', $afterCancellation->reason);
+    }
+
+    public function testOrderIntentReservationBlocksExistingOpenExposureWithoutActiveLock(): void
+    {
+        $manager = $this->orderIntentManager();
+        $this->em->persist(
+            $this->newFuturesOrder('bitmart', 'orphan-open-order', '1', 'BTCUSDT')
+                ->setClientOrderId('orphan-open-order-client')
+                ->setStatus('pending')
+        );
+        $this->em->flush();
+
+        $reservation = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            clientOrderId: 'cid-existing-open-exposure',
+            strategyProfile: 'scalper',
+        ));
+
+        /** @var \App\Repository\SymbolExecutionLockRepository $lockRepository */
+        $lockRepository = $this->em->getRepository(SymbolExecutionLock::class);
+        $lock = $lockRepository->findActive('bitmart', 'perpetual', 'BTCUSDT');
+
+        self::assertTrue($reservation->blocked);
+        self::assertSame('cross_profile_symbol_locked', $reservation->reason);
+        self::assertSame('existing_open_exposure', $reservation->metadata['lock']['blocking_reason'] ?? null);
+        self::assertNotNull($lock);
+        self::assertNull($lock->getOwnerOrderIntentId());
+        self::assertSame(0, $this->em->getRepository(OrderIntent::class)->count([]));
+    }
+
+    public function testFuturesOrderRepositoryTreatsBitmartRawStateAsOpen(): void
+    {
+        $this->em->persist(
+            $this->newFuturesOrder('bitmart', 'state-only-open-order', '1', 'BTCUSDT')
+                ->setStatus(null)
+                ->setRawData([
+                    'exchange' => 'bitmart',
+                    'market_type' => 'perpetual',
+                    'state' => 1,
+                ])
+        );
+        $this->em->flush();
+
+        /** @var FuturesOrderRepository $repository */
+        $repository = $this->em->getRepository(FuturesOrder::class);
+
+        self::assertTrue($repository->hasOpenOrderForSymbol('BTCUSDT'));
+    }
+
+    public function testSymbolExecutionLockMetadataDeclaresActiveUniqueConstraint(): void
+    {
+        $metadata = $this->em->getClassMetadata(SymbolExecutionLock::class);
+        $uniqueConstraints = $metadata->table['uniqueConstraints'] ?? [];
+
+        self::assertArrayHasKey('ux_symbol_execution_lock_active_symbol', $uniqueConstraints);
+        self::assertSame(
+            ['exchange', 'market_type', 'symbol'],
+            $uniqueConstraints['ux_symbol_execution_lock_active_symbol']['columns'] ?? null,
+        );
+        self::assertSame(
+            'released_at IS NULL',
+            $uniqueConstraints['ux_symbol_execution_lock_active_symbol']['options']['where'] ?? null,
+        );
+    }
+
+    public function testBlockedReservationDetachesCascadedProtections(): void
+    {
+        $manager = $this->orderIntentManager();
+
+        $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            clientOrderId: 'cid-protection-owner',
+            strategyProfile: 'scalper',
+        ));
+        $blockedParams = $this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            clientOrderId: 'cid-protection-blocked',
+            strategyProfile: 'scalper_micro',
+        );
+        $blockedParams['preset_take_profit_price'] = '110';
+        $blockedParams['preset_stop_loss_price'] = '90';
+
+        $blocked = $manager->reserveIntent($blockedParams);
+        $this->em->flush();
+
+        self::assertTrue($blocked->blocked);
+        self::assertSame(0, $this->em->getRepository(OrderProtection::class)->count([]));
+    }
+
+    public function testExpiredSymbolLockIsNotReclaimedWhileOpenOrderExists(): void
+    {
+        $manager = $this->orderIntentManager();
+        $owner = $this->expiredLockOwner('BTCUSDT');
+        $lock = new SymbolExecutionLock(
+            exchange: Exchange::BITMART,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            ownerOrderIntent: $owner,
+            expiresAt: new \DateTimeImmutable('-1 hour', new \DateTimeZone('UTC')),
+        );
+        $this->em->persist($owner);
+        $this->em->persist($lock);
+        $this->em->persist($this->newFuturesOrder('bitmart', 'open-order-btc', '1', 'BTCUSDT')->setStatus('pending'));
+        $this->em->flush();
+
+        $reservation = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160980:long:scalper_micro:v1',
+            clientOrderId: 'cid-expired-open-order',
+            strategyProfile: 'scalper_micro',
+        ));
+
+        self::assertTrue($reservation->blocked);
+        self::assertSame('cross_profile_symbol_locked', $reservation->reason);
+        self::assertNull($lock->getReleasedAt());
+    }
+
+    public function testExpiredSymbolLockCanBeReclaimedWithoutOpenExposure(): void
+    {
+        $manager = $this->orderIntentManager();
+        $owner = $this->expiredLockOwner('BTCUSDT');
+        $lock = new SymbolExecutionLock(
+            exchange: Exchange::BITMART,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            ownerOrderIntent: $owner,
+            expiresAt: new \DateTimeImmutable('-1 hour', new \DateTimeZone('UTC')),
+        );
+        $this->em->persist($owner);
+        $this->em->persist($lock);
+        $this->em->flush();
+
+        $reservation = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160980:long:scalper_micro:v1',
+            clientOrderId: 'cid-expired-reclaimed',
+            strategyProfile: 'scalper_micro',
+        ));
+
+        self::assertTrue($reservation->created);
+        self::assertSame('expired_reclaimed', $lock->getReleaseReason());
+        self::assertNotNull($lock->getReleasedAt());
     }
 
     public function testTradingStateReadsCanSelectExplicitExchangeContext(): void
@@ -421,6 +805,20 @@ final class ExchangeScopedStorageTest extends KernelTestCase
             ->setVolume(BigDecimal::of('1'));
     }
 
+    private function normalizeSqlitePartialUniqueIndexes(): void
+    {
+        $connection = $this->em->getConnection();
+        if (!$connection->getDatabasePlatform() instanceof SqlitePlatform) {
+            return;
+        }
+
+        $connection->executeStatement('DROP INDEX IF EXISTS ux_symbol_execution_lock_active_symbol');
+        $connection->executeStatement(
+            'CREATE UNIQUE INDEX ux_symbol_execution_lock_active_symbol ' .
+            'ON symbol_execution_lock (exchange, market_type, symbol) WHERE released_at IS NULL'
+        );
+    }
+
     /**
      * @param array<string,mixed> $values
      */
@@ -457,12 +855,25 @@ final class ExchangeScopedStorageTest extends KernelTestCase
     {
         /** @var OrderIntentRepository $repository */
         $repository = $this->em->getRepository(OrderIntent::class);
+        /** @var \App\Repository\SymbolExecutionLockRepository $lockRepository */
+        $lockRepository = $this->em->getRepository(SymbolExecutionLock::class);
+        /** @var PositionRepository $positionRepository */
+        $positionRepository = $this->em->getRepository(Position::class);
+        /** @var FuturesOrderRepository $orderRepository */
+        $orderRepository = $this->em->getRepository(FuturesOrder::class);
 
         return new OrderIntentManager(
             $repository,
             $this->em,
             new NullLogger(),
             new DecisionKeyFactory(),
+            new SymbolExecutionLockManager(
+                $lockRepository,
+                $positionRepository,
+                $orderRepository,
+                $this->em,
+                new NullLogger(),
+            ),
         );
     }
 
@@ -476,15 +887,17 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         string $clientOrderId = 'cid-reservation',
         string $price = '100',
         int $size = 1,
+        string $symbol = 'BTCUSDT',
+        string $strategyProfile = 'scalper_micro',
     ): array {
         return [
             'exchange' => $exchange,
             'market_type' => $marketType,
             'decision_key' => $decisionKey,
-            'symbol' => 'BTCUSDT',
+            'symbol' => $symbol,
             'timeframe' => '1m',
             'candle_open_ts' => '1764160800',
-            'strategy_profile' => 'scalper_micro',
+            'strategy_profile' => $strategyProfile,
             'strategy_version' => 'v1',
             'side' => 1,
             'type' => OrderIntent::TYPE_LIMIT,
@@ -497,12 +910,27 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         ];
     }
 
-    private function newFuturesOrder(string $exchange, string $orderId, string $size): FuturesOrder
+    private function expiredLockOwner(string $symbol): OrderIntent
+    {
+        return $this->newIntent('bitmart', 'cid-expired-owner-' . strtolower($symbol))
+            ->setDecisionKey(sprintf('bitmart:perpetual:%s:1m:1764160800:long:scalper:v1', $symbol))
+            ->setStrategyProfile('scalper')
+            ->setStrategyVersion('v1')
+            ->setSymbol($symbol)
+            ->setStatus(OrderIntent::STATUS_FAILED);
+    }
+
+    private function newFuturesOrder(
+        string $exchange,
+        string $orderId,
+        string $size,
+        string $symbol = 'ETHUSDT',
+    ): FuturesOrder
     {
         return (new FuturesOrder())
             ->setExchange($exchange)
             ->setMarketType(MarketType::PERPETUAL)
-            ->setSymbol('ETHUSDT')
+            ->setSymbol($symbol)
             ->setOrderId($orderId)
             ->setClientOrderId($exchange . '-client')
             ->setStatus('new')
