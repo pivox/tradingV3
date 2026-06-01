@@ -91,6 +91,30 @@ CREATE TABLE futures_plan_order (
 )
 SQL);
         $this->connection->executeStatement(<<<'SQL'
+CREATE TABLE order_intent (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    exchange VARCHAR(32) NOT NULL,
+    market_type VARCHAR(32) NOT NULL,
+    decision_key VARCHAR(255) NULL,
+    strategy_profile VARCHAR(80) NULL,
+    strategy_version VARCHAR(80) NULL,
+    symbol VARCHAR(50) NOT NULL,
+    timeframe VARCHAR(10) NULL,
+    side INTEGER NULL,
+    type VARCHAR(20) NULL,
+    status VARCHAR(30) NOT NULL,
+    price NUMERIC NULL,
+    size INTEGER NULL,
+    client_order_id VARCHAR(80) NULL,
+    order_id VARCHAR(80) NULL,
+    exchange_order_id VARCHAR(80) NULL,
+    failure_reason TEXT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    sent_at DATETIME NULL
+)
+SQL);
+        $this->connection->executeStatement(<<<'SQL'
 CREATE TABLE trade_lifecycle_event (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol VARCHAR(50) NOT NULL,
@@ -234,12 +258,33 @@ SQL);
 
     public function testDecisionKeyInvestigationFindsLifecycleRowsByOrderIds(): void
     {
+        $this->connection->insert('order_intent', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'decision_key' => 'decision-key',
+            'strategy_profile' => 'scalper_micro',
+            'strategy_version' => 'test',
+            'symbol' => 'LINKUSDT',
+            'timeframe' => '1m',
+            'side' => 1,
+            'type' => 'limit',
+            'status' => 'SENT',
+            'price' => '14.2',
+            'size' => 1,
+            'client_order_id' => 'decision-client-order',
+            'order_id' => null,
+            'exchange_order_id' => 'exchange-decision-order',
+            'failure_reason' => null,
+            'created_at' => '2026-06-01 10:00:00',
+            'updated_at' => '2026-06-01 10:01:00',
+            'sent_at' => '2026-06-01 10:01:00',
+        ]);
         $this->connection->insert('trade_lifecycle_event', [
             'symbol' => 'LINKUSDT',
             'event_type' => 'order_submitted',
             'run_id' => null,
-            'order_id' => null,
-            'client_order_id' => 'decision-client-order',
+            'order_id' => 'exchange-decision-order',
+            'client_order_id' => null,
             'side' => 'LONG',
             'qty' => '1',
             'price' => '14.2',
@@ -254,10 +299,10 @@ SQL);
         $result = (new InvestigationQuery($this->connection, sys_get_temp_dir()))->investigate(
             null,
             null,
-            'decision-client-order',
+            'decision-key',
             null,
         );
 
-        self::assertSame(['decision-client-order'], array_column($result['sections']['lifecycle'], 'client_order_id'));
+        self::assertSame(['exchange-decision-order'], array_column($result['sections']['lifecycle'], 'order_id'));
     }
 }

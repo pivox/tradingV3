@@ -229,19 +229,39 @@ final class InvestigationQuery
             $params['runId'] = $runId;
         }
         if ($decisionKey !== '') {
-            $where[] = '(CAST(extra AS TEXT) LIKE :needle OR client_order_id = :decisionKey OR order_id = :decisionKey)';
+            $where[] = "(CAST(extra AS TEXT) LIKE :needle
+                OR client_order_id = :decisionKey
+                OR order_id = :decisionKey
+                OR client_order_id IN (
+                    SELECT client_order_id
+                    FROM order_intent
+                    WHERE decision_key = :decisionKey
+                      AND client_order_id IS NOT NULL
+                )
+                OR order_id IN (
+                    SELECT order_id
+                    FROM order_intent
+                    WHERE decision_key = :decisionKey
+                      AND order_id IS NOT NULL
+                )
+                OR order_id IN (
+                    SELECT exchange_order_id
+                    FROM order_intent
+                    WHERE decision_key = :decisionKey
+                      AND exchange_order_id IS NOT NULL
+                ))";
             $params['needle'] = '%' . $decisionKey . '%';
             $params['decisionKey'] = $decisionKey;
         }
         $this->addWindow($where, $params, 'happened_at', $window);
 
-        return $this->selectWithWhere(
-            'trade_lifecycle_event',
-            'SELECT id, symbol, event_type, run_id, order_id, client_order_id, side, qty, price, timeframe, config_profile, config_version, reason_code, extra, happened_at FROM trade_lifecycle_event',
-            $where,
-            $params,
-            'happened_at DESC',
-        );
+        $sql = 'SELECT id, symbol, event_type, run_id, order_id, client_order_id, side, qty, price, timeframe, config_profile, config_version, reason_code, extra, happened_at FROM trade_lifecycle_event';
+        if ($where !== []) {
+            $sql .= ' WHERE ' . implode(' AND ', $where);
+        }
+        $sql .= ' ORDER BY happened_at DESC LIMIT 80';
+
+        return $this->db->fetchAll(['trade_lifecycle_event', 'order_intent'], $sql, $params);
     }
 
     /**

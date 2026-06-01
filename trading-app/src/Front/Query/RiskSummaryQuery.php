@@ -128,6 +128,10 @@ final class RiskSummaryQuery
              "SELECT id, exchange, market_type, symbol, side, type, status, trigger_price, price, size, client_order_id, order_id, plan_type, raw_data, updated_at
               FROM futures_plan_order
              WHERE LOWER(COALESCE(status, '')) IN ('new', 'open', 'pending', 'submitted', 'active', 'live', 'untriggered', '1')
+                OR CAST(raw_data AS TEXT) LIKE '%\"state\":1%'
+                OR CAST(raw_data AS TEXT) LIKE '%\"state\": 1%'
+                OR CAST(raw_data AS TEXT) LIKE '%\"state\":\"1\"%'
+                OR CAST(raw_data AS TEXT) LIKE '%\"state\": \"1\"%'
               ORDER BY updated_at DESC
               LIMIT 100",
         );
@@ -153,19 +157,34 @@ final class RiskSummaryQuery
              FROM order_protection op
              INNER JOIN order_intent oi ON oi.id = op.order_intent_id
              LEFT JOIN futures_plan_order fpo
-                ON fpo.exchange = oi.exchange
-               AND fpo.market_type = oi.market_type
-               AND (fpo.order_id = op.order_id OR fpo.client_order_id = op.client_order_id)
+               ON fpo.exchange = oi.exchange
+              AND fpo.market_type = oi.market_type
+               AND (
+                   fpo.order_id = op.order_id
+                   OR fpo.order_id = oi.order_id
+                   OR fpo.order_id = oi.exchange_order_id
+                   OR fpo.client_order_id = op.client_order_id
+                   OR fpo.client_order_id = oi.client_order_id
+               )
              LEFT JOIN futures_order fo
                 ON fo.exchange = oi.exchange
                AND fo.market_type = oi.market_type
-               AND (fo.order_id = op.order_id OR fo.client_order_id = op.client_order_id)
+               AND (
+                   fo.order_id = op.order_id
+                   OR fo.order_id = oi.order_id
+                   OR fo.order_id = oi.exchange_order_id
+                   OR fo.client_order_id = op.client_order_id
+                   OR fo.client_order_id = oi.client_order_id
+               )
              WHERE LOWER(COALESCE(op.type, '')) = 'stop_loss'
                AND op.price > 0
                AND oi.status = 'SENT'
-               AND COALESCE(op.order_id, op.client_order_id, '') <> ''
                AND (
                    LOWER(COALESCE(fpo.status, '')) IN ('new', 'open', 'pending', 'submitted', 'active', 'live', 'untriggered', '1')
+                   OR CAST(fpo.raw_data AS TEXT) LIKE '%\"state\":1%'
+                   OR CAST(fpo.raw_data AS TEXT) LIKE '%\"state\": 1%'
+                   OR CAST(fpo.raw_data AS TEXT) LIKE '%\"state\":\"1\"%'
+                   OR CAST(fpo.raw_data AS TEXT) LIKE '%\"state\": \"1\"%'
                    OR LOWER(COALESCE(fo.status, '')) IN ('new', 'open', 'pending', 'sent', 'submitted', 'partially_filled', 'partially-filled', '1', '2')
                )
              ORDER BY op.updated_at DESC
