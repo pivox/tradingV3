@@ -84,13 +84,14 @@ final class FuturesOrderRepository extends ServiceEntityRepository
             ->getResult();
 
         foreach ($orders as $order) {
-            if (
-                \is_array($order)
-                && $this->isOpenOrderState(
-                    $order['status'] ?? null,
-                    \is_array($order['rawData'] ?? null) ? $order['rawData'] : [],
-                )
-            ) {
+            if (!\is_array($order)) {
+                continue;
+            }
+            $rawData = $order['rawData'] ?? null;
+            if (\is_string($rawData)) {
+                $rawData = json_decode($rawData, true) ?? [];
+            }
+            if ($this->isOpenOrderState($order['status'] ?? null, \is_array($rawData) ? $rawData : [])) {
                 return true;
             }
         }
@@ -117,13 +118,14 @@ final class FuturesOrderRepository extends ServiceEntityRepository
             ->where('o.exchange = :exchange')
             ->andWhere('o.marketType = :marketType')
             ->andWhere('o.symbol = :symbol')
-            ->andWhere('(o.status IN (:statuses) OR o.status IS NULL OR o.status = :blankStatus)')
+            ->andWhere('(o.status IN (:statuses) OR o.status IN (:numericStatuses) OR o.status IS NULL OR o.status = :blankStatus)')
             ->setParameter('cancelled', 'cancelled')
             ->setParameter('now', new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
             ->setParameter('exchange', $intent->getExchange())
             ->setParameter('marketType', $intent->getMarketType())
             ->setParameter('symbol', strtoupper($intent->getSymbol()))
             ->setParameter('statuses', self::OPEN_STATUSES)
+            ->setParameter('numericStatuses', self::OPEN_NUMERIC_STATES)
             ->setParameter('blankStatus', '');
 
         if ($ids !== []) {

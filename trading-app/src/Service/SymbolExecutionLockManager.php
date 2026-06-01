@@ -97,7 +97,8 @@ final class SymbolExecutionLockManager
             $this->orders->markOpenOrdersCancelledForIntent($intent);
         }
 
-        if ($this->hasOpenPosition($active) || (!$allowOpenOrder && $this->hasOpenOrder($active))) {
+        $lockHasOwner = $active->getOwnerOrderIntent() instanceof OrderIntent;
+        if ($this->hasOpenPosition($active) || ((!$allowOpenOrder || !$lockHasOwner) && $this->hasOpenOrder($active))) {
             $this->logger->info('symbol_execution_lock.release_skipped_open_exposure', [
                 'exchange' => $active->getExchange(),
                 'market_type' => $active->getMarketType(),
@@ -155,9 +156,14 @@ final class SymbolExecutionLockManager
         ExchangeContext $context,
         string $reason,
         bool $flush = false,
+        ?\DateTimeImmutable $lockedBefore = null,
     ): bool {
         $active = $this->locks->findActive($context->exchange->value, $context->marketType->value, $symbol);
         if (!$active instanceof SymbolExecutionLock) {
+            return false;
+        }
+
+        if ($lockedBefore !== null && $active->getLockedAt() > $lockedBefore) {
             return false;
         }
 

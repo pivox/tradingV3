@@ -27,6 +27,7 @@ final class SymbolExecutionLockReleaseListener
             $context,
             'position_closed',
             true,
+            $event->positionHistory->closedAt,
         );
     }
 }
