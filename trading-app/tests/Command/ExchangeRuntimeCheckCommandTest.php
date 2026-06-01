@@ -18,6 +18,7 @@ use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Dto\ExchangeCapabilities;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Okx\OkxConfig;
+use App\Provider\Bitmart\Http\BitmartConfig;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Registry\ExchangeProviderBundle;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -33,6 +34,7 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         $command = new ExchangeRuntimeCheckCommand(
             $this->adapterRegistry($this->adapter(Exchange::OKX, MarketType::PERPETUAL)),
             $this->missingProviderRegistry(),
+            new BitmartConfig('', '', ''),
             new OkxConfig(environment: 'demo'),
             new HyperliquidConfig(),
         );
@@ -63,6 +65,7 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         $command = new ExchangeRuntimeCheckCommand(
             $this->adapterRegistry($this->adapter(Exchange::BITMART, MarketType::PERPETUAL)),
             $this->providerRegistry($this->providerBundle(Exchange::BITMART, MarketType::PERPETUAL)),
+            new BitmartConfig('key', 'secret', 'memo'),
             new OkxConfig(environment: 'demo'),
             new HyperliquidConfig(),
         );
@@ -83,6 +86,34 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Credentials: ok', $output);
         self::assertStringContainsString('REST: unknown', $output);
         self::assertStringContainsString('Recommended dry_run: false', $output);
+        self::assertStringContainsString('Schedule ready: yes', $output);
+    }
+
+    public function testReportsUnreadyBitmartRuntimeWhenCredentialsAreMissing(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(Exchange::BITMART, MarketType::PERPETUAL)),
+            $this->providerRegistry($this->providerBundle(Exchange::BITMART, MarketType::PERPETUAL)),
+            new BitmartConfig('', '', ''),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Exchange: bitmart', $output);
+        self::assertStringContainsString('Adapter: found', $output);
+        self::assertStringContainsString('Provider bundle: found', $output);
+        self::assertStringContainsString('Credentials: missing', $output);
+        self::assertStringContainsString('Live trading: disabled', $output);
+        self::assertStringContainsString('Recommended dry_run: true', $output);
         self::assertStringContainsString('Schedule ready: yes', $output);
     }
 

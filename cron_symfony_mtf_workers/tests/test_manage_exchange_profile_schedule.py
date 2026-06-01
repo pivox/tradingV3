@@ -1,8 +1,12 @@
 """Tests for the generic exchange/profile Temporal schedule manager."""
 
+import asyncio
+
 import pytest
 
+import scripts.manage_exchange_profile_schedule as schedule_manager
 from scripts.manage_exchange_profile_schedule import (
+    async_main,
     build_job,
     build_parser,
     generate_schedule_id,
@@ -130,3 +134,32 @@ def test_runtime_check_command_uses_docker_compose():
         "okx",
         "perpetual",
     ]
+
+
+def test_create_dry_run_schedule_preview_skips_temporal_and_runtime_check(monkeypatch, capsys):
+    async def fail_get_client():
+        raise AssertionError("dry-run schedule preview must not connect to Temporal")
+
+    def fail_runtime_check(exchange, market_type):
+        raise AssertionError("dry-run schedule preview must not run Docker runtime checks")
+
+    monkeypatch.setattr(schedule_manager, "get_client", fail_get_client)
+    monkeypatch.setattr(schedule_manager, "run_runtime_check", fail_runtime_check)
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "create",
+            "--exchange",
+            "okx",
+            "--profile",
+            "scalper",
+            "--dry-run-schedule",
+        ]
+    )
+
+    asyncio.run(async_main(args))
+
+    output = capsys.readouterr().out
+    assert "[DRY-RUN] would create schedule cron-mtf-okx-scalper-1m" in output
+    assert "'exchange': 'okx'" in output

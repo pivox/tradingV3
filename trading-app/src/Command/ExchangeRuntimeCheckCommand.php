@@ -11,6 +11,7 @@ use App\Exchange\Contract\ExchangeAdapterInterface;
 use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Okx\OkxConfig;
+use App\Provider\Bitmart\Http\BitmartConfig;
 use App\Provider\Context\ExchangeContext;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -27,6 +28,7 @@ final class ExchangeRuntimeCheckCommand extends Command
     public function __construct(
         private readonly ExchangeAdapterRegistryInterface $adapters,
         private readonly ExchangeProviderRegistryInterface $providers,
+        private readonly BitmartConfig $bitmartConfig,
         private readonly OkxConfig $okxConfig,
         private readonly HyperliquidConfig $hyperliquidConfig,
     ) {
@@ -127,6 +129,7 @@ final class ExchangeRuntimeCheckCommand extends Command
     private function credentialsStatus(Exchange $exchange): string
     {
         return match ($exchange) {
+            Exchange::BITMART => $this->hasBitmartCredentials() ? 'ok' : 'missing',
             Exchange::OKX => $this->hasOkxCredentials() ? 'ok' : 'missing',
             Exchange::HYPERLIQUID => $this->hasHyperliquidCredentials() ? 'ok' : 'missing',
             default => 'ok',
@@ -164,6 +167,13 @@ final class ExchangeRuntimeCheckCommand extends Command
         return trim($this->okxConfig->apiKey) !== ''
             && trim($this->okxConfig->apiSecret) !== ''
             && trim($this->okxConfig->apiPassphrase) !== '';
+    }
+
+    private function hasBitmartCredentials(): bool
+    {
+        return trim($this->bitmartConfig->getApiKey()) !== ''
+            && trim($this->bitmartConfig->getApiSecret()) !== ''
+            && trim($this->bitmartConfig->getApiMemo()) !== '';
     }
 
     private function hasHyperliquidCredentials(): bool

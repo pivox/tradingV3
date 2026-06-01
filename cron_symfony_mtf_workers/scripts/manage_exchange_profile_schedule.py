@@ -234,13 +234,6 @@ async def create_schedule(client: Any, config: ScheduleConfig) -> None:
     if config.exchange is None or config.profile is None:
         raise RuntimeError("create requires --exchange and --profile")
 
-    runtime_check: Dict[str, str] = {}
-    if not config.skip_runtime_check:
-        runtime_check = run_runtime_check(config.exchange, config.market_type)
-
-    for warning in validate_live_guardrails(config.dry_run, runtime_check):
-        print(f"WARNING: {warning}")
-
     job = build_job(
         exchange=config.exchange,
         market_type=config.market_type,
@@ -248,6 +241,22 @@ async def create_schedule(client: Any, config: ScheduleConfig) -> None:
         workers=config.workers,
         dry_run=config.dry_run,
     )
+
+    if config.dry_run_schedule:
+        print(
+            "[DRY-RUN] would create schedule "
+            f"{config.schedule_id} (workflow_id='{config.workflow_id}', cron='{config.cron}', "
+            f"tz='{TIME_ZONE}', job={job})"
+        )
+        return
+
+    runtime_check: Dict[str, str] = {}
+    if not config.skip_runtime_check:
+        runtime_check = run_runtime_check(config.exchange, config.market_type)
+
+    for warning in validate_live_guardrails(config.dry_run, runtime_check):
+        print(f"WARNING: {warning}")
+
     Schedule, ScheduleActionStartWorkflow, SchedulePolicy, ScheduleSpec, overlap = temporal_schedule_classes()
     schedule = Schedule(
         action=ScheduleActionStartWorkflow(
@@ -262,14 +271,6 @@ async def create_schedule(client: Any, config: ScheduleConfig) -> None:
         ),
         policy=SchedulePolicy(overlap=overlap),
     )
-
-    if config.dry_run_schedule:
-        print(
-            "[DRY-RUN] would create schedule "
-            f"{config.schedule_id} (workflow_id='{config.workflow_id}', cron='{config.cron}', "
-            f"tz='{TIME_ZONE}', job={job})"
-        )
-        return
 
     try:
         await client.create_schedule(config.schedule_id, schedule)
@@ -310,12 +311,13 @@ async def describe_schedule(handle: Any) -> None:
 
 async def async_main(args: argparse.Namespace) -> None:
     config = resolve_schedule_config(args)
-    client = await get_client()
 
     if config.command == "create":
+        client = None if config.dry_run_schedule else await get_client()
         await create_schedule(client, config)
         return
 
+    client = await get_client()
     handle = client.get_schedule_handle(config.schedule_id)
     if config.command == "pause":
         await pause_schedule(handle, config)
