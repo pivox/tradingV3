@@ -88,6 +88,28 @@ CREATE TABLE symbol_execution_lock (
     released_at DATETIME NULL
 )
 SQL);
+        $this->connection->executeStatement(<<<'SQL'
+CREATE TABLE order_intent (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    exchange VARCHAR(32) NOT NULL,
+    market_type VARCHAR(32) NOT NULL,
+    symbol VARCHAR(50) NOT NULL,
+    side INTEGER NULL,
+    status VARCHAR(30) NOT NULL,
+    updated_at DATETIME NOT NULL
+)
+SQL);
+        $this->connection->executeStatement(<<<'SQL'
+CREATE TABLE order_protection (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_intent_id INTEGER NOT NULL,
+    type VARCHAR(20) NOT NULL,
+    price NUMERIC NOT NULL,
+    client_order_id VARCHAR(80) NULL,
+    order_id VARCHAR(80) NULL,
+    updated_at DATETIME NOT NULL
+)
+SQL);
     }
 
     public function testOpenPositionWithoutStopLossProducesCriticalAlert(): void
@@ -207,7 +229,7 @@ SQL);
             'exchange' => 'bitmart',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
-            'side' => 2,
+            'side' => 3,
             'type' => 'stop_loss',
             'status' => 'active',
             'trigger_price' => '13.90',
@@ -227,5 +249,96 @@ SQL);
 
         self::assertTrue($view->positions[0]['has_stop_loss']);
         self::assertSame(0, $view->criticalAlertCount);
+    }
+
+    public function testStopLossProtectionMustMatchPositionSide(): void
+    {
+        foreach (['LONG', 'SHORT'] as $side) {
+            $this->connection->insert('positions', [
+                'exchange' => 'bitmart',
+                'market_type' => 'perpetual',
+                'symbol' => 'LINKUSDT',
+                'side' => $side,
+                'size' => '42',
+                'avg_entry_price' => '14.25',
+                'leverage' => 8,
+                'unrealized_pnl' => '-3.10',
+                'status' => 'OPEN',
+                'payload' => json_encode(['source' => 'exchange'], JSON_THROW_ON_ERROR),
+                'updated_at' => '2026-06-01 10:00:00',
+            ]);
+        }
+        $this->connection->insert('futures_plan_order', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 3,
+            'type' => 'stop_loss',
+            'status' => 'active',
+            'trigger_price' => '13.90',
+            'price' => '13.90',
+            'size' => 42,
+            'client_order_id' => 'long-sl-plan-order',
+            'order_id' => 'exchange-long-sl-plan-order',
+            'plan_type' => 'stop_loss',
+            'raw_data' => '{}',
+            'updated_at' => '2026-06-01 10:01:00',
+        ]);
+
+        $view = (new RiskSummaryQuery(
+            $this->connection,
+            new MockClock('2026-06-01 10:05:00 UTC'),
+        ))->getSummary();
+
+        $bySide = [];
+        foreach ($view->positions as $position) {
+            $bySide[$position['side']] = $position;
+        }
+
+        self::assertTrue($bySide['LONG']['has_stop_loss']);
+        self::assertFalse($bySide['SHORT']['has_stop_loss']);
+        self::assertSame(1, $view->criticalAlertCount);
+        self::assertSame('SHORT', $view->alerts[0]->context['side']);
+    }
+
+    public function testFailedOrderProtectionDoesNotSuppressMissingStopLossAlert(): void
+    {
+        $this->connection->insert('positions', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 'LONG',
+            'size' => '42',
+            'avg_entry_price' => '14.25',
+            'leverage' => 8,
+            'unrealized_pnl' => '-3.10',
+            'status' => 'OPEN',
+            'payload' => json_encode(['source' => 'exchange'], JSON_THROW_ON_ERROR),
+            'updated_at' => '2026-06-01 10:00:00',
+        ]);
+        $this->connection->insert('order_intent', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 1,
+            'status' => 'FAILED',
+            'updated_at' => '2026-06-01 09:59:00',
+        ]);
+        $this->connection->insert('order_protection', [
+            'order_intent_id' => 1,
+            'type' => 'stop_loss',
+            'price' => '13.90',
+            'client_order_id' => 'failed-sl-protection',
+            'order_id' => 'exchange-failed-sl-protection',
+            'updated_at' => '2026-06-01 10:01:00',
+        ]);
+
+        $view = (new RiskSummaryQuery(
+            $this->connection,
+            new MockClock('2026-06-01 10:05:00 UTC'),
+        ))->getSummary();
+
+        self::assertFalse($view->positions[0]['has_stop_loss']);
+        self::assertSame(1, $view->criticalAlertCount);
     }
 }

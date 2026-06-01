@@ -90,6 +90,25 @@ CREATE TABLE futures_plan_order (
     updated_at DATETIME NOT NULL
 )
 SQL);
+        $this->connection->executeStatement(<<<'SQL'
+CREATE TABLE trade_lifecycle_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol VARCHAR(50) NOT NULL,
+    event_type VARCHAR(80) NOT NULL,
+    run_id VARCHAR(80) NULL,
+    order_id VARCHAR(80) NULL,
+    client_order_id VARCHAR(80) NULL,
+    side VARCHAR(10) NULL,
+    qty NUMERIC NULL,
+    price NUMERIC NULL,
+    timeframe VARCHAR(10) NULL,
+    config_profile VARCHAR(80) NULL,
+    config_version VARCHAR(80) NULL,
+    reason_code VARCHAR(80) NULL,
+    extra TEXT NULL,
+    happened_at DATETIME NOT NULL
+)
+SQL);
     }
 
     public function testInvestigationScopesMtfSymbolsToRequestedTimeWindowAndReadsEntryZoneAtr(): void
@@ -211,5 +230,34 @@ SQL);
         self::assertSame([], $decisionKeyOnly['sections']['mtf_symbols']);
         self::assertSame([], $runIdOnly['sections']['orders']);
         self::assertSame([], $runIdOnly['sections']['plan_orders']);
+    }
+
+    public function testDecisionKeyInvestigationFindsLifecycleRowsByOrderIds(): void
+    {
+        $this->connection->insert('trade_lifecycle_event', [
+            'symbol' => 'LINKUSDT',
+            'event_type' => 'order_submitted',
+            'run_id' => null,
+            'order_id' => null,
+            'client_order_id' => 'decision-client-order',
+            'side' => 'LONG',
+            'qty' => '1',
+            'price' => '14.2',
+            'timeframe' => '1m',
+            'config_profile' => 'scalper_micro',
+            'config_version' => 'test',
+            'reason_code' => null,
+            'extra' => '{}',
+            'happened_at' => '2026-06-01 10:15:00',
+        ]);
+
+        $result = (new InvestigationQuery($this->connection, sys_get_temp_dir()))->investigate(
+            null,
+            null,
+            'decision-client-order',
+            null,
+        );
+
+        self::assertSame(['decision-client-order'], array_column($result['sections']['lifecycle'], 'client_order_id'));
     }
 }

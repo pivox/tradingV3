@@ -140,11 +140,13 @@ final class RiskSummaryQuery
     {
         return $this->db->fetchAll(
             ['order_protection', 'order_intent'],
-            "SELECT op.id, oi.symbol, oi.side, op.type, op.price, op.client_order_id, op.order_id, op.updated_at
+            "SELECT op.id, oi.exchange, oi.market_type, oi.symbol, oi.side, op.type, op.price, op.client_order_id, op.order_id, op.updated_at
              FROM order_protection op
              INNER JOIN order_intent oi ON oi.id = op.order_intent_id
              WHERE LOWER(COALESCE(op.type, '')) = 'stop_loss'
                AND op.price > 0
+               AND oi.status = 'SENT'
+               AND COALESCE(op.order_id, op.client_order_id, '') <> ''
              ORDER BY op.updated_at DESC
              LIMIT 100",
         );
@@ -238,6 +240,10 @@ final class RiskSummaryQuery
                 continue;
             }
 
+            if (!$this->protectionMatchesPositionScope($protection, $position)) {
+                continue;
+            }
+
             if (!$this->rowIndicatesStopLoss($protection)) {
                 continue;
             }
@@ -250,6 +256,45 @@ final class RiskSummaryQuery
         }
 
         return false;
+    }
+
+    /**
+     * @param array<string, mixed> $protection
+     * @param array<string, mixed> $position
+     */
+    private function protectionMatchesPositionScope(array $protection, array $position): bool
+    {
+        foreach (['exchange', 'market_type'] as $key) {
+            $positionValue = strtolower((string) ($position[$key] ?? ''));
+            $protectionValue = strtolower((string) ($protection[$key] ?? ''));
+            if ($positionValue !== '' && $protectionValue !== '' && $positionValue !== $protectionValue) {
+                return false;
+            }
+        }
+
+        $positionSide = $this->normalizePositionSide($position['side'] ?? null);
+        $protectionSide = $this->normalizePositionSide($protection['side'] ?? null);
+
+        return $positionSide !== null && $protectionSide !== null && $positionSide === $protectionSide;
+    }
+
+    private function normalizePositionSide(mixed $side): ?string
+    {
+        if (is_numeric($side)) {
+            return match ((int) $side) {
+                1, 3 => 'LONG',
+                2, 4 => 'SHORT',
+                default => null,
+            };
+        }
+
+        $normalized = strtolower(trim((string) $side));
+
+        return match ($normalized) {
+            'long', 'open_long', 'close_long' => 'LONG',
+            'short', 'open_short', 'close_short' => 'SHORT',
+            default => null,
+        };
     }
 
     /**

@@ -229,8 +229,9 @@ final class InvestigationQuery
             $params['runId'] = $runId;
         }
         if ($decisionKey !== '') {
-            $where[] = 'CAST(extra AS TEXT) LIKE :needle';
+            $where[] = '(CAST(extra AS TEXT) LIKE :needle OR client_order_id = :decisionKey OR order_id = :decisionKey)';
             $params['needle'] = '%' . $decisionKey . '%';
+            $params['decisionKey'] = $decisionKey;
         }
         $this->addWindow($where, $params, 'happened_at', $window);
 
