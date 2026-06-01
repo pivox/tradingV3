@@ -29,6 +29,7 @@ final class OrderIntentManager
         private readonly EntityManagerInterface $entityManager,
         private readonly LoggerInterface $logger,
         private readonly DecisionKeyFactory $decisionKeyFactory,
+        private readonly ?SymbolExecutionLockManager $symbolExecutionLockManager = null,
     ) {
     }
 
@@ -87,7 +88,66 @@ final class OrderIntentManager
                 }
             }
 
-            return OrderIntentReservation::created($this->createIntent($orderParams, $quantization, $rawInputs));
+            $connection = $this->entityManager->getConnection();
+            $connection->beginTransaction();
+            try {
+                $intent = $this->buildIntent($orderParams, $quantization, $rawInputs);
+                $this->entityManager->persist($intent);
+
+                if ($this->symbolExecutionLockManager instanceof SymbolExecutionLockManager) {
+                    $lockReservation = $this->symbolExecutionLockManager->reserveForIntent(
+                        $intent,
+                        [
+                            'source' => 'order_intent_reservation',
+                            'decision_key' => null,
+                            'strategy_profile' => $intent->getStrategyProfile(),
+                            'strategy_version' => $intent->getStrategyVersion(),
+                        ],
+                    );
+
+                    if ($lockReservation->blocked) {
+                        $this->entityManager->detach($intent);
+                        $connection->commit();
+
+                        $blockingIntent = $lockReservation->lock->getOwnerOrderIntent() ?? $intent;
+                        $this->logger->warning('[OrderIntentManager] Global symbol lock blocked intent reservation', [
+                            'exchange' => $intent->getExchange(),
+                            'market_type' => $intent->getMarketType(),
+                            'symbol' => $intent->getSymbol(),
+                            'decision_key' => null,
+                            'reason' => 'cross_profile_symbol_locked',
+                            'lock' => $lockReservation->metadata['lock'] ?? null,
+                        ]);
+
+                        return OrderIntentReservation::blocked(
+                            $blockingIntent,
+                            'cross_profile_symbol_locked',
+                            $lockReservation->metadata,
+                        );
+                    }
+                }
+
+                $this->entityManager->flush();
+                $connection->commit();
+
+                $this->logger->debug('[OrderIntentManager] Reserved intent', [
+                    'order_intent_id' => $intent->getId(),
+                    'client_order_id' => $intent->getClientOrderId(),
+                    'decision_key' => $intent->getDecisionKey(),
+                    'exchange' => $intent->getExchange(),
+                    'market_type' => $intent->getMarketType(),
+                    'symbol' => $intent->getSymbol(),
+                    'status' => $intent->getStatus(),
+                ]);
+
+                return OrderIntentReservation::created($intent);
+            } catch (\Throwable $e) {
+                if ($connection->isTransactionActive()) {
+                    $connection->rollBack();
+                }
+
+                throw $e;
+            }
         }
 
         $context = $this->contextFromParams($orderParams);
@@ -106,6 +166,40 @@ final class OrderIntentManager
 
                 $intent = $this->buildIntent($orderParams, $quantization, $rawInputs);
                 $this->entityManager->persist($intent);
+
+                if ($this->symbolExecutionLockManager instanceof SymbolExecutionLockManager) {
+                    $lockReservation = $this->symbolExecutionLockManager->reserveForIntent(
+                        $intent,
+                        [
+                            'source' => 'order_intent_reservation',
+                            'decision_key' => $decisionKey,
+                            'strategy_profile' => $intent->getStrategyProfile(),
+                            'strategy_version' => $intent->getStrategyVersion(),
+                        ],
+                    );
+
+                    if ($lockReservation->blocked) {
+                        $this->entityManager->detach($intent);
+                        $connection->commit();
+
+                        $blockingIntent = $lockReservation->lock->getOwnerOrderIntent() ?? $intent;
+                        $this->logger->warning('[OrderIntentManager] Global symbol lock blocked intent reservation', [
+                            'exchange' => $intent->getExchange(),
+                            'market_type' => $intent->getMarketType(),
+                            'symbol' => $intent->getSymbol(),
+                            'decision_key' => $decisionKey,
+                            'reason' => 'cross_profile_symbol_locked',
+                            'lock' => $lockReservation->metadata['lock'] ?? null,
+                        ]);
+
+                        return OrderIntentReservation::blocked(
+                            $blockingIntent,
+                            'cross_profile_symbol_locked',
+                            $lockReservation->metadata,
+                        );
+                    }
+                }
+
                 $this->entityManager->flush();
                 $connection->commit();
 
@@ -229,6 +323,7 @@ final class OrderIntentManager
     public function markAsFailed(OrderIntent $intent, string $reason): void
     {
         $intent->markAsFailed($reason);
+        $this->symbolExecutionLockManager?->releaseForIntent($intent, 'order_intent_failed');
         $this->entityManager->flush();
 
         $this->logger->warning('[OrderIntentManager] Marked as failed', [
@@ -244,6 +339,7 @@ final class OrderIntentManager
     public function markAsCancelled(OrderIntent $intent): void
     {
         $intent->markAsCancelled();
+        $this->symbolExecutionLockManager?->releaseForIntent($intent, 'order_intent_cancelled');
         $this->entityManager->flush();
 
         $this->logger->info('[OrderIntentManager] Marked as cancelled', [
@@ -352,6 +448,18 @@ final class OrderIntentManager
      */
     private function hydrateIdempotencyFields(OrderIntent $intent, array $orderParams): void
     {
+        if (isset($orderParams['strategy_profile'])) {
+            $intent->setStrategyProfile((string) $orderParams['strategy_profile']);
+        }
+
+        if (isset($orderParams['strategy_version'])) {
+            $intent->setStrategyVersion((string) $orderParams['strategy_version']);
+        }
+
+        if (isset($orderParams['timeframe'])) {
+            $intent->setTimeframe((string) $orderParams['timeframe']);
+        }
+
         $decisionKey = isset($orderParams['decision_key']) ? trim((string) $orderParams['decision_key']) : '';
         if ($decisionKey === '') {
             return;
@@ -360,9 +468,17 @@ final class OrderIntentManager
         $intent->setDecisionKey($decisionKey);
         $parsed = $this->decisionKeyFactory->parse($decisionKey);
 
-        $intent->setStrategyProfile((string)($orderParams['strategy_profile'] ?? $parsed['strategy_profile'] ?? ''));
-        $intent->setStrategyVersion((string)($orderParams['strategy_version'] ?? $parsed['strategy_version'] ?? ''));
-        $intent->setTimeframe((string)($orderParams['timeframe'] ?? $parsed['timeframe'] ?? ''));
+        if ($intent->getStrategyProfile() === null) {
+            $intent->setStrategyProfile((string)($parsed['strategy_profile'] ?? ''));
+        }
+
+        if ($intent->getStrategyVersion() === null) {
+            $intent->setStrategyVersion((string)($parsed['strategy_version'] ?? ''));
+        }
+
+        if ($intent->getTimeframe() === null) {
+            $intent->setTimeframe((string)($parsed['timeframe'] ?? ''));
+        }
 
         $candleOpenTs = $orderParams['candle_open_ts'] ?? $parsed['candle_open_ts'] ?? null;
         $timestamp = $this->decisionKeyFactory->normalizeCandleOpenTs($candleOpenTs, $intent->getTimeframe());

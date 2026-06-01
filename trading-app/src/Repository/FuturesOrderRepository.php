@@ -63,4 +63,22 @@ final class FuturesOrderRepository extends ServiceEntityRepository
 
         return $qb->getQuery()->getResult();
     }
+
+    public function hasOpenOrderForSymbol(string $symbol, ?ExchangeContext $context = null): bool
+    {
+        $count = $this->createQueryBuilder('o')
+            ->select('COUNT(o.id)')
+            ->andWhere('o.exchange = :exchange')
+            ->andWhere('o.marketType = :marketType')
+            ->andWhere('o.symbol = :symbol')
+            ->andWhere('o.status IN (:statuses)')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
+            ->setParameter('symbol', strtoupper($symbol))
+            ->setParameter('statuses', ['pending', 'partially_filled', 'new', 'sent', 'open', 'submitted'])
+            ->getQuery()
+            ->getSingleScalarResult();
+
+        return (int) $count > 0;
+    }
 }

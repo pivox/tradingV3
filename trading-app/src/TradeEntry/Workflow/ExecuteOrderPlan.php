@@ -95,7 +95,7 @@ final class ExecuteOrderPlan
                             'decision_key' => $decisionKey,
                             'order_intent_id' => $reservation->intent->getId(),
                             'existing_status' => $reservation->intent->getStatus(),
-                        ],
+                        ] + $reservation->metadata,
                     );
                 }
 
