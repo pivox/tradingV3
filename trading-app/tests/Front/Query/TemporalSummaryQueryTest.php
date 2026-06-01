@@ -80,5 +80,7 @@ YAML);
 
         self::assertNotEmpty($summary['admin_commands']);
         self::assertStringContainsString('temporal operator cluster health', $summary['admin_commands'][0]['command']);
+        self::assertStringContainsString('--namespace default', $summary['admin_commands'][2]['command']);
+        self::assertStringNotContainsString('%env(TEMPORAL_NAMESPACE)%', $summary['admin_commands'][2]['command']);
     }
 }

@@ -9,6 +9,7 @@ final readonly class RiskSummaryView
     public int $openPositionCount;
     public int $openOrderCount;
     public int $openPlanOrderCount;
+    public int $openOrderTotalCount;
     public int $activeLockCount;
     public int $staleLockCount;
     public int $criticalAlertCount;
@@ -30,6 +31,7 @@ final readonly class RiskSummaryView
         $this->openPositionCount = count($positions);
         $this->openOrderCount = count($orders);
         $this->openPlanOrderCount = count($planOrders);
+        $this->openOrderTotalCount = $this->openOrderCount + $this->openPlanOrderCount;
         $this->activeLockCount = count($locks);
         $this->staleLockCount = count(array_filter($locks, static fn (array $lock): bool => (bool) ($lock['is_stale'] ?? false)));
         $this->criticalAlertCount = count(array_filter($alerts, static fn (FrontAlert $alert): bool => $alert->severity === 'critical'));
@@ -44,6 +46,7 @@ final readonly class RiskSummaryView
             'open_position_count' => $this->openPositionCount,
             'open_order_count' => $this->openOrderCount,
             'open_plan_order_count' => $this->openPlanOrderCount,
+            'open_order_total_count' => $this->openOrderTotalCount,
             'active_lock_count' => $this->activeLockCount,
             'stale_lock_count' => $this->staleLockCount,
             'critical_alert_count' => $this->criticalAlertCount,

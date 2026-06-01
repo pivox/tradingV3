@@ -139,4 +139,48 @@ SQL);
         self::assertSame('stale_symbol_lock', $view->alerts[0]->code);
         self::assertSame('BTCUSDT', $view->alerts[0]->symbol);
     }
+
+    public function testOpenOrdersIncludeSentAndExchangeNumericStatesInTotals(): void
+    {
+        foreach (['sent', '1', '2'] as $index => $status) {
+            $this->connection->insert('futures_order', [
+                'exchange' => 'bitmart',
+                'market_type' => 'perpetual',
+                'symbol' => 'ETHUSDT',
+                'side' => 1,
+                'type' => 'limit',
+                'status' => $status,
+                'price' => '3500',
+                'size' => 1,
+                'client_order_id' => 'order-' . $index,
+                'order_id' => 'exchange-order-' . $index,
+                'updated_at' => '2026-06-01 10:0' . $index . ':00',
+            ]);
+        }
+
+        $this->connection->insert('futures_plan_order', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'ETHUSDT',
+            'side' => 1,
+            'type' => 'take_profit',
+            'status' => 'active',
+            'trigger_price' => '3600',
+            'price' => '3600',
+            'size' => 1,
+            'client_order_id' => 'plan-order',
+            'order_id' => 'exchange-plan-order',
+            'updated_at' => '2026-06-01 10:05:00',
+        ]);
+
+        $view = (new RiskSummaryQuery(
+            $this->connection,
+            new MockClock('2026-06-01 10:05:00 UTC'),
+        ))->getSummary();
+
+        self::assertSame(3, $view->openOrderCount);
+        self::assertSame(1, $view->openPlanOrderCount);
+        self::assertSame(4, $view->openOrderTotalCount);
+        self::assertSame(4, $view->toArray()['open_order_total_count']);
+    }
 }

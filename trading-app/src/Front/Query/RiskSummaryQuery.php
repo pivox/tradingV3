@@ -110,7 +110,7 @@ final class RiskSummaryQuery
             ['futures_order'],
             "SELECT id, exchange, market_type, symbol, side, type, status, price, size, client_order_id, order_id, updated_at
              FROM futures_order
-             WHERE LOWER(COALESCE(status, '')) IN ('new', 'open', 'pending', 'submitted', 'partially_filled', 'partially-filled')
+             WHERE LOWER(COALESCE(status, '')) IN ('new', 'open', 'pending', 'sent', 'submitted', 'partially_filled', 'partially-filled', '1', '2')
              ORDER BY updated_at DESC
              LIMIT 100",
         );

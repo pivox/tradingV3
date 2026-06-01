@@ -9,6 +9,13 @@ use Psr\Clock\ClockInterface;
 
 final class SystemHealthQuery
 {
+    private const MESSENGER_TABLES = [
+        'messenger_messages_order_timeout',
+        'messenger_messages_mtf_projection',
+        'messenger_messages_mtf_decision',
+        'messenger_messages_failed',
+    ];
+
     private readonly FrontDatabase $db;
 
     public function __construct(
@@ -47,7 +54,7 @@ final class SystemHealthQuery
             $checks[] = ['name' => 'Postgres/DBAL', 'status' => 'critical', 'detail' => $exception->getMessage()];
         }
 
-        foreach (['mtf_run', 'mtf_run_symbol', 'positions', 'futures_order', 'symbol_execution_lock', 'messenger_messages'] as $table) {
+        foreach (array_merge(['mtf_run', 'mtf_run_symbol', 'positions', 'futures_order', 'symbol_execution_lock'], self::MESSENGER_TABLES) as $table) {
             $checks[] = [
                 'name' => $table,
                 'status' => $this->db->tableExists($table) ? 'ok' : 'warning',
@@ -63,13 +70,29 @@ final class SystemHealthQuery
      */
     private function queues(): array
     {
-        return $this->db->fetchAll(
-            ['messenger_messages'],
-            "SELECT queue_name, COUNT(*) AS message_count
-             FROM messenger_messages
-             GROUP BY queue_name
-             ORDER BY queue_name ASC",
-        );
+        $queues = [];
+
+        foreach (self::MESSENGER_TABLES as $table) {
+            if (!$this->db->tableExists($table)) {
+                continue;
+            }
+
+            foreach ($this->db->fetchAll(
+                [$table],
+                sprintf(
+                    "SELECT queue_name, COUNT(*) AS message_count, '%s' AS table_name
+                     FROM %s
+                     GROUP BY queue_name
+                     ORDER BY queue_name ASC",
+                    $table,
+                    $table,
+                ),
+            ) as $row) {
+                $queues[] = $row;
+            }
+        }
+
+        return $queues;
     }
 
     /**

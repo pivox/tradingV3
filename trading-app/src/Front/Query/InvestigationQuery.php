@@ -38,7 +38,7 @@ final class InvestigationQuery
         }
 
         $sections = [
-            'mtf_symbols' => $this->mtfSymbols($symbol, $runId),
+            'mtf_symbols' => $this->mtfSymbols($symbol, $runId, $window),
             'mtf_audit' => $this->mtfAudit($symbol, $runId, $window),
             'order_intents' => $this->orderIntents($symbol, $decisionKey, $window),
             'orders' => $this->orders($symbol, $window),
@@ -62,9 +62,10 @@ final class InvestigationQuery
     }
 
     /**
+     * @param array{0: ?\DateTimeImmutable, 1: ?\DateTimeImmutable} $window
      * @return list<array<string, mixed>>
      */
-    private function mtfSymbols(string $symbol, string $runId): array
+    private function mtfSymbols(string $symbol, string $runId, array $window): array
     {
         $where = [];
         $params = [];
@@ -76,6 +77,7 @@ final class InvestigationQuery
             $where[] = 'run_id = :runId';
             $params['runId'] = $runId;
         }
+        $this->addWindow($where, $params, 'created_at', $window);
 
         return $this->selectWithWhere(
             'mtf_run_symbol',
@@ -288,7 +290,7 @@ final class InvestigationQuery
 
         return $this->selectWithWhere(
             'entry_zone_live',
-            'SELECT id, symbol, side, price_min, price_max, atr_pct1m, vwap, volume_ratio, config_profile, config_version, valid_from, valid_until, created_at, status FROM entry_zone_live',
+            'SELECT id, symbol, side, price_min, price_max, atr_pct_1m, vwap, volume_ratio, config_profile, config_version, valid_from, valid_until, created_at, status FROM entry_zone_live',
             $where,
             $params,
             'created_at DESC',

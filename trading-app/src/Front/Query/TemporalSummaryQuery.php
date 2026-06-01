@@ -215,7 +215,7 @@ final class TemporalSummaryQuery
     private function adminCommands(array $cluster): array
     {
         $address = $this->commandAddress((string) ($cluster['address'] ?? 'temporal:7233'));
-        $namespace = (string) ($cluster['namespace'] ?? 'default');
+        $namespace = $this->commandNamespace((string) ($cluster['namespace'] ?? 'default'));
         $workflowId = (string) ($cluster['workflow_id'] ?? '<workflow-id>');
 
         return [
@@ -382,11 +382,23 @@ final class TemporalSummaryQuery
 
     private function commandAddress(string $address): string
     {
-        if (str_starts_with($address, '%env(')) {
-            return 'temporal:7233';
+        return $this->resolveEnvPlaceholder($address, 'temporal:7233');
+    }
+
+    private function commandNamespace(string $namespace): string
+    {
+        return $this->resolveEnvPlaceholder($namespace, 'default');
+    }
+
+    private function resolveEnvPlaceholder(string $value, string $default): string
+    {
+        if (!preg_match('/^%env\(([^)]+)\)%$/', $value, $matches)) {
+            return $value;
         }
 
-        return $address;
+        $envValue = $_ENV[$matches[1]] ?? $_SERVER[$matches[1]] ?? getenv($matches[1]);
+
+        return is_string($envValue) && trim($envValue) !== '' ? $envValue : $default;
     }
 
     private function relativePath(string $path): string
