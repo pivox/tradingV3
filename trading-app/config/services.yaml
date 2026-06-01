@@ -27,6 +27,13 @@ parameters:
     router.default_uri: 'http://trading-app-nginx'
     messenger.transport.dsn: 'doctrine://default?queue_name=log_messages'
     # Default values for env-backed log levels (so env is optional)
+    env(BITMART_API_KEY): ''
+    env(BITMART_SECRET_KEY): ''
+    env(BITMART_API_MEMO): ''
+    env(BITMART_BASE_URL): 'https://api-cloud-v2.bitmart.com'
+    env(BITMART_PUBLIC_API_URL): 'https://api-cloud-v2.bitmart.com'
+    env(BITMART_PRIVATE_API_URL): 'https://api-cloud-v2.bitmart.com'
+    env(BITMART_WS_PRIVATE_URL): 'wss://openapi-ws-v2.bitmart.com/api?protocol=1.1'
     env(MTF_LOG_LEVEL): 'info'
     env(LOG_LEVEL_MAIN): 'info'
     env(LOG_LEVEL_SIGNALS): 'info'

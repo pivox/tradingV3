@@ -113,6 +113,9 @@ IDs générés par défaut :
 | `--exchange=okx --profile=scalper --cron="*/1 * * * *"` | `cron-mtf-okx-scalper-1m` | `mtf-okx-scalper-runner` |
 | `--exchange=bitmart --profile=regular --cron="*/5 * * * *"` | `cron-mtf-bitmart-regular-5m` | `mtf-bitmart-regular-runner` |
 | `--exchange=hyperliquid --profile=scalper_micro --cron="*/1 * * * *"` | `cron-mtf-hyperliquid-scalper-micro-1m` | `mtf-hyperliquid-scalper-micro-runner` |
+| `--exchange=okx --market-type=spot --profile=scalper --cron="*/1 * * * *"` | `cron-mtf-okx-spot-scalper-1m` | `mtf-okx-spot-scalper-runner` |
+
+Le `market_type` est omis des IDs pour `perpetual` afin de conserver les noms recommandés historiques, et ajouté pour les autres marchés afin d'éviter les collisions.
 
 Matrice recommandée :
 

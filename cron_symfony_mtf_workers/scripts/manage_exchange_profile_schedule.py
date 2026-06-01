@@ -70,12 +70,22 @@ def profile_slug(profile: str) -> str:
     return profile.replace("_", "-")
 
 
-def generate_schedule_id(exchange: str, profile: str, cron_expression: str) -> str:
-    return f"cron-mtf-{exchange}-{profile_slug(profile)}-{cadence_suffix(cron_expression)}"
+def market_slug(market_type: str) -> str:
+    return "" if market_type == "perpetual" else f"{market_type}-"
 
 
-def generate_workflow_id(exchange: str, profile: str) -> str:
-    return f"mtf-{exchange}-{profile_slug(profile)}-runner"
+def generate_schedule_id(
+    exchange: str,
+    profile: str,
+    cron_expression: str,
+    *,
+    market_type: str = "perpetual",
+) -> str:
+    return f"cron-mtf-{exchange}-{market_slug(market_type)}{profile_slug(profile)}-{cadence_suffix(cron_expression)}"
+
+
+def generate_workflow_id(exchange: str, profile: str, *, market_type: str = "perpetual") -> str:
+    return f"mtf-{exchange}-{market_slug(market_type)}{profile_slug(profile)}-runner"
 
 
 def build_job(
@@ -165,28 +175,29 @@ def run_runtime_check(exchange: str, market_type: str) -> Dict[str, str]:
 
 def resolve_schedule_config(args: argparse.Namespace) -> ScheduleConfig:
     cron = args.cron
-    dry_run = parse_bool(getattr(args, "dry_run", None), True)
+    dry_run = parse_bool(getattr(args, "dry_run", None), parse_bool(os.getenv("MTF_WORKERS_DRY_RUN"), True))
     exchange = getattr(args, "exchange", None)
+    market_type = getattr(args, "market_type", "perpetual")
     profile = getattr(args, "profile", None)
 
     if getattr(args, "schedule_id", None):
         schedule_id = args.schedule_id
     elif exchange and profile:
-        schedule_id = generate_schedule_id(exchange, profile, cron)
+        schedule_id = generate_schedule_id(exchange, profile, cron, market_type=market_type)
     else:
         raise SystemExit("--schedule-id is required when --exchange or --profile is omitted")
 
     if getattr(args, "workflow_id", None):
         workflow_id = args.workflow_id
     elif exchange and profile:
-        workflow_id = generate_workflow_id(exchange, profile)
+        workflow_id = generate_workflow_id(exchange, profile, market_type=market_type)
     else:
         workflow_id = "mtf-schedule-runner"
 
     return ScheduleConfig(
         command=args.command,
         exchange=exchange,
-        market_type=getattr(args, "market_type", "perpetual"),
+        market_type=market_type,
         profile=profile,
         workers=max(1, getattr(args, "workers", DEFAULT_WORKERS)),
         dry_run=dry_run,
@@ -334,7 +345,7 @@ def add_common_options(parser: argparse.ArgumentParser, *, require_matrix: bool)
     parser.add_argument("--market-type", default="perpetual", choices=sorted(SUPPORTED_MARKET_TYPES))
     parser.add_argument("--profile", required=require_matrix, choices=sorted(SUPPORTED_PROFILES))
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
-    parser.add_argument("--dry-run", default="true")
+    parser.add_argument("--dry-run")
     parser.add_argument("--cron", default=DEFAULT_CRON)
     parser.add_argument("--schedule-id")
     parser.add_argument("--workflow-id")

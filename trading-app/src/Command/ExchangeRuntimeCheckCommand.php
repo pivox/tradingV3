@@ -11,7 +11,6 @@ use App\Exchange\Contract\ExchangeAdapterInterface;
 use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Okx\OkxConfig;
-use App\Provider\Bitmart\Http\BitmartConfig;
 use App\Provider\Context\ExchangeContext;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -28,9 +27,9 @@ final class ExchangeRuntimeCheckCommand extends Command
     public function __construct(
         private readonly ExchangeAdapterRegistryInterface $adapters,
         private readonly ExchangeProviderRegistryInterface $providers,
-        private readonly BitmartConfig $bitmartConfig,
         private readonly OkxConfig $okxConfig,
         private readonly HyperliquidConfig $hyperliquidConfig,
+        private readonly array $bitmartEnv = [],
     ) {
         parent::__construct();
     }
@@ -171,14 +170,38 @@ final class ExchangeRuntimeCheckCommand extends Command
 
     private function hasBitmartCredentials(): bool
     {
-        return trim($this->bitmartConfig->getApiKey()) !== ''
-            && trim($this->bitmartConfig->getApiSecret()) !== ''
-            && trim($this->bitmartConfig->getApiMemo()) !== '';
+        return $this->envIsPresent('BITMART_API_KEY')
+            && $this->envIsPresent('BITMART_SECRET_KEY')
+            && $this->envIsPresent('BITMART_API_MEMO');
     }
 
     private function hasHyperliquidCredentials(): bool
     {
         return trim($this->hyperliquidConfig->accountAddress) !== ''
             && trim($this->hyperliquidConfig->privateKey) !== '';
+    }
+
+    private function envIsPresent(string $name): bool
+    {
+        return trim($this->envValue($name)) !== '';
+    }
+
+    private function envValue(string $name): string
+    {
+        if (array_key_exists($name, $this->bitmartEnv)) {
+            return (string) $this->bitmartEnv[$name];
+        }
+
+        if (isset($_ENV[$name])) {
+            return (string) $_ENV[$name];
+        }
+
+        if (isset($_SERVER[$name])) {
+            return (string) $_SERVER[$name];
+        }
+
+        $value = getenv($name);
+
+        return is_string($value) ? $value : '';
     }
 }

@@ -59,6 +59,14 @@ def test_generated_ids_use_exchange_profile_and_cron_suffix():
     assert generate_workflow_id("okx", "scalper_micro") == "mtf-okx-scalper-micro-runner"
 
 
+def test_generated_ids_include_non_perpetual_market_type_to_avoid_collisions():
+    assert (
+        generate_schedule_id("okx", "scalper", "*/1 * * * *", market_type="spot")
+        == "cron-mtf-okx-spot-scalper-1m"
+    )
+    assert generate_workflow_id("okx", "scalper", market_type="spot") == "mtf-okx-spot-scalper-runner"
+
+
 def test_runtime_check_output_is_parsed_to_snake_case_keys():
     parsed = parse_runtime_check_output(
         "\n".join(
@@ -110,6 +118,26 @@ def test_parser_defaults_to_dry_run_and_generated_ids():
     assert config.schedule_id == "cron-mtf-okx-scalper-1m"
     assert config.workflow_id == "mtf-okx-scalper-runner"
     assert config.market_type == "perpetual"
+
+
+def test_parser_honors_dry_run_environment_default(monkeypatch):
+    monkeypatch.setenv("MTF_WORKERS_DRY_RUN", "false")
+
+    parser = build_parser()
+    args = parser.parse_args(["create", "--exchange", "bitmart", "--profile", "scalper"])
+    config = resolve_schedule_config(args)
+
+    assert config.dry_run is False
+
+
+def test_explicit_dry_run_overrides_environment_default(monkeypatch):
+    monkeypatch.setenv("MTF_WORKERS_DRY_RUN", "false")
+
+    parser = build_parser()
+    args = parser.parse_args(["create", "--exchange", "bitmart", "--profile", "scalper", "--dry-run=true"])
+    config = resolve_schedule_config(args)
+
+    assert config.dry_run is True
 
 
 def test_status_can_use_explicit_schedule_id_without_exchange_or_profile():

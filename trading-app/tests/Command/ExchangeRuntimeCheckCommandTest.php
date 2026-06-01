@@ -18,7 +18,6 @@ use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Dto\ExchangeCapabilities;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Okx\OkxConfig;
-use App\Provider\Bitmart\Http\BitmartConfig;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Registry\ExchangeProviderBundle;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -34,7 +33,6 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         $command = new ExchangeRuntimeCheckCommand(
             $this->adapterRegistry($this->adapter(Exchange::OKX, MarketType::PERPETUAL)),
             $this->missingProviderRegistry(),
-            new BitmartConfig('', '', ''),
             new OkxConfig(environment: 'demo'),
             new HyperliquidConfig(),
         );
@@ -65,9 +63,9 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         $command = new ExchangeRuntimeCheckCommand(
             $this->adapterRegistry($this->adapter(Exchange::BITMART, MarketType::PERPETUAL)),
             $this->providerRegistry($this->providerBundle(Exchange::BITMART, MarketType::PERPETUAL)),
-            new BitmartConfig('key', 'secret', 'memo'),
             new OkxConfig(environment: 'demo'),
             new HyperliquidConfig(),
+            ['BITMART_API_KEY' => 'key', 'BITMART_SECRET_KEY' => 'secret', 'BITMART_API_MEMO' => 'memo'],
         );
 
         $tester = new CommandTester($command);
@@ -94,9 +92,9 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         $command = new ExchangeRuntimeCheckCommand(
             $this->adapterRegistry($this->adapter(Exchange::BITMART, MarketType::PERPETUAL)),
             $this->providerRegistry($this->providerBundle(Exchange::BITMART, MarketType::PERPETUAL)),
-            new BitmartConfig('', '', ''),
             new OkxConfig(environment: 'demo'),
             new HyperliquidConfig(),
+            ['BITMART_API_KEY' => '', 'BITMART_SECRET_KEY' => '', 'BITMART_API_MEMO' => ''],
         );
 
         $tester = new CommandTester($command);
