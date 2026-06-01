@@ -109,11 +109,10 @@ final class MtfRunnerRequestDto
 
     private static function normalizeExchange(string $value): Exchange
     {
-        return match (strtolower(trim($value))) {
-            'bitmart' => Exchange::BITMART,
-            'binance' => Exchange::BINANCE,
-            default => throw new \InvalidArgumentException(sprintf('Unsupported exchange "%s"', $value)),
-        };
+        $normalized = strtolower(trim($value));
+
+        return Exchange::tryFrom($normalized)
+            ?? throw new \InvalidArgumentException(sprintf('Unsupported exchange "%s"', $value));
     }
 
     private static function normalizeMarketType(string $value): MarketType
