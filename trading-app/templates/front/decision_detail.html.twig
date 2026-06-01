@@ -1,0 +1,30 @@
+{% extends 'front/base.html.twig' %}
+
+{% block title %}Decision {{ detail.decision_key }} | TradingV3 Ops{% endblock %}
+
+{% block body %}
+    <section class="page-header">
+        <div>
+            <h1>Decision</h1>
+            <p class="mono">{{ detail.decision_key }}</p>
+        </div>
+        <a class="button-link" href="{{ path('front_decisions') }}">Retour</a>
+    </section>
+
+    {% for title, rows in {
+        'Order intents': detail.order_intents,
+        'Zone events': detail.zone_events,
+        'Lifecycle': detail.lifecycle_events
+    } %}
+        <section class="panel">
+            <div class="panel-header"><h2>{{ title }}</h2><span>{{ rows|length }}</span></div>
+            <div class="json-list">
+                {% for row in rows %}
+                    <pre>{{ row|json_encode(constant('JSON_PRETTY_PRINT')) }}</pre>
+                {% else %}
+                    <p class="empty">Aucune donnee.</p>
+                {% endfor %}
+            </div>
+        </section>
+    {% endfor %}
+{% endblock %}

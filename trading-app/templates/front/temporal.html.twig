@@ -1,0 +1,135 @@
+{% extends 'front/base.html.twig' %}
+
+{% block title %}Temporal | TradingV3 Ops{% endblock %}
+
+{% block body %}
+    <section class="page-header">
+        <div>
+            <h1>Temporal</h1>
+            <p>Administration et monitoring de la stack Temporal MTF.</p>
+        </div>
+        <div class="header-actions" data-auto-refresh data-refresh-url="{{ path('front_api_temporal_summary') }}" data-refresh-interval="30000">
+            <span class="live-dot"></span>
+            <a href="{{ temporal.ui.url }}" target="_blank" rel="noreferrer">Temporal UI</a>
+        </div>
+    </section>
+
+    <section class="metric-grid">
+        <div class="metric">
+            <span>Address</span>
+            <strong class="metric-text">{{ temporal.cluster.address }}</strong>
+        </div>
+        <div class="metric">
+            <span>Namespace</span>
+            <strong class="metric-text">{{ temporal.cluster.namespace }}</strong>
+        </div>
+        <div class="metric">
+            <span>Task queues</span>
+            <strong>{{ temporal.task_queues|length }}</strong>
+        </div>
+        <div class="metric {{ temporal.workers is empty ? 'warning' : '' }}">
+            <span>Workers</span>
+            <strong>{{ temporal.workers|length }}</strong>
+        </div>
+    </section>
+
+    <section class="layout-two">
+        <div class="panel">
+            <div class="panel-header"><h2>Cluster</h2></div>
+            <dl class="kv-grid">
+                <dt>gRPC</dt><dd class="mono">{{ temporal.cluster.address }} / host {{ temporal.cluster.grpc_port }}</dd>
+                <dt>Namespace</dt><dd class="mono">{{ temporal.cluster.namespace }}</dd>
+                <dt>Task queue MTF</dt><dd class="mono">{{ temporal.cluster.task_queue|default('-') }}</dd>
+                <dt>Workflow ID</dt><dd class="mono">{{ temporal.cluster.workflow_id|default('-') }}</dd>
+                <dt>HTTP API</dt><dd>{{ temporal.cluster.http_api_enabled ? 'activee' : 'non declaree' }}</dd>
+                <dt>UI</dt><dd><a href="{{ temporal.ui.url }}" target="_blank" rel="noreferrer">{{ temporal.ui.url }}</a></dd>
+            </dl>
+        </div>
+        <div class="panel">
+            <div class="panel-header"><h2>Checks</h2></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+                    <tbody>
+                    {% for check in temporal.checks %}
+                        <tr><td>{{ check.name }}</td><td><span class="pill {{ check.status }}">{{ check.status }}</span></td><td>{{ check.detail }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section class="layout-two">
+        <div class="panel">
+            <div class="panel-header"><h2>Services Docker</h2><span>{{ temporal.services|length }}</span></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Service</th><th>Container</th><th>Image</th><th>Ports</th><th>Health</th></tr></thead>
+                    <tbody>
+                    {% for service in temporal.services %}
+                        <tr>
+                            <td class="mono">{{ service.name }}</td>
+                            <td class="mono">{{ service.container_name }}</td>
+                            <td>{{ service.image|default('-') }}</td>
+                            <td class="mono">{{ service.ports|join(', ') ?: service.expose|join(', ') }}</td>
+                            <td>{{ service.has_healthcheck ? 'oui' : 'non' }}</td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="5" class="empty">Aucun service Temporal trouve.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="panel">
+            <div class="panel-header"><h2>Workers & task queues</h2></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Worker</th><th>Task queue</th><th class="num">MTF</th><th class="num">Micro</th><th>Target</th></tr></thead>
+                    <tbody>
+                    {% for worker in temporal.workers %}
+                        <tr>
+                            <td class="mono">{{ worker.container_name }}</td>
+                            <td class="mono">{{ worker.task_queue }}</td>
+                            <td class="num">{{ worker.workers_count|default('-') }}</td>
+                            <td class="num">{{ worker.scalper_micro_workers_count|default('-') }}</td>
+                            <td class="mono">{{ worker.target_url|default('-') }}</td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="5" class="empty">Aucun worker Temporal declare.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section class="panel">
+        <div class="panel-header"><h2>Commandes admin</h2></div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Action</th><th>Commande</th></tr></thead>
+                <tbody>
+                {% for command in temporal.admin_commands %}
+                    <tr><td>{{ command.label }}</td><td class="mono">{{ command.command }}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="panel">
+        <div class="panel-header"><h2>Fichiers surveilles</h2></div>
+        <div class="table-wrap compact">
+            <table>
+                <thead><tr><th>Fichier</th><th>Existe</th><th>Updated</th><th class="num">KB</th></tr></thead>
+                <tbody>
+                {% for file in temporal.config_files %}
+                    <tr><td class="mono">{{ file.path }}</td><td>{{ file.exists ? 'oui' : 'non' }}</td><td>{{ file.updated_at|default('-') }}</td><td class="num">{{ file.size_kb|default('-') }}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+{% endblock %}

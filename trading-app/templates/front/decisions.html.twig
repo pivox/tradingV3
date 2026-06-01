@@ -1,0 +1,85 @@
+{% extends 'front/base.html.twig' %}
+
+{% block title %}Decision Explorer | TradingV3 Ops{% endblock %}
+
+{% block body %}
+    <section class="page-header">
+        <div>
+            <h1>Decision Explorer</h1>
+            <p>{{ view.runs|length }} run(s) recent(s), {{ view.symbols|length }} symbole(s) sur le dernier run</p>
+        </div>
+        <div class="header-actions" data-auto-refresh data-refresh-url="{{ path('front_api_decisions_latest') }}" data-refresh-interval="30000">
+            <span class="live-dot"></span>
+            <span>refresh</span>
+        </div>
+    </section>
+
+    <section class="panel">
+        <div class="panel-header"><h2>Runs MTF</h2></div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Run</th><th>Status</th><th>Start</th><th class="num">Duree</th><th class="num">Workers</th><th class="num">Processed</th><th class="num">Success</th></tr></thead>
+                <tbody>
+                {% for run in view.runs %}
+                    <tr>
+                        <td class="mono">{{ run.run_id }}</td>
+                        <td><span class="pill">{{ run.status }}</span></td>
+                        <td>{{ run.started_at }}</td>
+                        <td class="num">{{ run.execution_time_seconds }} s</td>
+                        <td class="num">{{ run.workers|default('-') }}</td>
+                        <td class="num">{{ run.symbols_processed }}/{{ run.symbols_requested }}</td>
+                        <td class="num">{{ run.success_rate }}%</td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="7" class="empty">Aucun run MTF trouve.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="layout-two">
+        <div class="panel">
+            <div class="panel-header"><h2>Raisons principales</h2></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Raison</th><th class="num">Count</th></tr></thead>
+                    <tbody>
+                    {% for row in view.reasonCounts %}
+                        <tr><td>{{ row.reason }}</td><td class="num">{{ row.count }}</td></tr>
+                    {% else %}
+                        <tr><td colspan="2" class="empty">Aucune raison calculee.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="panel">
+            <div class="panel-header"><h2>Symboles dernier run</h2></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Symbole</th><th>Status</th><th>TF</th><th>Raison</th><th>Decision</th></tr></thead>
+                    <tbody>
+                    {% for symbol in view.symbols %}
+                        <tr>
+                            <td class="mono">{{ symbol.symbol }}</td>
+                            <td>{{ symbol.status }}</td>
+                            <td>{{ symbol.blocking_tf|default(symbol.execution_tf|default('-')) }}</td>
+                            <td>{{ symbol.primary_reason }}</td>
+                            <td>
+                                {% if symbol.decision_key|default(null) %}
+                                    <a href="{{ path('front_decision_detail', {decisionKey: symbol.decision_key}) }}">ouvrir</a>
+                                {% else %}
+                                    <span class="muted">-</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="5" class="empty">Aucun symbole pour le dernier run.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+{% endblock %}

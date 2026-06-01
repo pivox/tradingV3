@@ -308,6 +308,22 @@ services:
             $path: '%kernel.project_dir%/config/app/indicator.yaml'
         autowire: false
 
+    App\Front\Query\SystemHealthQuery:
+        arguments:
+            $projectDir: '%kernel.project_dir%'
+
+    App\Front\Query\ConfigSummaryQuery:
+        arguments:
+            $projectDir: '%kernel.project_dir%'
+
+    App\Front\Query\InvestigationQuery:
+        arguments:
+            $projectDir: '%kernel.project_dir%'
+
+    App\Front\Query\TemporalSummaryQuery:
+        arguments:
+            $projectDir: '%kernel.project_dir%'
+
     # Registre des conditions: injection automatique via AutowireLocator/AutowireIterator
     App\MtfValidator\ConditionLoader\ConditionRegistry:
         arguments:

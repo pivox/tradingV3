@@ -1,0 +1,61 @@
+{% extends 'front/base.html.twig' %}
+
+{% block title %}Investigation | TradingV3 Ops{% endblock %}
+
+{% block body %}
+    <section class="page-header">
+        <div>
+            <h1>Investigation</h1>
+            <p>Recherche consolidee BDD par symbole, date, decision_key ou run_id.</p>
+        </div>
+    </section>
+
+    <section class="panel">
+        <form class="filter-form" method="get" action="{{ path('front_investigate') }}">
+            <label>Symbole <input name="symbol" value="{{ app.request.query.get('symbol') }}" placeholder="LINKUSDT"></label>
+            <label>Date UTC <input name="date" value="{{ app.request.query.get('date') }}" placeholder="2025-11-30 13:02"></label>
+            <label>Decision key <input name="decision_key" value="{{ app.request.query.get('decision_key') }}"></label>
+            <label>Run ID <input name="run_id" value="{{ app.request.query.get('run_id') }}"></label>
+            <button type="submit">Rechercher</button>
+        </form>
+    </section>
+
+    {% if result.searched %}
+        <section class="metric-grid">
+            {% for name, rows in result.sections %}
+                <div class="metric"><span>{{ name }}</span><strong>{{ rows|length }}</strong></div>
+            {% endfor %}
+        </section>
+
+        {% if result.exports is not empty %}
+            <section class="panel">
+                <div class="panel-header"><h2>Exports existants</h2></div>
+                <div class="table-wrap compact">
+                    <table>
+                        <thead><tr><th>Fichier</th><th>Chemin</th><th>Updated</th></tr></thead>
+                        <tbody>
+                        {% for export in result.exports %}
+                            <tr><td>{{ export.name }}</td><td class="mono">{{ export.path }}</td><td>{{ export.updated_at }}</td></tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        {% endif %}
+
+        {% for name, rows in result.sections %}
+            <section class="panel">
+                <div class="panel-header"><h2>{{ name }}</h2><span>{{ rows|length }}</span></div>
+                <div class="json-list">
+                    {% for row in rows %}
+                        <pre>{{ row|json_encode(constant('JSON_PRETTY_PRINT')) }}</pre>
+                    {% else %}
+                        <p class="empty">Aucune donnee.</p>
+                    {% endfor %}
+                </div>
+            </section>
+        {% endfor %}
+    {% else %}
+        <section class="panel"><p class="empty">Aucune recherche lancee.</p></section>
+    {% endif %}
+{% endblock %}

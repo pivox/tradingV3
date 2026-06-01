@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="fr">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{% block title %}TradingV3 Ops{% endblock %}</title>
+        <link rel="stylesheet" href="/front/app.css">
+        {% block stylesheets %}{% endblock %}
+    </head>
+    <body>
+        <header class="topbar">
+            <a class="brand" href="{{ path('front_cockpit') }}">
+                <span class="brand-mark">T3</span>
+                <span>TradingV3 Ops</span>
+            </a>
+            <nav class="main-nav" aria-label="Navigation principale">
+                <a class="{{ current|default('cockpit') == 'cockpit' ? 'active' : '' }}" href="{{ path('front_cockpit') }}">Cockpit</a>
+                <a class="{{ current|default('') == 'risk' ? 'active' : '' }}" href="{{ path('front_risk') }}">Risk Center</a>
+                <a class="{{ current|default('') == 'decisions' ? 'active' : '' }}" href="{{ path('front_decisions') }}">Decision Explorer</a>
+                <a class="{{ current|default('') == 'investigate' ? 'active' : '' }}" href="{{ path('front_investigate') }}">Investigation</a>
+                <a class="{{ current|default('') == 'system' ? 'active' : '' }}" href="{{ path('front_system') }}">System</a>
+                <a class="{{ current|default('') == 'temporal' ? 'active' : '' }}" href="{{ path('front_temporal') }}">Temporal</a>
+                <a class="{{ current|default('') == 'config' ? 'active' : '' }}" href="{{ path('front_config') }}">Config</a>
+            </nav>
+        </header>
+
+        <main class="page-shell">
+            {% block body %}{% endblock %}
+        </main>
+
+        <script src="/front/app.js" defer></script>
+        {% block javascripts %}{% endblock %}
+    </body>
+</html>
