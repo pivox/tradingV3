@@ -94,7 +94,10 @@ final class OrderIntentManager
                 $intent = $this->buildIntent($orderParams, $quantization, $rawInputs);
                 $this->entityManager->persist($intent);
 
-                if ($this->symbolExecutionLockManager instanceof SymbolExecutionLockManager) {
+                if (
+                    $this->symbolExecutionLockManager instanceof SymbolExecutionLockManager
+                    && $this->requiresSymbolExecutionLock($intent, $orderParams)
+                ) {
                     $lockReservation = $this->symbolExecutionLockManager->reserveForIntent(
                         $intent,
                         [
@@ -167,7 +170,10 @@ final class OrderIntentManager
                 $intent = $this->buildIntent($orderParams, $quantization, $rawInputs);
                 $this->entityManager->persist($intent);
 
-                if ($this->symbolExecutionLockManager instanceof SymbolExecutionLockManager) {
+                if (
+                    $this->symbolExecutionLockManager instanceof SymbolExecutionLockManager
+                    && $this->requiresSymbolExecutionLock($intent, $orderParams)
+                ) {
                     $lockReservation = $this->symbolExecutionLockManager->reserveForIntent(
                         $intent,
                         [
@@ -549,6 +555,44 @@ final class OrderIntentManager
         if ($lockReservation->syntheticLockCreated) {
             $this->entityManager->flush();
         }
+    }
+
+    /**
+     * @param array<string,mixed> $orderParams
+     */
+    private function requiresSymbolExecutionLock(OrderIntent $intent, array $orderParams): bool
+    {
+        if (\in_array($intent->getSide(), [2, 3], true)) {
+            return false;
+        }
+
+        return !$this->truthyOrderParam($orderParams, 'reduce_only')
+            && !$this->truthyOrderParam($orderParams, 'reduceOnly');
+    }
+
+    /**
+     * @param array<string,mixed> $orderParams
+     */
+    private function truthyOrderParam(array $orderParams, string $key): bool
+    {
+        if (!\array_key_exists($key, $orderParams)) {
+            return false;
+        }
+
+        $value = $orderParams[$key];
+        if (\is_bool($value)) {
+            return $value;
+        }
+
+        if (\is_int($value)) {
+            return $value === 1;
+        }
+
+        if (\is_string($value)) {
+            return \in_array(strtolower(trim($value)), ['1', 'true', 'yes', 'on'], true);
+        }
+
+        return false;
     }
 
     private function lockDecisionKey(ExchangeContext $context, string $decisionKey): void

@@ -32,6 +32,7 @@ use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\Trading\Storage\FuturesOrderOrderStateRepository;
 use App\Trading\Storage\PositionPositionStateRepository;
 use Brick\Math\BigDecimal;
+use Doctrine\DBAL\Platforms\SqlitePlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
@@ -74,6 +75,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $schemaTool = new SchemaTool($this->em);
         $schemaTool->dropSchema($metadata);
         $schemaTool->createSchema($metadata);
+        $this->normalizeSqlitePartialUniqueIndexes();
     }
 
     protected function tearDown(): void
@@ -370,6 +372,37 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         ], $scalperMicro->metadata['lock'] ?? null);
     }
 
+    public function testReduceOnlyCloseIntentBypassesGlobalSymbolLock(): void
+    {
+        $manager = $this->orderIntentManager();
+
+        $entry = $manager->reserveIntent($this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            clientOrderId: 'cid-entry-lock-owner',
+            strategyProfile: 'scalper',
+        ));
+        $closeParams = $this->orderIntentParams(
+            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:close:manual:v1',
+            clientOrderId: 'cid-reduce-only-close',
+            strategyProfile: 'manual_close',
+        );
+        $closeParams['side'] = 2;
+        $closeParams['reduce_only'] = true;
+
+        $close = $manager->reserveIntent($closeParams);
+
+        self::assertTrue($entry->created);
+        self::assertTrue($close->created);
+        self::assertFalse($close->blocked);
+        self::assertSame(2, $close->intent->getSide());
+
+        /** @var \App\Repository\SymbolExecutionLockRepository $lockRepository */
+        $lockRepository = $this->em->getRepository(SymbolExecutionLock::class);
+        $lock = $lockRepository->findActive('bitmart', 'perpetual', 'BTCUSDT');
+
+        self::assertSame($entry->intent->getId(), $lock?->getOwnerOrderIntentId());
+    }
+
     public function testOrderIntentReservationWithoutDecisionKeyStillUsesGlobalSymbolLock(): void
     {
         $manager = $this->orderIntentManager();
@@ -564,6 +597,41 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame(0, $this->em->getRepository(OrderIntent::class)->count([]));
     }
 
+    public function testFuturesOrderRepositoryTreatsBitmartRawStateAsOpen(): void
+    {
+        $this->em->persist(
+            $this->newFuturesOrder('bitmart', 'state-only-open-order', '1', 'BTCUSDT')
+                ->setStatus(null)
+                ->setRawData([
+                    'exchange' => 'bitmart',
+                    'market_type' => 'perpetual',
+                    'state' => 1,
+                ])
+        );
+        $this->em->flush();
+
+        /** @var FuturesOrderRepository $repository */
+        $repository = $this->em->getRepository(FuturesOrder::class);
+
+        self::assertTrue($repository->hasOpenOrderForSymbol('BTCUSDT'));
+    }
+
+    public function testSymbolExecutionLockMetadataDeclaresActiveUniqueConstraint(): void
+    {
+        $metadata = $this->em->getClassMetadata(SymbolExecutionLock::class);
+        $uniqueConstraints = $metadata->table['uniqueConstraints'] ?? [];
+
+        self::assertArrayHasKey('ux_symbol_execution_lock_active_symbol', $uniqueConstraints);
+        self::assertSame(
+            ['exchange', 'market_type', 'symbol'],
+            $uniqueConstraints['ux_symbol_execution_lock_active_symbol']['columns'] ?? null,
+        );
+        self::assertSame(
+            'released_at IS NULL',
+            $uniqueConstraints['ux_symbol_execution_lock_active_symbol']['options']['where'] ?? null,
+        );
+    }
+
     public function testBlockedReservationDetachesCascadedProtections(): void
     {
         $manager = $this->orderIntentManager();
@@ -735,6 +803,20 @@ final class ExchangeScopedStorageTest extends KernelTestCase
             ->setLowPrice(BigDecimal::of('90'))
             ->setClosePrice(BigDecimal::of($close))
             ->setVolume(BigDecimal::of('1'));
+    }
+
+    private function normalizeSqlitePartialUniqueIndexes(): void
+    {
+        $connection = $this->em->getConnection();
+        if (!$connection->getDatabasePlatform() instanceof SqlitePlatform) {
+            return;
+        }
+
+        $connection->executeStatement('DROP INDEX IF EXISTS ux_symbol_execution_lock_active_symbol');
+        $connection->executeStatement(
+            'CREATE UNIQUE INDEX ux_symbol_execution_lock_active_symbol ' .
+            'ON symbol_execution_lock (exchange, market_type, symbol) WHERE released_at IS NULL'
+        );
     }
 
     /**

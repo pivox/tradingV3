@@ -12,6 +12,7 @@ use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: SymbolExecutionLockRepository::class)]
 #[ORM\Table(name: 'symbol_execution_lock')]
+#[ORM\UniqueConstraint(name: 'ux_symbol_execution_lock_active_symbol', columns: ['exchange', 'market_type', 'symbol'], options: ['where' => 'released_at IS NULL'])]
 #[ORM\Index(name: 'idx_symbol_execution_lock_active', columns: ['exchange', 'market_type', 'symbol', 'released_at'])]
 #[ORM\Index(name: 'idx_symbol_execution_lock_owner_intent', columns: ['owner_order_intent_id'])]
 final class SymbolExecutionLock
