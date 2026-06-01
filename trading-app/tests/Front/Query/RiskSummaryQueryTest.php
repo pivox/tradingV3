@@ -69,6 +69,8 @@ CREATE TABLE futures_plan_order (
     size INTEGER NULL,
     client_order_id VARCHAR(80) NULL,
     order_id VARCHAR(80) NULL,
+    plan_type VARCHAR(20) NULL,
+    raw_data TEXT NOT NULL DEFAULT '{}',
     updated_at DATETIME NOT NULL
 )
 SQL);
@@ -170,6 +172,8 @@ SQL);
             'size' => 1,
             'client_order_id' => 'plan-order',
             'order_id' => 'exchange-plan-order',
+            'plan_type' => 'take_profit',
+            'raw_data' => '{}',
             'updated_at' => '2026-06-01 10:05:00',
         ]);
 
@@ -182,5 +186,46 @@ SQL);
         self::assertSame(1, $view->openPlanOrderCount);
         self::assertSame(4, $view->openOrderTotalCount);
         self::assertSame(4, $view->toArray()['open_order_total_count']);
+    }
+
+    public function testActiveStopLossPlanOrderSuppressesMissingStopLossAlert(): void
+    {
+        $this->connection->insert('positions', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 'LONG',
+            'size' => '42',
+            'avg_entry_price' => '14.25',
+            'leverage' => 8,
+            'unrealized_pnl' => '-3.10',
+            'status' => 'OPEN',
+            'payload' => json_encode(['source' => 'exchange'], JSON_THROW_ON_ERROR),
+            'updated_at' => '2026-06-01 10:00:00',
+        ]);
+        $this->connection->insert('futures_plan_order', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 2,
+            'type' => 'stop_loss',
+            'status' => 'active',
+            'trigger_price' => '13.90',
+            'price' => '13.90',
+            'size' => 42,
+            'client_order_id' => 'sl-plan-order',
+            'order_id' => 'exchange-sl-plan-order',
+            'plan_type' => 'stop_loss',
+            'raw_data' => '{}',
+            'updated_at' => '2026-06-01 10:01:00',
+        ]);
+
+        $view = (new RiskSummaryQuery(
+            $this->connection,
+            new MockClock('2026-06-01 10:05:00 UTC'),
+        ))->getSummary();
+
+        self::assertTrue($view->positions[0]['has_stop_loss']);
+        self::assertSame(0, $view->criticalAlertCount);
     }
 }

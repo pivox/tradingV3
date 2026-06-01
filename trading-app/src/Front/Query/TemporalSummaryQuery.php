@@ -104,7 +104,7 @@ final class TemporalSummaryQuery
                 'name' => $name,
                 'image' => $definition['image'] ?? null,
                 'container_name' => $definition['container_name'] ?? $name,
-                'ports' => $this->normalizeList($definition['ports'] ?? []),
+                'ports' => $this->normalizePorts($definition['ports'] ?? []),
                 'expose' => $this->normalizeList($definition['expose'] ?? []),
                 'environment' => $environment,
                 'mem_limit' => $definition['mem_limit'] ?? null,
@@ -338,6 +338,35 @@ final class TemporalSummaryQuery
     }
 
     /**
+     * @return list<string>
+     */
+    private function normalizePorts(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $ports = [];
+        foreach ($value as $item) {
+            if (is_array($item)) {
+                $target = (string) ($item['target'] ?? '');
+                $published = (string) ($item['published'] ?? '');
+                $hostIp = (string) ($item['host_ip'] ?? '');
+                if ($target === '') {
+                    continue;
+                }
+
+                $ports[] = ($hostIp !== '' ? $hostIp . ':' : '') . ($published !== '' ? $published . ':' : '') . $target;
+                continue;
+            }
+
+            $ports[] = (string) $item;
+        }
+
+        return $ports;
+    }
+
+    /**
      * @param list<string>|mixed $ports
      */
     private function firstHostPort(mixed $ports, string $containerPort): ?string
@@ -348,11 +377,13 @@ final class TemporalSummaryQuery
 
         foreach ($ports as $port) {
             $port = trim((string) $port, '"\'');
-            if (!str_ends_with($port, ':' . $containerPort)) {
+            $portWithoutProtocol = explode('/', $port, 2)[0];
+            $parts = explode(':', $portWithoutProtocol);
+            if ((string) end($parts) !== $containerPort) {
                 continue;
             }
 
-            return explode(':', $port)[0] ?? null;
+            return $parts[count($parts) - 2] ?? $containerPort;
         }
 
         return null;

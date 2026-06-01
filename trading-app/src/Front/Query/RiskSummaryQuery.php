@@ -26,6 +26,7 @@ final class RiskSummaryQuery
         $positions = $this->loadOpenPositions();
         $orders = $this->loadOpenOrders();
         $planOrders = $this->loadOpenPlanOrders();
+        $stopLossProtections = $this->loadStopLossProtections();
         $locks = $this->loadActiveLocks($now);
         $intents = $this->loadStaleOrderIntents($now);
         $alerts = [];
@@ -33,7 +34,8 @@ final class RiskSummaryQuery
         foreach ($positions as $index => $position) {
             $payload = FrontDatabase::jsonObject($position['payload'] ?? null);
             $positions[$index]['payload'] = $payload;
-            $positions[$index]['has_stop_loss'] = $this->hasStopLoss($payload);
+            $positions[$index]['has_stop_loss'] = $this->hasStopLoss($payload)
+                || $this->hasActiveStopLossProtection($position, $orders, $planOrders, $stopLossProtections);
 
             if (!$positions[$index]['has_stop_loss']) {
                 $alerts[] = new FrontAlert(
@@ -123,10 +125,27 @@ final class RiskSummaryQuery
     {
         return $this->db->fetchAll(
             ['futures_plan_order'],
-            "SELECT id, exchange, market_type, symbol, side, type, status, trigger_price, price, size, client_order_id, order_id, updated_at
+            "SELECT id, exchange, market_type, symbol, side, type, status, trigger_price, price, size, client_order_id, order_id, plan_type, raw_data, updated_at
              FROM futures_plan_order
              WHERE LOWER(COALESCE(status, '')) IN ('new', 'open', 'pending', 'submitted', 'active', 'live', 'untriggered')
              ORDER BY updated_at DESC
+             LIMIT 100",
+        );
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function loadStopLossProtections(): array
+    {
+        return $this->db->fetchAll(
+            ['order_protection', 'order_intent'],
+            "SELECT op.id, oi.symbol, oi.side, op.type, op.price, op.client_order_id, op.order_id, op.updated_at
+             FROM order_protection op
+             INNER JOIN order_intent oi ON oi.id = op.order_intent_id
+             WHERE LOWER(COALESCE(op.type, '')) = 'stop_loss'
+               AND op.price > 0
+             ORDER BY op.updated_at DESC
              LIMIT 100",
         );
     }
@@ -199,6 +218,55 @@ final class RiskSummaryQuery
         }
 
         return false;
+    }
+
+    /**
+     * @param array<string, mixed> $position
+     * @param list<array<string, mixed>> $orders
+     * @param list<array<string, mixed>> $planOrders
+     * @param list<array<string, mixed>> $stopLossProtections
+     */
+    private function hasActiveStopLossProtection(array $position, array $orders, array $planOrders, array $stopLossProtections): bool
+    {
+        $symbol = strtoupper((string) ($position['symbol'] ?? ''));
+        if ($symbol === '') {
+            return false;
+        }
+
+        foreach (array_merge($orders, $planOrders, $stopLossProtections) as $protection) {
+            if (strtoupper((string) ($protection['symbol'] ?? '')) !== $symbol) {
+                continue;
+            }
+
+            if (!$this->rowIndicatesStopLoss($protection)) {
+                continue;
+            }
+
+            if ($this->isMeaningfulPrice($protection['trigger_price'] ?? null)
+                || $this->isMeaningfulPrice($protection['price'] ?? null)
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function rowIndicatesStopLoss(array $row): bool
+    {
+        foreach (['type', 'plan_type', 'client_order_id', 'order_id'] as $key) {
+            $value = strtolower((string) ($row[$key] ?? ''));
+            if (str_contains($value, 'stop') || str_contains($value, 'sl')) {
+                return true;
+            }
+        }
+
+        $rawData = FrontDatabase::jsonObject($row['raw_data'] ?? null);
+
+        return $rawData !== [] && $this->hasStopLoss($rawData);
     }
 
     private function isMeaningfulPrice(mixed $value): bool

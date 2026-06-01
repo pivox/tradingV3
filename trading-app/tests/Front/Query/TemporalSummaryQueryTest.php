@@ -40,7 +40,7 @@ services:
     image: temporalio/ui:2.39.0
     container_name: temporal_ui
     ports:
-      - "8233:8080"
+      - "127.0.0.1:8233:8080"
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
   cron-symfony-mtf-workers:

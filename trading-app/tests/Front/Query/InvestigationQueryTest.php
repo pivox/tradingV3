@@ -52,6 +52,44 @@ CREATE TABLE entry_zone_live (
     status VARCHAR(30) NULL
 )
 SQL);
+        $this->connection->executeStatement(<<<'SQL'
+CREATE TABLE futures_order (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    exchange VARCHAR(32) NOT NULL,
+    market_type VARCHAR(32) NOT NULL,
+    symbol VARCHAR(50) NOT NULL,
+    side INTEGER NULL,
+    type VARCHAR(20) NULL,
+    status VARCHAR(30) NULL,
+    price NUMERIC NULL,
+    size INTEGER NULL,
+    filled_size NUMERIC NULL,
+    client_order_id VARCHAR(80) NULL,
+    order_id VARCHAR(80) NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+)
+SQL);
+        $this->connection->executeStatement(<<<'SQL'
+CREATE TABLE futures_plan_order (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    exchange VARCHAR(32) NOT NULL,
+    market_type VARCHAR(32) NOT NULL,
+    symbol VARCHAR(50) NOT NULL,
+    side INTEGER NULL,
+    type VARCHAR(20) NULL,
+    status VARCHAR(30) NULL,
+    trigger_price NUMERIC NULL,
+    execution_price NUMERIC NULL,
+    price NUMERIC NULL,
+    size INTEGER NULL,
+    plan_type VARCHAR(20) NULL,
+    client_order_id VARCHAR(80) NULL,
+    order_id VARCHAR(80) NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+)
+SQL);
     }
 
     public function testInvestigationScopesMtfSymbolsToRequestedTimeWindowAndReadsEntryZoneAtr(): void
@@ -107,5 +145,71 @@ SQL);
 
         self::assertSame(['run-in-window'], array_column($result['sections']['mtf_symbols'], 'run_id'));
         self::assertSame('0.0042', (string) $result['sections']['entry_zones'][0]['atr_pct_1m']);
+    }
+
+    public function testInvestigationSkipsSectionsThatCannotBeScopedByTheSubmittedCriteria(): void
+    {
+        $this->connection->insert('mtf_run_symbol', [
+            'run_id' => 'unrelated-run',
+            'symbol' => 'LINKUSDT',
+            'status' => 'VALID',
+            'execution_tf' => '1m',
+            'blocking_tf' => null,
+            'signal_side' => 'LONG',
+            'current_price' => '14.2',
+            'trading_decision' => 'LONG',
+            'error' => null,
+            'context' => '{}',
+            'created_at' => '2026-06-01 10:15:00',
+        ]);
+        $this->connection->insert('futures_order', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 1,
+            'type' => 'limit',
+            'status' => 'open',
+            'price' => '14.2',
+            'size' => 1,
+            'filled_size' => '0',
+            'client_order_id' => 'unrelated-order',
+            'order_id' => 'exchange-unrelated-order',
+            'created_at' => '2026-06-01 10:15:00',
+            'updated_at' => '2026-06-01 10:15:00',
+        ]);
+        $this->connection->insert('futures_plan_order', [
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'symbol' => 'LINKUSDT',
+            'side' => 1,
+            'type' => 'stop_loss',
+            'status' => 'active',
+            'trigger_price' => '13.9',
+            'execution_price' => null,
+            'price' => '13.9',
+            'size' => 1,
+            'plan_type' => 'stop_loss',
+            'client_order_id' => 'unrelated-plan',
+            'order_id' => 'exchange-unrelated-plan',
+            'created_at' => '2026-06-01 10:15:00',
+            'updated_at' => '2026-06-01 10:15:00',
+        ]);
+
+        $decisionKeyOnly = (new InvestigationQuery($this->connection, sys_get_temp_dir()))->investigate(
+            null,
+            null,
+            'decision-key-only',
+            null,
+        );
+        $runIdOnly = (new InvestigationQuery($this->connection, sys_get_temp_dir()))->investigate(
+            null,
+            null,
+            null,
+            'run-id-only',
+        );
+
+        self::assertSame([], $decisionKeyOnly['sections']['mtf_symbols']);
+        self::assertSame([], $runIdOnly['sections']['orders']);
+        self::assertSame([], $runIdOnly['sections']['plan_orders']);
     }
 }

@@ -67,6 +67,10 @@ final class InvestigationQuery
      */
     private function mtfSymbols(string $symbol, string $runId, array $window): array
     {
+        if ($symbol === '' && $runId === '') {
+            return [];
+        }
+
         $where = [];
         $params = [];
         if ($symbol !== '') {
@@ -94,6 +98,10 @@ final class InvestigationQuery
      */
     private function mtfAudit(string $symbol, string $runId, array $window): array
     {
+        if ($symbol === '' && $runId === '') {
+            return [];
+        }
+
         $where = [];
         $params = [];
         if ($symbol !== '') {
@@ -121,6 +129,10 @@ final class InvestigationQuery
      */
     private function orderIntents(string $symbol, string $decisionKey, array $window): array
     {
+        if ($symbol === '' && $decisionKey === '') {
+            return [];
+        }
+
         $where = [];
         $params = [];
         if ($symbol !== '') {
@@ -148,6 +160,10 @@ final class InvestigationQuery
      */
     private function orders(string $symbol, array $window): array
     {
+        if ($symbol === '') {
+            return [];
+        }
+
         $where = [];
         $params = [];
         if ($symbol !== '') {
@@ -171,6 +187,10 @@ final class InvestigationQuery
      */
     private function planOrders(string $symbol, array $window): array
     {
+        if ($symbol === '') {
+            return [];
+        }
+
         $where = [];
         $params = [];
         if ($symbol !== '') {
@@ -194,6 +214,10 @@ final class InvestigationQuery
      */
     private function lifecycle(string $symbol, string $decisionKey, string $runId, array $window): array
     {
+        if ($symbol === '' && $decisionKey === '' && $runId === '') {
+            return [];
+        }
+
         $where = [];
         $params = [];
         if ($symbol !== '') {
@@ -225,6 +249,10 @@ final class InvestigationQuery
      */
     private function zoneEvents(string $symbol, string $decisionKey, array $window): array
     {
+        if ($symbol === '' && $decisionKey === '') {
+            return [];
+        }
+
         $where = [];
         $params = [];
         if ($symbol !== '') {
@@ -253,6 +281,10 @@ final class InvestigationQuery
      */
     private function snapshots(string $symbol, string $runId, array $window): array
     {
+        if ($symbol === '' && $runId === '') {
+            return [];
+        }
+
         $where = [];
         $params = [];
         if ($symbol !== '') {
@@ -280,6 +312,10 @@ final class InvestigationQuery
      */
     private function entryZones(string $symbol, array $window): array
     {
+        if ($symbol === '') {
+            return [];
+        }
+
         $where = [];
         $params = [];
         if ($symbol !== '') {
