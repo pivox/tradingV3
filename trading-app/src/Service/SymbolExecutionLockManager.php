@@ -47,6 +47,22 @@ final class SymbolExecutionLockManager
             }
         }
 
+        if ($this->hasOpenExposureForKey($intent->getExchange(), $intent->getMarketType(), $intent->getSymbol())) {
+            $lock = new SymbolExecutionLock(
+                exchange: $intent->getExchange(),
+                marketType: $intent->getMarketType(),
+                symbol: $intent->getSymbol(),
+                expiresAt: (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->modify(
+                    sprintf('+%d seconds', $this->defaultTtlSeconds)
+                ),
+            );
+            $lock->setPayload(array_replace($payload, ['source' => 'existing_open_exposure']));
+            $this->entityManager->persist($lock);
+            $this->entityManager->flush();
+
+            return SymbolExecutionLockReservation::blocked($lock, $this->lockMetadata($lock, $intent, 'existing_open_exposure'));
+        }
+
         $lock = new SymbolExecutionLock(
             exchange: $intent->getExchange(),
             marketType: $intent->getMarketType(),
@@ -62,7 +78,7 @@ final class SymbolExecutionLockManager
         return SymbolExecutionLockReservation::created($lock);
     }
 
-    public function releaseForIntent(OrderIntent $intent, string $reason): bool
+    public function releaseForIntent(OrderIntent $intent, string $reason, bool $allowOpenOrder = false): bool
     {
         $active = $this->locks->findActive($intent->getExchange(), $intent->getMarketType(), $intent->getSymbol());
         if (!$active instanceof SymbolExecutionLock) {
@@ -74,7 +90,11 @@ final class SymbolExecutionLockManager
             return false;
         }
 
-        if ($this->hasOpenExposure($active)) {
+        if ($allowOpenOrder && $reason === 'order_intent_cancelled') {
+            $this->orders->markOpenOrdersCancelledForIntent($intent);
+        }
+
+        if ($this->hasOpenPosition($active) || (!$allowOpenOrder && $this->hasOpenOrder($active))) {
             $this->logger->info('symbol_execution_lock.release_skipped_open_exposure', [
                 'exchange' => $active->getExchange(),
                 'market_type' => $active->getMarketType(),
@@ -199,6 +219,13 @@ final class SymbolExecutionLockManager
         return $this->hasOpenPosition($lock) || $this->hasOpenOrder($lock);
     }
 
+    private function hasOpenExposureForKey(string $exchange, string $marketType, string $symbol): bool
+    {
+        $lock = new SymbolExecutionLock($exchange, $marketType, $symbol);
+
+        return $this->hasOpenExposure($lock);
+    }
+
     private function hasOpenPosition(SymbolExecutionLock $lock): bool
     {
         $context = ExchangeContext::fromValues($lock->getExchange(), $lock->getMarketType());
@@ -224,9 +251,13 @@ final class SymbolExecutionLockManager
     /**
      * @return array{lock: array<string,mixed>}
      */
-    private function lockMetadata(SymbolExecutionLock $lock, OrderIntent $currentIntent): array
+    private function lockMetadata(
+        SymbolExecutionLock $lock,
+        OrderIntent $currentIntent,
+        ?string $blockingReason = null,
+    ): array
     {
-        return [
+        $metadata = [
             'lock' => [
                 'exchange' => $lock->getExchange(),
                 'market_type' => $lock->getMarketType(),
@@ -237,6 +268,12 @@ final class SymbolExecutionLockManager
                 'blocking_decision_key' => $lock->getOwnerDecisionKey(),
             ],
         ];
+
+        if ($blockingReason !== null) {
+            $metadata['lock']['blocking_reason'] = $blockingReason;
+        }
+
+        return $metadata;
     }
 
     private function lockSymbolKey(string $exchange, string $marketType, string $symbol): void

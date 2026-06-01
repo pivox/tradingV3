@@ -106,7 +106,7 @@ final class OrderIntentManager
                     );
 
                     if ($lockReservation->blocked) {
-                        $this->entityManager->detach($intent);
+                        $this->detachIntentGraph($intent);
                         $connection->commit();
 
                         $blockingIntent = $lockReservation->lock->getOwnerOrderIntent() ?? $intent;
@@ -179,7 +179,7 @@ final class OrderIntentManager
                     );
 
                     if ($lockReservation->blocked) {
-                        $this->entityManager->detach($intent);
+                        $this->detachIntentGraph($intent);
                         $connection->commit();
 
                         $blockingIntent = $lockReservation->lock->getOwnerOrderIntent() ?? $intent;
@@ -272,6 +272,10 @@ final class OrderIntentManager
         if ($errors !== null && count($errors) > 0) {
             $intent->setValidationErrors($errors);
             $intent->markAsFailed('Validation failed: ' . json_encode($errors));
+            $this->symbolExecutionLockManager?->releaseForIntent(
+                $intent,
+                'order_intent_validation_failed',
+            );
             $this->entityManager->flush();
             return false;
         }
@@ -339,7 +343,7 @@ final class OrderIntentManager
     public function markAsCancelled(OrderIntent $intent): void
     {
         $intent->markAsCancelled();
-        $this->symbolExecutionLockManager?->releaseForIntent($intent, 'order_intent_cancelled');
+        $this->symbolExecutionLockManager?->releaseForIntent($intent, 'order_intent_cancelled', true);
         $this->entityManager->flush();
 
         $this->logger->info('[OrderIntentManager] Marked as cancelled', [
@@ -527,6 +531,15 @@ final class OrderIntentManager
             OrderIntent::STATUS_SENT => 'idempotent_sent_replay',
             default => 'idempotent_in_flight',
         };
+    }
+
+    private function detachIntentGraph(OrderIntent $intent): void
+    {
+        foreach ($intent->getProtections() as $protection) {
+            $this->entityManager->detach($protection);
+        }
+
+        $this->entityManager->detach($intent);
     }
 
     private function lockDecisionKey(ExchangeContext $context, string $decisionKey): void
