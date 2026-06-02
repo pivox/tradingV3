@@ -1,0 +1,45 @@
+{% extends 'front/base.html.twig' %}
+
+{% block title %}Config | TradingV3 Ops{% endblock %}
+
+{% block body %}
+    <section class="page-header">
+        <div>
+            <h1>Config</h1>
+            <p>Mode actif: <strong>{{ config.active_mode.name|default('unknown') }}</strong></p>
+        </div>
+    </section>
+
+    <section class="layout-two">
+        <div class="panel">
+            <div class="panel-header"><h2>Modes</h2></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Mode</th><th>Enabled</th><th class="num">Priority</th></tr></thead>
+                    <tbody>
+                    {% for mode in config.modes %}
+                        <tr><td>{{ mode.name }}</td><td>{{ mode.enabled ? 'oui' : 'non' }}</td><td class="num">{{ mode.priority }}</td></tr>
+                    {% else %}
+                        <tr><td colspan="3" class="empty">Aucun mode trouve.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="panel">
+            <div class="panel-header"><h2>Fichiers YAML</h2><span>{{ config.files|length }}</span></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Fichier</th><th>Updated</th><th class="num">KB</th></tr></thead>
+                    <tbody>
+                    {% for file in config.files %}
+                        <tr><td class="mono">{{ file.path }}</td><td>{{ file.updated_at }}</td><td class="num">{{ file.size_kb }}</td></tr>
+                    {% else %}
+                        <tr><td colspan="3" class="empty">Aucun fichier trouve.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+{% endblock %}

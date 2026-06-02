@@ -1,0 +1,78 @@
+{% extends 'front/base.html.twig' %}
+
+{% block title %}System | TradingV3 Ops{% endblock %}
+
+{% block body %}
+    <section class="page-header">
+        <div>
+            <h1>System</h1>
+            <p>{{ health.generated_at }}</p>
+        </div>
+        <div class="header-actions" data-auto-refresh data-refresh-url="{{ path('front_api_system_health') }}" data-refresh-interval="30000">
+            <span class="live-dot"></span>
+            <span>refresh</span>
+        </div>
+    </section>
+
+    <section class="layout-two">
+        <div class="panel">
+            <div class="panel-header"><h2>Health</h2></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+                    <tbody>
+                    {% for check in health.checks %}
+                        <tr><td>{{ check.name }}</td><td><span class="pill {{ check.status }}">{{ check.status }}</span></td><td>{{ check.detail }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="panel">
+            <div class="panel-header"><h2>Workers attendus</h2></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Container</th><th>Transport</th><th>Status</th></tr></thead>
+                    <tbody>
+                    {% for worker in health.workers %}
+                        <tr><td class="mono">{{ worker.name }}</td><td>{{ worker.transport }}</td><td>{{ worker.status }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section class="layout-two">
+        <div class="panel">
+            <div class="panel-header"><h2>Messenger queues</h2></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Queue</th><th class="num">Messages</th></tr></thead>
+                    <tbody>
+                    {% for queue in health.queues %}
+                        <tr><td>{{ queue.queue_name }}</td><td class="num">{{ queue.message_count }}</td></tr>
+                    {% else %}
+                        <tr><td colspan="2" class="empty">Aucune queue lisible.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="panel">
+            <div class="panel-header"><h2>Logs recents</h2></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Log</th><th>Updated</th><th class="num">KB</th></tr></thead>
+                    <tbody>
+                    {% for log in health.logs %}
+                        <tr><td class="mono">{{ log.path }}</td><td>{{ log.updated_at }}</td><td class="num">{{ log.size_kb }}</td></tr>
+                    {% else %}
+                        <tr><td colspan="3" class="empty">Aucun log trouve.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+{% endblock %}

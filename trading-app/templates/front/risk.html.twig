@@ -1,0 +1,105 @@
+{% extends 'front/base.html.twig' %}
+
+{% block title %}Risk Center | TradingV3 Ops{% endblock %}
+
+{% block body %}
+    <section class="page-header">
+        <div>
+            <h1>Risk Center</h1>
+            <p>{{ view.openPositionCount }} position(s), {{ view.openOrderCount + view.openPlanOrderCount }} ordre(s), {{ view.activeLockCount }} lock(s)</p>
+        </div>
+        <div class="header-actions" data-auto-refresh data-refresh-url="{{ path('front_api_risk_summary') }}" data-refresh-interval="20000">
+            <span class="live-dot"></span>
+            <span>refresh</span>
+        </div>
+    </section>
+
+    <section class="metric-grid">
+        <div class="metric critical"><span>Critiques</span><strong data-json-field="critical_alert_count">{{ view.criticalAlertCount }}</strong></div>
+        <div class="metric"><span>Positions</span><strong data-json-field="open_position_count">{{ view.openPositionCount }}</strong></div>
+        <div class="metric"><span>Ordres</span><strong data-json-field="open_order_count">{{ view.openOrderCount }}</strong></div>
+        <div class="metric warning"><span>Locks stale</span><strong data-json-field="stale_lock_count">{{ view.staleLockCount }}</strong></div>
+    </section>
+
+    <section class="panel">
+        <div class="panel-header"><h2>Alertes risk</h2></div>
+        {% if view.alerts is empty %}
+            <p class="empty">Aucune alerte active.</p>
+        {% else %}
+            <div class="alert-list">
+                {% for alert in view.alerts %}
+                    <article class="alert-row {{ alert.severity }}">
+                        <strong>{{ alert.title }}</strong>
+                        <span>{{ alert.message }}</span>
+                        <em>{{ alert.code }}</em>
+                    </article>
+                {% endfor %}
+            </div>
+        {% endif %}
+    </section>
+
+    <section class="panel">
+        <div class="panel-header"><h2>Positions ouvertes</h2></div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Symbole</th><th>Side</th><th class="num">Size</th><th class="num">Entry</th><th class="num">Lev</th><th class="num">PnL</th><th>SL</th><th>Updated</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for row in view.positions %}
+                    <tr class="{{ row.has_stop_loss ? '' : 'danger-row' }}">
+                        <td class="mono">{{ row.symbol }}</td>
+                        <td>{{ row.side }}</td>
+                        <td class="num">{{ row.size|default('-') }}</td>
+                        <td class="num">{{ row.avg_entry_price|default('-') }}</td>
+                        <td class="num">{{ row.leverage|default('-') }}</td>
+                        <td class="num">{{ row.unrealized_pnl|default('-') }}</td>
+                        <td>{{ row.has_stop_loss ? 'ok' : 'manquant' }}</td>
+                        <td>{{ row.updated_at|default('-') }}</td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="8" class="empty">Aucune position ouverte.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="layout-two">
+        <div class="panel">
+            <div class="panel-header"><h2>Ordres ouverts</h2></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Symbole</th><th>Status</th><th>Type</th><th class="num">Prix</th><th>Client ID</th></tr></thead>
+                    <tbody>
+                    {% for row in view.orders %}
+                        <tr><td class="mono">{{ row.symbol }}</td><td>{{ row.status }}</td><td>{{ row.type }}</td><td class="num">{{ row.price|default('-') }}</td><td class="mono">{{ row.client_order_id|default('-') }}</td></tr>
+                    {% else %}
+                        <tr><td colspan="5" class="empty">Aucun ordre ouvert.</td></tr>
+                    {% endfor %}
+                    {% for row in view.planOrders %}
+                        <tr><td class="mono">{{ row.symbol }}</td><td>{{ row.status }}</td><td>{{ row.type }} plan</td><td class="num">{{ row.trigger_price|default(row.price|default('-')) }}</td><td class="mono">{{ row.client_order_id|default('-') }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="panel">
+            <div class="panel-header"><h2>Locks actifs</h2></div>
+            <div class="table-wrap compact">
+                <table>
+                    <thead><tr><th>Symbole</th><th>Profil</th><th>Expire</th><th>Etat</th></tr></thead>
+                    <tbody>
+                    {% for row in view.locks %}
+                        <tr class="{{ row.is_stale ? 'danger-row' : '' }}"><td class="mono">{{ row.symbol }}</td><td>{{ row.owner_profile|default('-') }}</td><td>{{ row.expires_at }}</td><td>{{ row.is_stale ? 'stale' : 'actif' }}</td></tr>
+                    {% else %}
+                        <tr><td colspan="4" class="empty">Aucun lock actif.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+{% endblock %}
