@@ -164,3 +164,11 @@ trade_entry:
             max_attempts: 3
         meta: >
             Zone d'entrée courte, pure micro-structure autour de VWAP 1m (1m/5m).
+
+    # ============================
+    # TP/SL RECALCULATION GUARDS
+    # ============================
+    tp_sl_recalc:
+        min_position_age_sec: 180
+        tp_proximity_skip_pct: 0.003
+        skip_if_tp_partially_filled: true

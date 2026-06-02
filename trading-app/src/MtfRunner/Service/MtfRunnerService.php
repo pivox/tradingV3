@@ -26,6 +26,8 @@ use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Repository\ContractRepository;
 use App\Repository\PositionRepository;
+use App\Config\TradeEntryConfigProvider;
+use App\Config\TradeEntryModeContext;
 use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
 use App\TradeEntry\Service\TpSlTwoTargetsService;
 use App\TradeEntry\Types\Side as EntrySide;
@@ -71,6 +73,8 @@ final class MtfRunnerService
         private readonly string $projectDir,
         private readonly ClockInterface $clock,
         private readonly ?TpSlTwoTargetsService $tpSlService = null,
+        private readonly ?TradeEntryConfigProvider $tradeEntryConfigProvider = null,
+        private readonly ?TradeEntryModeContext $tradeEntryModeContext = null,
     ) {
     }
 
@@ -1061,6 +1065,52 @@ final class MtfRunnerService
                             'reason' => count($tpOrders) === 0 ? 'no_tp_orders' : 'multiple_tp_orders',
                         ]);
                         continue;
+                    }
+
+                    // Guards configurables par profil
+                    $recalcConfig = $this->tradeEntryConfigProvider !== null && $this->tradeEntryModeContext !== null
+                        ? $this->tradeEntryConfigProvider
+                            ->getConfigForMode($this->tradeEntryModeContext->resolve(null))
+                            ->getTpSlRecalcConfig()
+                        : ['min_position_age_sec' => 0, 'tp_proximity_skip_pct' => 0.0, 'skip_if_tp_partially_filled' => false];
+
+                    // Guard 1 — Âge minimum de la position
+                    $positionAgeSec = time() - $position->openedAt->getTimestamp();
+                    if ($positionAgeSec < $recalcConfig['min_position_age_sec']) {
+                        $this->positionsLogger->info('tp_sl_recalc_skipped', [
+                            'symbol' => $symbol,
+                            'reason' => 'position_too_young',
+                            'age_sec' => $positionAgeSec,
+                        ]);
+                        continue;
+                    }
+
+                    // Guard 2 — TP trop proche du prix courant
+                    $existingTp = reset($tpOrders) ?: null;
+                    $currentPrice = (float)$position->markPrice->__toString();
+                    if ($existingTp !== null && $recalcConfig['tp_proximity_skip_pct'] > 0.0 && $currentPrice > 0.0) {
+                        $tpPrice = (float)$existingTp->price->__toString();
+                        $proximity = abs($currentPrice - $tpPrice) / $currentPrice;
+                        if ($proximity < $recalcConfig['tp_proximity_skip_pct']) {
+                            $this->positionsLogger->info('tp_sl_recalc_skipped', [
+                                'symbol' => $symbol,
+                                'reason' => 'tp_too_close',
+                                'proximity_pct' => $proximity,
+                            ]);
+                            continue;
+                        }
+                    }
+
+                    // Guard 3 — TP partiellement fillé
+                    if ($recalcConfig['skip_if_tp_partially_filled'] && $existingTp !== null) {
+                        if ($existingTp->filledQuantity->isGreaterThan(0)) {
+                            $this->positionsLogger->info('tp_sl_recalc_skipped', [
+                                'symbol' => $symbol,
+                                'reason' => 'tp_partially_filled',
+                                'filled_qty' => (float)$existingTp->filledQuantity->__toString(),
+                            ]);
+                            continue;
+                        }
                     }
 
                     // Recalculer les TP/SL

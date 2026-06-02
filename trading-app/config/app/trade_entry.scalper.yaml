@@ -187,3 +187,11 @@ trade_entry:
 
         meta: >
             EntryZone resserrée, plus précise, moins permissive, cohérente avec le scalping pro.
+
+    # ============================
+    # TP/SL RECALCULATION GUARDS
+    # ============================
+    tp_sl_recalc:
+        min_position_age_sec: 180
+        tp_proximity_skip_pct: 0.003
+        skip_if_tp_partially_filled: true

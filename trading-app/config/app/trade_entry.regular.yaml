@@ -184,3 +184,11 @@ trade_entry:
             Transforme un signal validé (MTF) en plans d'exécution sûrs, traçables et idempotents.
             Sélection dynamique 1m vs 5m, calcul du dernier prix (WS->REST->K-line),
             sizing, levier, orchestration, état, tests, observabilité.
+
+    # ============================
+    # TP/SL RECALCULATION GUARDS
+    # ============================
+    tp_sl_recalc:
+        min_position_age_sec: 180
+        tp_proximity_skip_pct: 0.003
+        skip_if_tp_partially_filled: true
