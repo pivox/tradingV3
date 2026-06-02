@@ -994,6 +994,13 @@ final class MtfRunnerService
                 return;
             }
 
+            // Charger la config des guards une seule fois pour toutes les positions
+            $recalcConfig = $this->tradeEntryConfigProvider !== null && $this->tradeEntryModeContext !== null
+                ? $this->tradeEntryConfigProvider
+                    ->getConfigForMode($this->tradeEntryModeContext->resolve(null))
+                    ->getTpSlRecalcConfig()
+                : ['min_position_age_sec' => 0, 'tp_proximity_skip_pct' => 0.0, 'skip_if_tp_partially_filled' => false];
+
             // Récupérer toutes les positions ouvertes
             $openPositions = $accountProvider->getOpenPositions();
             $this->positionsLogger->info('[MTF Runner] TP/SL recalculation: checking positions', [
@@ -1067,13 +1074,6 @@ final class MtfRunnerService
                         continue;
                     }
 
-                    // Guards configurables par profil
-                    $recalcConfig = $this->tradeEntryConfigProvider !== null && $this->tradeEntryModeContext !== null
-                        ? $this->tradeEntryConfigProvider
-                            ->getConfigForMode($this->tradeEntryModeContext->resolve(null))
-                            ->getTpSlRecalcConfig()
-                        : ['min_position_age_sec' => 0, 'tp_proximity_skip_pct' => 0.0, 'skip_if_tp_partially_filled' => false];
-
                     // Guard 1 — Âge minimum de la position
                     $positionAgeSec = time() - $position->openedAt->getTimestamp();
                     if ($positionAgeSec < $recalcConfig['min_position_age_sec']) {
@@ -1088,14 +1088,14 @@ final class MtfRunnerService
                     // Guard 2 — TP trop proche du prix courant
                     $existingTp = reset($tpOrders) ?: null;
                     $currentPrice = (float)$position->markPrice->__toString();
-                    if ($existingTp !== null && $recalcConfig['tp_proximity_skip_pct'] > 0.0 && $currentPrice > 0.0) {
+                    if ($existingTp !== null && $recalcConfig['tp_proximity_skip_pct'] > 0.0 && $currentPrice > 0.0 && $existingTp->price !== null) {
                         $tpPrice = (float)$existingTp->price->__toString();
                         $proximity = abs($currentPrice - $tpPrice) / $currentPrice;
                         if ($proximity < $recalcConfig['tp_proximity_skip_pct']) {
                             $this->positionsLogger->info('tp_sl_recalc_skipped', [
                                 'symbol' => $symbol,
                                 'reason' => 'tp_too_close',
-                                'proximity_pct' => $proximity,
+                                'proximity_ratio' => $proximity,
                             ]);
                             continue;
                         }
