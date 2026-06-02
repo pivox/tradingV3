@@ -114,10 +114,10 @@ API RunnerController / CLI mtf:run
 
 | Fichier | Description |
 | --- | --- |
-| `config/app/mtf_validations.<mode>.yaml` | Règles multi‑timeframes (context/execution, filters, execution_selector). |
-| `config/app/trade_entry.<mode>.yaml` | Risk sizing, leverage, stop policies, entry zone, market entry. |
-| `config/trading.yml` | Paramètres partagés (entry zone, watchers, market_entry). |
-| `config/app/mtf_contracts.yaml` | Contrats activés côté runner. |
+| `trading-app/src/MtfValidator/config/validations.<mode>.yaml` | Règles multi-timeframes (context/execution, filters, execution_selector). |
+| `trading-app/config/app/trade_entry.<mode>.yaml` | Risk sizing, leverage, stop policies, entry zone, market entry. |
+| `trading-app/config/app/indicator.yaml` | Paramètres indicateurs et calculs. |
+| `trading-app/config/app/mtf_contracts.yaml` | Contrats activés côté runner. |
 
 - `MtfValidationConfigProvider` + `TradeEntryModeContext` sélectionnent le mode actif (`scalper_micro` par défaut).
 - Secrets indispensables : `BITMART_*`, `APP_ENV`, `APP_DEBUG`, `REDIS_URL`, `MESSENGER_TRANSPORT_DSN`, `MTF_LOG_LEVEL`.
@@ -157,20 +157,32 @@ API / commandes utiles :
 
 ## 7. Checklists développement
 
-1. **Nouveau mode** : `mtf_validations.<mode>.yaml` + `trade_entry.<mode>.yaml`, enregistrer dans `services.yaml`, docs Runner/TradeEntry.
+1. **Nouveau mode** : `validations.<mode>.yaml` + `trade_entry.<mode>.yaml`, enregistrer dans `services.yaml`, docs Runner/TradeEntry.
 2. **Nouveau filtre/feature Runner** : modifier `src/MtfRunner/*`, ajouter tests (`tests/MtfRunner/Service/*`), mettre à jour le README du module.
 3. **Nouvelle règle MTF** : mettre à jour le YAML, ajouter les conditions `src/Indicator/Condition/*`, couvrir par `tests/MtfValidator`.
 4. **Évolution TradeEntry** : modifier builder/plan/execution + documentation `src/TradeEntry/README.md`.
 5. **Nouvel exchange** : créer un `ExchangeProviderBundle`, l’enregistrer dans `ExchangeProviderRegistry`, utiliser `MainProviderInterface::forContext()`.
 6. **Temporal** : après toute évolution API/Runner, vérifier `cron_symfony_mtf_workers/README.md` et relancer les schedules.
-7. **Déploiement** : s’assurer que `messenger:consume order_timeout` (et `indicator_snapshot` si utilisé) tournent, surveiller `mtf_runner` et `order_journey`.
+7. **Déploiement** : s’assurer que `messenger:consume order_timeout`, `mtf_projection` et `mtf_decision` tournent, surveiller `mtf_runner` et `order_journey`.
 
 ---
 
-## 8. Ressources complémentaires
+## 8. Documentation canonique
 
-- `trading-app/src/*/README.md` : documentation approfondie par composant.
-- `trading-app/docs/*` : runbooks historiques (`MTF_POSITIONS_USAGE`, `MTF_PERFORMANCE_ANALYSIS`, etc.).
-- `cron_symfony_mtf_workers/docs/ARCHITECTURE.md` : schéma complet du workflow Temporal.
+- Source Markdown : `docs/handbook/`.
+- Thème MkDocs/Bootstrap custom : `docs/mkdocs_theme/`.
+- Configuration MkDocs : `mkdocs.yml`.
+- Le rendu HTML `docs/site/` est généré et n'est pas versionné.
+- Inventaire des docs remplacées : `docs/handbook/inventories/project-inventory.md`.
+- Temporal : `cron_symfony_mtf_workers/docs/ARCHITECTURE.md`.
 
-Gardez ces documents à jour à chaque évolution : ils constituent la source de vérité pour l’équipe (runbook d’exploitation, onboarding, support Temporal). Bonne orchestration MTF !
+Commandes documentation :
+```bash
+python3 -m pip install -r requirements-docs.txt
+python3 -m mkdocs serve
+python3 -m mkdocs build --strict
+```
+
+En CI, GitHub Actions construit le handbook avec MkDocs puis publie `docs/site/` vers GitHub Pages à chaque push documentaire sur `main`. Le site cible est `https://pivox.github.io/tradingV3/`.
+
+Gardez le handbook à jour à chaque évolution : il constitue la source de vérité pour l’équipe, Claude et Codex.

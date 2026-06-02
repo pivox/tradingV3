@@ -38,3 +38,6 @@ mysql-data/
 
 # Investigation exports
 investigation/
+
+# Documentation build output
+/docs/site/
