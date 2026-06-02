@@ -1075,7 +1075,7 @@ final class MtfRunnerService
                     }
 
                     // Guard 1 — Âge minimum de la position
-                    $positionAgeSec = time() - $position->openedAt->getTimestamp();
+                    $positionAgeSec = $this->clock->now()->getTimestamp() - $position->openedAt->getTimestamp();
                     if ($positionAgeSec < $recalcConfig['min_position_age_sec']) {
                         $this->positionsLogger->info('tp_sl_recalc_skipped', [
                             'symbol' => $symbol,
