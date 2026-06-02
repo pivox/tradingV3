@@ -152,6 +152,8 @@ trade_entry:
     entry:
         prefer_maker: true     # Préférence maker-only
         fallback_taker: true   # Autorise fallback en taker
+        limit_order_ttl_sec: 45
+        cancel_after_timeout_sec: 75
 
         budget:
             mode: fixed_or_available          # Utilise budget fixe ou solde dispo

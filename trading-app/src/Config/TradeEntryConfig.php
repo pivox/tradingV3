@@ -66,6 +66,16 @@ class TradeEntryConfig
         return $this->config['market_entry'] ?? [];
     }
 
+    public function getLimitOrderTtlSec(): int
+    {
+        return (int) ($this->config['entry']['limit_order_ttl_sec'] ?? 60);
+    }
+
+    public function getCancelAfterTimeoutSec(): int
+    {
+        return (int) ($this->config['entry']['cancel_after_timeout_sec'] ?? 90);
+    }
+
     public function getTpSlRecalcConfig(): array
     {
         return $this->config['tp_sl_recalc'] ?? [
