@@ -176,8 +176,9 @@ final class ExecutionBox
         $cancelAfterTimeout = null;   // valeur envoyée au provider (0 => désarmement exchange)
         $watchWindowSec = null;       // fenêtre locale de surveillance/fallback
         if ($plan->orderType !== 'market') {
-            // Fenêtre locale forcée à 120 secondes
-            $watchWindowSec = 120;
+            // Fenêtre locale basée sur le profil (sinon 120s par défaut)
+            $profileConfig = $this->tradeEntryConfigResolver->resolve($mode);
+            $watchWindowSec = $profileConfig->getLimitOrderTtlSec();
             // Désarmer le dead-man côté exchange (éviter le cap 60s)
             $orderPayload['cancel_after_timeout'] = 0; // 0 => disable cancel-all-after
         }
@@ -249,8 +250,7 @@ final class ExecutionBox
             if ($plan->orderType !== 'market') {
                 try {
                     // Utiliser la fenêtre locale forcée si définie, sinon fallback sur 60s
-                    $watchSec = $watchWindowSec ?? ($cancelAfterTimeout ?? 60);
-                    if ($watchSec <= 0) { $watchSec = 60; }
+                    $watchSec = ($watchWindowSec !== null && $watchWindowSec > 0) ? $watchWindowSec : 120;
                     $contextSnapshot = $this->watchLifecycleContext($contextBuilder, $plan->exchangeContext);
                     $this->bus->dispatch(
                         new LimitFillWatchMessage(
@@ -262,6 +262,7 @@ final class ExecutionBox
                             tries: 0,
                             decisionKey: $decisionKey,
                             lifecycleContext: $contextSnapshot,
+                            mode: $mode,
                         ),
                         [new DelayStamp(self::LIMIT_WATCH_INITIAL_DELAY_MS)] // premier poll dans 5s
                     );

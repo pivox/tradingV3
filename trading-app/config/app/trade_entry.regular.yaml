@@ -152,6 +152,8 @@ trade_entry:
     entry:
         prefer_maker: true
         fallback_taker: true
+        limit_order_ttl_sec: 90
+        cancel_after_timeout_sec: 120
         budget:
             mode: fixed_or_available
             fixed_usdt_if_available: 30       # utilise 30 USDT si dispo, sinon solde dispo

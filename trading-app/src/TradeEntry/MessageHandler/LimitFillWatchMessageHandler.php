@@ -267,6 +267,7 @@ final class LimitFillWatchMessageHandler
                 decisionKey: $message->decisionKey,
                 lifecycleContext: $message->lifecycleContext,
                 cancelIssued: $cancelIssued,
+                mode: $message->mode ?? null,
             ),
             [new DelayStamp(self::POLL_DELAY_MS)]
         );

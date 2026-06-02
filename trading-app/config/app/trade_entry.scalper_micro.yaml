@@ -130,6 +130,8 @@ trade_entry:
     entry:
         prefer_maker: true
         fallback_taker: true
+        limit_order_ttl_sec: 30
+        cancel_after_timeout_sec: 60
         budget:
             mode: fixed_or_available
             fixed_usdt_if_available: 50

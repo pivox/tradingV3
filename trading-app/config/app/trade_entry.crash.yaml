@@ -164,6 +164,8 @@ trade_entry:
     entry:
         prefer_maker: true
         fallback_taker: true
+        limit_order_ttl_sec: 120
+        cancel_after_timeout_sec: 150
 
         budget:
             mode: fixed_or_available
