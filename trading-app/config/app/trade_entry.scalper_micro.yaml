@@ -132,7 +132,7 @@ trade_entry:
         fallback_taker: true
         budget:
             mode: fixed_or_available
-            fixed_usdt_if_available: 77
+            fixed_usdt_if_available: 50
         quantization:
             price_tick: from_exchange
             qty_step: from_exchange
