@@ -15,6 +15,13 @@ meta:
     created_at: '2025-10-05'
 
 trade_entry:
+    # ============================
+    # FEES
+    # ============================
+    fees:
+        maker_rate: 0.0005
+        taker_rate: 0.0005
+
     # ======== DEFAULTS (Paramètres par défaut pour TradeEntry) ========
     # Clés déplacées depuis mtf_validations.yaml (section defaults)
     defaults:

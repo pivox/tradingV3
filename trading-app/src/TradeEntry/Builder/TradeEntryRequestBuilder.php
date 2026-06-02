@@ -216,6 +216,10 @@ final class TradeEntryRequestBuilder
             $leverageExchangeCap = null;
         }
 
+        $fees = $config->getFees();
+        $makerRate = (float)($fees['maker_rate'] ?? 0.0);
+        $takerRate = (float)($fees['taker_rate'] ?? 0.0);
+
         return new TradeEntryRequest(
             symbol: $symbol,
             side: $sideEnum,
@@ -247,6 +251,8 @@ final class TradeEntryRequestBuilder
             leverageMultiplier: 1.0,
             leverageExchangeCap: $leverageExchangeCap,
             exchangeContext: $exchangeContext,
+            makerRate: $makerRate,
+            takerRate: $takerRate,
         );
     }
 
