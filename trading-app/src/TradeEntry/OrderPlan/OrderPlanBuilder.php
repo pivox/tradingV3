@@ -549,7 +549,10 @@ final class OrderPlanBuilder
         ]);
 
         // --- TAKE PROFIT : R-multiple puis « snap » sur pivot avec garde en R ---
-        $tpTheoretical = $this->tpc->fromRMultiple($entry, $stop, $req->side, (float)$req->rMultiple, $precision);
+        $tpTheoretical = $this->tpc->fromRMultipleWithFees(
+            $entry, $stop, $req->side, (float)$req->rMultiple,
+            $req->makerRate, $req->takerRate, $precision
+        );
 
         $pivotLevels = \is_array($pre->pivotLevels) && !empty($pre->pivotLevels) ? $pre->pivotLevels : null;
         if ($pivotLevels === null) {
@@ -607,6 +610,7 @@ final class OrderPlanBuilder
             'r_theoretical' => $rTheoretical,
             'r_effective' => round($rEffective, 3),
             'aligned_on_pivot' => $pickedFromPivot,
+            'expected_fee_usdt' => $entry * $contractSize * ($req->makerRate + $req->takerRate) * $sizeContracts,
             'decision_key' => $decisionKey,
         ]);
 

@@ -20,6 +20,13 @@ meta:
 trade_entry:
 
     # ============================
+    # FEES
+    # ============================
+    fees:
+        maker_rate: 0.0005
+        taker_rate: 0.0005
+
+    # ============================
     # DEFAULTS
     # ============================
     defaults:
@@ -27,8 +34,8 @@ trade_entry:
         risk_pct_percent: 0.4             # 0.4 % du capital par trade
         initial_margin_usdt: 50.0        # budget relevé pour passer les min_size des contrats
         fallback_account_balance: 0.0
-        r_multiple: 1.3                  # TP resserré (profil micro)
-        tp1_r: 1.2
+        r_multiple: 1.8                  # TP resserré (profil micro)
+        tp1_r: 1.5
 
         # --- Stop Loss ---
         stop_from: 'atr'

@@ -39,5 +39,7 @@ final class TradeEntryRequest
         public readonly float $leverageMultiplier = 1.0,
         public readonly ?float $leverageExchangeCap = null,
         public readonly ?ExchangeContext $exchangeContext = null,
+        public readonly float $makerRate = 0.0,
+        public readonly float $takerRate = 0.0,
     ) {}
 }

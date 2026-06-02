@@ -89,6 +89,7 @@ final class TradeEntryController extends AbstractController
                 $stopFallback = 'atr';
             }
 
+            $fees = $config->getFees();
             $requestDto = new TradeEntryRequest(
                 symbol: (string)$data['symbol'],
                 side: $side,
@@ -108,6 +109,8 @@ final class TradeEntryController extends AbstractController
                 atrK: isset($data['atr_k']) ? (float)$data['atr_k'] : (float)($defaults['atr_k'] ?? 1.5),
                 marketMaxSpreadPct: $marketSpread,
                 leverageExchangeCap: $leverageExchangeCap,
+                makerRate: (float)($fees['maker_rate'] ?? 0.0),
+                takerRate: (float)($fees['taker_rate'] ?? 0.0),
             );
 
             $result = $this->service->buildAndExecute($requestDto, mode: $mode);

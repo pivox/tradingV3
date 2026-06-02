@@ -66,6 +66,14 @@ class TradeEntryConfig
         return $this->config['market_entry'] ?? [];
     }
 
+    public function getFees(): array
+    {
+        return $this->config['fees'] ?? [
+            'maker_rate' => 0.0,
+            'taker_rate' => 0.0,
+        ];
+    }
+
     public function getFallbackEndOfZoneConfig(): \App\TradeEntry\Dto\FallbackEndOfZoneConfig
     {
         $block = (array)($this->config['fallback_end_of_zone'] ?? []);

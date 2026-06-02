@@ -140,6 +140,9 @@ final class TpSlTwoTargetsService
         $pivotSlMinKeepRatio = isset($defaults['pivot_sl_min_keep_ratio']) ? (float)$defaults['pivot_sl_min_keep_ratio'] : null;
         $rMultiple = (float)($req->rMultiple ?? ($defaults['r_multiple'] ?? 2.0));
         $slFullByDefault = (bool)($defaults['sl_full_size'] ?? true);
+        $fees = $config->getFees();
+        $makerRate = (float)($fees['maker_rate'] ?? 0.0);
+        $takerRate = (float)($fees['taker_rate'] ?? 0.0);
 
         // Stop par pivot si disponible, sinon par risque
         if (!empty($pivotLevels)) {
@@ -180,7 +183,7 @@ final class TpSlTwoTargetsService
         $currentPrice = (float)($pre->markPrice ?? $pre->bestAsk ?? $pre->bestBid ?? $entryPrice);
 
         // TP1 = mécanique actuelle (R multiple aligné pivots si dispo)
-        $tp1Base = $this->tpc->fromRMultiple($entryPrice, $stop, $req->side, $rMultiple, $precision);
+        $tp1Base = $this->tpc->fromRMultipleWithFees($entryPrice, $stop, $req->side, $rMultiple, $makerRate, $takerRate, $precision);
         $tp1 = $tp1Base;
         if (!empty($pivotLevels) && $rMultiple > 0.0) {
             $tp1 = $this->tpc->alignTakeProfitWithPivot(
@@ -472,17 +475,17 @@ final class TpSlTwoTargetsService
 
         // Fallback: 2R depuis SL si aucun pivot valide trouvé
         if ($tp2 === null || !$tp2Found) {
-            $tp2 = $this->tpc->fromRMultiple($entryPrice, $stop, $req->side, 2.0, $precision);
+            $tp2 = $this->tpc->fromRMultipleWithFees($entryPrice, $stop, $req->side, 2.0, $makerRate, $takerRate, $precision);
             // Garantir que TP2 est significativement différent de TP1
             if ($req->side === EntrySide::Long) {
                 if ($tp2 <= $tp1 + $minDiffFromTp1) {
                     // Utiliser un multiple plus élevé ou forcer un écart minimal
-                    $tp2 = max($tp1 + $minDiffFromTp1, $this->tpc->fromRMultiple($entryPrice, $stop, $req->side, 2.5, $precision));
+                    $tp2 = max($tp1 + $minDiffFromTp1, $this->tpc->fromRMultipleWithFees($entryPrice, $stop, $req->side, 2.5, $makerRate, $takerRate, $precision));
                     $tp2 = \App\TradeEntry\Pricing\TickQuantizer::quantizeUp($tp2, $precision);
                 }
             } else {
                 if ($tp2 >= $tp1 - $minDiffFromTp1) {
-                    $tp2 = min($tp1 - $minDiffFromTp1, $this->tpc->fromRMultiple($entryPrice, $stop, $req->side, 2.5, $precision));
+                    $tp2 = min($tp1 - $minDiffFromTp1, $this->tpc->fromRMultipleWithFees($entryPrice, $stop, $req->side, 2.5, $makerRate, $takerRate, $precision));
                     $tp2 = \App\TradeEntry\Pricing\TickQuantizer::quantize($tp2, $precision);
                 }
             }

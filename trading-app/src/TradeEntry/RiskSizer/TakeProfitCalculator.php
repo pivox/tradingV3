@@ -40,6 +40,33 @@ final class TakeProfitCalculator
     }
 
     /**
+     * TP = entry ± R * multiple + fee offset (maker+taker round-trip).
+     * Uses directional rounding: floor for Long, ceil for Short (same as fromRMultiple).
+     */
+    public function fromRMultipleWithFees(
+        float $entry,
+        float $stop,
+        Side $side,
+        float $rMultiple,
+        float $makerRate,
+        float $takerRate,
+        int $pricePrecision
+    ): float {
+        $rMultiple = max(0.0, $rMultiple);
+        $riskUnit  = abs($entry - $stop);
+        if ($riskUnit <= 0.0 || $rMultiple === 0.0) {
+            return TickQuantizer::quantize($entry, $pricePrecision);
+        }
+        $feeOffset = $entry * ($makerRate + $takerRate);
+        $raw = $side === Side::Long
+            ? $entry + $rMultiple * $riskUnit + $feeOffset
+            : $entry - $rMultiple * $riskUnit - $feeOffset;
+        return $side === Side::Long
+            ? TickQuantizer::quantize($raw, $pricePrecision)
+            : TickQuantizer::quantizeUp($raw, $pricePrecision);
+    }
+
+    /**
      * Aligne le TP sur un niveau pivot (R1/R2/R3... ou S1/S2/S3...) cohérent :
      *  - pour un Long : chercher la résistance >= baseTP, sinon garder baseTP
      *  - pour un Short: chercher le support   <= baseTP, sinon garder baseTP
