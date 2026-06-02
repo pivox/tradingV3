@@ -39,9 +39,9 @@ Apres modification de `messenger.yaml`, relancer les containers workers concerne
 ## Rapports utiles
 
 ```bash
-./mtf_report.sh 2025-11-26
+trading-app/scripts/mtf_report.sh 2025-11-26
 trading-app/scripts/mtf_condition_report.py \
-  --log var/log/mtf-YYYY-MM-DD.log \
+  --log trading-app/var/log/mtf-YYYY-MM-DD.log \
   --since "YYYY-MM-DD HH:MM" \
   --csv-prefix /tmp/mtf-summary
 ```

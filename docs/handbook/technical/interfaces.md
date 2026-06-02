@@ -6,12 +6,12 @@
 | --- | --- | --- |
 | `GET /health` | `HealthController` | Sante app. |
 | `POST /api/mtf/run` | `RunnerController` | Run MTF principal. |
-| `GET /mtf/runs/{runId}` | `MtfRunReadController` | Lecture run. |
-| `GET /status` | `MtfController` | Statut MTF legacy/web. |
-| `GET /lock/status` | `MtfController` | Etat locks. |
-| `POST /lock/cleanup` | `MtfController` | Nettoyage locks. |
-| `GET /switches` | `MtfController` | Switches MTF. |
+| `GET /api/mtf/status` | `MtfController` | Statut MTF legacy/web. |
+| `GET /api/mtf/lock/status` | `MtfController` | Etat locks. |
+| `POST /api/mtf/lock/cleanup` | `MtfController` | Nettoyage locks. |
+| `GET /api/mtf/switches` | `MtfController` | Switches MTF. |
 | `GET /api/mtf-audits` | `MtfAuditController` | Audits MTF JSON. |
+| `GET /api/mtf-audits?runId={runId}` | `MtfAuditController` | Lecture des audits d'un run. |
 | `GET /api/indicators/available` | `IndicatorApiController` | Conditions/indicateurs disponibles. |
 | `GET /api/indicators/pivots` | `IndicatorApiController` | Pivots. |
 | `GET /api/indicators/values` | `IndicatorApiController` | Valeurs indicateurs. |

@@ -138,7 +138,7 @@ docker compose up -d postgresql temporal temporal-ui cron-symfony-mtf-workers
 L'application cible doit aussi etre disponible:
 
 ```bash
-docker compose up -d trading-app-db trading-app-redis trading-app-php trading-app-nginx
+docker compose up -d trading-app-db redis trading-app-php trading-app-nginx
 ```
 
 UI:
