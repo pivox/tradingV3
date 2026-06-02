@@ -66,6 +66,15 @@ class TradeEntryConfig
         return $this->config['market_entry'] ?? [];
     }
 
+    public function getTpSlRecalcConfig(): array
+    {
+        return $this->config['tp_sl_recalc'] ?? [
+            'min_position_age_sec' => 0,
+            'tp_proximity_skip_pct' => 0.0,
+            'skip_if_tp_partially_filled' => false,
+        ];
+    }
+
     public function getFees(): array
     {
         return $this->config['fees'] ?? [
