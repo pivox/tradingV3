@@ -1,0 +1,46 @@
+site_name: TradingV3 Handbook
+site_description: Documentation technique et fonctionnelle canonique du projet TradingV3
+site_url: https://pivox.github.io/tradingV3/
+docs_dir: docs/handbook
+site_dir: docs/site
+use_directory_urls: false
+strict: true
+
+theme:
+  name: null
+  custom_dir: docs/mkdocs_theme/bootstrap
+
+nav:
+  - Accueil: index.md
+  - Architecture: architecture.md
+  - Fonctionnel:
+      - Vue d'ensemble: functional/index.md
+      - Flux MTF: functional/mtf-run.md
+      - Validation MTF: functional/mtf-validation.md
+      - TradeEntry et risque: functional/trade-entry.md
+  - Technique:
+      - Modules backend: technical/backend-modules.md
+      - Interfaces et commandes: technical/interfaces.md
+      - Donnees et persistance: technical/data.md
+      - Configuration: technical/configuration.md
+      - Temporal workers: technical/temporal.md
+      - Frontend et Ops: technical/frontend.md
+  - Graphes:
+      - Piles d'execution: graphs/execution-stacks.md
+  - Runbooks:
+      - Exploitation: runbooks/operations.md
+      - Investigation: runbooks/investigation.md
+  - Inventaires:
+      - Couverture projet: inventories/project-inventory.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - fenced_code
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  version: "2026-06-02"
