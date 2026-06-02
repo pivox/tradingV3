@@ -29,3 +29,15 @@ Ce skill est conçu pour :
 ## Structure du dossier
 
 Voir `SKILL.md` pour la définition complète du comportement de l'agent.
+
+Fichiers de référence inclus :
+
+- `risk-management.md`
+- `backtesting-methodology.md`
+- `statistical-validation.md`
+- `exchange-integration.md`
+- `yaml-structure.md`
+- `checklists.md`
+- `github-templates.md`
+- `prompts.md`
+- `issues-ready.md`

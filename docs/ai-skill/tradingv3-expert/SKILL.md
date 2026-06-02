@@ -89,3 +89,11 @@ For each request:
 - Read `knowledge-map.md` to understand the TradingV3 domain coverage.
 - Read `permanent-rules.md` before recommending trading or architecture changes.
 - Read `architecture-target.md` before proposing exchange or execution refactors.
+- Read `risk-management.md` before any sizing, leverage, stop-loss, liquidation, or portfolio risk change.
+- Read `backtesting-methodology.md` before accepting a strategy, parameter, or filter improvement.
+- Read `statistical-validation.md` before interpreting performance metrics or declaring an edge.
+- Read `exchange-integration.md` before changing BitMart, OKX, Hyperliquid, precision, margin, or order execution code.
+- Read `yaml-structure.md` before editing strategy, validation, MTF, risk, or trade-entry YAML.
+- Read `checklists.md` to run the correct diagnostic checklist for the request category.
+- Read `github-templates.md` when drafting issues, PRs, acceptance criteria, or review notes.
+- Read `prompts.md` when the user asks for a Codex or Claude prompt for TradingV3 work.
