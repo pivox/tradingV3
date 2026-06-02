@@ -23,28 +23,37 @@ src/Trading/
 
 ## 3. Interface centrale
 
+`App\Exchange\Contract\ExchangeAdapterInterface` — interface réelle dans `trading-app/src/Exchange/Contract/ExchangeAdapterInterface.php`.
+
 ```php
 interface ExchangeAdapterInterface
 {
-    public function getName(): string;
+    public function exchange(): Exchange;
 
-    public function getMarketData(string $symbol, string $timeframe): array;
+    public function marketType(): MarketType;
 
-    public function getBalance(string $asset): array;
+    public function capabilities(): ExchangeCapabilities;
 
-    public function getOpenPositions(): array;
+    /** @return ExchangeBalanceDto[] */
+    public function getBalances(): array;
 
-    public function setLeverage(string $symbol, float $leverage): void;
+    /** @return ExchangePositionDto[] */
+    public function getOpenPositions(?string $symbol = null): array;
 
-    public function placeOrder(OrderPlan $orderPlan): ExchangeOrderResult;
+    /** @return ExchangeOrderDto[] */
+    public function getOpenOrders(?string $symbol = null): array;
 
-    public function placeStopLoss(StopLossPlan $stopLossPlan): ExchangeOrderResult;
+    public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult;
 
-    public function cancelOrder(string $exchangeOrderId): void;
+    public function cancelOrder(CancelOrderRequest $request): CancelOrderResult;
 
-    public function reconcileOrder(string $clientOrderId): OrderReconciliationResult;
+    public function getOrder(string $symbol, string $exchangeOrderId): ?ExchangeOrderDto;
 
-    public function getExchangeConstraints(string $symbol): ExchangeConstraints;
+    public function getOrderBookTop(string $symbol): SymbolBidAskDto;
+
+    public function setLeverage(string $symbol, int $leverage, string $marginMode): bool;
+
+    public function reconcile(?string $symbol = null): ExchangeReconciliationResult;
 }
 ```
 

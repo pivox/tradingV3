@@ -1,3 +1,4 @@
-display_name: TradingV3 Expert
-short_description: Trading risk, strategy, and exchange expert
-default_prompt: Use TradingV3 Expert to analyze TradingV3 strategy, risk, execution, exchange, architecture, YAML, or statistical validation work and produce an atomic, testable issue or PR plan.
+interface:
+  display_name: TradingV3 Expert
+  short_description: Trading risk, strategy, and exchange expert
+  default_prompt: Use $tradingv3-expert to analyze TradingV3 strategy, risk, execution, exchange, architecture, YAML, or statistical validation work and produce an atomic, testable issue or PR plan.
