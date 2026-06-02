@@ -475,17 +475,17 @@ final class TpSlTwoTargetsService
 
         // Fallback: 2R depuis SL si aucun pivot valide trouvé
         if ($tp2 === null || !$tp2Found) {
-            $tp2 = $this->tpc->fromRMultiple($entryPrice, $stop, $req->side, 2.0, $precision);
+            $tp2 = $this->tpc->fromRMultipleWithFees($entryPrice, $stop, $req->side, 2.0, $makerRate, $takerRate, $precision);
             // Garantir que TP2 est significativement différent de TP1
             if ($req->side === EntrySide::Long) {
                 if ($tp2 <= $tp1 + $minDiffFromTp1) {
                     // Utiliser un multiple plus élevé ou forcer un écart minimal
-                    $tp2 = max($tp1 + $minDiffFromTp1, $this->tpc->fromRMultiple($entryPrice, $stop, $req->side, 2.5, $precision));
+                    $tp2 = max($tp1 + $minDiffFromTp1, $this->tpc->fromRMultipleWithFees($entryPrice, $stop, $req->side, 2.5, $makerRate, $takerRate, $precision));
                     $tp2 = \App\TradeEntry\Pricing\TickQuantizer::quantizeUp($tp2, $precision);
                 }
             } else {
                 if ($tp2 >= $tp1 - $minDiffFromTp1) {
-                    $tp2 = min($tp1 - $minDiffFromTp1, $this->tpc->fromRMultiple($entryPrice, $stop, $req->side, 2.5, $precision));
+                    $tp2 = min($tp1 - $minDiffFromTp1, $this->tpc->fromRMultipleWithFees($entryPrice, $stop, $req->side, 2.5, $makerRate, $takerRate, $precision));
                     $tp2 = \App\TradeEntry\Pricing\TickQuantizer::quantize($tp2, $precision);
                 }
             }
