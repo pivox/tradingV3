@@ -339,8 +339,8 @@ final class RiskSummaryQuery
     {
         if (is_numeric($side)) {
             return match ((int) $side) {
-                1, 2 => 'LONG',
-                3, 4 => 'SHORT',
+                1, 3 => 'LONG',
+                2, 4 => 'SHORT',
                 default => null,
             };
         }
