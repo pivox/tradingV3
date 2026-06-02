@@ -250,8 +250,7 @@ final class ExecutionBox
             if ($plan->orderType !== 'market') {
                 try {
                     // Utiliser la fenêtre locale forcée si définie, sinon fallback sur 60s
-                    $watchSec = $watchWindowSec ?? ($cancelAfterTimeout ?? 60);
-                    if ($watchSec <= 0) { $watchSec = 60; }
+                    $watchSec = ($watchWindowSec !== null && $watchWindowSec > 0) ? $watchWindowSec : 120;
                     $contextSnapshot = $this->watchLifecycleContext($contextBuilder, $plan->exchangeContext);
                     $this->bus->dispatch(
                         new LimitFillWatchMessage(
