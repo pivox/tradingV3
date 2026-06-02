@@ -19,7 +19,11 @@
 
 ## Selection de profil
 
-Le profil est transmis par payload HTTP, CLI ou schedule Temporal via `mtf_profile`.
+Le profil est transmis:
+
+- en HTTP et via les schedules Temporal avec la cle payload `mtf_profile`;
+- en CLI avec l'option `--trade-profile`, par exemple `bin/console mtf:run --trade-profile=scalper_micro`.
+
 Les providers de config resolvent ensuite:
 
 - validation MTF: `MtfValidationConfigProvider`;

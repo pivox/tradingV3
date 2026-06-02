@@ -76,7 +76,7 @@ ORDER BY tze.happened_at DESC;
 ```bash
 docker-compose exec trading-app-php php bin/console app:indicator:conditions:list
 docker-compose exec trading-app-php php bin/console app:indicator:conditions:diagnose BTCUSDT 5m
-docker-compose exec trading-app-php php bin/console indicator:snapshot BTCUSDT 5m
+docker-compose exec trading-app-php php bin/console indicator:snapshot list --symbol=BTCUSDT --timeframe=5m
 ```
 
 Surveiller les warnings ATR si `php-trader` retourne une valeur invalide et force le fallback PHP.

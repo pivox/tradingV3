@@ -32,7 +32,7 @@ Apres modification de `messenger.yaml`, relancer les containers workers concerne
 | --- | --- |
 | `rg "/api/mtf/run" trading-app/var/log/dev-YYYY-MM-DD.log` | Appels HTTP. |
 | `rg "reason=" trading-app/var/log/mtf-YYYY-MM-DD.log` | Raisons MTF agregeables. |
-| `rg "[MTF Messenger]" trading-app/var/log/*` | Dispatch et consommation decisions. |
+| `rg -F "[MTF Messenger]" trading-app/var/log/*` | Dispatch et consommation decisions. |
 | `rg "entry_zone.rejected_by_deviation" trading-app/var/log/*` | Rejets zone. |
 | `rg "trader_atr returned invalid value" trading-app/var/log/*` | Fallback ATR. |
 
