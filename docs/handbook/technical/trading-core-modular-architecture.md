@@ -22,6 +22,20 @@ ancienne architecture lisible
 
 Cette option est preferable a une migration immediate vers des microservices complets ou vers une plateforme multi-CEX/multi-DEX trop large. La logique trading doit d'abord prouver son expectancy nette et reduire les mauvais trades.
 
+## Scope exchange cible
+
+Bitmart est considere comme un provider historique/legacy a retirer de la cible. Il peut rester present temporairement dans le code existant pour compatibilite runtime, mais il ne doit plus etre le gateway cible de la nouvelle architecture.
+
+Exchanges a conserver dans la cible :
+
+```text
+OKX
+Hyperliquid
+Fake / Paper exchange
+```
+
+Tout nouveau design TradingCore, ExecutionPort ou Gateway doit donc eviter de prendre Bitmart comme reference principale.
+
 ## Principe fondamental
 
 ```text
@@ -29,7 +43,7 @@ TradingCore ne depend de rien.
 Symfony depend de TradingCore.
 Les adapters exchange dependent de TradingCore.
 Le backtesting depend de TradingCore.
-TradingCore ne depend ni de Symfony, ni de Bitmart, ni de Temporal.
+TradingCore ne depend ni de Symfony, ni de Temporal, ni d'un exchange concret.
 ```
 
 ## Flux cible
@@ -68,7 +82,7 @@ Le Runner ne doit pas :
 - contenir les regles RSI/MACD/EMA ;
 - calculer le levier ;
 - calculer les SL/TP ;
-- connaitre les payloads Bitmart, OKX ou Hyperliquid.
+- connaitre les payloads OKX, Hyperliquid ou Fake/Paper.
 
 ### MTF Validation
 
@@ -279,7 +293,6 @@ src/
     Messenger/
     Temporal/
     Exchange/
-      Bitmart/
       Okx/
       Hyperliquid/
       Fake/
@@ -316,7 +329,6 @@ package "Ports" {
 }
 
 package "Infrastructure" {
-  class BitmartAdapter
   class OkxAdapter
   class HyperliquidAdapter
   class FakeExchangeAdapter
@@ -337,7 +349,6 @@ RiskManager --> TakeProfitCalculator
 RunTradingCycleUseCase --> OrderPlanBuilder
 OrderPlanBuilder --> ExchangeExecutionPort
 
-ExchangeExecutionPort <|.. BitmartAdapter
 ExchangeExecutionPort <|.. OkxAdapter
 ExchangeExecutionPort <|.. HyperliquidAdapter
 ExchangeExecutionPort <|.. FakeExchangeAdapter
@@ -355,13 +366,15 @@ AuditPort <|.. DoctrineAuditStore
 - Separation des profils YAML.
 - Audit et observabilite.
 
-## Ce qu'il faut simplifier
+## Ce qu'il faut retirer ou eviter comme cible
 
-- Eviter que Symfony devienne une dependance du coeur trading.
-- Eviter de distribuer le risk management dans plusieurs services.
-- Eviter que Messenger devienne obligatoire entre tous les modules internes.
-- Eviter d'introduire CEX/DEX partout avant d'avoir une expectancy nette fiable.
-- Eviter le terme `Contract` pour les instruments.
+- Bitmart comme gateway cible.
+- Bitmart comme modele de reference pour les DTOs metier.
+- Les payloads exchange dans Strategy, MTF, Risk ou SL/TP.
+- La dependance Symfony dans le coeur trading.
+- Le risk management distribue dans plusieurs services.
+- Messenger obligatoire entre tous les modules internes.
+- Le terme `Contract` pour les instruments.
 
 ## Migration progressive
 
@@ -391,6 +404,16 @@ Extraire d'abord :
 
 Brancher la logique extraite sur le backtesting avant tout changement live.
 
+### Phase 6 — Retrait progressif Bitmart
+
+Ne pas supprimer Bitmart brutalement dans une PR documentaire. Le retrait doit passer par une migration separee :
+
+- marquer Bitmart comme legacy ;
+- retirer Bitmart des configs cibles ;
+- verifier les usages runtime restants ;
+- remplacer les exemples et tests par OKX, Hyperliquid ou Fake ;
+- supprimer le code Bitmart seulement quand aucun flux live/test n'en depend.
+
 ## Non-objectifs
 
 - Ne pas reecrire TradingV3 dans une seule PR.
@@ -400,11 +423,14 @@ Brancher la logique extraite sur le backtesting avant tout changement live.
 - Ne pas modifier les YAML.
 - Ne pas desserrer les EntryZones.
 - Ne pas augmenter le nombre de trades.
+- Ne pas supprimer le code Bitmart dans cette PR documentaire.
 
 ## Definition of done pour cette etape
 
 - La cible TradingCore modulaire est documentee.
 - Les frontieres Runner / MTF / Entry / Risk / SLTP / Execution / Evaluation sont explicites.
 - Les contrats de module sont distingues des instruments tradeables.
+- Bitmart est marque comme legacy a retirer, pas comme gateway cible.
+- OKX, Hyperliquid et Fake/Paper restent les gateways cibles.
 - La migration proposee est progressive.
 - Aucun comportement runtime n'est modifie.
