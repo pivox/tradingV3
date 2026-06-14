@@ -2,51 +2,74 @@
 
 ## Statut
 
-Document de travail initial. Cette page sert de base d'itération pour une refonte majeure de TradingV3 vers une plateforme multi-CEX et multi-DEX.
+Document de travail pour la refonte cible de TradingV3.
 
-Le but n'est pas de décrire uniquement le code existant. Le but est de définir l'architecture qui correspond le mieux à la trajectoire cible : plusieurs exchanges centralisés, plusieurs protocoles décentralisés, contrôle du risque, exécution robuste et analyse PnL systématique.
+Cette page ne decrit pas uniquement le code existant. Elle definit la trajectoire cible : un coeur trading modulaire, des frontieres metier explicites, des gateways exchange isolees, un controle du risque strict et une analyse PnL systematique.
+
+## Decision exchange
+
+Bitmart est considere comme un provider historique/legacy a retirer de la cible.
+
+Il peut rester present temporairement dans le code existant tant qu'une migration separee n'a pas ete faite, mais il ne doit plus etre le modele de reference pour :
+
+- les DTOs metier ;
+- les exemples d'architecture cible ;
+- les gateways futures ;
+- les tests de decision trading ;
+- les fichiers de config cible.
+
+Exchanges a conserver dans la cible :
+
+```text
+OKX
+Hyperliquid
+Fake / Paper exchange
+```
+
+Binance reste une option future a valider. Les DEX restent hors live pour l'instant et ne doivent commencer qu'en quote/simulation.
 
 ## Contexte actuel
 
-TradingV3 possède déjà une base utile :
+TradingV3 possede deja une base utile :
 
 ```text
 Runner -> Validator -> Decision -> TradeEntry -> Provider/Exchange
 ```
 
-Le runner orchestre les runs MTF, le validateur produit des décisions, TradeEntry construit et exécute les plans d'ordre, et les providers abstraient l'accès aux exchanges.
+Le runner orchestre les runs MTF, le validateur produit des decisions, TradeEntry construit et execute les plans d'ordre, et les providers/adapters abstraient l'acces aux exchanges.
 
-Cette base est cohérente pour un système Bitmart/MTF, mais elle devient limitée pour une plateforme multi-CEX/multi-DEX :
+Cette base est coherente pour un systeme MTF/exchange unique, mais elle devient limitee pour une plateforme multi-exchange :
 
-- le Runner porte trop de responsabilités opérationnelles ;
-- TradeEntry mélange encore planification d'ordre, exécution et gestion de protections ;
-- les CEX et les DEX ne peuvent pas partager naïvement le même modèle d'ordre ;
-- le routage d'exécution doit devenir un composant métier à part entière ;
-- l'analyse post-trade doit boucler vers la stratégie et la configuration.
+- le Runner porte trop de responsabilites operationnelles ;
+- TradeEntry melange encore planification d'ordre, execution et gestion de protections ;
+- le routage d'execution doit devenir un composant metier a part entiere ;
+- l'analyse post-trade doit boucler vers la strategie et la configuration ;
+- les DTOs metier ne doivent pas etre modeles sur un provider historique a retirer.
 
-## Problème à résoudre
+## Probleme a resoudre
 
-La future architecture doit répondre à ces questions :
+La future architecture doit repondre a ces questions :
 
 ```text
-Comment produire une intention de trading sans dépendre d'un exchange ?
-Comment valider le risque avant toute exécution ?
-Comment choisir entre Bitmart, OKX, Hyperliquid, Binance ou un DEX ?
-Comment gérer des ordres CEX et des transactions DEX sans les forcer dans le même modèle ?
+Comment produire une intention de trading sans dependre d'un exchange concret ?
+Comment valider le risque avant toute execution ?
+Comment choisir entre OKX, Hyperliquid, Fake/Paper ou un futur gateway ?
 Comment garantir qu'aucune position live ne reste sans protection ?
-Comment mesurer si les changements améliorent réellement l'expectancy nette ?
+Comment mesurer si les changements ameliorent reellement l'expectancy nette ?
+Comment retirer progressivement le provider historique sans casser le runtime ?
 ```
 
-## Options étudiées
+## Options etudiees
 
 ### Option A — Modular monolith hexagonal
 
 ```text
 Symfony App
-├── Strategy Engine
-├── Risk Engine
-├── Order Management
-├── Execution Management
+├── Trading Core
+├── Strategy / MTF
+├── Risk
+├── Order Planning
+├── Execution
 ├── Position Management
 ├── Analytics
 └── Exchange Adapters
@@ -54,15 +77,15 @@ Symfony App
 
 Avantages :
 
-- simple à développer ;
-- simple à tester ;
-- simple à déployer ;
-- cohérent avec le code Symfony actuel ;
+- simple a developper ;
+- simple a tester ;
+- simple a deployer ;
+- coherent avec le code Symfony actuel ;
 - bon choix pour une migration progressive.
 
 Limites :
 
-- le monolithe peut grossir si les gateways CEX/DEX deviennent lourdes ;
+- le monolithe peut grossir si les gateways deviennent lourdes ;
 - les WebSockets, workers et synchronisations peuvent augmenter la pression runtime ;
 - une mauvaise discipline peut recréer un gros service central.
 
@@ -75,79 +98,74 @@ Risk Service
 OMS Service
 EMS Service
 Position Service
-Portfolio Service
 Analytics Service
-CEX Gateway Services
-DEX Gateway Services
+Exchange Gateway Services
 Temporal Orchestrator
 Ops Front
 ```
 
 Avantages :
 
-- scalabilité maximale ;
-- isolation forte des responsabilités ;
+- scalabilite maximale ;
+- isolation forte des responsabilites ;
 - extraction facile des gateways lourdes ;
-- équipes séparées possibles.
+- equipes separees possibles.
 
 Limites :
 
-- complexité très élevée ;
-- idempotence distribuée plus difficile ;
-- observabilité plus coûteuse ;
+- complexite tres elevee ;
+- idempotence distribuee plus difficile ;
+- observabilite plus couteuse ;
 - debugging plus difficile ;
-- versioning d'événements nécessaire ;
-- overhead excessif tant que l'edge trading n'est pas prouvé.
+- versioning d'evenements necessaire ;
+- overhead excessif tant que l'edge trading n'est pas prouve.
 
-### Option C — Trading Platform Core + OMS/EMS + gateways
+### Option C — Trading Core modulaire + OMS/EMS progressifs
 
 ```text
 Symfony modular monolith
-├── Trading Core
+├── TradingCore
 ├── Risk Engine
-├── OMS
-├── EMS
+├── OMS minimal
+├── EMS minimal
 ├── Position Manager
 ├── Analytics Engine
-├── CEX Gateways
-├── DEX Gateways
-└── Event Store léger
+├── Exchange Gateways
+└── Event Store leger
 ```
 
 Avantages :
 
-- meilleure séparation métier ;
+- meilleure separation metier ;
 - compatible avec une migration progressive ;
-- suffisamment robuste pour plusieurs CEX/DEX ;
-- évite la complexité microservices trop tôt ;
-- prépare une extraction future des gateways si nécessaire.
+- suffisamment robuste pour OKX, Hyperliquid et Fake/Paper ;
+- evite la complexite microservices trop tot ;
+- prepare une extraction future des gateways si necessaire.
 
 Limites :
 
-- nécessite une vraie discipline de frontières ;
+- necessite une vraie discipline de frontieres ;
 - impose de restructurer les modules existants ;
-- demande des contrats métier stables.
+- demande des contrats metier stables.
 
-## Décision recommandée
+## Decision recommandee
 
-L'architecture cible recommandée est l'option C :
+L'architecture cible recommandee est l'option C, mais avec une priorite court/moyen terme plus simple :
 
 ```text
-Trading Platform Core
-+ Strategy Engine
-+ Risk Engine
-+ OMS
-+ EMS
-+ CEX Gateway
-+ DEX Gateway
-+ Position Manager
-+ Analytics Engine
-+ Event Store léger
-+ Temporal pour l'orchestration
-+ Symfony pour API/Ops/front
+TradingCore modulaire
++ Runner mince
++ MTF Validation
++ Entry
++ Risk / Leverage / SLTP
++ ExecutionPort
++ OKX Gateway
++ Hyperliquid Gateway
++ Fake/Paper Gateway
++ Analytics / Backtesting
 ```
 
-Cette cible doit être mise en place comme un modular monolith strict, avec possibilité d'extraire certains modules plus tard.
+L'objectif n'est pas de construire tout de suite une plateforme multi-CEX/multi-DEX complete. L'objectif est d'abord de stabiliser la decision trading et de mesurer l'expectancy nette.
 
 ## Vue cible
 
@@ -160,51 +178,55 @@ Cette cible doit être mise en place comme un modular monolith strict, avec poss
                          │    Trading API     │
                          └─────────┬──────────┘
                                    │
+                         ┌─────────▼──────────┐
+                         │ Application Runner │
+                         └─────────┬──────────┘
+                                   │
         ┌──────────────────────────┼──────────────────────────┐
         │                          │                          │
 ┌───────▼────────┐       ┌─────────▼────────┐       ┌─────────▼────────┐
-│ Strategy Engine│       │   Risk Engine    │       │ Analytics Engine │
-│ MTF / Signals  │       │ exposure / caps  │       │ PnL / winrate    │
+│ MTF / Strategy │       │   Risk Engine    │       │ Analytics Engine │
+│ Validation     │       │ exposure / caps  │       │ PnL / winrate    │
 └───────┬────────┘       └─────────┬────────┘       └─────────┬────────┘
         │                          │                          │
         └──────────────┬───────────┴──────────────┬───────────┘
                        │                          │
               ┌────────▼────────┐        ┌────────▼────────┐
-              │       OMS       │        │ Position Manager│
-              │ orders lifecycle│        │ SL/TP/trailing  │
+              │   Order Plan    │        │ Position Manager│
+              │ Entry / SL / TP │        │ SL/TP/trailing  │
               └────────┬────────┘        └────────┬────────┘
                        │                          │
               ┌────────▼──────────────────────────▼────────┐
               │                    EMS                      │
-              │ routing, slippage, maker/taker, gas, MEV    │
+              │ routing, slippage, maker/taker, retries     │
               └────────┬──────────────────────────┬────────┘
                        │                          │
           ┌────────────▼────────────┐  ┌──────────▼───────────┐
-          │      CEX Gateways       │  │      DEX Gateways     │
-          │ Bitmart / OKX / Binance │  │ Uniswap / 0x / 1inch  │
-          │ Hyperliquid             │  │ wallets / RPC / MEV   │
+          │      CEX Gateways       │  │      Future DEX POC   │
+          │ OKX / Hyperliquid       │  │ quote / simulation    │
+          │ Fake / Paper            │  │ no live initially     │
           └─────────────────────────┘  └──────────────────────┘
 ```
 
 ## Modules cibles
 
-### 1. Strategy Engine
+### 1. TradingCore / Strategy
 
-Responsabilité : produire une intention de trading, jamais un ordre exchange.
+Responsabilite : produire une intention de trading, jamais un ordre exchange.
 
-Entrées :
+Entrees :
 
 - market data ;
 - indicateurs ;
 - contexte MTF ;
 - configuration effective ;
-- état de marché.
+- etat de marche.
 
 Sortie :
 
 ```text
 SignalIntent
-- symbol / instrument
+- instrument
 - side
 - timeframe
 - profile
@@ -215,11 +237,11 @@ SignalIntent
 - metadata conditions
 ```
 
-Règle : le Strategy Engine ne doit pas connaître les payloads Bitmart, OKX, Hyperliquid ou DEX.
+Regle : Strategy ne doit pas connaitre les payloads OKX, Hyperliquid, Fake/Paper ou DEX.
 
 ### 2. Risk Engine
 
-Responsabilité : accepter, réduire ou refuser une intention de trading.
+Responsabilite : accepter, reduire ou refuser une intention de trading.
 
 Sortie :
 
@@ -237,18 +259,18 @@ RiskDecision
 - correlation_cap
 ```
 
-Règles non négociables :
+Regles non negociables :
 
-- aucun ordre live sans décision de risque ;
-- aucune position sans SL automatique immédiatement attaché ou procédure de réparation critique ;
-- aucun levier arbitraire : le levier découle du risque, du stop, du budget et des caps exchange ;
+- aucun ordre live sans decision de risque ;
+- aucune position sans SL automatique immediatement attache ou procedure de reparation critique ;
+- aucun levier arbitraire : le levier decoule du risque, du stop, du budget et des caps exchange ;
 - aucune bascule live sans runtime-check OK.
 
 ### 3. OMS — Order Management System
 
-Responsabilité : gérer le cycle de vie métier des ordres.
+Responsabilite : gerer le cycle de vie metier des ordres.
 
-États cibles :
+Etats cibles :
 
 ```text
 requested
@@ -266,9 +288,9 @@ replaced
 closed
 ```
 
-L'OMS ne choisit pas l'exchange. Il conserve la vérité métier de l'ordre, l'idempotence, les transitions et les corrélations.
+L'OMS ne choisit pas l'exchange. Il conserve la verite metier de l'ordre, l'idempotence, les transitions et les correlations.
 
-Identifiants à standardiser :
+Identifiants a standardiser :
 
 - `intent_id` ;
 - `risk_decision_id` ;
@@ -281,37 +303,29 @@ Identifiants à standardiser :
 
 ### 4. EMS — Execution Management System
 
-Responsabilité : choisir où et comment exécuter.
+Responsabilite : choisir ou et comment executer.
 
-Décisions EMS :
+Decisions EMS :
 
-- CEX ou DEX ;
-- exchange/protocole cible ;
+- exchange cible ;
 - maker ou taker ;
-- limit, market, IOC ou swap transaction ;
+- limit, market ou IOC ;
 - split order ou non ;
 - fallback exchange ;
 - retry ou abandon ;
-- slippage maximum ;
-- gestion gas/MEV si DEX.
+- slippage maximum.
 
-Exemples :
+Exemple :
 
 ```text
 BTCUSDT long perp
--> comparer Bitmart / OKX / Hyperliquid
--> choisir meilleur coût total : spread + frais + profondeur + latence + risque runtime
-```
-
-```text
-ETH/USDC spot on-chain
--> comparer Uniswap / 0x / 1inch
--> vérifier gas, route, approval, slippage, simulation, MEV
+-> comparer OKX / Hyperliquid / Fake-Paper
+-> choisir meilleur cout total : spread + frais + profondeur + latence + risque runtime
 ```
 
 ### 5. CEX Gateways
 
-Responsabilité : isoler chaque exchange centralisé.
+Responsabilite : isoler chaque exchange centralise.
 
 Interface cible indicative :
 
@@ -328,29 +342,35 @@ interface CexGatewayInterface
 }
 ```
 
-CEX couverts ou candidats :
+CEX a conserver dans la cible :
 
-- Bitmart ;
 - OKX ;
 - Hyperliquid ;
-- Binance ;
 - Fake / Paper exchange.
 
-Chaque gateway doit gérer :
+CEX legacy a retirer :
+
+- Bitmart.
+
+CEX candidat futur a valider :
+
+- Binance.
+
+Chaque gateway doit gerer :
 
 - mapping DTO interne -> payload exchange ;
-- mapping réponse exchange -> événement interne ;
+- mapping reponse exchange -> evenement interne ;
 - rate limits ;
-- REST public/privé ;
-- WebSocket public/privé si disponible ;
+- REST public/prive ;
+- WebSocket public/prive si disponible ;
 - idempotence via `client_order_id` ;
-- récupération et réparation d'état.
+- recuperation et reparation d'etat.
 
 ### 6. DEX Gateways
 
-Responsabilité : isoler les protocoles on-chain.
+Responsabilite : isoler les protocoles on-chain.
 
-Un DEX ne doit pas être forcé dans le modèle CEX. Il a un cycle différent : quote, approval, simulation, transaction, confirmation, reorg possible.
+Un DEX ne doit pas etre force dans le modele CEX. Il a un cycle different : quote, approval, simulation, transaction, confirmation, reorg possible.
 
 Interface cible indicative :
 
@@ -366,33 +386,18 @@ interface DexGatewayInterface
 }
 ```
 
-DEX/protocoles candidats :
+DEX/protocoles candidats, uniquement en proof of concept dry-run au depart :
 
 - Uniswap ;
 - 0x ;
 - 1inch ;
 - agrégateur interne futur ;
 - RPC EVM ;
-- private relay / MEV protection si nécessaire.
-
-Aspects obligatoires :
-
-- `chain_id` ;
-- wallet ;
-- token in/out ;
-- allowance ;
-- gas balance ;
-- nonce ;
-- slippage ;
-- route ;
-- simulation ;
-- transaction hash ;
-- confirmation block ;
-- reorg handling.
+- private relay / MEV protection si necessaire.
 
 ### 7. Position Manager
 
-Responsabilité : gérer les positions ouvertes après exécution.
+Responsabilite : gerer les positions ouvertes apres execution.
 
 Fonctions :
 
@@ -403,15 +408,15 @@ Fonctions :
 - time stop ;
 - liquidation guard ;
 - synchronisation exchange ;
-- réparation si SL/TP absent ;
+- reparation si SL/TP absent ;
 - fermeture d'urgence ;
 - projection lifecycle.
 
-Ce module doit sortir de la responsabilité du Runner.
+Ce module doit sortir de la responsabilite du Runner.
 
 ### 8. Analytics Engine
 
-Responsabilité : mesurer si le système gagne réellement.
+Responsabilite : mesurer si le systeme gagne reellement.
 
 Sources :
 
@@ -423,7 +428,7 @@ Sources :
 - snapshots indicateurs ;
 - configuration effective au moment du trade.
 
-Métriques :
+Metriques :
 
 - winrate ;
 - expectancy nette ;
@@ -439,7 +444,7 @@ Métriques :
 Boucle cible :
 
 ```text
-Trades exécutés
+Trades executes
 -> position_trade_analysis
 -> expectancy nette
 -> identification pertes
@@ -449,11 +454,11 @@ Trades exécutés
 -> activation progressive
 ```
 
-## CEX vs DEX : règle de modélisation
+## CEX vs DEX : regle de modelisation
 
-Ne pas créer un seul `OrderRequest` universel pour tout.
+Ne pas creer un seul `OrderRequest` universel pour tout.
 
-Modèle CEX :
+Modele CEX :
 
 ```text
 CexOrderRequest
@@ -471,7 +476,7 @@ CexOrderRequest
 - TP/SL exchange-native si disponible
 ```
 
-Modèle DEX :
+Modele DEX :
 
 ```text
 SwapExecutionPlan
@@ -482,14 +487,14 @@ SwapExecutionPlan
 - amount_in/out
 - route
 - slippage
-- gas
+gas
 - nonce
 - approval
 - simulation result
 - tx hash
 ```
 
-Modèle supérieur commun :
+Modele superieur commun :
 
 ```text
 ExecutionIntent
@@ -501,13 +506,13 @@ ExecutionIntent
 - metadata
 ```
 
-Le coeur métier parle en intention d'exposition. Les gateways traduisent cette intention vers leurs mécanismes propres.
+Le coeur metier parle en intention d'exposition. Les gateways traduisent cette intention vers leurs mecanismes propres.
 
-## Event Store léger
+## Event Store leger
 
-Il faut éviter un event sourcing complet trop tôt, mais créer une piste d'audit structurée.
+Il faut eviter un event sourcing complet trop tot, mais creer une piste d'audit structuree.
 
-Événements utiles :
+Evenements utiles :
 
 ```text
 SignalIntentCreated
@@ -534,19 +539,19 @@ DexTransactionConfirmed
 DexTransactionFailed
 ```
 
-Chaque événement doit porter :
+Chaque evenement doit porter :
 
 - timestamp ;
 - correlation id ;
 - source module ;
 - exchange / market / chain si applicable ;
-- payload métier ;
+- payload metier ;
 - payload brut externe optionnel ;
-- erreur éventuelle.
+- erreur eventuelle.
 
 ## Configuration cible
 
-La configuration doit être résolue en une config effective :
+La configuration doit etre resolue en une config effective :
 
 ```text
 base
@@ -565,15 +570,15 @@ config/trading/base.yaml
 config/trading/modes/regular.yaml
 config/trading/modes/scalper.yaml
 config/trading/modes/scalper_micro.yaml
-config/trading/exchanges/bitmart.yaml
 config/trading/exchanges/okx.yaml
 config/trading/exchanges/hyperliquid.yaml
+config/trading/exchanges/fake.yaml
 config/trading/dex/evm.yaml
-config/trading/overrides/scalper_micro.bitmart.yaml
+config/trading/overrides/scalper_micro.okx.yaml
 config/trading/env/prod.yaml
 ```
 
-Règle : toute décision de trade doit pouvoir être reliée à la config effective utilisée.
+Règle : toute decision de trade doit pouvoir etre reliee a la config effective utilisee.
 
 ## Structure de code cible
 
@@ -590,10 +595,9 @@ src/
 ├── Exchange/
 │   ├── Shared/
 │   ├── Cex/
-│   │   ├── Bitmart/
 │   │   ├── Okx/
-│   │   ├── Binance/
-│   │   └── Hyperliquid/
+│   │   ├── Hyperliquid/
+│   │   └── Fake/
 │   └── Dex/
 │       ├── Evm/
 │       ├── Uniswap/
@@ -624,20 +628,22 @@ src/
     └── RuntimeCheck/
 ```
 
-## Migration progressive proposée
+## Migration progressive proposee
 
 ### Phase 0 — Cadrage
 
 - Valider ce document.
-- Lister les modules existants à déplacer ou encapsuler.
-- Créer les frontières de noms sans changer le comportement runtime.
+- Lister les modules existants a deplacer ou encapsuler.
+- Creer les frontieres de noms sans changer le comportement runtime.
+- Marquer Bitmart comme legacy dans les documents et configs cibles.
 
 ### Phase 1 — Config effective
 
-- Créer `EffectiveTradingConfigResolver`.
-- Garder compatibilité avec les YAML actuels.
+- Creer `EffectiveTradingConfigResolver`.
+- Garder compatibilite avec les YAML actuels.
 - Exposer la config effective dans l'Ops front.
-- Ajouter tests de résolution.
+- Ajouter tests de resolution.
+- Prevoir une config cible sans Bitmart.
 
 ### Phase 2 — Runner mince
 
@@ -650,7 +656,7 @@ Extraire progressivement :
 - `PostRunProjectionDispatcher` ;
 - `RunResultAssembler`.
 
-Objectif : le Runner orchestre, mais ne porte plus la logique métier.
+Objectif : le Runner orchestre, mais ne porte plus la logique metier.
 
 ### Phase 3 — Strategy/Risk/Order boundaries
 
@@ -661,88 +667,101 @@ Objectif : le Runner orchestre, mais ne porte plus la logique métier.
 
 ### Phase 4 — OMS minimal
 
-- Créer cycle de vie ordre interne.
-- Standardiser les identifiants de corrélation.
+- Creer cycle de vie ordre interne.
+- Standardiser les identifiants de correlation.
 - Centraliser idempotence et transitions.
 - Connecter TradeEntry existant au nouvel OMS.
 
 ### Phase 5 — EMS minimal
 
-- Créer `ExecutionRoute`.
+- Creer `ExecutionRoute`.
 - Choisir exchange/protocole cible explicitement.
 - Centraliser maker/taker, slippage, fallback, retry.
-- Préparer split order futur.
+- Preparer split order futur.
 
 ### Phase 6 — Gateways CEX strictes
 
-- Transformer Provider/Exchange actuel vers `Exchange/Cex/*` ou l'encapsuler.
-- Garder Bitmart comme premier gateway complet.
-- Garder OKX/Hyperliquid en dry-run/runtime-check jusqu'à readiness complète.
+- Garder OKX, Hyperliquid et Fake/Paper comme gateways cibles.
+- Garder OKX/Hyperliquid en dry-run/runtime-check jusqu'a readiness complete.
+- Utiliser Fake/Paper comme gateway de test et simulation.
+- Planifier le retrait Bitmart dans une PR separee.
 
-### Phase 7 — Position Manager autonome
+### Phase 7 — Retrait progressif Bitmart
+
+- Inventorier les usages Bitmart restants.
+- Retirer Bitmart des exemples et configs cibles.
+- Remplacer les tests de gateway cible par OKX, Hyperliquid ou Fake.
+- Supprimer le code Bitmart seulement quand aucune execution, aucun test critique et aucun schedule n'en dependent.
+
+### Phase 8 — Position Manager autonome
 
 - Sortir TP/SL/trailing/time-stop du Runner.
-- Créer réparation de protections manquantes.
-- Créer alerte critique si position sans SL.
+- Creer reparation de protections manquantes.
+- Creer alerte critique si position sans SL.
 
-### Phase 8 — DEX Gateway proof of concept
+### Phase 9 — DEX Gateway proof of concept
 
 - Commencer par quote/simulation uniquement.
-- Pas d'exécution live tant que wallet, gas, allowance, simulation, slippage et MEV ne sont pas maîtrisés.
-- Modèle séparé de CEX.
+- Pas d'execution live tant que wallet, gas, allowance, simulation, slippage et MEV ne sont pas maitrises.
+- Modele separe de CEX.
 
-### Phase 9 — Analytics feedback loop
+### Phase 10 — Analytics feedback loop
 
 - Faire de `position_trade_analysis` la source standard.
 - Ajouter expectancy nette par profil/exchange/setup.
-- Utiliser les résultats pour proposer des changements YAML/config.
+- Utiliser les resultats pour proposer des changements YAML/config.
 
 ## Invariants d'architecture
 
-- Strategy ne dépend jamais d'un exchange concret.
-- Risk ne dépend jamais d'un payload exchange.
-- OMS garde la vérité métier des ordres.
-- EMS choisit le chemin d'exécution.
+- Strategy ne depend jamais d'un exchange concret.
+- Risk ne depend jamais d'un payload exchange.
+- OMS garde la verite metier des ordres.
+- EMS choisit le chemin d'execution.
 - Gateway traduit vers l'exchange/protocole.
-- Position Manager protège et suit les positions.
-- Analytics mesure avant d'élargir la fréquence de trading.
+- Position Manager protege et suit les positions.
+- Analytics mesure avant d'elargir la frequence de trading.
 - Aucune activation live sans runtime-check OK.
-- Aucun trade live sans risque validé.
+- Aucun trade live sans risque valide.
 - Aucune position live sans SL automatique visible.
-- Toute décision doit être corrélable par `run_id`, `decision_key`, `client_order_id`, `exchange_order_id` ou `trade_id`.
+- Toute decision doit etre correlable par `run_id`, `decision_key`, `client_order_id`, `exchange_order_id` ou `trade_id`.
+- Bitmart n'est pas une cible de la nouvelle architecture.
 
-## Non-objectifs immédiats
+## Non-objectifs immediats
 
 - Ne pas migrer en microservices complets maintenant.
-- Ne pas ajouter DEX live immédiatement.
+- Ne pas ajouter DEX live immediatement.
 - Ne pas casser les workflows Temporal existants sans migration.
-- Ne pas réécrire simultanément Strategy, Risk, OMS, EMS et Gateways dans une seule PR.
-- Ne pas chercher plus de trades avant d'avoir mesuré l'expectancy nette.
+- Ne pas reecrire simultanement Strategy, Risk, OMS, EMS et Gateways dans une seule PR.
+- Ne pas chercher plus de trades avant d'avoir mesure l'expectancy nette.
+- Ne pas supprimer brutalement Bitmart dans une PR documentaire.
 
-## Critères d'acceptation pour une future implémentation
+## Criteres d'acceptation pour une future implementation
 
-- Les modules ont des frontières testables.
+- Les modules ont des frontieres testables.
 - Les payloads exchange ne fuient pas dans Strategy/Risk.
-- Les décisions de risque sont persistées ou auditables.
-- Les routes d'exécution sont explicites.
-- Les positions sans SL sont détectées et remontées comme anomalies critiques.
-- Les CEX et DEX ont des modèles séparés.
+- Les decisions de risque sont persistees ou auditables.
+- Les routes d'execution sont explicites.
+- Les positions sans SL sont detectees et remontees comme anomalies critiques.
 - La config effective est observable.
-- Les décisions sont analysables via `position_trade_analysis` ou successeur.
+- Les decisions sont analysables via `position_trade_analysis` ou successeur.
+- OKX, Hyperliquid et Fake/Paper sont les gateways cible conservees.
+- Bitmart est retire des documents, configs et exemples cible avant retrait de code.
 
-## Découpage de PR proposé
+## Decoupage de PR propose
 
 ### PR 1 — Documentation architecture cible
 
 - Ajouter ce document.
 - Ajouter le lien dans le handbook.
-- Aligner le vocabulaire : Strategy, Risk, OMS, EMS, Gateway, Position Manager, Analytics.
+- Aligner le vocabulaire : TradingCore, Strategy, Risk, OMS, EMS, Gateway, Position Manager, Analytics.
+- Marquer Bitmart comme legacy a retirer.
 
 ### PR 2 — EffectiveTradingConfigResolver
 
 - Introduire le resolver.
-- Garder compatibilité avec les fichiers existants.
-- Ajouter tests de résolution.
+- Garder compatibilite avec les fichiers existants.
+- Ajouter tests de resolution.
+- Ajouter tests de config cible OKX/Hyperliquid/Fake.
 
 ### PR 3 — Runner extraction 1
 
@@ -758,54 +777,62 @@ Objectif : le Runner orchestre, mais ne porte plus la logique métier.
 
 ### PR 5 — SignalIntent + RiskDecision
 
-- Introduire DTOs métier.
+- Introduire DTOs metier.
 - Adapter le flux MTF sans changer le comportement externe.
 
 ### PR 6 — OMS minimal
 
-- Introduire état d'ordre interne.
+- Introduire etat d'ordre interne.
 - Standardiser transitions et idempotence.
 
 ### PR 7 — EMS minimal
 
 - Introduire `ExecutionRoute`.
-- Préparer routing multi-CEX.
+- Preparer routing OKX/Hyperliquid/Fake.
 
 ### PR 8 — Position Manager autonome
 
 - Sortir recalcul TP/SL du Runner.
-- Ajouter contrôle position sans SL.
+- Ajouter controle position sans SL.
 
-### PR 9 — Gateway Bitmart encapsulée
+### PR 9 — Gateways OKX/Hyperliquid/Fake cibles
 
-- Aligner Bitmart sur les contrats CEX cibles.
-- Conserver compatibilité runtime.
+- Stabiliser les contrats de gateway.
+- Garder OKX/Hyperliquid en dry-run/runtime-check tant que le runtime n'est pas complet.
+- Utiliser Fake/Paper pour tests et simulation.
 
-### PR 10 — DEX Gateway dry-run
+### PR 10 — Retrait Bitmart
+
+- Supprimer Bitmart des configs cible.
+- Remplacer les usages restants.
+- Supprimer le code uniquement apres verification qu'aucun flux critique n'en depend.
+
+### PR 11 — DEX Gateway dry-run
 
 - Quote/simulation uniquement.
 - Aucun live.
 
 ## Questions ouvertes
 
-- Faut-il garder `TradeEntry` comme nom de module ou le découper en `OrderPlanning`, `Execution`, `PositionProtection` ?
-- Quelle table doit devenir la source de vérité des ordres internes ?
-- Faut-il introduire un `trade_id` dès la décision ou seulement après fill ?
+- Faut-il garder `TradeEntry` comme nom de module ou le decouper en `OrderPlanning`, `Execution`, `PositionProtection` ?
+- Quelle table doit devenir la source de verite des ordres internes ?
+- Faut-il introduire un `trade_id` des la decision ou seulement apres fill ?
 - Quel niveau d'event store est suffisant sans basculer en event sourcing complet ?
-- Comment représenter proprement les instruments CEX perps vs DEX spot/swaps ?
-- Quel composant doit décider du fallback entre CEX ?
-- Quelle politique adopter pour les DEX : quote-only, simulation-only, puis live très restreint ?
+- Comment representer proprement les instruments CEX perps vs DEX spot/swaps ?
+- Quel composant doit decider du fallback entre CEX ?
+- Quelle politique adopter pour les DEX : quote-only, simulation-only, puis live tres restreint ?
+- Quelle est la strategie exacte de retrait de Bitmart : suppression directe apres remplacement ou maintien temporaire en legacy disabled ?
 
 ## Vision finale
 
-TradingV3 doit évoluer d'un bot MTF orienté exchange vers une plateforme de décision et d'exécution :
+TradingV3 doit evoluer d'un bot MTF oriente exchange historique vers une plateforme de decision et d'execution :
 
 ```text
 Strategy produit une intention.
-Risk décide si elle est autorisée.
+Risk decide si elle est autorisee.
 OMS suit le cycle de vie.
 EMS choisit le meilleur chemin.
-Gateway exécute.
-Position Manager protège.
-Analytics vérifie si l'ensemble gagne vraiment.
+Gateway execute via OKX, Hyperliquid ou Fake/Paper.
+Position Manager protege.
+Analytics verifie si l'ensemble gagne vraiment.
 ```
