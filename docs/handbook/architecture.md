@@ -2,6 +2,12 @@
 
 TradingV3 est une plateforme de trading futures orientee Bitmart, avec une architecture preparee pour plusieurs exchanges.
 
+## Architecture cible long terme
+
+La vision cible multi-CEX/multi-DEX est documentee dans [Architecture cible Trading Platform Core](technical/trading-platform-target-architecture.md).
+
+Cette page conserve la vue de l'architecture actuelle. La cible long terme introduit les frontieres suivantes : Strategy Engine, Risk Engine, OMS, EMS, CEX Gateways, DEX Gateways, Position Manager, Analytics Engine et Event Store leger.
+
 ## Vue logique
 
 ```mermaid
