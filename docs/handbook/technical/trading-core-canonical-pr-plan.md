@@ -4,7 +4,7 @@
 
 Plan de migration canonique pour faire evoluer TradingV3 vers le TradingCore modulaire sans casser le runtime actuel.
 
-Ce document decoupe la trajectoire en petites PR relisibles, testables et mergeables. Chaque PR doit rester atomique, avec un scope clair et un hors-scope explicite.
+Ce document decoupe la trajectoire en petites PR relisibles, testables et mergeables. Chaque PR doit rester atomique, avec un scope clair, un hors-scope explicite, des tests attendus et des criteres d'acceptation verifiables.
 
 ## Objectif global
 
@@ -32,6 +32,57 @@ Contraintes permanentes :
 - garder Bitmart comme legacy jusqu'a une PR de retrait dediee ;
 - garder OKX, Hyperliquid et Fake/Paper comme gateways cible.
 
+## Mode operatoire canonique
+
+Chaque PR doit suivre ce cycle :
+
+```text
+1. Creer une branche courte et explicite.
+2. Implementer un seul objectif.
+3. Ajouter ou adapter les tests du scope uniquement.
+4. Mettre a jour la documentation si une frontiere change.
+5. Pousser la PR en draft.
+6. Lancer la revue Codex/Claude.
+7. Corriger uniquement les remarques du scope.
+8. Merger seulement si les tests et criteres d'acceptation passent.
+9. Passer a la PR suivante.
+```
+
+Regle importante : si une fenetre de travail est saturee, compacter le contexte puis reprendre a la PR suivante sans melanger deux PRs.
+
+## Format canonique d'une PR
+
+Chaque PR doit avoir cette structure :
+
+```markdown
+## Objectif
+
+Une phrase claire.
+
+## Scope
+
+- changements inclus ;
+- fichiers/modules concernes ;
+- comportement attendu.
+
+## Hors-scope
+
+- ce qui ne doit pas etre modifie ;
+- ce qui sera traite dans une autre PR.
+
+## Tests
+
+Commandes lancees ou a lancer.
+
+## Risques
+
+Risques runtime, config, exchange, data ou trading.
+
+## Criteres d'acceptation
+
+Checklist verifiable avant merge.
+```
+
 ## Regle de taille des PR
 
 Une PR canonique doit respecter ces criteres :
@@ -44,6 +95,19 @@ Une PR canonique doit respecter ces criteres :
 - tests unitaires ou de non-regression quand du code est touche ;
 - documentation mise a jour si une frontiere change.
 ```
+
+## Gates de securite
+
+Aucune PR suivante ne doit etre mergee si elle casse :
+
+- `mtf:run` ;
+- `POST /api/mtf/run` ;
+- le dry-run ;
+- le Temporal scheduler qui appelle `/api/mtf/run` ;
+- l'attachement obligatoire du SL ;
+- l'idempotence ;
+- l'audit minimal ;
+- la possibilite de revenir a une execution sans live via Fake/Paper.
 
 ## Sequence canonique
 
@@ -69,6 +133,11 @@ Tests :
 ```bash
 python3 -m mkdocs build --strict
 ```
+
+Critere d'acceptation :
+
+- la PR reste documentation only ;
+- la navigation handbook expose les pages d'architecture et le plan canonique.
 
 Statut : PR draft courante.
 
@@ -362,7 +431,7 @@ Scope :
 
 - stabiliser Fake/Paper comme gateway cible ;
 - executer un `OrderPlan` en simulation ;
-- produire fills, fees simulés, slippage simulé ;
+- produire fills, fees simules, slippage simule ;
 - journaliser lifecycle.
 
 Hors-scope :
@@ -621,6 +690,20 @@ PR 14  Analytics baseline
 PR 15  Backtesting net
 PR 16  Bitmart removal inventory
 PR 17  Bitmart removal execution
+```
+
+## Prompts courts par PR
+
+Pour chaque PR, utiliser ce modele dans Codex CLI :
+
+```text
+Tu travailles sur TradingV3.
+Objectif : realiser uniquement la PR XX du plan Trading Core canonique.
+Lis docs/handbook/technical/trading-core-canonical-pr-plan.md.
+Respecte strictement le scope, le hors-scope, les tests et les criteres d'acceptation.
+Ne modifie pas les YAML ni le comportement live sauf si la PR le demande explicitement.
+Garde mtf:run, POST /api/mtf/run et le dry-run fonctionnels.
+A la fin, donne la liste des fichiers modifies et les tests lances.
 ```
 
 ## Regle de merge
