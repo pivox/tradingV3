@@ -6,7 +6,11 @@ TradingV3 est une plateforme de trading futures orientee Bitmart, avec une archi
 
 La vision cible multi-CEX/multi-DEX est documentee dans [Architecture cible Trading Platform Core](technical/trading-platform-target-architecture.md).
 
+La decision de court/moyen terme pour garder une base simple et evolutive est documentee dans [Architecture Trading Core modulaire](technical/trading-core-modular-architecture.md).
+
 Cette page conserve la vue de l'architecture actuelle. La cible long terme introduit les frontieres suivantes : Strategy Engine, Risk Engine, OMS, EMS, CEX Gateways, DEX Gateways, Position Manager, Analytics Engine et Event Store leger.
+
+La cible Trading Core modulaire conserve l'esprit Runner -> MTF -> Decision -> TradeEntry, mais separe clairement les modules Runner, MTF, Entry, Risk, SL/TP, Execution et Evaluation avec des ports de communication explicites.
 
 ## Vue logique
 
