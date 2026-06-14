@@ -25,6 +25,7 @@ nav:
       - Configuration: technical/configuration.md
       - Temporal workers: technical/temporal.md
       - Frontend et Ops: technical/frontend.md
+      - Front Ops anti-logs: technical/front-ops-anti-logs.md
   - Graphes:
       - Piles d'execution: graphs/execution-stacks.md
   - Runbooks:

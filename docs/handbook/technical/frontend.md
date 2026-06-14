@@ -18,6 +18,12 @@ La surface Ops recente est servie par Symfony:
 Templates: `trading-app/templates/front`.
 Assets: `trading-app/public/front/app.css` et `trading-app/public/front/app.js`.
 
+## Roadmap Front Ops anti-logs
+
+La roadmap [Front Ops anti-logs](front-ops-anti-logs.md) décrit l'évolution cible du front vers une console d'exploitation réellement utilisée : cockpit, run timeline, decision detail, trade lifecycle, position/risk, runtime matrix multi-exchange, effective config et trade analytics.
+
+Le principe directeur est simple : chaque fois qu'une action humaine nécessite d'ouvrir un fichier log, il faut identifier l'écran qui devrait répondre plus vite à cette question.
+
 ## Web Symfony historique
 
 Les templates sous `trading-app/templates` exposent encore des ecrans:
