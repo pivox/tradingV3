@@ -62,6 +62,37 @@ Runner
 
 Le flux reste proche de l'architecture historique Runner -> Validator -> Decision -> TradeEntry, mais chaque responsabilite devient explicite et testable.
 
+## Entrypoints runtime actuels a preserver
+
+La refonte TradingCore ne doit pas oublier les deux chemins d'execution existants :
+
+```text
+CLI complete execution:
+php bin/console mtf:run
+
+HTTP complete execution:
+POST /api/mtf/run
+```
+
+La commande `mtf:run` sert de declenchement CLI complet via le runner. La route `POST /api/mtf/run` est le declenchement HTTP principal utilise par l'application et par les workflows Temporal.
+
+Le Temporal scheduler lance des workflows periodiques qui appellent cette route HTTP. La cadence actuelle peut etre d'une minute, par exemple via un cron `*/1 * * * *` sur un couple exchange/profile.
+
+Dans la cible, ces entrypoints restent des adaptateurs d'application :
+
+```text
+CLI mtf:run
+  -> RunTradingCycleUseCase
+  -> TradingCore
+
+Temporal schedule every minute
+  -> POST /api/mtf/run
+  -> RunTradingCycleUseCase
+  -> TradingCore
+```
+
+La refonte ne doit donc pas supprimer ces surfaces. Elle doit seulement les rendre plus minces : elles orchestrent, mais ne portent pas la logique de validation, de risque, d'entree, de SL/TP ou d'execution.
+
 ## Frontieres des modules
 
 ### Runner
@@ -365,6 +396,8 @@ AuditPort <|.. DoctrineAuditStore
 - Fake exchange pour tests et simulation.
 - Separation des profils YAML.
 - Audit et observabilite.
+- Les entrypoints `mtf:run` et `POST /api/mtf/run`, en les rendant plus minces.
+- Le Temporal scheduler qui declenche `/api/mtf/run`, notamment sur cadence minute quand necessaire.
 
 ## Ce qu'il faut retirer ou eviter comme cible
 
@@ -424,6 +457,7 @@ Ne pas supprimer Bitmart brutalement dans une PR documentaire. Le retrait doit p
 - Ne pas desserrer les EntryZones.
 - Ne pas augmenter le nombre de trades.
 - Ne pas supprimer le code Bitmart dans cette PR documentaire.
+- Ne pas supprimer les entrypoints actuels `mtf:run` et `POST /api/mtf/run`.
 
 ## Definition of done pour cette etape
 
@@ -432,5 +466,6 @@ Ne pas supprimer Bitmart brutalement dans une PR documentaire. Le retrait doit p
 - Les contrats de module sont distingues des instruments tradeables.
 - Bitmart est marque comme legacy a retirer, pas comme gateway cible.
 - OKX, Hyperliquid et Fake/Paper restent les gateways cibles.
+- Les entrypoints runtime actuels sont preserves dans la cible : CLI `mtf:run`, route `POST /api/mtf/run`, Temporal scheduler.
 - La migration proposee est progressive.
 - Aucun comportement runtime n'est modifie.
