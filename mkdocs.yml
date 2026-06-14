@@ -27,6 +27,7 @@ nav:
       - Frontend et Ops: technical/frontend.md
       - Architecture cible trading platform: technical/trading-platform-target-architecture.md
       - Architecture Trading Core modulaire: technical/trading-core-modular-architecture.md
+      - Plan PR canoniques Trading Core: technical/trading-core-canonical-pr-plan.md
   - Graphes:
       - Piles d'execution: graphs/execution-stacks.md
   - Runbooks:
