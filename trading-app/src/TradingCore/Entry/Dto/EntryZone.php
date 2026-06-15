@@ -23,6 +23,31 @@ final readonly class EntryZone
 
     public function contains(float $price): bool
     {
-        return $price >= $this->low && $price <= $this->high;
+        if ($price >= $this->low && $price <= $this->high) {
+            return true;
+        }
+
+        $tolerance = $this->metadata['outside_tolerance_pct'] ?? null;
+        if (!\is_numeric($tolerance)) {
+            return false;
+        }
+
+        $tolerance = (float)$tolerance;
+        if ($tolerance <= 0.0 || $price <= 0.0) {
+            return false;
+        }
+        if ($tolerance > 1.0) {
+            $tolerance *= 0.01;
+        }
+        $tolerance = min($tolerance, 1.0);
+
+        if ($price > $this->high) {
+            return (($price - $this->high) / $price) <= $tolerance;
+        }
+        if ($price < $this->low) {
+            return (($this->low - $price) / $price) <= $tolerance;
+        }
+
+        return false;
     }
 }

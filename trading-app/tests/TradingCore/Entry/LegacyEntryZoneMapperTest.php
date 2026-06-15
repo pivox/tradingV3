@@ -4,11 +4,14 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Entry;
 
 use App\TradeEntry\Dto\EntryZone as LegacyEntryZone;
+use App\TradingCore\Entry\Dto\EntryZone;
 use App\TradingCore\Entry\Mapper\LegacyEntryZoneMapper;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(LegacyEntryZoneMapper::class)]
+#[CoversClass(EntryZone::class)]
+#[CoversClass(LegacyEntryZone::class)]
 final class LegacyEntryZoneMapperTest extends TestCase
 {
     public function testMapsLegacyEntryZoneWithoutChangingBoundsOrMetadata(): void

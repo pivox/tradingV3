@@ -4,12 +4,16 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Entry;
 
 use App\TradingCore\Entry\Dto\EntryZone;
+use App\TradingCore\Entry\Dto\EntryZoneDecision;
 use App\TradingCore\Entry\Enum\EntryZoneStatus;
 use App\TradingCore\Entry\Service\EntryZoneGuard;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(EntryZoneGuard::class)]
+#[CoversClass(EntryZone::class)]
+#[CoversClass(EntryZoneDecision::class)]
+#[CoversClass(EntryZoneStatus::class)]
 final class EntryZoneGuardTest extends TestCase
 {
     public function testAcceptsCandidateInsideZone(): void
@@ -103,6 +107,59 @@ final class EntryZoneGuardTest extends TestCase
         self::assertEqualsWithDelta(1.02, $decision->zoneDevPct, 1e-12);
         self::assertSame(0.05, $decision->zoneMaxDevPct);
         self::assertSame('zone_far_from_market', $decision->reasonIfRejected);
+    }
+
+    public function testDefaultsToFarFromMarketReasonWhenZoneDeviationFails(): void
+    {
+        $guard = new EntryZoneGuard();
+        $zone = new EntryZone(
+            low: 100.0,
+            high: 101.0,
+            center: 100.5,
+            widthPct: 0.01,
+            ttlSec: 180,
+            expiresAt: null,
+            source: 'vwap',
+            atrUsed: 1.0,
+            quantized: false,
+        );
+
+        $decision = $guard->decide(
+            entryZone: $zone,
+            candidatePrice: 100.5,
+            referencePrice: 50.0,
+            zoneMaxDevPct: 0.05,
+        );
+
+        self::assertSame(EntryZoneStatus::Rejected, $decision->status);
+        self::assertSame('zone_far_from_market', $decision->reasonIfRejected);
+    }
+
+    public function testAcceptsCandidateInsideLegacyOutsideTolerance(): void
+    {
+        $guard = new EntryZoneGuard();
+        $zone = new EntryZone(
+            low: 99.0,
+            high: 101.0,
+            center: 100.0,
+            widthPct: 0.02,
+            ttlSec: 180,
+            expiresAt: null,
+            source: 'vwap',
+            atrUsed: 1.0,
+            quantized: false,
+            metadata: ['outside_tolerance_pct' => 0.012],
+        );
+
+        $decision = $guard->decide(
+            entryZone: $zone,
+            candidatePrice: 101.5,
+            referencePrice: 100.0,
+            zoneMaxDevPct: 0.03,
+        );
+
+        self::assertSame(EntryZoneStatus::Accepted, $decision->status);
+        self::assertNull($decision->reasonIfRejected);
     }
 
     public function testNormalizesPercentThresholdButDoesNotChangeSemanticValue(): void

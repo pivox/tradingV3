@@ -3,12 +3,15 @@ declare(strict_types=1);
 
 namespace App\Tests\TradingCore\Entry;
 
+use App\TradingCore\Entry\Dto\EntryZone;
 use App\TradingCore\Entry\Dto\EntryZoneRequest;
 use App\TradingCore\Entry\Service\EntryZoneCalculator;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(EntryZoneCalculator::class)]
+#[CoversClass(EntryZoneRequest::class)]
+#[CoversClass(EntryZone::class)]
 final class EntryZoneCalculatorTest extends TestCase
 {
     public function testCalculatesZoneAroundVwapPivot(): void

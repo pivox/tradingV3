@@ -22,8 +22,9 @@ final class EntryZoneGuard
     ): EntryZoneDecision {
         $normalizedZoneMax = $zoneMaxDevPct !== null ? $this->normalizePercent($zoneMaxDevPct) : null;
         $zoneDevPct = $this->computeZoneDeviation($referencePrice, $entryZone);
-        $accepted = $entryZone->contains($candidatePrice)
-            && ($normalizedZoneMax === null || $zoneDevPct === null || $zoneDevPct <= $normalizedZoneMax);
+        $isInsideZone = $entryZone->contains($candidatePrice);
+        $isWithinDeviation = $normalizedZoneMax === null || $zoneDevPct === null || $zoneDevPct <= $normalizedZoneMax;
+        $accepted = $isInsideZone && $isWithinDeviation;
 
         return new EntryZoneDecision(
             status: $accepted ? EntryZoneStatus::Accepted : EntryZoneStatus::Rejected,
@@ -31,9 +32,18 @@ final class EntryZoneGuard
             candidatePrice: $candidatePrice,
             zoneDevPct: $zoneDevPct,
             zoneMaxDevPct: $normalizedZoneMax,
-            reasonIfRejected: $accepted ? null : ($reasonIfRejected ?? 'entry_not_within_zone'),
+            reasonIfRejected: $accepted ? null : ($reasonIfRejected ?? $this->defaultRejectedReason($isInsideZone, $isWithinDeviation)),
             metadata: $metadata,
         );
+    }
+
+    private function defaultRejectedReason(bool $isInsideZone, bool $isWithinDeviation): string
+    {
+        if ($isInsideZone && !$isWithinDeviation) {
+            return 'zone_far_from_market';
+        }
+
+        return 'entry_not_within_zone';
     }
 
     private function computeZoneDeviation(?float $referencePrice, EntryZone $entryZone): ?float
