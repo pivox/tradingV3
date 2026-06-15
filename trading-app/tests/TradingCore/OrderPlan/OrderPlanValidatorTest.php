@@ -97,6 +97,14 @@ final class OrderPlanValidatorTest extends TestCase
         self::assertContains('instrument_missing', $result->invalidReasons);
     }
 
+    public function testRejectsUnsupportedMarketType(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(marketType: 'futures'));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('market_type_invalid', $result->invalidReasons);
+    }
+
     public function testRejectsInvalidMarginModeAndTimeInForce(): void
     {
         $result = (new OrderPlanValidator())->validate($this->plan(

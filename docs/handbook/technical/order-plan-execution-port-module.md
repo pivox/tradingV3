@@ -96,7 +96,7 @@ OrderPlan invalide si symbole absent
 OrderPlan invalide si instrument absent
 OrderPlan invalide si profile absent
 OrderPlan invalide si exchange absent
-OrderPlan invalide si market_type absent
+OrderPlan invalide si market_type absent ou hors perpetual/spot
 OrderPlan invalide si side inconnu
 OrderPlan invalide si type d'ordre inconnu
 OrderPlan invalide si margin_mode absent ou hors isolated/cross

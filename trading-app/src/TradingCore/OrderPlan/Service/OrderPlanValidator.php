@@ -26,8 +26,11 @@ final class OrderPlanValidator
         if (trim($plan->exchange) === '') {
             $invalidReasons[] = 'exchange_missing';
         }
-        if (trim($plan->marketType) === '') {
+        $marketType = strtolower(trim($plan->marketType));
+        if ($marketType === '') {
             $invalidReasons[] = 'market_type_missing';
+        } elseif (!\in_array($marketType, ['perpetual', 'spot'], true)) {
+            $invalidReasons[] = 'market_type_invalid';
         }
         if (!\in_array(strtolower($plan->side), ['long', 'short'], true)) {
             $invalidReasons[] = 'side_invalid';
@@ -101,7 +104,7 @@ final class OrderPlanValidator
                 }
             }
 
-            if (strtolower(trim($plan->marketType)) === 'perpetual') {
+            if ($marketType === 'perpetual') {
                 if ($protection->liquidationCheck === null) {
                     $invalidReasons[] = 'liquidation_guard_missing';
                 } elseif (!$protection->liquidationCheck->isSafe) {
