@@ -106,6 +106,66 @@ final class TakeProfitCalculatorTest extends TestCase
         self::assertSame($buffer, $result->metadata['tp_buffer_pct']);
     }
 
+    public function testRejectsWhenRMultipleIsNotPositive(): void
+    {
+        $calculator = new TakeProfitCalculator();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('rMultiple must be positive');
+
+        $calculator->calculate(new TakeProfitRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 95.0,
+            riskDistance: null,
+            rMultiple: 0.0,
+            tp1R: null,
+            tpPolicy: 'r_multiple',
+            tpBufferPct: null,
+            tpMinKeepRatio: 0.95,
+            tpMaxExtraR: null,
+            feesBps: null,
+            spreadBps: null,
+            slippageBps: null,
+        ));
+    }
+
+    public function testEmitsSingleTpWhenTp1RIsAbsent(): void
+    {
+        $calculator = new TakeProfitCalculator();
+
+        // No explicit tp1R → tp1 lands at rMultiple, no tp2 emitted.
+        $result = $calculator->calculate(new TakeProfitRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 95.0,
+            riskDistance: null,
+            rMultiple: 1.8,
+            tp1R: null,
+            tpPolicy: 'r_multiple',
+            tpBufferPct: null,
+            tpMinKeepRatio: 0.95,
+            tpMaxExtraR: null,
+            feesBps: null,
+            spreadBps: null,
+            slippageBps: null,
+        ));
+
+        self::assertSame(109.0, $result->tp1Price);
+        self::assertNull($result->tp2Price);
+        self::assertSame(1.8, $result->expectedR);
+    }
+
     public function testWarnsWhenNetRIsIncoherentAfterCosts(): void
     {
         $calculator = new TakeProfitCalculator();

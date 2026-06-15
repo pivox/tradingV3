@@ -106,6 +106,34 @@ final class StopLossCalculatorTest extends TestCase
         self::assertSame('pivot', $result->stopSource);
     }
 
+    public function testFallsBackToAtrWhenPivotIsUnavailable(): void
+    {
+        $calculator = new StopLossCalculator();
+
+        // stopFrom=pivot but no pivotPrice → fallback to ATR stop.
+        $result = $calculator->calculate(new StopLossRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopFrom: 'pivot',
+            stopFallback: 'atr',
+            atr: 2.0,
+            atrK: 1.5,
+            pivotPrice: null,
+            pivotSlPolicy: 'nearest',
+            pivotSlBufferPct: 0.003,
+            pivotSlMinKeepRatio: 0.8,
+        ));
+
+        self::assertSame(97.0, $result->stopPrice);
+        self::assertSame('atr_fallback', $result->stopSource);
+        self::assertContains('Pivot stop unavailable; falling back to ATR stop.', $result->warnings);
+    }
+
     public function testRejectsStopOnWrongSideOfEntry(): void
     {
         $calculator = new StopLossCalculator();

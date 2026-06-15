@@ -29,7 +29,7 @@ final class StopLossCalculator
             stopPct: $this->normalize($stopPct),
             stopDistance: $this->normalize($stopDistance),
             stopSource: $source,
-            isFullSize: $request->slFullSize ?? true,
+            isFullSize: $request->slFullSize,
             warnings: $warnings,
             metadata: $request->metadata + [
                 'symbol' => $request->symbol,
