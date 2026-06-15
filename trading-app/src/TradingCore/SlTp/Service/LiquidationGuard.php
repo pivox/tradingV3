@@ -51,6 +51,11 @@ final class LiquidationGuard
             return $this->unsafe($request, $liquidationPrice, $liquidationDistancePct, $ratio, 'liquidation_not_beyond_stop');
         }
 
+        // Fail closed: NAN or negative threshold makes any comparison unreliable.
+        if (!\is_finite($request->minDistanceRatio) || $request->minDistanceRatio < 0.0) {
+            return $this->unsafe($request, $liquidationPrice, $liquidationDistancePct, $ratio, 'invalid_min_distance_ratio');
+        }
+
         if ($ratio < $request->minDistanceRatio) {
             return $this->unsafe($request, $liquidationPrice, $liquidationDistancePct, $ratio, 'liquidation_distance_below_min_ratio');
         }

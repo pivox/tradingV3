@@ -108,6 +108,47 @@ final class LiquidationGuardTest extends TestCase
         self::assertSame('liquidation_not_beyond_stop', $result->reasonIfUnsafe);
     }
 
+    public function testMarksPlanUnsafeWhenMinDistanceRatioIsInvalid(): void
+    {
+        $guard = new LiquidationGuard();
+
+        // NAN threshold: ratio < NAN evaluates false in PHP → would pass as safe without guard.
+        $result = $guard->check(new LiquidationCheckRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 95.0,
+            leverage: 5,
+            maintenanceMarginRate: null,
+            liquidationPrice: 80.0,
+            minDistanceRatio: NAN,
+        ));
+
+        self::assertFalse($result->isSafe);
+        self::assertSame('invalid_min_distance_ratio', $result->reasonIfUnsafe);
+
+        // Negative threshold: any ratio passes → same fail-closed behaviour.
+        $result2 = $guard->check(new LiquidationCheckRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 95.0,
+            leverage: 5,
+            maintenanceMarginRate: null,
+            liquidationPrice: 80.0,
+            minDistanceRatio: -1.0,
+        ));
+
+        self::assertFalse($result2->isSafe);
+        self::assertSame('invalid_min_distance_ratio', $result2->reasonIfUnsafe);
+    }
+
     public function testMarksPlanUnsafeWhenLiquidationDataIsUnavailable(): void
     {
         $guard = new LiquidationGuard();
