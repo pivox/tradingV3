@@ -117,6 +117,17 @@ final class OrderPlanValidatorTest extends TestCase
         self::assertContains('time_in_force_invalid', $result->invalidReasons);
     }
 
+    public function testRejectsPostOnlyMarketOrder(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            orderType: 'market',
+            timeInForce: 'post_only',
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('post_only_requires_limit_order', $result->invalidReasons);
+    }
+
     public function testRejectsNonFiniteExecutionFields(): void
     {
         $result = (new OrderPlanValidator())->validate($this->plan(
@@ -410,6 +421,7 @@ final class OrderPlanValidatorTest extends TestCase
         string $marketType = 'perpetual',
         string $instrument = 'BTCUSDT',
         string $side = 'long',
+        string $orderType = 'limit',
         string $marginMode = 'isolated',
         string $timeInForce = 'gtc',
         ?ProtectionPlan $protectionPlan = null,
@@ -426,7 +438,7 @@ final class OrderPlanValidatorTest extends TestCase
             exchange: $exchange,
             marketType: $marketType,
             side: $side,
-            orderType: 'limit',
+            orderType: $orderType,
             marginMode: $marginMode,
             timeInForce: $timeInForce,
             entryPrice: $entryPrice,

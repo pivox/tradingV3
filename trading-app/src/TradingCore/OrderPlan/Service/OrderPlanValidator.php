@@ -38,6 +38,7 @@ final class OrderPlanValidator
         if (!\in_array(strtolower($plan->orderType), ['limit', 'market'], true)) {
             $invalidReasons[] = 'order_type_invalid';
         }
+        $orderType = strtolower(trim($plan->orderType));
         $marginMode = strtolower(trim($plan->marginMode));
         if ($marginMode === '') {
             $invalidReasons[] = 'margin_mode_missing';
@@ -49,6 +50,8 @@ final class OrderPlanValidator
             $invalidReasons[] = 'time_in_force_missing';
         } elseif (!\in_array($timeInForce, ['gtc', 'fok', 'ioc', 'post_only'], true)) {
             $invalidReasons[] = 'time_in_force_invalid';
+        } elseif ($orderType === 'market' && $timeInForce === 'post_only') {
+            $invalidReasons[] = 'post_only_requires_limit_order';
         }
         if ($plan->entryPrice <= 0.0 || !\is_finite($plan->entryPrice)) {
             $invalidReasons[] = 'entry_price_not_positive';

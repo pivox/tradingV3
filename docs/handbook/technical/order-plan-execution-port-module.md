@@ -101,6 +101,7 @@ OrderPlan invalide si side inconnu
 OrderPlan invalide si type d'ordre inconnu
 OrderPlan invalide si margin_mode absent ou hors isolated/cross
 OrderPlan invalide si time_in_force absent ou hors gtc/fok/ioc/post_only
+OrderPlan invalide si type d'ordre market avec time_in_force post_only
 OrderPlan invalide si entry_price <= 0 ou non fini
 OrderPlan invalide si quantity <= 0 ou non finie
 OrderPlan invalide si leverage <= 0
