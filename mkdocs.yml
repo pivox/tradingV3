@@ -26,6 +26,7 @@ nav:
       - Effective trading config resolver: technical/effective-trading-config-resolver.md
       - Runner extraction: technical/runner-extraction.md
       - DTOs MTF et TradeCandidate: technical/mtf-dtos-and-trade-candidate.md
+      - EntryZone module: technical/entry-zone-module.md
       - Exchange readiness consolidation: technical/exchange-readiness-consolidation.md
       - Exchange readiness matrix: technical/exchange-readiness-matrix.md
       - Exchange runtime gates: technical/exchange-runtime-gates.md
