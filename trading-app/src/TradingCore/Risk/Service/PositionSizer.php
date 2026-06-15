@@ -68,12 +68,13 @@ final class PositionSizer
         if (
             $legacyRuntimeSource === RiskSource::RiskPctPercentLegacy
             && $request->riskPctPercentLegacy !== null
-            && $request->riskPctPercentLegacy > 0.0
         ) {
-            if ($request->fixedRiskPct !== null && $request->fixedRiskPct > 0.0) {
+            if ($request->riskPctPercentLegacy > 0.0 && $request->fixedRiskPct !== null && $request->fixedRiskPct > 0.0) {
                 $warnings[] = 'Preserving legacy runtime risk source from defaults.risk_pct_percent; risk.fixed_risk_pct is carried for audit only.';
             }
-
+            // Return even when zero — the caller's positivity check rejects it, matching the
+            // legacy TradeEntryRequestBuilder which returns null when riskPct <= 0 (never falls
+            // through to fixedRiskPct).
             return [$request->riskPctPercentLegacy, RiskSource::RiskPctPercentLegacy, $warnings];
         }
 

@@ -204,6 +204,36 @@ final class PositionSizerTest extends TestCase
         self::assertSame(0.008, $result->quantity);
     }
 
+    public function testRejectsWhenLegacyRiskPctIsZeroInsteadOfFallingBackToFixedRisk(): void
+    {
+        $interpreter = new RiskConfigInterpreter();
+        $sizer = new PositionSizer();
+
+        // risk_pct_percent=0.0 normalizes to 0.0 → source is RiskPctPercentLegacy with value 0.
+        // Must NOT fall through to fixedRiskPct — legacy runtime would have returned null (rejected).
+        $request = $interpreter->fromLegacyTradeEntryConfig(
+            symbol: 'BTCUSDT',
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            entryPrice: 100.0,
+            stopPct: 0.02,
+            defaults: [
+                'risk_pct_percent' => 0.0,
+                'initial_margin_usdt' => 50.0,
+            ],
+            risk: [
+                'fixed_risk_pct' => 5.0,
+            ],
+            availableBalance: 100.0,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('effective risk pct must be positive');
+
+        $sizer->calculate($request);
+    }
+
     public function testPreservesLegacyRuntimeRiskSourceWhenRequestComesFromInterpreter(): void
     {
         $interpreter = new RiskConfigInterpreter();
