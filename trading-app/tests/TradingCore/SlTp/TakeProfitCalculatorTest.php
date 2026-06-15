@@ -76,12 +76,13 @@ final class TakeProfitCalculatorTest extends TestCase
         self::assertSame(1.4, $result->expectedR);
     }
 
-    public function testCarriesTpBufferWithoutMutatingConfiguredValue(): void
+    public function testAppliesTpBufferOnlyForPivotPolicy(): void
     {
         $calculator = new TakeProfitCalculator();
         $buffer = 0.001;
 
-        $result = $calculator->calculate(new TakeProfitRequest(
+        // Pivot policy: buffer is applied → tp1Price = 105 - 0.1 = 104.9.
+        $pivotResult = $calculator->calculate(new TakeProfitRequest(
             symbol: 'SOLUSDT',
             instrument: null,
             profile: 'scalper_micro',
@@ -102,8 +103,32 @@ final class TakeProfitCalculatorTest extends TestCase
             slippageBps: null,
         ));
 
-        self::assertSame(104.9, $result->tp1Price);
-        self::assertSame($buffer, $result->metadata['tp_buffer_pct']);
+        self::assertSame(104.9, $pivotResult->tp1Price);
+        self::assertSame($buffer, $pivotResult->metadata['tp_buffer_pct']);
+
+        // R-multiple policy: buffer must NOT be applied → tp1Price stays at 105.0.
+        $rResult = $calculator->calculate(new TakeProfitRequest(
+            symbol: 'SOLUSDT',
+            instrument: null,
+            profile: 'scalper_micro',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 95.0,
+            riskDistance: null,
+            rMultiple: 1.0,
+            tp1R: 1.0,
+            tpPolicy: 'r_multiple',
+            tpBufferPct: $buffer,
+            tpMinKeepRatio: 0.95,
+            tpMaxExtraR: null,
+            feesBps: null,
+            spreadBps: null,
+            slippageBps: null,
+        ));
+
+        self::assertSame(105.0, $rResult->tp1Price);
     }
 
     public function testRejectsWhenRMultipleIsNotPositive(): void

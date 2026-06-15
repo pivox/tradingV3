@@ -84,6 +84,14 @@ final class StopLossCalculator
                 return [$this->atrStop($request, $direction), 'atr_fallback', $warnings];
             }
 
+            if (strtolower((string)$request->stopFallback) === 'risk') {
+                if ($request->providedStopPrice !== null && $request->providedStopPrice > 0.0 && \is_finite($request->providedStopPrice)) {
+                    $warnings[] = 'Pivot stop unavailable; falling back to risk stop.';
+
+                    return [$request->providedStopPrice, 'risk_fallback', $warnings];
+                }
+            }
+
             throw new \InvalidArgumentException('pivotPrice must be positive when stopFrom=pivot');
         }
 

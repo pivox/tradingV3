@@ -133,6 +133,35 @@ final class StopLossCalculatorTest extends TestCase
         ));
     }
 
+    public function testFallsBackToRiskStopWhenPivotIsUnavailableAndFallbackIsRisk(): void
+    {
+        $calculator = new StopLossCalculator();
+
+        // stopFrom=pivot, no pivot, stopFallback=risk → use providedStopPrice.
+        $result = $calculator->calculate(new StopLossRequest(
+            symbol: 'SOLUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopFrom: 'pivot',
+            stopFallback: 'risk',
+            atr: null,
+            atrK: null,
+            pivotPrice: null,
+            pivotSlPolicy: 'nearest',
+            pivotSlBufferPct: null,
+            pivotSlMinKeepRatio: null,
+            providedStopPrice: 94.0,
+        ));
+
+        self::assertSame(94.0, $result->stopPrice);
+        self::assertSame('risk_fallback', $result->stopSource);
+        self::assertContains('Pivot stop unavailable; falling back to risk stop.', $result->warnings);
+    }
+
     public function testFallsBackToAtrWhenPivotIsUnavailable(): void
     {
         $calculator = new StopLossCalculator();

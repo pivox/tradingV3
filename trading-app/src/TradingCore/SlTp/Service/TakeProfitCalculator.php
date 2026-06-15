@@ -33,8 +33,10 @@ final class TakeProfitCalculator
         $tp1Price = $this->priceForR($request->entryPrice, $riskDistance, $direction, $tp1R);
         $tp2Price = $tp2R !== null ? $this->priceForR($request->entryPrice, $riskDistance, $direction, $tp2R) : null;
 
+        // Buffer only applies during pivot alignment — not for pure R-multiple policies.
         $bufferPct = $request->tpBufferPct !== null ? max(0.0, $request->tpBufferPct) : 0.0;
-        if ($bufferPct > 0.0) {
+        $isPivotPolicy = str_contains(strtolower($request->tpPolicy), 'pivot');
+        if ($bufferPct > 0.0 && $isPivotPolicy) {
             $buffer = $request->entryPrice * $bufferPct;
             $tp1Price = $direction === 'long' ? $tp1Price - $buffer : $tp1Price + $buffer;
             if ($tp2Price !== null) {
