@@ -218,6 +218,82 @@ final class OrderPlanValidatorTest extends TestCase
         self::assertContains('liquidation_guard_unsafe', $result->invalidReasons);
     }
 
+    public function testRejectsPerpetualPlanWithMissingLiquidationMetrics(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            protectionPlan: $this->protectionPlan(
+                liquidationCheck: new LiquidationCheckResult(
+                    isSafe: true,
+                    liquidationPrice: null,
+                    liquidationDistancePct: null,
+                    stopToLiquidationRatio: null,
+                ),
+            ),
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('liquidation_guard_data_invalid', $result->invalidReasons);
+    }
+
+    public function testRejectsPerpetualPlanWithNonFiniteLiquidationMetrics(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            protectionPlan: $this->protectionPlan(
+                liquidationCheck: new LiquidationCheckResult(
+                    isSafe: true,
+                    liquidationPrice: INF,
+                    liquidationDistancePct: NAN,
+                    stopToLiquidationRatio: -INF,
+                ),
+            ),
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('liquidation_guard_data_invalid', $result->invalidReasons);
+    }
+
+    public function testRejectsLongLiquidationPriceAtOrAboveStop(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            protectionPlan: $this->protectionPlan(
+                liquidationCheck: new LiquidationCheckResult(
+                    isSafe: true,
+                    liquidationPrice: 98.0,
+                    liquidationDistancePct: 0.02,
+                    stopToLiquidationRatio: 1.0,
+                ),
+            ),
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('liquidation_price_not_beyond_stop', $result->invalidReasons);
+    }
+
+    public function testRejectsShortLiquidationPriceAtOrBelowStop(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            side: 'short',
+            protectionPlan: $this->protectionPlan(
+                stopLoss: new StopLossResult(
+                    stopPrice: 102.0,
+                    stopPct: 0.02,
+                    stopDistance: 2.0,
+                    stopSource: 'pivot',
+                    isFullSize: true,
+                ),
+                liquidationCheck: new LiquidationCheckResult(
+                    isSafe: true,
+                    liquidationPrice: 102.0,
+                    liquidationDistancePct: 0.02,
+                    stopToLiquidationRatio: 1.0,
+                ),
+            ),
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('liquidation_price_not_beyond_stop', $result->invalidReasons);
+    }
+
     public function testWithValidationPreservesAllFields(): void
     {
         $plan = new OrderPlan(

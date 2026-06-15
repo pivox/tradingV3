@@ -109,6 +109,31 @@ final class OrderPlanValidator
                     $invalidReasons[] = 'liquidation_guard_missing';
                 } elseif (!$protection->liquidationCheck->isSafe) {
                     $invalidReasons[] = 'liquidation_guard_unsafe';
+                } else {
+                    $liquidationCheck = $protection->liquidationCheck;
+                    if (
+                        $liquidationCheck->liquidationPrice === null
+                        || $liquidationCheck->liquidationDistancePct === null
+                        || $liquidationCheck->stopToLiquidationRatio === null
+                        || $liquidationCheck->liquidationPrice <= 0.0
+                        || $liquidationCheck->liquidationDistancePct <= 0.0
+                        || $liquidationCheck->stopToLiquidationRatio <= 0.0
+                        || !\is_finite($liquidationCheck->liquidationPrice)
+                        || !\is_finite($liquidationCheck->liquidationDistancePct)
+                        || !\is_finite($liquidationCheck->stopToLiquidationRatio)
+                    ) {
+                        $invalidReasons[] = 'liquidation_guard_data_invalid';
+                    }
+
+                    if ($stopLoss !== null) {
+                        $side = strtolower(trim($plan->side));
+                        if (
+                            ($side === 'long' && $liquidationCheck->liquidationPrice !== null && $liquidationCheck->liquidationPrice >= $stopLoss->stopPrice)
+                            || ($side === 'short' && $liquidationCheck->liquidationPrice !== null && $liquidationCheck->liquidationPrice <= $stopLoss->stopPrice)
+                        ) {
+                            $invalidReasons[] = 'liquidation_price_not_beyond_stop';
+                        }
+                    }
                 }
             }
         }

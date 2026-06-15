@@ -117,6 +117,8 @@ OrderPlan invalide si stop_distance <= 0 ou non fini
 OrderPlan invalide si le stop n'est pas protecteur pour le side
 OrderPlan perpetual invalide si liquidation guard absent
 OrderPlan perpetual invalide si liquidation guard unsafe
+OrderPlan perpetual invalide si les metriques liquidation sont absentes ou non finies
+OrderPlan perpetual invalide si le prix de liquidation n'est pas au-dela du stop
 ```
 
 Cette validation cible ne change pas le runtime legacy. Elle prepare la regle :
