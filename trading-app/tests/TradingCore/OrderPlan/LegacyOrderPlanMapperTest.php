@@ -89,6 +89,7 @@ final class LegacyOrderPlanMapperTest extends TestCase
         );
 
         self::assertNull($plan->protectionPlan);
+        self::assertSame('short', $plan->side);
         self::assertSame(OrderPlanStatus::Invalid, $plan->validation->status);
         self::assertContains('protection_plan_missing', $plan->validation->invalidReasons);
         self::assertContains('client_order_id_missing', $plan->validation->invalidReasons);

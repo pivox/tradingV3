@@ -29,10 +29,10 @@ final class OrderPlanValidator
         if (trim($plan->timeInForce) === '') {
             $invalidReasons[] = 'time_in_force_missing';
         }
-        if ($plan->entryPrice <= 0.0) {
+        if ($plan->entryPrice <= 0.0 || !\is_finite($plan->entryPrice)) {
             $invalidReasons[] = 'entry_price_not_positive';
         }
-        if ($plan->quantity <= 0.0) {
+        if ($plan->quantity <= 0.0 || !\is_finite($plan->quantity)) {
             $invalidReasons[] = 'quantity_not_positive';
         }
         if ($plan->leverage <= 0) {

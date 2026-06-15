@@ -79,6 +79,52 @@ final class OrderPlanValidatorTest extends TestCase
         self::assertContains('leverage_not_positive', $result->invalidReasons);
     }
 
+    public function testRejectsNonFiniteExecutionFields(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            entryPrice: INF,
+            quantity: NAN,
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('entry_price_not_positive', $result->invalidReasons);
+        self::assertContains('quantity_not_positive', $result->invalidReasons);
+    }
+
+    public function testWithValidationPreservesAllFields(): void
+    {
+        $plan = new OrderPlan(
+            symbol: 'BTCUSDT',
+            profile: 'scalper_micro',
+            exchange: 'bitmart',
+            marketType: 'perpetual',
+            side: 'long',
+            orderType: 'limit',
+            marginMode: 'isolated',
+            timeInForce: 'gtc',
+            entryPrice: 100.0,
+            quantity: 12.0,
+            leverage: 5,
+            protectionPlan: $this->protectionPlan(),
+            clientOrderId: 'CID123',
+            idempotencyKey: 'key:BTCUSDT',
+            metadata: ['foo' => 'bar'],
+        );
+
+        $validation = new \App\TradingCore\OrderPlan\Dto\OrderPlanValidationResult(
+            status: OrderPlanStatus::Valid,
+            isExecutable: true,
+        );
+        $updated = $plan->withValidation($validation);
+
+        self::assertSame($plan->symbol, $updated->symbol);
+        self::assertSame($plan->entryPrice, $updated->entryPrice);
+        self::assertSame($plan->quantity, $updated->quantity);
+        self::assertSame($plan->metadata, $updated->metadata);
+        self::assertSame($plan->clientOrderId, $updated->clientOrderId);
+        self::assertSame(OrderPlanStatus::Valid, $updated->validation->status);
+    }
+
     public function testRejectsPlanWithoutClientOrderId(): void
     {
         $result = (new OrderPlanValidator())->validate($this->plan(clientOrderId: ''));
