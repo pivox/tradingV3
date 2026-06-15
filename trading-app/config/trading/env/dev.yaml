@@ -1,0 +1,7 @@
+version: '0.1.0-effective-config-bootstrap'
+
+trading:
+  env: dev
+  execution:
+    dry_run: true
+    live_enabled: false

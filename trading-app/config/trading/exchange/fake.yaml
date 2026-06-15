@@ -1,0 +1,15 @@
+version: '0.1.0-effective-config-bootstrap'
+
+trading:
+  exchange: fake
+  exchange_status: paper_only
+  execution:
+    dry_run: true
+    live_enabled: false
+
+compatibility:
+  env_template_keys:
+    - FAKE_EXCHANGE_ENABLED
+    - FAKE_EXCHANGE_INITIAL_BALANCE_USDT
+    - FAKE_EXCHANGE_FEES_ENABLED
+    - FAKE_EXCHANGE_SLIPPAGE_BPS
