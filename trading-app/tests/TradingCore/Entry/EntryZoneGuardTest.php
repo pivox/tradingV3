@@ -37,7 +37,7 @@ final class EntryZoneGuardTest extends TestCase
         self::assertSame(EntryZoneStatus::Accepted, $decision->status);
         self::assertSame($zone, $decision->entryZone);
         self::assertSame(100.5, $decision->candidatePrice);
-        self::assertSame(0.01, $decision->zoneDevPct);
+        self::assertEqualsWithDelta(0.01, $decision->zoneDevPct, 1e-12);
         self::assertSame(0.03, $decision->zoneMaxDevPct);
         self::assertNull($decision->reasonIfRejected);
     }
@@ -67,10 +67,42 @@ final class EntryZoneGuardTest extends TestCase
         );
 
         self::assertSame(EntryZoneStatus::Rejected, $decision->status);
-        self::assertSame(0.10, $decision->zoneDevPct);
+        self::assertEqualsWithDelta(0.10, $decision->zoneDevPct, 1e-12);
         self::assertSame(0.05, $decision->zoneMaxDevPct);
         self::assertSame('zone_far_from_market', $decision->reasonIfRejected);
         self::assertSame('decision-2', $decision->metadata['decision_key']);
+    }
+
+    public function testRejectsCandidateBecauseZoneIsTooFarFromMarketEvenThoughPriceIsInsideZone(): void
+    {
+        $guard = new EntryZoneGuard();
+        $zone = new EntryZone(
+            low: 100.0,
+            high: 101.0,
+            center: 100.5,
+            widthPct: 0.01,
+            ttlSec: 180,
+            expiresAt: null,
+            source: 'vwap',
+            atrUsed: 1.0,
+            quantized: false,
+        );
+
+        // candidatePrice is inside zone bounds — contains() returns true.
+        // But the zone is anchored around 100–101 while the market reference is 50.
+        // zoneDevPct = max(|100-50|, |101-50|) / 50 = 51/50 = 1.02, which exceeds zoneMaxDevPct=0.05.
+        $decision = $guard->decide(
+            entryZone: $zone,
+            candidatePrice: 100.5,
+            referencePrice: 50.0,
+            zoneMaxDevPct: 0.05,
+            reasonIfRejected: 'zone_far_from_market',
+        );
+
+        self::assertSame(EntryZoneStatus::Rejected, $decision->status);
+        self::assertEqualsWithDelta(1.02, $decision->zoneDevPct, 1e-12);
+        self::assertSame(0.05, $decision->zoneMaxDevPct);
+        self::assertSame('zone_far_from_market', $decision->reasonIfRejected);
     }
 
     public function testNormalizesPercentThresholdButDoesNotChangeSemanticValue(): void

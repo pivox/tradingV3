@@ -85,12 +85,11 @@ final class EntryZoneCalculator
 
     private function resolveSource(EntryZoneRequest $request): string
     {
-        $anchor = $request->config['anchor'] ?? $request->config['from'] ?? null;
-        if (\is_string($anchor) && trim($anchor) !== '') {
-            return strtolower(trim($anchor));
+        if ($request->vwap !== null && \is_finite($request->vwap) && $request->vwap > 0.0) {
+            return 'vwap';
         }
 
-        return $request->vwap !== null ? 'vwap' : 'reference_price';
+        return $request->referencePrice > 0.0 ? 'reference_price' : 'current_price';
     }
 
     /**
