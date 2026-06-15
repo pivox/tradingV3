@@ -77,6 +77,12 @@ final class RiskConfigInterpreter
         );
     }
 
+    /**
+     * Normalizes a percent-or-fraction value to a fraction.
+     * Values > 1.0 are treated as percentage (e.g. 5.0 → 0.05).
+     * Values ≤ 1.0 are assumed to already be fractions (e.g. 0.05 stays 0.05).
+     * All YAML fixed_risk_pct values in this codebase are > 1.0; never use sub-1 values to mean sub-1%.
+     */
     public function normalizePercent(float $value): float
     {
         $value = max(0.0, $value);

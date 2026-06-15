@@ -77,6 +77,39 @@ final class LeverageCalculatorTest extends TestCase
         self::assertSame(['exchange_cap', 'profile_cap', 'symbol_cap'], $result->capsApplied);
     }
 
+    public function testFloorCannotBypassExchangeOrProfileOrSymbolCaps(): void
+    {
+        $calculator = new LeverageCalculator(new LeverageCapResolver());
+
+        // rawLeverage = 0.2/0.01 = 20, cappedLeverage = min(20, 5) = 5
+        // floor = 10 > exchangeCap = 5 — must NOT raise finalLeverage above 5
+        $result = $calculator->calculate(new LeverageCalculationRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            stopPct: 0.01,
+            riskPct: 0.2,
+            rawLeverage: null,
+            exchangeCap: 5.0,
+            symbolCap: null,
+            profileCap: null,
+            timeframeMultiplier: 1.0,
+            liquidityMultiplier: null,
+            maxLossPct: null,
+            floor: 10.0,
+            minLeverage: 1,
+            maxLeverage: 100,
+            roundingMode: 'ceil',
+        ));
+
+        self::assertSame(20.0, $result->rawLeverage);
+        self::assertSame(5.0, $result->cappedLeverage);
+        self::assertSame(5, $result->finalLeverage);
+        self::assertContains('exchange_cap', $result->capsApplied);
+    }
+
     public function testFloorDoesNotInventLeverageWithoutPositiveRawInput(): void
     {
         $calculator = new LeverageCalculator(new LeverageCapResolver());

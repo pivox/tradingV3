@@ -29,7 +29,8 @@ final class LeverageCalculator
         $bounded = min(max($cappedLeverage, (float)$request->minLeverage), (float)$request->maxLeverage);
 
         if ($request->floor !== null && \is_finite($request->floor) && $request->floor > 0.0) {
-            $bounded = max($bounded, $request->floor);
+            // Floor cannot bypass exchange/profile/symbol caps: cap it to cappedLeverage first.
+            $bounded = max($bounded, min($request->floor, $cappedLeverage));
         }
 
         $rounded = $this->round($bounded, $request->roundingMode);
