@@ -43,7 +43,6 @@ final class LeverageCalculatorTest extends TestCase
 
         self::assertSame(2.0, $result->rawLeverage);
         self::assertSame(2.0, $result->cappedLeverage);
-        self::assertSame(2, $result->roundedLeverage);
         self::assertSame(2, $result->finalLeverage);
     }
 
@@ -74,7 +73,6 @@ final class LeverageCalculatorTest extends TestCase
 
         self::assertSame(10.0, $result->rawLeverage);
         self::assertSame(5.0, $result->cappedLeverage);
-        self::assertSame(5, $result->roundedLeverage);
         self::assertSame(5, $result->finalLeverage);
         self::assertSame(['exchange_cap', 'profile_cap', 'symbol_cap'], $result->capsApplied);
     }

@@ -106,6 +106,9 @@ final class PositionSizer
         }
 
         if ($request->fallbackAccountBalance !== null && $request->fallbackAccountBalance > 0.0) {
+            // Mirrors TradeEntryRequestBuilder: initialMargin = fallbackCapital * riskPct.
+            // Caller applies effectiveRiskPct again → riskUsdt = balance * riskPct².
+            // All current YAML configs set fallback_account_balance: 0.0 so this path is unreachable in production.
             return $request->fallbackAccountBalance * $riskPct;
         }
 

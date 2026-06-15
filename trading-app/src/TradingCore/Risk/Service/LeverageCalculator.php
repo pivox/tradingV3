@@ -46,7 +46,6 @@ final class LeverageCalculator
             cappedLeverage: $cappedLeverage,
             finalLeverage: $rounded,
             capsApplied: $capsApplied,
-            roundedLeverage: $rounded,
             warnings: $warnings,
             metadata: [
                 'timeframe_multiplier' => $timeframeMultiplier,

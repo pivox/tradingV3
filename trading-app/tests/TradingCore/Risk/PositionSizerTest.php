@@ -95,6 +95,36 @@ final class PositionSizerTest extends TestCase
         self::assertContains('Both fixedRiskPct and legacy riskPctPercent are present; fixedRiskPct is the canonical module source.', $result->warnings);
     }
 
+    public function testSizesFallbackCapitalUsingLegacyDoubleRiskPctPattern(): void
+    {
+        $sizer = new PositionSizer();
+
+        // fallback_account_balance = 1000, riskPct = 0.004, initialMarginUsdt = null
+        // resolveCapitalBase returns 1000 * 0.004 = 4.0 (mirrors TradeEntryRequestBuilder)
+        // riskUsdt = 4.0 * 0.004 = 0.016 (riskPct applied twice — matches legacy behavior)
+        $result = $sizer->calculate(new RiskCalculationRequest(
+            symbol: 'ETHUSDT',
+            instrument: null,
+            profile: 'scalper_micro',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            equity: null,
+            availableBalance: null,
+            entryPrice: 100.0,
+            stopPrice: null,
+            stopPct: 0.02,
+            fixedRiskPct: null,
+            riskPctPercentLegacy: 0.004,
+            initialMarginUsdt: null,
+            fallbackAccountBalance: 1000.0,
+        ));
+
+        self::assertSame(RiskSource::RiskPctPercentLegacy, $result->riskSource);
+        self::assertSame(0.016, $result->riskUsdt);
+        self::assertSame(0.8, $result->positionNotional);
+        self::assertSame(0.008, $result->quantity);
+    }
+
     public function testPreservesLegacyRuntimeRiskSourceWhenRequestComesFromInterpreter(): void
     {
         $interpreter = new RiskConfigInterpreter();
