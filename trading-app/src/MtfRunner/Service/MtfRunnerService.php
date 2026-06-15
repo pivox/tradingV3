@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace App\MtfRunner\Service;
 
+use App\Application\Runner\OpenActivityFilter;
+use App\Application\Runner\SymbolUniverseResolver;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
-use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\MtfValidator\Dto\MtfResultDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Contract\Provider\MainProviderInterface;
@@ -22,9 +23,7 @@ use App\MtfRunner\Service\FuturesOrderSyncService;
 use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
-use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\Provider\Context\ExchangeContext;
-use App\Provider\Repository\ContractRepository;
 use App\Repository\PositionRepository;
 use App\Config\TradeEntryConfigProvider;
 use App\Config\TradeEntryModeContext;
@@ -55,7 +54,8 @@ use Symfony\Component\Process\Process;
 final class MtfRunnerService
 {
     public function __construct(
-        private readonly ContractRepository $contractRepository,
+        private readonly SymbolUniverseResolver $symbolUniverseResolver,
+        private readonly OpenActivityFilter $openActivityFilter,
         private readonly PositionRepository $positionRepository,
         private readonly MtfLockRepository $mtfLockRepository,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
@@ -231,48 +231,7 @@ final class MtfRunnerService
      */
     public function resolveSymbols(array $inputSymbols, ?string $profile = null, ?ExchangeContext $context = null): array
     {
-        $symbols = [];
-
-        // Normaliser les symboles fournis
-        foreach ($inputSymbols as $symbol) {
-            if (is_string($symbol) && $symbol !== '') {
-                $symbols[] = strtoupper(trim($symbol));
-            }
-        }
-
-        $symbols = array_values(array_unique(array_filter($symbols)));
-
-        // Si aucun symbole fourni, récupérer depuis la base de données
-        if (empty($symbols)) {
-            try {
-                $fetched = $this->contractRepository->allActiveSymbolNames([], false, $profile, $context);
-                if (!empty($fetched)) {
-                    $symbols = array_values(array_unique(array_map('strval', $fetched)));
-                }
-            } catch (\Throwable $e) {
-                $this->logger->warning('[MTF Runner] Failed to load active symbols, using fallback', [
-                    'error' => $e->getMessage(),
-                    'profile' => $profile,
-                ]);
-                $symbols = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT', 'DOTUSDT'];
-            }
-        }
-
-        // Consommer les symboles depuis la queue des switches
-        $queuedSymbols = $this->consumeSymbolsFromSwitchQueue();
-        if (!empty($queuedSymbols)) {
-            $symbols = array_values(array_unique(array_merge($symbols, $queuedSymbols)));
-            $this->mtfLogger->info('[MTF Runner] Added symbols from switch queue', [
-                'count' => count($queuedSymbols),
-            ]);
-        }
-
-        // Fallback si toujours vide
-        if (empty($symbols)) {
-            $symbols = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT', 'DOTUSDT'];
-        }
-
-        return $symbols;
+        return $this->symbolUniverseResolver->resolve($inputSymbols, $profile, $context);
     }
 
     /**
@@ -295,122 +254,14 @@ final class MtfRunnerService
         ?array $openPositions = null,
         ?array $openOrders = null
     ): array {
-        $excludedSymbols = [];
-        $provider = $this->mainProvider->forContext($context);
-
-        $hasAccountProvider = $provider->getAccountProvider() !== null || $openPositions !== null;
-        $hasOrderProvider = $provider->getOrderProvider() !== null || $openOrders !== null;
-
-        if (empty($symbols) || (!$hasAccountProvider && !$hasOrderProvider)) {
-            return $symbols;
-        }
-
-        $symbolsToProcess = [];
-
-        // Récupérer les symboles avec positions ouvertes depuis l'exchange
-        $openPositionSymbols = [];
-        $accountProvider = $provider->getAccountProvider();
-        if ($accountProvider || $openPositions !== null) {
-            try {
-                if ($openPositions === null && $accountProvider) {
-                    $openPositions = $accountProvider->getOpenPositions();
-                    $this->mtfLogger->info('[MTF Runner] Fetched open positions', [
-                        'run_id' => $runId,
-                        'count' => count($openPositions),
-                    ]);
-                } elseif ($openPositions !== null) {
-                    $this->mtfLogger->info('[MTF Runner] Reusing prefetched open positions', [
-                        'run_id' => $runId,
-                        'count' => count($openPositions),
-                    ]);
-                }
-
-                foreach ($openPositions as $position) {
-                    $positionSymbol = strtoupper($position->symbol ?? '');
-                    if ($positionSymbol !== '' && !in_array($positionSymbol, $openPositionSymbols, true)) {
-                        $openPositionSymbols[] = $positionSymbol;
-                    }
-                }
-            } catch (\Throwable $e) {
-                $this->mtfLogger->warning('[MTF Runner] Failed to fetch open positions from exchange', [
-                    'run_id' => $runId,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        // Récupérer les symboles avec ordres ouverts depuis l'exchange
-        $openOrderSymbols = [];
-        $orderProvider = $provider->getOrderProvider();
-        if ($orderProvider || $openOrders !== null) {
-            try {
-                if ($openOrders === null && $orderProvider) {
-                    $openOrders = $orderProvider->getOpenOrders();
-                    $this->mtfLogger->info('[MTF Runner] Fetched open orders', [
-                        'run_id' => $runId,
-                        'count' => count($openOrders),
-                    ]);
-                } elseif ($openOrders !== null) {
-                    $this->mtfLogger->info('[MTF Runner] Reusing prefetched open orders', [
-                        'run_id' => $runId,
-                        'count' => count($openOrders),
-                    ]);
-                }
-
-                foreach ($openOrders as $order) {
-                    $orderSymbol = strtoupper($order->symbol ?? '');
-                    if ($orderSymbol !== '' && !in_array($orderSymbol, $openOrderSymbols, true)) {
-                        $openOrderSymbols[] = $orderSymbol;
-                    }
-                }
-            } catch (\Throwable $e) {
-                $this->logger->warning('[MTF Runner] Failed to fetch open orders from exchange', [
-                    'run_id' => $runId,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        // Combiner les symboles à exclure
-        $symbolsWithActivity = array_unique(array_merge($openPositionSymbols, $openOrderSymbols));
-
-        // Réactiver les switches des symboles qui n'ont plus d'ordres/positions ouverts
-        try {
-            $reactivatedCount = $this->mtfSwitchRepository->reactivateSwitchesForInactiveSymbols($symbolsWithActivity);
-            if ($reactivatedCount > 0) {
-                $this->mtfLogger->info('[MTF Runner] Reactivated switches for inactive symbols', [
-                    'run_id' => $runId,
-                    'reactivated_count' => $reactivatedCount,
-                ]);
-            }
-        } catch (\Throwable $e) {
-            $this->logger->error('[MTF Runner] Failed to reactivate switches for inactive symbols', [
-                'run_id' => $runId,
-                'error' => $e->getMessage(),
-            ]);
-        }
-
-        // Filtrer les symboles
-        foreach ($symbols as $symbol) {
-            $symbolUpper = strtoupper($symbol);
-
-            if (in_array($symbolUpper, $symbolsWithActivity, true)) {
-                $excludedSymbols[] = $symbolUpper;
-            } else {
-                $symbolsToProcess[] = $symbol;
-            }
-        }
-
-        if (!empty($excludedSymbols)) {
-            $this->logger->info('[MTF Runner] Filtered symbols with open orders/positions', [
-                'run_id' => $runId,
-                'excluded_count' => count($excludedSymbols),
-                'excluded_symbols' => array_slice($excludedSymbols, 0, 10),
-                'remaining_count' => count($symbolsToProcess),
-            ]);
-        }
-
-        return $symbolsToProcess;
+        return $this->openActivityFilter->filter(
+            $symbols,
+            $runId,
+            $context,
+            $excludedSymbols,
+            $openPositions,
+            $openOrders,
+        );
     }
 
     /**
@@ -1174,23 +1025,6 @@ final class MtfRunnerService
         $minute = (int) $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('i');
 
         return $minute % 3 === 0;
-    }
-
-    /**
-     * Consomme les symboles depuis la queue des switches
-     *
-     * @return array<string>
-     */
-    private function consumeSymbolsFromSwitchQueue(): array
-    {
-        try {
-            return $this->mtfSwitchRepository->consumeSymbolsWithFutureExpiration();
-        } catch (\Throwable $e) {
-            $this->logger->warning('[MTF Runner] Failed to consume symbols from switch queue', [
-                'error' => $e->getMessage(),
-            ]);
-            return [];
-        }
     }
 
     /**

@@ -24,6 +24,7 @@ nav:
       - Donnees et persistance: technical/data.md
       - Configuration: technical/configuration.md
       - Effective trading config resolver: technical/effective-trading-config-resolver.md
+      - Runner extraction: technical/runner-extraction.md
       - Exchange readiness consolidation: technical/exchange-readiness-consolidation.md
       - Exchange readiness matrix: technical/exchange-readiness-matrix.md
       - Exchange runtime gates: technical/exchange-runtime-gates.md

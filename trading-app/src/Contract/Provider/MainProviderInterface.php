@@ -24,15 +24,14 @@ interface MainProviderInterface
     /**
      * Retourne le provider d'ordres
      */
-    public function getOrderProvider(): OrderProviderInterface;
+    public function getOrderProvider(): ?OrderProviderInterface;
 
     /**
      * Retourne le provider de compte
      */
-    public function getAccountProvider(): AccountProviderInterface;
+    public function getAccountProvider(): ?AccountProviderInterface;
 
     public function getSystemProvider(): SystemProviderInterface;
 
     public function forContext(?ExchangeContext $context = null): self;
 }
-
