@@ -143,11 +143,26 @@ final class OrderPlanValidator
                             $minDistanceRatio = (float) $minDistanceRatio;
                             if (!\is_finite($minDistanceRatio) || $minDistanceRatio < 0.0) {
                                 $invalidReasons[] = 'invalid_min_distance_ratio';
-                            } elseif (
-                                $liquidationCheck->stopToLiquidationRatio !== null
-                                && $liquidationCheck->stopToLiquidationRatio < $minDistanceRatio
-                            ) {
-                                $invalidReasons[] = 'liquidation_distance_below_min_ratio';
+                            } else {
+                                $ratio = $liquidationCheck->stopToLiquidationRatio;
+                                if (
+                                    $stopLoss !== null
+                                    && $liquidationCheck->liquidationPrice !== null
+                                    && $plan->entryPrice > 0.0
+                                    && \is_finite($plan->entryPrice)
+                                    && \is_finite($stopLoss->stopPrice)
+                                    && \is_finite($liquidationCheck->liquidationPrice)
+                                ) {
+                                    $stopDistance = abs($plan->entryPrice - $stopLoss->stopPrice);
+                                    $liquidationDistance = abs($plan->entryPrice - $liquidationCheck->liquidationPrice);
+                                    if ($stopDistance > 0.0 && \is_finite($stopDistance) && \is_finite($liquidationDistance)) {
+                                        $ratio = $liquidationDistance / $stopDistance;
+                                    }
+                                }
+
+                                if ($ratio !== null && $ratio < $minDistanceRatio) {
+                                    $invalidReasons[] = 'liquidation_distance_below_min_ratio';
+                                }
                             }
                         }
                     }
