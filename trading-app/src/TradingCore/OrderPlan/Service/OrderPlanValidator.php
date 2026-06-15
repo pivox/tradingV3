@@ -92,6 +92,13 @@ final class OrderPlanValidator
                 if ($stopLoss->stopDistance <= 0.0 || !\is_finite($stopLoss->stopDistance)) {
                     $invalidReasons[] = 'stop_distance_not_positive';
                 }
+                $side = strtolower(trim($plan->side));
+                if (
+                    ($side === 'long' && $stopLoss->stopPrice >= $plan->entryPrice)
+                    || ($side === 'short' && $stopLoss->stopPrice <= $plan->entryPrice)
+                ) {
+                    $invalidReasons[] = 'stop_loss_side_invalid';
+                }
             }
 
             if (strtolower(trim($plan->marketType)) === 'perpetual') {

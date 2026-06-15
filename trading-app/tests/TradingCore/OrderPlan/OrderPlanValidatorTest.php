@@ -143,6 +143,45 @@ final class OrderPlanValidatorTest extends TestCase
         self::assertContains('stop_distance_not_positive', $result->invalidReasons);
     }
 
+    public function testRejectsLongStopLossAtOrAboveEntry(): void
+    {
+        $protection = $this->protectionPlan(
+            stopLoss: new StopLossResult(
+                stopPrice: 100.0,
+                stopPct: 0.02,
+                stopDistance: 2.0,
+                stopSource: 'pivot',
+                isFullSize: true,
+            ),
+        );
+
+        $result = (new OrderPlanValidator())->validate($this->plan(protectionPlan: $protection));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('stop_loss_side_invalid', $result->invalidReasons);
+    }
+
+    public function testRejectsShortStopLossAtOrBelowEntry(): void
+    {
+        $protection = $this->protectionPlan(
+            stopLoss: new StopLossResult(
+                stopPrice: 100.0,
+                stopPct: 0.02,
+                stopDistance: 2.0,
+                stopSource: 'pivot',
+                isFullSize: true,
+            ),
+        );
+
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            side: 'short',
+            protectionPlan: $protection,
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('stop_loss_side_invalid', $result->invalidReasons);
+    }
+
     public function testRejectsPerpetualPlanWithoutLiquidationGuard(): void
     {
         $result = (new OrderPlanValidator())->validate($this->plan(
@@ -236,6 +275,7 @@ final class OrderPlanValidatorTest extends TestCase
         string $exchange = 'bitmart',
         string $marketType = 'perpetual',
         string $instrument = 'BTCUSDT',
+        string $side = 'long',
         string $marginMode = 'isolated',
         string $timeInForce = 'gtc',
         ?ProtectionPlan $protectionPlan = null,
@@ -251,7 +291,7 @@ final class OrderPlanValidatorTest extends TestCase
             profile: $profile,
             exchange: $exchange,
             marketType: $marketType,
-            side: 'long',
+            side: $side,
             orderType: 'limit',
             marginMode: $marginMode,
             timeInForce: $timeInForce,

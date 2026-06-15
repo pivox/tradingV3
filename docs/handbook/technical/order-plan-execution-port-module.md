@@ -114,6 +114,7 @@ OrderPlan invalide si stop-loss non full size
 OrderPlan invalide si stop_price <= 0 ou non fini
 OrderPlan invalide si stop_pct <= 0 ou non fini
 OrderPlan invalide si stop_distance <= 0 ou non fini
+OrderPlan invalide si le stop n'est pas protecteur pour le side
 OrderPlan perpetual invalide si liquidation guard absent
 OrderPlan perpetual invalide si liquidation guard unsafe
 ```
