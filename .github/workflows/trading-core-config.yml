@@ -1,0 +1,93 @@
+name: Trading Core Config Checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/trading-core-config.yml'
+      - 'trading-app/src/TradingCore/Config/**'
+      - 'trading-app/tests/TradingCore/Config/**'
+      - 'trading-app/config/**'
+      - 'config_file/**'
+      - 'docs/handbook/technical/**'
+      - 'mkdocs.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/trading-core-config.yml'
+      - 'trading-app/src/TradingCore/Config/**'
+      - 'trading-app/tests/TradingCore/Config/**'
+      - 'trading-app/config/**'
+      - 'config_file/**'
+      - 'docs/handbook/technical/**'
+      - 'mkdocs.yml'
+
+jobs:
+  trading-core-config:
+    name: Trading Core Config
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: trading-app
+
+    env:
+      APP_ENV: test
+      DEFAULT_URI: 'http://localhost'
+      DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:5432/trading_test?serverVersion=16&charset=utf8'
+      REDIS_URL: 'redis://127.0.0.1:6379'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: redis, pdo_pgsql, intl, opcache
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate composer
+        run: composer validate --no-check-publish
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: PHPUnit TradingCore Config
+        run: vendor/bin/phpunit --bootstrap vendor/autoload.php tests/TradingCore/Config
+
+      - name: PHPStan TradingCore Config
+        run: vendor/bin/phpstan analyse src/TradingCore/Config tests/TradingCore/Config --memory-limit=512M
+
+      - name: Lint YAML config
+        run: php bin/console lint:yaml config
+
+      - name: Lint Symfony container
+        run: php bin/console lint:container
+
+      - name: Check mtf:run command still exists
+        run: php bin/console list mtf --raw | grep -E '^mtf:run\s'
+
+      - name: Check /api/mtf/run route still exists
+        run: php bin/console debug:router --show-controllers | grep -E '/api/mtf/run|mtf_run'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install MkDocs dependencies
+        working-directory: .
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements-docs.txt ]; then
+            python -m pip install -r requirements-docs.txt
+          else
+            python -m pip install mkdocs mkdocs-material pymdown-extensions
+          fi
+
+      - name: Build MkDocs strict
+        working-directory: .
+        run: python -m mkdocs build --strict
