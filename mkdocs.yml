@@ -23,6 +23,7 @@ nav:
       - Interfaces et commandes: technical/interfaces.md
       - Donnees et persistance: technical/data.md
       - Configuration: technical/configuration.md
+      - Templates clés environnement: technical/environment-key-templates.md
       - Temporal workers: technical/temporal.md
       - Frontend et Ops: technical/frontend.md
       - Architecture cible trading platform: technical/trading-platform-target-architecture.md
