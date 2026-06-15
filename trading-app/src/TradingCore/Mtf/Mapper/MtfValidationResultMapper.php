@@ -6,7 +6,6 @@ namespace App\TradingCore\Mtf\Mapper;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
-use App\Contract\MtfValidator\Dto\ExecutionSelectionDto;
 use App\Contract\MtfValidator\Dto\MtfResultDto;
 use App\Contract\MtfValidator\Dto\TimeframeDecisionDto;
 use App\TradingCore\Mtf\Dto\MtfRejectionReason;
@@ -155,9 +154,14 @@ final class MtfValidationResultMapper
      */
     private function timeframesFromLegacyPayload(array $payload, bool $valid): array
     {
+        // SymbolResultDto::toArray() nests decisions under context.context / context.execution.
+        // Flat legacy payloads use context.timeframe_decisions / execution.timeframe_decisions.
+        // Both paths are mutually exclusive so collecting all four produces no duplicates.
         $decisions = [
             ...$this->legacyDecisionsFrom($payload['context']['timeframe_decisions'] ?? null),
+            ...$this->legacyDecisionsFrom($payload['context']['context']['timeframe_decisions'] ?? null),
             ...$this->legacyDecisionsFrom($payload['execution']['timeframe_decisions'] ?? null),
+            ...$this->legacyDecisionsFrom($payload['context']['execution']['timeframe_decisions'] ?? null),
         ];
 
         $timeframes = [];
@@ -241,7 +245,14 @@ final class MtfValidationResultMapper
     {
         $status = $this->nullableString($payload['status'] ?? null);
         if ($status !== null) {
-            return strtoupper($status);
+            $upper = strtoupper($status);
+            // SUCCESS and COMPLETED are legacy success statuses (SymbolResultDto normalizes SUCCESS → COMPLETED).
+            // Normalize both to READY so isReady() and TradeCandidateMapper work correctly.
+            if (in_array($upper, ['READY', 'SUCCESS', 'COMPLETED'], true)) {
+                return 'READY';
+            }
+
+            return $upper;
         }
 
         if (($payload['isTradable'] ?? $payload['is_tradable'] ?? false) === true) {

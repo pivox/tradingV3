@@ -167,4 +167,55 @@ final class MtfValidationResultMapperTest extends TestCase
         self::assertSame(['worker' => 'mtf:run-worker'], $result->metadata);
         self::assertSame($payload, $result->rawLegacyPayload);
     }
+
+    public function testNormalizesLegacySuccessStatusesToReady(): void
+    {
+        foreach (['SUCCESS', 'COMPLETED'] as $legacyStatus) {
+            $payload = [
+                'symbol' => 'BTCUSDT',
+                'profile' => 'scalper_micro',
+                'status' => $legacyStatus,
+                'execution_tf' => '1m',
+                'signal_side' => 'LONG',
+            ];
+
+            $result = (new MtfValidationResultMapper())->fromLegacyPayload($payload);
+
+            self::assertSame('READY', $result->status, "status '$legacyStatus' should normalize to READY");
+            self::assertTrue($result->isReady(), "isReady() should return true for '$legacyStatus'");
+        }
+    }
+
+    public function testMapsNestedSymbolResultDtoStyleTimeframeDecisions(): void
+    {
+        $payload = [
+            'symbol' => 'BTCUSDT',
+            'profile' => 'scalper_micro',
+            'status' => 'READY',
+            'execution_tf' => '1m',
+            'signal_side' => 'LONG',
+            'context' => [
+                'context' => [
+                    'timeframe_decisions' => [
+                        ['timeframe' => '5m', 'phase' => 'context', 'signal' => 'long', 'valid' => true, 'rules_passed' => ['trend_ok'], 'rules_failed' => []],
+                    ],
+                ],
+                'execution' => [
+                    'timeframe_decisions' => [
+                        ['timeframe' => '1m', 'phase' => 'execution', 'signal' => 'long', 'valid' => false, 'invalid_reason' => 'pullback_failed', 'rules_failed' => ['pullback_ok'], 'rules_passed' => []],
+                    ],
+                ],
+            ],
+        ];
+
+        $result = (new MtfValidationResultMapper())->fromLegacyPayload($payload);
+
+        self::assertCount(1, $result->validatedTimeframes);
+        self::assertSame('5m', $result->validatedTimeframes[0]->timeframe);
+        self::assertSame('context', $result->validatedTimeframes[0]->phase);
+
+        self::assertCount(1, $result->rejectedTimeframes);
+        self::assertSame('1m', $result->rejectedTimeframes[0]->timeframe);
+        self::assertSame('pullback_failed', $result->rejectedTimeframes[0]->rejectionReason?->reason);
+    }
 }
