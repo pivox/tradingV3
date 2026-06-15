@@ -110,6 +110,37 @@ final class LeverageCalculatorTest extends TestCase
         self::assertContains('exchange_cap', $result->capsApplied);
     }
 
+    public function testCeilRoundingCannotExceedFractionalFloatCap(): void
+    {
+        $calculator = new LeverageCalculator(new LeverageCapResolver());
+
+        // exchangeCap = 5.5 (fractional), rawLeverage >> cap → cappedLeverage = 5.5
+        // ceil(5.5) = 6 would exceed the cap — finalLeverage must be floor(5.5) = 5
+        $result = $calculator->calculate(new LeverageCalculationRequest(
+            symbol: 'SOLUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            stopPct: 0.01,
+            riskPct: 0.5,
+            rawLeverage: null,
+            exchangeCap: 5.5,
+            symbolCap: null,
+            profileCap: null,
+            timeframeMultiplier: 1.0,
+            liquidityMultiplier: null,
+            maxLossPct: null,
+            floor: null,
+            minLeverage: 1,
+            maxLeverage: 100,
+            roundingMode: 'ceil',
+        ));
+
+        self::assertSame(5.5, $result->cappedLeverage);
+        self::assertSame(5, $result->finalLeverage);
+    }
+
     public function testFloorDoesNotInventLeverageWithoutPositiveRawInput(): void
     {
         $calculator = new LeverageCalculator(new LeverageCapResolver());
