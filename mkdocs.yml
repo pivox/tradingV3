@@ -24,6 +24,9 @@ nav:
       - Donnees et persistance: technical/data.md
       - Configuration: technical/configuration.md
       - Effective trading config resolver: technical/effective-trading-config-resolver.md
+      - Exchange readiness matrix: technical/exchange-readiness-matrix.md
+      - Exchange runtime gates: technical/exchange-runtime-gates.md
+      - Exchange schedule policy: technical/exchange-schedule-policy.md
       - Templates clés environnement: technical/environment-key-templates.md
       - Temporal workers: technical/temporal.md
       - Frontend et Ops: technical/frontend.md
