@@ -1,22 +1,29 @@
 # Runner extraction
 
-## Objectif PR03
+## Objectif
 
-PR03 commence l'extraction du runner sans changer le comportement runtime.
+Les PR Runner amincissent progressivement `MtfRunnerService` sans changer le
+comportement runtime.
 
-Le scope est volontairement limite a deux responsabilites deja presentes dans
-`MtfRunnerService` :
+Le runner reste l'orchestrateur principal des entrypoints existants. Chaque PR
+extrait uniquement des blocs deja presents, avec les memes entrees, sorties,
+logs et side effects.
+
+## PR03 - extraction symboles et activite ouverte
+
+PR03 a extrait mecaniquement deux responsabilites :
 
 - resolution de l'univers de symboles a traiter ;
 - filtrage des symboles occupes par positions ou ordres ouverts.
 
-`MtfRunnerService` reste l'orchestrateur principal. Les nouveaux services sont
-des delegations mecaniques qui conservent les memes entrees, sorties, logs et
-side effects que les blocs extraits.
+Services ajoutes :
+
+- `App\Application\Runner\SymbolUniverseResolver` ;
+- `App\Application\Runner\OpenActivityFilter`.
 
 ## Entrypoints conserves
 
-| Entrypoint | Statut PR03 |
+| Entrypoint | Statut |
 | --- | --- |
 | `php bin/console mtf:run` | Conserve. La commande construit toujours `MtfRunnerRequestDto` puis appelle `RunMtfCycleUseCase`. |
 | `POST /api/mtf/run` | Conserve. `RunnerController` garde le payload et la reponse existants. |
@@ -38,7 +45,7 @@ side effects que les blocs extraits.
 9. recalcul TP/SL cadence ;
 10. enrichissement/reporting final.
 
-PR03 ne change pas l'ordre de ces etapes.
+Les PR03 et PR04 ne changent pas l'ordre de ces etapes.
 
 ## Ce que PR03 extrait
 
@@ -72,6 +79,57 @@ Responsabilite extraite depuis
 `MtfRunnerService::filterSymbolsWithOpenOrdersOrPositions()` reste disponible et
 delegue au nouveau service.
 
+## PR04 - sync exchange, projection post-run et resultat
+
+PR04 poursuit l'extraction sans changer le comportement runtime ni la structure
+JSON retournee par `/api/mtf/run`.
+
+Services ajoutes :
+
+- `App\Application\Runner\ExchangeStateSynchronizer` ;
+- `App\Application\Runner\PostRunProjectionDispatcher` ;
+- `App\Application\Runner\RunResultAssembler`.
+
+### `App\Application\Runner\ExchangeStateSynchronizer`
+
+Responsabilite extraite depuis `MtfRunnerService::syncTables()` :
+
+- resoudre les providers via `MainProviderInterface::forContext()` ;
+- conserver le guard legacy quand les providers account et order sont absents ;
+- synchroniser les positions ouvertes dans `positions` via
+  `PositionRepository::findOneBySymbolSide()` puis `upsert()` ;
+- reutiliser `OrderProviderInterface::getOpenOrders()`, qui conserve le chemin
+  existant de synchronisation des ordres cote provider/FuturesOrderSyncService ;
+- retourner le meme tableau `open_positions` / `open_orders` ;
+- conserver les logs et catches existants.
+
+`MtfRunnerService::syncTables()` reste disponible et delegue au nouveau service.
+
+### `App\Application\Runner\PostRunProjectionDispatcher`
+
+Responsabilite extraite autour du dispatch post-run :
+
+- resoudre les timeframes depuis `current_tf` ou `MtfValidatorInterface::getListTimeframe()` ;
+- filtrer les resultats de symboles en ignorant l'entree synthetique `FINAL` ;
+- publier le meme `IndicatorSnapshotPersistRequestMessage` ;
+- conserver `run_id`, profil, timestamp UTC, exchange et market type ;
+- conserver les conditions de non-dispatch quand il n'y a pas de timeframe ou de symbole.
+
+Aucun transport Messenger, queue ou handler n'est modifie.
+
+### `App\Application\Runner\RunResultAssembler`
+
+Responsabilite extraite autour de l'enrichissement et de la reponse finale :
+
+- deleguer l'enrichissement existant a `MtfRunResultEnricher` ;
+- assembler la reponse avec les memes clefs :
+  `summary`, `results`, `errors`, `summary_by_tf`, `rejected_by`,
+  `last_validated`, `orders_placed`, `performance` ;
+- conserver les compteurs, timings, resultats par symbole, raisons de rejet et
+  ordres places/ignores.
+
+La structure de reponse `/api/mtf/run` reste inchangee.
+
 ## Structure utilisee ensuite par MTF
 
 Apres resolution et filtrage, le runner transmet toujours une liste simple de
@@ -84,37 +142,40 @@ Les resultats restent indexes par symbole dans `results`, avec les statuts
 `READY` ou `INVALID` derives de `MtfResultDto::isTradable`. PR03 ne modifie pas
 la structure de reponse ni les valeurs `READY` / `REJECTED` / `INVALID`.
 
-## Ce qui reste legacy dans PR03
+PR04 ne change pas cette structure.
+
+## Ce qui reste dans `MtfRunnerService`
 
 Les responsabilites suivantes restent dans `MtfRunnerService` :
 
-- synchronisation exchange complete ;
-- creation et mise a jour des entites `Position` ;
 - gestion des locks ;
 - extension/desactivation post-run des switches pour symboles exclus ;
 - execution parallele par `Process` ;
-- dispatch Messenger de projection indicateurs ;
 - recalcul TP/SL ;
-- reporting final et enrichissement de resultat.
+- construction du contexte exchange/market ;
+- construction de `MtfRunRequestDto` pour l'execution sequentielle ;
+- aggregation des workers paralleles ;
+- creation de la commande `mtf:run-worker`.
 
 Les entrypoints Symfony, Temporal et worker ne sont pas extraits dans cette PR.
 
 ## Hors-scope confirme
 
-PR03 ne branche pas `EffectiveTradingConfigResolver` au runtime, ne modifie pas
-les YAML strategie, ne change pas TradeEntry, EntryZone, Risk/Leverage, SL/TP,
-Temporal, les schedules, Bitmart, OKX ou Hyperliquid live.
+PR03 et PR04 ne branchent pas `EffectiveTradingConfigResolver` au runtime, ne
+modifient pas les YAML strategie, ne changent pas TradeEntry, EntryZone,
+Risk/Leverage, SL/TP, Temporal, les schedules, Bitmart, OKX ou Hyperliquid
+live.
 
 Aucun secret n'est ajoute.
 
 ## Tests de non-regression
 
-Tests ajoutes :
+Tests PR03 :
 
 - `tests/Application/Runner/SymbolUniverseResolverTest.php`
 - `tests/Application/Runner/OpenActivityFilterTest.php`
 
-Ces tests couvrent :
+Ils couvrent :
 
 - normalisation et deduplication des symboles fournis ;
 - chargement des contrats actifs quand aucun symbole n'est fourni ;
@@ -123,14 +184,42 @@ Ces tests couvrent :
 - exclusion des symboles avec positions ou ordres ouverts ;
 - side effect de reactivation des switches inactifs.
 
-## Suite PR04
+Tests PR04 :
 
-PR04 pourra extraire les responsabilites suivantes, sans les melanger avec PR03 :
+- `tests/Application/Runner/ExchangeStateSynchronizerTest.php`
+- `tests/Application/Runner/PostRunProjectionDispatcherTest.php`
+- `tests/Application/Runner/RunResultAssemblerTest.php`
 
-- synchronisation exchange/tables ;
-- reporting final ;
-- assemblage de resultat ;
-- dispatch post-run.
+Ils couvrent :
+
+- absence de providers account/order sans sync ni erreur ;
+- synchronisation positions et retour des ordres ouverts ;
+- payload `IndicatorSnapshotPersistRequestMessage` ;
+- absence de dispatch quand aucun symbole reel n'est present ;
+- assemblage final avec la structure de reponse existante.
+
+## Suite PR05
+
+PR05 doit traiter les DTOs MTF / TradeCandidate sans melanger cette etape avec
+la validation strategique ou l'execution :
+
+- stabiliser un DTO explicite entre MTF et TradeEntry ;
+- rendre visibles profil, instrument, side, execution timeframe, raisons de
+  rejet et metadata ;
+- conserver les valeurs READY / REJECTED et le comportement de validation ;
+- ne pas modifier TradeEntry, EntryZone, Risk/Leverage, SL/TP ou ExecutionPort
+  dans la meme PR.
 
 La validation MTF, TradeEntry, EntryZone, Risk/Leverage, SL/TP et ExecutionPort
 restent des PR separees du plan TradingCore canonique.
+
+## Garantie runtime
+
+PR04 reste une extraction mecanique :
+
+- aucun entrypoint n'est modifie ;
+- aucun schedule Temporal n'est modifie ;
+- aucune strategie YAML n'est modifiee ;
+- aucun exchange live OKX/Hyperliquid n'est active ;
+- Bitmart reste legacy runtime ;
+- la reponse `/api/mtf/run` conserve les memes clefs et payloads.
