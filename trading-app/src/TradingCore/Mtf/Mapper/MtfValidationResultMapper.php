@@ -252,7 +252,7 @@ final class MtfValidationResultMapper
                 return 'READY';
             }
 
-            return $upper;
+            return 'REJECTED';
         }
 
         if (($payload['isTradable'] ?? $payload['is_tradable'] ?? false) === true) {

@@ -168,6 +168,24 @@ final class MtfValidationResultMapperTest extends TestCase
         self::assertSame($payload, $result->rawLegacyPayload);
     }
 
+    public function testNormalizesNonReadyLegacyStatusesToRejected(): void
+    {
+        foreach (['INVALID', 'ERROR', 'CONTEXT_INVALID'] as $legacyStatus) {
+            $payload = [
+                'symbol' => 'BTCUSDT',
+                'profile' => 'scalper_micro',
+                'status' => $legacyStatus,
+                'reason' => 'ema_trend_failed',
+            ];
+
+            $result = (new MtfValidationResultMapper())->fromLegacyPayload($payload);
+
+            self::assertSame('REJECTED', $result->status, "status '$legacyStatus' should normalize to REJECTED");
+            self::assertFalse($result->isReady(), "isReady() should return false for '$legacyStatus'");
+            self::assertSame($legacyStatus, $result->rawLegacyPayload['status'], 'rawLegacyPayload preserves original status');
+        }
+    }
+
     public function testNormalizesLegacySuccessStatusesToReady(): void
     {
         foreach (['SUCCESS', 'COMPLETED'] as $legacyStatus) {
