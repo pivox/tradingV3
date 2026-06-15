@@ -141,6 +141,39 @@ final class LeverageCalculatorTest extends TestCase
         self::assertSame(5, $result->finalLeverage);
     }
 
+    public function testCeilRoundingCannotExceedCapWhenRawLeverageEqualsCapExactly(): void
+    {
+        $calculator = new LeverageCalculator(new LeverageCapResolver());
+
+        // rawLeverage = riskPct/stopPct = 0.055/0.01 = 5.5, exchangeCap = 5.5
+        // cappedLeverage = preCapLeverage = 5.5 (cap not "reducing" but still binding)
+        // ceil(5.5) = 6 must be clamped to floor(5.5) = 5
+        $result = $calculator->calculate(new LeverageCalculationRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            stopPct: 0.01,
+            riskPct: 0.055,
+            rawLeverage: null,
+            exchangeCap: 5.5,
+            symbolCap: null,
+            profileCap: null,
+            timeframeMultiplier: 1.0,
+            liquidityMultiplier: null,
+            maxLossPct: null,
+            floor: null,
+            minLeverage: 1,
+            maxLeverage: 100,
+            roundingMode: 'ceil',
+        ));
+
+        self::assertSame(5.5, $result->rawLeverage);
+        self::assertSame(5.5, $result->cappedLeverage);
+        self::assertSame(5, $result->finalLeverage);
+    }
+
     public function testCeilRoundingIsPreservedWhenNoCapsReducedLeverage(): void
     {
         $calculator = new LeverageCalculator(new LeverageCapResolver());

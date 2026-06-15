@@ -121,6 +121,33 @@ final class PositionSizerTest extends TestCase
         ));
     }
 
+    public function testFallbackCapitalPathCappsToAvailableBalance(): void
+    {
+        $sizer = new PositionSizer();
+
+        // syntheticMargin = 1000 * 0.004 = 4.0, availableBalance = 1.0
+        // capitalBase = min(4.0, 1.0) = 1.0 → riskUsdt = 1.0 * 0.004 = 0.004
+        $result = $sizer->calculate(new RiskCalculationRequest(
+            symbol: 'ETHUSDT',
+            instrument: null,
+            profile: 'scalper_micro',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            equity: null,
+            availableBalance: 1.0,
+            entryPrice: 100.0,
+            stopPrice: null,
+            stopPct: 0.02,
+            fixedRiskPct: null,
+            riskPctPercentLegacy: 0.004,
+            initialMarginUsdt: null,
+            fallbackAccountBalance: 1000.0,
+        ));
+
+        self::assertSame(0.004, $result->riskUsdt);
+        self::assertSame(0.2, $result->positionNotional);
+    }
+
     public function testSizesFallbackCapitalUsingLegacyDoubleRiskPctPattern(): void
     {
         $sizer = new PositionSizer();
