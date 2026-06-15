@@ -33,6 +33,7 @@ Le but n'est pas de coder maintenant. Le but est de reduire le risque des future
 - Aucune activation live OKX/Hyperliquid sans runtime-check OK.
 - Bitmart est legacy a retirer, mais pas brutalement dans les PR d'architecture.
 - Fake/Paper doit devenir le filet de securite de test avant live.
+- Les fichiers `config_file/dev.env` et `config_file/prod.env` doivent rester des templates de noms de cles, sans valeurs sensibles.
 ```
 
 ## Architecture actuelle simplifiee
@@ -121,6 +122,7 @@ Infrastructure
 | Bitmart provider | Legacy a retirer | Inventorier puis remplacer. |
 | OKX/Hyperliquid adapters | Gateways cible | Stabiliser dry-run/runtime-check avant live. |
 | Fake exchange | Gateway de test canonique | Prioritaire avant live OKX/Hyperliquid. |
+| `.env.example` / `.env.native` | `config_file/dev.env` et `config_file/prod.env` | Centraliser les noms de cles attendues, sans secrets. |
 | `position_trade_analysis` | Source Analytics | Mesurer avant d'optimiser. |
 
 ## Analyse par domaine
@@ -346,6 +348,21 @@ Risque principal : continuer a piloter par nombre de trades ou winrate seul.
 
 Mitigation : aucune PR de strategie/parametres sans rapport Analytics.
 
+### 11. Environment keys
+
+Le nouveau dossier `config_file/` doit devenir la reference des noms de cles attendues :
+
+```text
+config_file/dev.env
+config_file/prod.env
+```
+
+Ces fichiers servent a lister les cles, pas les valeurs.
+
+Risque principal : confondre template de cles et stockage de secrets.
+
+Mitigation : les fichiers doivent contenir uniquement des lignes `KEY=` et les vraies valeurs doivent rester hors Git.
+
 ## Matrice de dependances
 
 | PR | Depend de | Bloque |
@@ -415,7 +432,8 @@ Pourquoi cet ordre :
 - creer un OrderRequest universel qui force CEX et DEX dans le meme modele ;
 - faire porter au Runner des decisions Risk ou Execution ;
 - faire dependre TradingCore de Symfony, Doctrine ou Temporal ;
-- utiliser le nombre de trades comme objectif principal.
+- utiliser le nombre de trades comme objectif principal ;
+- committer des valeurs secretes dans `config_file/dev.env` ou `config_file/prod.env`.
 ```
 
 ## Questions ouvertes a traiter avant implementation lourde
@@ -428,6 +446,7 @@ Pourquoi cet ordre :
 6. Comment representer les frais, spread et slippage dans les backtests ?
 7. Quand considerer OKX/Hyperliquid prets pour un forward test non-live ?
 8. Quelle strategie exacte pour le retrait Bitmart : archive, suppression directe, ou module legacy disabled ?
+9. Quelle liste finale de cles `dev.env` / `prod.env` doit devenir obligatoire par gateway ?
 
 ## Definition of ready pour commencer les PR de code
 
@@ -438,7 +457,8 @@ Avant PR 01, il faut :
 - confirmer que Bitmart est bien legacy a retirer ;
 - confirmer OKX / Hyperliquid / Fake-Paper comme gateways cible ;
 - confirmer que mtf:run et /api/mtf/run restent les entrypoints ;
-- confirmer que le premier objectif est la config effective, pas l'execution live.
+- confirmer que le premier objectif est la config effective, pas l'execution live ;
+- confirmer que `config_file/dev.env` et `config_file/prod.env` sont des templates de noms de cles uniquement.
 ```
 
 ## Conclusion
@@ -452,6 +472,7 @@ Preserver les entrypoints.
 Rendre le Runner mince.
 Stabiliser les contrats internes.
 Isoler Entry, Risk, SLTP et Execution.
+Centraliser les noms de cles d'environnement.
 Utiliser Fake/Paper comme filet de securite.
 Mesurer en Analytics/Backtesting.
 Stabiliser OKX et Hyperliquid en dry-run.
