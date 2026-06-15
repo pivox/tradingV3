@@ -160,6 +160,40 @@ final class TakeProfitCalculatorTest extends TestCase
         ));
     }
 
+    public function testSuppressesTp2WhenBufferLeavesItCloserThanRestoredTp1(): void
+    {
+        $calculator = new TakeProfitCalculator();
+
+        // entry=100, stop=99.95 → riskDistance=0.05
+        // tp1R=1 → tp1=100.05; tp2R=1.8 → tp2=100.09
+        // buffer=0.001 → bufferAbs=0.1 (entry*buffer)
+        // tp1=100.05-0.1=99.95, effectiveR=(99.95-100)/0.05=-1 < minKeep=0.95 → reset tp1=100.05
+        // tp2=100.09-0.1=99.99 < tp1=100.05 → tp2 suppressed (not a farther target)
+        $result = $calculator->calculate(new TakeProfitRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 99.95,
+            riskDistance: null,
+            rMultiple: 1.8,
+            tp1R: 1.0,
+            tpPolicy: 'pivot_conservative',
+            tpBufferPct: 0.001,
+            tpMinKeepRatio: 0.95,
+            tpMaxExtraR: null,
+            feesBps: null,
+            spreadBps: null,
+            slippageBps: null,
+        ));
+
+        self::assertSame(100.05, $result->tp1Price);
+        self::assertNull($result->tp2Price);
+    }
+
     public function testSuppressesTp2WhenTp1RAliasesRMultiple(): void
     {
         $calculator = new TakeProfitCalculator();

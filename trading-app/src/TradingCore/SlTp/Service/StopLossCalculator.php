@@ -75,6 +75,10 @@ final class StopLossCalculator
                     ? $request->pivotPrice * (1.0 - $buffer)
                     : $request->pivotPrice * (1.0 + $buffer);
 
+                if ($stop <= 0.0 || !\is_finite($stop)) {
+                    throw new \InvalidArgumentException('pivot stop price must be positive; pivotSlBufferPct is too large');
+                }
+
                 return [$stop, 'pivot', $warnings];
             }
 

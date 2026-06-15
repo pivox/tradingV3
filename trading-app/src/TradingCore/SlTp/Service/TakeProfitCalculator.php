@@ -46,6 +46,13 @@ final class TakeProfitCalculator
             $effectiveR = $this->effectiveR($request->entryPrice, $tp1Price, $riskDistance, $direction);
             if ($effectiveR < $tp1R * max(0.0, $request->tpMinKeepRatio)) {
                 $tp1Price = $this->priceForR($request->entryPrice, $riskDistance, $direction, $tp1R);
+                // Suppress TP2 if the buffer left it closer to entry than the restored TP1.
+                if ($tp2Price !== null) {
+                    $tp2StillFarther = $direction === 'long' ? $tp2Price > $tp1Price : $tp2Price < $tp1Price;
+                    if (!$tp2StillFarther) {
+                        $tp2Price = null;
+                    }
+                }
             }
         }
 
