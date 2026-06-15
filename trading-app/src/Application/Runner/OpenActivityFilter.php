@@ -35,70 +35,82 @@ final class OpenActivityFilter
         ?array $openOrders = null,
     ): array {
         $excludedSymbols = [];
+
+        if (empty($symbols)) {
+            return $symbols;
+        }
+
         $provider = $this->mainProvider->forContext($context);
         $accountProvider = $provider->getAccountProvider();
         $orderProvider = $provider->getOrderProvider();
 
-        if (empty($symbols)) {
+        $hasAccountProvider = $accountProvider !== null || $openPositions !== null;
+        $hasOrderProvider = $orderProvider !== null || $openOrders !== null;
+
+        if (!$hasAccountProvider && !$hasOrderProvider) {
             return $symbols;
         }
 
         $symbolsToProcess = [];
 
         $openPositionSymbols = [];
-        try {
-            if ($openPositions === null) {
-                $openPositions = $accountProvider->getOpenPositions();
-                $this->mtfLogger->info('[MTF Runner] Fetched open positions', [
-                    'run_id' => $runId,
-                    'count' => count($openPositions),
-                ]);
-            } else {
-                $this->mtfLogger->info('[MTF Runner] Reusing prefetched open positions', [
-                    'run_id' => $runId,
-                    'count' => count($openPositions),
-                ]);
-            }
-
-            foreach ($openPositions as $position) {
-                $positionSymbol = strtoupper($this->extractSymbol($position));
-                if ($positionSymbol !== '' && !in_array($positionSymbol, $openPositionSymbols, true)) {
-                    $openPositionSymbols[] = $positionSymbol;
+        if ($accountProvider !== null || $openPositions !== null) {
+            try {
+                if ($openPositions === null && $accountProvider !== null) {
+                    $openPositions = $accountProvider->getOpenPositions();
+                    $this->mtfLogger->info('[MTF Runner] Fetched open positions', [
+                        'run_id' => $runId,
+                        'count' => count($openPositions),
+                    ]);
+                } elseif ($openPositions !== null) {
+                    $this->mtfLogger->info('[MTF Runner] Reusing prefetched open positions', [
+                        'run_id' => $runId,
+                        'count' => count($openPositions),
+                    ]);
                 }
+
+                foreach ($openPositions ?? [] as $position) {
+                    $positionSymbol = strtoupper($this->extractSymbol($position));
+                    if ($positionSymbol !== '' && !in_array($positionSymbol, $openPositionSymbols, true)) {
+                        $openPositionSymbols[] = $positionSymbol;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->mtfLogger->warning('[MTF Runner] Failed to fetch open positions from exchange', [
+                    'run_id' => $runId,
+                    'error' => $e->getMessage(),
+                ]);
             }
-        } catch (\Throwable $e) {
-            $this->mtfLogger->warning('[MTF Runner] Failed to fetch open positions from exchange', [
-                'run_id' => $runId,
-                'error' => $e->getMessage(),
-            ]);
         }
 
         $openOrderSymbols = [];
-        try {
-            if ($openOrders === null) {
-                $openOrders = $orderProvider->getOpenOrders();
-                $this->mtfLogger->info('[MTF Runner] Fetched open orders', [
-                    'run_id' => $runId,
-                    'count' => count($openOrders),
-                ]);
-            } else {
-                $this->mtfLogger->info('[MTF Runner] Reusing prefetched open orders', [
-                    'run_id' => $runId,
-                    'count' => count($openOrders),
-                ]);
-            }
-
-            foreach ($openOrders as $order) {
-                $orderSymbol = strtoupper($this->extractSymbol($order));
-                if ($orderSymbol !== '' && !in_array($orderSymbol, $openOrderSymbols, true)) {
-                    $openOrderSymbols[] = $orderSymbol;
+        if ($orderProvider !== null || $openOrders !== null) {
+            try {
+                if ($openOrders === null && $orderProvider !== null) {
+                    $openOrders = $orderProvider->getOpenOrders();
+                    $this->mtfLogger->info('[MTF Runner] Fetched open orders', [
+                        'run_id' => $runId,
+                        'count' => count($openOrders),
+                    ]);
+                } elseif ($openOrders !== null) {
+                    $this->mtfLogger->info('[MTF Runner] Reusing prefetched open orders', [
+                        'run_id' => $runId,
+                        'count' => count($openOrders),
+                    ]);
                 }
+
+                foreach ($openOrders ?? [] as $order) {
+                    $orderSymbol = strtoupper($this->extractSymbol($order));
+                    if ($orderSymbol !== '' && !in_array($orderSymbol, $openOrderSymbols, true)) {
+                        $openOrderSymbols[] = $orderSymbol;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('[MTF Runner] Failed to fetch open orders from exchange', [
+                    'run_id' => $runId,
+                    'error' => $e->getMessage(),
+                ]);
             }
-        } catch (\Throwable $e) {
-            $this->logger->warning('[MTF Runner] Failed to fetch open orders from exchange', [
-                'run_id' => $runId,
-                'error' => $e->getMessage(),
-            ]);
         }
 
         $symbolsWithActivity = array_unique(array_merge($openPositionSymbols, $openOrderSymbols));

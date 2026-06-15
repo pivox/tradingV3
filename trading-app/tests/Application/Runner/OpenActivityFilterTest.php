@@ -60,9 +60,9 @@ final class OpenActivityFilterTest extends TestCase
         $context = $this->legacyContext();
 
         $mainProvider = $this->createMock(MainProviderInterface::class);
-        $mainProvider->expects(self::once())->method('forContext')->with($context)->willReturnSelf();
-        $mainProvider->expects(self::once())->method('getAccountProvider')->willReturn($this->createMock(AccountProviderInterface::class));
-        $mainProvider->expects(self::once())->method('getOrderProvider')->willReturn($this->createMock(OrderProviderInterface::class));
+        $mainProvider->expects(self::never())->method('forContext');
+        $mainProvider->expects(self::never())->method('getAccountProvider');
+        $mainProvider->expects(self::never())->method('getOrderProvider');
 
         $switchRepository = $this->createMock(MtfSwitchRepository::class);
         $switchRepository->expects(self::never())->method('reactivateSwitchesForInactiveSymbols');
@@ -76,6 +76,32 @@ final class OpenActivityFilterTest extends TestCase
 
         $excludedSymbols = [];
         self::assertSame([], $filter->filter([], 'run-123', $context, $excludedSymbols));
+        self::assertSame([], $excludedSymbols);
+    }
+
+    public function testReturnsSymbolsUnchangedWhenNoProvidersAvailable(): void
+    {
+        $context = $this->legacyContext();
+        $symbols = ['BTCUSDT', 'ETHUSDT'];
+
+        $mainProvider = $this->createMock(MainProviderInterface::class);
+        $mainProvider->expects(self::once())->method('forContext')->with($context)->willReturnSelf();
+        $mainProvider->expects(self::once())->method('getAccountProvider')->willReturn(null);
+        $mainProvider->expects(self::once())->method('getOrderProvider')->willReturn(null);
+
+        $switchRepository = $this->createMock(MtfSwitchRepository::class);
+        $switchRepository->expects(self::never())->method('reactivateSwitchesForInactiveSymbols');
+
+        $filter = new OpenActivityFilter(
+            $mainProvider,
+            $switchRepository,
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(LoggerInterface::class),
+        );
+
+        $excludedSymbols = [];
+
+        self::assertSame($symbols, $filter->filter($symbols, 'run-123', $context, $excludedSymbols));
         self::assertSame([], $excludedSymbols);
     }
 
