@@ -1,6 +1,18 @@
 # Architecture Systeme
 
-TradingV3 est une plateforme de trading futures orientee Bitmart, avec une architecture preparee pour plusieurs exchanges.
+TradingV3 est une plateforme de trading futures historiquement orientee Bitmart, avec une cible d'architecture qui retire Bitmart du coeur futur et conserve OKX, Hyperliquid et Fake/Paper comme gateways cible.
+
+## Architecture cible long terme
+
+La vision cible multi-CEX/multi-DEX est documentee dans [Architecture cible Trading Platform Core](technical/trading-platform-target-architecture.md).
+
+La decision de court/moyen terme pour garder une base simple et evolutive est documentee dans [Architecture Trading Core modulaire](technical/trading-core-modular-architecture.md).
+
+Cette page conserve la vue de l'architecture actuelle. La cible long terme introduit les frontieres suivantes : Strategy Engine, Risk Engine, OMS, EMS, CEX Gateways, DEX Gateways, Position Manager, Analytics Engine et Event Store leger.
+
+La cible Trading Core modulaire conserve l'esprit Runner -> MTF -> Decision -> TradeEntry, mais separe clairement les modules Runner, MTF, Entry, Risk, SL/TP, Execution et Evaluation avec des ports de communication explicites.
+
+Bitmart est a traiter comme legacy a retirer progressivement. Il ne doit plus servir de reference pour les DTOs metier, les gateways cible ou les exemples de nouvelle architecture.
 
 ## Vue logique
 
@@ -43,7 +55,7 @@ flowchart LR
 | Validator | Charge le profil YAML, construit les contextes indicateurs, valide contexte et execution. |
 | Decision | Convertit un symbole `READY` en message de decision ou en appel TradeEntry. |
 | TradeEntry | Calcule entry zone, sizing, levier, SL/TP, place les ordres et attache les protections. |
-| Provider/Exchange | Normalise l'acces Bitmart, OKX, Hyperliquid et Fake exchange. |
+| Provider/Exchange | Normalise l'acces exchange. Bitmart reste legacy; OKX, Hyperliquid et Fake/Paper sont les gateways cible. |
 | Messenger | Decouple projection, decision et surveillance des ordres. |
 | Temporal | Planifie les appels periodiques a l'API Symfony. |
 
