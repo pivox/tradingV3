@@ -37,9 +37,13 @@ final class LeverageCalculator
         $rounded = max(1, $rounded);
         $rounded = max($request->minLeverage, $rounded);
         $rounded = min($request->maxLeverage, $rounded);
-        // Prevent ceil/round from pushing above a fractional float cap (e.g. cap=5.5, ceil→6).
-        $rounded = min($rounded, (int)floor($cappedLeverage));
-        $rounded = max(max(1, $request->minLeverage), $rounded);
+        // Prevent ceil/round from pushing above a fractional float cap, but only when a cap
+        // actually reduced the leverage (cappedLeverage < preCapLeverage).
+        // When no cap was binding, cappedLeverage equals the raw leverage and the rounding
+        // mode must be respected as-is (e.g. rawLeverage=1.5, ceil→2 must stay 2).
+        if ($cappedLeverage < $preCapLeverage && $rounded > (int)floor($cappedLeverage)) {
+            $rounded = max(max(1, $request->minLeverage), (int)floor($cappedLeverage));
+        }
 
         if ($request->maxLossPct !== null && \is_finite($request->maxLossPct) && $request->maxLossPct > 0.0) {
             $warnings[] = 'maxLossPct is represented for execution-time size/leverage capping; it is not applied to raw leverage in this preparatory module.';

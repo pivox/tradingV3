@@ -95,6 +95,32 @@ final class PositionSizerTest extends TestCase
         self::assertContains('Both fixedRiskPct and legacy riskPctPercent are present; fixedRiskPct is the canonical module source.', $result->warnings);
     }
 
+    public function testRejectsPositionWhenAvailableBalanceIsExplicitlyZero(): void
+    {
+        $sizer = new PositionSizer();
+
+        // availableBalance=0.0 explicitly means "no budget" and must be honored,
+        // not silently ignored in favour of initialMarginUsdt.
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('capital base must be positive');
+
+        $sizer->calculate(new RiskCalculationRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'scalper_micro',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            equity: null,
+            availableBalance: 0.0,
+            entryPrice: 100.0,
+            stopPrice: null,
+            stopPct: 0.02,
+            fixedRiskPct: null,
+            riskPctPercentLegacy: 0.004,
+            initialMarginUsdt: 50.0,
+        ));
+    }
+
     public function testSizesFallbackCapitalUsingLegacyDoubleRiskPctPattern(): void
     {
         $sizer = new PositionSizer();

@@ -141,6 +141,40 @@ final class LeverageCalculatorTest extends TestCase
         self::assertSame(5, $result->finalLeverage);
     }
 
+    public function testCeilRoundingIsPreservedWhenNoCapsReducedLeverage(): void
+    {
+        $calculator = new LeverageCalculator(new LeverageCapResolver());
+
+        // rawLeverage = 0.04/0.02 = 2.0 — exchange cap is 100 (not binding).
+        // ceil(2.0) = 2 must NOT be clipped to floor(2.0) = 2 (no-op here).
+        // More critically: fractional raw = 1.5, cap = 100 → ceil(1.5) must stay 2.
+        $result = $calculator->calculate(new LeverageCalculationRequest(
+            symbol: 'ETHUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            stopPct: 0.02,
+            riskPct: 0.03,
+            rawLeverage: null,
+            exchangeCap: 100.0,
+            symbolCap: null,
+            profileCap: null,
+            timeframeMultiplier: 1.0,
+            liquidityMultiplier: null,
+            maxLossPct: null,
+            floor: null,
+            minLeverage: 1,
+            maxLeverage: 100,
+            roundingMode: 'ceil',
+        ));
+
+        // rawLeverage = 0.03/0.02 = 1.5, exchangeCap not binding → ceil(1.5) = 2
+        self::assertSame(1.5, $result->rawLeverage);
+        self::assertSame(1.5, $result->cappedLeverage);
+        self::assertSame(2, $result->finalLeverage);
+    }
+
     public function testFloorDoesNotInventLeverageWithoutPositiveRawInput(): void
     {
         $calculator = new LeverageCalculator(new LeverageCapResolver());

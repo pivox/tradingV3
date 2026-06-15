@@ -98,8 +98,9 @@ final class PositionSizer
     {
         $initialMargin = $request->initialMarginUsdt;
         if ($initialMargin !== null && $initialMargin > 0.0) {
-            if ($request->availableBalance !== null && $request->availableBalance > 0.0) {
-                return min($initialMargin, $request->availableBalance);
+            if ($request->availableBalance !== null) {
+                // Honor an explicit zero balance: min(margin, 0.0) = 0.0 → caller throws.
+                return min($initialMargin, max(0.0, $request->availableBalance));
             }
 
             return $initialMargin;
