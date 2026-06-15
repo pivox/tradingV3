@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\MtfRunner\Service;
 
+use App\Application\Runner\ExchangeStateSynchronizer;
 use App\Application\Runner\OpenActivityFilter;
+use App\Application\Runner\PostRunProjectionDispatcher;
+use App\Application\Runner\RunResultAssembler;
 use App\Application\Runner\SymbolUniverseResolver;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfResultDto;
@@ -15,23 +18,17 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Common\Enum\OrderSide;
 use App\Common\Enum\PositionSide;
-use App\Entity\Position;
 use App\MtfRunner\Dto\MtfRunnerRequestDto as RunnerRequestDto;
-use App\MtfRunner\Application\Projection\IndicatorSnapshotPersistenceDispatcher;
-use App\MtfRunner\Application\Result\MtfRunResultEnricher;
-use App\MtfRunner\Service\FuturesOrderSyncService;
 use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\Provider\Context\ExchangeContext;
-use App\Repository\PositionRepository;
 use App\Config\TradeEntryConfigProvider;
 use App\Config\TradeEntryModeContext;
 use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
 use App\TradeEntry\Service\TpSlTwoTargetsService;
 use App\TradeEntry\Types\Side as EntrySide;
 use App\MtfValidator\Service\PerformanceProfiler;
-use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\Uuid;
@@ -56,19 +53,17 @@ final class MtfRunnerService
     public function __construct(
         private readonly SymbolUniverseResolver $symbolUniverseResolver,
         private readonly OpenActivityFilter $openActivityFilter,
-        private readonly PositionRepository $positionRepository,
+        private readonly ExchangeStateSynchronizer $exchangeStateSynchronizer,
+        private readonly PostRunProjectionDispatcher $postRunProjectionDispatcher,
+        private readonly RunResultAssembler $runResultAssembler,
         private readonly MtfLockRepository $mtfLockRepository,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
-        private readonly FuturesOrderSyncService $futuresOrderSyncService,
         private readonly MtfValidatorInterface $mtfValidator,
         private readonly MainProviderInterface $mainProvider,
-        private readonly EntityManagerInterface $entityManager,
         private readonly LoggerInterface $logger,
         private readonly LoggerInterface $mtfLogger,
         private readonly LoggerInterface $positionsLogger,
         private readonly TradeDecisionDispatcherInterface $tradeDecisionDispatcher,
-        private readonly IndicatorSnapshotPersistenceDispatcher $indicatorSnapshotPersistenceDispatcher,
-        private readonly MtfRunResultEnricher $resultEnricher,
         #[Autowire('%kernel.project_dir%')]
         private readonly string $projectDir,
         private readonly ClockInterface $clock,
@@ -156,7 +151,7 @@ final class MtfRunnerService
                 : $this->runSequential($symbols, $request, $context);
             $profiler->increment('runner', 'mtf_execution', microtime(true) - $execStart);
 
-            $this->indicatorSnapshotPersistenceDispatcher->dispatch($result['results'] ?? [], $request, $runId);
+            $this->postRunProjectionDispatcher->dispatch($result['results'] ?? [], $request, $runId);
 
             // 8. Mettre à jour les switches pour les symboles exclus (après traitement)
             if (!empty($excludedSymbols)) {
@@ -184,7 +179,7 @@ final class MtfRunnerService
             // 10. Post-processing : enrichir les résultats
             $postProcessStart = microtime(true);
             $results = $result['results'] ?? [];
-            $enriched = $this->resultEnricher->enrich($results);
+            $enriched = $this->runResultAssembler->enrich($results);
             $profiler->increment('runner', 'post_processing', microtime(true) - $postProcessStart);
 
             $executionTime = microtime(true) - $startTime;
@@ -197,16 +192,7 @@ final class MtfRunnerService
                 'performance' => $performanceReport,
             ]);
 
-            return [
-                'summary' => $result['summary'] ?? [],
-                'results' => $results,
-                'errors' => $result['errors'] ?? [],
-                'summary_by_tf' => $enriched['summary_by_tf'],
-                'rejected_by' => $enriched['rejected_by'],
-                'last_validated' => $enriched['last_validated'],
-                'orders_placed' => $enriched['orders_placed'],
-                'performance' => $performanceReport,
-            ];
+            return $this->runResultAssembler->assemble($result, $results, $enriched, $performanceReport);
 
         } catch (\Throwable $e) {
             $this->logger->error('[MTF Runner] Execution failed', [
@@ -352,120 +338,7 @@ final class MtfRunnerService
      */
     public function syncTables(ExchangeContext $context): array
     {
-        $openPositions = [];
-        $openOrders = [];
-
-        try {
-            $provider = $this->mainProvider->forContext($context);
-            $accountProvider = $provider->getAccountProvider();
-            $orderProvider = $provider->getOrderProvider();
-
-            if (!$accountProvider && !$orderProvider) {
-                $this->positionsLogger->warning('[MTF Runner] Cannot sync tables: missing providers');
-                return [
-                    'open_positions' => $openPositions,
-                    'open_orders' => $openOrders,
-                ];
-            }
-
-            // 1. Synchroniser les positions
-            if ($accountProvider) {
-                $openPositions = $this->syncPositions($accountProvider, $context);
-            }
-
-            // 2. Synchroniser les ordres
-            if ($orderProvider) {
-                $openOrders = $this->syncOrders($orderProvider);
-            }
-
-        } catch (\Throwable $e) {
-            $this->logger->error('[MTF Runner] Failed to sync tables', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-        }
-
-        return [
-            'open_positions' => $openPositions,
-            'open_orders' => $openOrders,
-        ];
-    }
-
-    /**
-     * Synchronise les positions depuis l'exchange vers la table positions
-     */
-    private function syncPositions($accountProvider, ExchangeContext $context): array
-    {
-        $openPositions = [];
-
-        try {
-            $openPositions = $accountProvider->getOpenPositions();
-            $this->positionsLogger->info('[MTF Runner] Syncing positions', [
-                'count' => count($openPositions),
-            ]);
-
-            foreach ($openPositions as $positionDto) {
-                try {
-                    $symbol = strtoupper($positionDto->symbol);
-                    $side = strtoupper($positionDto->side->value);
-
-                    // Chercher ou créer la position
-                    $position = $this->positionRepository->findOneBySymbolSide($symbol, $side, $context);
-                    if (!$position) {
-                        $position = new Position($symbol, $side, $context->exchange, $context->marketType);
-                    }
-
-                    // Mettre à jour les données
-                    $position->setSize($positionDto->size->__toString());
-                    $position->setAvgEntryPrice($positionDto->entryPrice->__toString());
-                    $position->setLeverage((int)$positionDto->leverage->__toString());
-                    $position->setUnrealizedPnl($positionDto->unrealizedPnl->__toString());
-                    $position->setStatus('OPEN');
-                    $position->mergePayload([
-                        'exchange' => $context->exchange->value,
-                        'market_type' => $context->marketType->value,
-                        'mark_price' => $positionDto->markPrice->__toString(),
-                        'margin' => $positionDto->margin->__toString(),
-                        'realized_pnl' => $positionDto->realizedPnl->__toString(),
-                    ]);
-
-                    $this->positionRepository->upsert($position);
-                } catch (\Throwable $e) {
-                    $this->logger->error('[MTF Runner] Failed to sync position', [
-                        'symbol' => $positionDto->symbol ?? 'unknown',
-                        'error' => $e->getMessage(),
-                    ]);
-                }
-            }
-        } catch (\Throwable $e) {
-            $this->logger->error('[MTF Runner] Failed to sync positions', [
-                'error' => $e->getMessage(),
-            ]);
-        }
-
-        return $openPositions;
-    }
-
-    /**
-     * Synchronise les ordres depuis l'exchange vers futures_order et futures_order_trade
-     */
-    private function syncOrders($orderProvider): array
-    {
-        $openOrders = [];
-
-        try {
-            $openOrders = $orderProvider->getOpenOrders();
-            // getOpenOrders() synchronise déjà les ordres via FuturesOrderSyncService
-            $this->positionsLogger->info('[MTF Runner] Syncing orders via provider', [
-                'count' => count($openOrders),
-            ]);
-        } catch (\Throwable $e) {
-            $this->logger->error('[MTF Runner] Failed to sync orders', [
-                'error' => $e->getMessage(),
-            ]);
-        }
-
-        return $openOrders;
+        return $this->exchangeStateSynchronizer->sync($context);
     }
 
     /**
