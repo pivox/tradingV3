@@ -104,7 +104,8 @@ final class TakeProfitCalculatorTest extends TestCase
             pivotAligned: true,
         ));
 
-        self::assertSame(104.9, $pivotResult->tp1Price);
+        // Clamp: buffer cannot push TP inside the base R target → stays at 105.0.
+        self::assertSame(105.0, $pivotResult->tp1Price);
         self::assertSame($buffer, $pivotResult->metadata['tp_buffer_pct']);
 
         // R-multiple policy: buffer must NOT be applied → tp1Price stays at 105.0.
@@ -221,15 +222,14 @@ final class TakeProfitCalculatorTest extends TestCase
         ));
     }
 
-    public function testSuppressesTp2WhenBufferLeavesItCloserThanRestoredTp1(): void
+    public function testBufferClampsToBaseRTargetAndPreservesBothLegs(): void
     {
         $calculator = new TakeProfitCalculator();
 
-        // entry=100, stop=99.95 → riskDistance=0.05
-        // tp1R=1 → tp1=100.05; tp2R=1.8 → tp2=100.09
-        // buffer=0.001 → bufferAbs=0.1 (entry*buffer)
-        // tp1=100.05-0.1=99.95, effectiveR=(99.95-100)/0.05=-1 < minKeep=0.95 → reset tp1=100.05
-        // tp2=100.09-0.1=99.99 < tp1=100.05 → tp2 suppressed (not a farther target)
+        // With the clamp, buffer can never push TP below the base R target.
+        // baseTp1 = 100 + 5*1.0 = 105.0; buffered = 105 - 0.1 = 104.9 → clamped to 105.0.
+        // baseTp2 = 100 + 5*1.8 = 109.0; buffered = 109 - 0.1 = 108.9 → clamped to 109.0.
+        // Both legs stay at their theoretical R values; TP2 is still farther → not suppressed.
         $result = $calculator->calculate(new TakeProfitRequest(
             symbol: 'BTCUSDT',
             instrument: null,
@@ -238,7 +238,7 @@ final class TakeProfitCalculatorTest extends TestCase
             marketType: 'futures',
             direction: 'long',
             entryPrice: 100.0,
-            stopPrice: 99.95,
+            stopPrice: 95.0,
             riskDistance: null,
             rMultiple: 1.8,
             tp1R: 1.0,
@@ -252,8 +252,8 @@ final class TakeProfitCalculatorTest extends TestCase
             pivotAligned: true,
         ));
 
-        self::assertSame(100.05, $result->tp1Price);
-        self::assertNull($result->tp2Price);
+        self::assertSame(105.0, $result->tp1Price);
+        self::assertSame(109.0, $result->tp2Price);
     }
 
     public function testSuppressesTp2WhenTp1RIsGreaterThanRMultiple(): void

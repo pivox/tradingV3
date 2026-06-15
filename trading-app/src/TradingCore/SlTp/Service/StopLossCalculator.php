@@ -83,7 +83,9 @@ final class StopLossCalculator
                 if ($maxDistancePct !== null && \is_finite($maxDistancePct) && $maxDistancePct > 0.0) {
                     $distancePct = abs($request->entryPrice - $stop) / $request->entryPrice;
                     if ($distancePct > $maxDistancePct) {
-                        if (strtolower((string)$request->stopFallback) === 'atr') {
+                        $hasAtrInputs = $request->atr !== null && $request->atr > 0.0 && \is_finite($request->atr)
+                            && $request->atrK !== null && $request->atrK > 0.0 && \is_finite($request->atrK);
+                        if (strtolower((string)$request->stopFallback) === 'atr' && $hasAtrInputs) {
                             $warnings[] = 'Pivot stop exceeds max distance; falling back to ATR stop.';
                             return [$this->atrStop($request, $direction), 'atr_fallback', $warnings];
                         }

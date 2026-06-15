@@ -41,12 +41,19 @@ final class TakeProfitCalculator
 
         // Buffer only applies when a pivot was actually selected — matching legacy OrderPlanBuilder
         // which skips the buffer when pivotLevels is empty even for pivot policies.
+        // Legacy clamps buffered price with max/min against the base R target so the buffer never
+        // moves TP inside the theoretical target (TakeProfitCalculator::alignWithPivot:107-133).
         $bufferPct = $request->tpBufferPct !== null ? max(0.0, $request->tpBufferPct) : 0.0;
         if ($bufferPct > 0.0 && $request->pivotAligned) {
             $buffer = $request->entryPrice * $bufferPct;
-            $tp1Price = $direction === 'long' ? $tp1Price - $buffer : $tp1Price + $buffer;
+            $baseTp1 = $tp1Price;
+            $baseTp2 = $tp2Price;
+            $buffered1 = $direction === 'long' ? $tp1Price - $buffer : $tp1Price + $buffer;
+            // Clamp: buffer must not push TP inside the base R target.
+            $tp1Price = $direction === 'long' ? max($baseTp1, $buffered1) : min($baseTp1, $buffered1);
             if ($tp2Price !== null) {
-                $tp2Price = $direction === 'long' ? $tp2Price - $buffer : $tp2Price + $buffer;
+                $buffered2 = $direction === 'long' ? $tp2Price - $buffer : $tp2Price + $buffer;
+                $tp2Price = $direction === 'long' ? max($baseTp2, $buffered2) : min($baseTp2, $buffered2);
             }
 
             $effectiveR = $this->effectiveR($request->entryPrice, $tp1Price, $riskDistance, $direction);

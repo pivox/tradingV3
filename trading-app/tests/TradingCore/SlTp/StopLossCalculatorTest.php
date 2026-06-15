@@ -106,6 +106,34 @@ final class StopLossCalculatorTest extends TestCase
         self::assertSame('pivot', $result->stopSource);
     }
 
+    public function testKeepsPivotWhenMaxDistanceExceededButAtrUnavailable(): void
+    {
+        $calculator = new StopLossCalculator();
+
+        // Pivot too far (50% > 2%) but no ATR inputs → must use pivot with warning, not throw.
+        $result = $calculator->calculate(new StopLossRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopFrom: 'pivot',
+            stopFallback: 'atr',
+            atr: null,
+            atrK: null,
+            pivotPrice: 50.0,
+            pivotSlPolicy: 'nearest',
+            pivotSlBufferPct: 0.0,
+            pivotSlMinKeepRatio: null,
+            pivotSlMaxDistancePct: 0.02,
+        ));
+
+        self::assertSame('pivot', $result->stopSource);
+        self::assertNotEmpty(array_filter($result->warnings, fn(string $w): bool => str_contains($w, 'Pivot stop distance')));
+    }
+
     public function testFallsBackToAtrWhenPivotExceedsMaxDistance(): void
     {
         $calculator = new StopLossCalculator();
