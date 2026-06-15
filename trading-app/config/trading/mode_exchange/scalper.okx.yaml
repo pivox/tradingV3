@@ -1,0 +1,12 @@
+version: '0.1.0-effective-config-bootstrap'
+
+trading:
+  profile: scalper
+  exchange: okx
+  execution:
+    dry_run: true
+    live_enabled: false
+    runtime_check_required: true
+
+compatibility:
+  reason: future_profile_exchange_override_placeholder

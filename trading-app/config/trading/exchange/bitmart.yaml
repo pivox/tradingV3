@@ -1,0 +1,19 @@
+version: '0.1.0-effective-config-bootstrap'
+
+trading:
+  exchange: bitmart
+  exchange_status: legacy_runtime_only
+  execution:
+    dry_run: true
+    live_enabled: false
+
+compatibility:
+  legacy_runtime_dependency: true
+  env_template_keys:
+    - BITMART_API_KEY
+    - BITMART_SECRET_KEY
+    - BITMART_API_MEMO
+    - BITMART_BASE_URL
+    - BITMART_PRIVATE_API_URL
+    - BITMART_PUBLIC_API_URL
+    - BITMART_WS_PRIVATE_URL

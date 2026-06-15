@@ -1,0 +1,9 @@
+version: '0.1.0-effective-config-bootstrap'
+
+trading:
+  profile: regular
+
+compatibility:
+  trade_entry_config: config/app/trade_entry.regular.yaml
+  mtf_validation_config: src/MtfValidator/config/validations.regular.yaml
+  mtf_contracts_config: config/app/mtf_contracts.yaml

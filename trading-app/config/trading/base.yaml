@@ -1,0 +1,24 @@
+version: '0.1.0-effective-config-bootstrap'
+
+trading:
+  config_schema: effective_trading_config.v1
+  runtime_status: inactive_reference
+  exchange: fake
+  market_type: perpetual
+  execution:
+    dry_run: true
+    live_enabled: false
+    runtime_check_required: true
+    require_stop_loss: true
+  risk:
+    source: legacy_runtime_config
+  leverage:
+    policy: derived_from_risk_and_stop
+  entry_zone:
+    source: legacy_trade_entry_config
+  fees:
+    source: exchange_layer_or_legacy_runtime_config
+
+compatibility:
+  bitmart_legacy_runtime_kept: true
+  current_runtime_unchanged: true

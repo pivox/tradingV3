@@ -1,0 +1,21 @@
+version: '0.1.0-effective-config-bootstrap'
+
+trading:
+  exchange: okx
+  exchange_status: dry_run_runtime_check_only
+  execution:
+    dry_run: true
+    live_enabled: false
+    runtime_check_required: true
+
+compatibility:
+  env_template_keys:
+    - OKX_ENV
+    - OKX_API_KEY
+    - OKX_API_SECRET
+    - OKX_API_PASSPHRASE
+    - OKX_API_BASE_URI
+    - OKX_WS_PUBLIC_URI
+    - OKX_WS_PRIVATE_URI
+    - OKX_DEMO_TRADING_ENABLED
+    - OKX_LIVE_ENABLED

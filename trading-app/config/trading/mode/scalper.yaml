@@ -1,0 +1,9 @@
+version: '0.1.0-effective-config-bootstrap'
+
+trading:
+  profile: scalper
+
+compatibility:
+  trade_entry_config: config/app/trade_entry.scalper.yaml
+  mtf_validation_config: src/MtfValidator/config/validations.scalper.yaml
+  mtf_contracts_config: config/app/mtf_contracts.yaml

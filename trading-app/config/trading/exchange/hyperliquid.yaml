@@ -1,0 +1,18 @@
+version: '0.1.0-effective-config-bootstrap'
+
+trading:
+  exchange: hyperliquid
+  exchange_status: dry_run_runtime_check_only
+  execution:
+    dry_run: true
+    live_enabled: false
+    runtime_check_required: true
+
+compatibility:
+  env_template_keys:
+    - HYPERLIQUID_ENV
+    - HYPERLIQUID_PRIVATE_KEY
+    - HYPERLIQUID_ACCOUNT_ADDRESS
+    - HYPERLIQUID_API_BASE_URI
+    - HYPERLIQUID_WS_URI
+    - HYPERLIQUID_MAINNET_ENABLED
