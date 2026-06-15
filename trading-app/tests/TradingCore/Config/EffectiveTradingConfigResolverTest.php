@@ -9,7 +9,6 @@ use App\TradingCore\Config\Exception\TradingConfigException;
 use App\TradingCore\Config\TradingConfigLayer;
 use App\TradingCore\Config\TradingConfigLayerLoader;
 use PHPUnit\Framework\Attributes\CoversClass;
-use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(EffectiveTradingConfigResolver::class)]
@@ -169,6 +168,41 @@ YAML);
         $this->expectExceptionMessage('must contain a YAML mapping');
 
         $this->resolver()->resolve('regular', 'fake', 'dev');
+    }
+
+    public function testRejectsUnsafeLayerNamesBeforeReadingOptionalFiles(): void
+    {
+        $this->writeYaml('base.yaml', <<<YAML
+trading:
+  execution:
+    dry_run: true
+YAML);
+        $this->writeYaml('../services.yaml', <<<YAML
+services:
+  escaped: true
+YAML);
+
+        $this->expectException(TradingConfigException::class);
+        $this->expectExceptionMessage('Invalid trading config layer name');
+
+        $this->resolver()->resolve('../../services', 'fake', 'dev');
+    }
+
+    public function testAllowsSafeSlugLayerNames(): void
+    {
+        $this->writeYaml('base.yaml', <<<YAML
+trading:
+  execution:
+    dry_run: true
+YAML);
+        $this->writeYaml('mode/scalper_micro.yaml', <<<YAML
+trading:
+  profile: scalper_micro
+YAML);
+
+        $resolved = $this->resolver()->resolve('scalper_micro', 'fake', 'dev');
+
+        self::assertSame('scalper_micro', $resolved['config']['trading']['profile']);
     }
 
     private function resolver(): EffectiveTradingConfigResolver

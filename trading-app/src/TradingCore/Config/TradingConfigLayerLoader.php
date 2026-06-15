@@ -47,6 +47,8 @@ final readonly class TradingConfigLayerLoader
      */
     public function describeOptional(string $type, string $name): array
     {
+        $this->assertSafeLayerName($type, $name);
+
         return [
             'type' => $type,
             'name' => $name,
@@ -57,6 +59,8 @@ final readonly class TradingConfigLayerLoader
 
     private function load(string $type, string $name, string $relativePath, bool $required): ?TradingConfigLayer
     {
+        $this->assertSafeLayerName($type, $name);
+
         $path = $this->pathFor($relativePath);
 
         if (!is_file($path)) {
@@ -112,5 +116,22 @@ final readonly class TradingConfigLayerLoader
             'env' => sprintf('env/%s.yaml', $name),
             default => sprintf('%s.yaml', $name),
         };
+    }
+
+    private function assertSafeLayerName(string $type, string $name): void
+    {
+        $pattern = $type === 'mode_exchange'
+            ? '/^[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+$/'
+            : '/^[a-z0-9][a-z0-9_-]*$/';
+
+        if (preg_match($pattern, $name) === 1) {
+            return;
+        }
+
+        throw new TradingConfigException(sprintf(
+            'Invalid trading config layer name for "%s": "%s"',
+            $type,
+            $name,
+        ));
     }
 }
