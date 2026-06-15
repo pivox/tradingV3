@@ -135,6 +135,36 @@ final class TakeProfitCalculatorTest extends TestCase
         ));
     }
 
+    public function testSuppressesTp2WhenTp1RAliasesRMultiple(): void
+    {
+        $calculator = new TakeProfitCalculator();
+
+        // tp1R == rMultiple (regular.yaml alias pattern): must not emit a duplicate tp2 leg.
+        $result = $calculator->calculate(new TakeProfitRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'regular',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 95.0,
+            riskDistance: null,
+            rMultiple: 2.0,
+            tp1R: 2.0,
+            tpPolicy: 'r_multiple',
+            tpBufferPct: null,
+            tpMinKeepRatio: 0.95,
+            tpMaxExtraR: null,
+            feesBps: null,
+            spreadBps: null,
+            slippageBps: null,
+        ));
+
+        self::assertSame(110.0, $result->tp1Price);
+        self::assertNull($result->tp2Price);
+    }
+
     public function testEmitsSingleTpWhenTp1RIsAbsent(): void
     {
         $calculator = new TakeProfitCalculator();

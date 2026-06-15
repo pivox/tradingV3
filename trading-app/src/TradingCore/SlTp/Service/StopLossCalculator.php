@@ -111,9 +111,15 @@ final class StopLossCalculator
 
         $distance = $request->atr * $request->atrK;
 
-        return $direction === 'long'
+        $stopPrice = $direction === 'long'
             ? $request->entryPrice - $distance
             : $request->entryPrice + $distance;
+
+        if ($stopPrice <= 0.0 || !\is_finite($stopPrice)) {
+            throw new \InvalidArgumentException('atr stop price must be positive; atr * atrK exceeds entry price');
+        }
+
+        return $stopPrice;
     }
 
     private function assertStopSide(string $direction, float $entryPrice, float $stopPrice): void

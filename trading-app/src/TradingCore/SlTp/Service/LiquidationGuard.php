@@ -15,6 +15,14 @@ final class LiquidationGuard
         }
 
         $direction = $this->direction($request->direction);
+
+        $isStopOnCorrectSide = $direction === 'long'
+            ? $request->stopPrice < $request->entryPrice
+            : $request->stopPrice > $request->entryPrice;
+        if (!$isStopOnCorrectSide) {
+            return $this->unsafe($request, null, null, null, 'stop_on_wrong_side_of_entry');
+        }
+
         $stopDistance = abs($request->entryPrice - $request->stopPrice);
         if ($stopDistance <= 0.0 || !\is_finite($stopDistance)) {
             return $this->unsafe($request, null, null, null, 'stop_distance_not_positive');

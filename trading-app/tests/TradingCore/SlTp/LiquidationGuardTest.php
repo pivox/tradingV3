@@ -62,6 +62,29 @@ final class LiquidationGuardTest extends TestCase
         self::assertSame('liquidation_distance_below_min_ratio', $result->reasonIfUnsafe);
     }
 
+    public function testMarksPlanUnsafeWhenStopIsOnWrongSideOfEntry(): void
+    {
+        $guard = new LiquidationGuard();
+
+        // Long: stop above entry — invalid regardless of liquidation price.
+        $result = $guard->check(new LiquidationCheckRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 105.0,
+            leverage: 5,
+            maintenanceMarginRate: null,
+            liquidationPrice: 80.0,
+            minDistanceRatio: 3.0,
+        ));
+
+        self::assertFalse($result->isSafe);
+        self::assertSame('stop_on_wrong_side_of_entry', $result->reasonIfUnsafe);
+    }
+
     public function testMarksPlanUnsafeWhenLiquidationIsNotBeyondStop(): void
     {
         $guard = new LiquidationGuard();

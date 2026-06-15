@@ -106,6 +106,33 @@ final class StopLossCalculatorTest extends TestCase
         self::assertSame('pivot', $result->stopSource);
     }
 
+    public function testRejectsAtrStopWhenDistanceExceedsEntryPrice(): void
+    {
+        $calculator = new StopLossCalculator();
+
+        // atr=80, atrK=2 → distance=160 > entryPrice=100 → stopPrice=-60 (invalid).
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('atr stop price must be positive');
+
+        $calculator->calculate(new StopLossRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopFrom: 'atr',
+            stopFallback: null,
+            atr: 80.0,
+            atrK: 2.0,
+            pivotPrice: null,
+            pivotSlPolicy: 'nearest',
+            pivotSlBufferPct: null,
+            pivotSlMinKeepRatio: null,
+        ));
+    }
+
     public function testFallsBackToAtrWhenPivotIsUnavailable(): void
     {
         $calculator = new StopLossCalculator();
