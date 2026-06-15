@@ -17,23 +17,44 @@ final class OrderPlanValidator
         if (trim($plan->symbol) === '') {
             $invalidReasons[] = 'symbol_missing';
         }
+        if (trim($plan->instrument) === '') {
+            $invalidReasons[] = 'instrument_missing';
+        }
+        if (trim($plan->profile) === '') {
+            $invalidReasons[] = 'profile_missing';
+        }
+        if (trim($plan->exchange) === '') {
+            $invalidReasons[] = 'exchange_missing';
+        }
+        if (trim($plan->marketType) === '') {
+            $invalidReasons[] = 'market_type_missing';
+        }
         if (!\in_array(strtolower($plan->side), ['long', 'short'], true)) {
             $invalidReasons[] = 'side_invalid';
         }
         if (!\in_array(strtolower($plan->orderType), ['limit', 'market'], true)) {
             $invalidReasons[] = 'order_type_invalid';
         }
-        if (trim($plan->marginMode) === '') {
+        $marginMode = strtolower(trim($plan->marginMode));
+        if ($marginMode === '') {
             $invalidReasons[] = 'margin_mode_missing';
+        } elseif (!\in_array($marginMode, ['isolated', 'cross'], true)) {
+            $invalidReasons[] = 'margin_mode_invalid';
         }
-        if (trim($plan->timeInForce) === '') {
+        $timeInForce = strtolower(trim($plan->timeInForce));
+        if ($timeInForce === '') {
             $invalidReasons[] = 'time_in_force_missing';
+        } elseif (!\in_array($timeInForce, ['gtc', 'fok', 'ioc', 'post_only'], true)) {
+            $invalidReasons[] = 'time_in_force_invalid';
         }
         if ($plan->entryPrice <= 0.0 || !\is_finite($plan->entryPrice)) {
             $invalidReasons[] = 'entry_price_not_positive';
         }
         if ($plan->quantity <= 0.0 || !\is_finite($plan->quantity)) {
             $invalidReasons[] = 'quantity_not_positive';
+        }
+        if ($plan->contractSize !== null && ($plan->contractSize <= 0.0 || !\is_finite($plan->contractSize))) {
+            $invalidReasons[] = 'contract_size_not_positive';
         }
         if ($plan->leverage <= 0) {
             $invalidReasons[] = 'leverage_not_positive';
@@ -62,8 +83,22 @@ final class OrderPlanValidator
                 if (!$stopLoss->isFullSize) {
                     $invalidReasons[] = 'stop_loss_not_full_size';
                 }
-                if ($stopLoss->stopPct <= 0.0) {
+                if ($stopLoss->stopPrice <= 0.0 || !\is_finite($stopLoss->stopPrice)) {
+                    $invalidReasons[] = 'stop_price_not_positive';
+                }
+                if ($stopLoss->stopPct <= 0.0 || !\is_finite($stopLoss->stopPct)) {
                     $invalidReasons[] = 'stop_pct_not_positive';
+                }
+                if ($stopLoss->stopDistance <= 0.0 || !\is_finite($stopLoss->stopDistance)) {
+                    $invalidReasons[] = 'stop_distance_not_positive';
+                }
+            }
+
+            if (strtolower(trim($plan->marketType)) === 'perpetual') {
+                if ($protection->liquidationCheck === null) {
+                    $invalidReasons[] = 'liquidation_guard_missing';
+                } elseif (!$protection->liquidationCheck->isSafe) {
+                    $invalidReasons[] = 'liquidation_guard_unsafe';
                 }
             }
         }

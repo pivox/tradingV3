@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Execution\Dto;
 
+use App\TradingCore\Execution\Enum\ExecutionStatus;
+
 final readonly class ExecutionResult
 {
     /**
@@ -10,7 +12,7 @@ final readonly class ExecutionResult
      * @param array<string,mixed> $metadata
      */
     public function __construct(
-        public string $status,
+        public ExecutionStatus $status,
         public ?string $clientOrderId = null,
         public ?string $exchangeOrderId = null,
         public array $raw = [],

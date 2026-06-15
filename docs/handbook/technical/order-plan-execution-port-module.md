@@ -93,18 +93,29 @@ non valide explicitement est non executable.
 
 ```text
 OrderPlan invalide si symbole absent
+OrderPlan invalide si instrument absent
+OrderPlan invalide si profile absent
+OrderPlan invalide si exchange absent
+OrderPlan invalide si market_type absent
 OrderPlan invalide si side inconnu
 OrderPlan invalide si type d'ordre inconnu
-OrderPlan invalide si entry_price <= 0
-OrderPlan invalide si quantity <= 0
+OrderPlan invalide si margin_mode absent ou hors isolated/cross
+OrderPlan invalide si time_in_force absent ou hors gtc/fok/ioc/post_only
+OrderPlan invalide si entry_price <= 0 ou non fini
+OrderPlan invalide si quantity <= 0 ou non finie
 OrderPlan invalide si leverage <= 0
+OrderPlan invalide si contract_size fourni <= 0 ou non fini
 OrderPlan invalide si client_order_id absent
 OrderPlan invalide si idempotency_key absente
 OrderPlan invalide si ProtectionPlan absent
 OrderPlan invalide si ProtectionPlan invalide
 OrderPlan invalide si stop-loss absent
 OrderPlan invalide si stop-loss non full size
-OrderPlan invalide si stop_pct <= 0
+OrderPlan invalide si stop_price <= 0 ou non fini
+OrderPlan invalide si stop_pct <= 0 ou non fini
+OrderPlan invalide si stop_distance <= 0 ou non fini
+OrderPlan perpetual invalide si liquidation guard absent
+OrderPlan perpetual invalide si liquidation guard unsafe
 ```
 
 Cette validation cible ne change pas le runtime legacy. Elle prepare la regle :
@@ -129,6 +140,22 @@ ExecutionRequest -> ExecutionResult
 
 Le mode live exige un plan executable. Le mode dry-run reste autorise avec un
 plan invalide pour permettre inspection, audit et comparaison avec le legacy.
+
+Le boundary live ne fait pas confiance a la validation portee par le DTO. Avant
+de construire une requete live, `ExecutionRequest::forPlan()` revalide le plan
+avec `OrderPlanValidator` et remplace la validation stale par le resultat frais.
+Un appelant ne peut donc pas rendre un plan live executable en injectant un
+`OrderPlanValidationResult` forge.
+
+`ExecutionResult` transporte un `ExecutionStatus` enum, pas une string libre :
+
+```text
+dry_run
+accepted
+rejected
+failed
+skipped
+```
 
 PR09 n'ajoute aucune implementation live du port. Le placement cible du port
 est entre `ExecuteOrderPlan` et les gateways exchange, apres validation du plan

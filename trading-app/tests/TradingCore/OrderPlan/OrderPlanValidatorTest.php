@@ -79,16 +79,96 @@ final class OrderPlanValidatorTest extends TestCase
         self::assertContains('leverage_not_positive', $result->invalidReasons);
     }
 
+    public function testRejectsMissingRoutingFields(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            symbol: '',
+            profile: '',
+            exchange: '',
+            marketType: '',
+            instrument: '',
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('symbol_missing', $result->invalidReasons);
+        self::assertContains('profile_missing', $result->invalidReasons);
+        self::assertContains('exchange_missing', $result->invalidReasons);
+        self::assertContains('market_type_missing', $result->invalidReasons);
+        self::assertContains('instrument_missing', $result->invalidReasons);
+    }
+
+    public function testRejectsInvalidMarginModeAndTimeInForce(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            marginMode: 'portfolio',
+            timeInForce: 'maker_only',
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('margin_mode_invalid', $result->invalidReasons);
+        self::assertContains('time_in_force_invalid', $result->invalidReasons);
+    }
+
     public function testRejectsNonFiniteExecutionFields(): void
     {
         $result = (new OrderPlanValidator())->validate($this->plan(
             entryPrice: INF,
             quantity: NAN,
+            contractSize: -INF,
         ));
 
         self::assertSame(OrderPlanStatus::Invalid, $result->status);
         self::assertContains('entry_price_not_positive', $result->invalidReasons);
         self::assertContains('quantity_not_positive', $result->invalidReasons);
+        self::assertContains('contract_size_not_positive', $result->invalidReasons);
+    }
+
+    public function testRejectsNonFiniteStopLossFields(): void
+    {
+        $protection = $this->protectionPlan(
+            stopLoss: new StopLossResult(
+                stopPrice: INF,
+                stopPct: NAN,
+                stopDistance: -INF,
+                stopSource: 'pivot',
+                isFullSize: true,
+            ),
+        );
+
+        $result = (new OrderPlanValidator())->validate($this->plan(protectionPlan: $protection));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('stop_price_not_positive', $result->invalidReasons);
+        self::assertContains('stop_pct_not_positive', $result->invalidReasons);
+        self::assertContains('stop_distance_not_positive', $result->invalidReasons);
+    }
+
+    public function testRejectsPerpetualPlanWithoutLiquidationGuard(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            protectionPlan: $this->protectionPlan(liquidationCheck: null),
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('liquidation_guard_missing', $result->invalidReasons);
+    }
+
+    public function testRejectsPerpetualPlanWithUnsafeLiquidationGuard(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            protectionPlan: $this->protectionPlan(
+                liquidationCheck: new LiquidationCheckResult(
+                    isSafe: false,
+                    liquidationPrice: 99.0,
+                    liquidationDistancePct: 0.01,
+                    stopToLiquidationRatio: 0.5,
+                    reasonIfUnsafe: 'stop_too_close_to_liquidation',
+                ),
+            ),
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('liquidation_guard_unsafe', $result->invalidReasons);
     }
 
     public function testWithValidationPreservesAllFields(): void
@@ -151,28 +231,38 @@ final class OrderPlanValidatorTest extends TestCase
     }
 
     private function plan(
+        string $symbol = 'BTCUSDT',
+        string $profile = 'scalper_micro',
+        string $exchange = 'bitmart',
+        string $marketType = 'perpetual',
+        string $instrument = 'BTCUSDT',
+        string $marginMode = 'isolated',
+        string $timeInForce = 'gtc',
         ?ProtectionPlan $protectionPlan = null,
         float $entryPrice = 100.0,
         float $quantity = 12.0,
         int $leverage = 5,
+        ?float $contractSize = null,
         ?string $clientOrderId = 'CID123',
         ?string $idempotencyKey = 'decision:BTCUSDT:long',
     ): OrderPlan {
         return new OrderPlan(
-            symbol: 'BTCUSDT',
-            profile: 'scalper_micro',
-            exchange: 'bitmart',
-            marketType: 'perpetual',
+            symbol: $symbol,
+            profile: $profile,
+            exchange: $exchange,
+            marketType: $marketType,
             side: 'long',
             orderType: 'limit',
-            marginMode: 'isolated',
-            timeInForce: 'gtc',
+            marginMode: $marginMode,
+            timeInForce: $timeInForce,
             entryPrice: $entryPrice,
             quantity: $quantity,
             leverage: $leverage,
             protectionPlan: $protectionPlan ?? $this->protectionPlan(),
             clientOrderId: $clientOrderId,
             idempotencyKey: $idempotencyKey,
+            contractSize: $contractSize,
+            instrument: $instrument,
         );
     }
 
@@ -196,6 +286,12 @@ final class OrderPlanValidatorTest extends TestCase
 
     private function protectionPlan(
         ?StopLossResult $stopLoss = null,
+        ?LiquidationCheckResult $liquidationCheck = new LiquidationCheckResult(
+            isSafe: true,
+            liquidationPrice: 80.0,
+            liquidationDistancePct: 0.20,
+            stopToLiquidationRatio: 0.1,
+        ),
         bool $isValid = true,
     ): ProtectionPlan {
         return new ProtectionPlan(
@@ -213,12 +309,7 @@ final class OrderPlanValidatorTest extends TestCase
                 expectedNetR: 1.4,
                 tpPolicyApplied: 'r_multiple',
             ),
-            liquidationCheck: new LiquidationCheckResult(
-                isSafe: true,
-                liquidationPrice: 80.0,
-                liquidationDistancePct: 0.20,
-                stopToLiquidationRatio: 0.1,
-            ),
+            liquidationCheck: $liquidationCheck,
             isValid: $isValid,
             status: $isValid ? ProtectionPlanStatus::Valid : ProtectionPlanStatus::Invalid,
             invalidReasons: $isValid ? [] : ['liquidation_guard_unsafe'],

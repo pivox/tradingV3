@@ -5,6 +5,7 @@ namespace App\TradingCore\Execution\Dto;
 
 use App\TradingCore\Execution\Enum\ExecutionMode;
 use App\TradingCore\OrderPlan\Dto\OrderPlan;
+use App\TradingCore\OrderPlan\Service\OrderPlanValidator;
 
 final readonly class ExecutionRequest
 {
@@ -28,12 +29,17 @@ final readonly class ExecutionRequest
         array $metadata = [],
         ?\DateTimeImmutable $requestedAt = null,
     ): self {
-        if ($mode === ExecutionMode::Live && !$orderPlan->validation->isExecutable) {
+        $validatedPlan = $orderPlan;
+        if ($mode === ExecutionMode::Live) {
+            $validatedPlan = $orderPlan->withValidation((new OrderPlanValidator())->validate($orderPlan));
+        }
+
+        if ($mode === ExecutionMode::Live && !$validatedPlan->validation->isExecutable) {
             throw new \InvalidArgumentException('Live execution requires an executable order plan.');
         }
 
         return new self(
-            orderPlan: $orderPlan,
+            orderPlan: $validatedPlan,
             mode: $mode,
             requestedAt: $requestedAt ?? new \DateTimeImmutable('now', new \DateTimeZone('UTC')),
             metadata: $metadata,
