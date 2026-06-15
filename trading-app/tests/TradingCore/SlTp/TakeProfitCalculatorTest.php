@@ -194,6 +194,36 @@ final class TakeProfitCalculatorTest extends TestCase
         self::assertNull($result->tp2Price);
     }
 
+    public function testSuppressesTp2WhenTp1RIsGreaterThanRMultiple(): void
+    {
+        $calculator = new TakeProfitCalculator();
+
+        // tp1R=2.0 > rMultiple=1.5 → tp2 at 1.5R would be closer than tp1 at 2.0R — must be null.
+        $result = $calculator->calculate(new TakeProfitRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 95.0,
+            riskDistance: null,
+            rMultiple: 1.5,
+            tp1R: 2.0,
+            tpPolicy: 'r_multiple',
+            tpBufferPct: null,
+            tpMinKeepRatio: 0.95,
+            tpMaxExtraR: null,
+            feesBps: null,
+            spreadBps: null,
+            slippageBps: null,
+        ));
+
+        self::assertSame(110.0, $result->tp1Price);
+        self::assertNull($result->tp2Price);
+    }
+
     public function testSuppressesTp2WhenTp1RAliasesRMultiple(): void
     {
         $calculator = new TakeProfitCalculator();

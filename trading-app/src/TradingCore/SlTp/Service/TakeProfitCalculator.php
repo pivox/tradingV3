@@ -23,10 +23,10 @@ final class TakeProfitCalculator
             throw new \InvalidArgumentException('riskDistance must be positive');
         }
 
-        // tp1R defaults to rMultiple when absent; tp2 is emitted only when tp1R is explicitly set
-        // to a value different from rMultiple — otherwise both legs would land at the same price.
+        // tp1R defaults to rMultiple when absent; tp2 is emitted only when rMultiple is strictly
+        // farther than tp1R — same direction, larger R = farther price for both long and short.
         $tp1R = $request->tp1R !== null && $request->tp1R > 0.0 ? $request->tp1R : $request->rMultiple;
-        $tp2R = $request->tp1R !== null && $request->tp1R > 0.0 && $request->tp1R !== $request->rMultiple
+        $tp2R = $request->tp1R !== null && $request->tp1R > 0.0 && $request->rMultiple > $tp1R
             ? $request->rMultiple
             : null;
 
