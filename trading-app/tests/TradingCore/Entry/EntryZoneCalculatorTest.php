@@ -160,4 +160,35 @@ final class EntryZoneCalculatorTest extends TestCase
         self::assertSame(100.4, $zone->high);
         self::assertTrue($zone->quantized);
     }
+
+    public function testPropagatesOutsideToleranceFromConfigIntoMetadata(): void
+    {
+        $calculator = new EntryZoneCalculator();
+
+        $zone = $calculator->calculate(new EntryZoneRequest(
+            symbol: 'DOGEUSDT',
+            instrument: null,
+            profile: 'scalper_micro',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            executionTimeframe: '1m',
+            referencePrice: 100.0,
+            currentPrice: 100.0,
+            vwap: 100.0,
+            atr: 1.0,
+            tickSize: null,
+            spreadBps: null,
+            slippageBps: null,
+            config: [
+                'k_atr' => 0.5,
+                'w_min' => 0.001,
+                'w_max' => 0.01,
+                'outside_tolerance_pct' => 0.012,
+            ],
+        ));
+
+        self::assertSame(0.012, $zone->metadata['outside_tolerance_pct']);
+        self::assertTrue($zone->contains(101.5));
+    }
 }

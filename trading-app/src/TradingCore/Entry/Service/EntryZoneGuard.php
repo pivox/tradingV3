@@ -39,7 +39,7 @@ final class EntryZoneGuard
 
     private function defaultRejectedReason(bool $isInsideZone, bool $isWithinDeviation): string
     {
-        if ($isInsideZone && !$isWithinDeviation) {
+        if (!$isWithinDeviation) {
             return 'zone_far_from_market';
         }
 

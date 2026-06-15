@@ -135,6 +135,32 @@ final class EntryZoneGuardTest extends TestCase
         self::assertSame('zone_far_from_market', $decision->reasonIfRejected);
     }
 
+    public function testDefaultsToFarFromMarketReasonWhenBothContainmentAndDeviationFail(): void
+    {
+        $guard = new EntryZoneGuard();
+        $zone = new EntryZone(
+            low: 90.0,
+            high: 91.0,
+            center: 90.5,
+            widthPct: 0.011049723756906077,
+            ttlSec: 180,
+            expiresAt: null,
+            source: 'vwap',
+            atrUsed: 1.0,
+            quantized: false,
+        );
+
+        $decision = $guard->decide(
+            entryZone: $zone,
+            candidatePrice: 100.0,
+            referencePrice: 100.0,
+            zoneMaxDevPct: 0.05,
+        );
+
+        self::assertSame(EntryZoneStatus::Rejected, $decision->status);
+        self::assertSame('zone_far_from_market', $decision->reasonIfRejected);
+    }
+
     public function testAcceptsCandidateInsideLegacyOutsideTolerance(): void
     {
         $guard = new EntryZoneGuard();

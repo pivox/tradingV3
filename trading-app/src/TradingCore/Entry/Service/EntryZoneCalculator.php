@@ -25,6 +25,7 @@ final class EntryZoneCalculator
             ?? self::DEFAULT_W_MAX;
         $ttlSec = $this->intConfig($request->config, 'ttl_sec') ?? self::DEFAULT_TTL_SEC;
         $quantize = (bool)($request->config['quantize_to_exchange_step'] ?? false);
+        $outsideTolerancePct = $this->floatConfig($request->config, 'outside_tolerance_pct');
 
         $halfFromAtr = $request->atr !== null && \is_finite($request->atr) && $request->atr > 0.0
             ? $request->atr * $kAtr
@@ -70,6 +71,7 @@ final class EntryZoneCalculator
                 'k_atr' => $kAtr,
                 'w_min' => $wMin,
                 'w_max' => $wMax,
+                'outside_tolerance_pct' => $outsideTolerancePct,
             ],
         );
     }
