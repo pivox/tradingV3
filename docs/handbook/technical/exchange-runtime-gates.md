@@ -22,7 +22,7 @@ La bascule live doit être explicite, testée et traçable.
 | Gate | Description | Bloquant live |
 |---|---|---:|
 | Credentials présents | Les clés nécessaires sont disponibles hors Git. | Oui |
-| Credentials valides | Le runtime-check peut authentifier l’exchange. | Oui |
+| Credentials valides | Les clés sont non vides (vérification de présence uniquement). `app:exchange:runtime-check` n’effectue pas de sonde REST ; la validité réelle doit être confirmée séparément par un appel authentifié. | Oui |
 | Exchange explicitement autorisé | L’exchange est listé dans la config effective. | Oui |
 | Market type explicitement autorisé | Le couple exchange/market type est supporté. | Oui |
 | Dry-run validé | Les opérations critiques ont été testées sans live. | Oui |
