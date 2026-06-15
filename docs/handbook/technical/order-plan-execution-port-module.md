@@ -119,6 +119,7 @@ OrderPlan perpetual invalide si liquidation guard absent
 OrderPlan perpetual invalide si liquidation guard unsafe
 OrderPlan perpetual invalide si les metriques liquidation sont absentes ou non finies
 OrderPlan perpetual invalide si le prix de liquidation n'est pas au-dela du stop
+OrderPlan perpetual invalide si le ratio liquidation est sous le min_distance_ratio enregistre
 ```
 
 Cette validation cible ne change pas le runtime legacy. Elle prepare la regle :

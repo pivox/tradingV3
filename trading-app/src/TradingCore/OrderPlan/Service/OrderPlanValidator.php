@@ -134,6 +134,23 @@ final class OrderPlanValidator
                             $invalidReasons[] = 'liquidation_price_not_beyond_stop';
                         }
                     }
+
+                    if (\array_key_exists('min_distance_ratio', $liquidationCheck->metadata)) {
+                        $minDistanceRatio = $liquidationCheck->metadata['min_distance_ratio'];
+                        if (!\is_int($minDistanceRatio) && !\is_float($minDistanceRatio)) {
+                            $invalidReasons[] = 'invalid_min_distance_ratio';
+                        } else {
+                            $minDistanceRatio = (float) $minDistanceRatio;
+                            if (!\is_finite($minDistanceRatio) || $minDistanceRatio < 0.0) {
+                                $invalidReasons[] = 'invalid_min_distance_ratio';
+                            } elseif (
+                                $liquidationCheck->stopToLiquidationRatio !== null
+                                && $liquidationCheck->stopToLiquidationRatio < $minDistanceRatio
+                            ) {
+                                $invalidReasons[] = 'liquidation_distance_below_min_ratio';
+                            }
+                        }
+                    }
                 }
             }
         }

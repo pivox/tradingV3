@@ -294,6 +294,31 @@ final class OrderPlanValidatorTest extends TestCase
         self::assertContains('liquidation_price_not_beyond_stop', $result->invalidReasons);
     }
 
+    public function testRejectsLiquidationRatioBelowRecordedMinimum(): void
+    {
+        $result = (new OrderPlanValidator())->validate($this->plan(
+            protectionPlan: $this->protectionPlan(
+                stopLoss: new StopLossResult(
+                    stopPrice: 95.0,
+                    stopPct: 0.05,
+                    stopDistance: 5.0,
+                    stopSource: 'pivot',
+                    isFullSize: true,
+                ),
+                liquidationCheck: new LiquidationCheckResult(
+                    isSafe: true,
+                    liquidationPrice: 90.0,
+                    liquidationDistancePct: 0.10,
+                    stopToLiquidationRatio: 2.0,
+                    metadata: ['min_distance_ratio' => 3.0],
+                ),
+            ),
+        ));
+
+        self::assertSame(OrderPlanStatus::Invalid, $result->status);
+        self::assertContains('liquidation_distance_below_min_ratio', $result->invalidReasons);
+    }
+
     public function testWithValidationPreservesAllFields(): void
     {
         $plan = new OrderPlan(
