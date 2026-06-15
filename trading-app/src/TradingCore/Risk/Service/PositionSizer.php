@@ -118,8 +118,9 @@ final class PositionSizer
             return $syntheticMargin;
         }
 
-        if ($request->availableBalance !== null && $request->availableBalance > 0.0) {
-            return $request->availableBalance;
+        if ($request->availableBalance !== null) {
+            // Honor explicit zero — no spendable budget → capitalBase = 0 → caller rejects.
+            return max(0.0, $request->availableBalance);
         }
 
         return $request->equity !== null && $request->equity > 0.0 ? $request->equity : 0.0;

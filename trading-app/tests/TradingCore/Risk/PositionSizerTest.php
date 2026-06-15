@@ -121,6 +121,32 @@ final class PositionSizerTest extends TestCase
         ));
     }
 
+    public function testRejectsWhenAvailableBalanceIsZeroAndEquityIsPositive(): void
+    {
+        $sizer = new PositionSizer();
+
+        // No initialMarginUsdt, no fallbackAccountBalance — falls to the availableBalance/equity
+        // branch. availableBalance=0.0 must block sizing even when equity is positive.
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('capital base must be positive');
+
+        $sizer->calculate(new RiskCalculationRequest(
+            symbol: 'SOLUSDT',
+            instrument: null,
+            profile: 'scalper_micro',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            equity: 500.0,
+            availableBalance: 0.0,
+            entryPrice: 100.0,
+            stopPrice: null,
+            stopPct: 0.02,
+            fixedRiskPct: null,
+            riskPctPercentLegacy: 0.004,
+            initialMarginUsdt: null,
+        ));
+    }
+
     public function testFallbackCapitalPathCappsToAvailableBalance(): void
     {
         $sizer = new PositionSizer();
