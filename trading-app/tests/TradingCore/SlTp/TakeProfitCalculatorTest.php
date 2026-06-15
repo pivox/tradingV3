@@ -81,7 +81,7 @@ final class TakeProfitCalculatorTest extends TestCase
         $calculator = new TakeProfitCalculator();
         $buffer = 0.001;
 
-        // Pivot policy: buffer is applied → tp1Price = 105 - 0.1 = 104.9.
+        // Pivot policy with an actual pivot selected: buffer is applied → tp1Price = 105 - 0.1 = 104.9.
         $pivotResult = $calculator->calculate(new TakeProfitRequest(
             symbol: 'SOLUSDT',
             instrument: null,
@@ -101,6 +101,7 @@ final class TakeProfitCalculatorTest extends TestCase
             feesBps: null,
             spreadBps: null,
             slippageBps: null,
+            pivotAligned: true,
         ));
 
         self::assertSame(104.9, $pivotResult->tp1Price);
@@ -129,6 +130,66 @@ final class TakeProfitCalculatorTest extends TestCase
         ));
 
         self::assertSame(105.0, $rResult->tp1Price);
+    }
+
+    public function testDoesNotApplyBufferWhenNoPivotWasSelected(): void
+    {
+        $calculator = new TakeProfitCalculator();
+
+        // pivot_conservative policy but pivotAligned=false (no pivot available) → buffer must not shift TP.
+        $result = $calculator->calculate(new TakeProfitRequest(
+            symbol: 'SOLUSDT',
+            instrument: null,
+            profile: 'scalper_micro',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 95.0,
+            riskDistance: null,
+            rMultiple: 2.0,
+            tp1R: null,
+            tpPolicy: 'pivot_conservative',
+            tpBufferPct: 0.001,
+            tpMinKeepRatio: 0.95,
+            tpMaxExtraR: null,
+            feesBps: null,
+            spreadBps: null,
+            slippageBps: null,
+            pivotAligned: false,
+        ));
+
+        self::assertSame(110.0, $result->tp1Price);
+    }
+
+    public function testRejectsWhenShortTakeProfitPriceIsNotPositive(): void
+    {
+        $calculator = new TakeProfitCalculator();
+
+        // short, entry=100, stop=180 → riskDistance=80, r=1.5 → tp=100-80*1.5=-20 → must throw.
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('take-profit price must be positive');
+
+        $calculator->calculate(new TakeProfitRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            profile: 'scalper',
+            exchange: 'bitmart',
+            marketType: 'futures',
+            direction: 'short',
+            entryPrice: 100.0,
+            stopPrice: 180.0,
+            riskDistance: null,
+            rMultiple: 1.5,
+            tp1R: null,
+            tpPolicy: 'r_multiple',
+            tpBufferPct: null,
+            tpMinKeepRatio: 0.95,
+            tpMaxExtraR: null,
+            feesBps: null,
+            spreadBps: null,
+            slippageBps: null,
+        ));
     }
 
     public function testRejectsWhenRMultipleIsNotPositive(): void
@@ -188,6 +249,7 @@ final class TakeProfitCalculatorTest extends TestCase
             feesBps: null,
             spreadBps: null,
             slippageBps: null,
+            pivotAligned: true,
         ));
 
         self::assertSame(100.05, $result->tp1Price);

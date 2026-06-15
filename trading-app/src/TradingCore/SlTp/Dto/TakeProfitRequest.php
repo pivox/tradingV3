@@ -29,6 +29,7 @@ final readonly class TakeProfitRequest
         public ?float $feesBps,
         public ?float $spreadBps,
         public ?float $slippageBps,
+        public bool $pivotAligned = false,
         public array $metadata = [],
     ) {
         $this->instrument = $instrument ?? $symbol;

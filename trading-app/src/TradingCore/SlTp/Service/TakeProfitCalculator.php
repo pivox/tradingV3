@@ -31,12 +31,18 @@ final class TakeProfitCalculator
             : null;
 
         $tp1Price = $this->priceForR($request->entryPrice, $riskDistance, $direction, $tp1R);
+        if ($tp1Price <= 0.0 || !\is_finite($tp1Price)) {
+            throw new \InvalidArgumentException('take-profit price must be positive; riskDistance * R exceeds entry price');
+        }
         $tp2Price = $tp2R !== null ? $this->priceForR($request->entryPrice, $riskDistance, $direction, $tp2R) : null;
+        if ($tp2Price !== null && ($tp2Price <= 0.0 || !\is_finite($tp2Price))) {
+            $tp2Price = null;
+        }
 
-        // Buffer only applies during pivot alignment — not for pure R-multiple policies.
+        // Buffer only applies when a pivot was actually selected — matching legacy OrderPlanBuilder
+        // which skips the buffer when pivotLevels is empty even for pivot policies.
         $bufferPct = $request->tpBufferPct !== null ? max(0.0, $request->tpBufferPct) : 0.0;
-        $isPivotPolicy = str_contains(strtolower($request->tpPolicy), 'pivot');
-        if ($bufferPct > 0.0 && $isPivotPolicy) {
+        if ($bufferPct > 0.0 && $request->pivotAligned) {
             $buffer = $request->entryPrice * $bufferPct;
             $tp1Price = $direction === 'long' ? $tp1Price - $buffer : $tp1Price + $buffer;
             if ($tp2Price !== null) {
