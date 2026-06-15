@@ -27,6 +27,7 @@ nav:
       - Runner extraction: technical/runner-extraction.md
       - DTOs MTF et TradeCandidate: technical/mtf-dtos-and-trade-candidate.md
       - EntryZone module: technical/entry-zone-module.md
+      - Risk / Leverage module: technical/risk-and-leverage-module.md
       - Exchange readiness consolidation: technical/exchange-readiness-consolidation.md
       - Exchange readiness matrix: technical/exchange-readiness-matrix.md
       - Exchange runtime gates: technical/exchange-runtime-gates.md
