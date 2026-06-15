@@ -108,11 +108,12 @@ Aucune PR suivante ne doit etre mergee si elle casse :
 - l'attachement obligatoire du SL ;
 - l'idempotence ;
 - l'audit minimal ;
-- la possibilite de revenir a une execution sans live via Fake/Paper.
+- la possibilite de revenir a une execution sans live via Fake/Paper ;
+- la regle de non-commit des valeurs sensibles dans `config_file/*.env`.
 
 ## Sequence canonique
 
-### PR 00 — Architecture cible et plan canonique
+### PR 00 — Architecture cible, env templates et plan canonique
 
 Objectif : poser la direction et le vocabulaire.
 
@@ -121,7 +122,7 @@ Scope :
 - documenter TradingCore modulaire ;
 - documenter le statut exchange : Bitmart legacy, OKX/Hyperliquid/Fake-Paper cible ;
 - documenter les entrypoints a preserver ;
-- ajouter `config_file/dev.env` et `config_file/prod.env` comme templates de noms de cles sans secrets ;
+- ajouter `config_file/dev.env` et `config_file/prod.env` comme templates de noms de cles sans valeurs sensibles ;
 - documenter ce plan de PR.
 
 Hors-scope :
@@ -129,7 +130,7 @@ Hors-scope :
 - aucun changement runtime ;
 - aucun YAML modifie ;
 - aucune suppression Bitmart ;
-- aucune vraie valeur d'environnement ou secret dans Git.
+- aucune vraie valeur d'environnement dans Git.
 
 Tests :
 
@@ -181,9 +182,9 @@ Critere d'acceptation :
 
 ---
 
-## Suite des PR
+## PR suivantes
 
-La suite reste celle definie dans la version precedente du plan :
+La suite des PR reste canonique et doit etre executee dans cet ordre. Les details de dependances, risques, anti-patterns et chemin critique sont documentes dans `technical/trading-core-migration-analysis.md`.
 
 ```text
 PR 02  Exchange readiness matrix
@@ -204,6 +205,21 @@ PR 16  Bitmart removal inventory
 PR 17  Bitmart removal execution
 ```
 
+## Prompt court par PR
+
+Pour chaque PR, utiliser ce modele dans Codex CLI :
+
+```text
+Tu travailles sur TradingV3.
+Objectif : realiser uniquement la PR XX du plan Trading Core canonique.
+Lis docs/handbook/technical/trading-core-canonical-pr-plan.md et docs/handbook/technical/trading-core-migration-analysis.md.
+Respecte strictement le scope, le hors-scope, les tests et les criteres d'acceptation.
+Ne modifie pas les YAML ni le comportement live sauf si la PR le demande explicitement.
+Garde mtf:run, POST /api/mtf/run et le dry-run fonctionnels.
+Ne commit aucune vraie valeur dans config_file/*.env.
+A la fin, donne la liste des fichiers modifies et les tests lances.
+```
+
 ## Regle de merge
 
 Aucune PR suivante ne doit etre mergee si elle casse :
@@ -215,4 +231,4 @@ Aucune PR suivante ne doit etre mergee si elle casse :
 - l'idempotence ;
 - l'audit minimal ;
 - la possibilite de revenir a une execution sans live via Fake/Paper ;
-- la regle de non-commit des secrets dans `config_file/*.env`.
+- la regle de non-commit des valeurs sensibles dans `config_file/*.env`.
