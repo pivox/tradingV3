@@ -79,6 +79,30 @@ final class StopLossCalculator
                     throw new \InvalidArgumentException('pivot stop price must be positive; pivotSlBufferPct is too large');
                 }
 
+                $maxDistancePct = $request->pivotSlMaxDistancePct;
+                if ($maxDistancePct !== null && \is_finite($maxDistancePct) && $maxDistancePct > 0.0) {
+                    $distancePct = abs($request->entryPrice - $stop) / $request->entryPrice;
+                    if ($distancePct > $maxDistancePct) {
+                        if (strtolower((string)$request->stopFallback) === 'atr') {
+                            $warnings[] = 'Pivot stop exceeds max distance; falling back to ATR stop.';
+                            return [$this->atrStop($request, $direction), 'atr_fallback', $warnings];
+                        }
+                        if (strtolower((string)$request->stopFallback) === 'risk'
+                            && $request->providedStopPrice !== null
+                            && $request->providedStopPrice > 0.0
+                            && \is_finite($request->providedStopPrice)
+                        ) {
+                            $warnings[] = 'Pivot stop exceeds max distance; falling back to risk stop.';
+                            return [$request->providedStopPrice, 'risk_fallback', $warnings];
+                        }
+                        $warnings[] = sprintf(
+                            'Pivot stop distance %.4f exceeds max %.4f but no fallback is available.',
+                            $distancePct,
+                            $maxDistancePct,
+                        );
+                    }
+                }
+
                 return [$stop, 'pivot', $warnings];
             }
 

@@ -28,6 +28,7 @@ final readonly class StopLossRequest
         public ?float $pivotSlMinKeepRatio,
         public bool $slFullSize = true,
         public ?float $positionSize = null,
+        public ?float $pivotSlMaxDistancePct = null,
         public ?float $providedStopPrice = null,
         public array $metadata = [],
     ) {
