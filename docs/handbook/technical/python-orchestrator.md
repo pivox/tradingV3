@@ -109,7 +109,7 @@ Un set peut représenter :
 - un statut `enabled` / `disabled` ;
 - un mode `dry_run` / live.
 
-Exemple fonctionnel :
+Exemple fonctionnel cible :
 
 ```json
 {
@@ -122,12 +122,42 @@ Exemple fonctionnel :
   "environment": "mainnet",
   "dry_run": false,
   "workers": 1,
+  "sync_tables": false,
   "symbols": ["BTCUSDT", "ETHUSDT"],
   "priority": 10
 }
 ```
 
 Au moment du run, l'API Python ne recalcule pas ce set. Elle le lit, l'exécute, puis sauvegarde le résultat.
+
+## Dépendance Symfony : `sync_tables=false`
+
+Pour que le modèle "sets déjà prêts" fonctionne, Symfony doit pouvoir exécuter `/api/mtf/run` sans relancer une synchronisation des tables exchange/open-state à chaque appel.
+
+La cible fonctionnelle est :
+
+```text
+refresh explicite des contrats
+→ sets préparés
+→ runs parallèles avec sync_tables=false
+```
+
+Donc une PR technique devra faire accepter et respecter un champ équivalent à :
+
+```json
+{
+  "sync_tables": false
+}
+```
+
+Règles attendues :
+
+- `sync_tables=true` reste le comportement legacy par défaut ;
+- `sync_tables=false` est utilisé uniquement par l'orchestrateur Python sur des sets déjà préparés ;
+- si Symfony ne sait pas encore honorer `sync_tables=false`, les runs parallèles ne doivent pas être considérés comme prêts pour la cible ;
+- le front doit distinguer "refresh contrats" et "run des sets".
+
+Sans ce contrat, chaque set pourrait encore déclencher une sync Symfony, ce qui annulerait le bénéfice du flux de refresh explicite.
 
 ## Déclenchement
 
@@ -188,6 +218,7 @@ Avant tout run :
 - garder `workers=1` côté Symfony au début ;
 - borner la concurrence globale ;
 - refuser les valeurs dangereuses de workers, concurrence ou nombre de contrats ;
+- exiger le support Symfony de `sync_tables=false` avant d'utiliser des sets préparés en parallèle ;
 - conserver une trace du dernier payload et de la dernière réponse ;
 - ne pas déclencher des trades simplement pour augmenter la fréquence.
 
@@ -204,4 +235,4 @@ Elle peut se limiter à :
 - stockage du dernier JSON ;
 - visualisation minimale.
 
-Le live orchestré nécessite une étape dédiée avec idempotence, locks et validation côté Symfony.
+Le live orchestré nécessite une étape dédiée avec idempotence, locks, support `sync_tables=false` et validation côté Symfony.
