@@ -9,7 +9,7 @@ La cible fonctionnelle retenue pour la suite est plus simple : Temporal redevien
 | Composant | Responsabilité cible |
 | --- | --- |
 | Temporal schedule | Déclencher périodiquement un run. |
-| Temporal workflow / activity | Appeler une URL unique de l'orchestrateur Python et retourner OK / non OK. |
+| Temporal workflow / activity | Appeler une URL unique de l'orchestrateur Python, retourner OK / non OK et échouer explicitement si `ok=false`. |
 | API Python orchestratrice | Lire les sets prêts, lancer les appels Symfony en parallèle, agréger, persister le dernier JSON. |
 | Symfony / TradingV3 | Rester le moteur métier : `/api/mtf/run`, `/api/mtf/sync-contracts`, configuration `mtf_contracts`. |
 | Front cockpit | Paramétrer les sets, lancer un run manuel, visualiser le dernier retour JSON. |
@@ -33,7 +33,11 @@ sequenceDiagram
     Symfony-->>Python: réponses JSON existantes
     Python->>Db: sauvegarder dernier JSON et statut
     Python-->>Activity: { ok: true|false, run_id, summary }
-    Activity-->>Schedule: succès ou échec
+    alt ok=true
+        Activity-->>Schedule: succès
+    else ok=false
+        Activity--xSchedule: échec explicite du workflow/activity
+    end
 ```
 
 ## Responsabilités legacy
@@ -130,7 +134,11 @@ Retour minimal attendu :
 }
 ```
 
-Si `ok=false`, Temporal marque le tick en échec. Le JSON complet et les détails par set restent dans l'API Python et dans la base d'orchestration.
+Contrat important : `ok=false` n'est pas un succès Temporal.
+
+L'activity ou le workflow minimal doit explicitement échouer lorsque l'orchestrateur retourne `ok=false`, par exemple en levant une erreur après avoir journalisé le `run_id` et le résumé. Il ne faut pas seulement retourner un JSON contenant `ok=false`, sinon Temporal affichera le tick comme réussi.
+
+Le JSON complet et les détails par set restent dans l'API Python et dans la base d'orchestration.
 
 ## Scripts de schedules legacy
 
@@ -181,5 +189,6 @@ Après création de l'orchestrateur Python, les tests attendus devront aussi cou
 
 - appel unique Temporal vers `/orchestrator/run` ;
 - retour `ok=true` / `ok=false` ;
+- échec explicite du workflow/activity lorsque `ok=false` ;
 - stockage du dernier JSON côté API Python ;
 - absence de logique de sélection des contrats dans Temporal.
