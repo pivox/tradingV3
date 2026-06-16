@@ -31,24 +31,21 @@ Le but n'est pas d'augmenter le nombre de trades. Le but est de mieux contrôler
 
 ## Flux fonctionnel principal
 
-```plantuml
-@startuml
-title Orchestration Python fonctionnelle
+```mermaid
+sequenceDiagram
+    participant Trigger as Front / Cron / Temporal
+    participant Python as API Python
+    participant Db as Base orchestration
+    participant Symfony as Symfony
 
-actor "Front / Cron / Temporal" as Trigger
-participant "API Python" as Python
-participant "Base orchestration" as Db
-participant "Symfony" as Symfony
-
-Trigger -> Python : POST /orchestrator/run
-Python -> Db : lire les sets actifs déjà prêts
-loop appels parallèles bornés
-    Python -> Symfony : POST /api/mtf/run
-    Symfony --> Python : JSON existant
-end
-Python -> Db : sauvegarder dernier JSON global et par set
-Python --> Trigger : { ok, run_id, summary }
-@enduml
+    Trigger->>Python: POST /orchestrator/run
+    Python->>Db: lire les sets actifs déjà prêts
+    loop appels parallèles bornés
+        Python->>Symfony: POST /api/mtf/run
+        Symfony-->>Python: JSON existant
+    end
+    Python->>Db: sauvegarder dernier JSON global et par set
+    Python-->>Trigger: { ok, run_id, summary }
 ```
 
 ## Mise à jour des contrats
@@ -57,23 +54,20 @@ La récupération des contrats depuis Symfony ne se fait pas à chaque run.
 
 Elle se fait uniquement lors d'un changement de configuration ou via une action explicite du front.
 
-```plantuml
-@startuml
-title Mise à jour des contrats sollicités
+```mermaid
+sequenceDiagram
+    participant Front as Front cockpit
+    participant Python as API Python
+    participant Symfony as Symfony
+    participant Db as Base orchestration
 
-actor "Front cockpit" as Front
-participant "API Python" as Python
-participant "Symfony" as Symfony
-participant "Base orchestration" as Db
-
-Front -> Python : demande de recalcul des contrats
-Python -> Symfony : appel explicite liste contrats sollicités
-Symfony -> Symfony : applique mtf_contracts
-Symfony --> Python : contrats filtrés
-Python -> Python : prépare / met à jour les sets
-Python -> Db : persiste sets et payloads prêts
-Python --> Front : preview des sets disponibles
-@enduml
+    Front->>Python: demande de recalcul des contrats
+    Python->>Symfony: appel explicite liste contrats sollicités
+    Symfony->>Symfony: applique mtf_contracts
+    Symfony-->>Python: contrats filtrés
+    Python->>Python: prépare / met à jour les sets
+    Python->>Db: persiste sets et payloads prêts
+    Python-->>Front: preview des sets disponibles
 ```
 
 ## Lien avec `mtf_contracts`
