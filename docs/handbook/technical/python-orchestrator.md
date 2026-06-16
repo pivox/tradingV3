@@ -251,7 +251,6 @@ Paramètres de requête (tous optionnels) :
 | `profile` | `mtf_profile` | 1er mode activé, sinon config fallback | Profil de configuration `mtf_contracts.<profile>.yaml`. |
 | `exchange` | `cex` | `bitmart` | Exchange ciblé. |
 | `market_type` | `type_contract` | `perpetual` | Type de marché. |
-| `ignore_limits` | — | `false` | Ignore `top_n` / `mid_n` (renvoie tous les éligibles). |
 
 Réponse :
 
@@ -269,8 +268,7 @@ Réponse :
     "min_turnover": 1500000,
     "mid_max_turnover": 8000000,
     "top_n": 140,
-    "mid_n": 0,
-    "ignore_limits": false
+    "mid_n": 0
   }
 }
 ```

@@ -52,9 +52,11 @@ class ContractsApiController extends AbstractController
             $marketTypeInput = $request->query->get('market_type', $request->query->get('type_contract'));
             $context = ExchangeContext::fromValues($exchangeInput, $marketTypeInput);
 
-            $ignoreLimits = filter_var($request->query->get('ignore_limits', false), FILTER_VALIDATE_BOOLEAN);
-
-            $symbols = $this->contractRepository->allActiveSymbolNames([], $ignoreLimits, $profile, $context);
+            // On colle strictement à l'univers du runner (findSymbolsMixedLiquidity).
+            // Pas d'option ignore_limits : findAllActiveSymbolsWithoutLimits applique
+            // le filtre d'âge à l'inverse (open_timestamp > borne) et renverrait un
+            // univers incohérent avec ce qu'un run sélectionnerait réellement.
+            $symbols = $this->contractRepository->allActiveSymbolNames([], false, $profile, $context);
             $symbols = array_values(array_unique(array_map('strval', $symbols)));
 
             $config = $this->contractsConfigProvider->getConfigForProfile($profile);
@@ -65,7 +67,6 @@ class ContractsApiController extends AbstractController
                 'mid_max_turnover' => $config->getFilter('mid_max_turnover', null),
                 'top_n' => $config->getLimit('top_n', null),
                 'mid_n' => $config->getLimit('mid_n', null),
-                'ignore_limits' => $ignoreLimits,
             ];
 
             return $this->json([
