@@ -65,9 +65,12 @@ mtf_profile: regular
 environment: mainnet
 dry_run: false
 workers: 1
+sync_tables: false
 contracts_limit: 30
 priority: 10
 ```
+
+`sync_tables: false` est obligatoire pour les sets préparés `mtf_run` lorsque les contrats ont déjà été rafraîchis via le flux explicite front/API Python. Tant que Symfony ne sait pas honorer ce champ, ces sets ne doivent pas être considérés comme prêts pour l'orchestration parallèle.
 
 Ce format est indicatif pour la documentation. Il décrit la cible fonctionnelle, pas une implémentation déjà livrée.
 
@@ -96,6 +99,7 @@ La concurrence est pilotée par l'API Python, pas par les workers Symfony.
 Règles cibles :
 
 - `workers=1` côté Symfony au début ;
+- `sync_tables=false` pour les sets préparés ;
 - concurrence globale bornée côté API Python ;
 - pas deux appels live incompatibles sur le même symbole ;
 - pas de parallélisation illimitée ;
