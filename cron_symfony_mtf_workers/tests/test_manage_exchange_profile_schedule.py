@@ -6,7 +6,9 @@ import pytest
 
 import scripts.manage_exchange_profile_schedule as schedule_manager
 from scripts.manage_exchange_profile_schedule import (
+    OKX_DRY_RUN_ONLY_MESSAGE,
     ScheduleConfig,
+    assert_exchange_schedule_policy,
     async_main,
     build_job,
     build_parser,
@@ -224,6 +226,32 @@ def test_create_live_schedule_with_runtime_check_bypass_skips_guardrail_validati
         ),
     )
 
+    # Bitmart is not dry-run-only, so the bypass still creates a live schedule.
+    config = ScheduleConfig(
+        command="create",
+        exchange="bitmart",
+        market_type="perpetual",
+        profile="scalper",
+        workers=4,
+        dry_run=False,
+        cron="*/1 * * * *",
+        schedule_id="cron-mtf-bitmart-scalper-1m",
+        workflow_id="mtf-bitmart-scalper-runner",
+        dry_run_schedule=False,
+        skip_runtime_check=True,
+    )
+    client = CapturingClient()
+
+    asyncio.run(create_schedule(client, config))
+
+    assert client.created[0][0] == "cron-mtf-bitmart-scalper-1m"
+
+
+def test_create_live_okx_schedule_is_blocked_even_with_runtime_check_bypass():
+    class FailingClient:
+        async def create_schedule(self, schedule_id, schedule):
+            raise AssertionError("OKX live schedule must never reach Temporal creation")
+
     config = ScheduleConfig(
         command="create",
         exchange="okx",
@@ -237,8 +265,34 @@ def test_create_live_schedule_with_runtime_check_bypass_skips_guardrail_validati
         dry_run_schedule=False,
         skip_runtime_check=True,
     )
-    client = CapturingClient()
 
-    asyncio.run(create_schedule(client, config))
+    with pytest.raises(RuntimeError, match=OKX_DRY_RUN_ONLY_MESSAGE):
+        asyncio.run(create_schedule(FailingClient(), config))
 
-    assert client.created[0][0] == "cron-mtf-okx-scalper-1m"
+
+def test_resolve_schedule_config_blocks_live_okx_create():
+    parser = build_parser()
+    args = parser.parse_args(
+        ["create", "--exchange", "okx", "--profile", "scalper", "--dry-run=false"]
+    )
+
+    with pytest.raises(RuntimeError, match=OKX_DRY_RUN_ONLY_MESSAGE):
+        resolve_schedule_config(args)
+
+
+def test_resolve_schedule_config_allows_dry_run_okx_create():
+    parser = build_parser()
+    args = parser.parse_args(
+        ["create", "--exchange", "okx", "--profile", "scalper", "--dry-run=true"]
+    )
+
+    config = resolve_schedule_config(args)
+
+    assert config.exchange == "okx"
+    assert config.dry_run is True
+
+
+def test_assert_exchange_schedule_policy_allows_live_for_non_dry_run_only_exchanges():
+    # Bitmart legacy can still go live; only dry-run-only exchanges (OKX) are blocked.
+    assert_exchange_schedule_policy("bitmart", dry_run=False) is None
+    assert_exchange_schedule_policy("okx", dry_run=True) is None

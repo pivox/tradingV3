@@ -22,6 +22,19 @@ SUPPORTED_EXCHANGES = {"bitmart", "binance", "fake", "hyperliquid", "okx"}
 SUPPORTED_MARKET_TYPES = {"perpetual", "spot"}
 SUPPORTED_PROFILES = {"regular", "scalper", "scalper_micro"}
 
+# PR11: OKX stays dry-run only until a dedicated live-readiness PR. A live (dry_run=false)
+# OKX schedule must never be created, regardless of --skip-runtime-check.
+DRY_RUN_ONLY_EXCHANGES = {"okx"}
+OKX_DRY_RUN_ONLY_MESSAGE = (
+    "OKX schedules must stay dry_run=true until a dedicated live-readiness PR."
+)
+
+
+def assert_exchange_schedule_policy(exchange: Optional[str], dry_run: bool) -> None:
+    """Block live schedules for exchanges that are still dry-run only (PR11: OKX)."""
+    if exchange in DRY_RUN_ONLY_EXCHANGES and not dry_run:
+        raise RuntimeError(OKX_DRY_RUN_ONLY_MESSAGE)
+
 
 @dataclass(frozen=True)
 class ScheduleConfig:
@@ -180,6 +193,10 @@ def resolve_schedule_config(args: argparse.Namespace) -> ScheduleConfig:
     market_type = getattr(args, "market_type", "perpetual")
     profile = getattr(args, "profile", None)
 
+    if getattr(args, "command", None) == "create":
+        # Fail fast on the CLI path before contacting Temporal or running a runtime-check.
+        assert_exchange_schedule_policy(exchange, dry_run)
+
     if getattr(args, "schedule_id", None):
         schedule_id = args.schedule_id
     elif exchange and profile:
@@ -244,6 +261,10 @@ def temporal_schedule_classes():
 async def create_schedule(client: Any, config: ScheduleConfig) -> None:
     if config.exchange is None or config.profile is None:
         raise RuntimeError("create requires --exchange and --profile")
+
+    # Dry-run-only policy is independent of the runtime-check and cannot be bypassed
+    # with --skip-runtime-check: OKX live schedules are forbidden in PR11.
+    assert_exchange_schedule_policy(config.exchange, config.dry_run)
 
     job = build_job(
         exchange=config.exchange,

@@ -31,6 +31,7 @@ nav:
       - SLTP / LiquidationGuard module: technical/sltp-liquidation-guard-module.md
       - OrderPlan / ExecutionPort module: technical/order-plan-execution-port-module.md
       - Fake / Paper gateway: technical/fake-paper-gateway.md
+      - OKX dry-run: technical/okx-dry-run.md
       - Exchange readiness consolidation: technical/exchange-readiness-consolidation.md
       - Exchange readiness matrix: technical/exchange-readiness-matrix.md
       - Exchange runtime gates: technical/exchange-runtime-gates.md
