@@ -40,28 +40,29 @@ class ContractsApiController extends AbstractController
     public function contracts(Request $request): JsonResponse
     {
         try {
-            $profileInput = $request->query->get('profile', $request->query->get('mtf_profile'));
-            $profile = is_string($profileInput) && $profileInput !== '' ? $profileInput : null;
-
-            // Résolution du profil par défaut depuis la config (cf. RunnerController)
-            if ($profile === null) {
-                $enabledModes = $this->modeContext->getEnabledModes();
-                if (!empty($enabledModes)) {
-                    $profile = $enabledModes[0]['name'] ?? null;
-                }
-            }
-
-            // Réutilise le parsing de contexte du runner (trim, alias futures/perp,
-            // erreur explicite sur valeur inconnue) pour que le preview vise exactement
-            // le même exchange/marché qu'un /api/mtf/run avec les mêmes entrées, plutôt
-            // que de retomber silencieusement sur Bitmart/perpetual.
+            // Réutilise le parsing du runner (profil : skip vide + fallback mtf_profile
+            // + trim ; contexte : trim, alias futures/perp, erreur explicite sur valeur
+            // inconnue) pour que le preview prépare exactement le même set qu'un
+            // /api/mtf/run avec les mêmes entrées, plutôt que de retomber silencieusement
+            // sur le profil par défaut ou sur Bitmart/perpetual.
             try {
                 $runnerRequest = MtfRunnerRequestDto::fromArray([
+                    'profile' => $request->query->get('profile'),
+                    'mtf_profile' => $request->query->get('mtf_profile'),
                     'exchange' => $request->query->get('exchange', $request->query->get('cex')),
                     'market_type' => $request->query->get('market_type', $request->query->get('type_contract')),
                 ]);
             } catch (\InvalidArgumentException $e) {
                 return $this->json(['ok' => false, 'error' => $e->getMessage()], 400);
+            }
+
+            // Profil par défaut depuis la config si non fourni (cf. RunnerController)
+            $profile = $runnerRequest->profile;
+            if ($profile === null) {
+                $enabledModes = $this->modeContext->getEnabledModes();
+                if (!empty($enabledModes)) {
+                    $profile = $enabledModes[0]['name'] ?? null;
+                }
             }
 
             $context = ExchangeContext::fromEnums(
