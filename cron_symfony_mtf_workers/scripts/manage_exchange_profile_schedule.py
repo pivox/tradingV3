@@ -31,8 +31,13 @@ OKX_DRY_RUN_ONLY_MESSAGE = (
 
 
 def assert_exchange_schedule_policy(exchange: Optional[str], dry_run: bool) -> None:
-    """Block live schedules for exchanges that are still dry-run only (PR11: OKX)."""
-    if exchange in DRY_RUN_ONLY_EXCHANGES and not dry_run:
+    """Block live schedules for exchanges that are still dry-run only (PR11: OKX).
+
+    The exchange is normalized so the gate cannot be bypassed by casing/whitespace
+    (e.g. a ScheduleConfig built in code with exchange="OKX").
+    """
+    normalized_exchange = (exchange or "").strip().lower()
+    if normalized_exchange in DRY_RUN_ONLY_EXCHANGES and not dry_run:
         raise RuntimeError(OKX_DRY_RUN_ONLY_MESSAGE)
 
 

@@ -18,7 +18,7 @@ use App\TradingCore\OrderPlan\Service\OrderPlanValidator;
  *
  * It is a pure TradingCore preview, NOT an exchange execution:
  * - no HTTP call, ever;
- * - it never touches {@see \App\Exchange\Okx\OkxExchangeAdapter} or
+ * - it never touches {@see \App\Exchange\Adapter\OkxExchangeAdapter} or
  *   {@see \App\Exchange\Okx\OkxRestClient} (so no `privatePost`, no order placement);
  * - no Symfony, Doctrine, Messenger, Temporal nor any concrete runtime provider.
  *

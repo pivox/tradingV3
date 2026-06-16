@@ -296,3 +296,12 @@ def test_assert_exchange_schedule_policy_allows_live_for_non_dry_run_only_exchan
     # Bitmart legacy can still go live; only dry-run-only exchanges (OKX) are blocked.
     assert_exchange_schedule_policy("bitmart", dry_run=False) is None
     assert_exchange_schedule_policy("okx", dry_run=True) is None
+
+
+def test_assert_exchange_schedule_policy_blocks_uppercase_okx_live():
+    # The gate normalizes casing/whitespace: a hand-built "OKX" must not bypass it.
+    with pytest.raises(RuntimeError, match=OKX_DRY_RUN_ONLY_MESSAGE):
+        assert_exchange_schedule_policy("OKX", dry_run=False)
+
+    with pytest.raises(RuntimeError, match=OKX_DRY_RUN_ONLY_MESSAGE):
+        assert_exchange_schedule_policy("  Okx ", dry_run=False)
