@@ -157,6 +157,23 @@ final class OrderPlanBuilderTest extends TestCase
         self::assertSame('unit-test', $plan->metadata['caller']);
     }
 
+    public function testBuilderAuditMetadataIsAuthoritativeOverCallerMetadata(): void
+    {
+        // A caller cannot forge the builder's audit fields, but its own keys survive.
+        $plan = (new OrderPlanBuilder())->build($this->request([
+            'entryZone' => null,
+            'metadata' => [
+                'source' => 'caller',
+                'build_missing_inputs' => [],
+                'run_id' => 'run-123',
+            ],
+        ]));
+
+        self::assertSame('trading_core_order_plan_builder', $plan->metadata['source']);
+        self::assertContains('entry_zone', $plan->metadata['build_missing_inputs']);
+        self::assertSame('run-123', $plan->metadata['run_id']);
+    }
+
     // --- fixtures ---
 
     /**

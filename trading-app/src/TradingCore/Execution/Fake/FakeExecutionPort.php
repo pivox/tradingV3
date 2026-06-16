@@ -33,14 +33,20 @@ final class FakeExecutionPort implements ExecutionPortInterface
     {
         $plan = $request->orderPlan;
 
-        $metadata = [
-            'gateway' => 'fake_paper',
-            'mode' => $request->mode->value,
-            'requested_at' => $request->requestedAt->format(\DateTimeInterface::ATOM),
-            'client_order_id' => $plan->clientOrderId,
-            'idempotency_key' => $plan->idempotencyKey,
-            'simulated' => true,
-        ];
+        // Preserve incoming audit metadata (run_id, decision_key, correlation_id,
+        // schedule_id, profile, ...) while keeping the gateway's own fields authoritative:
+        // a caller must not be able to spoof gateway/simulated/client_order_id.
+        $metadata = array_merge(
+            $request->metadata,
+            [
+                'gateway' => 'fake_paper',
+                'mode' => $request->mode->value,
+                'requested_at' => $request->requestedAt->format(\DateTimeInterface::ATOM),
+                'client_order_id' => $plan->clientOrderId,
+                'idempotency_key' => $plan->idempotencyKey,
+                'simulated' => true,
+            ],
+        );
 
         // The fake gateway never executes live: it has no real venue to route to.
         if ($request->mode === ExecutionMode::Live) {

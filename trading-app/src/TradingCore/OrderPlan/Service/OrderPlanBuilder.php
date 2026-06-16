@@ -72,14 +72,16 @@ final readonly class OrderPlanBuilder
             entryZone: $request->entryZone,
             riskCalculation: $request->riskCalculation,
             leverageCalculation: $request->leverageCalculation,
-            metadata: $request->metadata + [
+            // Builder audit fields are authoritative: a caller must not be able to forge
+            // source/dry_run/build_missing_inputs while caller-only keys are still preserved.
+            metadata: array_merge($request->metadata, [
                 'source' => 'trading_core_order_plan_builder',
                 'candidate_direction' => $candidate->direction,
                 'execution_timeframe' => $candidate->executionTimeframe,
                 'signal_time' => $candidate->signalTime->format(\DateTimeInterface::ATOM),
                 'dry_run' => $candidate->dryRun,
                 'build_missing_inputs' => $missingInputs,
-            ],
+            ]),
             instrument: $candidate->instrument,
         );
 

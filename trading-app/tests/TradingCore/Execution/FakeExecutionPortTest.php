@@ -85,6 +85,34 @@ final class FakeExecutionPortTest extends TestCase
         self::assertSame('decision:BTCUSDT:long', $result->metadata['idempotency_key']);
     }
 
+    public function testPreservesIncomingRequestMetadata(): void
+    {
+        $request = ExecutionRequest::forPlan(
+            $this->executablePlan(),
+            ExecutionMode::DryRun,
+            ['run_id' => 'run-123', 'correlation_id' => 'corr-9'],
+        );
+
+        $result = (new FakeExecutionPort())->execute($request);
+
+        self::assertSame('run-123', $result->metadata['run_id']);
+        self::assertSame('corr-9', $result->metadata['correlation_id']);
+    }
+
+    public function testCallerCannotOverrideGatewayAuthoritativeMetadata(): void
+    {
+        $request = ExecutionRequest::forPlan(
+            $this->executablePlan(),
+            ExecutionMode::DryRun,
+            ['gateway' => 'spoofed', 'simulated' => false],
+        );
+
+        $result = (new FakeExecutionPort())->execute($request);
+
+        self::assertSame('fake_paper', $result->metadata['gateway']);
+        self::assertTrue($result->metadata['simulated']);
+    }
+
     // --- fixtures ---
 
     private function executablePlan(): OrderPlan
