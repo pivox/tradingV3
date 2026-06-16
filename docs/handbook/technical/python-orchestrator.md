@@ -218,6 +218,7 @@ Avant tout run :
 - garder `workers=1` côté Symfony au début ;
 - borner la concurrence globale ;
 - refuser les valeurs dangereuses de workers, concurrence ou nombre de contrats ;
+- exiger une API Symfony exposant les contrats filtrés par `mtf_contracts` avant de persister des sets réels ;
 - exiger le support Symfony de `sync_tables=false` avant d'utiliser des sets préparés en parallèle ;
 - conserver une trace du dernier payload et de la dernière réponse ;
 - ne pas déclencher des trades simplement pour augmenter la fréquence.
@@ -227,9 +228,10 @@ Avant tout run :
 | PR | Objectif | Résultat attendu |
 | --- | --- | --- |
 | DOC-001 | Figer la cible fonctionnelle | Documentation actuelle validée. |
+| SF-001 | Exposer les contrats filtrés par `mtf_contracts` | Endpoint Symfony retournant les symboles réellement sélectionnés. |
 | PY-001 | Créer le squelette API Python | Service API lancé, endpoint healthcheck, structure projet. |
 | DB-001 | Persister dashboards, sets et derniers runs | Tables orchestration + dernier JSON global/par set. |
-| SF-001 | Supporter `sync_tables=false` côté Symfony | `/api/mtf/run` peut exécuter un set préparé sans sync par run. |
+| SF-002 | Supporter `sync_tables=false` côté Symfony | `/api/mtf/run` peut exécuter un set préparé sans sync par run. |
 | PY-002 | Implémenter `/orchestrator/run` | Lecture des sets actifs, appels parallèles bornés, agrégation. |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
