@@ -99,48 +99,42 @@ Pour chaque set :
 
 La mise à jour des contrats est une action explicite.
 
-```plantuml
-@startuml
-title Recalcul des contrats depuis le cockpit
+```mermaid
+sequenceDiagram
+    participant User as Utilisateur
+    participant Front as Front cockpit
+    participant Python as API Python
+    participant Symfony as Symfony
+    participant Db as Base orchestration
 
-actor "Utilisateur" as User
-participant "Front cockpit" as Front
-participant "API Python" as Python
-participant "Symfony" as Symfony
-participant "Base orchestration" as Db
-
-User -> Front : modifier config / demander recalcul
-Front -> Python : POST /contracts/refresh
-Python -> Symfony : demander contrats sollicités
-Symfony --> Python : contrats filtrés selon mtf_contracts
-Python -> Python : reconstruire les sets prêts
-Python -> Db : sauvegarder sets et payloads
-Python --> Front : preview des sets mis à jour
-@enduml
+    User->>Front: modifier config / demander recalcul
+    Front->>Python: POST /contracts/refresh
+    Python->>Symfony: demander contrats sollicités
+    Symfony-->>Python: contrats filtrés selon mtf_contracts
+    Python->>Python: reconstruire les sets prêts
+    Python->>Db: sauvegarder sets et payloads
+    Python-->>Front: preview des sets mis à jour
 ```
 
 Cette action est distincte du run.
 
 ## Déclenchement d'un run
 
-```plantuml
-@startuml
-title Lancement manuel ou planifié
+```mermaid
+sequenceDiagram
+    participant Trigger as Utilisateur ou Temporal
+    participant Python as API Python
+    participant Db as Base orchestration
+    participant Symfony as Symfony
 
-actor "Utilisateur ou Temporal" as Trigger
-participant "API Python" as Python
-participant "Base orchestration" as Db
-participant "Symfony" as Symfony
-
-Trigger -> Python : POST /orchestrator/run
-Python -> Db : lire les sets actifs
-loop appels parallèles bornés
-    Python -> Symfony : POST payload prêt
-    Symfony --> Python : réponse JSON
-end
-Python -> Db : sauvegarder dernier JSON
-Python --> Trigger : ok / non ok + résumé
-@enduml
+    Trigger->>Python: POST /orchestrator/run
+    Python->>Db: lire les sets actifs
+    loop appels parallèles bornés
+        Python->>Symfony: POST payload prêt
+        Symfony-->>Python: réponse JSON
+    end
+    Python->>Db: sauvegarder dernier JSON
+    Python-->>Trigger: ok / non ok + résumé
 ```
 
 ## Règles de sécurité fonctionnelle
