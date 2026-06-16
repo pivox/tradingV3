@@ -70,6 +70,60 @@ sequenceDiagram
     Python-->>Front: preview des sets disponibles
 ```
 
+## API Symfony : contrats sélectionnés (SF-001)
+
+Symfony expose la liste des contrats réellement retenus par `mtf_contracts`, sans
+déclencher de run, via :
+
+```text
+GET|POST /api/mtf/selected-contracts
+```
+
+Paramètres (query string en GET, JSON en POST) :
+
+- `profile` / `mtf_profile` : profil de configuration (défaut = mode TradeEntry actif) ;
+- `exchange` / `market_type` : contexte exchange (même jeu accepté que `/api/mtf/run` :
+  `bitmart`, `okx`, `hyperliquid`, ... ; défaut `bitmart` / `perpetual`) ;
+- `ignore_limits` : `true` pour obtenir tous les symboles éligibles sans `top_n` / `mid_n`
+  (filtres strictement identiques à la sélection limitée).
+
+Comportements explicites :
+
+- un corps POST JSON invalide renvoie `400` (pas de bascule silencieuse sur les défauts) ;
+- un `exchange` / `market_type` non supporté renvoie `400` ;
+- si le fichier de config dédié au profil n'existe pas, le provider retombe sur la config
+  par défaut : la réponse distingue alors `requested_profile`, `effective_profile`
+  (`default`) et `profile_config_found` ;
+- si `selection.enabled` vaut `false`, aucune sélection curée n'est exposée :
+  `symbols` est vide et `selection_enabled` vaut `false` ;
+- le `timestamp` est au format RFC3339 UTC ;
+- en cas d'erreur interne, le message reste générique (les détails vont dans les logs).
+
+Réponse type :
+
+```json
+{
+  "status": "success",
+  "data": {
+    "requested_profile": "scalper_micro",
+    "effective_profile": "scalper_micro",
+    "profile_config_found": true,
+    "exchange": "bitmart",
+    "market_type": "perpetual",
+    "selection_enabled": true,
+    "ignore_limits": false,
+    "count": 2,
+    "symbols": ["BTCUSDT", "ETHUSDT"],
+    "filters": { "quote_currency": "USDT", "status": "Trading", "min_turnover": 1500000 },
+    "limits": { "top_n": 140, "mid_n": 0 },
+    "timestamp": "2026-06-16T19:30:00+00:00"
+  }
+}
+```
+
+C'est cet endpoint que l'API Python appelle lors du refresh explicite des contrats
+pour préparer ses sets de payloads.
+
 ## Lien avec `mtf_contracts`
 
 Symfony reste la source de vérité pour la sélection initiale des contrats. La configuration `mtf_contracts` filtre déjà les contrats selon :

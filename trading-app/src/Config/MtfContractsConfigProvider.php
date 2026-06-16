@@ -76,6 +76,21 @@ final class MtfContractsConfigProvider
     }
 
     /**
+     * Indique si un fichier de configuration spécifique existe pour ce profil.
+     * Si false, {@see getConfigForProfile()} retombe sur le fichier par défaut
+     * `mtf_contracts.yaml`. Utile pour distinguer le profil demandé du profil
+     * réellement appliqué.
+     */
+    public function hasProfileConfig(?string $profile): bool
+    {
+        if ($profile === null || $profile === '') {
+            return false;
+        }
+
+        return is_file($this->configDir . '/mtf_contracts.' . $profile . '.yaml');
+    }
+
+    /**
      * Résout le chemin du fichier de config avec fallback
      * 
      * @param string|null $profile Nom du profil

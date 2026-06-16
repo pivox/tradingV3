@@ -390,78 +390,107 @@ class ContractRepository extends ServiceEntityRepository
     public function findAllActiveSymbolsWithoutLimits(?string $profile = null, ?ExchangeContext $context = null): array
     {
         $config = $this->configProvider->getConfigForProfile($profile);
-        
-        // --- Config YAML ---
+
+        // Filtres strictement identiques à findSymbolsMixedLiquidity : seule la
+        // restriction top_n/mid_n est retirée ici (ignore_limits = true).
+        [$baseSql, $params] = $this->buildBaseFilter($config, $context);
+
+        $sql = "WITH base AS (\n{$baseSql}\n)\nSELECT symbol FROM base ORDER BY t24 DESC";
+
+        $stmt = $this->conn->prepare($sql);
+        $this->bindBaseFilterParams($stmt, $params);
+
+        $symbols = $stmt->executeQuery()->fetchFirstColumn();
+
+        return array_values(array_unique($symbols));
+    }
+
+    /**
+     * Construit le filtre de base commun (statut, exchange, quote, turnover,
+     * expiration, âge, blacklist, mtf_switch) partagé par la sélection limitée
+     * (TOP/MID) et la sélection sans limites. Garantit que `ignore_limits=true`
+     * applique exactement les mêmes filtres, seules les limites changeant.
+     *
+     * @return array{0: string, 1: array<string, array{0: mixed, 1: int|string|null}>}
+     *   SQL du corps de la CTE `base` (colonnes `symbol`, `t24`) et paramètres à binder.
+     */
+    private function buildBaseFilter(MtfContractsConfig $config, ?ExchangeContext $context): array
+    {
         $status            = (string) $config->getFilter('status', 'Trading');
         $quoteCurrency     = (string) $config->getFilter('quote_currency', 'USDT');
         $minTurnover       = (float)  $config->getFilter('min_turnover', 500000);
         $requireNotExpired = (bool)   $config->getFilter('require_not_expired', true);
-        $expireUnit        = (string) $config->getFilter('expire_unit', false); // 's' | 'ms'
+        $expireUnit        = (string) $config->getFilter('expire_unit', 's');   // 's' | 'ms'
         $maxAgeHours       = (int)    $config->getFilter('max_age_hours', 880);
+        $openUnit          = (string) $config->getFilter('open_unit', 's');     // 's' | 'ms'
 
-        // --- Horloge & unités ---
         $now    = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
         $nowSec = (int) $now->format('U');             // epoch seconds
         $nowMs  = (int) round(microtime(true) * 1000); // epoch millis
         $nowForExpire = ($expireUnit === 'ms') ? $nowMs : $nowSec;
 
-        $openTsMinSec = $maxAgeHours > 0
-            ? $now->sub(new \DateInterval('PT'.$maxAgeHours.'H'))->getTimestamp()
-            : null;
-        $openTsMin = $openTsMinSec;
-        $openTsMinSet = !is_null($openTsMin);
+        $openTsMin = null;
+        if ($maxAgeHours > 0) {
+            $boundarySec = $now->sub(new \DateInterval('PT'.$maxAgeHours.'H'))->getTimestamp();
+            $openTsMin   = ($openUnit === 'ms') ? $boundarySec * 1000 : $boundarySec;
+        }
+        $openTsMinSet = ($openTsMin !== null);
 
-        // --- Expression turnover ---
-        $turnoverExpr = 'turnover_24h';
-
-        // --- SQL sans LIMIT ---
         $sql = "
-SELECT c.symbol
-FROM contracts c
-WHERE c.status = :status
-  AND c.exchange = :exchange
-  AND c.market_type = :marketType
-  AND c.quote_currency = :quoteCurrency
-  AND {$turnoverExpr} >= :minTurnover
-  AND (
-        :requireNotExpired = FALSE
-     OR c.expire_timestamp IS NULL
-     OR c.expire_timestamp = 0
-     OR c.expire_timestamp > :nowForExpire
-  )
-  AND ( :openTsMinSet = FALSE OR c.open_timestamp > :openTsMin )
-  AND NOT EXISTS (
-      SELECT 1 FROM blacklisted_contract b
-      WHERE b.symbol = c.symbol
-        AND (b.expires_at IS NULL OR b.expires_at > :dtnow)
-  )
-  AND NOT EXISTS (
-      SELECT 1 FROM mtf_switch m
-      WHERE m.switch_key LIKE :symbolPattern
-        AND SUBSTRING(m.switch_key FROM 8) = c.symbol
-        AND m.is_on = :isOff
-        AND (m.expires_at IS NULL OR m.expires_at > :dtnow)
-  )
-ORDER BY {$turnoverExpr} DESC
+  SELECT c.symbol, turnover_24h AS t24
+  FROM contracts c
+  WHERE c.status = :status
+    AND c.exchange = :exchange
+    AND c.market_type = :marketType
+    AND c.quote_currency = :quoteCurrency
+    AND turnover_24h >= :minTurnover
+    AND (
+          :requireNotExpired = FALSE
+       OR c.expire_timestamp IS NULL
+       OR c.expire_timestamp = 0
+       OR c.expire_timestamp > :nowForExpire
+    )
+    AND ( :openTsMinSet = FALSE OR c.open_timestamp < :openTsMin )
+    AND NOT EXISTS (
+        SELECT 1 FROM blacklisted_contract b
+        WHERE b.symbol = c.symbol
+          AND (b.expires_at IS NULL OR b.expires_at > :dtnow)
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM mtf_switch m
+        WHERE m.switch_key LIKE :symbolPattern
+          AND SUBSTRING(m.switch_key FROM 8) = c.symbol
+          AND m.is_on = :isOff
+          AND (m.expires_at IS NULL OR m.expires_at > :dtnow)
+    )
 ";
 
-        $stmt = $this->conn->prepare($sql);
-        $stmt->bindValue('status', $status);
-        $stmt->bindValue('exchange', ExchangeContext::exchangeValue($context));
-        $stmt->bindValue('marketType', ExchangeContext::marketTypeValue($context));
-        $stmt->bindValue('quoteCurrency', $quoteCurrency);
-        $stmt->bindValue('minTurnover', $minTurnover);
-        $stmt->bindValue('requireNotExpired', $requireNotExpired, ParameterType::BOOLEAN);
-        $stmt->bindValue('nowForExpire', $nowForExpire, ParameterType::INTEGER);
-        $stmt->bindValue('openTsMin', $openTsMin, $openTsMin === null ? ParameterType::NULL : ParameterType::INTEGER);
-        $stmt->bindValue('dtnow', $now, Types::DATETIME_IMMUTABLE);
-        $stmt->bindValue('symbolPattern', 'SYMBOL:%');
-        $stmt->bindValue('isOff', false, ParameterType::BOOLEAN);
-        $stmt->bindValue('openTsMinSet', $openTsMinSet, ParameterType::BOOLEAN);
+        $params = [
+            'status'            => [$status, ParameterType::STRING],
+            'exchange'          => [ExchangeContext::exchangeValue($context), ParameterType::STRING],
+            'marketType'        => [ExchangeContext::marketTypeValue($context), ParameterType::STRING],
+            'quoteCurrency'     => [$quoteCurrency, ParameterType::STRING],
+            'minTurnover'       => [$minTurnover, ParameterType::STRING],
+            'requireNotExpired' => [$requireNotExpired, ParameterType::BOOLEAN],
+            'nowForExpire'      => [$nowForExpire, ParameterType::INTEGER],
+            'openTsMinSet'      => [$openTsMinSet, ParameterType::BOOLEAN],
+            'openTsMin'         => [$openTsMin, $openTsMin === null ? ParameterType::NULL : ParameterType::INTEGER],
+            'dtnow'             => [$now, Types::DATETIME_IMMUTABLE],
+            'symbolPattern'     => ['SYMBOL:%', ParameterType::STRING],
+            'isOff'             => [false, ParameterType::BOOLEAN],
+        ];
 
-        $symbols = $stmt->executeQuery()->fetchFirstColumn();
+        return [$sql, $params];
+    }
 
-        return array_values(array_unique($symbols));
+    /**
+     * @param array<string, array{0: mixed, 1: int|string|null}> $params
+     */
+    private function bindBaseFilterParams(\Doctrine\DBAL\Statement $stmt, array $params): void
+    {
+        foreach ($params as $name => [$value, $type]) {
+            $stmt->bindValue($name, $value, $type);
+        }
     }
     public function findWithFilters(?string $status = null, ?string $symbol = null, ?ExchangeContext $context = null): array
     {
@@ -494,16 +523,9 @@ ORDER BY {$turnoverExpr} DESC
     public function findSymbolsMixedLiquidity(?string $profile = null, ?ExchangeContext $context = null): array
     {
         $config = $this->configProvider->getConfigForProfile($profile);
-        
-        // --- Config YAML ---
-        $status            = (string) $config->getFilter('status', 'Trading');
-        $quoteCurrency     = (string) $config->getFilter('quote_currency', 'USDT');
-        $minTurnover       = (float)  $config->getFilter('min_turnover', 500000);
+
+        // --- Config YAML (limites + buckets, les filtres viennent de buildBaseFilter) ---
         $midMaxTurnover    = (float)  $config->getFilter('mid_max_turnover', 2000000);
-        $requireNotExpired = (bool)   $config->getFilter('require_not_expired', true);
-        $expireUnit        = (string) $config->getFilter('expire_unit', 's');   // 's' | 'ms'
-        $maxAgeHours       = (int)    $config->getFilter('max_age_hours', 880);
-        $openUnit          = (string) $config->getFilter('open_unit', 's');     // 's' | 'ms'
 
         $topN   = (int) $config->getLimit('top_n', 0);
         $midN   = (int) $config->getLimit('mid_n', 0);
@@ -518,59 +540,18 @@ ORDER BY {$turnoverExpr} DESC
             $orderMid = 'ASC';
         }
 
-        // --- Horloge & unités ---
-        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'));
-
-        $nowSec = (int) $now->format('U');             // epoch seconds
-        $nowMs  = (int) round(microtime(true) * 1000); // epoch millis
-
-        $nowForExpire = ($expireUnit === 'ms') ? $nowMs : $nowSec;
-
-        // borne min pour open_timestamp
-        $openTsMin = null;
-        if ($maxAgeHours > 0) {
-            $boundarySec = $now->sub(new \DateInterval('PT'.$maxAgeHours.'H'))->getTimestamp();
-            $openTsMin   = ($openUnit === 'ms') ? $boundarySec * 1000 : $boundarySec;
-        }
-        $openTsMinSet = ($openTsMin !== null);
-
-        // --- Expression turnover (caster si stocké en texte) ---
-        $turnoverExpr = 'turnover_24h'; // ou CAST(...) si besoin
-
         // --- Pas de requête si aucun bucket demandé ---
         if ($topN <= 0 && $midN <= 0) {
             return [];
         }
 
+        // Filtres de base partagés avec findAllActiveSymbolsWithoutLimits.
+        [$baseSql, $params] = $this->buildBaseFilter($config, $context);
+
         // --- SQL principal (table: contracts) ---
         $sql = "
 WITH base AS (
-  SELECT c.symbol, {$turnoverExpr} AS t24
-  FROM contracts c
-  WHERE c.status = :status
-    AND c.exchange = :exchange
-    AND c.market_type = :marketType
-    AND c.quote_currency = :quoteCurrency
-    AND {$turnoverExpr} >= :minTurnover
-    AND (
-          :requireNotExpired = FALSE
-       OR c.expire_timestamp IS NULL
-       OR c.expire_timestamp = 0
-       OR c.expire_timestamp > :nowForExpire
-    )
-    AND ( :openTsMinSet = FALSE OR c.open_timestamp < :openTsMin )
-    AND NOT EXISTS (
-        SELECT 1 FROM blacklisted_contract b
-        WHERE b.symbol = c.symbol
-          AND (b.expires_at IS NULL OR b.expires_at > :dtnow)
-    )
-    AND NOT EXISTS (
-        SELECT 1 FROM mtf_switch m
-        WHERE m.switch_key LIKE :symbolPattern
-          AND SUBSTRING(m.switch_key FROM 8) = c.symbol
-          AND m.is_on = :isOff
-          AND (m.expires_at IS NULL OR m.expires_at > :dtnow)
-    )
+{$baseSql}
 )
 ";
 
@@ -607,24 +588,8 @@ SELECT symbol FROM (
 
         $stmt = $this->conn->prepare($sql);
 
-        // --- Bind communs ---
-        $stmt->bindValue('status',         $status);
-        $stmt->bindValue('exchange',       ExchangeContext::exchangeValue($context));
-        $stmt->bindValue('marketType',     ExchangeContext::marketTypeValue($context));
-        $stmt->bindValue('quoteCurrency',  $quoteCurrency);
-        $stmt->bindValue('minTurnover',    $minTurnover);
-        $stmt->bindValue('requireNotExpired', $requireNotExpired, ParameterType::BOOLEAN);
-        $stmt->bindValue('nowForExpire',   $nowForExpire, ParameterType::INTEGER);
-        $stmt->bindValue('dtnow',          $now, Types::DATETIME_IMMUTABLE);
-        $stmt->bindValue('symbolPattern',  'SYMBOL:%');
-        $stmt->bindValue('isOff',          false, ParameterType::BOOLEAN);
-        $stmt->bindValue('openTsMinSet',   $openTsMinSet, ParameterType::BOOLEAN);
-
-        if ($openTsMin !== null) {
-            $stmt->bindValue('openTsMin', $openTsMin, ParameterType::INTEGER);
-        } else {
-            $stmt->bindValue('openTsMin', null, ParameterType::NULL);
-        }
+        // --- Bind communs (filtres de base partagés) ---
+        $this->bindBaseFilterParams($stmt, $params);
 
         if ($topN > 0) {
             $stmt->bindValue('midMaxTurnover', $midMaxTurnover);
