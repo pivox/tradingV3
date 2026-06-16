@@ -13,9 +13,8 @@ use App\MtfValidator\Repository\MtfAuditRepository;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\Repository\MtfStateRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
-use App\Common\Enum\Exchange;
-use App\Common\Enum\MarketType;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Context\ExchangeContextResolver;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -39,6 +38,7 @@ class MtfController extends AbstractController
         private readonly MainProviderInterface $mainProvider,
         private readonly MtfContractsConfigProvider $contractsConfigProvider,
         private readonly TradeEntryModeContext $modeContext,
+        private readonly ExchangeContextResolver $exchangeContextResolver,
     ) {
     }
 
@@ -378,12 +378,17 @@ class MtfController extends AbstractController
     public function selectedContracts(Request $request): JsonResponse
     {
         try {
-            $data = $request->getMethod() === 'POST'
-                ? (json_decode($request->getContent(), true) ?? [])
-                : $request->query->all();
+            try {
+                $data = $this->parseRequestPayload($request);
+            } catch (\JsonException $e) {
+                return $this->json([
+                    'status' => 'error',
+                    'message' => 'Invalid JSON payload.',
+                ], Response::HTTP_BAD_REQUEST);
+            }
 
             try {
-                $context = $this->resolveExchangeContext($data);
+                $context = $this->exchangeContextResolver->resolve($data);
             } catch (\InvalidArgumentException $e) {
                 return $this->json([
                     'status' => 'error',
@@ -393,30 +398,45 @@ class MtfController extends AbstractController
 
             // Profil : explicite sinon mode TradeEntry actif (même logique que /api/mtf/run).
             $profileInput = $data['profile'] ?? $data['mtf_profile'] ?? null;
-            $profile = is_string($profileInput) && trim($profileInput) !== ''
+            $requestedProfile = is_string($profileInput) && trim($profileInput) !== ''
                 ? trim($profileInput)
                 : $this->modeContext->resolve(null);
 
+            // Profil demandé vs profil réellement appliqué : le provider retombe
+            // silencieusement sur la config par défaut si le fichier dédié manque.
+            $profileConfigFound = $this->contractsConfigProvider->hasProfileConfig($requestedProfile);
+            $effectiveProfile = $profileConfigFound ? $requestedProfile : 'default';
+
             $ignoreLimits = filter_var($data['ignore_limits'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
-            $config = $this->contractsConfigProvider->getConfigForProfile($profile);
-            $symbols = $this->contractRepository->allActiveSymbolNames([], $ignoreLimits, $profile, $context);
+            $config = $this->contractsConfigProvider->getConfigForProfile($requestedProfile);
+            $selectionEnabled = (bool) $config->get('enabled', true);
+
+            // selection.enabled=false : aucune sélection curée n'est exposée.
+            // Comportement explicite et documenté → liste vide, pas de requête DB.
+            $symbols = $selectionEnabled
+                ? $this->contractRepository->allActiveSymbolNames([], $ignoreLimits, $requestedProfile, $context)
+                : [];
 
             $this->mtfLogger->info('[MTF Controller] Selected contracts resolved', [
-                'profile' => $profile,
+                'requested_profile' => $requestedProfile,
+                'effective_profile' => $effectiveProfile,
                 'exchange' => $context->exchange->value,
                 'market_type' => $context->marketType->value,
                 'ignore_limits' => $ignoreLimits,
+                'selection_enabled' => $selectionEnabled,
                 'count' => count($symbols),
             ]);
 
             return $this->json([
                 'status' => 'success',
                 'data' => [
-                    'profile' => $profile,
+                    'requested_profile' => $requestedProfile,
+                    'effective_profile' => $effectiveProfile,
+                    'profile_config_found' => $profileConfigFound,
                     'exchange' => $context->exchange->value,
                     'market_type' => $context->marketType->value,
-                    'selection_enabled' => (bool) $config->get('enabled', true),
+                    'selection_enabled' => $selectionEnabled,
                     'ignore_limits' => $ignoreLimits,
                     'count' => count($symbols),
                     'symbols' => $symbols,
@@ -432,7 +452,9 @@ class MtfController extends AbstractController
                         'top_n' => $config->getLimit('top_n'),
                         'mid_n' => $config->getLimit('mid_n'),
                     ],
-                    'timestamp' => $this->clock->now()->format('Y-m-d H:i:s'),
+                    'timestamp' => $this->clock->now()
+                        ->setTimezone(new \DateTimeZone('UTC'))
+                        ->format(\DateTimeInterface::RFC3339),
                 ],
             ]);
         } catch (\Throwable $e) {
@@ -442,9 +464,32 @@ class MtfController extends AbstractController
 
             return $this->json([
                 'status' => 'error',
-                'message' => $e->getMessage(),
+                'message' => 'Internal error while resolving selected contracts.',
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /**
+     * Décode le payload de la requête : JSON pour POST (erreur explicite si
+     * invalide), query string pour GET.
+     *
+     * @return array<string,mixed>
+     * @throws \JsonException si le corps POST n'est pas un JSON valide.
+     */
+    private function parseRequestPayload(Request $request): array
+    {
+        if ($request->getMethod() !== 'POST') {
+            return $request->query->all();
+        }
+
+        $content = trim($request->getContent());
+        if ($content === '') {
+            return [];
+        }
+
+        $decoded = json_decode($content, true, 512, JSON_THROW_ON_ERROR);
+
+        return is_array($decoded) ? $decoded : [];
     }
 
     #[Route('/sync-contracts', name: 'sync_contracts', methods: ['POST', 'GET'])]
@@ -517,36 +562,12 @@ class MtfController extends AbstractController
         }
     }
 
+    /**
+     * Délègue au resolver partagé pour garantir le même jeu d'exchanges/markets
+     * accepté que `/api/mtf/run` (cf. ExchangeContextResolver / MtfRunnerRequestDto).
+     */
     private function resolveExchangeContext(array $data): ExchangeContext
     {
-        $exchangeInput = $data['exchange'] ?? $data['cex'] ?? null;
-        $marketInput = $data['market_type'] ?? $data['type_contract'] ?? null;
-
-        $exchange = Exchange::BITMART;
-        if ($exchangeInput !== null) {
-            if (!is_string($exchangeInput) || $exchangeInput === '') {
-                throw new \InvalidArgumentException('Invalid exchange parameter.');
-            }
-
-            $exchange = match (strtolower(trim($exchangeInput))) {
-                'bitmart' => Exchange::BITMART,
-                default => throw new \InvalidArgumentException(sprintf('Unsupported exchange "%s".', $exchangeInput)),
-            };
-        }
-
-        $marketType = MarketType::PERPETUAL;
-        if ($marketInput !== null) {
-            if (!is_string($marketInput) || $marketInput === '') {
-                throw new \InvalidArgumentException('Invalid market_type parameter.');
-            }
-
-            $marketType = match (strtolower(trim($marketInput))) {
-                'perpetual', 'perp', 'future', 'futures' => MarketType::PERPETUAL,
-                'spot' => MarketType::SPOT,
-                default => throw new \InvalidArgumentException(sprintf('Unsupported market type "%s".', $marketInput)),
-            };
-        }
-
-        return new ExchangeContext($exchange, $marketType);
+        return $this->exchangeContextResolver->resolve($data);
     }
 }

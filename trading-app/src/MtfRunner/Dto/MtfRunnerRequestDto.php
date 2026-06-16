@@ -6,6 +6,7 @@ namespace App\MtfRunner\Dto;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Provider\Context\ExchangeContextResolver;
 
 /**
  * DTO pour les requêtes d'exécution du Runner MTF
@@ -109,19 +110,13 @@ final class MtfRunnerRequestDto
 
     private static function normalizeExchange(string $value): Exchange
     {
-        $normalized = strtolower(trim($value));
-
-        return Exchange::tryFrom($normalized)
-            ?? throw new \InvalidArgumentException(sprintf('Unsupported exchange "%s"', $value));
+        // Source de vérité partagée avec les endpoints HTTP (cf. SF-001).
+        return ExchangeContextResolver::normalizeExchange($value);
     }
 
     private static function normalizeMarketType(string $value): MarketType
     {
-        return match (strtolower(trim($value))) {
-            'perpetual', 'perp', 'future', 'futures' => MarketType::PERPETUAL,
-            'spot' => MarketType::SPOT,
-            default => throw new \InvalidArgumentException(sprintf('Unsupported market type "%s"', $value)),
-        };
+        return ExchangeContextResolver::normalizeMarketType($value);
     }
 
     private static function extractProfileAndMode(array $data): array

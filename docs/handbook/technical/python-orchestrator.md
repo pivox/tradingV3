@@ -82,8 +82,22 @@ GET|POST /api/mtf/selected-contracts
 Paramètres (query string en GET, JSON en POST) :
 
 - `profile` / `mtf_profile` : profil de configuration (défaut = mode TradeEntry actif) ;
-- `exchange` / `market_type` : contexte exchange (défaut `bitmart` / `perpetual`) ;
-- `ignore_limits` : `true` pour obtenir tous les symboles éligibles sans `top_n` / `mid_n`.
+- `exchange` / `market_type` : contexte exchange (même jeu accepté que `/api/mtf/run` :
+  `bitmart`, `okx`, `hyperliquid`, ... ; défaut `bitmart` / `perpetual`) ;
+- `ignore_limits` : `true` pour obtenir tous les symboles éligibles sans `top_n` / `mid_n`
+  (filtres strictement identiques à la sélection limitée).
+
+Comportements explicites :
+
+- un corps POST JSON invalide renvoie `400` (pas de bascule silencieuse sur les défauts) ;
+- un `exchange` / `market_type` non supporté renvoie `400` ;
+- si le fichier de config dédié au profil n'existe pas, le provider retombe sur la config
+  par défaut : la réponse distingue alors `requested_profile`, `effective_profile`
+  (`default`) et `profile_config_found` ;
+- si `selection.enabled` vaut `false`, aucune sélection curée n'est exposée :
+  `symbols` est vide et `selection_enabled` vaut `false` ;
+- le `timestamp` est au format RFC3339 UTC ;
+- en cas d'erreur interne, le message reste générique (les détails vont dans les logs).
 
 Réponse type :
 
@@ -91,7 +105,9 @@ Réponse type :
 {
   "status": "success",
   "data": {
-    "profile": "scalper_micro",
+    "requested_profile": "scalper_micro",
+    "effective_profile": "scalper_micro",
+    "profile_config_found": true,
     "exchange": "bitmart",
     "market_type": "perpetual",
     "selection_enabled": true,
@@ -100,7 +116,7 @@ Réponse type :
     "symbols": ["BTCUSDT", "ETHUSDT"],
     "filters": { "quote_currency": "USDT", "status": "Trading", "min_turnover": 1500000 },
     "limits": { "top_n": 140, "mid_n": 0 },
-    "timestamp": "2026-06-16 19:30:00"
+    "timestamp": "2026-06-16T19:30:00+00:00"
   }
 }
 ```
