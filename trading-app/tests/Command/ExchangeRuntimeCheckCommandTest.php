@@ -54,8 +54,51 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('REST: unknown', $output);
         self::assertStringContainsString('Private WS: unsupported', $output);
         self::assertStringContainsString('Live trading: disabled', $output);
+        self::assertStringContainsString('Dry-run only: yes', $output);
+        self::assertStringContainsString('Live allowed: no', $output);
+        self::assertStringContainsString('Demo trading enabled: no', $output);
         self::assertStringContainsString('Recommended dry_run: true', $output);
         self::assertStringContainsString('Schedule ready: no', $output);
+    }
+
+    public function testOkxStaysDryRunOnlyEvenWithCredentialsProviderAndDemoFlag(): void
+    {
+        // PR11 hardening: a fully "ready" OKX runtime with demo trading enabled must still
+        // report live as forbidden and recommend dry-run. Demo capability != live trading.
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(Exchange::OKX, MarketType::PERPETUAL, supportsPrivateWs: true)),
+            $this->providerRegistry($this->providerBundle(Exchange::OKX, MarketType::PERPETUAL)),
+            new OkxConfig(
+                environment: 'demo',
+                apiKey: 'key',
+                apiSecret: 'secret',
+                apiPassphrase: 'pass',
+                demoTradingEnabled: true,
+                liveEnabled: true,
+            ),
+            new HyperliquidConfig(),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Exchange: okx', $output);
+        self::assertStringContainsString('Adapter: found', $output);
+        self::assertStringContainsString('Provider bundle: found', $output);
+        self::assertStringContainsString('Credentials: ok', $output);
+        // Even with OKX_LIVE_ENABLED=1 and demo trading on, live stays forbidden in PR11.
+        self::assertStringContainsString('Live trading: disabled', $output);
+        self::assertStringContainsString('Dry-run only: yes', $output);
+        self::assertStringContainsString('Live allowed: no', $output);
+        self::assertStringContainsString('Demo trading enabled: yes', $output);
+        self::assertStringContainsString('Recommended dry_run: true', $output);
+        self::assertStringContainsString('Schedule ready: yes', $output);
     }
 
     public function testReportsReadyBitmartRuntimeWhenAdapterAndProviderExist(): void
@@ -85,6 +128,9 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('REST: unknown', $output);
         self::assertStringContainsString('Recommended dry_run: false', $output);
         self::assertStringContainsString('Schedule ready: yes', $output);
+        // The OKX-specific dry-run-only gate must not leak into Bitmart legacy output.
+        self::assertStringNotContainsString('Dry-run only:', $output);
+        self::assertStringNotContainsString('Live allowed:', $output);
     }
 
     public function testReportsUnreadyBitmartRuntimeWhenCredentialsAreMissing(): void

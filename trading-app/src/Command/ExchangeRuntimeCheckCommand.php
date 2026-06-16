@@ -74,6 +74,13 @@ final class ExchangeRuntimeCheckCommand extends Command
         $output->writeln('REST: unknown');
         $output->writeln(sprintf('Private WS: %s', $privateWs));
         $output->writeln(sprintf('Live trading: %s', $liveTrading));
+        if ($exchange === Exchange::OKX) {
+            // PR11: OKX is dry-run only. Surface the gate explicitly so that demo-trading
+            // capability is never mistaken for live-trading authorization.
+            $output->writeln('Dry-run only: yes');
+            $output->writeln('Live allowed: no');
+            $output->writeln(sprintf('Demo trading enabled: %s', $this->okxConfig->demoTradingEnabled ? 'yes' : 'no'));
+        }
         $output->writeln(sprintf('Recommended dry_run: %s', $recommendedDryRun ? 'true' : 'false'));
         $output->writeln(sprintf('Schedule ready: %s', $scheduleReady ? 'yes' : 'no'));
 
@@ -142,9 +149,10 @@ final class ExchangeRuntimeCheckCommand extends Command
         }
 
         return match ($exchange) {
-            Exchange::OKX => $this->okxConfig->isDemo()
-                ? ($this->okxConfig->demoTradingEnabled ? 'enabled' : 'disabled')
-                : ($this->okxConfig->liveEnabled ? 'enabled' : 'disabled'),
+            // PR11: OKX stays dry-run only. Demo-trading capability (OKX_DEMO_TRADING_ENABLED)
+            // is NOT live trading, and OKX_LIVE_ENABLED is intentionally ignored here: live
+            // remains disabled until a dedicated OKX live-readiness PR flips this gate.
+            Exchange::OKX => 'disabled',
             Exchange::HYPERLIQUID => $this->hyperliquidConfig->isTestnet()
                 ? 'enabled'
                 : ($this->hyperliquidConfig->mainnetEnabled ? 'enabled' : 'disabled'),
