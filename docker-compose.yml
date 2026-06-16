@@ -159,6 +159,27 @@ services:
         reservations:
           memory: 64M
 
+  python-orchestrator:
+    build: ./python-orchestrator
+    container_name: python_orchestrator
+    mem_limit: 256m
+    environment:
+      - SYMFONY_BASE_URL=http://trading-app-nginx:80
+      - ORCHESTRATOR_PORT=8099
+      - MAX_CONCURRENCY=2
+    ports:
+      - "8099:8099"
+    networks:
+      - trading-app-net
+      - shared-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
   #  grafana:
   #    image: grafana/grafana:10.4.0
   #    container_name: grafana

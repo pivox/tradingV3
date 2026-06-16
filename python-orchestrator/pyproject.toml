@@ -1,0 +1,10 @@
+[project]
+name = "python-orchestrator"
+version = "0.1.0"
+description = "TradingV3 Python Orchestrator API (PY-001 skeleton)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-q"
