@@ -53,7 +53,7 @@ final class FakeExecutionPort implements ExecutionPortInterface
             return new ExecutionResult(
                 status: ExecutionStatus::Rejected,
                 clientOrderId: $plan->clientOrderId,
-                metadata: $metadata + ['reject_reason' => 'live_not_supported_by_fake_gateway'],
+                metadata: array_merge($metadata, ['reject_reason' => 'live_not_supported_by_fake_gateway']),
             );
         }
 
@@ -63,10 +63,10 @@ final class FakeExecutionPort implements ExecutionPortInterface
             return new ExecutionResult(
                 status: ExecutionStatus::Rejected,
                 clientOrderId: $plan->clientOrderId,
-                metadata: $metadata + [
+                metadata: array_merge($metadata, [
                     'reject_reason' => 'order_plan_not_executable',
                     'invalid_reasons' => $validation->invalidReasons,
-                ],
+                ]),
             );
         }
 
@@ -74,7 +74,7 @@ final class FakeExecutionPort implements ExecutionPortInterface
             status: ExecutionStatus::DryRun,
             clientOrderId: $plan->clientOrderId,
             exchangeOrderId: $this->fakeOrderId($plan->clientOrderId),
-            metadata: $metadata + ['dry_run' => true],
+            metadata: array_merge($metadata, ['dry_run' => true]),
         );
     }
 

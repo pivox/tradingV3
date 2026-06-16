@@ -104,13 +104,31 @@ final class FakeExecutionPortTest extends TestCase
         $request = ExecutionRequest::forPlan(
             $this->executablePlan(),
             ExecutionMode::DryRun,
-            ['gateway' => 'spoofed', 'simulated' => false],
+            ['gateway' => 'spoofed', 'simulated' => false, 'dry_run' => false],
         );
 
         $result = (new FakeExecutionPort())->execute($request);
 
         self::assertSame('fake_paper', $result->metadata['gateway']);
         self::assertTrue($result->metadata['simulated']);
+        // dry_run is a result-path field: the gateway value must overwrite the caller's.
+        self::assertTrue($result->metadata['dry_run']);
+    }
+
+    public function testCallerCannotSpoofRejectReasonOnLivePath(): void
+    {
+        // reject_reason carried by the incoming metadata must not survive: the gateway's
+        // own result reason is authoritative.
+        $request = ExecutionRequest::forPlan(
+            $this->executablePlan(),
+            ExecutionMode::Live,
+            ['reject_reason' => 'caller_spoofed'],
+        );
+
+        $result = (new FakeExecutionPort())->execute($request);
+
+        self::assertSame(ExecutionStatus::Rejected, $result->status);
+        self::assertSame('live_not_supported_by_fake_gateway', $result->metadata['reject_reason']);
     }
 
     // --- fixtures ---
