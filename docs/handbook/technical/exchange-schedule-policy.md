@@ -2,47 +2,80 @@
 
 ## Objectif
 
-Cette page définit la politique des schedules Temporal par exchange, market type et profil.
+Cette page définit la politique des déclenchements par exchange, market type et profil.
 
-Elle évite qu’un nouveau schedule rende OKX ou Hyperliquid live avant validation complète.
+Historiquement, la politique portait surtout sur les schedules Temporal. La cible retenue déplace l'orchestration vers une API Python : Temporal reste un cron basique qui appelle `/orchestrator/run`, tandis que les sets et les appels parallèles sont pilotés par l'API Python.
+
+Cette page évite qu'un nouveau déclenchement rende OKX ou Hyperliquid live avant validation complète.
 
 ## Règle générale
 
-Un schedule doit déclarer explicitement :
+Un déclenchement doit déclarer explicitement :
 
 - exchange ;
 - market type ;
 - profil ;
+- environnement ;
 - mode dry-run ou live ;
-- cadence ;
+- quota de contrats ;
 - garde-fous rate limits ;
 - audit attendu ;
 - statut readiness.
 
-## Statuts schedule
+## Statuts
 
 | Statut | Sens |
 |---|---|
 | `simulation_allowed` | Autorisé seulement avec Fake/Paper. |
-| `dry_run_allowed` | Autorisé sans ordre live, après runtime-check. |
+| `dry_run_allowed` | Autorisé sans ordre live, après validation des garde-fous. |
 | `legacy_allowed` | Autorisé uniquement parce que le runtime historique en dépend. |
 | `live_forbidden` | Interdit en live. |
 | `live_candidate` | Potentiellement live plus tard, après PR dédiée. |
 
 ## Politique par exchange
 
-| Exchange | Schedule simulation | Schedule dry-run | Schedule live | Commentaire |
+| Exchange | Simulation | Dry-run | Live | Commentaire |
 |---|---:|---:|---:|---|
 | Fake / Paper | Oui | Oui | Non | Filet de sécurité et gateway de test. |
 | OKX | Oui via Fake/Paper | Oui après runtime-check | Non | Live interdit dans les PRs de préparation. |
 | Hyperliquid | Oui via Fake/Paper | Oui après runtime-check | Non | Live interdit dans les PRs de préparation. |
-| Bitmart legacy | Non cible | Legacy seulement | Legacy seulement | À retirer plus tard, sans casser l’existant. |
+| Bitmart legacy | Non cible | Legacy seulement | Legacy seulement | À retirer plus tard, sans casser l'existant. |
+
+## Cible avec API Python
+
+Le déclenchement cible n'est plus "un schedule Temporal par exchange/profil". La cible devient :
+
+```text
+Temporal schedule unique
+→ activity minimale
+→ POST /orchestrator/run
+→ API Python lit les sets actifs
+→ API Python lance les appels Symfony en parallèle
+```
+
+Les sets Python deviennent la déclaration opérationnelle. Chaque set doit porter au minimum :
+
+```yaml
+set_id: bitmart_regular_live_top_30
+enabled: true
+action: mtf_run
+exchange: bitmart
+market_type: perpetual
+mtf_profile: regular
+environment: mainnet
+dry_run: false
+workers: 1
+contracts_limit: 30
+priority: 10
+```
+
+Ce format est indicatif pour la documentation. Il décrit la cible fonctionnelle, pas une implémentation déjà livrée.
 
 ## Cadence
 
 La cadence 1 minute est sensible.
 
-Avant d’autoriser une cadence 1m pour un exchange/profil, il faut valider :
+Avant d'autoriser une cadence 1m pour un dashboard ou un set, il faut valider :
 
 - rate limits exchange ;
 - coûts de requêtes REST ;
@@ -53,25 +86,20 @@ Avant d’autoriser une cadence 1m pour un exchange/profil, il faut valider :
 - dry-run stable ;
 - absence de double soumission ;
 - SL attaché immédiatement ;
-- logs exploitables.
+- logs exploitables ;
+- dernier JSON conservé.
 
-## Format cible de déclaration
+## Concurrence
 
-Un schedule devrait pouvoir être décrit ainsi :
+La concurrence est pilotée par l'API Python, pas par les workers Symfony.
 
-```yaml
-exchange: okx
-market_type: perpetual
-profile: scalper
-mode: dry_run
-cadence: "*/1 * * * *"
-runtime_check_required: true
-live_enabled: false
-audit_required: true
-fallback_gateway: fake
-```
+Règles cibles :
 
-Ce format est indicatif pour la documentation. Il ne branche aucun runtime dans cette PR.
+- `workers=1` côté Symfony au début ;
+- concurrence globale bornée côté API Python ;
+- pas deux appels live incompatibles sur le même symbole ;
+- pas de parallélisation illimitée ;
+- pas de live orchestré sans idempotence et locks.
 
 ## Fake / Paper
 
@@ -79,17 +107,17 @@ Fake/Paper est autorisé pour :
 
 - simulation ;
 - dry-run ;
-- validation d’OrderPlan ;
-- validation d’ExecutionPort ;
+- validation d'OrderPlan ;
+- validation d'ExecutionPort ;
 - replay ;
 - backtesting ;
 - contrôle des invariants.
 
-Fake/Paper ne doit jamais envoyer d’ordre live.
+Fake/Paper ne doit jamais envoyer d'ordre live.
 
 ## OKX
 
-OKX peut avoir des schedules dry-run seulement si :
+OKX peut avoir des sets dry-run seulement si :
 
 - runtime-check OK ;
 - credentials disponibles hors Git ;
@@ -98,11 +126,11 @@ OKX peut avoir des schedules dry-run seulement si :
 - audit actif ;
 - Fake/Paper disponible comme fallback.
 
-OKX live est interdit tant qu’une PR dédiée de readiness live n’a pas été validée.
+OKX live est interdit tant qu'une PR dédiée de readiness live n'a pas été validée.
 
 ## Hyperliquid
 
-Hyperliquid peut avoir des schedules dry-run seulement si :
+Hyperliquid peut avoir des sets dry-run seulement si :
 
 - runtime-check OK ;
 - credentials disponibles hors Git ;
@@ -112,30 +140,30 @@ Hyperliquid peut avoir des schedules dry-run seulement si :
 - audit actif ;
 - Fake/Paper disponible comme fallback.
 
-Hyperliquid live est interdit tant qu’une PR dédiée de readiness live n’a pas été validée.
+Hyperliquid live est interdit tant qu'une PR dédiée de readiness live n'a pas été validée.
 
 ## Bitmart legacy
 
-Bitmart peut rester schedulé uniquement si le runtime historique en dépend encore.
+Bitmart peut rester schedulé ou orchestré uniquement si le runtime historique en dépend encore.
 
 Règles :
 
-- ne pas créer de nouveaux schedules Bitmart comme cible future ;
-- documenter les schedules legacy existants ;
+- ne pas créer de nouveaux chemins Bitmart live sans idempotence et locks ;
+- documenter les déclenchements legacy existants ;
 - retirer Bitmart après inventaire ;
-- ne pas casser `mtf:run`, `POST /api/mtf/run` ou Temporal pendant la transition.
+- ne pas casser `mtf:run`, `POST /api/mtf/run` ou le déclenchement Temporal pendant la transition.
 
-## Gates avant ajout d’un nouveau schedule
+## Gates avant ajout d'un nouveau set
 
-Avant tout nouveau schedule, vérifier :
+Avant tout nouveau set, vérifier :
 
 1. la gateway est listée dans la readiness matrix ;
 2. le runtime-check est disponible ;
-3. l’exchange n’est pas live par défaut ;
+3. l'exchange n'est pas live par défaut ;
 4. le profil est explicitement autorisé ;
 5. la cadence est justifiée ;
 6. les rate limits sont connus ;
-7. l’audit minimal est actif ;
+7. l'audit minimal est actif ;
 8. Fake/Paper fallback existe ;
 9. la PR reste atomique ;
 10. les invariants trading ne sont pas cassés.
@@ -144,11 +172,11 @@ Avant tout nouveau schedule, vérifier :
 
 Les PRs de préparation ne doivent pas :
 
-- créer de schedule live OKX ;
-- créer de schedule live Hyperliquid ;
+- créer de chemin live OKX ;
+- créer de chemin live Hyperliquid ;
 - augmenter la cadence pour chercher plus de trades ;
 - contourner le runtime-check ;
-- désactiver le dry-run ;
+- désactiver le dry-run sans validation ;
 - modifier les stratégies pour forcer des trades ;
 - desserrer les EntryZones ;
 - modifier le levier.
