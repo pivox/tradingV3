@@ -81,6 +81,15 @@ final class ExchangeRuntimeCheckCommand extends Command
             $output->writeln('Live allowed: no');
             $output->writeln(sprintf('Demo trading enabled: %s', $this->okxConfig->demoTradingEnabled ? 'yes' : 'no'));
         }
+        if ($exchange === Exchange::HYPERLIQUID) {
+            // PR12: Hyperliquid is dry-run only. Surface the gate explicitly so that the
+            // configured network (testnet/mainnet) and the mainnet capability flag are never
+            // mistaken for live-trading authorization.
+            $output->writeln('Dry-run only: yes');
+            $output->writeln('Live allowed: no');
+            $output->writeln(sprintf('Network: %s', $this->hyperliquidConfig->normalizedEnvironment()));
+            $output->writeln(sprintf('Mainnet enabled: %s', $this->hyperliquidConfig->mainnetEnabled ? 'yes' : 'no'));
+        }
         $output->writeln(sprintf('Recommended dry_run: %s', $recommendedDryRun ? 'true' : 'false'));
         $output->writeln(sprintf('Schedule ready: %s', $scheduleReady ? 'yes' : 'no'));
 
@@ -153,9 +162,10 @@ final class ExchangeRuntimeCheckCommand extends Command
             // is NOT live trading, and OKX_LIVE_ENABLED is intentionally ignored here: live
             // remains disabled until a dedicated OKX live-readiness PR flips this gate.
             Exchange::OKX => 'disabled',
-            Exchange::HYPERLIQUID => $this->hyperliquidConfig->isTestnet()
-                ? 'enabled'
-                : ($this->hyperliquidConfig->mainnetEnabled ? 'enabled' : 'disabled'),
+            // PR12: Hyperliquid stays dry-run only. Testnet/mainnet network selection and
+            // HYPERLIQUID_MAINNET_ENABLED are NOT live-trading authorization: live remains
+            // disabled until a dedicated Hyperliquid live-readiness PR flips this gate.
+            Exchange::HYPERLIQUID => 'disabled',
             default => 'enabled',
         };
     }

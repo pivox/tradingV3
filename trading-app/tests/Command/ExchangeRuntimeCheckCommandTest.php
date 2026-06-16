@@ -99,6 +99,113 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Demo trading enabled: yes', $output);
         self::assertStringContainsString('Recommended dry_run: true', $output);
         self::assertStringContainsString('Schedule ready: yes', $output);
+        // The Hyperliquid-specific lines must never leak into OKX output.
+        self::assertStringNotContainsString('Network:', $output);
+        self::assertStringNotContainsString('Mainnet enabled:', $output);
+    }
+
+    public function testReportsUnreadyHyperliquidRuntimeWithoutProviderOrCredentials(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),
+            $this->missingProviderRegistry(),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(environment: 'testnet'),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'hyperliquid',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Exchange: hyperliquid', $output);
+        self::assertStringContainsString('Adapter: found', $output);
+        self::assertStringContainsString('Provider bundle: missing', $output);
+        self::assertStringContainsString('Credentials: missing', $output);
+        self::assertStringContainsString('Live trading: disabled', $output);
+        self::assertStringContainsString('Dry-run only: yes', $output);
+        self::assertStringContainsString('Live allowed: no', $output);
+        self::assertStringContainsString('Network: testnet', $output);
+        self::assertStringContainsString('Mainnet enabled: no', $output);
+        self::assertStringContainsString('Recommended dry_run: true', $output);
+        self::assertStringContainsString('Schedule ready: no', $output);
+        // The OKX-specific demo line must never leak into Hyperliquid output.
+        self::assertStringNotContainsString('Demo trading enabled:', $output);
+    }
+
+    public function testHyperliquidStaysDryRunOnlyEvenWithCredentialsProviderAndTestnet(): void
+    {
+        // PR12 hardening: a fully "ready" Hyperliquid runtime on testnet with credentials must
+        // still report live as forbidden and recommend dry-run. Testnet capability != live trading.
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(Exchange::HYPERLIQUID, MarketType::PERPETUAL, supportsPrivateWs: true)),
+            $this->providerRegistry($this->providerBundle(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(
+                environment: 'testnet',
+                accountAddress: '0xabc',
+                privateKey: '0xkey',
+            ),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'hyperliquid',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Exchange: hyperliquid', $output);
+        self::assertStringContainsString('Adapter: found', $output);
+        self::assertStringContainsString('Provider bundle: found', $output);
+        self::assertStringContainsString('Credentials: ok', $output);
+        self::assertStringContainsString('Live trading: disabled', $output);
+        self::assertStringContainsString('Dry-run only: yes', $output);
+        self::assertStringContainsString('Live allowed: no', $output);
+        self::assertStringContainsString('Network: testnet', $output);
+        self::assertStringContainsString('Mainnet enabled: no', $output);
+        self::assertStringContainsString('Recommended dry_run: true', $output);
+        self::assertStringContainsString('Schedule ready: yes', $output);
+    }
+
+    public function testHyperliquidMainnetEnabledStillForbidsLive(): void
+    {
+        // HYPERLIQUID_MAINNET_ENABLED=1 on mainnet is a network capability, NOT a live-trading
+        // authorization: live stays disabled and dry-run stays recommended in PR12.
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(Exchange::HYPERLIQUID, MarketType::PERPETUAL, supportsPrivateWs: true)),
+            $this->providerRegistry($this->providerBundle(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(
+                environment: 'mainnet',
+                accountAddress: '0xabc',
+                privateKey: '0xkey',
+                mainnetEnabled: true,
+            ),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'hyperliquid',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Credentials: ok', $output);
+        self::assertStringContainsString('Live trading: disabled', $output);
+        self::assertStringContainsString('Dry-run only: yes', $output);
+        self::assertStringContainsString('Live allowed: no', $output);
+        self::assertStringContainsString('Network: mainnet', $output);
+        self::assertStringContainsString('Mainnet enabled: yes', $output);
+        self::assertStringContainsString('Recommended dry_run: true', $output);
     }
 
     public function testReportsReadyBitmartRuntimeWhenAdapterAndProviderExist(): void
@@ -128,9 +235,11 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('REST: unknown', $output);
         self::assertStringContainsString('Recommended dry_run: false', $output);
         self::assertStringContainsString('Schedule ready: yes', $output);
-        // The OKX-specific dry-run-only gate must not leak into Bitmart legacy output.
+        // The OKX/Hyperliquid dry-run-only gates must not leak into Bitmart legacy output.
         self::assertStringNotContainsString('Dry-run only:', $output);
         self::assertStringNotContainsString('Live allowed:', $output);
+        self::assertStringNotContainsString('Network:', $output);
+        self::assertStringNotContainsString('Mainnet enabled:', $output);
     }
 
     public function testReportsUnreadyBitmartRuntimeWhenCredentialsAreMissing(): void
