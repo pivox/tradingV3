@@ -222,6 +222,20 @@ Avant tout run :
 - conserver une trace du dernier payload et de la dernière réponse ;
 - ne pas déclencher des trades simplement pour augmenter la fréquence.
 
+## Plan court de PR atomiques
+
+| PR | Objectif | Résultat attendu |
+| --- | --- | --- |
+| DOC-001 | Figer la cible fonctionnelle | Documentation actuelle validée. |
+| PY-001 | Créer le squelette API Python | Service API lancé, endpoint healthcheck, structure projet. |
+| DB-001 | Persister dashboards, sets et derniers runs | Tables orchestration + dernier JSON global/par set. |
+| SF-001 | Supporter `sync_tables=false` côté Symfony | `/api/mtf/run` peut exécuter un set préparé sans sync par run. |
+| PY-002 | Implémenter `/orchestrator/run` | Lecture des sets actifs, appels parallèles bornés, agrégation. |
+| UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
+| TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
+
+Ce plan reste volontairement court. Les issues et prompts détaillés seront créés au moment de chaque PR.
+
 ## Hors-scope de la première PR code
 
 La première PR technique de l'API Python ne doit pas encore gérer tout le trading live.
