@@ -49,6 +49,9 @@ class ContractsApiController extends AbstractController
                 $runnerRequest = MtfRunnerRequestDto::fromArray([
                     'profile' => $request->query->get('profile'),
                     'mtf_profile' => $request->query->get('mtf_profile'),
+                    'validation_mode' => $request->query->get('validation_mode'),
+                    'context_mode' => $request->query->get('context_mode'),
+                    'mode' => $request->query->get('mode'),
                     'exchange' => $request->query->get('exchange', $request->query->get('cex')),
                     'market_type' => $request->query->get('market_type', $request->query->get('type_contract')),
                 ]);
