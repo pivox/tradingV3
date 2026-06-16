@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Controller;
 
+use App\Config\MtfContractsConfigProvider;
+use App\Config\TradeEntryModeContext;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Contract\Provider\MainProviderInterface;
 use App\Provider\Repository\ContractRepository;
@@ -35,6 +37,8 @@ class MtfController extends AbstractController
         private readonly ClockInterface $clock,
         private readonly ContractRepository $contractRepository,
         private readonly MainProviderInterface $mainProvider,
+        private readonly MtfContractsConfigProvider $contractsConfigProvider,
+        private readonly TradeEntryModeContext $modeContext,
     ) {
     }
 
@@ -354,6 +358,91 @@ class MtfController extends AbstractController
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Expose la liste des contrats réellement sélectionnés par la configuration
+     * `mtf_contracts` (filtres + limites top_n/mid_n), sans déclencher de run.
+     *
+     * Cible : permettre à l'orchestrateur Python (cf. SF-001) de préparer ses sets
+     * de payloads à partir des symboles effectivement retenus côté Symfony.
+     *
+     * Paramètres (query string en GET, JSON en POST) :
+     * - profile / mtf_profile : profil de config (défaut = mode actif TradeEntry) ;
+     * - exchange / market_type : contexte exchange (défaut bitmart / perpetual) ;
+     * - ignore_limits : true pour retourner tous les symboles éligibles sans top_n/mid_n.
+     */
+    #[Route('/selected-contracts', name: 'selected_contracts', methods: ['GET', 'POST'])]
+    public function selectedContracts(Request $request): JsonResponse
+    {
+        try {
+            $data = $request->getMethod() === 'POST'
+                ? (json_decode($request->getContent(), true) ?? [])
+                : $request->query->all();
+
+            try {
+                $context = $this->resolveExchangeContext($data);
+            } catch (\InvalidArgumentException $e) {
+                return $this->json([
+                    'status' => 'error',
+                    'message' => $e->getMessage(),
+                ], Response::HTTP_BAD_REQUEST);
+            }
+
+            // Profil : explicite sinon mode TradeEntry actif (même logique que /api/mtf/run).
+            $profileInput = $data['profile'] ?? $data['mtf_profile'] ?? null;
+            $profile = is_string($profileInput) && trim($profileInput) !== ''
+                ? trim($profileInput)
+                : $this->modeContext->resolve(null);
+
+            $ignoreLimits = filter_var($data['ignore_limits'] ?? false, FILTER_VALIDATE_BOOLEAN);
+
+            $config = $this->contractsConfigProvider->getConfigForProfile($profile);
+            $symbols = $this->contractRepository->allActiveSymbolNames([], $ignoreLimits, $profile, $context);
+
+            $this->mtfLogger->info('[MTF Controller] Selected contracts resolved', [
+                'profile' => $profile,
+                'exchange' => $context->exchange->value,
+                'market_type' => $context->marketType->value,
+                'ignore_limits' => $ignoreLimits,
+                'count' => count($symbols),
+            ]);
+
+            return $this->json([
+                'status' => 'success',
+                'data' => [
+                    'profile' => $profile,
+                    'exchange' => $context->exchange->value,
+                    'market_type' => $context->marketType->value,
+                    'selection_enabled' => (bool) $config->get('enabled', true),
+                    'ignore_limits' => $ignoreLimits,
+                    'count' => count($symbols),
+                    'symbols' => $symbols,
+                    'filters' => [
+                        'quote_currency' => $config->getFilter('quote_currency'),
+                        'status' => $config->getFilter('status'),
+                        'min_turnover' => $config->getFilter('min_turnover'),
+                        'mid_max_turnover' => $config->getFilter('mid_max_turnover'),
+                        'max_age_hours' => $config->getFilter('max_age_hours'),
+                        'require_not_expired' => $config->getFilter('require_not_expired'),
+                    ],
+                    'limits' => [
+                        'top_n' => $config->getLimit('top_n'),
+                        'mid_n' => $config->getLimit('mid_n'),
+                    ],
+                    'timestamp' => $this->clock->now()->format('Y-m-d H:i:s'),
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            $this->mtfLogger->error('[MTF Controller] Failed to resolve selected contracts', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return $this->json([
+                'status' => 'error',
+                'message' => $e->getMessage(),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }

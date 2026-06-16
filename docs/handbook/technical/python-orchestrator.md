@@ -70,6 +70,44 @@ sequenceDiagram
     Python-->>Front: preview des sets disponibles
 ```
 
+## API Symfony : contrats sélectionnés (SF-001)
+
+Symfony expose la liste des contrats réellement retenus par `mtf_contracts`, sans
+déclencher de run, via :
+
+```text
+GET|POST /api/mtf/selected-contracts
+```
+
+Paramètres (query string en GET, JSON en POST) :
+
+- `profile` / `mtf_profile` : profil de configuration (défaut = mode TradeEntry actif) ;
+- `exchange` / `market_type` : contexte exchange (défaut `bitmart` / `perpetual`) ;
+- `ignore_limits` : `true` pour obtenir tous les symboles éligibles sans `top_n` / `mid_n`.
+
+Réponse type :
+
+```json
+{
+  "status": "success",
+  "data": {
+    "profile": "scalper_micro",
+    "exchange": "bitmart",
+    "market_type": "perpetual",
+    "selection_enabled": true,
+    "ignore_limits": false,
+    "count": 2,
+    "symbols": ["BTCUSDT", "ETHUSDT"],
+    "filters": { "quote_currency": "USDT", "status": "Trading", "min_turnover": 1500000 },
+    "limits": { "top_n": 140, "mid_n": 0 },
+    "timestamp": "2026-06-16 19:30:00"
+  }
+}
+```
+
+C'est cet endpoint que l'API Python appelle lors du refresh explicite des contrats
+pour préparer ses sets de payloads.
+
 ## Lien avec `mtf_contracts`
 
 Symfony reste la source de vérité pour la sélection initiale des contrats. La configuration `mtf_contracts` filtre déjà les contrats selon :
