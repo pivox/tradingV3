@@ -1,4 +1,4 @@
-"""Tests for the dashboard / target model, dry-run-only gate, fingerprint and snapshot."""
+"""Tests for the dashboard / target model: parsing, caps, dry-run-only gate, fingerprint, snapshot."""
 
 import pytest
 
@@ -36,6 +36,27 @@ def test_target_requires_id_and_exchange():
         DashboardTarget.from_dict({"target_id": "x"})
 
 
+def test_unsupported_environment_is_rejected():
+    with pytest.raises(ValueError, match="environment"):
+        DashboardTarget.from_dict({"target_id": "t", "exchange": "okx", "environment": "prod"})
+
+
+def test_workers_hard_cap_is_enforced():
+    with pytest.raises(ValueError, match="workers"):
+        DashboardTarget.from_dict({"target_id": "t", "exchange": "okx", "workers": 100})
+
+
+def test_max_concurrency_hard_cap_is_enforced():
+    with pytest.raises(ValueError, match="max_concurrency"):
+        Dashboard.from_dict(
+            {
+                "dashboard_id": "d",
+                "max_concurrency": 100,
+                "targets": [{"target_id": "t", "exchange": "okx"}],
+            }
+        )
+
+
 def test_snapshot_includes_fingerprint_and_fields():
     snapshot = _target().to_snapshot()
 
@@ -53,8 +74,10 @@ def test_fingerprint_is_stable_and_changes_with_effective_config():
     assert base.fingerprint() != changed.fingerprint()
 
 
-def test_validate_policy_blocks_live_okx_and_hyperliquid():
-    for exchange in ("okx", "hyperliquid"):
+def test_validate_policy_blocks_any_live_target():
+    # Dashboard orchestrator is dry-run-only for EVERY exchange (Bitmart live stays on the legacy
+    # direct schedule).
+    for exchange in ("okx", "hyperliquid", "bitmart"):
         dashboard = Dashboard(
             dashboard_id="d",
             targets=[_target(target_id="t", exchange=exchange, dry_run=False)],
@@ -63,22 +86,13 @@ def test_validate_policy_blocks_live_okx_and_hyperliquid():
             dashboard.validate_policy()
 
 
-def test_validate_policy_is_casing_proof():
-    dashboard = Dashboard(
-        dashboard_id="d",
-        targets=[_target(target_id="t", exchange="  OKX ", dry_run=False)],
-    )
-    with pytest.raises(RuntimeError, match="dry_run=true"):
-        dashboard.validate_policy()
-
-
-def test_validate_policy_allows_dry_run_okx_hl_and_live_bitmart():
+def test_validate_policy_allows_all_dry_run():
     dashboard = Dashboard(
         dashboard_id="d",
         targets=[
             _target(target_id="a", exchange="okx", dry_run=True),
             _target(target_id="b", exchange="hyperliquid", dry_run=True),
-            _target(target_id="c", exchange="bitmart", dry_run=False),
+            _target(target_id="c", exchange="bitmart", dry_run=True),
         ],
     )
 
@@ -107,14 +121,14 @@ def test_load_dashboards_builds_registry_with_defaults():
     assert [t.target_id for t in dashboard.targets] == ["okx", "hl"]
 
 
-def test_load_dashboards_is_fail_closed_on_live_okx():
+def test_load_dashboards_is_fail_closed_on_any_live_target():
     with pytest.raises(RuntimeError, match="dry_run=true"):
         load_dashboards(
             {
                 "dashboards": [
                     {
                         "dashboard_id": "bad",
-                        "targets": [{"target_id": "x", "exchange": "okx", "dry_run": False}],
+                        "targets": [{"target_id": "x", "exchange": "bitmart", "dry_run": False}],
                     }
                 ]
             }

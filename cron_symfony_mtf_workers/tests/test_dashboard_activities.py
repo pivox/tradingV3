@@ -80,7 +80,7 @@ def test_runtime_check_target_blocks_live_okx():
 
 
 def test_call_mtf_run_target_success(monkeypatch):
-    response = _FakeResponse(200, '{"data": {"summary": {"success_rate": 100}}}')
+    response = _FakeResponse(200, '{"status": "success", "data": {"summary": {"success_rate": 100}}}')
     monkeypatch.setattr(act.httpx, "AsyncClient", lambda *a, **k: _FakeClient(response))
 
     target = {"target_id": "okx", "exchange": "okx", "dry_run": True, "market_type": "perpetual"}
@@ -90,10 +90,23 @@ def test_call_mtf_run_target_success(monkeypatch):
     assert result["status"] == 200
 
 
-def test_call_mtf_run_target_applicative_failure_raises(monkeypatch):
+def test_call_mtf_run_target_applicative_failure_is_non_retryable(monkeypatch):
     response = _FakeResponse(200, '{"data": {"errors": ["boom"]}}')
     monkeypatch.setattr(act.httpx, "AsyncClient", lambda *a, **k: _FakeClient(response))
 
     target = {"target_id": "okx", "exchange": "okx", "dry_run": True, "market_type": "perpetual"}
-    with pytest.raises(ApplicationError):
+    with pytest.raises(ApplicationError) as excinfo:
         asyncio.run(act.call_mtf_run_target(target, "d:okx:ts:abc"))
+
+    assert excinfo.value.non_retryable is True
+
+
+def test_call_mtf_run_target_transient_5xx_is_retryable(monkeypatch):
+    response = _FakeResponse(503, "service unavailable")
+    monkeypatch.setattr(act.httpx, "AsyncClient", lambda *a, **k: _FakeClient(response))
+
+    target = {"target_id": "okx", "exchange": "okx", "dry_run": True, "market_type": "perpetual"}
+    with pytest.raises(ApplicationError) as excinfo:
+        asyncio.run(act.call_mtf_run_target(target, "d:okx:ts:abc"))
+
+    assert excinfo.value.non_retryable is False  # 5xx is transient -> per-target retry kept

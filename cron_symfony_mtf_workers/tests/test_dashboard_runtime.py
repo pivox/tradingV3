@@ -1,10 +1,11 @@
-"""Tests for the pure per-target helpers: Symfony body, success contract, runtime-check decision."""
+"""Tests for the pure per-target helpers: Symfony body, success contract, dry-run-only guardrail."""
 
 import pytest
 
 from dashboards.runtime import (
     decide_runtime_check,
     is_mtf_run_success,
+    is_transient_http,
     to_symfony_body,
 )
 
@@ -43,58 +44,46 @@ def test_to_symfony_body_omits_absent_optionals():
     assert "symbols" not in body
 
 
+def test_is_transient_http():
+    assert is_transient_http(None) is True       # transport failure
+    assert is_transient_http(429) is True
+    assert is_transient_http(503) is True
+    assert is_transient_http(400) is False       # deterministic client error
+    assert is_transient_http(200) is False
+
+
 def test_is_mtf_run_success_requires_http_2xx():
     assert is_mtf_run_success({"ok": False, "status": 500, "body": {}}) is False
 
 
-def test_is_mtf_run_success_true_on_clean_body():
-    assert is_mtf_run_success({"ok": True, "status": 200, "body": {"data": {"summary": {}}}}) is True
+def test_is_mtf_run_success_true_on_status_success():
+    assert is_mtf_run_success(
+        {"ok": True, "status": 200, "body": {"status": "success", "data": {"summary": {}}}}
+    ) is True
 
 
-def test_is_mtf_run_success_false_on_application_errors_in_2xx():
+def test_is_mtf_run_success_false_on_top_level_error_status():
+    # HTTP 200 but Symfony reports a blocking business status -> not a success.
+    assert is_mtf_run_success({"ok": True, "status": 200, "body": {"status": "error"}}) is False
+
+
+def test_is_mtf_run_success_false_on_application_errors_or_flag():
     assert is_mtf_run_success({"ok": True, "status": 200, "body": {"data": {"errors": ["boom"]}}}) is False
     assert is_mtf_run_success({"ok": True, "status": 200, "body": {"success": False}}) is False
 
 
-def test_is_mtf_run_success_lenient_on_non_dict_body():
-    # A 2xx with a non-JSON body cannot be assessed applicatively -> trust the HTTP status.
-    assert is_mtf_run_success({"ok": True, "status": 200, "body": "OK"}) is True
+def test_is_mtf_run_success_fail_closed_on_non_json_body():
+    # /api/mtf/run must return a JSON object; a 2xx HTML/empty/"OK" body is NOT a trading success.
+    assert is_mtf_run_success({"ok": True, "status": 200, "body": "OK"}) is False
 
 
 def test_decide_runtime_check_skips_for_dry_run():
-    def loader(exchange, market_type):
-        raise AssertionError("dry-run target must not run a runtime-check")
-
-    result = decide_runtime_check({"exchange": "okx", "dry_run": True}, loader)
+    result = decide_runtime_check({"target_id": "t", "exchange": "okx", "dry_run": True})
 
     assert result == {"ok": True, "checked": False, "reason": "dry_run"}
 
 
-def test_decide_runtime_check_blocks_live_okx_before_loader():
-    def loader(exchange, market_type):
-        raise AssertionError("live OKX must be blocked before any runtime-check")
-
-    with pytest.raises(RuntimeError, match="dry_run=true"):
-        decide_runtime_check({"exchange": "okx", "dry_run": False, "market_type": "perpetual"}, loader)
-
-
-def test_decide_runtime_check_live_bitmart_runs_guardrails():
-    def loader(exchange, market_type):
-        return {"schedule_ready": "yes", "credentials": "ok", "live_trading": "enabled"}
-
-    result = decide_runtime_check(
-        {"exchange": "bitmart", "dry_run": False, "market_type": "perpetual"}, loader
-    )
-
-    assert result["ok"] is True
-    assert result["checked"] is True
-
-
-def test_decide_runtime_check_live_bitmart_fails_when_not_ready():
-    def loader(exchange, market_type):
-        return {"schedule_ready": "no", "credentials": "missing", "live_trading": "disabled"}
-
-    with pytest.raises(RuntimeError):
-        decide_runtime_check(
-            {"exchange": "bitmart", "dry_run": False, "market_type": "perpetual"}, loader
-        )
+def test_decide_runtime_check_blocks_any_live_target():
+    for exchange in ("okx", "hyperliquid", "bitmart"):
+        with pytest.raises(RuntimeError, match="dry_run=true"):
+            decide_runtime_check({"target_id": "t", "exchange": exchange, "dry_run": False})

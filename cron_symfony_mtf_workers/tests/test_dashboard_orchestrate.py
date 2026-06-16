@@ -72,7 +72,7 @@ def test_orchestrate_continue_calls_every_target_even_with_a_failure():
     assert agg["targets_ok"] == 2
 
 
-def test_orchestrate_fail_fast_stops_after_failing_batch():
+def test_orchestrate_fail_fast_is_sequential_and_stops_at_first_failure():
     calls = []
 
     async def run_target(target):
@@ -80,10 +80,11 @@ def test_orchestrate_fail_fast_stops_after_failing_batch():
         ok = target["target_id"] != "t0"
         return {"ok": ok}
 
-    agg = asyncio.run(orchestrate("d", _targets(4), "fail_fast", 1, run_target))
+    # Even with max_concurrency=4, fail_fast runs sequentially and stops at the first failing target.
+    agg = asyncio.run(orchestrate("d", _targets(4), "fail_fast", 4, run_target))
 
     assert agg["ok"] is False
-    assert calls == ["t0"]  # stopped after the first failing batch
+    assert calls == ["t0"]  # no further target launched after the first failure
     assert agg["targets_called"] == 1
 
 

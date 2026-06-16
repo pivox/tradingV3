@@ -1,11 +1,12 @@
 """Temporal activities for the MTF dashboard orchestrator (one activity per concern).
 
 - ``load_dashboard_snapshot`` : reads a fresh dashboard snapshot from the config source at run start.
-- ``runtime_check_target``    : per-target live guardrail (dry-run-only + live runtime-check).
+- ``runtime_check_target``    : per-target dry-run-only guardrail (no Docker / no live check).
 - ``call_mtf_run_target``     : posts ONE target to Symfony /api/mtf/run with an applicative
-                                success contract.
+                                success contract and correct transient-vs-deterministic retry.
 
 The decisions live in the pure helpers (``dashboards.runtime``); these activities only do I/O.
+PR13 dashboard path is dry-run-only for every exchange (live stays on the legacy direct schedule).
 """
 from __future__ import annotations
 
@@ -18,8 +19,13 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from dashboards.model import load_dashboards_file
-from dashboards.runtime import DEFAULT_SYMFONY_URL, decide_runtime_check, is_mtf_run_success, to_symfony_body
-from scripts.manage_exchange_profile_schedule import run_runtime_check
+from dashboards.runtime import (
+    DEFAULT_SYMFONY_URL,
+    decide_runtime_check,
+    is_mtf_run_success,
+    is_transient_http,
+    to_symfony_body,
+)
 from utils.response_formatter import format_mtf_response
 
 DEFAULT_DASHBOARDS_PATH = os.getenv("DASHBOARDS_PATH", "dashboards/dashboards.example.yaml")
@@ -39,7 +45,14 @@ async def load_dashboard_snapshot(
 ) -> Dict[str, Any]:
     """Load a fresh snapshot of the dashboard at the start of the run (no stale matrix)."""
     path = dashboards_path or DEFAULT_DASHBOARDS_PATH
-    dashboards = load_dashboards_file(path)  # validates dry-run-only (fail-closed)
+    try:
+        dashboards = load_dashboards_file(path)  # validates dry-run-only (fail-closed)
+    except (ValueError, RuntimeError, OSError) as exc:
+        # Deterministic config error (bad YAML, policy/live violation, missing file): do not retry.
+        raise ApplicationError(
+            f"invalid dashboard config at {path}: {exc}", non_retryable=True
+        ) from exc
+
     dashboard = dashboards.get(dashboard_id)
     if dashboard is None:
         raise ApplicationError(
@@ -52,11 +65,10 @@ async def load_dashboard_snapshot(
 
 @activity.defn(name="runtime_check_target")
 async def runtime_check_target(target: Dict[str, Any]) -> Dict[str, Any]:
-    """Per-target live guardrail. dry-run targets skip; live targets run the full runtime-check."""
+    """Per-target dry-run-only guardrail (defense in depth). No Docker, no live check."""
     try:
-        return decide_runtime_check(target, run_runtime_check)
+        return decide_runtime_check(target)
     except RuntimeError as exc:
-        # Policy / live-readiness violation: deterministic failure, do not retry.
         raise ApplicationError(str(exc), non_retryable=True) from exc
 
 
@@ -76,22 +88,21 @@ async def call_mtf_run_target(target: Dict[str, Any], idempotency_key: str) -> D
             "url": url,
             "payload": body,
         }
-    except Exception as exc:  # noqa: BLE001 - transport failure is retryable
+    except Exception as exc:  # noqa: BLE001 - transport failure is transient -> retryable
         raise ApplicationError(
             f"transport failure for target '{target.get('target_id')}': {exc}"
         ) from exc
 
-    formatted = format_mtf_response(raw_response)
-    if not is_mtf_run_success(raw_response):
-        # Applicative failure: deterministic, do not retry — surface to the workflow.
-        raise ApplicationError(
-            f"target '{target.get('target_id')}' MTF run not successful",
-            {"status": raw_response["status"], "summary": formatted.get("summary"), "error": formatted.get("error")},
-            non_retryable=True,
-        )
+    if is_mtf_run_success(raw_response):
+        formatted = format_mtf_response(raw_response)
+        return {"ok": True, "status": raw_response["status"], "summary": formatted.get("summary")}
 
-    return {
-        "ok": True,
-        "status": raw_response["status"],
-        "summary": formatted.get("summary"),
-    }
+    # Failure: keep per-target retry for transient HTTP (5xx/429/timeout), but mark deterministic
+    # applicative / 4xx failures non-retryable so the workflow surfaces them without burning retries.
+    formatted = format_mtf_response(raw_response)
+    transient = is_transient_http(raw_response["status"])
+    raise ApplicationError(
+        f"target '{target.get('target_id')}' MTF run not successful",
+        {"status": raw_response["status"], "summary": formatted.get("summary"), "error": formatted.get("error")},
+        non_retryable=not transient,
+    )

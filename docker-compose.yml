@@ -146,8 +146,10 @@ services:
       - MTF_WORKERS_COUNT=4  # Réduit pour limiter le pic mémoire des workers PHP
       - SCALPER_MICRO_WORKERS_COUNT=4
       - MTF_WORKERS_DRY_RUN=false
-      # PR13: dashboard config source read by load_dashboard_snapshot (point to a real config in prod).
-      - DASHBOARDS_PATH=dashboards/dashboards.example.yaml
+      # PR13: dashboard config source read by load_dashboard_snapshot. Points to the real (gitignored)
+      # config, NOT the committed template; copy dashboards/dashboards.example.yaml to create it.
+      # Absent file simply means no dashboard run is served (the legacy direct schedule is unaffected).
+      - DASHBOARDS_PATH=dashboards/dashboards.yaml
     depends_on:
       temporal:
         condition: service_healthy

@@ -5,8 +5,11 @@ A *dashboard* is a named matrix of *targets*; each target maps to one Symfony
 (``MTF_WORKERS_URL`` resolved in the activity), so targets do NOT carry a free-form URL
 (no SSRF surface).
 
-The dry-run-only guardrail for OKX (PR11) and Hyperliquid (PR12) is reused from
-``scripts.manage_exchange_profile_schedule`` (single source of truth, never duplicated).
+PR13 scope: the dashboard orchestrator is **dry-run-only for every exchange**. Symfony does not
+yet consume ``environment`` / ``idempotency_key`` (no real demo/mainnet piloting, no dedup), and
+the Python worker cannot run a live runtime-check, so live trading stays on the legacy *direct*
+schedule (``manage_exchange_profile_schedule.py``), untouched. A dashboard target with
+``dry_run=false`` is therefore refused.
 
 This module imports ``scripts`` (which pulls ``subprocess`` etc.) so it must only be used from
 **activities** / scripts / tests — never imported inside the Temporal workflow sandbox.
@@ -18,15 +21,17 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 
-from scripts.manage_exchange_profile_schedule import (
-    assert_exchange_schedule_policy,
-    parse_bool,
-)
+from scripts.manage_exchange_profile_schedule import parse_bool
 
 DEFAULT_CADENCE = "*/1 * * * *"
 DEFAULT_FAIL_POLICY = "continue"
 DEFAULT_MAX_CONCURRENCY = 4
 SUPPORTED_FAIL_POLICIES = {"continue", "fail_fast"}
+SUPPORTED_ENVIRONMENTS = {"demo", "testnet", "mainnet"}
+
+# Hard caps: a dashboard YAML typo must not be able to saturate Symfony/Temporal.
+MAX_WORKERS = 16
+MAX_DASHBOARD_CONCURRENCY = 8
 
 
 def _normalize_symbols(raw: Any) -> Optional[List[str]]:
@@ -51,13 +56,22 @@ def _normalize_fail_policy(raw: Any) -> str:
     return value
 
 
+def _bounded(name: str, raw: Any, default: int, cap: int) -> int:
+    value = int(raw) if raw is not None else default
+    if value < 1:
+        raise ValueError(f"{name} must be >= 1 (got {value})")
+    if value > cap:
+        raise ValueError(f"{name} exceeds the hard cap {cap} (got {value})")
+    return value
+
+
 @dataclass(frozen=True)
 class DashboardTarget:
     """One row of a dashboard.
 
-    ``environment`` (``demo`` / ``testnet`` / ``mainnet``) is a real runtime dimension: it is part
-    of the target fingerprint and is forwarded to Symfony (consumed by the effective trading config
-    resolver). It is NOT a live authorization — OKX/Hyperliquid stay dry-run only.
+    ``environment`` (``demo`` / ``testnet`` / ``mainnet``) is part of the target fingerprint and is
+    forwarded to Symfony for forward-compatibility, but is NOT yet consumed by ``/api/mtf/run``
+    (see the module docstring): it does not pilot live trading today.
     """
 
     target_id: str
@@ -82,15 +96,21 @@ class DashboardTarget:
         mtf_profile = data.get("mtf_profile")
         # Accept legacy alias "network" for "environment".
         environment = data.get("environment", data.get("network"))
+        environment = str(environment).strip() if environment else None
+        if environment is not None and environment.lower() not in SUPPORTED_ENVIRONMENTS:
+            raise ValueError(
+                f"dashboard target '{target_id}' has unsupported environment '{environment}' "
+                f"(expected one of {sorted(SUPPORTED_ENVIRONMENTS)})"
+            )
 
         return cls(
             target_id=target_id,
             exchange=exchange,
             market_type=str(data.get("market_type") or "perpetual").strip() or "perpetual",
             mtf_profile=str(mtf_profile).strip() if mtf_profile else None,
-            environment=str(environment).strip() if environment else None,
+            environment=environment.lower() if environment else None,
             dry_run=parse_bool(data.get("dry_run"), True),
-            workers=max(1, int(data.get("workers", 4))),
+            workers=_bounded("workers", data.get("workers"), 4, MAX_WORKERS),
             symbols=_normalize_symbols(data.get("symbols")),
             force_run=parse_bool(data.get("force_run"), False),
         )
@@ -161,13 +181,24 @@ class Dashboard:
             targets=targets,
             cadence=str(data.get("cadence") or DEFAULT_CADENCE).strip() or DEFAULT_CADENCE,
             fail_policy=_normalize_fail_policy(data.get("fail_policy")),
-            max_concurrency=max(1, int(data.get("max_concurrency", DEFAULT_MAX_CONCURRENCY))),
+            max_concurrency=_bounded(
+                "max_concurrency", data.get("max_concurrency"), DEFAULT_MAX_CONCURRENCY, MAX_DASHBOARD_CONCURRENCY
+            ),
         )
 
     def validate_policy(self) -> None:
-        """Refuse any OKX/Hyperliquid target running live (dry_run=false), casing-proof."""
+        """Dashboard orchestrator is dry-run-only for every exchange.
+
+        Refuses any target with ``dry_run=false`` (OKX/Hyperliquid never go live, and Bitmart live
+        stays on the legacy direct schedule). Raises ``RuntimeError`` on the first offending target.
+        """
         for target in self.targets:
-            assert_exchange_schedule_policy(target.exchange, target.dry_run)
+            if not target.dry_run:
+                raise RuntimeError(
+                    f"dashboard target '{target.target_id}' ({target.exchange}) must be "
+                    "dry_run=true: the dashboard orchestrator is dry-run-only "
+                    "(live trading stays on the legacy direct schedule)."
+                )
 
     def to_snapshot(self) -> Dict[str, Any]:
         return {
@@ -180,7 +211,7 @@ class Dashboard:
 
 
 def load_dashboards(raw: Dict[str, Any]) -> Dict[str, Dashboard]:
-    """Build ``{dashboard_id: Dashboard}`` from a parsed mapping (fail-closed on live OKX/HL)."""
+    """Build ``{dashboard_id: Dashboard}`` from a parsed mapping (fail-closed on any live target)."""
     if not isinstance(raw, dict):
         raise ValueError("dashboards config must be a mapping with a 'dashboards' list")
 

@@ -1,0 +1,40 @@
+name: Cron Workers Tests
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/cron-workers-tests.yml'
+      - 'cron_symfony_mtf_workers/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cron-workers-tests.yml'
+      - 'cron_symfony_mtf_workers/**'
+
+jobs:
+  cron-workers-tests:
+    name: Cron Workers Pytest
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: cron_symfony_mtf_workers
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Pytest
+        run: python -m pytest -q

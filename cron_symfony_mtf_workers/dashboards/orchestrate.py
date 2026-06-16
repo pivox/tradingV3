@@ -19,7 +19,9 @@ async def _safe_run(run_target: TargetRunner, target: Dict[str, Any]) -> Dict[st
     try:
         result = await run_target(target)
     except Exception as exc:  # noqa: BLE001 - a failing target must not crash the batch gather
-        return {"target_id": target.get("target_id"), "ok": False, "error": str(exc)}
+        # Full structured detail remains in the per-target Activity history in Temporal; here we
+        # keep a typed, readable summary for the aggregate.
+        return {"target_id": target.get("target_id"), "ok": False, "error": str(exc), "error_type": type(exc).__name__}
     if not isinstance(result, dict):
         result = {"ok": bool(result)}
     result.setdefault("target_id", target.get("target_id"))
@@ -36,11 +38,14 @@ async def orchestrate(
 ) -> Dict[str, Any]:
     """Run targets in bounded-concurrency batches; aggregate all-or-nothing.
 
-    ``fail_fast`` stops scheduling further batches once a batch contains a failure; ``continue``
-    runs every target then aggregates.
+    ``fail_fast`` runs **sequentially** (effective concurrency 1) so it genuinely stops at the
+    first failing target. ``continue`` runs every target (in batches of ``max_concurrency``) then
+    aggregates.
     """
+    effective_concurrency = 1 if fail_policy == "fail_fast" else max_concurrency
+
     results: List[Dict[str, Any]] = []
-    for batch in plan_batches(targets, max_concurrency):
+    for batch in plan_batches(targets, effective_concurrency):
         batch_results = await asyncio.gather(*[_safe_run(run_target, target) for target in batch])
         results.extend(batch_results)
         if fail_policy == "fail_fast" and any(not result["ok"] for result in batch_results):

@@ -1,0 +1,3 @@
+# Real dashboard config (PR13): copied from dashboards/dashboards.example.yaml per environment.
+# Kept out of git so an example is never used as the active runtime matrix.
+dashboards/dashboards.yaml
