@@ -7,6 +7,7 @@ import time
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from activities.bridge_http import bridge_dashboard_call
 from activities.mtf_http import mtf_api_call
 from workflows.mtf_workers import CronSymfonyMtfWorkersWorkflow
 
@@ -39,7 +40,7 @@ async def main() -> None:
         client,
         task_queue=TASK_QUEUE,
         workflows=[CronSymfonyMtfWorkersWorkflow],
-        activities=[mtf_api_call],
+        activities=[mtf_api_call, bridge_dashboard_call],
     )
     await worker.run()
 

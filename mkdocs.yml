@@ -39,6 +39,7 @@ nav:
       - Exchange schedule policy: technical/exchange-schedule-policy.md
       - Templates clés environnement: technical/environment-key-templates.md
       - Temporal workers: technical/temporal.md
+      - Temporal bridge dashboard: technical/temporal-bridge-dashboard.md
       - Frontend et Ops: technical/frontend.md
       - Architecture cible trading platform: technical/trading-platform-target-architecture.md
       - Architecture Trading Core modulaire: technical/trading-core-modular-architecture.md

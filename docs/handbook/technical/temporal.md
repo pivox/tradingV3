@@ -7,8 +7,9 @@ Le sous-projet `cron_symfony_mtf_workers/` orchestre les appels planifies vers S
 | Composant | Fichier | Role |
 | --- | --- | --- |
 | Worker process | `cron_symfony_mtf_workers/worker.py` | Se connecte a Temporal, enregistre workflow et activity sur la task queue. |
-| Workflow | `workflows/mtf_workers.py` | Normalise les jobs, execute `mtf_api_call`, logge le resume. |
+| Workflow | `workflows/mtf_workers.py` | Route chaque job : chemin legacy (`mtf_api_call`) ou chemin bridge dashboard (`bridge_dashboard_call`) si le job porte un `dashboard_id`. |
 | Activity HTTP | `activities/mtf_http.py` | POST JSON vers Symfony, parse la reponse, appelle le formatteur. |
+| Activity bridge | `activities/bridge_http.py` | POST vers le bridge Flask (`bridge_dashboard_call`) ; leve si l'agregat dashboard n'est pas OK. Voir `technical/temporal-bridge-dashboard.md`. |
 | Model job | `models/mtf_job.py` | Normalise URL, workers, dry-run, profile, exchange, market type, timeout et symboles. |
 | Formatter | `utils/response_formatter.py` | Reduit une reponse MTF longue en resume exploitable dans Temporal UI. |
 | Schedules | `scripts/manage_*.py` | Cree, lit, pause, reprend ou supprime les schedules. |
@@ -76,6 +77,7 @@ Le payload envoye a Symfony garde uniquement les champs utiles:
 | Script | Statut | Usage |
 | --- | --- | --- |
 | `scripts/manage_exchange_profile_schedule.py` | recommande | Schedule explicite par `exchange`, `market_type`, `profile`, cadence et dry-run. |
+| `scripts/manage_dashboard_schedule.py` | recommande | Schedule pilote par dashboard via le bridge Flask (matrice de targets). Voir `technical/temporal-bridge-dashboard.md`. |
 | `scripts/manage_mtf_workers_schedule.py` | legacy | Ancien schedule generique vers `/api/mtf/run`. |
 | `scripts/manage_scalper_micro_schedule.py` | legacy | Ancien schedule dedie `scalper_micro`. |
 | `scripts/manage_contract_sync_schedule.py` | actif | Sync quotidienne des contrats via `/api/mtf/sync-contracts`. |

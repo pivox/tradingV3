@@ -146,9 +146,34 @@ services:
       - MTF_WORKERS_COUNT=4  # Réduit pour limiter le pic mémoire des workers PHP
       - SCALPER_MICRO_WORKERS_COUNT=4
       - MTF_WORKERS_DRY_RUN=false
+      - BRIDGE_URL=http://mtf-bridge:8090/bridge/run
     depends_on:
       temporal:
         condition: service_healthy
+    networks:
+      - temporal-net
+      - shared-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  # PR13: Flask dashboard bridge between Temporal and Symfony. The Temporal activity
+  # bridge_dashboard_call posts to /bridge/run; the bridge expands a dashboard into
+  # sequential Symfony /api/mtf/run calls. OKX/Hyperliquid stay dry-run only.
+  mtf-bridge:
+    build: ./cron_symfony_mtf_workers
+    container_name: mtf_bridge
+    mem_limit: 256m
+    entrypoint: ["python", "-m", "bridge.app"]
+    environment:
+      - MTF_WORKERS_URL=http://trading-app-nginx:80/api/mtf/run
+      - BRIDGE_DASHBOARDS_PATH=bridge/dashboards.example.yaml
+      - BRIDGE_PORT=8090
+    ports:
+      - "8090:8090"
     networks:
       - temporal-net
       - shared-net

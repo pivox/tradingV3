@@ -44,6 +44,7 @@ class MtfJob:
     market_type: Optional[str] = None
     mtf_profile: Optional[str] = None
     timeout_minutes: int = 15
+    idempotency_key: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MtfJob":
@@ -59,6 +60,7 @@ class MtfJob:
         exchange = data.get("exchange")
         market_type = data.get("market_type")
         mtf_profile = data.get("mtf_profile")
+        idempotency_key = data.get("idempotency_key")
 
         return cls(
             url=url,
@@ -72,6 +74,7 @@ class MtfJob:
             exchange=str(exchange) if exchange else None,
             market_type=str(market_type) if market_type else None,
             mtf_profile=str(mtf_profile) if mtf_profile else None,
+            idempotency_key=str(idempotency_key) if idempotency_key else None,
         )
 
     def payload(self) -> Dict[str, Any]:
@@ -92,5 +95,7 @@ class MtfJob:
             payload["market_type"] = self.market_type
         if self.mtf_profile:
             payload["mtf_profile"] = self.mtf_profile
+        if self.idempotency_key:
+            payload["idempotency_key"] = self.idempotency_key
 
         return payload
