@@ -18,25 +18,22 @@ Cette décision évite de faire porter à Temporal la logique de sélection, de 
 
 ## Flux cible simplifié
 
-```plantuml
-@startuml
-title Temporal comme cron basique
+```mermaid
+sequenceDiagram
+    participant Schedule as Temporal Schedule
+    participant Activity as Workflow/Activity minimal
+    participant Python as API Python /orchestrator/run
+    participant Symfony as Symfony /api/mtf/run
+    participant Db as Base orchestration
 
-participant "Temporal Schedule" as Schedule
-participant "Workflow/Activity\nminimal" as Activity
-participant "API Python\n/orchestrator/run" as Python
-participant "Symfony\n/api/mtf/run" as Symfony
-participant "Base orchestration" as Db
-
-Schedule -> Activity : tick planifié
-Activity -> Python : POST /orchestrator/run
-Python -> Db : lire les sets actifs déjà prêts
-Python -> Symfony : appels parallèles bornés
-Symfony --> Python : réponses JSON existantes
-Python -> Db : sauvegarder dernier JSON et statut
-Python --> Activity : { ok: true|false, run_id, summary }
-Activity --> Schedule : succès ou échec
-@enduml
+    Schedule->>Activity: tick planifié
+    Activity->>Python: POST /orchestrator/run
+    Python->>Db: lire les sets actifs déjà prêts
+    Python->>Symfony: appels parallèles bornés
+    Symfony-->>Python: réponses JSON existantes
+    Python->>Db: sauvegarder dernier JSON et statut
+    Python-->>Activity: { ok: true|false, run_id, summary }
+    Activity-->>Schedule: succès ou échec
 ```
 
 ## Responsabilités legacy
@@ -53,30 +50,27 @@ Activity --> Schedule : succès ou échec
 
 ## Flux legacy actuel
 
-```plantuml
-@startuml
-title Workflow Temporal legacy
+```mermaid
+sequenceDiagram
+    participant Ops as Opérateur / Script
+    participant Temporal as Temporal Server
+    participant Worker as worker.py
+    participant Workflow as CronSymfonyMtfWorkersWorkflow
+    participant Activity as mtf_api_call
+    participant Symfony as Symfony /api/mtf/run
+    participant Formatter as response_formatter.py
 
-participant "Opérateur / Script" as Ops
-participant "Temporal Server" as Temporal
-participant "worker.py" as Worker
-participant "CronSymfonyMtfWorkersWorkflow" as Workflow
-participant "mtf_api_call" as Activity
-participant "Symfony\n/api/mtf/run" as Symfony
-participant "response_formatter.py" as Formatter
-
-Ops -> Temporal : create schedule
-Worker -> Temporal : poll task queue cron_symfony_mtf_workers
-Temporal -> Workflow : cron tick avec jobs
-Workflow -> Workflow : MtfJob.from_dict + payload()
-Workflow -> Activity : execute_activity(url, payload)
-Activity -> Symfony : POST JSON
-Symfony --> Activity : full MTF response
-Activity -> Formatter : format_mtf_response(raw_response)
-Formatter --> Activity : summary + metrics + full_response
-Activity --> Workflow : formatted result
-Workflow --> Temporal : logs concis + result
-@enduml
+    Ops->>Temporal: create schedule
+    Worker->>Temporal: poll task queue cron_symfony_mtf_workers
+    Temporal->>Workflow: cron tick avec jobs
+    Workflow->>Workflow: MtfJob.from_dict + payload()
+    Workflow->>Activity: execute_activity(url, payload)
+    Activity->>Symfony: POST JSON
+    Symfony-->>Activity: full MTF response
+    Activity->>Formatter: format_mtf_response(raw_response)
+    Formatter-->>Activity: summary + metrics + full_response
+    Activity-->>Workflow: formatted result
+    Workflow-->>Temporal: logs concis + result
 ```
 
 ## Payload `MtfJob`
