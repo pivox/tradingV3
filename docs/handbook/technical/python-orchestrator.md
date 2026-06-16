@@ -228,7 +228,7 @@ Avant tout run :
 | PR | Objectif | Résultat attendu |
 | --- | --- | --- |
 | DOC-001 | Figer la cible fonctionnelle | Documentation actuelle validée. |
-| SF-001 | Exposer les contrats filtrés par `mtf_contracts` | Endpoint Symfony retournant les symboles réellement sélectionnés. |
+| SF-001 ✅ | Exposer les contrats filtrés par `mtf_contracts` | Livré : `GET /api/mtf/contracts` retourne les symboles réellement sélectionnés. |
 | PY-001 | Créer le squelette API Python | Service API lancé, endpoint healthcheck, structure projet. |
 | DB-001 | Persister dashboards, sets et derniers runs | Tables orchestration + dernier JSON global/par set. |
 | SF-002 | Supporter `sync_tables=false` côté Symfony | `/api/mtf/run` peut exécuter un set préparé sans sync par run. |
@@ -237,6 +237,45 @@ Avant tout run :
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 
 Ce plan reste volontairement court. Les issues et prompts détaillés seront créés au moment de chaque PR.
+
+## Endpoint contrats filtrés (SF-001)
+
+`GET /api/mtf/contracts` expose, en lecture seule, les symboles sélectionnés par
+`mtf_contracts`. Il réutilise le même chemin que le runner
+(`ContractRepository::allActiveSymbolNames`) sans consommer la file MTF switch.
+
+Paramètres de requête (tous optionnels) :
+
+| Param | Alias | Défaut | Rôle |
+| --- | --- | --- | --- |
+| `profile` | `mtf_profile` | 1er mode activé, sinon config fallback | Profil de configuration `mtf_contracts.<profile>.yaml`. |
+| `exchange` | `cex` | `bitmart` | Exchange ciblé. |
+| `market_type` | `type_contract` | `perpetual` | Type de marché. |
+| `ignore_limits` | — | `false` | Ignore `top_n` / `mid_n` (renvoie tous les éligibles). |
+
+Réponse :
+
+```json
+{
+  "ok": true,
+  "profile": "scalper_micro",
+  "exchange": "bitmart",
+  "market_type": "perpetual",
+  "count": 42,
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "filters": {
+    "quote_currency": "USDT",
+    "status": "Trading",
+    "min_turnover": 1500000,
+    "mid_max_turnover": 8000000,
+    "top_n": 140,
+    "mid_n": 0,
+    "ignore_limits": false
+  }
+}
+```
+
+L'API Python utilise cet endpoint lors du « refresh contrats » pour préparer les sets.
 
 ## Hors-scope de la première PR code
 
