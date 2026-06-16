@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace App\Controller\Api;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Config\MtfContractsConfigProvider;
 use App\Config\TradeEntryModeContext;
+use App\MtfRunner\Dto\MtfRunnerRequestDto;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Repository\ContractRepository;
 use Psr\Log\LoggerInterface;
@@ -48,9 +51,23 @@ class ContractsApiController extends AbstractController
                 }
             }
 
-            $exchangeInput = $request->query->get('exchange', $request->query->get('cex'));
-            $marketTypeInput = $request->query->get('market_type', $request->query->get('type_contract'));
-            $context = ExchangeContext::fromValues($exchangeInput, $marketTypeInput);
+            // Réutilise le parsing de contexte du runner (trim, alias futures/perp,
+            // erreur explicite sur valeur inconnue) pour que le preview vise exactement
+            // le même exchange/marché qu'un /api/mtf/run avec les mêmes entrées, plutôt
+            // que de retomber silencieusement sur Bitmart/perpetual.
+            try {
+                $runnerRequest = MtfRunnerRequestDto::fromArray([
+                    'exchange' => $request->query->get('exchange', $request->query->get('cex')),
+                    'market_type' => $request->query->get('market_type', $request->query->get('type_contract')),
+                ]);
+            } catch (\InvalidArgumentException $e) {
+                return $this->json(['ok' => false, 'error' => $e->getMessage()], 400);
+            }
+
+            $context = ExchangeContext::fromEnums(
+                $runnerRequest->exchange ?? Exchange::BITMART,
+                $runnerRequest->marketType ?? MarketType::PERPETUAL,
+            );
 
             // On colle strictement à l'univers du runner (findSymbolsMixedLiquidity).
             // Pas d'option ignore_limits : findAllActiveSymbolsWithoutLimits applique
