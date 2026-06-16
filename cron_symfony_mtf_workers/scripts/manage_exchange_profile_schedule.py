@@ -22,23 +22,32 @@ SUPPORTED_EXCHANGES = {"bitmart", "binance", "fake", "hyperliquid", "okx"}
 SUPPORTED_MARKET_TYPES = {"perpetual", "spot"}
 SUPPORTED_PROFILES = {"regular", "scalper", "scalper_micro"}
 
-# PR11: OKX stays dry-run only until a dedicated live-readiness PR. A live (dry_run=false)
-# OKX schedule must never be created, regardless of --skip-runtime-check.
-DRY_RUN_ONLY_EXCHANGES = {"okx"}
-OKX_DRY_RUN_ONLY_MESSAGE = (
-    "OKX schedules must stay dry_run=true until a dedicated live-readiness PR."
-)
+# PR11/PR12: OKX and Hyperliquid stay dry-run only until a dedicated live-readiness PR.
+# A live (dry_run=false) schedule for these exchanges must never be created, regardless
+# of --skip-runtime-check.
+DRY_RUN_ONLY_EXCHANGES = {"okx", "hyperliquid"}
+
+
+def dry_run_only_message(exchange: Optional[str]) -> str:
+    """Build the dry-run-only guardrail message for a given exchange."""
+    label = (exchange or "").strip().lower().upper()
+    return f"{label} schedules must stay dry_run=true until a dedicated live-readiness PR."
+
+
+# Backward-compatible aliases: the exact message raised per dry-run-only exchange.
+OKX_DRY_RUN_ONLY_MESSAGE = dry_run_only_message("okx")
+HYPERLIQUID_DRY_RUN_ONLY_MESSAGE = dry_run_only_message("hyperliquid")
 
 
 def assert_exchange_schedule_policy(exchange: Optional[str], dry_run: bool) -> None:
-    """Block live schedules for exchanges that are still dry-run only (PR11: OKX).
+    """Block live schedules for exchanges that are still dry-run only (PR11: OKX, PR12: Hyperliquid).
 
     The exchange is normalized so the gate cannot be bypassed by casing/whitespace
-    (e.g. a ScheduleConfig built in code with exchange="OKX").
+    (e.g. a ScheduleConfig built in code with exchange="OKX" or " Hyperliquid ").
     """
     normalized_exchange = (exchange or "").strip().lower()
     if normalized_exchange in DRY_RUN_ONLY_EXCHANGES and not dry_run:
-        raise RuntimeError(OKX_DRY_RUN_ONLY_MESSAGE)
+        raise RuntimeError(dry_run_only_message(normalized_exchange))
 
 
 @dataclass(frozen=True)
@@ -268,7 +277,7 @@ async def create_schedule(client: Any, config: ScheduleConfig) -> None:
         raise RuntimeError("create requires --exchange and --profile")
 
     # Dry-run-only policy is independent of the runtime-check and cannot be bypassed
-    # with --skip-runtime-check: OKX live schedules are forbidden in PR11.
+    # with --skip-runtime-check: OKX (PR11) and Hyperliquid (PR12) live schedules are forbidden.
     assert_exchange_schedule_policy(config.exchange, config.dry_run)
 
     job = build_job(

@@ -6,6 +6,7 @@ import pytest
 
 import scripts.manage_exchange_profile_schedule as schedule_manager
 from scripts.manage_exchange_profile_schedule import (
+    HYPERLIQUID_DRY_RUN_ONLY_MESSAGE,
     OKX_DRY_RUN_ONLY_MESSAGE,
     ScheduleConfig,
     assert_exchange_schedule_policy,
@@ -13,6 +14,7 @@ from scripts.manage_exchange_profile_schedule import (
     build_job,
     build_parser,
     create_schedule,
+    dry_run_only_message,
     generate_schedule_id,
     generate_workflow_id,
     parse_runtime_check_output,
@@ -293,9 +295,10 @@ def test_resolve_schedule_config_allows_dry_run_okx_create():
 
 
 def test_assert_exchange_schedule_policy_allows_live_for_non_dry_run_only_exchanges():
-    # Bitmart legacy can still go live; only dry-run-only exchanges (OKX) are blocked.
+    # Bitmart legacy can still go live; only dry-run-only exchanges (OKX, Hyperliquid) are blocked.
     assert_exchange_schedule_policy("bitmart", dry_run=False) is None
     assert_exchange_schedule_policy("okx", dry_run=True) is None
+    assert_exchange_schedule_policy("hyperliquid", dry_run=True) is None
 
 
 def test_assert_exchange_schedule_policy_blocks_uppercase_okx_live():
@@ -305,3 +308,65 @@ def test_assert_exchange_schedule_policy_blocks_uppercase_okx_live():
 
     with pytest.raises(RuntimeError, match=OKX_DRY_RUN_ONLY_MESSAGE):
         assert_exchange_schedule_policy("  Okx ", dry_run=False)
+
+
+def test_create_live_hyperliquid_schedule_is_blocked_even_with_runtime_check_bypass():
+    class FailingClient:
+        async def create_schedule(self, schedule_id, schedule):
+            raise AssertionError("Hyperliquid live schedule must never reach Temporal creation")
+
+    config = ScheduleConfig(
+        command="create",
+        exchange="hyperliquid",
+        market_type="perpetual",
+        profile="scalper",
+        workers=4,
+        dry_run=False,
+        cron="*/1 * * * *",
+        schedule_id="cron-mtf-hyperliquid-scalper-1m",
+        workflow_id="mtf-hyperliquid-scalper-runner",
+        dry_run_schedule=False,
+        skip_runtime_check=True,
+    )
+
+    with pytest.raises(RuntimeError, match=HYPERLIQUID_DRY_RUN_ONLY_MESSAGE):
+        asyncio.run(create_schedule(FailingClient(), config))
+
+
+def test_resolve_schedule_config_blocks_live_hyperliquid_create():
+    parser = build_parser()
+    args = parser.parse_args(
+        ["create", "--exchange", "hyperliquid", "--profile", "scalper", "--dry-run=false"]
+    )
+
+    with pytest.raises(RuntimeError, match=HYPERLIQUID_DRY_RUN_ONLY_MESSAGE):
+        resolve_schedule_config(args)
+
+
+def test_resolve_schedule_config_allows_dry_run_hyperliquid_create():
+    parser = build_parser()
+    args = parser.parse_args(
+        ["create", "--exchange", "hyperliquid", "--profile", "scalper", "--dry-run=true"]
+    )
+
+    config = resolve_schedule_config(args)
+
+    assert config.exchange == "hyperliquid"
+    assert config.dry_run is True
+
+
+def test_assert_exchange_schedule_policy_blocks_uppercase_hyperliquid_live():
+    # The gate normalizes casing/whitespace: a hand-built "HYPERLIQUID" must not bypass it.
+    with pytest.raises(RuntimeError, match=HYPERLIQUID_DRY_RUN_ONLY_MESSAGE):
+        assert_exchange_schedule_policy("HYPERLIQUID", dry_run=False)
+
+    with pytest.raises(RuntimeError, match=HYPERLIQUID_DRY_RUN_ONLY_MESSAGE):
+        assert_exchange_schedule_policy("  Hyperliquid ", dry_run=False)
+
+
+def test_dry_run_only_message_is_exchange_specific():
+    # The generalized message names the offending exchange (uppercased), so OKX and
+    # Hyperliquid get distinct, actionable guardrail messages.
+    assert dry_run_only_message("okx") == OKX_DRY_RUN_ONLY_MESSAGE
+    assert dry_run_only_message("  Hyperliquid ") == HYPERLIQUID_DRY_RUN_ONLY_MESSAGE
+    assert OKX_DRY_RUN_ONLY_MESSAGE != HYPERLIQUID_DRY_RUN_ONLY_MESSAGE
