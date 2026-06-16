@@ -1,0 +1,47 @@
+# EXAMPLE execution dashboards for the Temporal-native MTF dashboard orchestrator (PR13).
+#
+# This is a TEMPLATE, not a runtime config. Copy it (e.g. to dashboards/dashboards.yaml) and point
+# DASHBOARDS_PATH at your real config per environment. The workflow loads a fresh snapshot of this
+# file at the start of every run (LoadDashboardSnapshotActivity), so edits take effect on the next tick.
+#
+# A dashboard is a named matrix of targets. Each target = one Symfony POST /api/mtf/run, run as its
+# own Temporal Activity (retry/timeout/visibility per target), with bounded concurrency.
+#
+# SAFETY: every target here is dry_run=true. OKX and Hyperliquid stay dry-run only (PR11/PR12);
+# a target with dry_run=false for them is rejected at snapshot load, at runtime-check and at
+# schedule creation. "environment" (demo/testnet/mainnet) is a config dimension forwarded to
+# Symfony, NEVER a live authorization. Bitmart live remains served by the legacy direct schedule.
+# Do NOT put any secret here.
+
+dashboards:
+  - dashboard_id: okx-hl-dry-run
+    cadence: "*/1 * * * *"
+    fail_policy: continue          # or fail_fast
+    max_concurrency: 2
+    targets:
+      - target_id: okx-demo-scalper
+        exchange: okx
+        environment: demo
+        market_type: perpetual
+        mtf_profile: scalper
+        dry_run: true
+        workers: 4
+      - target_id: hyperliquid-mainnet-regular
+        exchange: hyperliquid
+        environment: mainnet
+        market_type: perpetual
+        mtf_profile: regular
+        dry_run: true
+        workers: 4
+
+  - dashboard_id: bitmart-dry-run
+    cadence: "*/1 * * * *"
+    fail_policy: continue
+    max_concurrency: 1
+    targets:
+      - target_id: bitmart-scalper-micro
+        exchange: bitmart
+        market_type: perpetual
+        mtf_profile: scalper_micro
+        dry_run: true
+        workers: 4

@@ -1,4 +1,4 @@
-"""Tests for the dashboard-driven Temporal schedule manager."""
+"""Tests for the dashboard-driven Temporal schedule manager (Temporal-native orchestrator)."""
 
 import asyncio
 
@@ -8,7 +8,7 @@ yaml = pytest.importorskip("yaml")
 
 import scripts.manage_dashboard_schedule as dash  # noqa: E402
 import scripts.manage_exchange_profile_schedule as base  # noqa: E402
-from bridge.dashboard import Dashboard, DashboardTarget  # noqa: E402
+from dashboards.model import Dashboard, DashboardTarget  # noqa: E402
 
 
 def _dashboard():
@@ -28,15 +28,10 @@ def test_generate_ids():
     assert dash.generate_dashboard_workflow_id(dashboard) == "mtf-dashboard-okx-hl-runner"
 
 
-def test_build_bridge_job_is_explicit_and_dry_run():
-    job = dash.build_bridge_job(_dashboard(), bridge_url="http://bridge/run", schedule_id="sid")
+def test_build_workflow_request():
+    request = dash.build_workflow_request(_dashboard(), dashboards_path="dashboards/x.yaml")
 
-    assert job == {
-        "dashboard_id": "okx-hl",
-        "bridge_url": "http://bridge/run",
-        "schedule_id": "sid",
-        "dry_run": True,
-    }
+    assert request == {"dashboard_id": "okx-hl", "dashboards_path": "dashboards/x.yaml"}
 
 
 def _write_dashboards(tmp_path, payload):
@@ -73,6 +68,7 @@ def test_create_dry_run_preview_skips_temporal(tmp_path, monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert "[DRY-RUN] would create schedule cron-mtf-dashboard-okx-hl-1m" in out
+    assert "MtfDashboardOrchestratorWorkflow" in out
     assert "'dashboard_id': 'okx-hl'" in out
 
 

@@ -1,13 +1,12 @@
-"""Create/manage a Temporal schedule that drives a dashboard via the Flask bridge.
+"""Create/manage a Temporal schedule that drives a dashboard via the Temporal-native orchestrator.
 
-The schedule starts ``CronSymfonyMtfWorkersWorkflow`` with a single *bridge job*
-(``{dashboard_id, bridge_url, schedule_id, dry_run}``). The workflow then calls the
-``bridge_dashboard_call`` activity, which expands the dashboard against Symfony.
+The schedule starts ``MtfDashboardOrchestratorWorkflow`` with ``{dashboard_id, dashboards_path}``.
+The workflow loads a fresh snapshot, runs one Activity per target (bounded concurrency) and
+aggregates all-or-nothing.
 
-Temporal plumbing (client, schedule classes, task queue, workflow type, time zone,
-cadence suffix) is reused from ``manage_exchange_profile_schedule`` to avoid duplication.
-The dashboard dry-run-only policy (PR11 OKX, PR12 Hyperliquid) is validated before any
-schedule is created.
+Temporal plumbing (client, schedule classes, task queue, time zone, cadence suffix) is reused from
+``manage_exchange_profile_schedule`` to avoid duplication. The dashboard dry-run-only policy
+(PR11 OKX, PR12 Hyperliquid) is validated before any schedule is created.
 
 Usage:
     python scripts/manage_dashboard_schedule.py create --dashboard-id okx-hl-dry-run
@@ -18,13 +17,13 @@ Usage:
 import argparse
 import asyncio
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import scripts.manage_exchange_profile_schedule as base
-from bridge.dashboard import Dashboard, load_dashboards_file
+from dashboards.model import Dashboard, load_dashboards_file
 
-BRIDGE_URL = os.getenv("BRIDGE_URL", "http://mtf-bridge:8090/bridge/run")
-DEFAULT_DASHBOARDS_PATH = os.getenv("BRIDGE_DASHBOARDS_PATH", "bridge/dashboards.example.yaml")
+WORKFLOW_TYPE = "MtfDashboardOrchestratorWorkflow"
+DEFAULT_DASHBOARDS_PATH = os.getenv("DASHBOARDS_PATH", "dashboards/dashboards.example.yaml")
 
 
 def generate_dashboard_schedule_id(dashboard: Dashboard) -> str:
@@ -35,15 +34,8 @@ def generate_dashboard_workflow_id(dashboard: Dashboard) -> str:
     return f"mtf-dashboard-{dashboard.dashboard_id}-runner"
 
 
-def build_bridge_job(dashboard: Dashboard, *, bridge_url: str, schedule_id: str) -> Dict[str, Any]:
-    return {
-        "dashboard_id": dashboard.dashboard_id,
-        "bridge_url": bridge_url,
-        "schedule_id": schedule_id,
-        # Dashboard-level dry_run is informational (true only if every target is dry-run);
-        # the per-target dry_run inside the dashboard is what actually drives Symfony.
-        "dry_run": all(target.dry_run for target in dashboard.targets),
-    }
+def build_workflow_request(dashboard: Dashboard, *, dashboards_path: str) -> Dict[str, Any]:
+    return {"dashboard_id": dashboard.dashboard_id, "dashboards_path": dashboards_path}
 
 
 def load_dashboard(dashboard_id: str, path: str) -> Dashboard:
@@ -63,13 +55,13 @@ async def create_dashboard_schedule(args: argparse.Namespace) -> None:
 
     schedule_id = args.schedule_id or generate_dashboard_schedule_id(dashboard)
     workflow_id = args.workflow_id or generate_dashboard_workflow_id(dashboard)
-    job = build_bridge_job(dashboard, bridge_url=args.bridge_url, schedule_id=schedule_id)
+    request = build_workflow_request(dashboard, dashboards_path=args.dashboards_path)
 
     if args.dry_run_schedule:
         print(
             "[DRY-RUN] would create schedule "
-            f"{schedule_id} (workflow_id='{workflow_id}', cron='{dashboard.cadence}', "
-            f"tz='{base.TIME_ZONE}', job={job})"
+            f"{schedule_id} (workflow_id='{workflow_id}', workflow='{WORKFLOW_TYPE}', "
+            f"cron='{dashboard.cadence}', tz='{base.TIME_ZONE}', request={request})"
         )
         return
 
@@ -79,8 +71,8 @@ async def create_dashboard_schedule(args: argparse.Namespace) -> None:
     )
     schedule = Schedule(
         action=ScheduleActionStartWorkflow(
-            base.WORKFLOW_TYPE,
-            args=[[job]],
+            WORKFLOW_TYPE,
+            args=[request],
             id=workflow_id,
             task_queue=base.TASK_QUEUE,
         ),
@@ -104,7 +96,7 @@ async def create_dashboard_schedule(args: argparse.Namespace) -> None:
             return
         raise
 
-    print(f"created schedule '{schedule_id}' -> cron='{dashboard.cadence}' -> job={job}")
+    print(f"created schedule '{schedule_id}' -> cron='{dashboard.cadence}' -> request={request}")
 
 
 def resolve_schedule_id(args: argparse.Namespace) -> str:
@@ -146,7 +138,6 @@ async def async_main(args: argparse.Namespace) -> None:
 def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dashboard-id")
     parser.add_argument("--dashboards-path", default=DEFAULT_DASHBOARDS_PATH)
-    parser.add_argument("--bridge-url", default=BRIDGE_URL)
     parser.add_argument("--schedule-id")
     parser.add_argument("--workflow-id")
 

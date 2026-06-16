@@ -73,13 +73,15 @@ fallback_gateway: fake
 
 Ce format est indicatif pour la documentation. Il ne branche aucun runtime dans cette PR.
 
-## Dashboard bridge (matrice de schedules)
+## Dashboard orchestrator (matrice de schedules)
 
-Plusieurs targets peuvent être regroupées dans un **dashboard** servi par le bridge Flask
-(`technical/temporal-bridge-dashboard.md`). La politique dry-run-only s'applique **au niveau de la
-matrice** : un dashboard contenant une target OKX/Hyperliquid en `dry_run=false` est refusé au
-chargement, à l'exécution et à la création du schedule (réutilisation de la gate PR11/PR12). Les
-appels Symfony y sont séquentiels et n'aboutissent OK que si toutes les targets sont OK.
+Plusieurs targets peuvent être regroupées dans un **dashboard** orchestré par le Workflow Temporal
+`MtfDashboardOrchestratorWorkflow` (`technical/temporal-dashboard-orchestrator.md`). La politique
+dry-run-only s'applique **au niveau de la matrice** : un dashboard contenant une target
+OKX/Hyperliquid en `dry_run=false` est refusé au chargement du snapshot, au runtime-check par target
+et à la création du schedule (réutilisation de la gate PR11/PR12). Chaque target est une Activity
+Temporal (retry/timeout/visibilité par target, bounded concurrency) et le run n'aboutit OK que si
+toutes les targets sont OK (all-or-nothing).
 
 ## Fake / Paper
 

@@ -7,9 +7,10 @@ Le sous-projet `cron_symfony_mtf_workers/` orchestre les appels planifies vers S
 | Composant | Fichier | Role |
 | --- | --- | --- |
 | Worker process | `cron_symfony_mtf_workers/worker.py` | Se connecte a Temporal, enregistre workflow et activity sur la task queue. |
-| Workflow | `workflows/mtf_workers.py` | Route chaque job : chemin legacy (`mtf_api_call`) ou chemin bridge dashboard (`bridge_dashboard_call`) si le job porte un `dashboard_id`. |
+| Workflow legacy | `workflows/mtf_workers.py` | `CronSymfonyMtfWorkersWorkflow` : chemin direct historique, execute `mtf_api_call` par job. Inchange. |
+| Workflow dashboard | `workflows/mtf_dashboard.py` | `MtfDashboardOrchestratorWorkflow` : orchestre une matrice dashboard, une Activity par target, bounded concurrency, all-or-nothing. Voir `technical/temporal-dashboard-orchestrator.md`. |
 | Activity HTTP | `activities/mtf_http.py` | POST JSON vers Symfony, parse la reponse, appelle le formatteur. |
-| Activity bridge | `activities/bridge_http.py` | POST vers le bridge Flask (`bridge_dashboard_call`) ; leve si l'agregat dashboard n'est pas OK. Voir `technical/temporal-bridge-dashboard.md`. |
+| Activities dashboard | `activities/dashboard.py` | `load_dashboard_snapshot`, `runtime_check_target`, `call_mtf_run_target` (une Activity par concern/target). |
 | Model job | `models/mtf_job.py` | Normalise URL, workers, dry-run, profile, exchange, market type, timeout et symboles. |
 | Formatter | `utils/response_formatter.py` | Reduit une reponse MTF longue en resume exploitable dans Temporal UI. |
 | Schedules | `scripts/manage_*.py` | Cree, lit, pause, reprend ou supprime les schedules. |
@@ -77,7 +78,7 @@ Le payload envoye a Symfony garde uniquement les champs utiles:
 | Script | Statut | Usage |
 | --- | --- | --- |
 | `scripts/manage_exchange_profile_schedule.py` | recommande | Schedule explicite par `exchange`, `market_type`, `profile`, cadence et dry-run. |
-| `scripts/manage_dashboard_schedule.py` | recommande | Schedule pilote par dashboard via le bridge Flask (matrice de targets). Voir `technical/temporal-bridge-dashboard.md`. |
+| `scripts/manage_dashboard_schedule.py` | recommande | Schedule pilote par dashboard (matrice de targets) via `MtfDashboardOrchestratorWorkflow`. Voir `technical/temporal-dashboard-orchestrator.md`. |
 | `scripts/manage_mtf_workers_schedule.py` | legacy | Ancien schedule generique vers `/api/mtf/run`. |
 | `scripts/manage_scalper_micro_schedule.py` | legacy | Ancien schedule dedie `scalper_micro`. |
 | `scripts/manage_contract_sync_schedule.py` | actif | Sync quotidienne des contrats via `/api/mtf/sync-contracts`. |

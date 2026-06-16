@@ -1,8 +1,8 @@
-"""Tests for the dashboard / target model and the dry-run-only guardrail."""
+"""Tests for the dashboard / target model, dry-run-only gate, fingerprint and snapshot."""
 
 import pytest
 
-from bridge.dashboard import (
+from dashboards.model import (
     Dashboard,
     DashboardTarget,
     load_dashboards,
@@ -13,7 +13,7 @@ def _target(**overrides):
     data = {
         "target_id": "okx-demo-scalper",
         "exchange": "okx",
-        "network": "demo",
+        "environment": "demo",
         "market_type": "perpetual",
         "mtf_profile": "scalper",
         "dry_run": True,
@@ -23,28 +23,10 @@ def _target(**overrides):
     return DashboardTarget.from_dict(data)
 
 
-def test_target_to_payload_mirrors_mtf_job_shape_plus_idempotency_key():
-    target = _target()
+def test_target_from_dict_accepts_network_alias_for_environment():
+    target = DashboardTarget.from_dict({"target_id": "t", "exchange": "okx", "network": "mainnet"})
 
-    payload = target.to_payload("dash-1", "2026-06-16T00:01:00+00:00")
-
-    assert payload == {
-        "workers": 4,
-        "dry_run": True,
-        "force_run": False,
-        "exchange": "okx",
-        "market_type": "perpetual",
-        "mtf_profile": "scalper",
-        "idempotency_key": "dash-1:okx-demo-scalper:2026-06-16T00:01:00+00:00",
-    }
-    # network is informational only and must never leak into the Symfony trading payload.
-    assert "network" not in payload
-
-
-def test_idempotency_key_is_dashboard_target_tick():
-    target = _target(target_id="t1")
-
-    assert target.idempotency_key("d1", "ts") == "d1:t1:ts"
+    assert target.environment == "mainnet"
 
 
 def test_target_requires_id_and_exchange():
@@ -52,6 +34,23 @@ def test_target_requires_id_and_exchange():
         DashboardTarget.from_dict({"exchange": "okx"})
     with pytest.raises(ValueError):
         DashboardTarget.from_dict({"target_id": "x"})
+
+
+def test_snapshot_includes_fingerprint_and_fields():
+    snapshot = _target().to_snapshot()
+
+    assert snapshot["target_id"] == "okx-demo-scalper"
+    assert snapshot["environment"] == "demo"
+    assert "fingerprint" in snapshot and len(snapshot["fingerprint"]) == 12
+
+
+def test_fingerprint_is_stable_and_changes_with_effective_config():
+    base = _target()
+    same = _target()
+    changed = _target(mtf_profile="regular")
+
+    assert base.fingerprint() == same.fingerprint()
+    assert base.fingerprint() != changed.fingerprint()
 
 
 def test_validate_policy_blocks_live_okx_and_hyperliquid():
@@ -79,7 +78,6 @@ def test_validate_policy_allows_dry_run_okx_hl_and_live_bitmart():
         targets=[
             _target(target_id="a", exchange="okx", dry_run=True),
             _target(target_id="b", exchange="hyperliquid", dry_run=True),
-            # Bitmart legacy can still run live; only OKX/HL are dry-run only.
             _target(target_id="c", exchange="bitmart", dry_run=False),
         ],
     )
@@ -87,7 +85,7 @@ def test_validate_policy_allows_dry_run_okx_hl_and_live_bitmart():
     assert dashboard.validate_policy() is None
 
 
-def test_load_dashboards_builds_registry_and_defaults():
+def test_load_dashboards_builds_registry_with_defaults():
     registry = load_dashboards(
         {
             "dashboards": [
@@ -102,10 +100,10 @@ def test_load_dashboards_builds_registry_and_defaults():
         }
     )
 
-    assert set(registry) == {"okx-hl"}
     dashboard = registry["okx-hl"]
     assert dashboard.cadence == "*/1 * * * *"
     assert dashboard.fail_policy == "continue"
+    assert dashboard.max_concurrency == 4
     assert [t.target_id for t in dashboard.targets] == ["okx", "hl"]
 
 
