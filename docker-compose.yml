@@ -180,11 +180,12 @@ services:
       - shared-net
     restart: unless-stopped
     healthcheck:
+      # Sonde le port réellement configuré (ORCHESTRATOR_PORT), pas une valeur figée.
       test:
         - "CMD"
         - "python"
         - "-c"
-        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8099/healthcheck', timeout=3).status == 200 else 1)"
+        - "import os,urllib.request,sys; p=os.getenv('ORCHESTRATOR_PORT','8099'); sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+p+'/healthcheck', timeout=3).status == 200 else 1)"
       interval: 15s
       timeout: 5s
       retries: 5

@@ -42,3 +42,11 @@ def test_workers_upper_bound_is_enforced():
 def test_workers_zero_is_rejected():
     with pytest.raises(ValidationError):
         OrchestratorSet(set_id="x", exchange="fake", workers=0)
+
+
+def test_symbols_are_immutable():
+    a_set = OrchestratorSet(set_id="x", exchange="fake", symbols=["BTCUSDT"])
+    # Tuple immuable : pas de .append possible, et l'affectation est bloquée (frozen).
+    assert isinstance(a_set.symbols, tuple)
+    with pytest.raises(AttributeError):
+        a_set.symbols.append("ETHUSDT")  # type: ignore[attr-defined]

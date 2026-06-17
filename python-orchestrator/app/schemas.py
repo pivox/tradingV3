@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import Literal, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -91,7 +91,9 @@ class OrchestratorSet(BaseModel):
         description="Workers côté Symfony (borné à 1 au début).",
     )
     sync_tables: bool = Field(default=False, description="Sync des tables exchange côté Symfony.")
-    symbols: List[str] = Field(default_factory=list, description="Liste optionnelle de symboles.")
+    # Tuple (et non list) pour une immuabilité réelle : `frozen=True` n'empêche
+    # pas la mutation d'une liste interne (ex. symbols.append(...)).
+    symbols: Tuple[str, ...] = Field(default_factory=tuple, description="Liste optionnelle de symboles.")
     priority: int = Field(default=0, description="Ordre / priorité fonctionnelle.")
 
     @model_validator(mode="after")
