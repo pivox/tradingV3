@@ -1,0 +1,4 @@
+# Dépendances de développement / test uniquement.
+# httpx (déjà en runtime) est requis par fastapi.testclient.
+-r requirements.txt
+pytest==8.4.2

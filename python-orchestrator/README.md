@@ -1,0 +1,147 @@
+# Python Orchestrator
+
+API d'orchestration des appels TradingV3 (FastAPI + uvicorn).
+
+Cette première itération correspond à **PY-001** : squelette du service,
+endpoint de santé et endpoint `/orchestrator/run` **stub**. La cible
+fonctionnelle complète est décrite dans
+[`docs/handbook/technical/python-orchestrator.md`](../docs/handbook/technical/python-orchestrator.md).
+
+## Rôle cible
+
+L'API Python devient l'orchestrateur principal :
+
+1. lit des sets de payloads déjà préparés ;
+2. lance plusieurs appels Symfony en parallèle (concurrence bornée) ;
+3. agrège les résultats ;
+4. conserve le dernier JSON retourné ;
+5. expose une visualisation fonctionnelle au front.
+
+Temporal reste un cron basique qui appelle `/orchestrator/run`, Symfony reste
+le moteur métier MTF (`/api/mtf/run`).
+
+## Périmètre de PY-001
+
+Inclus :
+
+- structure de projet et service démarrable (`uvicorn app.main:app`) ;
+- `GET /healthcheck` ;
+- `POST /orchestrator/run` (stub) renvoyant le contrat JSON cible à partir de
+  sets simulés en mémoire (dry-run, exchange `fake`) ;
+- contrat d'entrée `RunRequest` (idempotence) et invariants verrouillés dès le
+  squelette : enums exchange/profil/env, borne `workers`, garde-fou live
+  OKX/Hyperliquid, état explicite `no_sets` ;
+- schémas Pydantic (`OrchestratorSet`, `RunRequest`, `RunResponse`, `RunSummary`) ;
+- tests pytest.
+
+Hors-scope (PR suivantes) :
+
+- vraie exécution parallèle + appels Symfony réels → **PY-002** ;
+- persistance DB des sets et runs → **DB-001** ;
+- refresh des contrats, gestion live, idempotence/locks serveur ;
+- cockpit front → **UI-001** ; branchement Temporal → **TM-001**.
+
+## Endpoints
+
+| Méthode | Chemin | Description |
+| --- | --- | --- |
+| `GET` | `/healthcheck` | État de santé du service. |
+| `POST` | `/orchestrator/run` | Déclenche un run (stub PY-001). |
+| `GET` | `/docs` | Swagger UI (OpenAPI). |
+
+### `POST /orchestrator/run`
+
+Body optionnel (`RunRequest`) — sert l'idempotence et la traçabilité du tick :
+
+```json
+{
+  "dashboard_id": "dashA",
+  "schedule_id": "cron-orchestrator-1m",
+  "tick_timestamp": "2026-06-17T08:30:00Z",
+  "idempotency_key": "optional-stable-key",
+  "dry_run": true
+}
+```
+
+Le `run_id` est **dérivé de façon stable** quand un contexte est fourni :
+
+- `idempotency_key` présent → `run_<idempotency_key>` ;
+- sinon `dashboard_id` + `tick_timestamp` → `run_<dashboard_id>_<tickUTC>` ;
+- sinon (aucun contexte) → identifiant aléatoire non idempotent.
+
+Réponse :
+
+```json
+{
+  "ok": true,
+  "run_id": "run_dashA_20260617T083000Z",
+  "status": "success",
+  "summary": { "total_calls": 2, "success": 2, "failed": 0 }
+}
+```
+
+`status` ∈ `success | partial_failure | failed | no_sets`. **Aucun set actif**
+renvoie `status="no_sets"` et `ok=false` : ce n'est pas un succès Temporal
+(le workflow/activity devra échouer, cf. TM-002).
+
+## Lancement local
+
+```bash
+cd python-orchestrator
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt          # runtime
+uvicorn app.main:app --host 0.0.0.0 --port 8099
+```
+
+Vérifications :
+
+```bash
+curl -s http://localhost:8099/healthcheck
+curl -s -X POST http://localhost:8099/orchestrator/run
+# Swagger : http://localhost:8099/docs
+```
+
+## Docker
+
+Le service est défini dans le `docker-compose.yml` racine sous le nom
+`python-orchestrator`, **derrière le profile `orchestrator`** (il ne démarre
+donc pas avec un `docker compose up` standard) et **sans port hôte par défaut**
+(`expose` uniquement — bridge interne sans auth pour l'instant).
+
+```bash
+docker compose --profile orchestrator build python-orchestrator
+docker compose --profile orchestrator up -d python-orchestrator
+# Healthcheck Docker intégré (GET /healthcheck via stdlib Python).
+```
+
+Pour un accès dev depuis l'hôte, publier le port via un
+`docker-compose.override.yml` ou `docker compose run --service-ports python-orchestrator`.
+
+Le conteneur tourne en utilisateur non-root et n'embarque ni `build-essential`,
+ni les dépendances de test.
+
+## Tests
+
+```bash
+cd python-orchestrator
+pip install -r requirements-dev.txt
+python -m pytest
+# ou depuis la racine :
+make test-orchestrator
+```
+
+## Dépendances
+
+- `requirements.txt` : runtime uniquement, versions **épinglées** (reproductibilité).
+- `requirements-dev.txt` : runtime + `pytest` (non installé dans l'image).
+
+## Configuration (variables d'environnement)
+
+| Variable | Défaut | Rôle |
+| --- | --- | --- |
+| `SYMFONY_BASE_URL` | `http://trading-app-nginx:80` | URL de base Symfony (PY-002+). |
+| `ORCHESTRATOR_PORT` | `8099` | Port d'écoute HTTP (1..65535). |
+| `MAX_CONCURRENCY` | `2` | Concurrence globale bornée, ≥ 1 (PY-002+). |
+
+Une valeur non entière ou hors borne lève une erreur explicite au démarrage
+(pas de repli silencieux sur le défaut).

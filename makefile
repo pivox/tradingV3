@@ -313,3 +313,20 @@ validate-contracts: ## 🔎 Valide les contrats actifs pour un TF (TF=15m,5m,1m,
 	@echo "📁 Fichiers disponibles dans: $(OUTPUT_DIR)"
 	@$(EXEC_IN_APP) ls -lh $(OUTPUT_DIR)/*.json 2>/dev/null || true
 	@echo "════════════════════════════════════════════════════════════════"
+
+# ===================================
+# Python Orchestrator (PY-001)
+# ===================================
+
+.PHONY: build-orchestrator rebuild-orchestrator test-orchestrator
+
+ORCH_SVC ?= python-orchestrator
+
+build-orchestrator: ## Build the python-orchestrator image
+	$(DC) --profile orchestrator build $(ORCH_SVC)
+
+rebuild-orchestrator: build-orchestrator ## Rebuild + restart python-orchestrator
+	$(DC) --profile orchestrator up -d --no-deps $(ORCH_SVC)
+
+test-orchestrator: ## Run python-orchestrator pytest suite (installs dev deps)
+	cd python-orchestrator && pip install -q -r requirements-dev.txt && python -m pytest

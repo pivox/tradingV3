@@ -1,0 +1,15 @@
+.venv/
+.idea/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.DS_Store
+.env
+.gitignore
+# Fichiers de dev/test exclus de l'image runtime
+tests/
+requirements-dev.txt
+pyproject.toml
+README.md
