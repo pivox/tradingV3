@@ -57,6 +57,8 @@ class MtfRunCommand extends Command
             ->addOption('force-run', null, InputOption::VALUE_NONE, 'Force l\'exécution même si les switchs globaux ou symboles sont OFF')
             ->addOption('tf', null, InputOption::VALUE_OPTIONAL, 'Limiter l\'exécution à un unique timeframe (4h|1h|15m|5m|1m)')
             ->addOption('sync-contracts', null, InputOption::VALUE_NONE, 'Forcer la synchronisation (fetch + upsert) des contrats au démarrage (activé par défaut)')
+            ->addOption('sync-tables', null, InputOption::VALUE_OPTIONAL, 'Synchroniser les tables positions/ordres depuis l\'exchange (1|0)', '1')
+            ->addOption('skip-open-state-filter', null, InputOption::VALUE_OPTIONAL, 'Ne pas filtrer les symboles avec positions/ordres ouverts (1|0). Défaut: suit dry-run, refusé en live', 'auto')
             ->addOption('force-timeframe-check', null, InputOption::VALUE_NONE, 'Force l\'analyse du timeframe même si la dernière kline est récente')
             ->addOption('skip-context', null, InputOption::VALUE_NONE, 'Ignorer l\'alignement de contexte pour les TF d\'exécution (bypass de validation contextuelle)')
             ->addOption('lock-per-symbol', null, InputOption::VALUE_NONE, 'Utiliser des verrous par symbole (recommandé pour exécutions unitaires)')
@@ -84,6 +86,24 @@ class MtfRunCommand extends Command
         $currentTf = $input->getOption('tf');
         $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
         $syncContractsOpt = (bool) $input->getOption('sync-contracts');
+        // Parse 0/false/no/off (cohérent avec le parsing HTTP de RunnerController).
+        // Cas valueless `--sync-tables` (sans `=1|0`) : Symfony résout en null pour une
+        // option VALUE_OPTIONAL ; on le traite comme l'activation (la valeur par défaut),
+        // sinon le flag positif désactiverait la synchro à cause de filter_var(null)=false.
+        $syncTablesRaw = $input->getOption('sync-tables');
+        $syncTables = $syncTablesRaw === null
+            ? true
+            : filter_var($syncTablesRaw, FILTER_VALIDATE_BOOLEAN);
+        // Filtre d'activité (positions/ordres ouverts). Par défaut on ne le saute
+        // qu'en dry-run (diagnostic) ; en live le filtre protège contre le trading
+        // sur un symbole déjà en position/ordre, il ne doit pas être désactivé.
+        // Défaut 'auto' (option absente) → suit dry-run ; null (flag sans valeur) → skip.
+        $skipOpenStateOpt = $input->getOption('skip-open-state-filter');
+        $skipOpenStateFilter = match (true) {
+            $skipOpenStateOpt === 'auto' => $dryRun,
+            $skipOpenStateOpt === null => true,
+            default => filter_var($skipOpenStateOpt, FILTER_VALIDATE_BOOLEAN),
+        };
         $forceTimeframeCheck = (bool) $input->getOption('force-timeframe-check');
         $skipContext = (bool) $input->getOption('skip-context');
         $autoSwitchInvalid = (bool) $input->getOption('auto-switch-invalid');
@@ -145,7 +165,16 @@ class MtfRunCommand extends Command
             sprintf('- switch-duration: %s', $autoSwitchInvalid ? $switchDuration : 'N/A'),
             sprintf('- limit: %s', $symbols ? 'N/A (symbols fourni)' : ($limit === 0 ? 'illimité' : (string)$limit)),
             sprintf('- workers: %d', $workers),
+            sprintf('- skip-open-state-filter: %s', $skipOpenStateFilter ? 'oui' : 'non'),
         ]);
+
+        // Fail-closed : en live, le filtre d'activité ne peut pas être désactivé.
+        // Sans lui, un symbole déjà en position/ordre pourrait recevoir un nouvel ordre.
+        if (!$dryRun && $skipOpenStateFilter) {
+            $io->error('Refus : en live (--dry-run=0), le filtre d\'activité ne peut pas être désactivé (--skip-open-state-filter). Il protège contre le trading sur un symbole déjà en position/ordre.');
+
+            return Command::FAILURE;
+        }
 
         $io->note(sprintf('Démarrage de l\'exécution MTF à %s', date('Y-m-d H:i:s')));
 
@@ -205,13 +234,13 @@ class MtfRunCommand extends Command
                 'force_timeframe_check' => $forceTimeframeCheck,
                 'skip_context' => $skipContext,
                 'lock_per_symbol' => $lockPerSymbol,
-                'skip_open_state_filter' => true,
+                'skip_open_state_filter' => $skipOpenStateFilter,
                 'user_id' => $userId,
                 'ip_address' => $ipAddress,
                 'exchange' => $exchange->value,
                 'market_type' => $marketType->value,
                 'workers' => $workers,
-                'sync_tables' => true,
+                'sync_tables' => $syncTables,
                 'process_tp_sl' => true,
                 'profile' => $profile,
                 'validation_mode' => $validationMode,

@@ -41,3 +41,6 @@ investigation/
 
 # Documentation build output
 /docs/site/
+
+# Claude Code local artifacts (agent worktrees, local state)
+/.claude/
