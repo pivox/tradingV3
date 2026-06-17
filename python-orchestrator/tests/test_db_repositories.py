@@ -148,6 +148,8 @@ def test_record_run_set_upsert_same_run_set(db_session):
     assert rows[0].ok is True
     assert rows[0].duration_ms == 20
     assert rows[0].response_json == {"status": "ok"}
+    # L'ancienne erreur d'un échec précédent doit être effacée (champ nullable).
+    assert rows[0].error is None
 
 
 def test_dashboard_delete_sets_run_dashboard_null(db_session):

@@ -26,16 +26,20 @@ _RUN_SET_UPDATABLE = (
 
 
 def _apply(target: object, source: object, fields: Sequence[str]) -> None:
-    """Recopie ``fields`` de ``source`` vers ``target`` en ignorant les ``None``.
+    """Recopie ``fields`` de ``source`` vers ``target`` lors d'un upsert.
 
-    Ignorer ``None`` évite d'écraser une valeur existante (ou un server_default)
-    avec un champ simplement non renseigné sur l'instance transitoire ; ``0`` et
-    ``False`` (non ``None``) sont bien propagés.
+    Une colonne **NULLABLE** est toujours écrasée — y compris remise à ``None`` :
+    c'est le « dernier résultat » qui fait foi (ex. ``error`` effacée quand un
+    set repasse au succès). Une colonne **NOT NULL** n'est pas écrasée par un
+    ``None`` (champ simplement non renseigné sur l'instance transitoire), pour ne
+    pas violer la contrainte ni effacer un ``server_default``.
     """
+    columns = target.__table__.c
     for name in fields:
         value = getattr(source, name)
-        if value is not None:
-            setattr(target, name, value)
+        if value is None and not columns[name].nullable:
+            continue
+        setattr(target, name, value)
 
 
 def get_dashboard(session: Session, dashboard_id: int) -> Optional[Dashboard]:
