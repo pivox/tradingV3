@@ -67,6 +67,38 @@ def _resolve_status(success: int, failed: int) -> RunStatus:
     return "partial_failure"
 
 
+def _symbols_overlap(a: Any, b: Any) -> bool:
+    """Indique si deux sets ciblent au moins un symbole commun.
+
+    Un ``symbols`` vide signifie « tout l'univers actif » (résolu côté Symfony),
+    donc il chevauche n'importe quel autre set du même couple.
+    """
+    if not a.symbols or not b.symbols:
+        return True
+    return bool(set(a.symbols) & set(b.symbols))
+
+
+def _conflicting_live_set_ids(mtf_sets: List[Any], force_dry_run: bool) -> set:
+    """``set_id`` des sets EFFECTIVEMENT live qui se chevauchent dans le batch.
+
+    Deux sets live partageant ``(exchange, market_type)`` et au moins un symbole
+    recevraient le même snapshot pré-run (``sync_tables=false``) : le second ne
+    verrait pas une position/un ordre ouvert par le premier → trade live dupliqué.
+    On rejette ces sets (fail-closed) plutôt que de dispatcher à l'aveugle. Les
+    sets dry-run (ou forcés dry) ne posent pas ce problème.
+    """
+    live = [s for s in mtf_sets if not (s.dry_run or force_dry_run)]
+    conflicting: set = set()
+    for i, a in enumerate(live):
+        for b in live[i + 1:]:
+            if (a.exchange, a.market_type) != (b.exchange, b.market_type):
+                continue
+            if _symbols_overlap(a, b):
+                conflicting.add(a.set_id)
+                conflicting.add(b.set_id)
+    return conflicting
+
+
 async def _collect_snapshots(
     client: httpx.AsyncClient,
     base_url: str,
@@ -121,6 +153,17 @@ async def run_orchestrator(request: Optional[RunRequest] = None) -> RunResponse:
     success = 0
     failed = 0
 
+    # Override run-level : un appelant peut FORCER le dry-run (sécurité). Le
+    # forçage ne peut que rendre un set plus sûr — il ne downgrade jamais un
+    # set dry en live. Appliqué AVANT le garde fail-closed et la construction
+    # du payload pour que `{"dry_run": true}` empêche réellement tout ordre live.
+    force_dry_run = request.dry_run is True if request is not None else False
+
+    # Fail-closed : des sets live chevauchants (même exchange/market + symbole
+    # partagé) partageraient le même snapshot pré-run et pourraient dupliquer un
+    # trade live ; on les rejette avant dispatch.
+    conflicting_live_ids = _conflicting_live_set_ids(mtf_sets, force_dry_run)
+
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
         # 1) Un seul fetch d'état ouvert par couple (exchange, market_type).
         snapshots = await _collect_snapshots(client, settings.symfony_base_url, mtf_sets)
@@ -128,13 +171,14 @@ async def run_orchestrator(request: Optional[RunRequest] = None) -> RunResponse:
         # 2) Exécution bornée des sets avec le snapshot en cache.
         semaphore = asyncio.Semaphore(max(1, settings.max_concurrency))
 
-        # Override run-level : un appelant peut FORCER le dry-run (sécurité). Le
-        # forçage ne peut que rendre un set plus sûr — il ne downgrade jamais un
-        # set dry en live. Appliqué AVANT le garde fail-closed et la construction
-        # du payload pour que `{"dry_run": true}` empêche réellement tout ordre live.
-        force_dry_run = request.dry_run is True if request is not None else False
-
         async def _execute(a_set: Any) -> Dict[str, Any]:
+            if a_set.set_id in conflicting_live_ids:
+                return {
+                    "set_id": a_set.set_id,
+                    "ok": False,
+                    "status": None,
+                    "body": "overlapping live set rejected (shared pre-run snapshot would miss sibling fills)",
+                }
             snapshot = snapshots.get(snapshot_key(a_set))
             effective_dry_run = a_set.dry_run or force_dry_run
             # Fail-closed live : pas de snapshot fiable + set (effectivement) live => on n'exécute pas.

@@ -292,3 +292,38 @@ def test_run_level_dry_run_override_forces_live_set_to_dry(monkeypatch):
     mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
     assert len(mtf_posts) == 1
     assert mtf_posts[0]["json"]["dry_run"] is True
+
+
+def test_conflicting_live_set_ids():
+    a = _make_set("a", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    b = _make_set("b", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    c = _make_set("c", dry_run=False, exchange="bitmart", symbols=("ETHUSDT",))
+    dry = _make_set("d", dry_run=True, exchange="bitmart", symbols=("BTCUSDT",))
+    empty = _make_set("e", dry_run=False, exchange="bitmart")  # symbols=() => univers complet
+
+    # a et b partagent BTCUSDT => conflit ; c (ETHUSDT) et dry (dry-run) hors conflit.
+    assert orch._conflicting_live_set_ids([a, b, c, dry], force_dry_run=False) == {"a", "b"}
+    # symbols vide chevauche tout le monde du même couple.
+    assert orch._conflicting_live_set_ids([empty, c], force_dry_run=False) == {"e", "c"}
+    # Override force-dry => plus aucun set effectivement live => aucun conflit.
+    assert orch._conflicting_live_set_ids([a, b], force_dry_run=True) == set()
+    # Symboles disjoints => pas de conflit.
+    assert orch._conflicting_live_set_ids([a, c], force_dry_run=False) == set()
+
+
+def test_overlapping_live_sets_rejected_before_dispatch(monkeypatch):
+    sets = [
+        _make_set("live1", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",)),
+        _make_set("live2", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",)),
+    ]
+    monkeypatch.setattr(orch, "list_active_sets", lambda: sets)
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run").json()
+
+    # Les deux sets live chevauchants sont rejetés (fail-closed), aucun POST mtf/run.
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 2, "success": 0, "failed": 2}
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 0
