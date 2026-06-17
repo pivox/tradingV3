@@ -62,4 +62,38 @@ final class MtfRunnerRequestDtoTest extends TestCase
 
         self::assertSame($expected, $request->marketType);
     }
+
+    public function testFromArrayParsesOpenStateSnapshot(): void
+    {
+        $request = MtfRunnerRequestDto::fromArray([
+            'open_state_snapshot' => [
+                'open_positions' => [['symbol' => 'BTCUSDT']],
+                'open_orders' => [['symbol' => 'ETHUSDT']],
+            ],
+        ]);
+
+        self::assertNotNull($request->openStateSnapshot);
+        self::assertSame('BTCUSDT', $request->openStateSnapshot['open_positions'][0]['symbol']);
+        self::assertSame('ETHUSDT', $request->openStateSnapshot['open_orders'][0]['symbol']);
+    }
+
+    public function testFromArrayDefaultsOpenStateSnapshotToNull(): void
+    {
+        self::assertNull(MtfRunnerRequestDto::fromArray([])->openStateSnapshot);
+    }
+
+    public function testFromArrayNormalizesPartialOpenStateSnapshot(): void
+    {
+        $request = MtfRunnerRequestDto::fromArray([
+            'open_state_snapshot' => ['open_positions' => [['symbol' => 'BTCUSDT']]],
+        ]);
+
+        self::assertSame([['symbol' => 'BTCUSDT']], $request->openStateSnapshot['open_positions']);
+        self::assertSame([], $request->openStateSnapshot['open_orders']);
+    }
+
+    public function testFromArrayIgnoresNonArrayOpenStateSnapshot(): void
+    {
+        self::assertNull(MtfRunnerRequestDto::fromArray(['open_state_snapshot' => 'nope'])->openStateSnapshot);
+    }
 }

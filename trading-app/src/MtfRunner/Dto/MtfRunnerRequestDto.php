@@ -31,6 +31,14 @@ final class MtfRunnerRequestDto
         public readonly bool $processTpSl = true,
         public readonly ?string $profile = null,
         public readonly ?string $validationMode = null,
+        /**
+         * Instantané de l'état ouvert (positions/ordres) fourni par l'orchestrateur
+         * pour éviter un appel exchange par set (SF-002b). Forme attendue :
+         * ['open_positions' => array<int,mixed>, 'open_orders' => array<int,mixed>].
+         *
+         * @var array{open_positions?: array<int,mixed>, open_orders?: array<int,mixed>}|null
+         */
+        public readonly ?array $openStateSnapshot = null,
     ) {}
 
     public static function fromArray(array $data): self
@@ -56,6 +64,7 @@ final class MtfRunnerRequestDto
             processTpSl: (bool) ($data['process_tp_sl'] ?? true),
             profile: $profile,
             validationMode: $validationMode,
+            openStateSnapshot: self::extractOpenStateSnapshot($data),
         );
     }
 
@@ -79,6 +88,29 @@ final class MtfRunnerRequestDto
             'process_tp_sl' => $this->processTpSl,
             'profile' => $this->profile,
             'validation_mode' => $this->validationMode,
+            'open_state_snapshot' => $this->openStateSnapshot,
+        ];
+    }
+
+    /**
+     * Normalise l'instantané d'état ouvert fourni dans le payload.
+     *
+     * @param array<string,mixed> $data
+     * @return array{open_positions?: array<int,mixed>, open_orders?: array<int,mixed>}|null
+     */
+    private static function extractOpenStateSnapshot(array $data): ?array
+    {
+        $snapshot = $data['open_state_snapshot'] ?? null;
+        if (!is_array($snapshot)) {
+            return null;
+        }
+
+        $positions = $snapshot['open_positions'] ?? [];
+        $orders = $snapshot['open_orders'] ?? [];
+
+        return [
+            'open_positions' => is_array($positions) ? array_values($positions) : [],
+            'open_orders' => is_array($orders) ? array_values($orders) : [],
         ];
     }
 

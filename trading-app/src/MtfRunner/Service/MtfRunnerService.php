@@ -102,6 +102,31 @@ final class MtfRunnerService
             'workers' => $request->workers,
         ]);
 
+        // SF-002b : fail-closed en live. Si aucune source d'état ouvert fiable n'est
+        // disponible (pas de snapshot orchestrateur, sync_tables=false ET filtre désactivé),
+        // on refuse le run plutôt que de trader à l'aveugle sur des symboles peut-être déjà
+        // en position/ordre. Miroir du garde-fou CLI de SF-002a.
+        $hasSnapshot = $this->snapshotIsUsable($request->openStateSnapshot);
+        if (!$request->dryRun && !$hasSnapshot && !$request->syncTables && $request->skipOpenStateFilter) {
+            $reason = 'no_reliable_open_state_source';
+            $this->mtfLogger->error('[MTF Runner] Refusing live run without reliable open-state source', [
+                'run_id' => $runId,
+                'reason' => $reason,
+                'has_snapshot' => false,
+                'sync_tables' => false,
+                'skip_open_state_filter' => true,
+            ]);
+
+            return $this->buildRejectedRun(
+                $runId,
+                'En live, refus du run sans source d\'état ouvert fiable '
+                . '(open_state_snapshot absent, sync_tables=false et skip_open_state_filter=true). '
+                . 'Le filtre protège contre le trading sur un symbole déjà en position/ordre.',
+                $reason,
+                count($request->symbols),
+            );
+        }
+
         try {
             // 1. Créer le contexte
             $context = $this->createContext($request);
@@ -111,8 +136,21 @@ final class MtfRunnerService
             $symbols = $this->resolveSymbols($request->symbols, $request->profile, $context);
             $profiler->increment('runner', 'resolve_symbols', microtime(true) - $resolveStart);
 
-            // 3. Synchroniser les tables depuis l'exchange (si demandé)
-            if ($request->syncTables) {
+            // 3. Source de l'état ouvert (priorité) :
+            //    (1) snapshot orchestrateur (SF-002b) → aucun appel exchange par set ;
+            //    (2) sinon syncTables() si sync_tables=true (upsert DB + fetch amont) ;
+            //    (3) sinon null → le filtre d'activité refera son propre fetch si actif.
+            if ($hasSnapshot) {
+                /** @var array{open_positions?: array<int,mixed>, open_orders?: array<int,mixed>} $snapshot */
+                $snapshot = $request->openStateSnapshot;
+                $openPositions = array_values($snapshot['open_positions'] ?? []);
+                $openOrders = array_values($snapshot['open_orders'] ?? []);
+                $this->mtfLogger->info('[MTF Runner] Using orchestrator open-state snapshot (no exchange fetch per set)', [
+                    'run_id' => $runId,
+                    'positions_count' => count($openPositions),
+                    'orders_count' => count($openOrders),
+                ]);
+            } elseif ($request->syncTables) {
                 $syncStart = microtime(true);
                 [
                     'open_positions' => $openPositions,
@@ -122,8 +160,7 @@ final class MtfRunnerService
             } else {
                 // Portée limitée (SF-002a) : on saute uniquement l'upsert DB des
                 // positions/ordres. Le filtre d'activité (OpenActivityFilter) peut
-                // encore appeler l'exchange si skip_open_state_filter=false. Le vrai
-                // mode « no exchange per set » est traité par SF-002b (snapshot orchestrateur).
+                // encore appeler l'exchange si skip_open_state_filter=false.
                 $this->mtfLogger->debug('[MTF Runner] Skipping exchange table upsert (sync_tables=false)', [
                     'run_id' => $runId,
                 ]);
@@ -916,6 +953,62 @@ final class MtfRunnerService
         $marketType = $request->marketType ?? MarketType::PERPETUAL;
 
         return new ExchangeContext($exchange, $marketType);
+    }
+
+    /**
+     * Indique si un instantané d'état ouvert orchestrateur est exploitable.
+     * Un snapshot vide (aucune position ni ordre) reste une source FIABLE :
+     * l'orchestrateur a bien interrogé l'exchange, simplement rien n'était ouvert.
+     *
+     * @param array{open_positions?: array<int,mixed>, open_orders?: array<int,mixed>}|null $snapshot
+     */
+    private function snapshotIsUsable(?array $snapshot): bool
+    {
+        if ($snapshot === null) {
+            return false;
+        }
+
+        return array_key_exists('open_positions', $snapshot)
+            || array_key_exists('open_orders', $snapshot);
+    }
+
+    /**
+     * Construit un résultat de run rejeté (fail-closed) sans toucher l'exchange.
+     *
+     * @return array{
+     *     summary: array<string,mixed>,
+     *     results: array<string,mixed>,
+     *     errors: array<int,string>,
+     *     summary_by_tf: array<string,mixed>,
+     *     rejected_by: array<string,mixed>,
+     *     last_validated: array<string,mixed>,
+     *     orders_placed: array<string,mixed>,
+     *     performance: array<string,mixed>
+     * }
+     */
+    private function buildRejectedRun(string $runId, string $message, string $reason, int $symbolsRequested): array
+    {
+        return [
+            'summary' => [
+                'run_id' => $runId,
+                'status' => 'rejected',
+                'reason' => $reason,
+                'message' => $message,
+                'symbols_requested' => $symbolsRequested,
+                'symbols_processed' => 0,
+                'timestamp' => date('Y-m-d H:i:s'),
+            ],
+            'results' => [],
+            'errors' => [$message],
+            'summary_by_tf' => [],
+            'rejected_by' => [],
+            'last_validated' => [],
+            'orders_placed' => [
+                'count' => ['total' => 0, 'submitted' => 0, 'simulated' => 0],
+                'orders' => [],
+            ],
+            'performance' => [],
+        ];
     }
 
 }
