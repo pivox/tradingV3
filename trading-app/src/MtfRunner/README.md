@@ -68,6 +68,8 @@ Paramètres clés (depuis API ou CLI) :
 ### 3.2 syncTables(ExchangeContext)
 `FuturesOrderSyncService` synchronise les tables internes (positions, futures_order, futures_order_trade) depuis l’exchange avant de filtrer. Retourne `open_positions` et `open_orders` (réutilisés plus tard).
 
+Cette étape est conditionnée par le flag `sync_tables` de la requête (`MtfRunnerRequestDto::syncTables`, `true` par défaut). Avec `sync_tables=false`, l’upsert depuis l’exchange est **sauté** et `open_positions`/`open_orders` restent `null` (le filtre d’activité refera alors son propre fetch s’il n’est pas lui‑même désactivé via `skip_open_state_filter`). Ce mode est destiné à l’orchestrateur Python (SF-002) qui synchronise une seule fois globalement plutôt qu’une fois par set préparé.
+
 ### 3.3 filterSymbolsWithOpenOrdersOrPositions()
 - Récupère via `MainProviderInterface` (ou re‑utilise la synchro) les positions et ordres ouverts.
 - `MtfSwitchRepository::reactivateSwitchesForInactiveSymbols()` rallume automatiquement les symboles qui n’ont plus d’activité.
@@ -125,7 +127,7 @@ Paramètres clés (depuis API ou CLI) :
 | --- | --- |
 | `skip_open_state_filter=true` | Process tous les symboles (utile pour diagnostics). |
 | `lock_per_symbol=true` | Les workers `mtf:run-worker` créent des locks symbol (évite les collisions quand plusieurs runners tournent). |
-| `sync_tables=false` | Passe la synchro Bitmart (utiliser avec précaution). |
+| `sync_tables=false` | Saute la synchro Bitmart positions/ordres (CLI : `mtf:run --sync-tables=0`). Pour l’orchestrateur Python qui synchronise une fois globalement (SF-002). |
 | `process_tp_sl=false` | Désactive le recalcul post‑run (runner se focalise uniquement sur la validation). |
 | `force_run` | Propagé jusqu’à `MtfValidatorCoreService` → bypass context/switch guards. |
 | `force_timeframe_check` | Rejoue un TF même si la bougie précédente vient de se fermer. |

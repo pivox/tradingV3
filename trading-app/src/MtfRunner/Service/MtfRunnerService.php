@@ -112,14 +112,17 @@ final class MtfRunnerService
             $profiler->increment('runner', 'resolve_symbols', microtime(true) - $resolveStart);
 
             // 3. Synchroniser les tables depuis l'exchange (si demandé)
-            $syncTables = true;
-            if ($syncTables) {
+            if ($request->syncTables) {
                 $syncStart = microtime(true);
                 [
                     'open_positions' => $openPositions,
                     'open_orders' => $openOrders,
                 ] = $this->syncTables($context);
                 $profiler->increment('runner', 'sync_tables', microtime(true) - $syncStart);
+            } else {
+                $this->mtfLogger->info('[MTF Runner] Skipping exchange table sync (sync_tables=false)', [
+                    'run_id' => $runId,
+                ]);
             }
 
             // 4. Filtrer les symboles avec ordres/positions ouverts

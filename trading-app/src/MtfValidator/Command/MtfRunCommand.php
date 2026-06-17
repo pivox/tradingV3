@@ -57,6 +57,7 @@ class MtfRunCommand extends Command
             ->addOption('force-run', null, InputOption::VALUE_NONE, 'Force l\'exécution même si les switchs globaux ou symboles sont OFF')
             ->addOption('tf', null, InputOption::VALUE_OPTIONAL, 'Limiter l\'exécution à un unique timeframe (4h|1h|15m|5m|1m)')
             ->addOption('sync-contracts', null, InputOption::VALUE_NONE, 'Forcer la synchronisation (fetch + upsert) des contrats au démarrage (activé par défaut)')
+            ->addOption('sync-tables', null, InputOption::VALUE_OPTIONAL, 'Synchroniser les tables positions/ordres depuis l\'exchange (1|0)', '1')
             ->addOption('force-timeframe-check', null, InputOption::VALUE_NONE, 'Force l\'analyse du timeframe même si la dernière kline est récente')
             ->addOption('skip-context', null, InputOption::VALUE_NONE, 'Ignorer l\'alignement de contexte pour les TF d\'exécution (bypass de validation contextuelle)')
             ->addOption('lock-per-symbol', null, InputOption::VALUE_NONE, 'Utiliser des verrous par symbole (recommandé pour exécutions unitaires)')
@@ -84,6 +85,7 @@ class MtfRunCommand extends Command
         $currentTf = $input->getOption('tf');
         $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
         $syncContractsOpt = (bool) $input->getOption('sync-contracts');
+        $syncTables = ((string) $input->getOption('sync-tables')) !== '0';
         $forceTimeframeCheck = (bool) $input->getOption('force-timeframe-check');
         $skipContext = (bool) $input->getOption('skip-context');
         $autoSwitchInvalid = (bool) $input->getOption('auto-switch-invalid');
@@ -211,7 +213,7 @@ class MtfRunCommand extends Command
                 'exchange' => $exchange->value,
                 'market_type' => $marketType->value,
                 'workers' => $workers,
-                'sync_tables' => true,
+                'sync_tables' => $syncTables,
                 'process_tp_sl' => true,
                 'profile' => $profile,
                 'validation_mode' => $validationMode,
