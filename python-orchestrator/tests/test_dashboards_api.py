@@ -195,3 +195,87 @@ def test_workers_above_bound_rejected(api_client):
         json=_set_payload(set_id="too_many", workers=4),
     )
     assert resp.status_code == 422
+
+
+def test_create_bitmart_live_rejected(api_client):
+    """Aucun live persistable en PY-002, même sur un exchange autorisé live."""
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    resp = api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(set_id="bm_live", exchange="bitmart", dry_run=False),
+    )
+    assert resp.status_code == 422
+
+
+# --- Invariant de sélection -------------------------------------------------
+
+
+def test_create_ambiguous_set_rejected(api_client):
+    """Ni symbols, ni contracts_limit → set ambigu, refusé."""
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    resp = api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(set_id="ambiguous", symbols=[], contracts_limit=None),
+    )
+    assert resp.status_code == 422
+
+
+def test_create_with_contracts_limit_only_ok(api_client):
+    """Sélection dynamique bornée (contracts_limit) sans symbols explicites."""
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    resp = api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(set_id="dyn", symbols=[], contracts_limit=20),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["contracts_limit"] == 20
+
+
+def test_patch_clearing_symbols_without_limit_rejected(api_client):
+    """Vider symbols alors qu'aucune limite n'est posée → état ambigu, refusé."""
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
+    resp = api_client.patch(
+        f"/dashboards/{dashboard_id}/sets/bitmart_regular_top", json={"symbols": []}
+    )
+    assert resp.status_code == 422
+
+
+def test_patch_clear_contracts_limit_null_ok(api_client):
+    """contracts_limit est nullable : un null explicite l'efface (symbols restent)."""
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(contracts_limit=10),
+    )
+    resp = api_client.patch(
+        f"/dashboards/{dashboard_id}/sets/bitmart_regular_top",
+        json={"contracts_limit": None},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["contracts_limit"] is None
+
+
+# --- payload non writable + nulls explicites --------------------------------
+
+
+def test_payload_not_accepted_from_client_on_create(api_client):
+    """payload est read-only : un payload client est ignoré, pas persisté."""
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    resp = api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(payload={"forged": True}),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["payload"] is None
+
+
+def test_patch_explicit_null_on_not_null_field_rejected(api_client):
+    """{"exchange": null} ne doit pas passer (colonne NOT NULL) ni faire un 500."""
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
+    for field in ("exchange", "dry_run", "enabled", "symbols"):
+        resp = api_client.patch(
+            f"/dashboards/{dashboard_id}/sets/bitmart_regular_top", json={field: None}
+        )
+        assert resp.status_code == 422, field

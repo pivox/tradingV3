@@ -61,13 +61,38 @@ RunStatus = Literal["success", "partial_failure", "failed", "no_sets"]
 def assert_live_allowed(exchange: Exchange, dry_run: bool) -> None:
     """Garde-fou live : interdit ``dry_run=false`` sur OKX/Hyperliquid.
 
-    Factorisé pour être réutilisé par ``OrchestratorSet`` (sets simulés) et par
-    la gestion DB des sets (PY-002), afin que la règle soit appliquée partout
-    de façon identique. Lève ``ValueError`` (mappé en 422 côté API).
+    Utilisé par ``OrchestratorSet`` (sets simulés en mémoire, non persistés). La
+    configuration persistante (PY-002) applique une règle **plus stricte** via
+    ``assert_set_persistable``. Lève ``ValueError`` (mappé en 422 côté API).
     """
     if dry_run is False and exchange in LIVE_FORBIDDEN_EXCHANGES:
         raise ValueError(
             f"{exchange.value} live est interdit : dry_run doit rester true."
+        )
+
+
+def assert_set_persistable(*, dry_run: bool, symbols: list, contracts_limit: Optional[int]) -> None:
+    """Invariants d'un set **persisté** via l'API de configuration (PY-002).
+
+    1. Aucun live persistable tant que la readiness live n'est pas livrée : un
+       set stocké pourra être consommé tel quel par PY-005 sans nouvelle
+       validation humaine, donc on refuse tout ``dry_run=false`` (tous exchanges,
+       tous environnements) à ce stade.
+    2. Pas de set ambigu : il faut une sélection exploitable — soit ``symbols``
+       non vide, soit ``contracts_limit`` renseigné — sinon PY-005 devrait
+       deviner quoi exécuter.
+
+    Lève ``ValueError`` (mappé en 422 côté API).
+    """
+    if dry_run is False:
+        raise ValueError(
+            "persister un set live (dry_run=false) est interdit tant que la "
+            "readiness live n'est pas livrée : PY-002 ne stocke que des sets dry-run."
+        )
+    if not symbols and contracts_limit is None:
+        raise ValueError(
+            "set ambigu : fournir une sélection exploitable "
+            "('symbols' non vide ou 'contracts_limit')."
         )
 
 
@@ -194,8 +219,12 @@ class SetCreate(BaseModel):
     """Payload de création d'un set rattaché à un dashboard.
 
     ``set_id`` est l'identifiant fonctionnel stable du set au sein du dashboard
-    (unique via ``uq_orchestration_sets_dashboard_set``). Le garde-fou live
-    OKX/Hyperliquid est appliqué dès la validation.
+    (unique via ``uq_orchestration_sets_dashboard_set``).
+
+    ``payload`` n'est **pas** accepté ici : c'est un artefact produit côté serveur
+    (PY-004) à partir des champs typés ; un client REST ne doit pas pouvoir
+    persister un payload incohérent avec ``exchange`` / ``mtf_profile`` /
+    ``symbols``. Il reste exposé en lecture seule via ``SetRead``.
     """
 
     set_id: str = Field(..., min_length=1, max_length=255, description="Identifiant stable du set.")
@@ -205,26 +234,37 @@ class SetCreate(BaseModel):
     market_type: MarketType = Field(default=MarketType.PERPETUAL, description="perpetual ou spot.")
     mtf_profile: MtfProfile = Field(default=MtfProfile.REGULAR, description="Profil MTF.")
     environment: Environment = Field(default=Environment.DEMO, description="demo, testnet, mainnet.")
-    dry_run: bool = Field(default=True, description="Simulation ou exécution réelle.")
+    dry_run: bool = Field(default=True, description="Simulation (true). Le live n'est pas persistable en PY-002.")
     workers: int = Field(default=1, ge=1, le=MAX_WORKERS_PER_SET, description="Workers Symfony (borné).")
     sync_tables: bool = Field(default=False, description="Sync des tables exchange côté Symfony.")
-    symbols: List[str] = Field(default_factory=list, description="Liste optionnelle de symboles.")
-    contracts_limit: Optional[int] = Field(default=None, ge=1, description="Limite de contrats (PY-004).")
+    symbols: List[str] = Field(default_factory=list, description="Sélection explicite de symboles.")
+    contracts_limit: Optional[int] = Field(default=None, ge=1, description="Sélection dynamique bornée (PY-004).")
     priority: int = Field(default=0, description="Ordre / priorité fonctionnelle.")
-    payload: Optional[dict] = Field(default=None, description="Payload Symfony préparé (PY-004).")
 
     @model_validator(mode="after")
-    def _forbid_live_on_restricted_exchanges(self) -> "SetCreate":
-        assert_live_allowed(self.exchange, self.dry_run)
+    def _enforce_persistable_invariants(self) -> "SetCreate":
+        assert_set_persistable(
+            dry_run=self.dry_run, symbols=self.symbols, contracts_limit=self.contracts_limit
+        )
         return self
+
+
+# Seuls ces champs de ``SetUpdate`` correspondent à une colonne NULLABLE et
+# acceptent donc un ``null`` explicite en PATCH (ex. effacer la limite).
+_SET_NULLABLE_UPDATE_FIELDS = frozenset({"contracts_limit"})
 
 
 class SetUpdate(BaseModel):
     """Mise à jour partielle d'un set.
 
-    ``set_id`` est immuable (renommer = supprimer puis recréer). Le garde-fou
-    live est revalidé sur l'état résultant côté router, car ``exchange`` et
-    ``dry_run`` peuvent n'être que partiellement fournis.
+    ``set_id`` est immuable (renommer = supprimer puis recréer) et ``payload``
+    n'est pas modifiable par un client (cf. ``SetCreate``). Les invariants
+    (interdiction live, sélection exploitable) sont revalidés sur l'état résultant
+    côté router, car les champs ne sont que partiellement fournis.
+
+    Un ``null`` explicite sur un champ adossé à une colonne NOT NULL est rejeté :
+    sans cela ``{"exchange": null}`` casserait la fusion (et écraserait une
+    colonne NOT NULL via un PATCH).
     """
 
     enabled: Optional[bool] = None
@@ -239,7 +279,19 @@ class SetUpdate(BaseModel):
     symbols: Optional[List[str]] = None
     contracts_limit: Optional[int] = Field(default=None, ge=1)
     priority: Optional[int] = None
-    payload: Optional[dict] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_explicit_nulls(cls, data: object) -> object:
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if (
+                    value is None
+                    and key in cls.model_fields
+                    and key not in _SET_NULLABLE_UPDATE_FIELDS
+                ):
+                    raise ValueError(f"champ '{key}' ne peut pas être null.")
+        return data
 
 
 class SetRead(BaseModel):

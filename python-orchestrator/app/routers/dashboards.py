@@ -27,11 +27,10 @@ from app.schemas import (
     DashboardCreate,
     DashboardRead,
     DashboardUpdate,
-    Exchange,
     SetCreate,
     SetRead,
     SetUpdate,
-    assert_live_allowed,
+    assert_set_persistable,
 )
 
 router = APIRouter(prefix="/dashboards", tags=["dashboards"])
@@ -151,12 +150,17 @@ def update_set(
     a_set = _require_set(session, dashboard_id, set_id)
     updates = body.model_dump(mode="json", exclude_unset=True)
 
-    # Le garde-fou live s'applique à l'état résultant : un PATCH peut ne fournir
-    # que `dry_run` ou que `exchange`, donc on fusionne avec la ligne persistée.
-    effective_exchange = Exchange(updates.get("exchange", a_set.exchange))
+    # Les invariants (interdiction live, sélection exploitable) s'appliquent à
+    # l'état résultant : un PATCH partiel est fusionné avec la ligne persistée.
     effective_dry_run = updates.get("dry_run", a_set.dry_run)
+    effective_symbols = updates.get("symbols", a_set.symbols)
+    effective_limit = updates.get("contracts_limit", a_set.contracts_limit)
     try:
-        assert_live_allowed(effective_exchange, effective_dry_run)
+        assert_set_persistable(
+            dry_run=effective_dry_run,
+            symbols=effective_symbols,
+            contracts_limit=effective_limit,
+        )
     except ValueError as exc:
         # 422 littéral : la constante `status.HTTP_422_*` a été renommée selon
         # les versions de Starlette ; l'entier reste stable et non déprécié.

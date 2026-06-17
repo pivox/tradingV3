@@ -74,11 +74,17 @@ crée des dashboards regroupant des sets « prêts ». L'exécution parallèle d
 sets dans `/orchestrator/run` (appels Symfony réels, agrégation) reste l'objet
 de **PY-005** — à ce stade `/orchestrator/run` lit toujours les sets simulés.
 
-Garde-fous appliqués dès la création/mise à jour des sets :
+Garde-fous appliqués dès la création/mise à jour des sets (revalidés sur les
+`PATCH` partiels, l'état résultant étant fusionné avec la ligne persistée) :
 
 - `workers` borné à `MAX_WORKERS_PER_SET` (1 au début) → `422` au-delà ;
-- live OKX/Hyperliquid interdit (`dry_run=false`) → `422`, y compris sur un
-  `PATCH` partiel (l'état résultant est revalidé) ;
+- **aucun live persistable** : `dry_run=false` est refusé pour tous les
+  exchanges/environnements tant que la readiness live n'est pas livrée → `422` ;
+- **sélection exploitable obligatoire** : un set doit avoir `symbols` non vide
+  **ou** `contracts_limit` renseigné (pas de set ambigu) → `422` ;
+- **`payload` non writable** : produit côté serveur (PY-004), exposé en lecture
+  seule ; un `payload` envoyé par un client est ignoré ;
+- un `null` explicite sur un champ NOT NULL d'un `PATCH` de set → `422` ;
 - `set_id` unique par dashboard, `name` de dashboard unique → `409 Conflict` ;
 - `set_id` immuable (renommer = supprimer puis recréer).
 
@@ -90,7 +96,7 @@ curl -s -X POST localhost:8099/dashboards \
   -H 'Content-Type: application/json' \
   -d '{"name":"cockpit","description":"sets de prod"}'
 
-# 2. y attacher un set prêt
+# 2. y attacher un set prêt (dry-run, sélection explicite de symboles)
 curl -s -X POST localhost:8099/dashboards/1/sets \
   -H 'Content-Type: application/json' \
   -d '{"set_id":"bitmart_regular_top","exchange":"bitmart","mtf_profile":"regular",

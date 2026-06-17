@@ -288,9 +288,12 @@ sets (CRUD), sous le préfixe `/dashboards` :
 | `GET` / `POST` | `/dashboards/{id}/sets` | Liste (`?enabled_only=true`) / crée un set. |
 | `GET` / `PATCH` / `DELETE` | `/dashboards/{id}/sets/{set_id}` | Détail / mise à jour / suppression d'un set. |
 
-Garde-fous appliqués dès la configuration : borne `workers`, interdiction live OKX/Hyperliquid
-(revalidée sur les `PATCH` partiels), unicité du nom de dashboard et du `set_id` par dashboard
-(`409`), `set_id` immuable.
+Garde-fous appliqués dès la configuration (revalidés sur les `PATCH` partiels) : borne `workers` ;
+**aucun live persistable** (`dry_run=false` refusé pour tous les exchanges/environnements tant que
+la readiness live n'est pas livrée) ; **sélection exploitable obligatoire** (`symbols` non vide ou
+`contracts_limit`) ; **`payload` non writable** (produit serveur PY-004, lecture seule) ; rejet des
+`null` explicites sur les champs NOT NULL ; unicité du nom de dashboard et du `set_id` par dashboard
+(`409`) ; `set_id` immuable.
 
 La **lecture des sets persistés au moment du run** et l'**écriture des runs** restent portées par
 **PY-005** (`/orchestrator/run` lit encore les sets simulés). Les migrations s'appliquent via
