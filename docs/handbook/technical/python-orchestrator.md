@@ -259,6 +259,18 @@ l'orchestrateur récupère une seule fois puis distribue à tous les sets. Répo
 - L'orchestrateur joint ce JSON tel quel dans `open_state_snapshot` du payload
   `/api/mtf/run` (avec `sync_tables=false`).
 
+> **Exchange `fake` (sets de démo).** Les sets simulés en mémoire
+> (`app/services/sets.py`) utilisent `exchange=fake` / `market_type=perpetual`.
+> Symfony enregistre désormais un **bundle de providers Fake** (contexte
+> `fake_perpetual` / `fake_spot`, voir `config/services.yaml`) : `MainProvider::forContext(FAKE, …)`
+> résout sans erreur. Le provider Fake modélise un exchange vide/neutre :
+> `GET /api/exchange/open-state?exchange=fake&market_type=perpetual` renvoie
+> `{"open_positions":[],"open_orders":[]}`, et le provider de contrats Fake
+> n'expose **aucun symbole actif** — un `POST /api/mtf/run` sur le contexte FAKE
+> résout 0 symbole et se termine en succès trivial, sans aucun appel HTTP réel ni
+> exécution live. C'est ce qui permet au chemin de démo (`exchange=fake`) de
+> tourner de bout en bout depuis `/orchestrator/run`.
+
 ## Déclenchement
 
 L'endpoint cible est :
