@@ -127,7 +127,7 @@ Cette étape est conditionnée par le flag `sync_tables` de la requête (`MtfRun
 
 | Option | Effet |
 | --- | --- |
-| `skip_open_state_filter=true` | Process tous les symboles (utile pour diagnostics). |
+| `skip_open_state_filter=true` | Process tous les symboles sans filtrer ceux déjà en position/ordre (utile pour diagnostics). **CLI** : `mtf:run --skip-open-state-filter` n’est appliqué qu’en dry-run ; par défaut il vaut la valeur de `--dry-run` (filtre exécuté en live). Le forçage `--skip-open-state-filter=1` est **refusé en live** (`--dry-run=0`) — fail-closed, le filtre protège contre le trading sur un symbole déjà actif. |
 | `lock_per_symbol=true` | Les workers `mtf:run-worker` créent des locks symbol (évite les collisions quand plusieurs runners tournent). |
 | `sync_tables=false` | Saute **uniquement** l’upsert DB positions/ordres (SF-002a — voir §3.2 pour la portée et les limites). CLI : `mtf:run --sync-tables=0` (parsing `filter_var`, gère aussi `false`/`no`/`off`). |
 | `process_tp_sl=false` | Désactive le recalcul post‑run (runner se focalise uniquement sur la validation). |
