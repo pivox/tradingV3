@@ -161,3 +161,35 @@ def test_fetch_open_state_raises_on_unexpected_shape():
 
     with pytest.raises(OpenStateUnavailableError):
         asyncio.run(_run())
+
+
+@pytest.mark.parametrize(
+    "open_positions,open_orders",
+    [
+        (None, []),
+        ([], None),
+        ("nope", []),
+        ([], {"k": "v"}),
+    ],
+)
+def test_fetch_open_state_raises_on_non_list_arrays(open_positions, open_orders):
+    # Clés présentes mais valeurs non-listes : ne pas normaliser en [] (fail-closed).
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"open_positions": open_positions, "open_orders": open_orders}
+        )
+
+    async def _run():
+        async with _client_with(handler) as client:
+            await fetch_open_state(client, "http://symfony", "bitmart", "perpetual")
+
+    with pytest.raises(OpenStateUnavailableError):
+        asyncio.run(_run())
+
+
+def test_build_payload_applies_dry_run_override():
+    live_set = _make_set(dry_run=False)
+    # Override run-level dry_run=True => le payload force le dry-run.
+    assert build_mtf_payload(live_set, None, dry_run=True)["dry_run"] is True
+    # dry_run=None => on retombe sur la valeur du set (ici live).
+    assert build_mtf_payload(live_set, None, dry_run=None)["dry_run"] is False

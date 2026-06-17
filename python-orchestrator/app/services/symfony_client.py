@@ -74,15 +74,26 @@ async def fetch_open_state(
             f"open-state response has unexpected shape for {exchange}/{market_type}"
         )
 
+    positions = body.get("open_positions")
+    orders = body.get("open_orders")
+    # Ne pas normaliser un null/non-liste en [] : ce serait un snapshot "vide fiable"
+    # alors que l'exchange n'a rien rapporté de valide. On rejette (fail-closed) pour
+    # que les sets live ne s'exécutent pas comme si aucune position n'était ouverte.
+    if not isinstance(positions, list) or not isinstance(orders, list):
+        raise OpenStateUnavailableError(
+            f"open-state response has non-list open_positions/open_orders for {exchange}/{market_type}"
+        )
+
     return {
-        "open_positions": body.get("open_positions") or [],
-        "open_orders": body.get("open_orders") or [],
+        "open_positions": positions,
+        "open_orders": orders,
     }
 
 
 def build_mtf_payload(
     a_set: OrchestratorSet,
     snapshot: Optional[Dict[str, Any]],
+    dry_run: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Construit le payload ``/api/mtf/run`` pour un set.
 
@@ -94,9 +105,12 @@ def build_mtf_payload(
     refetch les positions/ordres depuis le provider pour chaque set (et a des
     effets de bord live), ce qui réintroduirait les appels exchange par set que
     le snapshot partagé vise justement à éliminer.
+
+    ``dry_run`` permet de transmettre la valeur effective résolue par l'appelant
+    (override run-level). Si ``None``, on retombe sur le ``dry_run`` du set.
     """
     payload: Dict[str, Any] = {
-        "dry_run": a_set.dry_run,
+        "dry_run": a_set.dry_run if dry_run is None else dry_run,
         "workers": a_set.workers,
         "exchange": a_set.exchange.value,
         "market_type": a_set.market_type.value,
@@ -139,10 +153,11 @@ async def run_mtf_set(
     base_url: str,
     a_set: OrchestratorSet,
     snapshot: Optional[Dict[str, Any]],
+    dry_run: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Exécute un set via ``POST /api/mtf/run`` avec le snapshot en cache."""
     url = f"{base_url.rstrip('/')}/api/mtf/run"
-    payload = build_mtf_payload(a_set, snapshot)
+    payload = build_mtf_payload(a_set, snapshot, dry_run)
     response = await client.post(url, json=payload)
     try:
         body = response.json()

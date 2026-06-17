@@ -128,10 +128,17 @@ async def run_orchestrator(request: Optional[RunRequest] = None) -> RunResponse:
         # 2) Exécution bornée des sets avec le snapshot en cache.
         semaphore = asyncio.Semaphore(max(1, settings.max_concurrency))
 
+        # Override run-level : un appelant peut FORCER le dry-run (sécurité). Le
+        # forçage ne peut que rendre un set plus sûr — il ne downgrade jamais un
+        # set dry en live. Appliqué AVANT le garde fail-closed et la construction
+        # du payload pour que `{"dry_run": true}` empêche réellement tout ordre live.
+        force_dry_run = request.dry_run is True if request is not None else False
+
         async def _execute(a_set: Any) -> Dict[str, Any]:
             snapshot = snapshots.get(snapshot_key(a_set))
-            # Fail-closed live : pas de snapshot fiable + set live => on n'exécute pas.
-            if snapshot is None and a_set.dry_run is False:
+            effective_dry_run = a_set.dry_run or force_dry_run
+            # Fail-closed live : pas de snapshot fiable + set (effectivement) live => on n'exécute pas.
+            if snapshot is None and effective_dry_run is False:
                 return {
                     "set_id": a_set.set_id,
                     "ok": False,
@@ -140,7 +147,9 @@ async def run_orchestrator(request: Optional[RunRequest] = None) -> RunResponse:
                 }
             async with semaphore:
                 try:
-                    return await run_mtf_set(client, settings.symfony_base_url, a_set, snapshot)
+                    return await run_mtf_set(
+                        client, settings.symfony_base_url, a_set, snapshot, effective_dry_run
+                    )
                 except httpx.HTTPError as exc:  # noqa: BLE001
                     return {
                         "set_id": a_set.set_id,

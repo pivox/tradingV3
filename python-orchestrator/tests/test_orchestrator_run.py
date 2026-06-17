@@ -275,3 +275,20 @@ def test_dry_run_proceeds_without_snapshot(monkeypatch):
     assert len(mtf_posts) == 1
     assert "open_state_snapshot" not in mtf_posts[0]["json"]
     assert mtf_posts[0]["json"]["sync_tables"] is False
+
+
+def test_run_level_dry_run_override_forces_live_set_to_dry(monkeypatch):
+    # Set live + fetch open-state en échec : sans override il serait skippé
+    # (fail-closed). Avec {"dry_run": true}, il est forcé en dry-run, donc exécuté.
+    sets = [_make_set("live", dry_run=False, exchange="bitmart")]
+    monkeypatch.setattr(orch, "list_active_sets", lambda: sets)
+    fake = _FakeAsyncClient(open_state_status=503)
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dry_run": True}).json()
+
+    assert body["ok"] is True
+    assert body["summary"]["success"] == 1
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1
+    assert mtf_posts[0]["json"]["dry_run"] is True
