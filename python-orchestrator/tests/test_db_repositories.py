@@ -128,6 +128,36 @@ def test_record_run_idempotent_by_idempotency_key(db_session):
     assert run.ok is True and run.status == "success"
 
 
+def test_record_run_partial_update_preserves_context(db_session):
+    """Une mise à jour partielle par run_id ne doit pas effacer idempotency_key / dashboard_id."""
+    dashboard = _make_dashboard(db_session)
+    repo.record_run(
+        db_session,
+        Run(
+            run_id="run_p",
+            dashboard_id=dashboard.id,
+            status="partial_failure",
+            ok=False,
+            idempotency_key="key-99",
+        ),
+    )
+    db_session.commit()
+
+    # Update de statut final : ne fournit ni idempotency_key ni dashboard_id.
+    repo.record_run(
+        db_session,
+        Run(run_id="run_p", status="success", ok=True, total_calls=5, success_count=5),
+    )
+    db_session.commit()
+    db_session.expire_all()
+
+    run = repo.get_run(db_session, "run_p")
+    assert run.status == "success" and run.total_calls == 5
+    # Champs de contexte préservés → l'idempotence reste résoluble.
+    assert run.idempotency_key == "key-99"
+    assert run.dashboard_id == dashboard.id
+
+
 def test_record_run_set_upsert_same_run_set(db_session):
     """Deux appels sur le même (run_id, set_id) mettent à jour le dernier résultat."""
     repo.record_run(db_session, Run(run_id="run_u", status="success", ok=True))

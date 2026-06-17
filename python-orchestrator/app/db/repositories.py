@@ -25,19 +25,26 @@ _RUN_SET_UPDATABLE = (
 )
 
 
-def _apply(target: object, source: object, fields: Sequence[str]) -> None:
+def _apply(target: object, source: object, fields: Sequence[str], *, clear_nullable: bool) -> None:
     """Recopie ``fields`` de ``source`` vers ``target`` lors d'un upsert.
 
-    Une colonne **NULLABLE** est toujours écrasée — y compris remise à ``None`` :
-    c'est le « dernier résultat » qui fait foi (ex. ``error`` effacée quand un
-    set repasse au succès). Une colonne **NOT NULL** n'est pas écrasée par un
-    ``None`` (champ simplement non renseigné sur l'instance transitoire), pour ne
-    pas violer la contrainte ni effacer un ``server_default``.
+    Une valeur non ``None`` est toujours recopiée. Le traitement d'un ``None``
+    dépend du mode :
+
+    - ``clear_nullable=True`` (snapshot complet, ex. résultat d'un set) : une
+      colonne **NULLABLE** est remise à ``None`` — le dernier résultat fait foi
+      (ex. ``error`` effacée quand un set repasse au succès).
+    - ``clear_nullable=False`` (mise à jour partielle, ex. transition de statut
+      d'un run) : un ``None`` n'écrase jamais — on préserve les champs
+      d'identité/contexte non renseignés (``idempotency_key``, ``dashboard_id``…).
+
+    Dans tous les cas, une colonne **NOT NULL** n'est jamais écrasée par un
+    ``None`` (pas de violation de contrainte ni d'effacement de ``server_default``).
     """
     columns = target.__table__.c
     for name in fields:
         value = getattr(source, name)
-        if value is None and not columns[name].nullable:
+        if value is None and not (clear_nullable and columns[name].nullable):
             continue
         setattr(target, name, value)
 
@@ -91,7 +98,9 @@ def record_run(session: Session, run: Run) -> Run:
         existing = get_run_by_idempotency_key(session, run.idempotency_key)
 
     if existing is not None:
-        _apply(existing, run, _RUN_UPDATABLE)
+        # Mise à jour partielle : un champ non renseigné (None) ne doit pas
+        # effacer l'idempotency_key/dashboard_id déjà stockés.
+        _apply(existing, run, _RUN_UPDATABLE, clear_nullable=False)
         session.flush()
         return existing
 
@@ -113,7 +122,9 @@ def record_run_set(session: Session, run_set: RunSet) -> RunSet:
         )
     )
     if existing is not None:
-        _apply(existing, run_set, _RUN_SET_UPDATABLE)
+        # Snapshot du dernier résultat : les champs nullable obsolètes
+        # (ex. error d'un échec précédent) doivent pouvoir être effacés.
+        _apply(existing, run_set, _RUN_SET_UPDATABLE, clear_nullable=True)
         session.flush()
         return existing
 
