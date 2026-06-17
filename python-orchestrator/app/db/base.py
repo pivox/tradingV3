@@ -2,30 +2,42 @@
 
 Le schéma PostgreSQL est dédié (``orchestration`` par défaut) pour isoler ces
 tables de celles gérées par Doctrine côté Symfony (qui n'introspecte que
-``public``). Le nom est lu depuis l'environnement pour pouvoir être neutralisé
-dans les tests SQLite — qui ne supportent pas les schémas — via
-``ORCHESTRATION_DB_SCHEMA=none`` (ou vide).
+``public``). Le nom est lu depuis l'environnement et **strictement validé** : il
+n'existe aucun chemin runtime qui retombe sur le schéma par défaut/``public``.
+Les tests SQLite conservent le schéma et attachent une base in-memory du même
+nom (cf. ``tests/conftest.py``) plutôt que de le neutraliser.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Optional
+import re
 
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
 
+DEFAULT_SCHEMA = "orchestration"
+# Identifiant SQL simple : évite toute injection DDL via le nom de schéma.
+_SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-def _resolve_schema() -> Optional[str]:
-    """Résout le schéma cible ; ``None`` désactive le préfixe (tests SQLite)."""
-    raw = os.getenv("ORCHESTRATION_DB_SCHEMA", "orchestration").strip()
-    if raw.lower() in {"", "none"}:
-        return None
+
+class SchemaError(ValueError):
+    """Nom de schéma d'orchestration invalide."""
+
+
+def _resolve_schema() -> str:
+    """Résout et valide le schéma cible (jamais ``None``, jamais ``public`` implicite)."""
+    raw = os.getenv("ORCHESTRATION_DB_SCHEMA", DEFAULT_SCHEMA).strip()
+    if not _SCHEMA_RE.match(raw):
+        raise SchemaError(
+            f"ORCHESTRATION_DB_SCHEMA invalide : {raw!r}. "
+            "Attendu un identifiant SQL simple (^[A-Za-z_][A-Za-z0-9_]*$)."
+        )
     return raw
 
 
 # Schéma figé à l'import : les tables le portent via ``MetaData(schema=...)``.
-SCHEMA: Optional[str] = _resolve_schema()
+SCHEMA: str = _resolve_schema()
 
 # Convention de nommage explicite des contraintes/index : noms stables et
 # déterministes, indispensables pour des migrations Alembic propres.

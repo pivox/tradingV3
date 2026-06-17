@@ -96,6 +96,60 @@ def test_record_run_and_run_set_then_cascade(db_session):
     assert db_session.query(RunSet).filter_by(run_id=run.run_id).count() == 0
 
 
+def test_record_run_idempotent_by_run_id(db_session):
+    """Deux appels avec le même run_id mettent à jour, sans doublon."""
+    repo.record_run(db_session, Run(run_id="run_1", ok=False, status="failed", total_calls=1))
+    repo.record_run(db_session, Run(run_id="run_1", ok=True, status="success", total_calls=3))
+    db_session.commit()
+
+    assert db_session.query(Run).count() == 1
+    run = repo.get_run(db_session, "run_1")
+    assert run.ok is True and run.status == "success" and run.total_calls == 3
+
+
+def test_record_run_idempotent_by_idempotency_key(db_session):
+    """Un retry avec une nouvelle run_id mais la même idempotency_key réutilise le run."""
+    repo.record_run(
+        db_session,
+        Run(run_id="run_a", status="partial_failure", ok=False, idempotency_key="key-42"),
+    )
+    db_session.commit()
+
+    # Retry : run_id différent, même clé → pas d'IntegrityError, mise à jour.
+    repo.record_run(
+        db_session,
+        Run(run_id="run_b", status="success", ok=True, idempotency_key="key-42"),
+    )
+    db_session.commit()
+
+    assert db_session.query(Run).count() == 1
+    run = repo.get_run_by_idempotency_key(db_session, "key-42")
+    assert run.run_id == "run_a"  # l'existant est conservé
+    assert run.ok is True and run.status == "success"
+
+
+def test_record_run_set_upsert_same_run_set(db_session):
+    """Deux appels sur le même (run_id, set_id) mettent à jour le dernier résultat."""
+    repo.record_run(db_session, Run(run_id="run_u", status="success", ok=True))
+    repo.record_run_set(
+        db_session,
+        RunSet(run_id="run_u", set_id="s1", ok=False, error="boom", duration_ms=10),
+    )
+    db_session.commit()
+
+    repo.record_run_set(
+        db_session,
+        RunSet(run_id="run_u", set_id="s1", ok=True, response_json={"status": "ok"}, duration_ms=20),
+    )
+    db_session.commit()
+
+    rows = db_session.query(RunSet).filter_by(run_id="run_u", set_id="s1").all()
+    assert len(rows) == 1
+    assert rows[0].ok is True
+    assert rows[0].duration_ms == 20
+    assert rows[0].response_json == {"status": "ok"}
+
+
 def test_dashboard_delete_sets_run_dashboard_null(db_session):
     dashboard = _make_dashboard(db_session)
     db_session.commit()

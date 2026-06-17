@@ -130,9 +130,21 @@ ni les dépendances de test.
 cd python-orchestrator
 pip install -r requirements-dev.txt
 python -m pytest
-# ou depuis la racine :
-make test-orchestrator
 ```
+
+Les tests DB tournent sur **SQLite in-memory** (aucun Postgres requis) en attachant
+le schéma `orchestration`. Un **smoke test PostgreSQL** (`tests/test_db_postgres_smoke.py`)
+valide en plus le vrai contrat Alembic (upgrade/downgrade, isolation `public`,
+absence de drift ORM↔migration) ; il est **ignoré** tant que
+`ORCHESTRATOR_TEST_DATABASE_URL` n'est pas défini :
+
+```bash
+export ORCHESTRATOR_TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/orchestrator_test
+python -m pytest
+```
+
+La CI (`.github/workflows/python-orchestrator.yml`) l'exécute automatiquement avec
+un service `postgres:15`.
 
 ## Dépendances
 
@@ -147,7 +159,7 @@ make test-orchestrator
 | `ORCHESTRATOR_PORT` | `8099` | Port d'écoute HTTP (1..65535). |
 | `MAX_CONCURRENCY` | `2` | Concurrence globale bornée, ≥ 1 (PY-002+). |
 | `DATABASE_URL` | `postgresql+psycopg://postgres:password@trading-app-db:5432/trading_app` | URL SQLAlchemy de la base orchestration (DB-001). |
-| `ORCHESTRATION_DB_SCHEMA` | `orchestration` | Schéma PostgreSQL dédié (DB-001). `none` le neutralise (tests SQLite). |
+| `ORCHESTRATION_DB_SCHEMA` | `orchestration` | Schéma PostgreSQL dédié (DB-001). Identifiant SQL simple validé (`^[A-Za-z_][A-Za-z0-9_]*$`). |
 
 Une valeur non entière ou hors borne lève une erreur explicite au démarrage
 (pas de repli silencieux sur le défaut).

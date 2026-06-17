@@ -6,7 +6,7 @@ résolution du schéma PostgreSQL, indépendamment de toute connexion.
 
 from __future__ import annotations
 
-import importlib
+import pytest
 
 from app.db.base import Base
 from app.db import models  # noqa: F401  (enregistre les tables sur Base.metadata)
@@ -88,21 +88,38 @@ def test_run_sets_fks_and_unique():
     assert ("run_id", "set_id") in uniques
 
 
-def test_schema_resolution(monkeypatch):
-    """Le schéma par défaut est ``orchestration`` ; ``none``/vide le neutralise."""
+def test_index_names_match_migration():
+    """Les index ORM portent exactement les noms créés par la migration 0001.
+
+    Évite le drift autogenerate (index mono-colonne fantômes via la convention).
+    """
+    all_indexes = {idx.name for t in Base.metadata.tables.values() for idx in t.indexes}
+    assert {
+        "ix_orchestration_sets_dashboard_enabled_priority",
+        "ix_runs_dashboard_created_at",
+        "ix_run_sets_run_id",
+    } <= all_indexes
+    # Aucun index mono-colonne fantôme issu de `index=True`.
+    assert "ix_orchestration_sets_dashboard_id" not in all_indexes
+    assert "ix_runs_dashboard_id" not in all_indexes
+
+
+def test_schema_resolution_default_and_custom(monkeypatch):
+    """Défaut ``orchestration`` ; un identifiant SQL valide est accepté tel quel."""
     import app.db.base as base_module
 
-    monkeypatch.setenv("ORCHESTRATION_DB_SCHEMA", "orchestration")
+    monkeypatch.delenv("ORCHESTRATION_DB_SCHEMA", raising=False)
     assert base_module._resolve_schema() == "orchestration"
-
-    monkeypatch.setenv("ORCHESTRATION_DB_SCHEMA", "none")
-    assert base_module._resolve_schema() is None
-
-    monkeypatch.setenv("ORCHESTRATION_DB_SCHEMA", "")
-    assert base_module._resolve_schema() is None
 
     monkeypatch.setenv("ORCHESTRATION_DB_SCHEMA", "custom_schema")
     assert base_module._resolve_schema() == "custom_schema"
 
-    monkeypatch.delenv("ORCHESTRATION_DB_SCHEMA", raising=False)
-    assert base_module._resolve_schema() == "orchestration"
+
+@pytest.mark.parametrize("bad", ["", "  ", "public schema", "orch;DROP", 'a"b', "1abc", "a-b"])
+def test_schema_resolution_rejects_invalid(monkeypatch, bad):
+    """Tout nom qui n'est pas un identifiant SQL simple est refusé (anti-injection)."""
+    import app.db.base as base_module
+
+    monkeypatch.setenv("ORCHESTRATION_DB_SCHEMA", bad)
+    with pytest.raises(base_module.SchemaError):
+        base_module._resolve_schema()

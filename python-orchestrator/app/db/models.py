@@ -23,6 +23,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -69,11 +70,19 @@ class OrchestrationSet(Base):
     __tablename__ = "orchestration_sets"
     __table_args__ = (
         UniqueConstraint("dashboard_id", "set_id", name="uq_orchestration_sets_dashboard_set"),
+        # Index composite explicite (couvre aussi les lookups FK dashboard_id en
+        # colonne de gauche). Nom aligné sur la migration pour éviter tout drift.
+        Index(
+            "ix_orchestration_sets_dashboard_enabled_priority",
+            "dashboard_id",
+            "enabled",
+            "priority",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     dashboard_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dashboards.id", ondelete="CASCADE"), nullable=False, index=True
+        BigInteger, ForeignKey("dashboards.id", ondelete="CASCADE"), nullable=False
     )
     set_id: Mapped[str] = mapped_column(String(255), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
@@ -104,13 +113,18 @@ class Run(Base):
     """Run d'orchestration déclenché + dernier JSON global."""
 
     __tablename__ = "runs"
+    __table_args__ = (
+        # Index composite explicite (couvre les lookups FK dashboard_id). Nom
+        # aligné sur la migration pour éviter tout drift autogenerate.
+        Index("ix_runs_dashboard_created_at", "dashboard_id", "created_at"),
+    )
 
     # run_id = identifiant dérivé par l'orchestrateur (cf. _resolve_run_id).
     run_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     # Nullable + SET NULL : on conserve l'historique des runs même si le
     # dashboard d'origine est supprimé.
     dashboard_id: Mapped[Optional[int]] = mapped_column(
-        BigInteger, ForeignKey("dashboards.id", ondelete="SET NULL"), nullable=True, index=True
+        BigInteger, ForeignKey("dashboards.id", ondelete="SET NULL"), nullable=True
     )
     ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     status: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -138,11 +152,13 @@ class RunSet(Base):
     __tablename__ = "run_sets"
     __table_args__ = (
         UniqueConstraint("run_id", "set_id", name="uq_run_sets_run_set"),
+        # Index explicite aligné sur la migration (évite le drift autogenerate).
+        Index("ix_run_sets_run_id", "run_id"),
     )
 
     id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(
-        String(255), ForeignKey("runs.run_id", ondelete="CASCADE"), nullable=False, index=True
+        String(255), ForeignKey("runs.run_id", ondelete="CASCADE"), nullable=False
     )
     # Snapshot textuel du set_id (le set peut être supprimé après le run).
     set_id: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -11,7 +11,8 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool, text
+from sqlalchemy import engine_from_config, pool
+from sqlalchemy.schema import CreateSchema
 
 from app.db.base import SCHEMA, Base
 from app.db import models  # noqa: F401  (enregistre les tables sur Base.metadata)
@@ -27,19 +28,16 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 
 target_metadata = Base.metadata
 
-# Schéma dédié : aussi utilisé pour stocker la table de version Alembic.
+# Schéma dédié (toujours défini et validé) : aussi utilisé pour stocker la table
+# de version Alembic, afin de ne pas polluer ``public``.
 _version_table_schema = SCHEMA
 
 
 def _include_object(obj, name, type_, reflected, compare_to):  # noqa: ANN001
     """Ne gère que les objets du schéma orchestration (ignore public/Doctrine)."""
-    if type_ == "table" and _version_table_schema is not None:
+    if type_ == "table":
         return getattr(obj, "schema", None) == _version_table_schema
     return True
-
-
-def _create_schema_sql() -> str:
-    return f'CREATE SCHEMA IF NOT EXISTS "{_version_table_schema}"'
 
 
 def run_migrations_offline() -> None:
@@ -54,8 +52,7 @@ def run_migrations_offline() -> None:
     )
     with context.begin_transaction():
         # Le schéma doit exister avant la table de version Alembic.
-        if _version_table_schema:
-            context.execute(_create_schema_sql())
+        context.execute(CreateSchema(_version_table_schema, if_not_exists=True))
         context.run_migrations()
 
 
@@ -68,10 +65,11 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         # Crée le schéma dédié avant qu'Alembic n'y matérialise sa table de
-        # version : sans cela, ``alembic upgrade`` échoue au premier run.
-        if _version_table_schema:
-            connection.execute(text(_create_schema_sql()))
-            connection.commit()
+        # version : sans cela, ``alembic upgrade`` échoue au premier run. Le nom
+        # est validé en amont (app.db.base) et quoté par le dialecte via
+        # CreateSchema → pas d'interpolation SQL manuelle.
+        connection.execute(CreateSchema(_version_table_schema, if_not_exists=True))
+        connection.commit()
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

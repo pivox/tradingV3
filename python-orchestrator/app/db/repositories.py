@@ -15,6 +15,28 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Dashboard, OrchestrationSet, Run, RunSet
 
+# Colonnes mutables recopiées lors d'un upsert (la PK et created_at sont exclus).
+_RUN_UPDATABLE = (
+    "dashboard_id", "ok", "status", "idempotency_key", "total_calls",
+    "success_count", "failed_count", "started_at", "finished_at", "last_json",
+)
+_RUN_SET_UPDATABLE = (
+    "set_ref_id", "payload_sent", "response_json", "ok", "error", "duration_ms",
+)
+
+
+def _apply(target: object, source: object, fields: Sequence[str]) -> None:
+    """Recopie ``fields`` de ``source`` vers ``target`` en ignorant les ``None``.
+
+    Ignorer ``None`` évite d'écraser une valeur existante (ou un server_default)
+    avec un champ simplement non renseigné sur l'instance transitoire ; ``0`` et
+    ``False`` (non ``None``) sont bien propagés.
+    """
+    for name in fields:
+        value = getattr(source, name)
+        if value is not None:
+            setattr(target, name, value)
+
 
 def get_dashboard(session: Session, dashboard_id: int) -> Optional[Dashboard]:
     """Retourne un dashboard par son id, ou ``None``."""
@@ -48,15 +70,49 @@ def get_run(session: Session, run_id: str) -> Optional[Run]:
     return session.get(Run, run_id)
 
 
+def get_run_by_idempotency_key(session: Session, idempotency_key: str) -> Optional[Run]:
+    """Retourne un run par sa clé d'idempotence, ou ``None``."""
+    return session.scalar(select(Run).where(Run.idempotency_key == idempotency_key))
+
+
 def record_run(session: Session, run: Run) -> Run:
-    """Persiste (ou met à jour) un run et le renvoie après flush."""
-    merged = session.merge(run)
+    """Upsert idempotent d'un run.
+
+    Résout l'existant par ``run_id`` puis, à défaut, par ``idempotency_key`` :
+    un retry réutilisant la même clé met à jour le run existant au lieu de violer
+    ``uq_runs_idempotency_key``. Retourne l'instance persistée après flush.
+    """
+    existing = session.get(Run, run.run_id)
+    if existing is None and run.idempotency_key:
+        existing = get_run_by_idempotency_key(session, run.idempotency_key)
+
+    if existing is not None:
+        _apply(existing, run, _RUN_UPDATABLE)
+        session.flush()
+        return existing
+
+    session.add(run)
     session.flush()
-    return merged
+    return run
 
 
 def record_run_set(session: Session, run_set: RunSet) -> RunSet:
-    """Persiste le résultat d'un set dans un run et le renvoie après flush."""
+    """Upsert idempotent du résultat d'un set dans un run.
+
+    Résout l'existant par ``(run_id, set_id)`` : un retry du même set dans le même
+    run met à jour le dernier résultat au lieu de violer ``uq_run_sets_run_set``.
+    """
+    existing = session.scalar(
+        select(RunSet).where(
+            RunSet.run_id == run_set.run_id,
+            RunSet.set_id == run_set.set_id,
+        )
+    )
+    if existing is not None:
+        _apply(existing, run_set, _RUN_SET_UPDATABLE)
+        session.flush()
+        return existing
+
     session.add(run_set)
     session.flush()
     return run_set
