@@ -323,10 +323,10 @@ validate-contracts: ## 🔎 Valide les contrats actifs pour un TF (TF=15m,5m,1m,
 ORCH_SVC ?= python-orchestrator
 
 build-orchestrator: ## Build the python-orchestrator image
-	$(DC) build $(ORCH_SVC)
+	$(DC) --profile orchestrator build $(ORCH_SVC)
 
 rebuild-orchestrator: build-orchestrator ## Rebuild + restart python-orchestrator
-	$(DC) up -d --no-deps $(ORCH_SVC)
+	$(DC) --profile orchestrator up -d --no-deps $(ORCH_SVC)
 
-test-orchestrator: ## Run python-orchestrator pytest suite (local venv)
-	cd python-orchestrator && python -m pytest
+test-orchestrator: ## Run python-orchestrator pytest suite (installs dev deps)
+	cd python-orchestrator && pip install -q -r requirements-dev.txt && python -m pytest

@@ -162,17 +162,33 @@ services:
   python-orchestrator:
     build: ./python-orchestrator
     container_name: python_orchestrator
+    # Service expérimental (PY-001) : derrière un profile pour ne pas démarrer
+    # par défaut avec la stack. Lancer via: docker compose --profile orchestrator up -d
+    profiles: ["orchestrator"]
     mem_limit: 256m
     environment:
       - SYMFONY_BASE_URL=http://trading-app-nginx:80
       - ORCHESTRATOR_PORT=8099
       - MAX_CONCURRENCY=2
-    ports:
-      - "8099:8099"
+    # Bridge interne appelé par Temporal/front : pas de port hôte par défaut
+    # (aucun auth/secret pour l'instant). Pour un accès dev local, publier via
+    # un override (docker-compose.override.yml) ou `docker compose run --service-ports`.
+    expose:
+      - "8099"
     networks:
       - trading-app-net
       - shared-net
     restart: unless-stopped
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8099/healthcheck', timeout=3).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     deploy:
       resources:
         limits:
