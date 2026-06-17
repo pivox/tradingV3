@@ -37,9 +37,13 @@ Inclus :
 Hors-scope (PR suivantes) :
 
 - vraie exécution parallèle + appels Symfony réels → **PY-002** ;
-- persistance DB des sets et runs → **DB-001** ;
 - refresh des contrats, gestion live, idempotence/locks serveur ;
 - cockpit front → **UI-001** ; branchement Temporal → **TM-001**.
+
+> **DB-001 (livré)** : le schéma de persistance (dashboards, sets, runs +
+> dernier JSON) existe désormais (cf. section *Persistance*). Le **câblage**
+> applicatif (lecture des sets depuis la DB, écriture des runs) reste l'objet
+> de **PY-002** : à ce stade `services/sets.py` reste en mémoire.
 
 ## Endpoints
 
@@ -142,6 +146,43 @@ make test-orchestrator
 | `SYMFONY_BASE_URL` | `http://trading-app-nginx:80` | URL de base Symfony (PY-002+). |
 | `ORCHESTRATOR_PORT` | `8099` | Port d'écoute HTTP (1..65535). |
 | `MAX_CONCURRENCY` | `2` | Concurrence globale bornée, ≥ 1 (PY-002+). |
+| `DATABASE_URL` | `postgresql+psycopg://postgres:password@trading-app-db:5432/trading_app` | URL SQLAlchemy de la base orchestration (DB-001). |
+| `ORCHESTRATION_DB_SCHEMA` | `orchestration` | Schéma PostgreSQL dédié (DB-001). `none` le neutralise (tests SQLite). |
 
 Une valeur non entière ou hors borne lève une erreur explicite au démarrage
 (pas de repli silencieux sur le défaut).
+
+## Persistance (DB-001)
+
+L'orchestrateur persiste sa configuration et ses résultats dans PostgreSQL via
+**SQLAlchemy 2.0 + Alembic** (driver `psycopg` sync). Pour ne pas interférer
+avec les migrations Doctrine de Symfony, tout vit dans un **schéma PostgreSQL
+dédié `orchestration`** au sein de la base `trading_app` existante (Symfony
+n'introspecte que `public`).
+
+Tables (`app/db/models.py`) :
+
+| Table | Rôle |
+| --- | --- |
+| `dashboards` | Configurations d'orchestration (nom, statut). |
+| `orchestration_sets` | Sets prêts à exécuter (miroir d'`OrchestratorSet` + `payload` préparé). |
+| `runs` | Runs déclenchés + **dernier JSON global** (`last_json`). |
+| `run_sets` | Résultat par set + **dernier JSON par set** (`response_json`). |
+
+La couche DB (`app/db/`) est **découplée** des routers/services : le câblage
+applicatif (CRUD, lecture des sets au run) est l'objet de **PY-002**.
+
+### Migrations
+
+```bash
+cd python-orchestrator
+export DATABASE_URL=postgresql+psycopg://postgres:password@trading-app-db:5432/trading_app
+alembic upgrade head        # crée le schéma `orchestration` + les 4 tables
+alembic downgrade base      # supprime les tables (laisse le schéma)
+alembic upgrade head --sql  # prévisualise le DDL sans l'appliquer
+```
+
+Le schéma `orchestration` (et la table de version Alembic qui y réside) est créé
+automatiquement par `alembic/env.py` au premier `upgrade`. L'`entrypoint` du
+conteneur n'exécute **pas** les migrations au boot (service expérimental derrière
+le profile `orchestrator`) : les appliquer explicitement.

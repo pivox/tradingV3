@@ -38,12 +38,24 @@ class Settings:
     port: int = 8099
     # Concurrence globale bornée des appels Symfony (utilisée par PY-002+).
     max_concurrency: int = 2
+    # URL SQLAlchemy de la base orchestration (DB-001). On réutilise la base
+    # `trading_app` mais dans un schéma dédié `orchestration` (cf. db_schema)
+    # pour ne pas interférer avec les migrations Doctrine de Symfony.
+    database_url: str = (
+        "postgresql+psycopg://postgres:password@trading-app-db:5432/trading_app"
+    )
+    # Schéma PostgreSQL dédié aux tables d'orchestration.
+    db_schema: str = "orchestration"
 
     def __post_init__(self) -> None:
         if not 1 <= self.port <= 65535:
             raise SettingsError(f"ORCHESTRATOR_PORT hors plage : {self.port} (attendu 1..65535).")
         if self.max_concurrency < 1:
             raise SettingsError(f"MAX_CONCURRENCY doit être >= 1 (reçu {self.max_concurrency}).")
+        if not self.database_url.strip():
+            raise SettingsError("DATABASE_URL ne doit pas être vide.")
+        if not self.db_schema.strip():
+            raise SettingsError("ORCHESTRATION_DB_SCHEMA ne doit pas être vide.")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -51,6 +63,8 @@ class Settings:
             symfony_base_url=os.getenv("SYMFONY_BASE_URL", cls.symfony_base_url),
             port=_int_env("ORCHESTRATOR_PORT", cls.port),
             max_concurrency=_int_env("MAX_CONCURRENCY", cls.max_concurrency),
+            database_url=os.getenv("DATABASE_URL", cls.database_url),
+            db_schema=os.getenv("ORCHESTRATION_DB_SCHEMA", cls.db_schema),
         )
 
 

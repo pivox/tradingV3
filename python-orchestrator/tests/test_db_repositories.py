@@ -1,0 +1,113 @@
+"""Tests round-trip de la couche DB sur SQLite in-memory (DB-001)."""
+
+from __future__ import annotations
+
+from app.db import repositories as repo
+from app.db.models import Dashboard, OrchestrationSet, Run, RunSet
+
+
+def _make_dashboard(session) -> Dashboard:
+    dashboard = Dashboard(name="dash_a", enabled=True, description="demo")
+    session.add(dashboard)
+    session.flush()
+    return dashboard
+
+
+def test_dashboard_round_trip(db_session):
+    dashboard = _make_dashboard(db_session)
+    db_session.commit()
+
+    assert repo.get_dashboard(db_session, dashboard.id) is not None
+    assert repo.get_dashboard_by_name(db_session, "dash_a").id == dashboard.id
+    assert repo.get_dashboard(db_session, 999999) is None
+
+
+def test_list_active_sets_excludes_disabled_and_sorts_by_priority(db_session):
+    dashboard = _make_dashboard(db_session)
+    db_session.add_all(
+        [
+            OrchestrationSet(dashboard_id=dashboard.id, set_id="low", exchange="fake", priority=1, enabled=True),
+            OrchestrationSet(dashboard_id=dashboard.id, set_id="high", exchange="fake", priority=10, enabled=True),
+            OrchestrationSet(dashboard_id=dashboard.id, set_id="off", exchange="fake", priority=99, enabled=False),
+        ]
+    )
+    db_session.commit()
+
+    active = repo.list_active_sets(db_session, dashboard.id)
+    ids = [s.set_id for s in active]
+    assert ids == ["high", "low"]  # désactivé exclu, tri priorité desc
+    assert all(s.enabled for s in active)
+
+
+def test_symbols_jsonb_round_trip(db_session):
+    dashboard = _make_dashboard(db_session)
+    a_set = OrchestrationSet(
+        dashboard_id=dashboard.id,
+        set_id="btc_eth",
+        exchange="fake",
+        symbols=["BTCUSDT", "ETHUSDT"],
+        payload={"action": "mtf_run", "dry_run": True},
+    )
+    db_session.add(a_set)
+    db_session.commit()
+    db_session.expire_all()
+
+    reloaded = db_session.get(OrchestrationSet, a_set.id)
+    assert reloaded.symbols == ["BTCUSDT", "ETHUSDT"]
+    assert reloaded.payload == {"action": "mtf_run", "dry_run": True}
+
+
+def test_record_run_and_run_set_then_cascade(db_session):
+    dashboard = _make_dashboard(db_session)
+    db_session.commit()
+
+    run = repo.record_run(
+        db_session,
+        Run(
+            run_id="run_dashA_20260617T083000Z",
+            dashboard_id=dashboard.id,
+            ok=False,
+            status="partial_failure",
+            total_calls=2,
+            success_count=1,
+            failed_count=1,
+            last_json={"ok": False, "summary": {"total_calls": 2}},
+        ),
+    )
+    repo.record_run_set(
+        db_session,
+        RunSet(
+            run_id=run.run_id,
+            set_id="fake_regular_demo_btc",
+            payload_sent={"dry_run": True},
+            response_json={"status": "success"},
+            ok=True,
+            duration_ms=42,
+        ),
+    )
+    db_session.commit()
+
+    assert repo.get_run(db_session, run.run_id).last_json["ok"] is False
+    assert db_session.query(RunSet).filter_by(run_id=run.run_id).count() == 1
+
+    # ON DELETE CASCADE : supprimer le run supprime ses run_sets.
+    db_session.delete(repo.get_run(db_session, run.run_id))
+    db_session.commit()
+    assert db_session.query(RunSet).filter_by(run_id=run.run_id).count() == 0
+
+
+def test_dashboard_delete_sets_run_dashboard_null(db_session):
+    dashboard = _make_dashboard(db_session)
+    db_session.commit()
+    repo.record_run(
+        db_session,
+        Run(run_id="run_x", dashboard_id=dashboard.id, ok=True, status="success"),
+    )
+    db_session.commit()
+
+    db_session.delete(db_session.get(Dashboard, dashboard.id))
+    db_session.commit()
+    db_session.expire_all()
+
+    # SET NULL : le run survit, son dashboard_id est nul.
+    assert repo.get_run(db_session, "run_x").dashboard_id is None

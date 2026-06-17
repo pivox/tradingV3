@@ -170,11 +170,19 @@ services:
       - SYMFONY_BASE_URL=http://trading-app-nginx:80
       - ORCHESTRATOR_PORT=8099
       - MAX_CONCURRENCY=2
+      # Persistance orchestration (DB-001) : réutilise la base trading_app dans
+      # un schéma dédié `orchestration` (isolé des tables Doctrine de Symfony).
+      # Appliquer les migrations avec `alembic upgrade head` (cf. README).
+      - DATABASE_URL=postgresql+psycopg://postgres:password@trading-app-db:5432/trading_app
+      - ORCHESTRATION_DB_SCHEMA=orchestration
     # Bridge interne appelé par Temporal/front : pas de port hôte par défaut
     # (aucun auth/secret pour l'instant). Pour un accès dev local, publier via
     # un override (docker-compose.override.yml) ou `docker compose run --service-ports`.
     expose:
       - "8099"
+    depends_on:
+      trading-app-db:
+        condition: service_healthy
     networks:
       - trading-app-net
       - shared-net
