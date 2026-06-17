@@ -72,6 +72,7 @@ class _FakeAsyncClient:
         open_state: Dict[str, Any] | None = None,
         open_state_status: int = 200,
         mtf_status: int = 200,
+        mtf_body: Dict[str, Any] | None = None,
         **_: Any,
     ) -> None:
         self._open_state = open_state if open_state is not None else {
@@ -80,6 +81,7 @@ class _FakeAsyncClient:
         }
         self._open_state_status = open_state_status
         self._mtf_status = mtf_status
+        self._mtf_body = mtf_body if mtf_body is not None else {"status": "success"}
         self.get_calls: List[Dict[str, Any]] = []
         self.post_calls: List[Dict[str, Any]] = []
 
@@ -95,7 +97,7 @@ class _FakeAsyncClient:
 
     async def post(self, url: str, json: Dict[str, Any] | None = None) -> _FakeResponse:
         self.post_calls.append({"url": url, "json": json or {}})
-        return _FakeResponse(self._mtf_status, {"status": "success"})
+        return _FakeResponse(self._mtf_status, self._mtf_body)
 
 
 def _install_fake_client(monkeypatch, fake: _FakeAsyncClient) -> None:
@@ -124,6 +126,20 @@ def test_run_summary_matches_injected_sets(monkeypatch):
     assert body["summary"] == {"total_calls": 3, "success": 3, "failed": 0}
     assert body["ok"] is True
     assert body["status"] == "success"
+
+
+def test_business_failure_in_200_body_counts_as_failed(monkeypatch):
+    # /api/mtf/run renvoie HTTP 200 mais un statut métier d'échec : le run global
+    # ne doit pas être ok et le set doit être compté en échec.
+    monkeypatch.setattr(orch, "list_active_sets", lambda: [_make_set("a")])
+    _install_fake_client(
+        monkeypatch,
+        _FakeAsyncClient(mtf_body={"status": "partial_success", "data": {"errors": ["x"]}}),
+    )
+
+    body = client.post("/orchestrator/run").json()
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 1, "success": 0, "failed": 1}
 
 
 def test_run_with_no_active_sets_is_not_success(monkeypatch):

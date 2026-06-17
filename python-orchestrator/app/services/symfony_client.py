@@ -111,6 +111,29 @@ def build_mtf_payload(
     return payload
 
 
+# Statuts métier renvoyés par /api/mtf/run considérés comme un succès complet.
+_SUCCESS_STATUSES = frozenset({"success"})
+
+
+def is_business_success(body: Any) -> bool:
+    """Indique si la réponse ``/api/mtf/run`` est un succès métier.
+
+    Symfony renvoie HTTP 200 même pour des échecs métier : ``partial_success``
+    (errors non vides), ``completed_with_errors`` (runs parallèles), ``rejected``
+    (fail-closed SF-002b)... Un set n'est réussi que si le statut est un succès
+    explicite ET qu'aucune erreur n'est remontée — le contrôleur peut écraser
+    ``partial_success`` par ``summary.status``, donc on vérifie aussi ``errors``.
+    """
+    if not isinstance(body, dict):
+        return False
+    if body.get("status") not in _SUCCESS_STATUSES:
+        return False
+    errors = body.get("errors")
+    if errors is None and isinstance(body.get("data"), dict):
+        errors = body["data"].get("errors")
+    return not errors
+
+
 async def run_mtf_set(
     client: httpx.AsyncClient,
     base_url: str,
@@ -127,7 +150,10 @@ async def run_mtf_set(
         body = response.text
     return {
         "set_id": a_set.set_id,
-        "ok": response.is_success,
+        # Succès = HTTP 2xx ET succès métier (sinon un partial_success/rejected
+        # renvoyé en 200 serait compté à tort comme réussi).
+        "ok": response.is_success and is_business_success(body),
         "status": response.status_code,
+        "business_status": body.get("status") if isinstance(body, dict) else None,
         "body": body,
     }

@@ -13,6 +13,8 @@ from app.services.symfony_client import (
     OpenStateUnavailableError,
     build_mtf_payload,
     fetch_open_state,
+    is_business_success,
+    run_mtf_set,
     snapshot_key,
 )
 
@@ -37,6 +39,71 @@ def test_build_payload_forces_sync_tables_false_and_attaches_snapshot():
     assert payload["symbols"] == ["BTCUSDT", "ETHUSDT"]
     assert payload["exchange"] == "fake"
     assert payload["market_type"] == "perpetual"
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ({"status": "success"}, True),
+        ({"status": "success", "data": {"errors": []}}, True),
+        ({"status": "partial_success"}, False),
+        ({"status": "completed_with_errors"}, False),
+        ({"status": "rejected"}, False),
+        ({"status": "error"}, False),
+        # Le contrôleur peut écraser le statut par summary.status : on vérifie errors.
+        ({"status": "success", "data": {"errors": ["BTCUSDT: boom"]}}, False),
+        ({"status": "success", "errors": ["x"]}, False),
+        ("not-json-string", False),
+        ({}, False),
+    ],
+)
+def test_is_business_success(body, expected):
+    assert is_business_success(body) is expected
+
+
+class _StubResponse:
+    def __init__(self, status_code, payload):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = str(payload)
+
+    @property
+    def is_success(self):
+        return 200 <= self.status_code < 300
+
+    def json(self):
+        return self._payload
+
+
+class _StubClient:
+    def __init__(self, response):
+        self._response = response
+
+    async def post(self, url, json=None):
+        return self._response
+
+
+def _run_set(status_code, payload):
+    client = _StubClient(_StubResponse(status_code, payload))
+    return asyncio.run(run_mtf_set(client, "http://sym", _make_set(), None))
+
+
+def test_run_mtf_set_ok_on_business_success():
+    result = _run_set(200, {"status": "success"})
+    assert result["ok"] is True
+    assert result["business_status"] == "success"
+
+
+def test_run_mtf_set_failed_on_business_failure_with_http_200():
+    # HTTP 200 mais statut métier d'échec : le set doit être compté en échec.
+    result = _run_set(200, {"status": "partial_success", "data": {"errors": ["x"]}})
+    assert result["ok"] is False
+    assert result["business_status"] == "partial_success"
+
+
+def test_run_mtf_set_failed_on_http_error():
+    result = _run_set(500, {"status": "error"})
+    assert result["ok"] is False
 
 
 def test_build_payload_omits_snapshot_when_none():
