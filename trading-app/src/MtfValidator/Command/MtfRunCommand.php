@@ -58,7 +58,7 @@ class MtfRunCommand extends Command
             ->addOption('tf', null, InputOption::VALUE_OPTIONAL, 'Limiter l\'exécution à un unique timeframe (4h|1h|15m|5m|1m)')
             ->addOption('sync-contracts', null, InputOption::VALUE_NONE, 'Forcer la synchronisation (fetch + upsert) des contrats au démarrage (activé par défaut)')
             ->addOption('sync-tables', null, InputOption::VALUE_OPTIONAL, 'Synchroniser les tables positions/ordres depuis l\'exchange (1|0)', '1')
-            ->addOption('skip-open-state-filter', null, InputOption::VALUE_OPTIONAL, 'Ne pas filtrer les symboles avec positions/ordres ouverts (1|0). Défaut: actif en dry-run, refusé en live')
+            ->addOption('skip-open-state-filter', null, InputOption::VALUE_OPTIONAL, 'Ne pas filtrer les symboles avec positions/ordres ouverts (1|0). Défaut: suit dry-run, refusé en live', 'auto')
             ->addOption('force-timeframe-check', null, InputOption::VALUE_NONE, 'Force l\'analyse du timeframe même si la dernière kline est récente')
             ->addOption('skip-context', null, InputOption::VALUE_NONE, 'Ignorer l\'alignement de contexte pour les TF d\'exécution (bypass de validation contextuelle)')
             ->addOption('lock-per-symbol', null, InputOption::VALUE_NONE, 'Utiliser des verrous par symbole (recommandé pour exécutions unitaires)')
@@ -86,15 +86,24 @@ class MtfRunCommand extends Command
         $currentTf = $input->getOption('tf');
         $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
         $syncContractsOpt = (bool) $input->getOption('sync-contracts');
-        // Cohérent avec le parsing HTTP (RunnerController) : gère 0/false/no/off.
-        $syncTables = filter_var($input->getOption('sync-tables'), FILTER_VALIDATE_BOOLEAN);
+        // Parse 0/false/no/off (cohérent avec le parsing HTTP de RunnerController).
+        // Cas valueless `--sync-tables` (sans `=1|0`) : Symfony résout en null pour une
+        // option VALUE_OPTIONAL ; on le traite comme l'activation (la valeur par défaut),
+        // sinon le flag positif désactiverait la synchro à cause de filter_var(null)=false.
+        $syncTablesRaw = $input->getOption('sync-tables');
+        $syncTables = $syncTablesRaw === null
+            ? true
+            : filter_var($syncTablesRaw, FILTER_VALIDATE_BOOLEAN);
         // Filtre d'activité (positions/ordres ouverts). Par défaut on ne le saute
         // qu'en dry-run (diagnostic) ; en live le filtre protège contre le trading
         // sur un symbole déjà en position/ordre, il ne doit pas être désactivé.
+        // Défaut 'auto' (option absente) → suit dry-run ; null (flag sans valeur) → skip.
         $skipOpenStateOpt = $input->getOption('skip-open-state-filter');
-        $skipOpenStateFilter = $skipOpenStateOpt === null
-            ? $dryRun
-            : filter_var($skipOpenStateOpt, FILTER_VALIDATE_BOOLEAN);
+        $skipOpenStateFilter = match (true) {
+            $skipOpenStateOpt === 'auto' => $dryRun,
+            $skipOpenStateOpt === null => true,
+            default => filter_var($skipOpenStateOpt, FILTER_VALIDATE_BOOLEAN),
+        };
         $forceTimeframeCheck = (bool) $input->getOption('force-timeframe-check');
         $skipContext = (bool) $input->getOption('skip-context');
         $autoSwitchInvalid = (bool) $input->getOption('auto-switch-invalid');
