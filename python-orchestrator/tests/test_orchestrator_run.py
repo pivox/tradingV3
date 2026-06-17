@@ -310,6 +310,10 @@ def test_conflicting_live_set_ids():
     # Symboles disjoints => pas de conflit.
     assert orch._conflicting_live_set_ids([a, c], force_dry_run=False) == set()
 
+    # Casse différente => même instrument (Symfony normalise en MAJUSCULES).
+    lower = _make_set("low", dry_run=False, exchange="bitmart", symbols=("btcusdt",))
+    assert orch._conflicting_live_set_ids([a, lower], force_dry_run=False) == {"a", "low"}
+
 
 def test_overlapping_live_sets_rejected_before_dispatch(monkeypatch):
     sets = [

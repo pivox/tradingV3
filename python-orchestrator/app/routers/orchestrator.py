@@ -75,7 +75,11 @@ def _symbols_overlap(a: Any, b: Any) -> bool:
     """
     if not a.symbols or not b.symbols:
         return True
-    return bool(set(a.symbols) & set(b.symbols))
+    # Symfony normalise les symboles en MAJUSCULES (SymbolUniverseResolver::resolve),
+    # donc BTCUSDT et btcusdt ciblent le même instrument : comparer normalisé.
+    norm_a = {s.strip().upper() for s in a.symbols}
+    norm_b = {s.strip().upper() for s in b.symbols}
+    return bool(norm_a & norm_b)
 
 
 def _conflicting_live_set_ids(mtf_sets: List[Any], force_dry_run: bool) -> set:
