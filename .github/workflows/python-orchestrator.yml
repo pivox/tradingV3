@@ -1,0 +1,60 @@
+name: Python Orchestrator
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/python-orchestrator.yml'
+      - 'python-orchestrator/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/python-orchestrator.yml'
+      - 'python-orchestrator/**'
+
+jobs:
+  tests:
+    name: pytest (+ PostgreSQL smoke)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: python-orchestrator
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: orchestrator_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Active le smoke test Alembic/PostgreSQL (upgrade/downgrade, isolation
+      # `public`, drift autogenerate). Sans cette variable, le smoke test skip.
+      ORCHESTRATOR_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/orchestrator_test
+      ORCHESTRATION_DB_SCHEMA: orchestration
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest

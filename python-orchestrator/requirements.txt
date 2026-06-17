@@ -5,3 +5,9 @@ fastapi==0.137.1
 uvicorn[standard]==0.49.0
 pydantic==2.13.4
 httpx==0.28.1
+# Persistance orchestration (DB-001). psycopg[binary] fournit des wheels :
+# pas besoin de build-essential dans l'image. alembic en runtime pour appliquer
+# les migrations dans le conteneur (alembic upgrade head).
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3
+alembic==1.14.0

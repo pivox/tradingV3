@@ -262,6 +262,24 @@ L'API Python garde toujours :
 
 Le front peut donc afficher le même type de retour que le retour existant de Symfony, avec une vue supplémentaire par set.
 
+## Schéma de persistance (DB-001)
+
+La persistance est implémentée dans `python-orchestrator/` avec **SQLAlchemy 2.0 + Alembic**
+(driver `psycopg` sync). Les tables vivent dans un **schéma PostgreSQL dédié `orchestration`**
+au sein de la base `trading_app` existante, afin de ne pas interférer avec les migrations
+Doctrine de Symfony (qui n'introspecte que `public`).
+
+| Table | Rôle |
+| --- | --- |
+| `dashboards` | Configurations d'orchestration (nom, statut actif). |
+| `orchestration_sets` | Sets prêts à exécuter (miroir d'`OrchestratorSet`, dont `sync_tables`, `symbols`, `contracts_limit`, et le `payload` préparé). |
+| `runs` | Runs déclenchés (`run_id`, statut, compteurs, idempotency_key) + **dernier JSON global** (`last_json`). |
+| `run_sets` | Détail par set d'un run (payload envoyé, réponse Symfony, statut, erreur, durée) + **dernier JSON par set** (`response_json`). |
+
+DB-001 ne livre que la couche schéma (modèles, migration, moteur/session, repositories). Le
+câblage applicatif — lecture des sets depuis la DB et écriture des runs — est porté par **PY-002**.
+Les migrations s'appliquent via `alembic upgrade head` (voir `python-orchestrator/README.md`).
+
 ## Garde-fous fonctionnels
 
 Avant tout run :
