@@ -213,6 +213,65 @@ def test_record_run_set_upsert_same_run_set(db_session):
     assert rows[0].error is None
 
 
+def test_create_update_delete_dashboard(db_session):
+    dashboard = repo.create_dashboard(db_session, name="cfg", description="x")
+    db_session.commit()
+    assert dashboard.id is not None
+
+    repo.update_dashboard(db_session, dashboard, fields={"enabled": False, "description": "y"})
+    db_session.commit()
+    reloaded = repo.get_dashboard(db_session, dashboard.id)
+    assert reloaded.enabled is False and reloaded.description == "y"
+
+    repo.delete_dashboard(db_session, reloaded)
+    db_session.commit()
+    assert repo.get_dashboard(db_session, dashboard.id) is None
+
+
+def test_list_dashboards_sorted_by_name(db_session):
+    repo.create_dashboard(db_session, name="zeta")
+    repo.create_dashboard(db_session, name="alpha")
+    db_session.commit()
+
+    assert [d.name for d in repo.list_dashboards(db_session)] == ["alpha", "zeta"]
+
+
+def test_create_get_update_delete_set(db_session):
+    dashboard = _make_dashboard(db_session)
+    db_session.commit()
+
+    a_set = repo.create_set(
+        db_session,
+        dashboard.id,
+        fields={"set_id": "s1", "exchange": "bitmart", "symbols": ["BTCUSDT"], "priority": 3},
+    )
+    db_session.commit()
+    assert repo.get_set(db_session, dashboard.id, "s1").id == a_set.id
+
+    repo.update_set(db_session, a_set, fields={"priority": 9, "enabled": False})
+    db_session.commit()
+    reloaded = repo.get_set(db_session, dashboard.id, "s1")
+    assert reloaded.priority == 9 and reloaded.enabled is False
+
+    repo.delete_set(db_session, reloaded)
+    db_session.commit()
+    assert repo.get_set(db_session, dashboard.id, "s1") is None
+
+
+def test_list_sets_enabled_only(db_session):
+    dashboard = _make_dashboard(db_session)
+    db_session.add_all(
+        [
+            OrchestrationSet(dashboard_id=dashboard.id, set_id="on", exchange="fake", enabled=True, priority=1),
+            OrchestrationSet(dashboard_id=dashboard.id, set_id="off", exchange="fake", enabled=False, priority=5),
+        ]
+    )
+    db_session.commit()
+
+    assert {s.set_id for s in repo.list_sets(db_session, dashboard.id)} == {"on", "off"}
+    assert [s.set_id for s in repo.list_sets(db_session, dashboard.id, enabled_only=True)] == ["on"]
+
+
 def test_dashboard_delete_sets_run_dashboard_null(db_session):
     dashboard = _make_dashboard(db_session)
     db_session.commit()

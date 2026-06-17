@@ -8,7 +8,7 @@ test pour le schéma.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -75,6 +75,95 @@ def list_active_sets(session: Session, dashboard_id: int) -> Sequence[Orchestrat
         .order_by(OrchestrationSet.priority.desc(), OrchestrationSet.set_id.asc())
     )
     return session.scalars(stmt).all()
+
+
+# ---------------------------------------------------------------------------
+# Gestion des dashboards et des sets (PY-002)
+#
+# CRUD minimal et explicite. Ces helpers ne committent pas : la transaction est
+# gérée par l'appelant (router), afin que création + sous-mutations restent
+# atomiques et que les violations d'unicité soient rattrapées au commit.
+# ---------------------------------------------------------------------------
+
+
+def list_dashboards(session: Session) -> Sequence[Dashboard]:
+    """Retourne tous les dashboards, triés par nom."""
+    return session.scalars(select(Dashboard).order_by(Dashboard.name.asc())).all()
+
+
+def create_dashboard(
+    session: Session,
+    *,
+    name: str,
+    enabled: bool = True,
+    description: Optional[str] = None,
+) -> Dashboard:
+    """Crée un dashboard et le flush (l'unicité du nom est vérifiée au commit)."""
+    dashboard = Dashboard(name=name, enabled=enabled, description=description)
+    session.add(dashboard)
+    session.flush()
+    return dashboard
+
+
+def update_dashboard(session: Session, dashboard: Dashboard, *, fields: Mapping[str, Any]) -> Dashboard:
+    """Applique une mise à jour partielle à un dashboard existant."""
+    for name, value in fields.items():
+        setattr(dashboard, name, value)
+    session.flush()
+    return dashboard
+
+
+def delete_dashboard(session: Session, dashboard: Dashboard) -> None:
+    """Supprime un dashboard (cascade ses sets ; SET NULL sur ses runs)."""
+    session.delete(dashboard)
+    session.flush()
+
+
+def list_sets(
+    session: Session, dashboard_id: int, *, enabled_only: bool = False
+) -> Sequence[OrchestrationSet]:
+    """Retourne les sets d'un dashboard, triés par priorité décroissante.
+
+    ``enabled_only=True`` ne renvoie que les sets actifs (même filtre que
+    ``list_active_sets``, mais sans contrainte sur la présence du dashboard).
+    """
+    stmt = select(OrchestrationSet).where(OrchestrationSet.dashboard_id == dashboard_id)
+    if enabled_only:
+        stmt = stmt.where(OrchestrationSet.enabled.is_(True))
+    stmt = stmt.order_by(OrchestrationSet.priority.desc(), OrchestrationSet.set_id.asc())
+    return session.scalars(stmt).all()
+
+
+def get_set(session: Session, dashboard_id: int, set_id: str) -> Optional[OrchestrationSet]:
+    """Retourne un set par ``(dashboard_id, set_id)``, ou ``None``."""
+    return session.scalar(
+        select(OrchestrationSet).where(
+            OrchestrationSet.dashboard_id == dashboard_id,
+            OrchestrationSet.set_id == set_id,
+        )
+    )
+
+
+def create_set(session: Session, dashboard_id: int, *, fields: Mapping[str, Any]) -> OrchestrationSet:
+    """Crée un set rattaché à un dashboard (unicité ``(dashboard_id, set_id)`` au commit)."""
+    a_set = OrchestrationSet(dashboard_id=dashboard_id, **dict(fields))
+    session.add(a_set)
+    session.flush()
+    return a_set
+
+
+def update_set(session: Session, a_set: OrchestrationSet, *, fields: Mapping[str, Any]) -> OrchestrationSet:
+    """Applique une mise à jour partielle à un set existant."""
+    for name, value in fields.items():
+        setattr(a_set, name, value)
+    session.flush()
+    return a_set
+
+
+def delete_set(session: Session, a_set: OrchestrationSet) -> None:
+    """Supprime un set."""
+    session.delete(a_set)
+    session.flush()
 
 
 def get_run(session: Session, run_id: str) -> Optional[Run]:
