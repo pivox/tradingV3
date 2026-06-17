@@ -84,7 +84,8 @@ Garde-fous appliqués dès la création/mise à jour des sets (revalidés sur le
   **ou** `contracts_limit` renseigné (pas de set ambigu) → `422` ;
 - **`payload` non writable** : produit côté serveur (PY-004), exposé en lecture
   seule ; un `payload` envoyé par un client est ignoré ;
-- un `null` explicite sur un champ NOT NULL d'un `PATCH` de set → `422` ;
+- un `null` explicite sur un champ NOT NULL d'un `PATCH` (dashboard ou set) →
+  `422` (seules les colonnes nullables `description` / `contracts_limit` sont effaçables) ;
 - `set_id` unique par dashboard, `name` de dashboard unique → `409 Conflict` ;
 - `set_id` immuable (renommer = supprimer puis recréer).
 

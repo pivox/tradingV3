@@ -66,6 +66,18 @@ def test_patch_dashboard_partial(api_client):
     assert body["name"] == "dash_a"  # non fourni → inchangé
 
 
+def test_patch_dashboard_explicit_null_on_not_null_field_rejected(api_client):
+    """{"name": null}/{"enabled": null} → 422, pas un 409 trompeur ni une écriture."""
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    for field in ("name", "enabled"):
+        resp = api_client.patch(f"/dashboards/{dashboard_id}", json={field: None})
+        assert resp.status_code == 422, field
+    # description est nullable : un null explicite l'efface.
+    resp = api_client.patch(f"/dashboards/{dashboard_id}", json={"description": None})
+    assert resp.status_code == 200
+    assert resp.json()["description"] is None
+
+
 def test_delete_dashboard_then_404(api_client):
     dashboard_id = _create_dashboard(api_client).json()["id"]
     assert api_client.delete(f"/dashboards/{dashboard_id}").status_code == 204

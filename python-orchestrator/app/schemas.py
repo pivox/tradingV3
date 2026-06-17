@@ -185,6 +185,27 @@ class RunResponse(BaseModel):
 # persistées (id, dashboard_id, horodatages, ``payload`` préparé).
 # ---------------------------------------------------------------------------
 
+# Champs (par modèle de mise à jour) adossés à une colonne NULLABLE et donc
+# autorisés à recevoir un ``null`` explicite en PATCH (les autres colonnes sont
+# NOT NULL : un null explicite y est refusé pour éviter un 500/409 trompeur).
+_DASHBOARD_NULLABLE_UPDATE_FIELDS = frozenset({"description"})
+
+
+def _reject_explicit_nulls(data: object, *, fields, nullable) -> object:
+    """Rejette un ``null`` explicite sur un champ adossé à une colonne NOT NULL.
+
+    Pydantic accepte un ``null`` pour tout champ ``Optional`` ; combiné à
+    ``model_dump(exclude_unset=True)``, la clé est conservée et écraserait une
+    colonne NOT NULL (caught en 409 trompeur, voire 500). On le bloque en amont
+    (`422`). Les colonnes NULLABLE (``description``, ``contracts_limit``) restent
+    effaçables par un ``null`` explicite.
+    """
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if value is None and key in fields and key not in nullable:
+                raise ValueError(f"champ '{key}' ne peut pas être null.")
+    return data
+
 
 class DashboardCreate(BaseModel):
     """Payload de création d'un dashboard d'orchestration."""
@@ -200,6 +221,13 @@ class DashboardUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     enabled: Optional[bool] = None
     description: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _forbid_null_overrides(cls, data: object) -> object:
+        return _reject_explicit_nulls(
+            data, fields=cls.model_fields, nullable=_DASHBOARD_NULLABLE_UPDATE_FIELDS
+        )
 
 
 class DashboardRead(BaseModel):
@@ -282,16 +310,10 @@ class SetUpdate(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _reject_explicit_nulls(cls, data: object) -> object:
-        if isinstance(data, dict):
-            for key, value in data.items():
-                if (
-                    value is None
-                    and key in cls.model_fields
-                    and key not in _SET_NULLABLE_UPDATE_FIELDS
-                ):
-                    raise ValueError(f"champ '{key}' ne peut pas être null.")
-        return data
+    def _forbid_null_overrides(cls, data: object) -> object:
+        return _reject_explicit_nulls(
+            data, fields=cls.model_fields, nullable=_SET_NULLABLE_UPDATE_FIELDS
+        )
 
 
 class SetRead(BaseModel):
