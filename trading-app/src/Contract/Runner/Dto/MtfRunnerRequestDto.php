@@ -87,7 +87,7 @@ final class MtfRunnerRequestDto
      * Normalise l'instantané d'état ouvert fourni dans le payload.
      *
      * @param array<string,mixed> $data
-     * @return array{open_positions?: array<int,mixed>, open_orders?: array<int,mixed>}|null
+     * @return array{open_positions: array<int,mixed>, open_orders: array<int,mixed>}|null
      */
     private static function extractOpenStateSnapshot(array $data): ?array
     {
@@ -96,12 +96,21 @@ final class MtfRunnerRequestDto
             return null;
         }
 
-        $positions = $snapshot['open_positions'] ?? [];
-        $orders = $snapshot['open_orders'] ?? [];
+        $positions = $snapshot['open_positions'] ?? null;
+        $orders = $snapshot['open_orders'] ?? null;
+
+        // Un snapshot n'est une source fiable que s'il contient explicitement les deux
+        // clés sous forme de tableaux. Un payload mal formé ({} ou clés manquantes/
+        // non-tableaux) retourne null pour que le garde fail-closed en live se déclenche
+        // au lieu d'exécuter le run sans état d'ouverture réel. Un snapshot vide mais
+        // bien formé (open_positions/open_orders = []) reste valide.
+        if (!is_array($positions) || !is_array($orders)) {
+            return null;
+        }
 
         return [
-            'open_positions' => is_array($positions) ? array_values($positions) : [],
-            'open_orders' => is_array($orders) ? array_values($orders) : [],
+            'open_positions' => array_values($positions),
+            'open_orders' => array_values($orders),
         ];
     }
 

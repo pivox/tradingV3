@@ -957,8 +957,11 @@ final class MtfRunnerService
 
     /**
      * Indique si un instantané d'état ouvert orchestrateur est exploitable.
-     * Un snapshot vide (aucune position ni ordre) reste une source FIABLE :
-     * l'orchestrateur a bien interrogé l'exchange, simplement rien n'était ouvert.
+     * Un snapshot vide mais bien formé (open_positions/open_orders = []) reste une
+     * source FIABLE : l'orchestrateur a bien interrogé l'exchange, rien n'était ouvert.
+     * En revanche un snapshot mal formé (clés manquantes ou non-tableaux, ex: {}) n'est
+     * PAS fiable : on exige les deux clés sous forme de tableaux pour que le garde
+     * fail-closed en live ne soit pas contourné par un payload vide/incomplet.
      *
      * @param array{open_positions?: array<int,mixed>, open_orders?: array<int,mixed>}|null $snapshot
      */
@@ -968,8 +971,8 @@ final class MtfRunnerService
             return false;
         }
 
-        return array_key_exists('open_positions', $snapshot)
-            || array_key_exists('open_orders', $snapshot);
+        return is_array($snapshot['open_positions'] ?? null)
+            && is_array($snapshot['open_orders'] ?? null);
     }
 
     /**

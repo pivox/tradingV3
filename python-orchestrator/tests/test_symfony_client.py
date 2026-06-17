@@ -30,6 +30,9 @@ def test_build_payload_forces_sync_tables_false_and_attaches_snapshot():
     payload = build_mtf_payload(a_set, snapshot)
 
     assert payload["sync_tables"] is False
+    # TP/SL recalc per set refetcherait l'exchange et aurait des effets de bord live :
+    # désactivé pour préserver l'objectif "zéro appel exchange par set".
+    assert payload["process_tp_sl"] is False
     assert payload["open_state_snapshot"] == snapshot
     assert payload["symbols"] == ["BTCUSDT", "ETHUSDT"]
     assert payload["exchange"] == "fake"
@@ -40,6 +43,7 @@ def test_build_payload_omits_snapshot_when_none():
     payload = build_mtf_payload(_make_set(), None)
 
     assert payload["sync_tables"] is False
+    assert payload["process_tp_sl"] is False
     assert "open_state_snapshot" not in payload
 
 

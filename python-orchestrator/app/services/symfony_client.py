@@ -89,6 +89,11 @@ def build_mtf_payload(
     SF-002b : ``sync_tables`` est toujours forcé à ``false`` et
     ``open_state_snapshot`` est joint (le snapshot remplace tout fetch exchange
     par set côté Symfony).
+
+    ``process_tp_sl`` est aussi forcé à ``false`` : le recalcul TP/SL post-run
+    refetch les positions/ordres depuis le provider pour chaque set (et a des
+    effets de bord live), ce qui réintroduirait les appels exchange par set que
+    le snapshot partagé vise justement à éliminer.
     """
     payload: Dict[str, Any] = {
         "dry_run": a_set.dry_run,
@@ -97,6 +102,7 @@ def build_mtf_payload(
         "market_type": a_set.market_type.value,
         "mtf_profile": a_set.mtf_profile.value,
         "sync_tables": False,
+        "process_tp_sl": False,
     }
     if a_set.symbols:
         payload["symbols"] = list(a_set.symbols)
