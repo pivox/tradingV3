@@ -17,17 +17,13 @@ os.environ["ORCHESTRATION_DB_SCHEMA"] = "orchestration"
 import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.db.base import SCHEMA
 
 
-@pytest.fixture()
-def db_session():
-    """Session SQLite in-memory avec le schéma orchestration attaché."""
-    from app.db.base import Base
-    from app.db import models  # noqa: F401  (enregistre les tables)
-
-    engine = create_engine("sqlite://", future=True)
+def _attach_schema_and_fks(engine) -> None:
+    """Active les FK SQLite et attache une base in-memory portant le schéma dédié."""
 
     @event.listens_for(engine, "connect")
     def _prepare_sqlite(dbapi_connection, _record):  # noqa: ANN001
@@ -40,6 +36,16 @@ def db_session():
         cursor.execute(f"ATTACH DATABASE ':memory:' AS {SCHEMA}")
         cursor.close()
 
+
+@pytest.fixture()
+def db_session():
+    """Session SQLite in-memory avec le schéma orchestration attaché."""
+    from app.db.base import Base
+    from app.db import models  # noqa: F401  (enregistre les tables)
+
+    engine = create_engine("sqlite://", future=True)
+    _attach_schema_and_fks(engine)
+
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     session: Session = factory()
@@ -47,4 +53,45 @@ def db_session():
         yield session
     finally:
         session.close()
+        engine.dispose()
+
+
+@pytest.fixture()
+def api_client():
+    """``TestClient`` câblé sur une DB SQLite in-memory partagée (PY-002).
+
+    ``StaticPool`` + une unique connexion partagée garantissent que toutes les
+    requêtes (potentiellement servies dans un thread du pool anyio) voient la
+    même base in-memory. La dépendance ``get_session`` est surchargée : aucun
+    PostgreSQL n'est requis.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.db.base import Base
+    from app.db import models  # noqa: F401  (enregistre les tables)
+    from app.db.engine import get_session
+    from app.main import app
+
+    engine = create_engine(
+        "sqlite://",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    _attach_schema_and_fks(engine)
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+    def _override_get_session():
+        session = factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_session] = _override_get_session
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_session, None)
         engine.dispose()

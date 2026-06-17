@@ -41,9 +41,13 @@ Hors-scope (PR suivantes) :
 - cockpit front → **UI-001** ; branchement Temporal → **TM-001**.
 
 > **DB-001 (livré)** : le schéma de persistance (dashboards, sets, runs +
-> dernier JSON) existe désormais (cf. section *Persistance*). Le **câblage**
-> applicatif (lecture des sets depuis la DB, écriture des runs) reste l'objet
-> de **PY-002** : à ce stade `services/sets.py` reste en mémoire.
+> dernier JSON) existe (cf. section *Persistance*).
+>
+> **PY-002 (livré)** : la **gestion** (CRUD) des dashboards et des sets est
+> désormais exposée en REST (cf. *Gestion des dashboards et sets*). La lecture
+> des sets persistés **au moment du run** et l'écriture des runs restent l'objet
+> de **PY-005** : à ce stade `/orchestrator/run` lit encore `services/sets.py`
+> (sets simulés en mémoire).
 
 ## Endpoints
 
@@ -51,7 +55,57 @@ Hors-scope (PR suivantes) :
 | --- | --- | --- |
 | `GET` | `/healthcheck` | État de santé du service. |
 | `POST` | `/orchestrator/run` | Déclenche un run (stub PY-001). |
+| `GET` | `/dashboards` | Liste les dashboards (PY-002). |
+| `POST` | `/dashboards` | Crée un dashboard (PY-002). |
+| `GET` | `/dashboards/{id}` | Détail d'un dashboard (PY-002). |
+| `PATCH` | `/dashboards/{id}` | Mise à jour partielle (PY-002). |
+| `DELETE` | `/dashboards/{id}` | Supprime un dashboard et ses sets (PY-002). |
+| `GET` | `/dashboards/{id}/sets` | Liste les sets (`?enabled_only=true`) (PY-002). |
+| `POST` | `/dashboards/{id}/sets` | Crée un set (PY-002). |
+| `GET` | `/dashboards/{id}/sets/{set_id}` | Détail d'un set (PY-002). |
+| `PATCH` | `/dashboards/{id}/sets/{set_id}` | Mise à jour partielle d'un set (PY-002). |
+| `DELETE` | `/dashboards/{id}/sets/{set_id}` | Supprime un set (PY-002). |
 | `GET` | `/docs` | Swagger UI (OpenAPI). |
+
+### Gestion des dashboards et sets (PY-002)
+
+PY-002 câble la couche DB (DB-001) dans une API REST de **configuration** : on
+crée des dashboards regroupant des sets « prêts ». L'exécution parallèle de ces
+sets dans `/orchestrator/run` (appels Symfony réels, agrégation) reste l'objet
+de **PY-005** — à ce stade `/orchestrator/run` lit toujours les sets simulés.
+
+Garde-fous appliqués dès la création/mise à jour des sets (revalidés sur les
+`PATCH` partiels, l'état résultant étant fusionné avec la ligne persistée) :
+
+- `workers` borné à `MAX_WORKERS_PER_SET` (1 au début) → `422` au-delà ;
+- **aucun live persistable** : `dry_run=false` est refusé pour tous les
+  exchanges/environnements tant que la readiness live n'est pas livrée → `422` ;
+- **sélection exploitable obligatoire** : un set doit avoir `symbols` non vide
+  **ou** `contracts_limit` renseigné (pas de set ambigu) → `422` ;
+- **`payload` non writable** : produit côté serveur (PY-004), exposé en lecture
+  seule ; un `payload` envoyé par un client est ignoré ;
+- un `null` explicite sur un champ NOT NULL d'un `PATCH` (dashboard ou set) →
+  `422` (seules les colonnes nullables `description` / `contracts_limit` sont effaçables) ;
+- `set_id` unique par dashboard, `name` de dashboard unique → `409 Conflict` ;
+- `set_id` immuable (renommer = supprimer puis recréer).
+
+Exemple :
+
+```bash
+# 1. créer un dashboard
+curl -s -X POST localhost:8099/dashboards \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"cockpit","description":"sets de prod"}'
+
+# 2. y attacher un set prêt (dry-run, sélection explicite de symboles)
+curl -s -X POST localhost:8099/dashboards/1/sets \
+  -H 'Content-Type: application/json' \
+  -d '{"set_id":"bitmart_regular_top","exchange":"bitmart","mtf_profile":"regular",
+       "symbols":["BTCUSDT","ETHUSDT"],"sync_tables":false,"priority":10}'
+
+# 3. lister les sets actifs
+curl -s 'localhost:8099/dashboards/1/sets?enabled_only=true'
+```
 
 ### `POST /orchestrator/run`
 

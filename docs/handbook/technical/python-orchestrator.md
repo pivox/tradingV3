@@ -276,9 +276,28 @@ Doctrine de Symfony (qui n'introspecte que `public`).
 | `runs` | Runs déclenchés (`run_id`, statut, compteurs, idempotency_key) + **dernier JSON global** (`last_json`). |
 | `run_sets` | Détail par set d'un run (payload envoyé, réponse Symfony, statut, erreur, durée) + **dernier JSON par set** (`response_json`). |
 
-DB-001 ne livre que la couche schéma (modèles, migration, moteur/session, repositories). Le
-câblage applicatif — lecture des sets depuis la DB et écriture des runs — est porté par **PY-002**.
-Les migrations s'appliquent via `alembic upgrade head` (voir `python-orchestrator/README.md`).
+DB-001 ne livre que la couche schéma (modèles, migration, moteur/session, repositories).
+
+**PY-002** câble la couche DB dans une API REST de **configuration** des dashboards et des
+sets (CRUD), sous le préfixe `/dashboards` :
+
+| Méthode | Chemin | Rôle |
+| --- | --- | --- |
+| `GET` / `POST` | `/dashboards` | Liste / crée un dashboard. |
+| `GET` / `PATCH` / `DELETE` | `/dashboards/{id}` | Détail / mise à jour partielle / suppression. |
+| `GET` / `POST` | `/dashboards/{id}/sets` | Liste (`?enabled_only=true`) / crée un set. |
+| `GET` / `PATCH` / `DELETE` | `/dashboards/{id}/sets/{set_id}` | Détail / mise à jour / suppression d'un set. |
+
+Garde-fous appliqués dès la configuration (revalidés sur les `PATCH` partiels) : borne `workers` ;
+**aucun live persistable** (`dry_run=false` refusé pour tous les exchanges/environnements tant que
+la readiness live n'est pas livrée) ; **sélection exploitable obligatoire** (`symbols` non vide ou
+`contracts_limit`) ; **`payload` non writable** (produit serveur PY-004, lecture seule) ; rejet des
+`null` explicites sur les champs NOT NULL ; unicité du nom de dashboard et du `set_id` par dashboard
+(`409`) ; `set_id` immuable.
+
+La **lecture des sets persistés au moment du run** et l'**écriture des runs** restent portées par
+**PY-005** (`/orchestrator/run` lit encore les sets simulés). Les migrations s'appliquent via
+`alembic upgrade head` (voir `python-orchestrator/README.md`).
 
 ## Garde-fous fonctionnels
 
