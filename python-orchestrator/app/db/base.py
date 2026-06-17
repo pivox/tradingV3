@@ -19,6 +19,10 @@ from sqlalchemy.orm import DeclarativeBase
 DEFAULT_SCHEMA = "orchestration"
 # Identifiant SQL simple : évite toute injection DDL via le nom de schéma.
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Schémas réservés interdits : poser les tables d'orchestration dans `public`
+# (schéma Symfony/Doctrine) ou un schéma système romprait l'isolation centrale
+# de la PR. On les refuse même s'ils sont syntaxiquement valides.
+_FORBIDDEN_SCHEMAS = frozenset({"public", "pg_catalog", "information_schema"})
 
 
 class SchemaError(ValueError):
@@ -26,12 +30,18 @@ class SchemaError(ValueError):
 
 
 def _resolve_schema() -> str:
-    """Résout et valide le schéma cible (jamais ``None``, jamais ``public`` implicite)."""
+    """Résout et valide le schéma cible (jamais ``None``, jamais ``public``)."""
     raw = os.getenv("ORCHESTRATION_DB_SCHEMA", DEFAULT_SCHEMA).strip()
     if not _SCHEMA_RE.match(raw):
         raise SchemaError(
             f"ORCHESTRATION_DB_SCHEMA invalide : {raw!r}. "
             "Attendu un identifiant SQL simple (^[A-Za-z_][A-Za-z0-9_]*$)."
+        )
+    if raw.lower() in _FORBIDDEN_SCHEMAS:
+        raise SchemaError(
+            f"ORCHESTRATION_DB_SCHEMA interdit : {raw!r}. Le schéma d'orchestration "
+            "doit être dédié (ni `public`, ni un schéma système) pour préserver "
+            "l'isolation vis-à-vis de Doctrine/Symfony."
         )
     return raw
 

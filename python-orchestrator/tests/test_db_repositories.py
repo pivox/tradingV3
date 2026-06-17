@@ -158,6 +158,37 @@ def test_record_run_partial_update_preserves_context(db_session):
     assert run.dashboard_id == dashboard.id
 
 
+def test_record_run_insert_race_falls_back_to_existing(db_session, monkeypatch):
+    """Course concurrente : si le lookup rate puis l'insert entre en conflit sur
+    `idempotency_key`, la violation est rattrapée et la ligne gagnante renvoyée."""
+    repo.record_run(
+        db_session,
+        Run(run_id="winner", status="success", ok=True, idempotency_key="race"),
+    )
+    db_session.commit()
+
+    real_resolve = repo._resolve_existing_run
+    calls = {"n": 0}
+
+    def flaky_resolve(session, run):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None  # simule un lookup qui rate avant le commit concurrent
+        return real_resolve(session, run)
+
+    monkeypatch.setattr(repo, "_resolve_existing_run", flaky_resolve)
+
+    # Nouveau run_id, même clé → insert → IntegrityError → rattrapage + reload.
+    result = repo.record_run(
+        db_session,
+        Run(run_id="loser", status="failed", ok=False, idempotency_key="race"),
+    )
+    db_session.commit()
+
+    assert result.run_id == "winner"            # ligne gagnante récupérée
+    assert db_session.query(Run).count() == 1   # pas de doublon créé
+
+
 def test_record_run_set_upsert_same_run_set(db_session):
     """Deux appels sur le même (run_id, set_id) mettent à jour le dernier résultat."""
     repo.record_run(db_session, Run(run_id="run_u", status="success", ok=True))

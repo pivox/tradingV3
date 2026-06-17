@@ -123,3 +123,13 @@ def test_schema_resolution_rejects_invalid(monkeypatch, bad):
     monkeypatch.setenv("ORCHESTRATION_DB_SCHEMA", bad)
     with pytest.raises(base_module.SchemaError):
         base_module._resolve_schema()
+
+
+@pytest.mark.parametrize("reserved", ["public", "PUBLIC", "pg_catalog", "information_schema"])
+def test_schema_resolution_rejects_reserved(monkeypatch, reserved):
+    """`public` et les schémas système sont refusés même s'ils sont syntaxiquement valides."""
+    import app.db.base as base_module
+
+    monkeypatch.setenv("ORCHESTRATION_DB_SCHEMA", reserved)
+    with pytest.raises(base_module.SchemaError):
+        base_module._resolve_schema()

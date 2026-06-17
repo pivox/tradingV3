@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Optional, Sequence
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import Dashboard, OrchestrationSet, Run, RunSet
@@ -86,27 +87,69 @@ def get_run_by_idempotency_key(session: Session, idempotency_key: str) -> Option
     return session.scalar(select(Run).where(Run.idempotency_key == idempotency_key))
 
 
+def _resolve_existing_run(session: Session, run: Run) -> Optional[Run]:
+    """Cherche le run existant par ``run_id`` puis, à défaut, par ``idempotency_key``."""
+    existing = session.get(Run, run.run_id)
+    if existing is None and run.idempotency_key:
+        existing = get_run_by_idempotency_key(session, run.idempotency_key)
+    return existing
+
+
+def _update_existing_run(session: Session, existing: Run, run: Run) -> Run:
+    # Mise à jour partielle : un champ non renseigné (None) ne doit pas effacer
+    # l'idempotency_key/dashboard_id déjà stockés.
+    _apply(existing, run, _RUN_UPDATABLE, clear_nullable=False)
+    session.flush()
+    return existing
+
+
 def record_run(session: Session, run: Run) -> Run:
     """Upsert idempotent d'un run.
 
     Résout l'existant par ``run_id`` puis, à défaut, par ``idempotency_key`` :
     un retry réutilisant la même clé met à jour le run existant au lieu de violer
-    ``uq_runs_idempotency_key``. Retourne l'instance persistée après flush.
+    ``uq_runs_idempotency_key``.
+
+    Le chemin d'insertion est protégé contre une **course concurrente** : si deux
+    writers manquent tous deux le lookup puis insèrent la même clé, le flush en
+    conflit (`uq_runs_idempotency_key` ou PK) est rattrapé via un savepoint, et on
+    recharge la ligne gagnante pour la mettre à jour — l'idempotence est donc
+    réellement garantie sous retry/concurrence. Retourne l'instance persistée.
     """
-    existing = session.get(Run, run.run_id)
-    if existing is None and run.idempotency_key:
-        existing = get_run_by_idempotency_key(session, run.idempotency_key)
-
+    existing = _resolve_existing_run(session, run)
     if existing is not None:
-        # Mise à jour partielle : un champ non renseigné (None) ne doit pas
-        # effacer l'idempotency_key/dashboard_id déjà stockés.
-        _apply(existing, run, _RUN_UPDATABLE, clear_nullable=False)
-        session.flush()
-        return existing
+        return _update_existing_run(session, existing, run)
 
-    session.add(run)
+    try:
+        with session.begin_nested():  # SAVEPOINT : isole l'échec d'insertion
+            session.add(run)
+            session.flush()
+        return run
+    except IntegrityError:
+        # Un autre writer a inséré la même clé/PK entre le lookup et le flush.
+        if run in session:
+            session.expunge(run)
+        existing = _resolve_existing_run(session, run)
+        if existing is None:
+            raise  # conflit sur une autre contrainte : ne pas masquer
+        return _update_existing_run(session, existing, run)
+
+
+def _resolve_existing_run_set(session: Session, run_set: RunSet) -> Optional[RunSet]:
+    return session.scalar(
+        select(RunSet).where(
+            RunSet.run_id == run_set.run_id,
+            RunSet.set_id == run_set.set_id,
+        )
+    )
+
+
+def _update_existing_run_set(session: Session, existing: RunSet, run_set: RunSet) -> RunSet:
+    # Snapshot du dernier résultat : les champs nullable obsolètes
+    # (ex. error d'un échec précédent) doivent pouvoir être effacés.
+    _apply(existing, run_set, _RUN_SET_UPDATABLE, clear_nullable=True)
     session.flush()
-    return run
+    return existing
 
 
 def record_run_set(session: Session, run_set: RunSet) -> RunSet:
@@ -114,20 +157,22 @@ def record_run_set(session: Session, run_set: RunSet) -> RunSet:
 
     Résout l'existant par ``(run_id, set_id)`` : un retry du même set dans le même
     run met à jour le dernier résultat au lieu de violer ``uq_run_sets_run_set``.
+    Le chemin d'insertion est protégé contre une course concurrente (savepoint +
+    rattrapage de la violation d'unicité, puis rechargement) comme ``record_run``.
     """
-    existing = session.scalar(
-        select(RunSet).where(
-            RunSet.run_id == run_set.run_id,
-            RunSet.set_id == run_set.set_id,
-        )
-    )
+    existing = _resolve_existing_run_set(session, run_set)
     if existing is not None:
-        # Snapshot du dernier résultat : les champs nullable obsolètes
-        # (ex. error d'un échec précédent) doivent pouvoir être effacés.
-        _apply(existing, run_set, _RUN_SET_UPDATABLE, clear_nullable=True)
-        session.flush()
-        return existing
+        return _update_existing_run_set(session, existing, run_set)
 
-    session.add(run_set)
-    session.flush()
-    return run_set
+    try:
+        with session.begin_nested():  # SAVEPOINT : isole l'échec d'insertion
+            session.add(run_set)
+            session.flush()
+        return run_set
+    except IntegrityError:
+        if run_set in session:
+            session.expunge(run_set)
+        existing = _resolve_existing_run_set(session, run_set)
+        if existing is None:
+            raise
+        return _update_existing_run_set(session, existing, run_set)
