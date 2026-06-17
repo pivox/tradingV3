@@ -78,6 +78,13 @@ final class PostRunProjectionDispatcher
             return [$request->currentTf];
         }
 
+        // getListTimeframe() exige un profil non nul (cf. MtfValidatorInterface).
+        // Sans profil résolu, on saute la projection (best-effort) plutôt que de
+        // provoquer un TypeError qui ferait échouer tout le run.
+        if (!\is_string($request->profile) || $request->profile === '') {
+            return [];
+        }
+
         return $this->mtfValidator->getListTimeframe($request->profile);
     }
 }

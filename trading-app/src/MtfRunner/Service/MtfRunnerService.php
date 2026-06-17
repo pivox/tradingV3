@@ -120,7 +120,11 @@ final class MtfRunnerService
                 ] = $this->syncTables($context);
                 $profiler->increment('runner', 'sync_tables', microtime(true) - $syncStart);
             } else {
-                $this->mtfLogger->info('[MTF Runner] Skipping exchange table sync (sync_tables=false)', [
+                // Portée limitée (SF-002a) : on saute uniquement l'upsert DB des
+                // positions/ordres. Le filtre d'activité (OpenActivityFilter) peut
+                // encore appeler l'exchange si skip_open_state_filter=false. Le vrai
+                // mode « no exchange per set » est traité par SF-002b (snapshot orchestrateur).
+                $this->mtfLogger->debug('[MTF Runner] Skipping exchange table upsert (sync_tables=false)', [
                     'run_id' => $runId,
                 ]);
             }

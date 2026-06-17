@@ -85,7 +85,8 @@ class MtfRunCommand extends Command
         $currentTf = $input->getOption('tf');
         $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
         $syncContractsOpt = (bool) $input->getOption('sync-contracts');
-        $syncTables = ((string) $input->getOption('sync-tables')) !== '0';
+        // Cohérent avec le parsing HTTP (RunnerController) : gère 0/false/no/off.
+        $syncTables = filter_var($input->getOption('sync-tables'), FILTER_VALIDATE_BOOLEAN);
         $forceTimeframeCheck = (bool) $input->getOption('force-timeframe-check');
         $skipContext = (bool) $input->getOption('skip-context');
         $autoSwitchInvalid = (bool) $input->getOption('auto-switch-invalid');

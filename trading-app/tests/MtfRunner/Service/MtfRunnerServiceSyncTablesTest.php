@@ -54,13 +54,28 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
         $syncProvider = $this->createMock(MainProviderInterface::class);
         $syncProvider->expects(self::never())->method('forContext');
 
-        $service = $this->buildService($syncProvider);
+        // Assertion directe (et non plus seulement un proxy d'internals) : le runner
+        // doit tracer le skip de l'upsert via le canal mtf.
+        $skipLogged = false;
+        $mtfLogger = $this->createMock(LoggerInterface::class);
+        $mtfLogger->method('debug')->willReturnCallback(
+            function (string $message) use (&$skipLogged): void {
+                if (str_contains($message, 'Skipping exchange table upsert')) {
+                    $skipLogged = true;
+                }
+            }
+        );
+
+        $service = $this->buildService($syncProvider, $mtfLogger);
 
         $service->run($this->request(syncTables: false));
+
+        self::assertTrue($skipLogged, 'Le skip de la synchro doit être tracé quand sync_tables=false.');
     }
 
     private function request(bool $syncTables): MtfRunnerRequestDto
     {
+        // Pas de profil : couvre aussi le chemin sans profil (cf. guard resolveTimeframes).
         return new MtfRunnerRequestDto(
             symbols: ['BTCUSDT'],
             exchange: Exchange::BITMART,
@@ -68,13 +83,19 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
             workers: 1,
             syncTables: $syncTables,
             processTpSl: false,
-            profile: 'scalper_micro',
         );
     }
 
-    private function buildService(MainProviderInterface $syncProvider): MtfRunnerService
+    /**
+     * Construit le service avec ses collaborateurs réels. Plusieurs d'entre eux
+     * (SymbolUniverseResolver, OpenActivityFilter, ExchangeStateSynchronizer...) sont
+     * déclarés `final` et ne peuvent donc pas être doublés : on les instancie réellement
+     * en mockant uniquement leurs dépendances feuilles (interfaces / repositories).
+     */
+    private function buildService(MainProviderInterface $syncProvider, ?LoggerInterface $mtfLogger = null): MtfRunnerService
     {
         $logger = $this->createMock(LoggerInterface::class);
+        $mtfLogger ??= $this->createMock(LoggerInterface::class);
         $switchRepository = $this->createMock(MtfSwitchRepository::class);
 
         $synchronizer = new ExchangeStateSynchronizer(
@@ -128,7 +149,7 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
             $validator,
             $this->createMock(MainProviderInterface::class),
             $logger,
-            $logger,
+            $mtfLogger,
             $logger,
             $this->createMock(TradeDecisionDispatcherInterface::class),
             '/tmp',

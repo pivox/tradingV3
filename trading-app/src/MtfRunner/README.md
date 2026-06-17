@@ -68,7 +68,9 @@ Paramètres clés (depuis API ou CLI) :
 ### 3.2 syncTables(ExchangeContext)
 `FuturesOrderSyncService` synchronise les tables internes (positions, futures_order, futures_order_trade) depuis l’exchange avant de filtrer. Retourne `open_positions` et `open_orders` (réutilisés plus tard).
 
-Cette étape est conditionnée par le flag `sync_tables` de la requête (`MtfRunnerRequestDto::syncTables`, `true` par défaut). Avec `sync_tables=false`, l’upsert depuis l’exchange est **sauté** et `open_positions`/`open_orders` restent `null` (le filtre d’activité refera alors son propre fetch s’il n’est pas lui‑même désactivé via `skip_open_state_filter`). Ce mode est destiné à l’orchestrateur Python (SF-002) qui synchronise une seule fois globalement plutôt qu’une fois par set préparé.
+Cette étape est conditionnée par le flag `sync_tables` de la requête (`MtfRunnerRequestDto::syncTables`, `true` par défaut). Avec `sync_tables=false`, l’upsert depuis l’exchange est **sauté** et `open_positions`/`open_orders` restent `null`.
+
+> ⚠️ **Portée (SF-002a).** `sync_tables=false` saute **uniquement** l’upsert DB de cette étape. Ce n’est **pas** un mode « zéro appel exchange » : le filtre d’activité (§3.3) refera son propre fetch (`getOpenPositions`/`getOpenOrders`) tant que `skip_open_state_filter=false`. Le vrai mode « no exchange per set » de l’orchestrateur Python (snapshot d’état partagé + fail-closed en live) est traité par **SF-002b**. Ne pas considérer `sync_tables=false` seul comme suffisant pour éviter les appels exchange par set, et ne pas utiliser `skip_open_state_filter=true` comme contournement en live (il désactive un garde-fou contre les positions/ordres déjà ouverts).
 
 ### 3.3 filterSymbolsWithOpenOrdersOrPositions()
 - Récupère via `MainProviderInterface` (ou re‑utilise la synchro) les positions et ordres ouverts.
@@ -127,7 +129,7 @@ Cette étape est conditionnée par le flag `sync_tables` de la requête (`MtfRun
 | --- | --- |
 | `skip_open_state_filter=true` | Process tous les symboles (utile pour diagnostics). |
 | `lock_per_symbol=true` | Les workers `mtf:run-worker` créent des locks symbol (évite les collisions quand plusieurs runners tournent). |
-| `sync_tables=false` | Saute la synchro Bitmart positions/ordres (CLI : `mtf:run --sync-tables=0`). Pour l’orchestrateur Python qui synchronise une fois globalement (SF-002). |
+| `sync_tables=false` | Saute **uniquement** l’upsert DB positions/ordres (SF-002a — voir §3.2 pour la portée et les limites). CLI : `mtf:run --sync-tables=0` (parsing `filter_var`, gère aussi `false`/`no`/`off`). |
 | `process_tp_sl=false` | Désactive le recalcul post‑run (runner se focalise uniquement sur la validation). |
 | `force_run` | Propagé jusqu’à `MtfValidatorCoreService` → bypass context/switch guards. |
 | `force_timeframe_check` | Rejoue un TF même si la bougie précédente vient de se fermer. |
@@ -145,7 +147,7 @@ Les loggers dédiés :
 
 Chaque étape logge un identifiant `run_id` (UUID) et un `decision_key` lorsqu’il est disponible (propagation jusqu’à TradeEntry).
 
-Le `PerformanceProfiler` retourne des timings par catégorie (`resolve_symbols`, `sync_tables`, `filter_symbols`, `mtf_execution`, `tp_sl_recalculation`, `post_processing`).
+Le `PerformanceProfiler` retourne des timings par catégorie (`resolve_symbols`, `sync_tables`, `filter_symbols`, `mtf_execution`, `tp_sl_recalculation`, `post_processing`). Certaines catégories ne sont présentes que si l’étape s’exécute : par ex. `sync_tables` est absente quand `sync_tables=false`, `tp_sl_recalculation` quand le recalcul est désactivé ou throttlé.
 
 ---
 

@@ -87,4 +87,24 @@ final class PostRunProjectionDispatcherTest extends TestCase
 
         $dispatcher->dispatch(['FINAL' => ['status' => 'completed']], new MtfRunnerRequestDto(profile: 'scalper'), 'run-123');
     }
+
+    public function testDoesNotResolveTimeframesNorDispatchWhenProfileIsMissing(): void
+    {
+        // getListTimeframe() exige un profil non nul ; sans profil ni current_tf,
+        // le dispatcher doit court-circuiter sans appeler le validateur (sinon TypeError).
+        $mtfValidator = $this->createMock(MtfValidatorInterface::class);
+        $mtfValidator->expects(self::never())->method('getListTimeframe');
+
+        $messageBus = $this->createMock(MessageBusInterface::class);
+        $messageBus->expects(self::never())->method('dispatch');
+
+        $dispatcher = new PostRunProjectionDispatcher(
+            $mtfValidator,
+            $messageBus,
+            $this->createMock(ClockInterface::class),
+            $this->createMock(LoggerInterface::class),
+        );
+
+        $dispatcher->dispatch(['BTCUSDT' => ['status' => 'READY']], new MtfRunnerRequestDto(), 'run-123');
+    }
 }
