@@ -290,6 +290,13 @@ async def run_orchestrator(
     if dashboard_id is None:
         return _no_sets_response(run_id)
 
+    # Le flag `enabled` du dashboard est un interrupteur de pause global : un
+    # dashboard absent ou désactivé ne lance aucun set (list_active_sets ne filtre
+    # que `OrchestrationSet.enabled`, pas le dashboard parent).
+    dashboard = repositories.get_dashboard(session, dashboard_id)
+    if dashboard is None or not dashboard.enabled:
+        return _no_sets_response(run_id)
+
     active_sets = list(repositories.list_active_sets(session, dashboard_id))
     if not active_sets:
         return _no_sets_response(run_id)
@@ -336,7 +343,10 @@ async def run_orchestrator(
             # La persistance les bloque déjà (assert_set_persistable), mais une ligne
             # ORM écrite hors API ne doit jamais déclencher un /api/mtf/run live ici.
             # Un override run-level dry_run rend le set sûr (effective_dry_run=True).
-            if effective_dry_run is False and exchange in _LIVE_FORBIDDEN_EXCHANGES:
+            # On normalise (casse/espaces) avant comparaison : une ligne hors API
+            # avec `OKX` ou ` hyperliquid ` doit fail-closer comme `okx`/`hyperliquid`.
+            normalized_exchange = exchange.strip().lower() if isinstance(exchange, str) else exchange
+            if effective_dry_run is False and normalized_exchange in _LIVE_FORBIDDEN_EXCHANGES:
                 return {
                     "set_id": a_set.set_id,
                     "ok": False,

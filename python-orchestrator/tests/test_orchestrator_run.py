@@ -28,8 +28,8 @@ _SENTINEL = object()
 # --------------------------------------------------------------------------
 
 
-def _seed_dashboard(session, name: str = "dash") -> Dashboard:
-    dashboard = Dashboard(name=name, enabled=True)
+def _seed_dashboard(session, name: str = "dash", *, enabled: bool = True) -> Dashboard:
+    dashboard = Dashboard(name=name, enabled=enabled)
     session.add(dashboard)
     session.commit()
     return dashboard
@@ -433,6 +433,40 @@ def test_live_forbidden_exchange_skipped_even_with_snapshot(orchestrator_env, mo
     assert body["summary"] == {"total_calls": 1, "success": 0, "failed": 1}
     mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
     assert len(mtf_posts) == 0
+
+
+def test_live_forbidden_exchange_skipped_with_uppercase_name(orchestrator_env, monkeypatch):
+    # Une ligne ORM hors API peut porter une casse/des espaces non normalisés
+    # (`OKX`) ; le garde doit fail-closer comme `okx`.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "okx_live", dry_run=False, exchange="OKX", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()  # snapshot dispo (200)
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 1, "success": 0, "failed": 1}
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 0
+
+
+def test_disabled_dashboard_returns_no_sets(orchestrator_env, monkeypatch):
+    # Le flag enabled du dashboard est un interrupteur de pause global : un
+    # dashboard désactivé ne lance aucun set, même s'ils sont actifs.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session, enabled=False)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["status"] == "no_sets"
+    assert body["ok"] is False
+    assert fake.get_calls == []
+    assert fake.post_calls == []
 
 
 def test_dry_run_override_allows_forbidden_exchange(orchestrator_env, monkeypatch):
