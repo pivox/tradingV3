@@ -165,7 +165,10 @@ def test_refresh_failclosed_on_empty_selection_for_uncapped_set(api_client, monk
 
 
 def test_refresh_allows_empty_selection_for_capped_set(api_client, monkeypatch):
-    # Set capé : une sélection vide reste valide (contracts_limit porte la sélection).
+    # Set capé : une sélection vide reste valide (contracts_limit le garde
+    # persistable), mais la sélection n'est pas matérialisée. Le payload doit
+    # rester null — surtout pas un payload « run-all » (symbols absent =>
+    # tout l'univers côté Symfony, qui n'a aucun paramètre de cap).
     dashboard_id = _mk_dashboard(api_client)
     _mk_set(api_client, dashboard_id, "capped", symbols=[], contracts_limit=5)
     _patch_fetch(monkeypatch, _Recorder(symbols_by_profile={"scalper_micro": []}))
@@ -173,7 +176,9 @@ def test_refresh_allows_empty_selection_for_capped_set(api_client, monkeypatch):
     resp = api_client.post(f"/dashboards/{dashboard_id}/refresh-contracts")
     assert resp.status_code == 200, resp.text
     assert resp.json()["sets"][0]["symbol_count"] == 0
-    assert _get_set(api_client, dashboard_id, "capped")["symbols"] == []
+    persisted = _get_set(api_client, dashboard_id, "capped")
+    assert persisted["symbols"] == []
+    assert persisted["payload"] is None
 
 
 def test_refresh_skips_disabled_sets(api_client, monkeypatch):

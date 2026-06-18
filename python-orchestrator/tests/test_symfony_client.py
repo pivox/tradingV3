@@ -342,11 +342,13 @@ def test_generate_set_payload_from_orm_string_fields():
     assert "open_state_snapshot" not in payload
 
 
-def test_generate_set_payload_omits_empty_symbols():
-    payload = generate_set_payload(_orm_set(symbols=[]))
-    assert "symbols" not in payload
-    assert payload["sync_tables"] is False
-    assert payload["process_tp_sl"] is False
+def test_generate_set_payload_none_when_no_concrete_symbols():
+    # Un set persisté sans symbole concret n'est valide que par sa
+    # `contracts_limit` (sélection non matérialisée). `/api/mtf/run` n'ayant pas
+    # de paramètre de cap, un payload sans `symbols` y signifierait « tout
+    # l'univers » : on renvoie donc `None` (pas de payload « run-all » trompeur)
+    # jusqu'à ce qu'un refresh renseigne des symboles concrets.
+    assert generate_set_payload(_orm_set(symbols=[])) is None
 
 
 def test_generate_set_payload_uses_set_dry_run():
