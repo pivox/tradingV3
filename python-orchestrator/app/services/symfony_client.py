@@ -231,7 +231,7 @@ def build_mtf_payload(
     return payload
 
 
-def generate_set_payload(a_set: Any) -> Dict[str, Any]:
+def generate_set_payload(a_set: Any) -> Optional[Dict[str, Any]]:
     """Prépare le payload ``/api/mtf/run`` **persisté** d'un set (PY-004).
 
     Lit un ``OrchestrationSet`` ORM, dont ``exchange``/``market_type``/
@@ -240,7 +240,18 @@ def generate_set_payload(a_set: Any) -> Dict[str, Any]:
     chaque run (PY-005), pas une donnée de configuration. Utilise le ``dry_run``
     configuré du set (les overrides run-level sont appliqués à l'exécution, pas
     stockés). Forme garantie identique à ``build_mtf_payload`` via le cœur partagé.
+
+    Renvoie ``None`` tant que le set n'a **aucun symbole concret** : un set
+    persisté valide à ce stade l'est forcément par sa ``contracts_limit`` seule
+    (``assert_set_persistable`` interdit ``symbols`` vide ET ``contracts_limit``
+    nulle), donc sa sélection n'est pas encore matérialisée. Or ``/api/mtf/run``
+    n'a pas de paramètre de cap : un payload sans ``symbols`` y signifie « tout
+    l'univers actif » — jamais l'intention d'un set capé. On laisse donc le
+    payload ``null`` jusqu'à ce qu'un refresh (PY-003) renseigne des symboles
+    concrets, plutôt que de persister un payload « run-all » trompeur.
     """
+    if not a_set.symbols:
+        return None
     return _base_mtf_payload(
         dry_run=a_set.dry_run,
         workers=a_set.workers,

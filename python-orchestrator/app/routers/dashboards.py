@@ -258,11 +258,11 @@ async def refresh_contracts(
 
     # 2) Validation préalable (AUCUNE écriture) : un set non capé
     #    (`contracts_limit is None`) dont la sélection rafraîchie serait vide
-    #    deviendrait ambigu/non exécutable — `assert_set_persistable` le refuse, et
-    #    `build_mtf_payload` omettrait `symbols` (liste vide = falsy), lançant tout
-    #    l'univers au lieu de « zéro contrat ». On échoue tout le refresh (fail-closed,
-    #    atomique) plutôt que de persister cet état. Un set capé tolère `[]` (la
-    #    `contracts_limit` porte la sélection).
+    #    deviendrait ambigu/non exécutable — `assert_set_persistable` le refuse. On
+    #    échoue tout le refresh (fail-closed, atomique) plutôt que de persister cet
+    #    état. Un set capé tolère `[]` : sa `contracts_limit` le garde persistable et
+    #    `generate_set_payload` renvoie alors `null` (pas de payload « run-all »
+    #    trompeur tant que la sélection n'est pas matérialisée).
     planned: list[tuple[OrchestrationSet, list, dict]] = []
     for a_set in mtf_sets:
         fetched = cache[(a_set.mtf_profile, a_set.exchange, a_set.market_type)]

@@ -192,11 +192,16 @@ tel quel (« sets prêts → runs parallèles »), sans recomposer le payload au
   `POST .../refresh-contracts` (refresh des symboles). Il n'est donc jamais périmé.
 - **Lecture seule** : `payload` n'est pas accepté en entrée (`SetCreate`/`SetUpdate`
   l'excluent) — un payload fourni par un client est ignoré. Il est exposé via `SetRead`.
-- **Forme** : identique au payload runtime (`build_mtf_payload`), via un cœur partagé.
-  `sync_tables` et `process_tp_sl` sont forcés à `false` ; `symbols` est omis s'il est
-  vide. Le `payload` **n'inclut pas** `open_state_snapshot` (valeur runtime récupérée à
-  chaque run, pas une donnée de configuration) ni d'override `dry_run` run-level (il
-  reflète le `dry_run` configuré du set).
+- **Forme** : même cœur que le payload runtime (`build_mtf_payload`). `sync_tables` et
+  `process_tp_sl` sont forcés à `false`. Le `payload` **n'inclut pas**
+  `open_state_snapshot` (valeur runtime récupérée à chaque run, pas une donnée de
+  configuration) ni d'override `dry_run` run-level (il reflète le `dry_run` configuré du set).
+- **Sélection non matérialisée ⇒ `payload` `null`** : un set valide par sa seule
+  `contracts_limit` (donc `symbols` encore vide) n'a pas de payload tant qu'un refresh n'a
+  pas renseigné de symboles concrets. `/api/mtf/run` n'ayant aucun paramètre de cap, un
+  payload sans `symbols` y signifierait « tout l'univers actif » — jamais l'intention d'un
+  set capé. On laisse donc le `payload` `null` plutôt que de persister un « run-all »
+  trompeur ; PY-005 ignore les sets sans payload.
 
 ```json
 {

@@ -276,7 +276,11 @@ def test_create_with_contracts_limit_only_ok(api_client):
         json=_set_payload(set_id="dyn", symbols=[], contracts_limit=20),
     )
     assert resp.status_code == 201
-    assert resp.json()["contracts_limit"] == 20
+    body = resp.json()
+    assert body["contracts_limit"] == 20
+    # Sélection non matérialisée : pas de payload « run-all » trompeur tant qu'un
+    # refresh n'a pas renseigné de symboles concrets (le payload reste null).
+    assert body["payload"] is None
 
 
 def test_patch_clearing_symbols_without_limit_rejected(api_client):
