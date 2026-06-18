@@ -598,6 +598,61 @@ def test_run_persists_failed_set_with_error(orchestrator_env, monkeypatch):
     assert rs.response_json == {"status": "partial_success", "data": {"errors": ["boom"]}}
 
 
+def test_persist_run_nulls_stale_fks(orchestrator_env):
+    # Régression : la transaction de lecture étant clôturée avant les appels
+    # Symfony, un set/dashboard peut être supprimé pendant le run. La persistance
+    # doit neutraliser les FK périmées (sinon l'INSERT viole la FK et tout
+    # l'historique est perdu) tout en conservant le run et les set_id.
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from app.schemas import RunSummary
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    set_a = _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    set_b = _seed_set(session, dash.id, "b", symbols=("ETHUSDT",))
+    a_id, b_id = set_a.id, set_b.id
+
+    # set_b supprimé « pendant les appels Symfony ».
+    session.delete(set_b)
+    session.commit()
+
+    mtf_sets = [SimpleNamespace(id=a_id, set_id="a"), SimpleNamespace(id=b_id, set_id="b")]
+    results = [
+        {"set_id": "a", "ok": True, "status": 200, "business_status": "success",
+         "body": {"status": "success"}, "payload_sent": {"x": 1}, "duration_ms": 5},
+        {"set_id": "b", "ok": True, "status": 200, "business_status": "success",
+         "body": {"status": "success"}, "payload_sent": {"x": 2}, "duration_ms": 6},
+    ]
+    now = datetime.now(timezone.utc)
+
+    orch._persist_run(
+        session,
+        run_id="run_stale",
+        dashboard_id=dash.id,
+        request=None,
+        ok=True,
+        status="success",
+        summary=RunSummary(total_calls=2, success=2, failed=0),
+        started_at=now,
+        finished_at=now,
+        mtf_sets=mtf_sets,
+        results=results,
+    )
+
+    session.expire_all()
+    run = session.get(Run, "run_stale")
+    assert run is not None  # historique non perdu malgré la FK périmée
+    assert run.dashboard_id == dash.id
+    by_set = {
+        rs.set_id: rs
+        for rs in session.scalars(select(RunSet).where(RunSet.run_id == "run_stale")).all()
+    }
+    assert by_set["a"].set_ref_id == a_id  # set encore présent
+    assert by_set["b"].set_ref_id is None  # set supprimé => FK neutralisée
+
+
 def test_no_sets_run_is_not_persisted(orchestrator_env, monkeypatch):
     client, session = orchestrator_env
     _install_fake_client(monkeypatch, _FakeAsyncClient())

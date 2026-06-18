@@ -23,11 +23,12 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import repositories
 from app.db.engine import get_session
-from app.db.models import Run, RunSet
+from app.db.models import OrchestrationSet, Run, RunSet
 from app.schemas import (
     Action,
     LIVE_FORBIDDEN_EXCHANGES,
@@ -172,11 +173,27 @@ def _persist_run(
         "sets": [_set_detail(r) for r in results],
     }
 
+    # Les parents (dashboard, sets) ont pu être supprimés pendant les appels
+    # Symfony (la transaction de lecture est clôturée avant l'attente). ON DELETE
+    # SET NULL ne couvre PAS un INSERT vers un parent disparu : la FK échouerait au
+    # commit et tout l'historique du run serait perdu. On neutralise donc les FK
+    # périmées en les ré-interrogeant dans la transaction de persistance (le
+    # `dashboard_id`/`set_id` réels restent tracés dans `last_json`/`RunSet.set_id`).
+    dashboard_ref = (
+        dashboard_id if repositories.get_dashboard(session, dashboard_id) is not None else None
+    )
+    set_ref_ids = [a_set.id for a_set in mtf_sets]
+    existing_set_ids = set(
+        session.scalars(
+            select(OrchestrationSet.id).where(OrchestrationSet.id.in_(set_ref_ids))
+        ).all()
+    )
+
     repositories.record_run(
         session,
         Run(
             run_id=run_id,
-            dashboard_id=dashboard_id,
+            dashboard_id=dashboard_ref,
             ok=ok,
             status=status,
             idempotency_key=idempotency_key,
@@ -198,7 +215,7 @@ def _persist_run(
             RunSet(
                 run_id=run_id,
                 set_id=result["set_id"],
-                set_ref_id=a_set.id,
+                set_ref_id=a_set.id if a_set.id in existing_set_ids else None,
                 payload_sent=result.get("payload_sent"),
                 response_json=body if isinstance(body, dict) else None,
                 ok=bool(result.get("ok")),
