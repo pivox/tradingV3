@@ -151,6 +151,31 @@ def test_refresh_failclosed_no_write_on_fetch_error(api_client, monkeypatch):
     assert _get_set(api_client, dashboard_id, "ko_set")["symbols"] == ["OLD_KO"]
 
 
+def test_refresh_failclosed_on_empty_selection_for_uncapped_set(api_client, monkeypatch):
+    # Set non capé (contracts_limit=None) : une sélection vide le rendrait ambigu
+    # (ni symbols, ni limite) et build_mtf_payload lancerait tout l'univers => 409.
+    dashboard_id = _mk_dashboard(api_client)
+    _mk_set(api_client, dashboard_id, "uncapped", symbols=["OLD"])
+    _patch_fetch(monkeypatch, _Recorder(symbols_by_profile={"scalper_micro": []}))
+
+    resp = api_client.post(f"/dashboards/{dashboard_id}/refresh-contracts")
+    assert resp.status_code == 409, resp.text
+    # Fail-closed : aucune écriture, les symboles précédents sont préservés.
+    assert _get_set(api_client, dashboard_id, "uncapped")["symbols"] == ["OLD"]
+
+
+def test_refresh_allows_empty_selection_for_capped_set(api_client, monkeypatch):
+    # Set capé : une sélection vide reste valide (contracts_limit porte la sélection).
+    dashboard_id = _mk_dashboard(api_client)
+    _mk_set(api_client, dashboard_id, "capped", symbols=[], contracts_limit=5)
+    _patch_fetch(monkeypatch, _Recorder(symbols_by_profile={"scalper_micro": []}))
+
+    resp = api_client.post(f"/dashboards/{dashboard_id}/refresh-contracts")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["sets"][0]["symbol_count"] == 0
+    assert _get_set(api_client, dashboard_id, "capped")["symbols"] == []
+
+
 def test_refresh_skips_disabled_sets(api_client, monkeypatch):
     dashboard_id = _mk_dashboard(api_client)
     _mk_set(api_client, dashboard_id, "active")

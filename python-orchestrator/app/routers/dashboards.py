@@ -213,8 +213,10 @@ async def refresh_contracts(
     puis écrit ``symbols`` sur chaque set — tronqué à ``contracts_limit`` si défini.
 
     **Fail-closed** : si le fetch d'un seul groupe échoue, on renvoie ``502`` sans
-    AUCUNE écriture partielle (les sets restent dans leur état précédent). Toutes
-    les écritures sont committées en une seule transaction à la fin.
+    AUCUNE écriture partielle (les sets restent dans leur état précédent). De même,
+    si la sélection rafraîchie rendrait un set non exécutable (set non capé dont les
+    ``symbols`` deviendraient vides), on renvoie ``409`` sans rien écrire. Toutes les
+    écritures sont committées en une seule transaction à la fin.
 
     Hors scope (PY-004/PY-005) : génération du ``payload`` /api/mtf/run et exécution.
     """
@@ -249,12 +251,34 @@ async def refresh_contracts(
                     detail=f"refresh contrats indisponible: {exc}",
                 )
 
-    # 2) Toutes les écritures réussies sont préparées puis committées en une fois.
-    previews: list[ContractRefreshSetPreview] = []
+    # 2) Validation préalable (AUCUNE écriture) : un set non capé
+    #    (`contracts_limit is None`) dont la sélection rafraîchie serait vide
+    #    deviendrait ambigu/non exécutable — `assert_set_persistable` le refuse, et
+    #    `build_mtf_payload` omettrait `symbols` (liste vide = falsy), lançant tout
+    #    l'univers au lieu de « zéro contrat ». On échoue tout le refresh (fail-closed,
+    #    atomique) plutôt que de persister cet état. Un set capé tolère `[]` (la
+    #    `contracts_limit` porte la sélection).
+    planned: list[tuple[OrchestrationSet, list, dict]] = []
     for a_set in mtf_sets:
         fetched = cache[(a_set.mtf_profile, a_set.exchange, a_set.market_type)]
         # `[:None]` = liste complète ; `[:N]` cape la sélection dynamique.
         symbols = list(fetched["symbols"][: a_set.contracts_limit])
+        try:
+            assert_set_persistable(
+                dry_run=a_set.dry_run,
+                symbols=symbols,
+                contracts_limit=a_set.contracts_limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=f"refresh produirait un set non exécutable ({a_set.set_id}): {exc}",
+            )
+        planned.append((a_set, symbols, fetched))
+
+    # 3) Écriture + commit en une seule transaction (tous les sets validés).
+    previews: list[ContractRefreshSetPreview] = []
+    for a_set, symbols, fetched in planned:
         repo.update_set(session, a_set, fields={"symbols": symbols})
         previews.append(
             ContractRefreshSetPreview(
