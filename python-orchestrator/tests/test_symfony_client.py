@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -15,6 +16,7 @@ from app.services.symfony_client import (
     build_mtf_payload,
     fetch_open_state,
     fetch_selected_contracts,
+    generate_set_payload,
     is_business_success,
     run_mtf_set,
     snapshot_key,
@@ -303,3 +305,65 @@ def test_fetch_selected_contracts_raises_on_missing_required_field(missing):
 
     with pytest.raises(ContractsUnavailableError):
         _fetch_contracts(handler)
+
+
+# --- generate_set_payload (PY-004) ------------------------------------------
+
+
+def _orm_set(**kwargs: Any) -> SimpleNamespace:
+    # Imite un OrchestrationSet ORM : exchange/market_type/mtf_profile sont des
+    # chaînes (pas des enums), symbols une liste.
+    base = {
+        "dry_run": True,
+        "workers": 1,
+        "exchange": "bitmart",
+        "market_type": "perpetual",
+        "mtf_profile": "scalper_micro",
+        "symbols": ["BTCUSDT", "ETHUSDT"],
+    }
+    base.update(kwargs)
+    return SimpleNamespace(**base)
+
+
+def test_generate_set_payload_from_orm_string_fields():
+    payload = generate_set_payload(_orm_set())
+
+    assert payload == {
+        "dry_run": True,
+        "workers": 1,
+        "exchange": "bitmart",
+        "market_type": "perpetual",
+        "mtf_profile": "scalper_micro",
+        "sync_tables": False,
+        "process_tp_sl": False,
+        "symbols": ["BTCUSDT", "ETHUSDT"],
+    }
+    # Le snapshot est une valeur runtime : jamais stockée dans le payload préparé.
+    assert "open_state_snapshot" not in payload
+
+
+def test_generate_set_payload_omits_empty_symbols():
+    payload = generate_set_payload(_orm_set(symbols=[]))
+    assert "symbols" not in payload
+    assert payload["sync_tables"] is False
+    assert payload["process_tp_sl"] is False
+
+
+def test_generate_set_payload_uses_set_dry_run():
+    # Pas d'override run-level ici : le payload persisté reflète le dry_run du set.
+    assert generate_set_payload(_orm_set(dry_run=True))["dry_run"] is True
+
+
+def test_generate_set_payload_matches_build_mtf_payload_shape():
+    # Cœur partagé : la forme persistée doit coïncider avec le payload runtime
+    # (hors open_state_snapshot, runtime uniquement).
+    orm = _orm_set()
+    pyd = OrchestratorSet(
+        set_id="s",
+        exchange="bitmart",
+        market_type="perpetual",
+        mtf_profile="scalper_micro",
+        symbols=("BTCUSDT", "ETHUSDT"),
+        dry_run=True,
+    )
+    assert generate_set_payload(orm) == build_mtf_payload(pyd, None)

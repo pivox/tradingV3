@@ -80,11 +80,11 @@ def test_refresh_updates_symbols_and_returns_preview(api_client, monkeypatch):
     assert preview["filters"] == {"top_n": 140}
 
     # Symboles réellement persistés en DB.
-    assert _get_set(api_client, dashboard_id, "s1")["symbols"] == [
-        "BTCUSDT",
-        "ETHUSDT",
-        "SOLUSDT",
-    ]
+    persisted = _get_set(api_client, dashboard_id, "s1")
+    assert persisted["symbols"] == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    # PY-004 : le payload /api/mtf/run est régénéré pour refléter la sélection.
+    assert persisted["payload"]["symbols"] == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    assert persisted["payload"]["sync_tables"] is False
 
 
 def test_refresh_respects_contracts_limit(api_client, monkeypatch):
