@@ -317,6 +317,15 @@ async def run_orchestrator(
     # trade live ; on les rejette avant dispatch.
     conflicting_live_ids = _conflicting_live_set_ids(mtf_sets, force_dry_run)
 
+    # Détache les sets et clôt la transaction de lecture AVANT les appels Symfony
+    # (jusqu'à 900s) : sinon la connexion PostgreSQL resterait « idle in
+    # transaction » pendant toute l'attente réseau (risque d'épuisement du pool /
+    # timeouts idle sous charge). Les colonnes déjà chargées restent lisibles sur
+    # les instances détachées (`expire_on_commit=False`, aucune relation lazy
+    # accédée pendant le run) ; `_persist_run` rouvre une transaction fraîche.
+    session.expunge_all()
+    session.commit()
+
     started_at = datetime.now(timezone.utc)
 
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
