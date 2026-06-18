@@ -474,6 +474,28 @@ final class BitmartOrderProvider implements ContextualOrderProviderInterface
 
     public function getOpenOrders(?string $symbol = null, ?ExchangeContext $context = null): array
     {
+        return $this->fetchOpenOrders($symbol, $context, false);
+    }
+
+    /**
+     * @return OrderDto[]
+     */
+    public function getOpenOrdersOrFail(?string $symbol = null): array
+    {
+        // Propage la dernière erreur après épuisement des retries (pas de [] silencieux)
+        // pour les consommateurs fail-closed (ex: endpoint /api/exchange/open-state).
+        return $this->fetchOpenOrders($symbol, null, true);
+    }
+
+    /**
+     * Cœur de récupération des ordres ouverts avec retries. Si $orFail est vrai,
+     * relève la dernière erreur au lieu de retourner [] (distinction « aucun
+     * ordre » vs « fetch échoué »).
+     *
+     * @return OrderDto[]
+     */
+    private function fetchOpenOrders(?string $symbol, ?ExchangeContext $context, bool $orFail): array
+    {
         $lastError = null;
         for ($i = 0; $i < self::RETRY_ATTEMPTS; $i++) {
             try {
@@ -547,6 +569,9 @@ final class BitmartOrderProvider implements ContextualOrderProviderInterface
                 'error' => $lastError->getMessage(),
                 'trace' => $lastError->getTraceAsString(),
             ]);
+            if ($orFail) {
+                throw $lastError;
+            }
         }
         return [];
     }

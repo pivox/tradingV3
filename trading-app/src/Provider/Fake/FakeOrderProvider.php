@@ -57,6 +57,15 @@ final class FakeOrderProvider implements OrderProviderInterface
     }
 
     /**
+     * @return OrderDto[]
+     */
+    public function getOpenOrdersOrFail(?string $symbol = null): array
+    {
+        // Contexte fake : aucun ordre, ne lève jamais (source fiable et vide).
+        return [];
+    }
+
+    /**
      * @return array<int, mixed>
      */
     public function getOrderHistory(string $symbol, int $limit = 100): array

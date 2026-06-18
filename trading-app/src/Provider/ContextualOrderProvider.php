@@ -73,6 +73,15 @@ final readonly class ContextualOrderProvider implements OrderProviderDecoratorIn
         return $this->inner->getOpenOrders($symbol);
     }
 
+    /**
+     * @return OrderDto[]
+     */
+    public function getOpenOrdersOrFail(?string $symbol = null): array
+    {
+        // Variante fail-closed : on délègue à l'inner, l'erreur éventuelle se propage.
+        return $this->inner->getOpenOrdersOrFail($symbol);
+    }
+
     public function getOrderHistory(string $symbol, int $limit = 100): array
     {
         if ($this->inner instanceof ContextualOrderProviderInterface) {

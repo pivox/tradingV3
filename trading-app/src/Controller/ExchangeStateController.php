@@ -47,8 +47,11 @@ final class ExchangeStateController extends AbstractController
             $accountProvider = $provider->getAccountProvider();
             $orderProvider = $provider->getOrderProvider();
 
-            $openPositions = $accountProvider !== null ? $accountProvider->getOpenPositions() : [];
-            $openOrders = $orderProvider !== null ? $orderProvider->getOpenOrders() : [];
+            // Variantes "OrFail" : une panne/erreur provider lève (au lieu de []),
+            // ce qui produit une réponse non-200 (cf. catch ci-dessous). L'orchestrateur
+            // fail-close alors les sets live au lieu de trader sur un snapshot vide trompeur.
+            $openPositions = $accountProvider !== null ? $accountProvider->getOpenPositionsOrFail() : [];
+            $openOrders = $orderProvider !== null ? $orderProvider->getOpenOrdersOrFail() : [];
 
             $snapshot = $this->serializer->serialize($openPositions, $openOrders);
 
@@ -65,10 +68,12 @@ final class ExchangeStateController extends AbstractController
                 'error' => $e->getMessage(),
             ]);
 
+            // 503 : panne/erreur exchange transitoire. Le client orchestrateur traite
+            // tout non-200 comme open-state indisponible (fail-closed des sets live).
             return $this->json([
                 'status' => 'error',
                 'message' => $e->getMessage(),
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+            ], Response::HTTP_SERVICE_UNAVAILABLE);
         }
     }
 }

@@ -31,6 +31,8 @@ final class FakeProvidersTest extends TestCase
         self::assertNull($provider->getAccountInfo());
         self::assertSame(0.0, $provider->getAccountBalance());
         self::assertSame([], $provider->getOpenPositions());
+        // Variante fail-closed : retourne [] sans jamais lever (source fiable, vide).
+        self::assertSame([], $provider->getOpenPositionsOrFail());
         self::assertNull($provider->getPosition('BTCUSDT'));
         self::assertSame([], $provider->getTradeHistory('BTCUSDT'));
         self::assertSame([], $provider->getTrades());
@@ -44,6 +46,8 @@ final class FakeProvidersTest extends TestCase
 
         self::assertSame([], $provider->getOpenOrders());
         self::assertSame([], $provider->getOpenOrders('BTCUSDT'));
+        // Variante fail-closed : retourne [] sans jamais lever (source fiable, vide).
+        self::assertSame([], $provider->getOpenOrdersOrFail());
         self::assertNull($provider->getOrder('BTCUSDT', '123'));
         self::assertSame([], $provider->getOrderHistory('BTCUSDT'));
 

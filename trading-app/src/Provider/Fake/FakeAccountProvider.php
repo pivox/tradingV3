@@ -36,6 +36,15 @@ final class FakeAccountProvider implements AccountProviderInterface
         return [];
     }
 
+    /**
+     * @return PositionDto[]
+     */
+    public function getOpenPositionsOrFail(?string $symbol = null): array
+    {
+        // Contexte fake : aucune position, ne lève jamais (source fiable et vide).
+        return [];
+    }
+
     public function getPosition(string $symbol): ?PositionDto
     {
         return null;

@@ -64,40 +64,7 @@ final class BitmartAccountProvider implements AccountProviderInterface
     public function getOpenPositions(?string $symbol = null): array
     {
         try {
-            $response = $this->bitmartClient->getPositions($symbol);
-
-            // Log pour debug : structure de la réponse
-            $this->logger->debug("BitMart positions response structure", [
-                'symbol' => $symbol,
-                'has_data' => isset($response['data']),
-                'data_keys' => isset($response['data']) ? array_keys($response['data']) : [],
-                'code' => $response['code'] ?? null,
-                'message' => $response['message'] ?? null,
-            ]);
-
-            // Pour position-v2, la structure peut être directement dans 'data' ou dans 'data.positions'
-            $positions = [];
-            if (isset($response['data']['positions'])) {
-                $positions = $response['data']['positions'];
-            } elseif (isset($response['data']) && is_array($response['data']) && !empty($response['data'])) {
-                // Fallback : parfois position-v2 retourne directement un tableau dans 'data'
-                $firstItem = reset($response['data']);
-                if (is_array($firstItem) && isset($firstItem['symbol'])) {
-                    $positions = $response['data'];
-                }
-            }
-            
-            // Filtrer les positions avec amount > 0 (BitMart retourne toujours long+short même si vides)
-            $positions = array_filter($positions, function($position) {
-                $amount = $position['current_amount'] ?? $position['size'] ?? 0;
-                return (float)$amount > 0;
-            });
-            
-            if (empty($positions)) {
-                return [];
-            }
-            
-            return array_map(fn($position) => PositionDto::fromArray($position), $positions);
+            return $this->fetchOpenPositions($symbol);
         } catch (\Exception $e) {
             $msg = $e->getMessage();
             $isRateLimited = (stripos($msg, '429') !== false) || (stripos($msg, '30013') !== false) || str_contains($msg, 'Too Many Requests');
@@ -115,6 +82,59 @@ final class BitmartAccountProvider implements AccountProviderInterface
             }
             return [];
         }
+    }
+
+    /**
+     * @return PositionDto[]
+     */
+    public function getOpenPositionsOrFail(?string $symbol = null): array
+    {
+        // Propage toute erreur (pas de catch → []) pour les consommateurs fail-closed.
+        return $this->fetchOpenPositions($symbol);
+    }
+
+    /**
+     * Cœur de récupération des positions ouvertes. Lève en cas d'échec de
+     * transport/parse (à la différence de getOpenPositions qui retourne []).
+     *
+     * @return PositionDto[]
+     */
+    private function fetchOpenPositions(?string $symbol = null): array
+    {
+        $response = $this->bitmartClient->getPositions($symbol);
+
+        // Log pour debug : structure de la réponse
+        $this->logger->debug("BitMart positions response structure", [
+            'symbol' => $symbol,
+            'has_data' => isset($response['data']),
+            'data_keys' => isset($response['data']) ? array_keys($response['data']) : [],
+            'code' => $response['code'] ?? null,
+            'message' => $response['message'] ?? null,
+        ]);
+
+        // Pour position-v2, la structure peut être directement dans 'data' ou dans 'data.positions'
+        $positions = [];
+        if (isset($response['data']['positions'])) {
+            $positions = $response['data']['positions'];
+        } elseif (isset($response['data']) && is_array($response['data']) && !empty($response['data'])) {
+            // Fallback : parfois position-v2 retourne directement un tableau dans 'data'
+            $firstItem = reset($response['data']);
+            if (is_array($firstItem) && isset($firstItem['symbol'])) {
+                $positions = $response['data'];
+            }
+        }
+
+        // Filtrer les positions avec amount > 0 (BitMart retourne toujours long+short même si vides)
+        $positions = array_filter($positions, function($position) {
+            $amount = $position['current_amount'] ?? $position['size'] ?? 0;
+            return (float)$amount > 0;
+        });
+
+        if (empty($positions)) {
+            return [];
+        }
+
+        return array_map(fn($position) => PositionDto::fromArray($position), $positions);
     }
 
     public function getPosition(string $symbol): ?PositionDto

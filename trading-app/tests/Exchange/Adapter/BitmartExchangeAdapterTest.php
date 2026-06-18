@@ -549,6 +549,11 @@ final readonly class PlanOrderProviderStub implements OrderProviderInterface
         return [];
     }
 
+    public function getOpenOrdersOrFail(?string $symbol = null): array
+    {
+        return [];
+    }
+
     public function getOrderHistory(string $symbol, int $limit = 100): array
     {
         return [];

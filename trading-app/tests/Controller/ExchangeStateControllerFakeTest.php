@@ -7,6 +7,7 @@ namespace App\Tests\Controller;
 use App\Application\Runner\OpenStateSnapshotSerializer;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Contract\Provider\AccountProviderInterface;
 use App\Controller\ExchangeStateController;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Context\ExchangeContextResolver;
@@ -86,5 +87,45 @@ final class ExchangeStateControllerFakeTest extends TestCase
         $response = $controller->openState($request);
 
         self::assertSame(Response::HTTP_BAD_REQUEST, $response->getStatusCode());
+    }
+
+    public function testProviderFailureReturnsServiceUnavailable(): void
+    {
+        // Une panne exchange fait lever getOpenPositionsOrFail : l'endpoint doit
+        // répondre non-200 (503) au lieu d'un snapshot vide trompeur, pour que
+        // l'orchestrateur fail-close les sets live.
+        $throwingAccount = $this->createMock(AccountProviderInterface::class);
+        $throwingAccount->method('getOpenPositionsOrFail')
+            ->willThrowException(new \RuntimeException('bitmart unavailable'));
+
+        $registry = new ExchangeProviderRegistry(
+            [
+                new ExchangeProviderBundle(
+                    new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL),
+                    new FakeKlineProvider(),
+                    new FakeContractProvider(),
+                    new FakeOrderProvider(),
+                    $throwingAccount,
+                    new FakeSystemProvider(),
+                ),
+            ],
+            Exchange::FAKE,
+            MarketType::PERPETUAL,
+        );
+
+        $controller = new ExchangeStateController(
+            new MainProvider($registry),
+            new ExchangeContextResolver(),
+            new OpenStateSnapshotSerializer(),
+            new NullLogger(),
+        );
+        $container = $this->createMock(ContainerInterface::class);
+        $container->method('has')->willReturn(false);
+        $controller->setContainer($container);
+
+        $request = new Request(['exchange' => 'fake', 'market_type' => 'perpetual']);
+        $response = $controller->openState($request);
+
+        self::assertSame(Response::HTTP_SERVICE_UNAVAILABLE, $response->getStatusCode());
     }
 }
