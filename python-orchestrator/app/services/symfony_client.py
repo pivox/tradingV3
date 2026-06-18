@@ -172,39 +172,83 @@ async def fetch_selected_contracts(
     }
 
 
+def _base_mtf_payload(
+    *,
+    dry_run: bool,
+    workers: int,
+    exchange: str,
+    market_type: str,
+    mtf_profile: str,
+    symbols: Any,
+) -> Dict[str, Any]:
+    """Cœur du payload ``/api/mtf/run``, source unique de sa forme.
+
+    Partagé entre la construction runtime (``build_mtf_payload``, set pydantic à
+    enums) et la préparation persistée (``generate_set_payload``, set ORM à
+    chaînes) pour éviter toute dérive de schéma.
+
+    SF-002b : ``sync_tables`` et ``process_tp_sl`` sont toujours forcés à
+    ``false`` (le snapshot partagé remplace tout fetch/effet de bord exchange par
+    set). ``symbols`` est omis s'il est vide : Symfony interprète alors l'absence
+    comme « tout l'univers actif ».
+    """
+    payload: Dict[str, Any] = {
+        "dry_run": dry_run,
+        "workers": workers,
+        "exchange": exchange,
+        "market_type": market_type,
+        "mtf_profile": mtf_profile,
+        "sync_tables": False,
+        "process_tp_sl": False,
+    }
+    if symbols:
+        payload["symbols"] = list(symbols)
+    return payload
+
+
 def build_mtf_payload(
     a_set: OrchestratorSet,
     snapshot: Optional[Dict[str, Any]],
     dry_run: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Construit le payload ``/api/mtf/run`` pour un set.
+    """Construit le payload ``/api/mtf/run`` runtime pour un set (pydantic).
 
-    SF-002b : ``sync_tables`` est toujours forcé à ``false`` et
-    ``open_state_snapshot`` est joint (le snapshot remplace tout fetch exchange
-    par set côté Symfony).
-
-    ``process_tp_sl`` est aussi forcé à ``false`` : le recalcul TP/SL post-run
-    refetch les positions/ordres depuis le provider pour chaque set (et a des
-    effets de bord live), ce qui réintroduirait les appels exchange par set que
-    le snapshot partagé vise justement à éliminer.
-
-    ``dry_run`` permet de transmettre la valeur effective résolue par l'appelant
-    (override run-level). Si ``None``, on retombe sur le ``dry_run`` du set.
+    Joint ``open_state_snapshot`` (le snapshot remplace tout fetch exchange par
+    set côté Symfony). ``dry_run`` permet de transmettre la valeur effective
+    résolue par l'appelant (override run-level) ; si ``None``, on retombe sur le
+    ``dry_run`` du set. Le reste de la forme vient de ``_base_mtf_payload``.
     """
-    payload: Dict[str, Any] = {
-        "dry_run": a_set.dry_run if dry_run is None else dry_run,
-        "workers": a_set.workers,
-        "exchange": a_set.exchange.value,
-        "market_type": a_set.market_type.value,
-        "mtf_profile": a_set.mtf_profile.value,
-        "sync_tables": False,
-        "process_tp_sl": False,
-    }
-    if a_set.symbols:
-        payload["symbols"] = list(a_set.symbols)
+    payload = _base_mtf_payload(
+        dry_run=a_set.dry_run if dry_run is None else dry_run,
+        workers=a_set.workers,
+        exchange=a_set.exchange.value,
+        market_type=a_set.market_type.value,
+        mtf_profile=a_set.mtf_profile.value,
+        symbols=a_set.symbols,
+    )
     if snapshot is not None:
         payload["open_state_snapshot"] = snapshot
     return payload
+
+
+def generate_set_payload(a_set: Any) -> Dict[str, Any]:
+    """Prépare le payload ``/api/mtf/run`` **persisté** d'un set (PY-004).
+
+    Lit un ``OrchestrationSet`` ORM, dont ``exchange``/``market_type``/
+    ``mtf_profile`` sont des **chaînes** en base (pas des enums). N'inclut PAS
+    ``open_state_snapshot`` : le snapshot est une valeur runtime récupérée à
+    chaque run (PY-005), pas une donnée de configuration. Utilise le ``dry_run``
+    configuré du set (les overrides run-level sont appliqués à l'exécution, pas
+    stockés). Forme garantie identique à ``build_mtf_payload`` via le cœur partagé.
+    """
+    return _base_mtf_payload(
+        dry_run=a_set.dry_run,
+        workers=a_set.workers,
+        exchange=a_set.exchange,
+        market_type=a_set.market_type,
+        mtf_profile=a_set.mtf_profile,
+        symbols=a_set.symbols,
+    )
 
 
 # Statuts métier renvoyés par /api/mtf/run considérés comme un succès complet.

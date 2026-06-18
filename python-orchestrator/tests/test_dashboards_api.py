@@ -158,6 +158,42 @@ def test_patch_set_partial(api_client):
     assert body["exchange"] == "bitmart"  # inchangé
 
 
+# --- Payload serveur (PY-004) -----------------------------------------------
+
+
+def test_create_set_generates_payload(api_client):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+
+    body = api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload()).json()
+
+    # Le payload /api/mtf/run est généré côté serveur dès la création.
+    assert body["payload"] == {
+        "dry_run": True,
+        "workers": 1,
+        "exchange": "bitmart",
+        "market_type": "perpetual",
+        "mtf_profile": "regular",
+        "sync_tables": False,
+        "process_tp_sl": False,
+        "symbols": ["BTCUSDT", "ETHUSDT"],
+    }
+
+
+def test_patch_set_regenerates_payload(api_client):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
+
+    body = api_client.patch(
+        f"/dashboards/{dashboard_id}/sets/bitmart_regular_top",
+        json={"symbols": ["SOLUSDT"], "mtf_profile": "scalper_micro"},
+    ).json()
+
+    # Le payload reflète l'état résultant du PATCH.
+    assert body["payload"]["symbols"] == ["SOLUSDT"]
+    assert body["payload"]["mtf_profile"] == "scalper_micro"
+    assert body["payload"]["sync_tables"] is False
+
+
 def test_delete_set_then_404(api_client):
     dashboard_id = _create_dashboard(api_client).json()["id"]
     api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
@@ -272,14 +308,18 @@ def test_patch_clear_contracts_limit_null_ok(api_client):
 
 
 def test_payload_not_accepted_from_client_on_create(api_client):
-    """payload est read-only : un payload client est ignoré, pas persisté."""
+    """payload est read-only : un payload client est ignoré ; le serveur génère le sien (PY-004)."""
     dashboard_id = _create_dashboard(api_client).json()["id"]
     resp = api_client.post(
         f"/dashboards/{dashboard_id}/sets",
         json=_set_payload(payload={"forged": True}),
     )
     assert resp.status_code == 201
-    assert resp.json()["payload"] is None
+    payload = resp.json()["payload"]
+    # Le payload forgé par le client est ignoré ; c'est le payload serveur qui est stocké.
+    assert "forged" not in payload
+    assert payload["exchange"] == "bitmart"
+    assert payload["sync_tables"] is False
 
 
 def test_patch_explicit_null_on_not_null_field_rejected(api_client):

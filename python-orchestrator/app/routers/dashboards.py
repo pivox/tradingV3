@@ -137,6 +137,9 @@ def create_set(
     detail = f"set_id '{body.set_id}' already exists in dashboard {dashboard_id}"
     with _conflict_guard(session, detail=detail):
         a_set = repo.create_set(session, dashboard_id, fields=body.model_dump(mode="json"))
+        # PY-004 : le payload /api/mtf/run est un artefact serveur dérivé des champs
+        # typés ; on le (re)génère à chaque écriture pour qu'il ne soit jamais périmé.
+        a_set.payload = symfony_client.generate_set_payload(a_set)
     session.refresh(a_set)
     return a_set
 
@@ -174,6 +177,8 @@ def update_set(
         raise HTTPException(422, detail=str(exc))
 
     repo.update_set(session, a_set, fields=updates)
+    # PY-004 : régénère le payload depuis l'état résultant du set.
+    a_set.payload = symfony_client.generate_set_payload(a_set)
     session.commit()
     session.refresh(a_set)
     return a_set
@@ -280,6 +285,8 @@ async def refresh_contracts(
     previews: list[ContractRefreshSetPreview] = []
     for a_set, symbols, fetched in planned:
         repo.update_set(session, a_set, fields={"symbols": symbols})
+        # PY-004 : le payload reflète la sélection rafraîchie.
+        a_set.payload = symfony_client.generate_set_payload(a_set)
         previews.append(
             ContractRefreshSetPreview(
                 set_id=a_set.set_id,

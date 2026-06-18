@@ -177,8 +177,39 @@ Réponse type :
 }
 ```
 
-> La génération du `payload` `/api/mtf/run` à partir des sets (PY-004) et leur
-> exécution parallèle (PY-005) restent hors du périmètre de ce refresh.
+> Le refresh régénère aussi le `payload` `/api/mtf/run` de chaque set rafraîchi
+> (PY-004, ci-dessous). L'exécution parallèle qui consomme ce payload (PY-005)
+> reste hors du périmètre de ce refresh.
+
+## Payload `/api/mtf/run` préparé (PY-004)
+
+Chaque set persistant porte un `payload` **prêt à l'emploi** pour `/api/mtf/run`,
+produit côté serveur à partir de ses champs typés. Objectif : PY-005 exécute le set
+tel quel (« sets prêts → runs parallèles »), sans recomposer le payload au run.
+
+- **Génération automatique** : le `payload` est (re)généré à chaque écriture qui change
+  la config du set — `POST .../sets` (création), `PATCH .../sets/{id}` (mise à jour),
+  `POST .../refresh-contracts` (refresh des symboles). Il n'est donc jamais périmé.
+- **Lecture seule** : `payload` n'est pas accepté en entrée (`SetCreate`/`SetUpdate`
+  l'excluent) — un payload fourni par un client est ignoré. Il est exposé via `SetRead`.
+- **Forme** : identique au payload runtime (`build_mtf_payload`), via un cœur partagé.
+  `sync_tables` et `process_tp_sl` sont forcés à `false` ; `symbols` est omis s'il est
+  vide. Le `payload` **n'inclut pas** `open_state_snapshot` (valeur runtime récupérée à
+  chaque run, pas une donnée de configuration) ni d'override `dry_run` run-level (il
+  reflète le `dry_run` configuré du set).
+
+```json
+{
+  "dry_run": true,
+  "workers": 1,
+  "exchange": "bitmart",
+  "market_type": "perpetual",
+  "mtf_profile": "scalper_micro",
+  "sync_tables": false,
+  "process_tp_sl": false,
+  "symbols": ["BTCUSDT", "ETHUSDT"]
+}
+```
 
 ## Lien avec `mtf_contracts`
 
@@ -420,6 +451,7 @@ Avant tout run :
 | SF-002b ✅ | Snapshot d'état ouvert orchestrateur (zéro appel exchange par set) | Livré : `GET /api/exchange/open-state` + `open_state_snapshot` sur `/api/mtf/run` ; fail-closed live côté Symfony et orchestrateur. |
 | PY-002 ✅ (partiel) | Implémenter `/orchestrator/run` | Livré : lecture des sets actifs, fetch snapshot 1×/(exchange,market_type), appels parallèles bornés, agrégation, fail-closed live. Persistance DB du dernier JSON à compléter. |
 | PY-003 ✅ | Refresh explicite des contrats | Livré : `POST /dashboards/{id}/refresh-contracts` fetch `GET /api/mtf/contracts` 1×/(profil,exchange,market_type), persiste `symbols` (cap `contracts_limit`), fail-closed 502 sans écriture partielle, aperçu par set. |
+| PY-004 ✅ | Générer le `payload` `/api/mtf/run` des sets | Livré : `payload` produit côté serveur (cœur partagé avec `build_mtf_payload`, `sync_tables`/`process_tp_sl=false`, sans snapshot) et régénéré à chaque create/update/refresh ; lecture seule via `SetRead`. |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 
