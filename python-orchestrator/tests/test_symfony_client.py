@@ -10,9 +10,11 @@ import pytest
 
 from app.schemas import OrchestratorSet
 from app.services.symfony_client import (
+    ContractsUnavailableError,
     OpenStateUnavailableError,
     build_mtf_payload,
     fetch_open_state,
+    fetch_selected_contracts,
     is_business_success,
     run_mtf_set,
     snapshot_key,
@@ -193,3 +195,111 @@ def test_build_payload_applies_dry_run_override():
     assert build_mtf_payload(live_set, None, dry_run=True)["dry_run"] is True
     # dry_run=None => on retombe sur la valeur du set (ici live).
     assert build_mtf_payload(live_set, None, dry_run=None)["dry_run"] is False
+
+
+# --- fetch_selected_contracts (PY-003) --------------------------------------
+
+
+def _ok_contracts_body(**overrides):
+    body = {
+        "ok": True,
+        "profile": "scalper_micro",
+        "exchange": "bitmart",
+        "market_type": "perpetual",
+        "count": 2,
+        "symbols": ["BTCUSDT", "ETHUSDT"],
+        "filters": {"quote_currency": "USDT", "top_n": 140},
+    }
+    body.update(overrides)
+    return body
+
+
+def _fetch_contracts(handler, profile="scalper_micro", exchange="bitmart", market_type="perpetual"):
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_selected_contracts(
+                client, "http://symfony", profile, exchange, market_type
+            )
+
+    return asyncio.run(_run())
+
+
+def test_fetch_selected_contracts_returns_normalized_shape_and_passes_params():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/mtf/contracts"
+        assert request.url.params["profile"] == "scalper_micro"
+        assert request.url.params["exchange"] == "bitmart"
+        assert request.url.params["market_type"] == "perpetual"
+        return httpx.Response(200, json=_ok_contracts_body())
+
+    result = _fetch_contracts(handler)
+    assert result == {
+        "profile": "scalper_micro",
+        "exchange": "bitmart",
+        "market_type": "perpetual",
+        "count": 2,
+        "symbols": ["BTCUSDT", "ETHUSDT"],
+        "filters": {"quote_currency": "USDT", "top_n": 140},
+    }
+
+
+def test_fetch_selected_contracts_omits_profile_when_none():
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Profil None => la clé n'est pas envoyée (Symfony retombe sur le mode actif).
+        assert "profile" not in request.url.params
+        return httpx.Response(200, json=_ok_contracts_body(profile="regular"))
+
+    result = _fetch_contracts(handler, profile=None)
+    assert result["profile"] == "regular"
+
+
+def test_fetch_selected_contracts_defaults_filters_to_empty_dict():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _ok_contracts_body()
+        body.pop("filters")
+        return httpx.Response(200, json=body)
+
+    assert _fetch_contracts(handler)["filters"] == {}
+
+
+def test_fetch_selected_contracts_raises_on_http_error_status():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"ok": False, "error": "boom"})
+
+    with pytest.raises(ContractsUnavailableError):
+        _fetch_contracts(handler)
+
+
+def test_fetch_selected_contracts_raises_on_invalid_json():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not-json", headers={"content-type": "application/json"})
+
+    with pytest.raises(ContractsUnavailableError):
+        _fetch_contracts(handler)
+
+
+def test_fetch_selected_contracts_raises_on_ok_false():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_ok_contracts_body(ok=False))
+
+    with pytest.raises(ContractsUnavailableError):
+        _fetch_contracts(handler)
+
+
+def test_fetch_selected_contracts_raises_on_non_list_symbols():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_ok_contracts_body(symbols="BTCUSDT"))
+
+    with pytest.raises(ContractsUnavailableError):
+        _fetch_contracts(handler)
+
+
+@pytest.mark.parametrize("missing", ["profile", "exchange", "market_type", "count"])
+def test_fetch_selected_contracts_raises_on_missing_required_field(missing):
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _ok_contracts_body()
+        body.pop(missing)
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(ContractsUnavailableError):
+        _fetch_contracts(handler)

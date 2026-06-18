@@ -32,6 +32,14 @@ class OpenStateUnavailableError(RuntimeError):
     """Le snapshot d'état ouvert n'a pas pu être récupéré (fail-closed live)."""
 
 
+class ContractsUnavailableError(RuntimeError):
+    """La liste des contrats sélectionnés n'a pas pu être récupérée (PY-003).
+
+    Levée par ``fetch_selected_contracts`` ; le refresh est *fail-closed* : un
+    groupe dont le fetch échoue interdit toute écriture partielle des sets.
+    """
+
+
 def snapshot_key(a_set: OrchestratorSet) -> SnapshotKey:
     """Clé de cache du snapshot pour un set."""
     return (a_set.exchange.value, a_set.market_type.value)
@@ -87,6 +95,80 @@ async def fetch_open_state(
     return {
         "open_positions": positions,
         "open_orders": orders,
+    }
+
+
+async def fetch_selected_contracts(
+    client: httpx.AsyncClient,
+    base_url: str,
+    profile: Optional[str],
+    exchange: str,
+    market_type: str,
+) -> Dict[str, Any]:
+    """Récupère les symboles sélectionnés par ``mtf_contracts`` pour un profil.
+
+    Appelle ``GET /api/mtf/contracts`` (SF-001, lecture seule : ne consomme pas la
+    file MTF switch). Sert au refresh explicite des contrats (PY-003) : Symfony
+    reste la source de vérité de la sélection.
+
+    Lève ``ContractsUnavailableError`` si l'appel échoue, si HTTP != 200, si le
+    corps n'est pas un JSON conforme (``ok`` vrai, ``symbols`` liste, champs
+    requis présents). On ne normalise jamais une réponse douteuse en sélection
+    vide : ce serait écraser les sets avec un univers faux.
+
+    Retourne ``{profile, exchange, market_type, count, symbols, filters}``.
+    """
+    url = f"{base_url.rstrip('/')}/api/mtf/contracts"
+    params = {"profile": profile, "exchange": exchange, "market_type": market_type}
+    # Un profil non fourni laisse Symfony retomber sur le mode actif : on n'envoie
+    # alors pas la clé (évite ``profile=`` qui serait parsé comme chaîne vide).
+    params = {k: v for k, v in params.items() if v is not None}
+    try:
+        response = await client.get(url, params=params)
+    except httpx.HTTPError as exc:  # noqa: BLE001 - on remonte une erreur métier claire
+        raise ContractsUnavailableError(
+            f"contracts fetch failed for {profile}/{exchange}/{market_type}: {exc}"
+        ) from exc
+
+    if response.status_code != 200:
+        raise ContractsUnavailableError(
+            f"contracts fetch returned HTTP {response.status_code} "
+            f"for {profile}/{exchange}/{market_type}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise ContractsUnavailableError(
+            f"contracts response is not valid JSON for {profile}/{exchange}/{market_type}"
+        ) from exc
+
+    if not isinstance(body, dict) or body.get("ok") is not True:
+        raise ContractsUnavailableError(
+            f"contracts response not ok for {profile}/{exchange}/{market_type}"
+        )
+
+    symbols = body.get("symbols")
+    if not isinstance(symbols, list):
+        raise ContractsUnavailableError(
+            f"contracts response has non-list symbols for {profile}/{exchange}/{market_type}"
+        )
+
+    # Champs requis : leur absence signale une réponse tronquée/inattendue.
+    for field in ("profile", "exchange", "market_type", "count"):
+        if field not in body:
+            raise ContractsUnavailableError(
+                f"contracts response missing '{field}' for {profile}/{exchange}/{market_type}"
+            )
+
+    filters = body.get("filters")
+    return {
+        "profile": body["profile"],
+        "exchange": body["exchange"],
+        "market_type": body["market_type"],
+        "count": body["count"],
+        "symbols": symbols,
+        "filters": filters if isinstance(filters, dict) else {},
     }
 
 

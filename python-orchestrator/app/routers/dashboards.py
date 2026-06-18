@@ -5,7 +5,8 @@ CRUD REST câblé sur la couche DB (DB-001) :
 - ``/dashboards``                          : création / liste ;
 - ``/dashboards/{id}``                     : lecture / mise à jour / suppression ;
 - ``/dashboards/{id}/sets``                : création / liste des sets ;
-- ``/dashboards/{id}/sets/{set_id}``       : lecture / mise à jour / suppression.
+- ``/dashboards/{id}/sets/{set_id}``       : lecture / mise à jour / suppression ;
+- ``/dashboards/{id}/refresh-contracts``   : refresh explicite des symboles (PY-003).
 
 Le câblage de ces sets dans l'exécution parallèle de ``/orchestrator/run`` est
 l'objet de PY-005 ; cette PR ne livre que la configuration (sets « prêts »).
@@ -14,8 +15,9 @@ l'objet de PY-005 ; cette PR ne livre que la configuration (sets « prêts »).
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Dict, Iterator, Tuple
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -24,6 +26,9 @@ from app.db import repositories as repo
 from app.db.engine import get_session
 from app.db.models import Dashboard, OrchestrationSet
 from app.schemas import (
+    Action,
+    ContractRefreshResponse,
+    ContractRefreshSetPreview,
     DashboardCreate,
     DashboardRead,
     DashboardUpdate,
@@ -32,6 +37,8 @@ from app.schemas import (
     SetUpdate,
     assert_set_persistable,
 )
+from app.services import symfony_client
+from app.settings import get_settings
 
 router = APIRouter(prefix="/dashboards", tags=["dashboards"])
 
@@ -183,3 +190,86 @@ def delete_set(
     repo.delete_set(session, a_set)
     session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- Refresh des contrats (PY-003) ------------------------------------------
+
+# Clé de regroupement d'un fetch contrats : un appel Symfony par couple distinct
+# (profil, exchange, market_type) — inutile de refetcher pour des sets identiques.
+_ContractsKey = Tuple[str, str, str]
+
+# Timeout (s) des appels Symfony pour le refresh, aligné sur l'orchestrateur.
+_HTTP_TIMEOUT = 900.0
+
+
+@router.post("/{dashboard_id}/refresh-contracts", response_model=ContractRefreshResponse)
+async def refresh_contracts(
+    dashboard_id: int, session: Session = Depends(get_session)
+) -> ContractRefreshResponse:
+    """Refresh explicite des symboles des sets `mtf_run` actifs d'un dashboard.
+
+    Pour chaque couple distinct (profil, exchange, market_type), interroge UNE
+    fois ``GET /api/mtf/contracts`` (Symfony = source de vérité de la sélection),
+    puis écrit ``symbols`` sur chaque set — tronqué à ``contracts_limit`` si défini.
+
+    **Fail-closed** : si le fetch d'un seul groupe échoue, on renvoie ``502`` sans
+    AUCUNE écriture partielle (les sets restent dans leur état précédent). Toutes
+    les écritures sont committées en une seule transaction à la fin.
+
+    Hors scope (PY-004/PY-005) : génération du ``payload`` /api/mtf/run et exécution.
+    """
+    _require_dashboard(session, dashboard_id)
+    settings = get_settings()
+
+    mtf_sets = [
+        s
+        for s in repo.list_active_sets(session, dashboard_id)
+        if s.action == Action.MTF_RUN.value
+    ]
+
+    # 1) Un seul fetch par couple distinct (profil, exchange, market_type).
+    #    Tout échec interrompt AVANT la moindre écriture (fail-closed).
+    cache: Dict[_ContractsKey, dict] = {}
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        for a_set in mtf_sets:
+            key: _ContractsKey = (a_set.mtf_profile, a_set.exchange, a_set.market_type)
+            if key in cache:
+                continue
+            try:
+                cache[key] = await symfony_client.fetch_selected_contracts(
+                    client,
+                    settings.symfony_base_url,
+                    a_set.mtf_profile,
+                    a_set.exchange,
+                    a_set.market_type,
+                )
+            except symfony_client.ContractsUnavailableError as exc:
+                raise HTTPException(
+                    status.HTTP_502_BAD_GATEWAY,
+                    detail=f"refresh contrats indisponible: {exc}",
+                )
+
+    # 2) Toutes les écritures réussies sont préparées puis committées en une fois.
+    previews: list[ContractRefreshSetPreview] = []
+    for a_set in mtf_sets:
+        fetched = cache[(a_set.mtf_profile, a_set.exchange, a_set.market_type)]
+        # `[:None]` = liste complète ; `[:N]` cape la sélection dynamique.
+        symbols = list(fetched["symbols"][: a_set.contracts_limit])
+        repo.update_set(session, a_set, fields={"symbols": symbols})
+        previews.append(
+            ContractRefreshSetPreview(
+                set_id=a_set.set_id,
+                mtf_profile=a_set.mtf_profile,
+                exchange=a_set.exchange,
+                market_type=a_set.market_type,
+                symbol_count=len(symbols),
+                contracts_limit=a_set.contracts_limit,
+                filters=fetched["filters"],
+            )
+        )
+
+    session.commit()
+
+    return ContractRefreshResponse(
+        dashboard_id=dashboard_id, count=len(previews), sets=previews
+    )
