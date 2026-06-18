@@ -93,56 +93,92 @@ sequenceDiagram
 ## API Symfony : contrats sélectionnés (SF-001)
 
 Symfony expose la liste des contrats réellement retenus par `mtf_contracts`, sans
-déclencher de run, via :
+déclencher de run (la file MTF switch n'est PAS consommée), via :
 
 ```text
-GET|POST /api/mtf/selected-contracts
+GET /api/mtf/contracts
 ```
 
-Paramètres (query string en GET, JSON en POST) :
+Paramètres (query string) :
 
 - `profile` / `mtf_profile` : profil de configuration (défaut = mode TradeEntry actif) ;
-- `exchange` / `market_type` : contexte exchange (même jeu accepté que `/api/mtf/run` :
-  `bitmart`, `okx`, `hyperliquid`, ... ; défaut `bitmart` / `perpetual`) ;
-- `ignore_limits` : `true` pour obtenir tous les symboles éligibles sans `top_n` / `mid_n`
-  (filtres strictement identiques à la sélection limitée).
+- `exchange` / `cex` : exchange (`bitmart`, `okx`, `hyperliquid`, ... ; défaut `bitmart`) ;
+- `market_type` / `type_contract` : type de marché (alias `futures`/`perp` acceptés ;
+  défaut `perpetual`).
 
 Comportements explicites :
 
-- un corps POST JSON invalide renvoie `400` (pas de bascule silencieuse sur les défauts) ;
 - un `exchange` / `market_type` non supporté renvoie `400` ;
-- si le fichier de config dédié au profil n'existe pas, le provider retombe sur la config
-  par défaut : la réponse distingue alors `requested_profile`, `effective_profile`
-  (`default`) et `profile_config_found` ;
-- si `selection.enabled` vaut `false`, aucune sélection curée n'est exposée :
-  `symbols` est vide et `selection_enabled` vaut `false` ;
-- le `timestamp` est au format RFC3339 UTC ;
-- en cas d'erreur interne, le message reste générique (les détails vont dans les logs).
+- en cas d'erreur interne, le message reste générique (les détails vont dans les logs),
+  réponse `{ "ok": false, "error": ... }` en `500`.
 
-Réponse type :
+Réponse type (forme **plate**, telle que renvoyée par `ContractsApiController`) :
 
 ```json
 {
-  "status": "success",
-  "data": {
-    "requested_profile": "scalper_micro",
-    "effective_profile": "scalper_micro",
-    "profile_config_found": true,
-    "exchange": "bitmart",
-    "market_type": "perpetual",
-    "selection_enabled": true,
-    "ignore_limits": false,
-    "count": 2,
-    "symbols": ["BTCUSDT", "ETHUSDT"],
-    "filters": { "quote_currency": "USDT", "status": "Trading", "min_turnover": 1500000 },
-    "limits": { "top_n": 140, "mid_n": 0 },
-    "timestamp": "2026-06-16T19:30:00+00:00"
+  "ok": true,
+  "profile": "scalper_micro",
+  "exchange": "bitmart",
+  "market_type": "perpetual",
+  "count": 2,
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "filters": {
+    "quote_currency": "USDT",
+    "status": "Trading",
+    "min_turnover": 1500000,
+    "mid_max_turnover": null,
+    "top_n": 140,
+    "mid_n": 0
   }
 }
 ```
 
 C'est cet endpoint que l'API Python appelle lors du refresh explicite des contrats
-pour préparer ses sets de payloads.
+(voir ci-dessous) pour mettre à jour la sélection de symboles de ses sets.
+
+## API Python : refresh explicite des contrats (PY-003)
+
+L'orchestrateur ne recalcule pas la sélection à chaque run : elle est rafraîchie
+**explicitement** (changement de config ou demande du front) via :
+
+```text
+POST /dashboards/{dashboard_id}/refresh-contracts
+```
+
+Déroulé :
+
+- charge les sets **actifs** d'action `mtf_run` du dashboard ;
+- regroupe par couple distinct `(mtf_profile, exchange, market_type)` et appelle
+  `GET /api/mtf/contracts` **une seule fois par groupe** (mise en cache) ;
+- **fail-closed** : si le fetch d'un seul groupe échoue, la route renvoie `502`
+  **sans aucune écriture** (les sets gardent leur sélection précédente) ;
+- sinon, pour chaque set, écrit `symbols = symbols_du_profil[:contracts_limit]`
+  (tronqué si `contracts_limit` est défini, sinon la sélection complète) puis
+  committe l'ensemble en une seule transaction ;
+- renvoie un aperçu par set.
+
+Réponse type :
+
+```json
+{
+  "dashboard_id": 1,
+  "count": 2,
+  "sets": [
+    {
+      "set_id": "bitmart_scalper_top",
+      "mtf_profile": "scalper_micro",
+      "exchange": "bitmart",
+      "market_type": "perpetual",
+      "symbol_count": 140,
+      "contracts_limit": 140,
+      "filters": { "quote_currency": "USDT", "top_n": 140 }
+    }
+  ]
+}
+```
+
+> La génération du `payload` `/api/mtf/run` à partir des sets (PY-004) et leur
+> exécution parallèle (PY-005) restent hors du périmètre de ce refresh.
 
 ## Lien avec `mtf_contracts`
 
@@ -383,6 +419,7 @@ Avant tout run :
 | SF-002a ✅ | Supporter `sync_tables=false` côté Symfony | Livré : `/api/mtf/run` et `mtf:run` honorent `sync_tables=false` (skip upsert DB). |
 | SF-002b ✅ | Snapshot d'état ouvert orchestrateur (zéro appel exchange par set) | Livré : `GET /api/exchange/open-state` + `open_state_snapshot` sur `/api/mtf/run` ; fail-closed live côté Symfony et orchestrateur. |
 | PY-002 ✅ (partiel) | Implémenter `/orchestrator/run` | Livré : lecture des sets actifs, fetch snapshot 1×/(exchange,market_type), appels parallèles bornés, agrégation, fail-closed live. Persistance DB du dernier JSON à compléter. |
+| PY-003 ✅ | Refresh explicite des contrats | Livré : `POST /dashboards/{id}/refresh-contracts` fetch `GET /api/mtf/contracts` 1×/(profil,exchange,market_type), persiste `symbols` (cap `contracts_limit`), fail-closed 502 sans écriture partielle, aperçu par set. |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 

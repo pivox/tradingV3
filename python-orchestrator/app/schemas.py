@@ -339,3 +339,36 @@ class SetRead(BaseModel):
     payload: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Refresh explicite des contrats (PY-003)
+#
+# Schémas de la réponse de ``POST /dashboards/{id}/refresh-contracts`` : pour
+# chaque set actif `mtf_run`, on renvoie un aperçu (combien de symboles ont été
+# persistés, sous quels filtres). La génération des payloads /api/mtf/run reste
+# l'objet de PY-004 ; ici on ne touche qu'aux ``symbols``.
+# ---------------------------------------------------------------------------
+
+
+class ContractRefreshSetPreview(BaseModel):
+    """Aperçu du refresh pour un set : combien de symboles, sous quels filtres."""
+
+    set_id: str
+    mtf_profile: MtfProfile
+    exchange: Exchange
+    market_type: MarketType
+    symbol_count: int
+    # Cap appliqué (None = sélection complète du profil).
+    contracts_limit: Optional[int] = None
+    # Filtres `mtf_contracts` renvoyés par Symfony (informatif pour le front).
+    filters: dict = Field(default_factory=dict)
+
+
+class ContractRefreshResponse(BaseModel):
+    """Réponse de ``POST /dashboards/{id}/refresh-contracts``."""
+
+    dashboard_id: int
+    # Nombre de sets rafraîchis (sets actifs `mtf_run` du dashboard).
+    count: int
+    sets: List[ContractRefreshSetPreview]
