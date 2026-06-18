@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -19,6 +20,7 @@ from app.services.symfony_client import (
     generate_set_payload,
     is_business_success,
     run_mtf_set,
+    run_persisted_set,
     snapshot_key,
 )
 
@@ -369,3 +371,86 @@ def test_generate_set_payload_matches_build_mtf_payload_shape():
         dry_run=True,
     )
     assert generate_set_payload(orm) == build_mtf_payload(pyd, None)
+
+
+# --- run_persisted_set (PY-005) ---------------------------------------------
+
+
+def test_run_persisted_set_dispatches_persisted_payload_with_snapshot_and_override():
+    # Part d'un payload persisté (live), injecte le snapshot runtime et applique
+    # l'override dry_run run-level ; sync_tables/process_tp_sl restent false.
+    persisted = {
+        "dry_run": False,
+        "workers": 1,
+        "exchange": "bitmart",
+        "market_type": "perpetual",
+        "mtf_profile": "scalper_micro",
+        "sync_tables": False,
+        "process_tp_sl": False,
+        "symbols": ["BTCUSDT"],
+    }
+    orm = _orm_set(set_id="s", payload=persisted, dry_run=False, symbols=["BTCUSDT"])
+    snapshot = {"open_positions": [], "open_orders": []}
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/mtf/run"
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(client, "http://sym", orm, snapshot, dry_run=True)
+
+    result = asyncio.run(_run())
+    sent = captured["json"]
+    assert sent["sync_tables"] is False
+    assert sent["process_tp_sl"] is False
+    assert sent["dry_run"] is True  # override run-level appliqué
+    assert sent["open_state_snapshot"] == snapshot
+    assert sent["symbols"] == ["BTCUSDT"]
+    assert result["ok"] is True
+    assert result["payload_sent"]["dry_run"] is True
+    # Le payload persisté n'est pas muté (copie défensive).
+    assert persisted["dry_run"] is False
+    assert "open_state_snapshot" not in persisted
+
+
+def test_run_persisted_set_falls_back_to_generate_when_payload_missing():
+    # payload absent => repli sur generate_set_payload (symboles présents).
+    orm = _orm_set(set_id="s", payload=None)
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(client, "http://sym", orm, None)
+
+    result = asyncio.run(_run())
+    assert result["ok"] is True
+    assert captured["json"]["symbols"] == ["BTCUSDT", "ETHUSDT"]
+    assert captured["json"]["sync_tables"] is False
+    assert "open_state_snapshot" not in captured["json"]
+
+
+def test_run_persisted_set_not_materialized_without_symbols():
+    # Aucun payload ni symbole concret => échec sans appel HTTP.
+    orm = _orm_set(set_id="s", payload=None, symbols=[])
+    calls: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(client, "http://sym", orm, None)
+
+    result = asyncio.run(_run())
+    assert result["ok"] is False
+    assert result["payload_sent"] is None
+    assert "not materialized" in result["body"]
+    assert calls == []  # aucun appel HTTP

@@ -201,7 +201,8 @@ tel quel (« sets prêts → runs parallèles »), sans recomposer le payload au
   pas renseigné de symboles concrets. `/api/mtf/run` n'ayant aucun paramètre de cap, un
   payload sans `symbols` y signifierait « tout l'univers actif » — jamais l'intention d'un
   set capé. On laisse donc le `payload` `null` plutôt que de persister un « run-all »
-  trompeur ; PY-005 ignore les sets sans payload.
+  trompeur ; au run, PY-005 n'exécute pas un set sans payload (aucun appel Symfony, set
+  compté en échec « not materialized » dans le `RunSet`).
 
 ```json
 {
@@ -425,9 +426,13 @@ la readiness live n'est pas livrée) ; **sélection exploitable obligatoire** (`
 `null` explicites sur les champs NOT NULL ; unicité du nom de dashboard et du `set_id` par dashboard
 (`409`) ; `set_id` immuable.
 
-La **lecture des sets persistés au moment du run** et l'**écriture des runs** restent portées par
-**PY-005** (`/orchestrator/run` lit encore les sets simulés). Les migrations s'appliquent via
-`alembic upgrade head` (voir `python-orchestrator/README.md`).
+La **lecture des sets persistés au moment du run** et l'**écriture des runs** sont livrées par
+**PY-005** : `/orchestrator/run` lit les sets actifs du dashboard depuis la base, exécute chaque set
+à partir de son `payload` persisté (+ snapshot runtime + override `dry_run`), puis persiste
+l'historique (un `Run` avec `last_json` global, un `RunSet` par set avec `payload_sent`,
+`response_json`, `duration_ms`). L'**exposition en lecture** de cet historique (endpoints `GET`)
+reste portée par **PY-006**. Les migrations s'appliquent via `alembic upgrade head` (voir
+`python-orchestrator/README.md`).
 
 ## Garde-fous fonctionnels
 
@@ -454,9 +459,11 @@ Avant tout run :
 | DB-001 | Persister dashboards, sets et derniers runs | Tables orchestration + dernier JSON global/par set. |
 | SF-002a ✅ | Supporter `sync_tables=false` côté Symfony | Livré : `/api/mtf/run` et `mtf:run` honorent `sync_tables=false` (skip upsert DB). |
 | SF-002b ✅ | Snapshot d'état ouvert orchestrateur (zéro appel exchange par set) | Livré : `GET /api/exchange/open-state` + `open_state_snapshot` sur `/api/mtf/run` ; fail-closed live côté Symfony et orchestrateur. |
-| PY-002 ✅ (partiel) | Implémenter `/orchestrator/run` | Livré : lecture des sets actifs, fetch snapshot 1×/(exchange,market_type), appels parallèles bornés, agrégation, fail-closed live. Persistance DB du dernier JSON à compléter. |
+| PY-002 ✅ | Implémenter `/orchestrator/run` (squelette parallèle) | Livré : fetch snapshot 1×/(exchange,market_type), appels parallèles bornés, agrégation, fail-closed live. Lecture DB des sets + persistance livrées par PY-005. |
 | PY-003 ✅ | Refresh explicite des contrats | Livré : `POST /dashboards/{id}/refresh-contracts` fetch `GET /api/mtf/contracts` 1×/(profil,exchange,market_type), persiste `symbols` (cap `contracts_limit`), fail-closed 502 sans écriture partielle, aperçu par set. |
 | PY-004 ✅ | Générer le `payload` `/api/mtf/run` des sets | Livré : `payload` produit côté serveur (cœur partagé avec `build_mtf_payload`, `sync_tables`/`process_tp_sl=false`, sans snapshot) et régénéré à chaque create/update/refresh ; lecture seule via `SetRead`. |
+| PY-005 ✅ | Exécuter les sets persistés + persister les runs | Livré : `/orchestrator/run` lit les sets actifs du dashboard depuis la base, exécute chaque set via son `payload` persisté (+ snapshot runtime + override `dry_run`), et persiste le run (`Run.last_json` global + un `RunSet` par set avec `payload_sent`/`response_json`/`duration_ms`). `no_sets` reste `ok=false`. |
+| PY-006 | Exposer l'historique des runs en lecture | Endpoints `GET` du dernier JSON global et par set (lecture seule ; l'écriture est faite par PY-005). |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 

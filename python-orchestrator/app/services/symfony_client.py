@@ -40,9 +40,16 @@ class ContractsUnavailableError(RuntimeError):
     """
 
 
-def snapshot_key(a_set: OrchestratorSet) -> SnapshotKey:
-    """Clé de cache du snapshot pour un set."""
-    return (a_set.exchange.value, a_set.market_type.value)
+def snapshot_key(a_set: Any) -> SnapshotKey:
+    """Clé de cache du snapshot pour un set.
+
+    Accepte un set pydantic (``exchange``/``market_type`` sont des enums) **et** un
+    ``OrchestrationSet`` ORM (ce sont des chaînes en base) : on lit ``.value`` quand
+    il existe, sinon la chaîne telle quelle.
+    """
+    exchange = getattr(a_set.exchange, "value", a_set.exchange)
+    market_type = getattr(a_set.market_type, "value", a_set.market_type)
+    return (exchange, market_type)
 
 
 async def fetch_open_state(
@@ -285,23 +292,25 @@ def is_business_success(body: Any) -> bool:
     return not errors
 
 
-async def run_mtf_set(
+async def _dispatch_mtf_run(
     client: httpx.AsyncClient,
     base_url: str,
-    a_set: OrchestratorSet,
-    snapshot: Optional[Dict[str, Any]],
-    dry_run: Optional[bool] = None,
+    set_id: str,
+    payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Exécute un set via ``POST /api/mtf/run`` avec le snapshot en cache."""
+    """POST ``/api/mtf/run`` et normalise le résultat (succès métier + corps brut).
+
+    Source unique de l'envoi : partagée entre ``run_mtf_set`` (set pydantic) et
+    ``run_persisted_set`` (set ORM persisté) pour éviter toute dérive.
+    """
     url = f"{base_url.rstrip('/')}/api/mtf/run"
-    payload = build_mtf_payload(a_set, snapshot, dry_run)
     response = await client.post(url, json=payload)
     try:
         body = response.json()
     except ValueError:
         body = response.text
     return {
-        "set_id": a_set.set_id,
+        "set_id": set_id,
         # Succès = HTTP 2xx ET succès métier (sinon un partial_success/rejected
         # renvoyé en 200 serait compté à tort comme réussi).
         "ok": response.is_success and is_business_success(body),
@@ -309,3 +318,57 @@ async def run_mtf_set(
         "business_status": body.get("status") if isinstance(body, dict) else None,
         "body": body,
     }
+
+
+async def run_mtf_set(
+    client: httpx.AsyncClient,
+    base_url: str,
+    a_set: OrchestratorSet,
+    snapshot: Optional[Dict[str, Any]],
+    dry_run: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Exécute un set pydantic via ``POST /api/mtf/run`` avec le snapshot en cache."""
+    payload = build_mtf_payload(a_set, snapshot, dry_run)
+    return await _dispatch_mtf_run(client, base_url, a_set.set_id, payload)
+
+
+async def run_persisted_set(
+    client: httpx.AsyncClient,
+    base_url: str,
+    orm_set: Any,
+    snapshot: Optional[Dict[str, Any]],
+    dry_run: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Exécute un ``OrchestrationSet`` ORM persisté via ``POST /api/mtf/run`` (PY-005).
+
+    Part du payload **persisté** (``orm_set.payload``, préparé par PY-004, sans
+    snapshot), avec repli sur ``generate_set_payload(orm_set)`` s'il est absent —
+    plutôt que de re-dériver le schéma ici. Injecte ensuite le
+    ``open_state_snapshot`` runtime, applique l'override ``dry_run`` run-level et
+    conserve ``sync_tables``/``process_tp_sl=false`` (déjà dans le payload). Le
+    résultat normalisé est augmenté de ``payload_sent`` (ce qui a réellement été
+    envoyé à Symfony, snapshot inclus).
+
+    Si aucun payload n'est disponible (aucun symbole concret matérialisé), renvoie
+    un échec **sans appel HTTP** : un set capé non rafraîchi n'a pas de sélection
+    exécutable (cf. ``generate_set_payload``).
+    """
+    payload = orm_set.payload or generate_set_payload(orm_set)
+    if payload is None:
+        return {
+            "set_id": orm_set.set_id,
+            "ok": False,
+            "status": None,
+            "business_status": None,
+            "body": "set payload not materialized (no concrete symbols)",
+            "payload_sent": None,
+        }
+    # Copie défensive : ne jamais muter le JSON ORM (snapshot/override runtime).
+    payload = dict(payload)
+    if dry_run is not None:
+        payload["dry_run"] = dry_run
+    if snapshot is not None:
+        payload["open_state_snapshot"] = snapshot
+    result = await _dispatch_mtf_run(client, base_url, orm_set.set_id, payload)
+    result["payload_sent"] = payload
+    return result
