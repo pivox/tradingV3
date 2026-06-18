@@ -1,24 +1,43 @@
 """Endpoint d'orchestration : ``POST /orchestrator/run``.
 
-PY-001 : squelette / stub. Le run lit les sets actifs simulés et retourne
-le contrat JSON cible (ok / run_id / status / summary) sans appel réseau.
+SF-002b / PY-002 : l'orchestrateur récupère l'état ouvert (positions/ordres)
+UNE seule fois par couple ``(exchange, market_type)`` via
+``GET /api/exchange/open-state``, puis exécute chaque set ``mtf_run`` en
+appelant ``POST /api/mtf/run`` avec ``sync_tables=false`` et le snapshot mis en
+cache. Symfony ne refait donc aucun fetch exchange par set.
 
-La vraie exécution parallèle bornée des appels Symfony, l'agrégation des
-réponses et la persistance du dernier JSON sont l'objet de PY-002.
+Concurrence bornée par ``asyncio.Semaphore(max_concurrency)``.
+
+Fail-closed live : si le fetch du snapshot échoue pour un couple, les sets
+**live** (``dry_run=false``) de ce couple sont marqués en erreur (on ne trade
+pas à l'aveugle). Les sets dry-run peuvent continuer sans snapshot.
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter
 
-from app.schemas import RunRequest, RunResponse, RunStatus, RunSummary
+from app.schemas import Action, RunRequest, RunResponse, RunStatus, RunSummary
 from app.services.sets import list_active_sets
+from app.services.symfony_client import (
+    OpenStateUnavailableError,
+    SnapshotKey,
+    fetch_open_state,
+    run_mtf_set,
+    snapshot_key,
+)
+from app.settings import get_settings
 
 router = APIRouter(tags=["orchestrator"])
+
+# Timeout (s) des appels Symfony, aligné sur le worker Temporal historique.
+_HTTP_TIMEOUT = 900.0
 
 
 def _resolve_run_id(request: Optional[RunRequest]) -> str:
@@ -48,14 +67,70 @@ def _resolve_status(success: int, failed: int) -> RunStatus:
     return "partial_failure"
 
 
-@router.post("/orchestrator/run", response_model=RunResponse)
-def run_orchestrator(request: Optional[RunRequest] = None) -> RunResponse:
-    """Déclenche un run d'orchestration (stub PY-001).
+def _symbols_overlap(a: Any, b: Any) -> bool:
+    """Indique si deux sets ciblent au moins un symbole commun.
 
-    Étapes cibles (PY-002) : lire les sets actifs, appliquer les garde-fous,
-    lancer les appels Symfony en parallèle avec concurrence bornée, agréger,
-    sauvegarder le dernier JSON, retourner un statut court.
+    Un ``symbols`` vide signifie « tout l'univers actif » (résolu côté Symfony),
+    donc il chevauche n'importe quel autre set du même couple.
     """
+    if not a.symbols or not b.symbols:
+        return True
+    # Symfony normalise les symboles en MAJUSCULES (SymbolUniverseResolver::resolve),
+    # donc BTCUSDT et btcusdt ciblent le même instrument : comparer normalisé.
+    norm_a = {s.strip().upper() for s in a.symbols}
+    norm_b = {s.strip().upper() for s in b.symbols}
+    return bool(norm_a & norm_b)
+
+
+def _conflicting_live_set_ids(mtf_sets: List[Any], force_dry_run: bool) -> set:
+    """``set_id`` des sets EFFECTIVEMENT live qui se chevauchent dans le batch.
+
+    Deux sets live partageant ``(exchange, market_type)`` et au moins un symbole
+    recevraient le même snapshot pré-run (``sync_tables=false``) : le second ne
+    verrait pas une position/un ordre ouvert par le premier → trade live dupliqué.
+    On rejette ces sets (fail-closed) plutôt que de dispatcher à l'aveugle. Les
+    sets dry-run (ou forcés dry) ne posent pas ce problème.
+    """
+    live = [s for s in mtf_sets if not (s.dry_run or force_dry_run)]
+    conflicting: set = set()
+    for i, a in enumerate(live):
+        for b in live[i + 1:]:
+            if (a.exchange, a.market_type) != (b.exchange, b.market_type):
+                continue
+            if _symbols_overlap(a, b):
+                conflicting.add(a.set_id)
+                conflicting.add(b.set_id)
+    return conflicting
+
+
+async def _collect_snapshots(
+    client: httpx.AsyncClient,
+    base_url: str,
+    mtf_sets: List[Any],
+) -> Dict[SnapshotKey, Dict[str, Any]]:
+    """Récupère un snapshot d'état ouvert par couple ``(exchange, market_type)``.
+
+    Un seul appel ``GET /api/exchange/open-state`` par couple distinct. Les
+    couples dont le fetch échoue restent absents du cache (fail-closed géré par
+    l'appelant pour les sets live).
+    """
+    keys = {snapshot_key(s) for s in mtf_sets}
+    snapshots: Dict[SnapshotKey, Dict[str, Any]] = {}
+    for exchange, market_type in keys:
+        try:
+            snapshots[(exchange, market_type)] = await fetch_open_state(
+                client, base_url, exchange, market_type
+            )
+        except OpenStateUnavailableError:
+            # Pas de snapshot fiable pour ce couple : on ne met rien en cache.
+            continue
+    return snapshots
+
+
+@router.post("/orchestrator/run", response_model=RunResponse)
+async def run_orchestrator(request: Optional[RunRequest] = None) -> RunResponse:
+    """Déclenche un run d'orchestration (SF-002b)."""
+    settings = get_settings()
     run_id = _resolve_run_id(request)
     active_sets = list_active_sets()
 
@@ -69,14 +144,77 @@ def run_orchestrator(request: Optional[RunRequest] = None) -> RunResponse:
             summary=RunSummary(total_calls=0, success=0, failed=0),
         )
 
-    # TODO(PY-002): remplacer la simulation par l'exécution parallèle bornée
-    # des appels Symfony (httpx.AsyncClient + asyncio.Semaphore(max_concurrency)),
-    # puis agréger les réponses réelles et persister le dernier JSON (DB-001).
-    total_calls = len(active_sets)
-    success = total_calls
+    mtf_sets = [s for s in active_sets if s.action == Action.MTF_RUN]
+    if not mtf_sets:
+        # Sets actifs mais aucun à exécuter via /api/mtf/run (actions hors scope).
+        return RunResponse(
+            ok=False,
+            run_id=run_id,
+            status="no_sets",
+            summary=RunSummary(total_calls=0, success=0, failed=0),
+        )
+
+    success = 0
     failed = 0
 
-    summary = RunSummary(total_calls=total_calls, success=success, failed=failed)
+    # Override run-level : un appelant peut FORCER le dry-run (sécurité). Le
+    # forçage ne peut que rendre un set plus sûr — il ne downgrade jamais un
+    # set dry en live. Appliqué AVANT le garde fail-closed et la construction
+    # du payload pour que `{"dry_run": true}` empêche réellement tout ordre live.
+    force_dry_run = request.dry_run is True if request is not None else False
+
+    # Fail-closed : des sets live chevauchants (même exchange/market + symbole
+    # partagé) partageraient le même snapshot pré-run et pourraient dupliquer un
+    # trade live ; on les rejette avant dispatch.
+    conflicting_live_ids = _conflicting_live_set_ids(mtf_sets, force_dry_run)
+
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        # 1) Un seul fetch d'état ouvert par couple (exchange, market_type).
+        snapshots = await _collect_snapshots(client, settings.symfony_base_url, mtf_sets)
+
+        # 2) Exécution bornée des sets avec le snapshot en cache.
+        semaphore = asyncio.Semaphore(max(1, settings.max_concurrency))
+
+        async def _execute(a_set: Any) -> Dict[str, Any]:
+            if a_set.set_id in conflicting_live_ids:
+                return {
+                    "set_id": a_set.set_id,
+                    "ok": False,
+                    "status": None,
+                    "body": "overlapping live set rejected (shared pre-run snapshot would miss sibling fills)",
+                }
+            snapshot = snapshots.get(snapshot_key(a_set))
+            effective_dry_run = a_set.dry_run or force_dry_run
+            # Fail-closed live : pas de snapshot fiable + set (effectivement) live => on n'exécute pas.
+            if snapshot is None and effective_dry_run is False:
+                return {
+                    "set_id": a_set.set_id,
+                    "ok": False,
+                    "status": None,
+                    "body": "open_state_snapshot unavailable: live set skipped (fail-closed)",
+                }
+            async with semaphore:
+                try:
+                    return await run_mtf_set(
+                        client, settings.symfony_base_url, a_set, snapshot, effective_dry_run
+                    )
+                except httpx.HTTPError as exc:  # noqa: BLE001
+                    return {
+                        "set_id": a_set.set_id,
+                        "ok": False,
+                        "status": None,
+                        "body": f"mtf run failed: {exc}",
+                    }
+
+        results = await asyncio.gather(*(_execute(s) for s in mtf_sets))
+
+    for result in results:
+        if result.get("ok"):
+            success += 1
+        else:
+            failed += 1
+
+    summary = RunSummary(total_calls=len(results), success=success, failed=failed)
     status = _resolve_status(success, failed)
 
     return RunResponse(

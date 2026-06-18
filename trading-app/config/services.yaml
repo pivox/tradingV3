@@ -229,15 +229,71 @@ services:
             $systemProvider: '@App\Provider\Bitmart\SystemProvider'
         public: false
 
+    # --- Fake exchange provider bundle ---
+    # Neutral/empty exchange used by the Python orchestrator demo sets
+    # (exchange=fake). It resolves a provider bundle so MainProvider::forContext()
+    # never fails for the FAKE context. The fake contract provider returns 0
+    # active contracts, so an MTF run on this context resolves 0 symbols and
+    # completes as a trivial success. No real HTTP / live execution occurs.
+
+    App\Provider\Context\ExchangeContext.fake_perpetual:
+        class: App\Provider\Context\ExchangeContext
+        arguments:
+            $exchange: !php/const App\Common\Enum\Exchange::FAKE
+            $marketType: !php/const App\Common\Enum\MarketType::PERPETUAL
+        public: false
+
+    App\Provider\Context\ExchangeContext.fake_spot:
+        class: App\Provider\Context\ExchangeContext
+        arguments:
+            $exchange: !php/const App\Common\Enum\Exchange::FAKE
+            $marketType: !php/const App\Common\Enum\MarketType::SPOT
+        public: false
+
+    # The fake provider classes themselves are autowired by the App\Provider\
+    # resource block above; only the contexts and bundles need explicit wiring.
+    App\Provider\Registry\ExchangeProviderBundle.fake_perpetual:
+        class: App\Provider\Registry\ExchangeProviderBundle
+        arguments:
+            $context: '@App\Provider\Context\ExchangeContext.fake_perpetual'
+            $klineProvider: '@App\Provider\Fake\FakeKlineProvider'
+            $contractProvider: '@App\Provider\Fake\FakeContractProvider'
+            $orderProvider: '@App\Provider\Fake\FakeOrderProvider'
+            $accountProvider: '@App\Provider\Fake\FakeAccountProvider'
+            $systemProvider: '@App\Provider\Fake\FakeSystemProvider'
+        public: false
+
+    App\Provider\Registry\ExchangeProviderBundle.fake_spot:
+        class: App\Provider\Registry\ExchangeProviderBundle
+        arguments:
+            $context: '@App\Provider\Context\ExchangeContext.fake_spot'
+            $klineProvider: '@App\Provider\Fake\FakeKlineProvider'
+            $contractProvider: '@App\Provider\Fake\FakeContractProvider'
+            $orderProvider: '@App\Provider\Fake\FakeOrderProvider'
+            $accountProvider: '@App\Provider\Fake\FakeAccountProvider'
+            $systemProvider: '@App\Provider\Fake\FakeSystemProvider'
+        public: false
+
     App\Provider\Registry\ExchangeProviderRegistry:
         arguments:
             $bundles:
                 - '@App\Provider\Registry\ExchangeProviderBundle.bitmart_perpetual'
                 - '@App\Provider\Registry\ExchangeProviderBundle.bitmart_spot'
+                - '@App\Provider\Registry\ExchangeProviderBundle.fake_perpetual'
+                - '@App\Provider\Registry\ExchangeProviderBundle.fake_spot'
             $defaultExchange: !php/const App\Common\Enum\Exchange::BITMART
             $defaultMarketType: !php/const App\Common\Enum\MarketType::PERPETUAL
 
     App\Contract\Provider\ExchangeProviderRegistryInterface: '@App\Provider\Registry\ExchangeProviderRegistry'
+
+    # Default interface aliases for autowiring. KlineProviderInterface,
+    # OrderProviderInterface and SystemProviderInterface are aliased via #[AsAlias]
+    # on their Bitmart classes. AccountProviderInterface and ContractProviderInterface
+    # previously resolved implicitly because Bitmart was the single implementation;
+    # registering the Fake providers added a second candidate, so the default
+    # (Bitmart) alias must now be declared explicitly.
+    App\Contract\Provider\AccountProviderInterface: '@App\Provider\Bitmart\BitmartAccountProvider'
+    App\Contract\Provider\ContractProviderInterface: '@App\Provider\Bitmart\BitmartContractProvider'
 
     # Provide a default context alias so autowiring of ExchangeContext resolves
     App\Provider\Context\ExchangeContext: '@App\Provider\Context\ExchangeContext.bitmart_perpetual'

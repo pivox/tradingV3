@@ -62,4 +62,62 @@ final class MtfRunnerRequestDtoTest extends TestCase
 
         self::assertSame($expected, $request->marketType);
     }
+
+    public function testFromArrayParsesOpenStateSnapshot(): void
+    {
+        $request = MtfRunnerRequestDto::fromArray([
+            'open_state_snapshot' => [
+                'open_positions' => [['symbol' => 'BTCUSDT']],
+                'open_orders' => [['symbol' => 'ETHUSDT']],
+            ],
+        ]);
+
+        self::assertNotNull($request->openStateSnapshot);
+        self::assertSame('BTCUSDT', $request->openStateSnapshot['open_positions'][0]['symbol']);
+        self::assertSame('ETHUSDT', $request->openStateSnapshot['open_orders'][0]['symbol']);
+    }
+
+    public function testFromArrayDefaultsOpenStateSnapshotToNull(): void
+    {
+        self::assertNull(MtfRunnerRequestDto::fromArray([])->openStateSnapshot);
+    }
+
+    public function testFromArrayKeepsWellFormedEmptyOpenStateSnapshot(): void
+    {
+        // Snapshot vide mais bien formé : l'orchestrateur a interrogé l'exchange,
+        // rien n'était ouvert. Reste une source fiable (les deux clés sont des tableaux).
+        $request = MtfRunnerRequestDto::fromArray([
+            'open_state_snapshot' => ['open_positions' => [], 'open_orders' => []],
+        ]);
+
+        self::assertNotNull($request->openStateSnapshot);
+        self::assertSame([], $request->openStateSnapshot['open_positions']);
+        self::assertSame([], $request->openStateSnapshot['open_orders']);
+    }
+
+    public function testFromArrayRejectsPartialOpenStateSnapshot(): void
+    {
+        // Clé open_orders manquante => snapshot mal formé => null, pour que le garde
+        // fail-closed en live ne soit pas contourné par un payload incomplet.
+        self::assertNull(MtfRunnerRequestDto::fromArray([
+            'open_state_snapshot' => ['open_positions' => [['symbol' => 'BTCUSDT']]],
+        ])->openStateSnapshot);
+    }
+
+    public function testFromArrayRejectsEmptyObjectOpenStateSnapshot(): void
+    {
+        self::assertNull(MtfRunnerRequestDto::fromArray(['open_state_snapshot' => []])->openStateSnapshot);
+    }
+
+    public function testFromArrayRejectsNonArraySnapshotKeys(): void
+    {
+        self::assertNull(MtfRunnerRequestDto::fromArray([
+            'open_state_snapshot' => ['open_positions' => 'nope', 'open_orders' => []],
+        ])->openStateSnapshot);
+    }
+
+    public function testFromArrayIgnoresNonArrayOpenStateSnapshot(): void
+    {
+        self::assertNull(MtfRunnerRequestDto::fromArray(['open_state_snapshot' => 'nope'])->openStateSnapshot);
+    }
 }

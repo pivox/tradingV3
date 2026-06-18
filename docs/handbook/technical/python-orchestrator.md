@@ -40,13 +40,33 @@ sequenceDiagram
 
     Trigger->>Python: POST /orchestrator/run
     Python->>Db: lire les sets actifs déjà prêts
+    loop une fois par (exchange, market_type) distinct
+        Python->>Symfony: GET /api/exchange/open-state
+        Symfony-->>Python: { open_positions, open_orders }
+    end
     loop appels parallèles bornés
-        Python->>Symfony: POST /api/mtf/run
+        Python->>Symfony: POST /api/mtf/run (sync_tables=false + open_state_snapshot)
         Symfony-->>Python: JSON existant
     end
     Python->>Db: sauvegarder dernier JSON global et par set
     Python-->>Trigger: { ok, run_id, summary }
 ```
+
+### Snapshot d'état ouvert partagé (SF-002b)
+
+Pour éviter un appel exchange par set, l'orchestrateur récupère l'état ouvert
+(positions/ordres) **une seule fois par couple `(exchange, market_type)` distinct**
+parmi les sets `mtf_run` actifs, via `GET /api/exchange/open-state`, puis transmet
+ce snapshot à chaque `POST /api/mtf/run` dans le champ `open_state_snapshot` avec
+`sync_tables=false`. Côté Symfony, la présence du snapshot **court-circuite**
+totalement le fetch exchange (priorité : snapshot > `sync_tables=true` > filtre).
+
+**Fail-closed live** : si le fetch du snapshot échoue pour un couple, les sets
+**live** (`dry_run=false`) de ce couple sont marqués en erreur et **ne sont pas
+exécutés** (on ne trade pas à l'aveugle). Les sets **dry-run** peuvent continuer
+sans snapshot. Ce garde-fou côté orchestrateur est doublé côté Symfony :
+`MtfRunnerService` rejette tout run live dépourvu de source d'état ouvert fiable
+(pas de snapshot ET `sync_tables=false` ET `skip_open_state_filter=true`).
 
 ## Mise à jour des contrats
 
@@ -213,6 +233,44 @@ Règles attendues :
 
 Sans ce contrat, chaque set pourrait encore déclencher une sync Symfony, ce qui annulerait le bénéfice du flux de refresh explicite.
 
+> ⚠️ **Portée de `sync_tables=false` seul (SF-002a).** `sync_tables=false` saute
+> uniquement l'upsert DB ; le filtre d'activité peut encore appeler l'exchange.
+> Le vrai mode « zéro appel exchange par set » est livré par **SF-002b** via le
+> snapshot orchestrateur ci-dessous.
+
+## Endpoint Symfony : état ouvert (SF-002b)
+
+```text
+GET /api/exchange/open-state?exchange=bitmart&market_type=perpetual
+```
+
+Endpoint **en lecture seule** qui produit l'instantané d'état ouvert que
+l'orchestrateur récupère une seule fois puis distribue à tous les sets. Réponse :
+
+```json
+{
+  "open_positions": [ { "symbol": "BTCUSDT", "side": "long", "size": "1.5", "...": "..." } ],
+  "open_orders":    [ { "symbol": "ETHUSDT", "order_id": "...", "side": "buy", "...": "..." } ]
+}
+```
+
+- `exchange` / `market_type` : optionnels (défauts `bitmart` / `perpetual`), même
+  jeu accepté que `/api/mtf/run` ; une valeur invalide renvoie `400`.
+- L'orchestrateur joint ce JSON tel quel dans `open_state_snapshot` du payload
+  `/api/mtf/run` (avec `sync_tables=false`).
+
+> **Exchange `fake` (sets de démo).** Les sets simulés en mémoire
+> (`app/services/sets.py`) utilisent `exchange=fake` / `market_type=perpetual`.
+> Symfony enregistre désormais un **bundle de providers Fake** (contexte
+> `fake_perpetual` / `fake_spot`, voir `config/services.yaml`) : `MainProvider::forContext(FAKE, …)`
+> résout sans erreur. Le provider Fake modélise un exchange vide/neutre :
+> `GET /api/exchange/open-state?exchange=fake&market_type=perpetual` renvoie
+> `{"open_positions":[],"open_orders":[]}`, et le provider de contrats Fake
+> n'expose **aucun symbole actif** — un `POST /api/mtf/run` sur le contexte FAKE
+> résout 0 symbole et se termine en succès trivial, sans aucun appel HTTP réel ni
+> exécution live. C'est ce qui permet au chemin de démo (`exchange=fake`) de
+> tourner de bout en bout depuis `/orchestrator/run`.
+
 ## Déclenchement
 
 L'endpoint cible est :
@@ -322,8 +380,9 @@ Avant tout run :
 | SF-001 ✅ | Exposer les contrats filtrés par `mtf_contracts` | Livré : `GET /api/mtf/contracts` retourne les symboles réellement sélectionnés. |
 | PY-001 | Créer le squelette API Python | Service API lancé, endpoint healthcheck, structure projet. |
 | DB-001 | Persister dashboards, sets et derniers runs | Tables orchestration + dernier JSON global/par set. |
-| SF-002 | Supporter `sync_tables=false` côté Symfony | `/api/mtf/run` peut exécuter un set préparé sans sync par run. |
-| PY-002 | Implémenter `/orchestrator/run` | Lecture des sets actifs, appels parallèles bornés, agrégation. |
+| SF-002a ✅ | Supporter `sync_tables=false` côté Symfony | Livré : `/api/mtf/run` et `mtf:run` honorent `sync_tables=false` (skip upsert DB). |
+| SF-002b ✅ | Snapshot d'état ouvert orchestrateur (zéro appel exchange par set) | Livré : `GET /api/exchange/open-state` + `open_state_snapshot` sur `/api/mtf/run` ; fail-closed live côté Symfony et orchestrateur. |
+| PY-002 ✅ (partiel) | Implémenter `/orchestrator/run` | Livré : lecture des sets actifs, fetch snapshot 1×/(exchange,market_type), appels parallèles bornés, agrégation, fail-closed live. Persistance DB du dernier JSON à compléter. |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 

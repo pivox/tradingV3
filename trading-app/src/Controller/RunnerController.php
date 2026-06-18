@@ -49,6 +49,11 @@ class RunnerController extends AbstractController
             $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
             $workers = max(1, (int)($data['workers'] ?? 1));
 
+            // SF-002b : instantané d'état ouvert fourni par l'orchestrateur (un seul
+            // fetch exchange amont, partagé entre tous les sets) — array|null uniquement.
+            $openStateSnapshot = $data['open_state_snapshot'] ?? null;
+            $openStateSnapshot = is_array($openStateSnapshot) ? $openStateSnapshot : null;
+
             // Normaliser les symboles fournis sans appliquer de fallback/queue
             $symbols = [];
             if (is_string($symbolsInput)) {
@@ -99,6 +104,7 @@ class RunnerController extends AbstractController
                 'validation_mode' => $data['validation_mode'] ?? null,
                 'context_mode' => $data['context_mode'] ?? null,
                 'mode' => $data['mode'] ?? null,
+                'open_state_snapshot' => $openStateSnapshot,
             ]);
             $result = $runMtfCycle->run($runnerRequest);
 

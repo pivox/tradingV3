@@ -28,6 +28,17 @@ interface AccountProviderInterface
     public function getOpenPositions(?string $symbol = null): array;
 
     /**
+     * Récupère les positions ouvertes en propageant toute erreur de transport/parse
+     * au lieu de retourner [] (contrairement à getOpenPositions). Destiné aux
+     * consommateurs fail-closed (ex: endpoint /api/exchange/open-state) qui ne
+     * doivent PAS confondre « aucune position » et « fetch échoué ».
+     *
+     * @return PositionDto[]
+     * @throws \Throwable si la récupération échoue
+     */
+    public function getOpenPositionsOrFail(?string $symbol = null): array;
+
+    /**
      * Récupère une position spécifique
      */
     public function getPosition(string $symbol): ?PositionDto;

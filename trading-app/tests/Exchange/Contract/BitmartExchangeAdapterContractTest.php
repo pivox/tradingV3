@@ -367,6 +367,11 @@ final class ContractBitmartOrderProvider implements OrderProviderInterface
         ));
     }
 
+    public function getOpenOrdersOrFail(?string $symbol = null): array
+    {
+        return $this->getOpenOrders($symbol);
+    }
+
     public function getOrderHistory(string $symbol, int $limit = 100): array
     {
         return array_slice(array_values($this->orders), 0, $limit);

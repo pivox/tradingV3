@@ -43,6 +43,17 @@ interface OrderProviderInterface
     public function getOpenOrders(?string $symbol = null): array;
 
     /**
+     * Récupère les ordres ouverts en propageant toute erreur de transport/parse
+     * au lieu de retourner [] (contrairement à getOpenOrders). Destiné aux
+     * consommateurs fail-closed (ex: endpoint /api/exchange/open-state) qui ne
+     * doivent PAS confondre « aucun ordre » et « fetch échoué ».
+     *
+     * @return OrderDto[]
+     * @throws \Throwable si la récupération échoue
+     */
+    public function getOpenOrdersOrFail(?string $symbol = null): array;
+
+    /**
      * Récupère l'historique des ordres
      */
     public function getOrderHistory(string $symbol, int $limit = 100): array;

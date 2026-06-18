@@ -73,6 +73,91 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
         self::assertTrue($skipLogged, 'Le skip de la synchro doit être tracé quand sync_tables=false.');
     }
 
+    /**
+     * SF-002b — quand l'orchestrateur fournit open_state_snapshot, le runner ne doit
+     * PAS interroger l'exchange pour synchroniser les tables, même si sync_tables=true.
+     */
+    public function testOpenStateSnapshotSkipsExchangeSync(): void
+    {
+        $syncProvider = $this->createMock(MainProviderInterface::class);
+        $syncProvider->expects(self::never())->method('forContext');
+
+        $service = $this->buildService($syncProvider);
+
+        $request = new MtfRunnerRequestDto(
+            symbols: ['BTCUSDT', 'ETHUSDT'],
+            exchange: Exchange::BITMART,
+            marketType: MarketType::PERPETUAL,
+            workers: 1,
+            syncTables: true, // le snapshot prime sur sync_tables
+            processTpSl: false,
+            openStateSnapshot: [
+                'open_positions' => [['symbol' => 'BTCUSDT']],
+                'open_orders' => [],
+            ],
+        );
+
+        $result = $service->run($request);
+
+        self::assertArrayHasKey('summary', $result);
+        self::assertNotSame('rejected', $result['summary']['status'] ?? null);
+    }
+
+    /**
+     * SF-002b — fail-closed en live : sans source d'état ouvert fiable (pas de snapshot,
+     * sync_tables=false, filtre désactivé), le run doit être rejeté sans toucher l'exchange.
+     */
+    public function testLiveRunRejectedWithoutReliableOpenStateSource(): void
+    {
+        $syncProvider = $this->createMock(MainProviderInterface::class);
+        $syncProvider->expects(self::never())->method('forContext');
+
+        $service = $this->buildService($syncProvider);
+
+        $request = new MtfRunnerRequestDto(
+            symbols: ['BTCUSDT'],
+            dryRun: false,
+            skipOpenStateFilter: true,
+            exchange: Exchange::BITMART,
+            marketType: MarketType::PERPETUAL,
+            workers: 1,
+            syncTables: false,
+            processTpSl: false,
+        );
+
+        $result = $service->run($request);
+
+        self::assertSame('rejected', $result['summary']['status'] ?? null);
+        self::assertSame('no_reliable_open_state_source', $result['summary']['reason'] ?? null);
+        self::assertNotEmpty($result['errors']);
+    }
+
+    /**
+     * En dry-run, l'absence de source fiable ne bloque pas (diagnostic autorisé).
+     */
+    public function testDryRunAllowedWithoutReliableOpenStateSource(): void
+    {
+        $syncProvider = $this->createMock(MainProviderInterface::class);
+        $syncProvider->expects(self::never())->method('forContext');
+
+        $service = $this->buildService($syncProvider);
+
+        $request = new MtfRunnerRequestDto(
+            symbols: ['BTCUSDT'],
+            dryRun: true,
+            skipOpenStateFilter: true,
+            exchange: Exchange::BITMART,
+            marketType: MarketType::PERPETUAL,
+            workers: 1,
+            syncTables: false,
+            processTpSl: false,
+        );
+
+        $result = $service->run($request);
+
+        self::assertNotSame('rejected', $result['summary']['status'] ?? null);
+    }
+
     private function request(bool $syncTables): MtfRunnerRequestDto
     {
         // Pas de profil : couvre aussi le chemin sans profil (cf. guard resolveTimeframes).
@@ -92,8 +177,11 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
      * déclarés `final` et ne peuvent donc pas être doublés : on les instancie réellement
      * en mockant uniquement leurs dépendances feuilles (interfaces / repositories).
      */
-    private function buildService(MainProviderInterface $syncProvider, ?LoggerInterface $mtfLogger = null): MtfRunnerService
-    {
+    private function buildService(
+        MainProviderInterface $syncProvider,
+        ?LoggerInterface $mtfLogger = null,
+        ?MainProviderInterface $filterProvider = null,
+    ): MtfRunnerService {
         $logger = $this->createMock(LoggerInterface::class);
         $mtfLogger ??= $this->createMock(LoggerInterface::class);
         $switchRepository = $this->createMock(MtfSwitchRepository::class);
@@ -113,10 +201,12 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
         );
 
         // Provider neutre (aucun account/order provider) → le filtre laisse passer les symboles.
-        $filterProvider = $this->createMock(MainProviderInterface::class);
-        $filterProvider->method('forContext')->willReturnSelf();
-        $filterProvider->method('getAccountProvider')->willReturn(null);
-        $filterProvider->method('getOrderProvider')->willReturn(null);
+        if ($filterProvider === null) {
+            $filterProvider = $this->createMock(MainProviderInterface::class);
+            $filterProvider->method('forContext')->willReturnSelf();
+            $filterProvider->method('getAccountProvider')->willReturn(null);
+            $filterProvider->method('getOrderProvider')->willReturn(null);
+        }
 
         $openActivityFilter = new OpenActivityFilter(
             $filterProvider,
