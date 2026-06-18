@@ -653,6 +653,59 @@ def test_persist_run_nulls_stale_fks(orchestrator_env):
     assert by_set["b"].set_ref_id is None  # set supprimé => FK neutralisée
 
 
+def test_persist_run_purges_stale_run_sets_on_rerun(orchestrator_env):
+    # Re-run du même run_id (retry idempotent) après désactivation d'un set : les
+    # RunSet périmés doivent être purgés pour rester cohérents avec le summary.
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from app.schemas import RunSummary
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    set_a = _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    set_b = _seed_set(session, dash.id, "b", symbols=("ETHUSDT",))
+    now = datetime.now(timezone.utc)
+
+    def _res(set_id):
+        return {"set_id": set_id, "ok": True, "status": 200, "business_status": "success",
+                "body": {"status": "success"}, "payload_sent": {}, "duration_ms": 1}
+
+    def _persist(mtf_sets, results, summary):
+        orch._persist_run(
+            session,
+            run_id="run_rerun",
+            dashboard_id=dash.id,
+            request=None,
+            ok=True,
+            status="success",
+            summary=summary,
+            started_at=now,
+            finished_at=now,
+            mtf_sets=mtf_sets,
+            results=results,
+        )
+
+    # 1er run : a + b.
+    _persist(
+        [SimpleNamespace(id=set_a.id, set_id="a"), SimpleNamespace(id=set_b.id, set_id="b")],
+        [_res("a"), _res("b")],
+        RunSummary(total_calls=2, success=2, failed=0),
+    )
+    # 2e run même run_id : seulement a (b désactivé entre-temps).
+    _persist(
+        [SimpleNamespace(id=set_a.id, set_id="a")],
+        [_res("a")],
+        RunSummary(total_calls=1, success=1, failed=0),
+    )
+
+    session.expire_all()
+    run = session.get(Run, "run_rerun")
+    assert run.total_calls == 1
+    run_sets = session.scalars(select(RunSet).where(RunSet.run_id == "run_rerun")).all()
+    assert {rs.set_id for rs in run_sets} == {"a"}  # le RunSet périmé "b" est purgé
+
+
 def test_no_sets_run_is_not_persisted(orchestrator_env, monkeypatch):
     client, session = orchestrator_env
     _install_fake_client(monkeypatch, _FakeAsyncClient())

@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.db import repositories
@@ -204,6 +204,18 @@ def _persist_run(
             finished_at=finished_at,
             last_json=last_json,
         ),
+    )
+
+    # Purge des RunSet périmés d'une exécution précédente du MÊME run_id (retry
+    # via idempotency_key/dashboard+tick) : si un set a été désactivé/supprimé/
+    # passé hors `mtf_run` entre-temps, son ancien RunSet subsisterait alors que le
+    # summary/last_json ne le compte plus — historique incohérent pour les lecteurs.
+    current_set_ids = {result["set_id"] for result in results}
+    session.execute(
+        delete(RunSet).where(
+            RunSet.run_id == run_id,
+            RunSet.set_id.notin_(current_set_ids),
+        )
     )
 
     # L'ordre de `results` suit celui de `mtf_sets` (asyncio.gather préserve
