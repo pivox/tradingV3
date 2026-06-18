@@ -417,6 +417,42 @@ def test_run_level_dry_run_override_forces_live_set_to_dry(orchestrator_env, mon
     assert mtf_posts[0]["json"]["dry_run"] is True
 
 
+def test_live_forbidden_exchange_skipped_even_with_snapshot(orchestrator_env, monkeypatch):
+    # Défense en profondeur : une ligne ORM live OKX/Hyperliquid (écrite hors API,
+    # qui contourne assert_set_persistable) ne doit JAMAIS déclencher un run live,
+    # même quand un snapshot est disponible.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "okx_live", dry_run=False, exchange="okx", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()  # snapshot dispo (200)
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 1, "success": 0, "failed": 1}
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 0
+
+
+def test_dry_run_override_allows_forbidden_exchange(orchestrator_env, monkeypatch):
+    # L'override run-level dry_run rend le set sûr : OKX devient exécutable en dry.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "okx", dry_run=False, exchange="okx", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "dry_run": True}
+    ).json()
+
+    assert body["ok"] is True
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1
+    assert mtf_posts[0]["json"]["dry_run"] is True
+
+
 def test_conflicting_live_set_ids():
     a = _make_set("a", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
     b = _make_set("b", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))

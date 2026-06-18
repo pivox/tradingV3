@@ -28,7 +28,14 @@ from sqlalchemy.orm import Session
 from app.db import repositories
 from app.db.engine import get_session
 from app.db.models import Run, RunSet
-from app.schemas import Action, RunRequest, RunResponse, RunStatus, RunSummary
+from app.schemas import (
+    Action,
+    LIVE_FORBIDDEN_EXCHANGES,
+    RunRequest,
+    RunResponse,
+    RunStatus,
+    RunSummary,
+)
 from app.services.symfony_client import (
     OpenStateUnavailableError,
     SnapshotKey,
@@ -42,6 +49,11 @@ router = APIRouter(tags=["orchestrator"])
 
 # Timeout (s) des appels Symfony, aligné sur le worker Temporal historique.
 _HTTP_TIMEOUT = 900.0
+
+# Exchanges dont le live est interdit (OKX/Hyperliquid), en chaînes pour comparer
+# aux colonnes ORM. Le validateur de schéma bloque déjà toute persistance live ;
+# ce miroir sert de garde-fou défense-en-profondeur au moment du run.
+_LIVE_FORBIDDEN_EXCHANGES = frozenset(e.value for e in LIVE_FORBIDDEN_EXCHANGES)
 
 
 def _resolve_run_id(request: Optional[RunRequest]) -> str:
@@ -319,6 +331,20 @@ async def run_orchestrator(
                 }
             snapshot = snapshots.get(snapshot_key(a_set))
             effective_dry_run = a_set.dry_run or force_dry_run
+            exchange = getattr(a_set.exchange, "value", a_set.exchange)
+            # Garde live défense-en-profondeur : OKX/Hyperliquid live sont interdits.
+            # La persistance les bloque déjà (assert_set_persistable), mais une ligne
+            # ORM écrite hors API ne doit jamais déclencher un /api/mtf/run live ici.
+            # Un override run-level dry_run rend le set sûr (effective_dry_run=True).
+            if effective_dry_run is False and exchange in _LIVE_FORBIDDEN_EXCHANGES:
+                return {
+                    "set_id": a_set.set_id,
+                    "ok": False,
+                    "status": None,
+                    "body": f"live forbidden for exchange '{exchange}': set skipped (fail-closed)",
+                    "payload_sent": None,
+                    "duration_ms": None,
+                }
             # Fail-closed live : pas de snapshot fiable + set (effectivement) live => on n'exécute pas.
             if snapshot is None and effective_dry_run is False:
                 return {
