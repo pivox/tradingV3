@@ -339,9 +339,10 @@ const OrchestrationCockpitPage = () => {
                         )}
 
                         {/* Détail par set runnable : ce qui partira réellement à Symfony.
-                            Le payload affiché est le payload /api/mtf/run persisté, avec le
-                            `dry_run` recalé sur la valeur effective (override « Forcer
-                            dry-run »). `open_state_snapshot` est joint au runtime. */}
+                            Le payload affiché est reconstruit depuis les colonnes du set
+                            (comme le runner), avec `dry_run` recalé sur la valeur effective
+                            (override « Forcer dry-run »). `open_state_snapshot` est joint au
+                            runtime, pas ici. */}
                         <h4>Détail des sets runnable</h4>
                         {loadingSets ? (
                             <div className="loading">Chargement…</div>
