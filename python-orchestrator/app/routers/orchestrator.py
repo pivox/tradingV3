@@ -140,6 +140,14 @@ def _result_error(result: Dict[str, Any]) -> Optional[str]:
     if isinstance(body, str):
         return body
     if isinstance(body, dict):
+        # Symfony peut renvoyer HTTP 200 « success » AVEC des erreurs
+        # (is_business_success traite ce cas comme un échec) : on remonte le détail
+        # plutôt que le statut trompeur, pour une histoire de run exploitable.
+        errors = body.get("errors")
+        if errors is None and isinstance(body.get("data"), dict):
+            errors = body["data"].get("errors")
+        if errors:
+            return "; ".join(str(e) for e in errors) if isinstance(errors, list) else str(errors)
         return body.get("status") or "business failure"
     return None
 

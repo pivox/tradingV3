@@ -663,9 +663,33 @@ def test_run_persists_failed_set_with_error(orchestrator_env, monkeypatch):
     assert run.status == "failed"
     rs = session.scalars(select(RunSet).where(RunSet.run_id == run_id)).one()
     assert rs.ok is False
-    # Corps structuré => l'erreur remonte le statut métier, le corps brut est gardé.
-    assert rs.error == "partial_success"
+    # Corps structuré avec data.errors => on remonte le détail (pas le statut),
+    # le corps brut est gardé.
+    assert rs.error == "boom"
     assert rs.response_json == {"status": "partial_success", "data": {"errors": ["boom"]}}
+
+
+def test_run_persists_success_with_errors_keeps_error_detail(orchestrator_env, monkeypatch):
+    # HTTP 200 status=success MAIS data.errors non vide => échec métier ; l'erreur
+    # persistée doit être le détail, pas le statut « success » trompeur.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    _install_fake_client(
+        monkeypatch,
+        _FakeAsyncClient(mtf_body={"status": "success", "data": {"errors": ["BTCUSDT: boom"]}}),
+    )
+
+    run_id = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id)}
+    ).json()["run_id"]
+
+    session.expire_all()
+    rs = session.scalars(select(RunSet).where(RunSet.run_id == run_id)).one()
+    assert rs.ok is False
+    assert rs.error == "BTCUSDT: boom"
+    run = session.get(Run, run_id)
+    assert run.last_json["sets"][0]["error"] == "BTCUSDT: boom"
 
 
 def test_persist_run_nulls_stale_fks(orchestrator_env):

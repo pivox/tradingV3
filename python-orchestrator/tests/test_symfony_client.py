@@ -359,6 +359,19 @@ def test_generate_set_payload_from_orm_string_fields():
     assert "open_state_snapshot" not in payload
 
 
+def test_generate_set_payload_none_when_symbols_blank():
+    # symbols réduit à du vide après trim => sélection non matérialisée (Symfony
+    # filtrerait ces entrées et retomberait sur tout l'univers).
+    assert generate_set_payload(_orm_set(symbols=[" ", "\t", ""])) is None
+
+
+def test_generate_set_payload_strips_symbol_whitespace():
+    assert generate_set_payload(_orm_set(symbols=[" BTCUSDT ", "ETHUSDT"]))["symbols"] == [
+        "BTCUSDT",
+        "ETHUSDT",
+    ]
+
+
 def test_generate_set_payload_none_when_no_concrete_symbols():
     # Un set persisté sans symbole concret n'est valide que par sa
     # `contracts_limit` (sélection non matérialisée). `/api/mtf/run` n'ayant pas
@@ -528,6 +541,26 @@ def test_run_persisted_set_clamps_oversized_workers():
 
     asyncio.run(_run())
     assert captured["json"]["workers"] == 1
+
+
+def test_run_persisted_set_not_materialized_when_symbols_blank():
+    # symbols=[" "] est truthy mais se réduit à du vide => not materialized, pas
+    # de dispatch « tout l'univers ».
+    orm = _orm_set(set_id="s", payload=None, symbols=[" "])
+    calls: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(client, "http://sym", orm, None)
+
+    result = asyncio.run(_run())
+    assert result["ok"] is False
+    assert "not materialized" in result["body"]
+    assert calls == []
 
 
 def test_run_persisted_set_not_materialized_even_with_stale_payload():

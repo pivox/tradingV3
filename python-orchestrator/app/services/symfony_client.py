@@ -290,8 +290,14 @@ def generate_set_payload(a_set: Any) -> Optional[Dict[str, Any]]:
     l'univers actif » — jamais l'intention d'un set capé. On laisse donc le
     payload ``null`` jusqu'à ce qu'un refresh (PY-003) renseigne des symboles
     concrets, plutôt que de persister un payload « run-all » trompeur.
+
+    Les symboles vides/blancs sont écartés : Symfony les *trim* puis les filtre
+    avant de résoudre l'univers, donc un ``symbols=[" "]`` y vaudrait « tout
+    l'univers actif ». Une sélection qui se réduit à du vide après nettoyage est
+    donc traitée comme **non matérialisée** (``None``).
     """
-    if not a_set.symbols:
+    symbols = [s.strip() for s in (a_set.symbols or []) if isinstance(s, str) and s.strip()]
+    if not symbols:
         return None
     return _base_mtf_payload(
         dry_run=a_set.dry_run,
@@ -299,7 +305,7 @@ def generate_set_payload(a_set: Any) -> Optional[Dict[str, Any]]:
         exchange=a_set.exchange,
         market_type=a_set.market_type,
         mtf_profile=a_set.mtf_profile,
-        symbols=a_set.symbols,
+        symbols=symbols,
     )
 
 
