@@ -143,11 +143,18 @@ def _result_error(result: Dict[str, Any]) -> Optional[str]:
         # Symfony peut renvoyer HTTP 200 « success » AVEC des erreurs
         # (is_business_success traite ce cas comme un échec) : on remonte le détail
         # plutôt que le statut trompeur, pour une histoire de run exploitable.
+        data = body.get("data") if isinstance(body.get("data"), dict) else {}
         errors = body.get("errors")
-        if errors is None and isinstance(body.get("data"), dict):
-            errors = body["data"].get("errors")
+        if errors is None:
+            errors = data.get("errors")
         if errors:
             return "; ".join(str(e) for e in errors) if isinstance(errors, list) else str(errors)
+        # RunnerController renvoie HTTP 500 sous la forme {"status":"error","message": ...}
+        # (exception Symfony) : on remonte ce message exploitable plutôt que le seul
+        # statut « error », sinon le détail actionnable est perdu dans l'historique.
+        message = body.get("message") or data.get("message")
+        if message:
+            return str(message)
         return body.get("status") or "business failure"
     return None
 
@@ -185,6 +192,12 @@ def _persist_run(
     commit est géré ici (la dépendance ``get_session`` ne committe pas).
     """
     idempotency_key = request.idempotency_key if request is not None else None
+    # Une clé vide/blanche est traitée comme absente par `_resolve_run_id` (run_id
+    # aléatoire) : il faut la normaliser en None ici aussi, sinon on persiste ""
+    # dans la colonne UNIQUE `runs.idempotency_key` et un second run à clé vide (avec
+    # un run_id différent) violerait la contrainte d'unicité au commit.
+    if idempotency_key is not None and not idempotency_key.strip():
+        idempotency_key = None
     # Borne la colonne unique `runs.idempotency_key` (String(255)) pour ne pas
     # faire échouer la persistance après coup ; hash déterministe au-delà.
     if idempotency_key is not None and len(idempotency_key) > _MAX_PERSISTED_LEN:

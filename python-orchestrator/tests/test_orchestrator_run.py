@@ -692,6 +692,57 @@ def test_run_persists_success_with_errors_keeps_error_detail(orchestrator_env, m
     assert run.last_json["sets"][0]["error"] == "BTCUSDT: boom"
 
 
+def test_run_persists_symfony_exception_message(orchestrator_env, monkeypatch):
+    # RunnerController renvoie HTTP 500 {"status":"error","message": <exception>} :
+    # l'erreur persistée doit être le message exploitable, pas le seul statut « error ».
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    _install_fake_client(
+        monkeypatch,
+        _FakeAsyncClient(
+            mtf_status=500,
+            mtf_body={"status": "error", "message": "Doctrine\\DBAL connection refused"},
+        ),
+    )
+
+    run_id = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id)}
+    ).json()["run_id"]
+
+    session.expire_all()
+    rs = session.scalars(select(RunSet).where(RunSet.run_id == run_id)).one()
+    assert rs.ok is False
+    assert rs.error == "Doctrine\\DBAL connection refused"
+    run = session.get(Run, run_id)
+    assert run.last_json["sets"][0]["error"] == "Doctrine\\DBAL connection refused"
+
+
+def test_blank_idempotency_key_persisted_as_null(orchestrator_env, monkeypatch):
+    # Une idempotency_key vide est traitée comme absente (run_id aléatoire) ; elle
+    # ne doit PAS être persistée telle quelle dans la colonne unique
+    # `runs.idempotency_key`, sinon deux runs à clé vide violent la contrainte.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    first = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": ""}
+    ).json()
+    second = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "   "}
+    ).json()
+
+    # Deux run_id distincts (clé vide => non idempotent) et aucun conflit d'unicité.
+    assert first["run_id"] != second["run_id"]
+    session.expire_all()
+    for run_id in (first["run_id"], second["run_id"]):
+        run = session.get(Run, run_id)
+        assert run is not None
+        assert run.idempotency_key is None
+
+
 def test_persist_run_nulls_stale_fks(orchestrator_env):
     # Régression : la transaction de lecture étant clôturée avant les appels
     # Symfony, un set/dashboard peut être supprimé pendant le run. La persistance
