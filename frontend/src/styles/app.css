@@ -965,6 +965,24 @@ h1, h2, h3, h4, h5, h6 {
     margin-top: 16px;
 }
 
+/* Indice discret (ex. « (forcé) » à côté d'un badge dry-run). */
+.cockpit-hint {
+    color: var(--dark-gray);
+    font-size: 12px;
+}
+
+/* Liste des sets exclus du run, regroupés par raison. */
+.cockpit-excluded {
+    margin-top: 12px;
+    padding-left: 18px;
+    font-size: 14px;
+    color: var(--dark-gray);
+}
+
+.cockpit-excluded li {
+    margin-bottom: 6px;
+}
+
 @media (max-width: 768px) {
     .cockpit-json-pair {
         grid-template-columns: 1fr;

@@ -12,6 +12,44 @@ import api from '../services/api';
 // Exchanges verrouillés en dry-run uniquement (cf. garde-fous fonctionnels).
 const LIVE_FORBIDDEN_EXCHANGES = ['okx', 'hyperliquid'];
 
+// Borne workers côté Symfony, alignée sur `MAX_WORKERS_PER_SET` du runner Python
+// (python-orchestrator/app/schemas.py). Aucune contrainte CHECK en base : le
+// runtime clampe à l'exécution, donc la preview clampe pareil pour ne pas afficher
+// un payload divergent de l'envoi réel.
+const MAX_WORKERS_PER_SET = 1;
+
+// Nettoie les symbols comme le runner / Symfony : trim puis écarte les vides et
+// blancs. Une sélection qui se réduit à du vide vaut « tout l'univers actif » côté
+// Symfony, ce que la matérialisation interdit ; on la traite donc comme non
+// matérialisée (cf. generate_set_payload, app/services/symfony_client.py).
+const cleanSymbols = (symbols) =>
+    (Array.isArray(symbols) ? symbols : [])
+        .filter((s) => typeof s === 'string')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+
+// Reconstruit le payload /api/mtf/run depuis les COLONNES du set (allow-list),
+// exactement comme `generate_set_payload` + le clamp workers de `run_persisted_set`
+// côté Python — plutôt que de faire confiance au JSON `payload` persisté, qui peut
+// être périmé (symbols vidés depuis) ou porter des flags de contrôle runner. On ne
+// montre ainsi dans la preview que ce qui partira réellement à Symfony.
+// Renvoie `null` si la sélection n'a aucun symbole concret (non matérialisé :
+// fail-closed, aucun appel). `open_state_snapshot` est joint au runtime, pas ici.
+const buildSetPayload = (s, { dryRun } = {}) => {
+    const symbols = cleanSymbols(s.symbols);
+    if (symbols.length === 0) return null;
+    return {
+        dry_run: dryRun === undefined ? s.dry_run : dryRun,
+        workers: Math.max(1, Math.min(s.workers || 1, MAX_WORKERS_PER_SET)),
+        exchange: s.exchange,
+        market_type: s.market_type,
+        mtf_profile: s.mtf_profile,
+        sync_tables: false,
+        process_tp_sl: false,
+        symbols
+    };
+};
+
 const STATUS_BADGE_CLASS = {
     success: 'badge-success',
     partial_failure: 'badge-warning',
@@ -118,15 +156,41 @@ const OrchestrationCockpitPage = () => {
     const enabledMtfSets = dashboardEnabled
         ? sets.filter((s) => s.enabled && s.action === 'mtf_run')
         : [];
-    // Un set capé non encore rafraîchi a `payload: null` (symbols vide) :
-    // l'orchestrateur le marque « not materialized » et n'appelle pas Symfony.
-    // On l'exclut donc des sets exécutables et on signale qu'un refresh manque.
-    const runnableSets = enabledMtfSets.filter((s) => s.payload);
-    const pendingMaterializationSets = enabledMtfSets.filter((s) => !s.payload);
+    // Dry-run effectif d'un set : « Forcer dry-run » est un override run-level qui
+    // écrase le `dry_run` configuré de chaque set (cf. RunRequest.dry_run côté
+    // Python). On le reflète dans la preview pour montrer ce qui partira vraiment.
+    const effectiveDryRun = (s) => forceDryRun || s.dry_run;
+
+    // Un set effectivement live (`dry_run=false` ET « Forcer dry-run » décoché) est
+    // REFUSÉ par le runner avant tout appel : tant que la readiness live n'est pas
+    // livrée, `orchestrator.py` skip TOUT set live (tous exchanges, Bitmart inclus)
+    // en `ok=false` / `payload_sent=null` — aucun /api/mtf/run n'est envoyé. Ce
+    // garde précède la vérif de matérialisation côté runner, donc on l'applique en
+    // premier ici. Cocher « Forcer dry-run » les rend dry → exécutables.
+    const liveRefusedSets = enabledMtfSets.filter((s) => !effectiveDryRun(s));
+    // OKX/Hyperliquid : live interdit même après readiness (politique permanente) ;
+    // les autres (Bitmart, fake) ne sont refusés que dans la phase actuelle.
+    const forbiddenLiveSets = liveRefusedSets.filter((s) => LIVE_FORBIDDEN_EXCHANGES.includes(s.exchange));
+
+    // Parmi les sets effectivement dry, on distingue matérialisé / non matérialisé.
+    // Un set non matérialisé n'a aucun symbole concret (sélection capée pas encore
+    // rafraîchie, ou symbols tous blancs) : le runner renvoie `payload=null` et
+    // n'appelle pas Symfony. On juge la matérialisation sur les COLONNES (comme le
+    // runner), pas sur le JSON `payload` persisté qui pourrait être périmé.
+    const effectiveDrySets = enabledMtfSets.filter((s) => effectiveDryRun(s));
+    const runnableSets = effectiveDrySets.filter((s) => cleanSymbols(s.symbols).length > 0);
+    const pendingMaterializationSets = effectiveDrySets.filter((s) => cleanSymbols(s.symbols).length === 0);
+    // Les deux autres états de set, à distinguer dans la preview : les sets
+    // désactivés (jamais exécutés) et les sets actifs dont l'action n'est pas
+    // `mtf_run` (l'orchestrateur ne dispatche aujourd'hui que des `mtf_run`).
+    // Calculés sur `sets` brut (indépendants de `dashboardEnabled`), à titre
+    // informatif : un dashboard inactif n'exécute de toute façon aucun set.
+    const disabledSets = sets.filter((s) => !s.enabled);
+    const nonMtfRunSets = sets.filter((s) => s.enabled && s.action !== 'mtf_run');
     const exchanges = [...new Set(runnableSets.map((s) => s.exchange))];
-    const liveSets = runnableSets.filter((s) => !s.dry_run && !forceDryRun);
-    const bitmartLiveSets = liveSets.filter((s) => s.exchange === 'bitmart');
-    const forbiddenLiveSets = liveSets.filter((s) => LIVE_FORBIDDEN_EXCHANGES.includes(s.exchange));
+    // Payload /api/mtf/run effectivement envoyé : reconstruit depuis les colonnes
+    // (comme le runner), avec `dry_run` recalé sur la valeur effective.
+    const effectivePayload = (s) => buildSetPayload(s, { dryRun: effectiveDryRun(s) });
 
     const handleRefreshContracts = async () => {
         if (!selectedDashboardId) return;
@@ -225,11 +289,15 @@ const OrchestrationCockpitPage = () => {
                             || busy
                             || loadingSets
                             || runnableSets.length === 0
-                            // `/orchestrator/run` exécute TOUS les sets actifs du
-                            // dashboard (pas de sélection par set côté backend) : un
-                            // set non matérialisé partirait et serait compté en échec.
-                            // On bloque donc le run tant qu'un refresh est requis.
+                            // `/orchestrator/run` itère TOUS les sets actifs du
+                            // dashboard (pas de sélection par set côté backend) et compte
+                            // chaque set dans `total_calls`/`failed`. Un set non matérialisé
+                            // OU effectivement live finit en échec (`ok=false`), donc le run
+                            // entier finit NON OK. On bloque tant qu'un de ces cas subsiste :
+                            // l'opérateur doit rafraîchir (matérialisation) ou cocher
+                            // « Forcer dry-run » / retirer le set live.
                             || pendingMaterializationSets.length > 0
+                            || liveRefusedSets.length > 0
                         }
                     >
                         {running ? 'Run en cours…' : 'Lancer un run'}
@@ -263,22 +331,119 @@ const OrchestrationCockpitPage = () => {
                             </div>
                         )}
                         <ul className="cockpit-preview">
-                            <li>{runnableSets.length} set(s) actif(s) à exécuter (action <code>mtf_run</code>)</li>
+                            <li>{runnableSets.length} set(s) runnable (action <code>mtf_run</code>, payload matérialisé)</li>
                             <li>{runnableSets.length} appel(s) Symfony prévu(s)</li>
+                            <li>{pendingMaterializationSets.length} non matérialisé(s) (exclu(s) du compte)</li>
+                            <li>{liveRefusedSets.length} live refusé(s) (exclu(s) du compte)</li>
+                            <li>{disabledSets.length} désactivé(s)</li>
+                            <li>{nonMtfRunSets.length} non-<code>mtf_run</code> (ignoré(s))</li>
                             <li>Exchanges : {exchanges.length > 0 ? exchanges.join(', ') : '—'}</li>
                             <li>Mode : {forceDryRun ? 'dry-run forcé (run-level)' : 'tel que configuré par set'}</li>
                             <li>Concurrence : bornée côté serveur (MAX_CONCURRENCY)</li>
                         </ul>
-                        {bitmartLiveSets.length > 0 && (
+                        {liveRefusedSets.length > 0 && (
                             <div className="alert alert-warning">
-                                ⚠️ {bitmartLiveSets.length} set(s) Bitmart en <strong>live</strong> : à confirmer.
+                                {liveRefusedSets.length} set(s) en <strong>live effectif</strong>. Le
+                                run est <strong>bloqué</strong> : <code>/orchestrator/run</code> itère
+                                tous les sets actifs et compte ces sets live en échec
+                                (<code>ok=false</code>, aucun <code>/api/mtf/run</code> envoyé,
+                                fail-closed), donc le run finirait NON OK.
+                                {forbiddenLiveSets.length > 0 && (
+                                    <> Dont {forbiddenLiveSets.length} OKX/Hyperliquid (live interdit
+                                    même après readiness).</>
+                                )}{' '}
+                                Cochez « Forcer dry-run » pour les exécuter en dry, ou désactivez /
+                                retirez ces sets.
                             </div>
                         )}
-                        {forbiddenLiveSets.length > 0 && (
-                            <div className="alert alert-danger">
-                                {forbiddenLiveSets.length} set(s) OKX/Hyperliquid en live :
-                                seront <strong>refusés</strong> (live interdit, fail-closed).
-                            </div>
+
+                        {/* Détail par set runnable : ce qui partira réellement à Symfony.
+                            Le payload affiché est reconstruit depuis les colonnes du set
+                            (comme le runner), avec `dry_run` recalé sur la valeur effective
+                            (override « Forcer dry-run »). `open_state_snapshot` est joint au
+                            runtime, pas ici. */}
+                        <h4>Détail des sets runnable</h4>
+                        {loadingSets ? (
+                            <div className="loading">Chargement…</div>
+                        ) : runnableSets.length === 0 ? (
+                            <div className="no-data">Aucun set runnable : rien ne partira à Symfony.</div>
+                        ) : (
+                            <table className="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Set ID</th>
+                                        <th>Exchange</th>
+                                        <th>Marché</th>
+                                        <th>Profil</th>
+                                        <th>Dry-run effectif</th>
+                                        <th>Workers</th>
+                                        <th>Symbols</th>
+                                        <th>Payload /api/mtf/run</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {runnableSets.map((s) => (
+                                        <tr key={s.id}>
+                                            <td>{s.set_id}</td>
+                                            <td>{s.exchange}</td>
+                                            <td>{s.market_type}</td>
+                                            <td>{s.mtf_profile}</td>
+                                            <td>
+                                                {/* runnableSets ⊆ sets effectivement dry : un set live
+                                                    n'est jamais runnable (refusé par le runner). */}
+                                                <span className="badge badge-info">dry</span>
+                                                {forceDryRun && !s.dry_run && (
+                                                    <span className="cockpit-hint"> (forcé)</span>
+                                                )}
+                                            </td>
+                                            <td>{Math.max(1, Math.min(s.workers || 1, MAX_WORKERS_PER_SET))}</td>
+                                            <td>{cleanSymbols(s.symbols).length}</td>
+                                            <td>
+                                                <details>
+                                                    <summary>payload</summary>
+                                                    <pre className="cockpit-json">
+                                                        {JSON.stringify(effectivePayload(s), null, 2)}
+                                                    </pre>
+                                                </details>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+
+                        {/* Sets non exécutés, regroupés par raison d'exclusion. */}
+                        {(pendingMaterializationSets.length > 0
+                            || liveRefusedSets.length > 0
+                            || disabledSets.length > 0
+                            || nonMtfRunSets.length > 0) && (
+                            <ul className="cockpit-excluded">
+                                {pendingMaterializationSets.length > 0 && (
+                                    <li>
+                                        <strong>Non matérialisé(s)</strong> (payload <code>null</code>, refresh requis) :{' '}
+                                        {pendingMaterializationSets.map((s) => s.set_id).join(', ')}
+                                    </li>
+                                )}
+                                {liveRefusedSets.length > 0 && (
+                                    <li>
+                                        <strong>Live refusé(s)</strong> (fail-closed, aucun appel ;
+                                        « Forcer dry-run » pour exécuter en dry) :{' '}
+                                        {liveRefusedSets.map((s) => s.set_id).join(', ')}
+                                    </li>
+                                )}
+                                {disabledSets.length > 0 && (
+                                    <li>
+                                        <strong>Désactivé(s)</strong> :{' '}
+                                        {disabledSets.map((s) => s.set_id).join(', ')}
+                                    </li>
+                                )}
+                                {nonMtfRunSets.length > 0 && (
+                                    <li>
+                                        <strong>Non-<code>mtf_run</code></strong> (action non dispatchée) :{' '}
+                                        {nonMtfRunSets.map((s) => `${s.set_id} (${s.action})`).join(', ')}
+                                    </li>
+                                )}
+                            </ul>
                         )}
                     </div>
 
