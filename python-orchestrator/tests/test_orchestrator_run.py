@@ -467,6 +467,25 @@ def test_live_forbidden_exchange_skipped_even_with_snapshot(orchestrator_env, mo
     assert len(mtf_posts) == 0
 
 
+def test_live_set_skipped_even_with_snapshot(orchestrator_env, monkeypatch):
+    # Phase actuelle : la readiness live n'étant pas livrée, assert_set_persistable
+    # interdit TOUT set live. Le runner applique la même politique : une ligne ORM
+    # live (écrite hors API), même sur un exchange autorisé (bitmart) et même avec un
+    # snapshot disponible, ne doit JAMAIS déclencher un /api/mtf/run live.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()  # snapshot dispo (200)
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 1, "success": 0, "failed": 1}
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 0
+
+
 def test_live_forbidden_exchange_skipped_with_uppercase_name(orchestrator_env, monkeypatch):
     # Une ligne ORM hors API peut porter une casse/des espaces non normalisés
     # (`OKX`) ; le garde doit fail-closer comme `okx`.

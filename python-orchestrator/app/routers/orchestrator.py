@@ -456,6 +456,23 @@ async def run_orchestrator(
                     "payload_sent": None,
                     "duration_ms": None,
                 }
+            # Fail-closed live (phase actuelle) : tant que la readiness live n'est pas
+            # livrée, `assert_set_persistable` (app/schemas.py) interdit la persistance
+            # de TOUT set live (tous exchanges/environnements). Le runner DB-backed
+            # applique la même politique de bout en bout : une ligne ORM effectivement
+            # live — écrite hors API, même avec un snapshot disponible — ne doit jamais
+            # déclencher un /api/mtf/run live. L'override run-level dry_run reste le seul
+            # moyen de rendre un set exécutable (en dry). À relâcher quand la readiness
+            # live (SAFE-001/SAFE-002, TM-001) sera livrée.
+            if effective_dry_run is False:
+                return {
+                    "set_id": a_set.set_id,
+                    "ok": False,
+                    "status": None,
+                    "body": "live execution not yet enabled: live set skipped (fail-closed)",
+                    "payload_sent": None,
+                    "duration_ms": None,
+                }
             # Fail-closed live : pas de snapshot fiable + set (effectivement) live => on n'exécute pas.
             if snapshot is None and effective_dry_run is False:
                 return {

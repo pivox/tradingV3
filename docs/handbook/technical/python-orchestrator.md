@@ -61,12 +61,23 @@ ce snapshot à chaque `POST /api/mtf/run` dans le champ `open_state_snapshot` av
 `sync_tables=false`. Côté Symfony, la présence du snapshot **court-circuite**
 totalement le fetch exchange (priorité : snapshot > `sync_tables=true` > filtre).
 
-**Fail-closed live** : si le fetch du snapshot échoue pour un couple, les sets
-**live** (`dry_run=false`) de ce couple sont marqués en erreur et **ne sont pas
-exécutés** (on ne trade pas à l'aveugle). Les sets **dry-run** peuvent continuer
-sans snapshot. Ce garde-fou côté orchestrateur est doublé côté Symfony :
-`MtfRunnerService` rejette tout run live dépourvu de source d'état ouvert fiable
-(pas de snapshot ET `sync_tables=false` ET `skip_open_state_filter=true`).
+**Fail-closed live (phase actuelle)** : tant que la readiness live n'est pas
+livrée, `assert_set_persistable` interdit la persistance de **tout** set live
+(`dry_run=false`, tous exchanges/environnements). Le runner DB-backed applique la
+même politique de bout en bout : **tout set effectivement live est skippé**
+(marqué en erreur, aucun `POST /api/mtf/run`), **même sur un exchange autorisé et
+même avec un snapshot disponible**, car la seule façon d'obtenir une ligne live
+est de contourner l'API. Seul un override run-level `dry_run=true` rend un set
+exécutable (en dry). Ce garde-fou sera relâché quand la readiness live
+(SAFE-001/SAFE-002, TM-001) sera livrée.
+
+**Fail-closed live (post-readiness)** : si le fetch du snapshot échoue pour un
+couple, les sets **live** (`dry_run=false`) de ce couple sont marqués en erreur et
+**ne sont pas exécutés** (on ne trade pas à l'aveugle). Les sets **dry-run**
+peuvent continuer sans snapshot. Ce garde-fou côté orchestrateur est doublé côté
+Symfony : `MtfRunnerService` rejette tout run live dépourvu de source d'état
+ouvert fiable (pas de snapshot ET `sync_tables=false` ET
+`skip_open_state_filter=true`).
 
 ## Mise à jour des contrats
 
@@ -439,8 +450,10 @@ reste portée par **PY-006**. Les migrations s'appliquent via `alembic upgrade h
 Avant tout run :
 
 - ne jamais lancer deux sets live incompatibles sur le même symbole ;
-- ne pas autoriser OKX live ;
-- ne pas autoriser Hyperliquid live ;
+- ne lancer aucun set live tant que la readiness live n'est pas livrée (tout set
+  `dry_run=false` est skippé par le runner, en miroir de `assert_set_persistable`) ;
+- ne pas autoriser OKX live (garde permanente, conservée après readiness) ;
+- ne pas autoriser Hyperliquid live (garde permanente, conservée après readiness) ;
 - garder `workers=1` côté Symfony au début ;
 - borner la concurrence globale ;
 - refuser les valeurs dangereuses de workers, concurrence ou nombre de contrats ;
