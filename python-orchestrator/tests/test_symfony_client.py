@@ -512,6 +512,24 @@ def test_run_persisted_set_rebuilds_from_orm_columns_not_stored_payload():
     }
 
 
+def test_run_persisted_set_clamps_oversized_workers():
+    # Ligne écrite hors API avec workers>1 (aucune contrainte DB) : le dispatch
+    # doit clamper à la borne (politique « workers=1 côté Symfony »).
+    orm = _orm_set(set_id="s", payload=None, symbols=["BTCUSDT"], workers=8)
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(client, "http://sym", orm, None)
+
+    asyncio.run(_run())
+    assert captured["json"]["workers"] == 1
+
+
 def test_run_persisted_set_not_materialized_even_with_stale_payload():
     # symbols vidé en base mais un `payload` périmé subsiste : on doit échouer
     # « not materialized » (pas de run « tout l'univers ») et NE PAS appeler Symfony.

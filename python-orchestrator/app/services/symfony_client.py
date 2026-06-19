@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
-from app.schemas import OrchestratorSet
+from app.schemas import MAX_WORKERS_PER_SET, OrchestratorSet
 
 # Clé de cache d'un snapshot : (exchange, market_type).
 SnapshotKey = Tuple[str, str]
@@ -407,6 +407,11 @@ async def run_persisted_set(
             "body": "set payload not materialized (no concrete symbols)",
             "payload_sent": None,
         }
+    # Garde runtime workers : la borne MAX_WORKERS_PER_SET n'est imposée qu'au
+    # schéma de persistance (aucune contrainte CHECK en base). Une ligne écrite hors
+    # API avec `workers>1` passerait Symfony en mode parallèle ; on clampe dans
+    # [1, MAX] pour respecter la politique « workers=1 côté Symfony ».
+    payload["workers"] = max(1, min(payload.get("workers") or 1, MAX_WORKERS_PER_SET))
     # Override run-level (sinon le dry_run de la colonne, déjà posé par
     # generate_set_payload) puis snapshot runtime.
     if dry_run is not None:
