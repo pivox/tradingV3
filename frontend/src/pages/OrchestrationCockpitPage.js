@@ -108,10 +108,10 @@ const RunDetail = ({ run }) => (
     </>
 );
 
-// Taille de page de l'historique et borne haute du nombre de runs chargés côté
-// front, alignées sur la borne API (`_MAX_RUNS_PAGE_SIZE=100`).
+// Taille de page de l'historique. La borne API (`_MAX_RUNS_PAGE_SIZE=100`) plafonne
+// le `limit` par appel, pas le nombre total de runs : l'endpoint reste paginé par
+// `offset`, donc « Charger plus » peut remonter au-delà de 100 runs (≤ 100 par page).
 const RUNS_PAGE_SIZE = 20;
-const RUNS_MAX = 100;
 
 const OrchestrationCockpitPage = () => {
     const [dashboards, setDashboards] = useState([]);
@@ -217,7 +217,8 @@ const OrchestrationCockpitPage = () => {
             setLatestRun(runData);
             const runsList = Array.isArray(runsData) ? runsData : [];
             setRuns(runsList);
-            setRunsHasMore(runsList.length === RUNS_PAGE_SIZE && runsList.length < RUNS_MAX);
+            // Une page pleine ⇒ il reste probablement des runs plus anciens à charger.
+            setRunsHasMore(runsList.length === RUNS_PAGE_SIZE);
         } catch (err) {
             if (isStale()) return;
             setError(`Impossible de charger le dashboard : ${err.message}`);
@@ -361,8 +362,8 @@ const OrchestrationCockpitPage = () => {
         setLoadingRunDetail(false);
     };
 
-    // Pagination « charger plus » : appoint borné (≤ RUNS_MAX), gardé par le jeton de
-    // détail du dashboard pour ignorer un appoint périmé après changement de dashboard.
+    // Pagination « charger plus » : appoint d'une page (`offset = runs.length`), gardé
+    // par le jeton de détail du dashboard pour ignorer un appoint périmé après changement.
     const handleLoadMoreRuns = async () => {
         if (!selectedDashboardId) return;
         const token = detailRequestRef.current;
@@ -375,11 +376,8 @@ const OrchestrationCockpitPage = () => {
             });
             if (token !== detailRequestRef.current) return;
             const list = Array.isArray(more) ? more : [];
-            setRuns((prev) => {
-                const next = [...prev, ...list];
-                setRunsHasMore(list.length === RUNS_PAGE_SIZE && next.length < RUNS_MAX);
-                return next;
-            });
+            setRuns((prev) => [...prev, ...list]);
+            setRunsHasMore(list.length === RUNS_PAGE_SIZE);
         } catch (err) {
             if (token === detailRequestRef.current) {
                 setError(`Impossible de charger plus de runs : ${err.message}`);
