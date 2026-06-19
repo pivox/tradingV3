@@ -188,8 +188,12 @@ def _persist_run(
     finished_at: datetime,
     mtf_sets: List[Any],
     results: List[Dict[str, Any]],
-) -> None:
+) -> str:
     """Persiste l'historique du run : un ``Run`` global + un ``RunSet`` par set.
+
+    Retourne le ``run_id`` réellement persisté : si ``record_run`` résout un run
+    existant par ``idempotency_key`` dont la PK diffère du run_id dérivé, l'appelant
+    doit renvoyer ce run_id-là (sinon le client reçoit un id introuvable).
 
     ``last_json`` agrège le résumé et le détail par set (le « dernier JSON » de la
     doc). ``record_run``/``record_run_set`` sont des upserts idempotents ; le
@@ -254,7 +258,13 @@ def _persist_run(
     # on réutilise alors le run_id réellement persisté pour la purge et les RunSet,
     # sinon ces lignes pointeraient un parent `runs` inexistant et la FK
     # `run_sets.run_id` casserait au commit (après l'exécution Symfony).
-    run_id = persisted_run.run_id
+    if persisted_run.run_id != run_id:
+        run_id = persisted_run.run_id
+        # `last_json` a été bâti avec le run_id dérivé : on l'aligne sur le run_id
+        # réellement persisté (réassignation explicite pour la détection de
+        # modification du JSON), afin que l'historique stocké et le run_id renvoyé au
+        # client soient cohérents et relisibles.
+        persisted_run.last_json = {**last_json, "run_id": run_id}
 
     # Purge des RunSet périmés d'une exécution précédente du MÊME run_id (retry
     # via idempotency_key/dashboard+tick) : si un set a été désactivé/supprimé/
@@ -287,6 +297,7 @@ def _persist_run(
         )
 
     session.commit()
+    return run_id
 
 
 def _symbols_overlap(a: Any, b: Any) -> bool:
@@ -483,7 +494,10 @@ async def run_orchestrator(
     status = _resolve_status(success, failed)
     ok = failed == 0
 
-    _persist_run(
+    # `_persist_run` peut renvoyer un run_id différent (run existant résolu par
+    # idempotency_key) : on renvoie ce run_id-là pour que le client puisse relire le
+    # run réellement persisté.
+    run_id = _persist_run(
         session,
         run_id=run_id,
         dashboard_id=dashboard_id,

@@ -769,6 +769,9 @@ def test_persist_reuses_existing_run_id_resolved_by_idempotency_key(
         "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "k1"}
     )
     assert resp.status_code == 200
+    # Le run_id renvoyé est celui réellement persisté (run_legacy), pas le dérivé
+    # introuvable (run_k1) : le client peut relire son run.
+    assert resp.json()["run_id"] == "run_legacy"
 
     session.expire_all()
     # Aucun "run_k1" créé : le run existant est mis à jour, et les RunSet pointent le
@@ -776,6 +779,8 @@ def test_persist_reuses_existing_run_id_resolved_by_idempotency_key(
     assert session.get(Run, "run_k1") is None
     legacy = session.get(Run, "run_legacy")
     assert legacy.status == "success"
+    # last_json aligné sur le run_id persisté (cohérence historique / relecture).
+    assert legacy.last_json["run_id"] == "run_legacy"
     run_sets = session.scalars(select(RunSet).where(RunSet.run_id == "run_legacy")).all()
     assert len(run_sets) == 1
     assert run_sets[0].set_id == "a"
