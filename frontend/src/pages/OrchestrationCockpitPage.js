@@ -27,11 +27,108 @@ const formatDuration = (ms) => {
     return `${(ms / 1000).toFixed(1)} s`;
 };
 
+// Rendu partagé du détail d'un run (`RunDetailRead`, PY-006) : résumé global,
+// table « Détail par set » (payload / réponse / erreur) et « Dernier JSON global ».
+// Utilisé tel quel pour le dernier run ET pour un run de l'historique, afin de ne
+// pas dupliquer le chemin de rendu. Les erreurs par set restent toujours visibles.
+const RunDetail = ({ run }) => (
+    <>
+        <div className="contract-info">
+            <div><strong>Run ID</strong><br />{run.run_id}</div>
+            <div>
+                <strong>Statut</strong><br />
+                <span className={`badge ${STATUS_BADGE_CLASS[run.status] || 'badge-secondary'}`}>
+                    {run.status}
+                </span>
+            </div>
+            <div><strong>OK</strong><br />{run.ok ? 'oui' : 'non'}</div>
+            <div><strong>Début</strong><br />{formatDate(run.started_at)}</div>
+            <div><strong>Fin</strong><br />{formatDate(run.finished_at)}</div>
+            <div><strong>Appels</strong><br />{run.total_calls}</div>
+            <div><strong>Réussis</strong><br />{run.success_count}</div>
+            <div><strong>Échoués</strong><br />{run.failed_count}</div>
+        </div>
+
+        <h4>Détail par set</h4>
+        <table className="data-table">
+            <thead>
+                <tr>
+                    <th>Set ID</th>
+                    <th>Statut</th>
+                    <th>Durée</th>
+                    <th>Erreur</th>
+                    <th>JSON</th>
+                </tr>
+            </thead>
+            <tbody>
+                {(run.sets || []).length === 0 ? (
+                    <tr><td colSpan="5" className="text-center">Aucun set dans ce run.</td></tr>
+                ) : (
+                    (run.sets || []).map((rs) => (
+                        <tr key={rs.id}>
+                            <td>{rs.set_id}</td>
+                            <td>
+                                <span className={`badge ${rs.ok ? 'badge-success' : 'badge-danger'}`}>
+                                    {rs.ok ? 'OK' : 'KO'}
+                                </span>
+                            </td>
+                            <td>{formatDuration(rs.duration_ms)}</td>
+                            <td className="cockpit-error">{rs.error || '—'}</td>
+                            <td>
+                                <details>
+                                    <summary>payload / réponse</summary>
+                                    <div className="cockpit-json-pair">
+                                        <div>
+                                            <strong>Payload envoyé</strong>
+                                            <pre className="cockpit-json">
+                                                {JSON.stringify(rs.payload_sent, null, 2)}
+                                            </pre>
+                                        </div>
+                                        <div>
+                                            <strong>Réponse Symfony</strong>
+                                            <pre className="cockpit-json">
+                                                {JSON.stringify(rs.response_json, null, 2)}
+                                            </pre>
+                                        </div>
+                                    </div>
+                                </details>
+                            </td>
+                        </tr>
+                    ))
+                )}
+            </tbody>
+        </table>
+
+        <details className="cockpit-last-json">
+            <summary>Dernier JSON global</summary>
+            <pre className="cockpit-json">
+                {JSON.stringify(run.last_json, null, 2)}
+            </pre>
+        </details>
+    </>
+);
+
+// Taille de page de l'historique et borne haute du nombre de runs chargés côté
+// front, alignées sur la borne API (`_MAX_RUNS_PAGE_SIZE=100`).
+const RUNS_PAGE_SIZE = 20;
+const RUNS_MAX = 100;
+
 const OrchestrationCockpitPage = () => {
     const [dashboards, setDashboards] = useState([]);
     const [selectedDashboardId, setSelectedDashboardId] = useState('');
     const [sets, setSets] = useState([]);
     const [latestRun, setLatestRun] = useState(null);
+
+    // Historique des runs (vue allégée `RunSummaryRead`) + détail d'un run
+    // sélectionné dans l'historique (`RunDetailRead`). Par défaut, aucun run
+    // sélectionné : le détail affiché reste le dernier run.
+    const [runs, setRuns] = useState([]);
+    const [runsHasMore, setRunsHasMore] = useState(false);
+    const [loadingRuns, setLoadingRuns] = useState(false);
+    const [loadingMoreRuns, setLoadingMoreRuns] = useState(false);
+    const [selectedRunId, setSelectedRunId] = useState(null);
+    const [runDetail, setRunDetail] = useState(null);
+    const [loadingRunDetail, setLoadingRunDetail] = useState(false);
 
     const [loadingDashboards, setLoadingDashboards] = useState(true);
     const [loadingSets, setLoadingSets] = useState(false);
@@ -46,6 +143,12 @@ const OrchestrationCockpitPage = () => {
     // n'applique son résultat que s'il est toujours le plus récent. Évite qu'une
     // réponse lente d'un dashboard précédent écrase celle du dashboard courant.
     const detailRequestRef = useRef(0);
+
+    // Jeton monotone dédié au chargement du détail d'un run d'historique : seule la
+    // réponse de la dernière sélection est appliquée (clics rapides / changement de
+    // dashboard). Incrémenté aussi par `loadDashboardDetail` pour invalider toute
+    // sélection d'historique en cours quand on change de dashboard.
+    const runDetailRequestRef = useRef(0);
 
     // 1) Chargement initial de la liste des dashboards.
     useEffect(() => {
@@ -72,9 +175,16 @@ const OrchestrationCockpitPage = () => {
 
     // 2) Chargement des sets + dernier run du dashboard sélectionné.
     const loadDashboardDetail = useCallback(async (dashboardId) => {
+        // Tout changement de dashboard invalide la sélection d'historique en cours
+        // (jeton de détail de run) et revient à l'affichage par défaut (dernier run).
+        runDetailRequestRef.current += 1;
+        setSelectedRunId(null);
+        setRunDetail(null);
         if (!dashboardId) {
             setSets([]);
             setLatestRun(null);
+            setRuns([]);
+            setRunsHasMore(false);
             return;
         }
         const token = ++detailRequestRef.current;
@@ -85,22 +195,32 @@ const OrchestrationCockpitPage = () => {
         // périmées. Combiné au gating sur `loadingSets`, les actions sont neutres.
         setSets([]);
         setLatestRun(null);
+        setRuns([]);
+        setRunsHasMore(false);
         setLoadingSets(true);
+        setLoadingRuns(true);
         setError(null);
         try {
-            const [setsData, runData] = await Promise.all([
+            const [setsData, runData, runsData] = await Promise.all([
                 api.getOrchestrationSets(dashboardId),
-                api.getOrchestrationLatestRun(dashboardId)
+                api.getOrchestrationLatestRun(dashboardId),
+                api.getOrchestrationRuns(dashboardId, { limit: RUNS_PAGE_SIZE, offset: 0 })
             ]);
             // Une sélection plus récente a été lancée entre-temps : on ignore.
             if (isStale()) return;
             setSets(Array.isArray(setsData) ? setsData : []);
             setLatestRun(runData);
+            const runsList = Array.isArray(runsData) ? runsData : [];
+            setRuns(runsList);
+            setRunsHasMore(runsList.length === RUNS_PAGE_SIZE && runsList.length < RUNS_MAX);
         } catch (err) {
             if (isStale()) return;
             setError(`Impossible de charger le dashboard : ${err.message}`);
         } finally {
-            if (!isStale()) setLoadingSets(false);
+            if (!isStale()) {
+                setLoadingSets(false);
+                setLoadingRuns(false);
+            }
         }
     }, []);
 
@@ -193,6 +313,75 @@ const OrchestrationCockpitPage = () => {
             setRunning(false);
         }
     };
+
+    // Sélection d'un run dans l'historique : charge son détail (`RunDetailRead`) et
+    // l'affiche dans le même composant que le dernier run. Cliquer le dernier run
+    // revient à l'affichage par défaut (détail déjà chargé, aucun refetch).
+    const handleSelectRun = async (runId) => {
+        if (!runId) return;
+        if (latestRun && String(runId) === String(latestRun.run_id)) {
+            runDetailRequestRef.current += 1;
+            setSelectedRunId(null);
+            setRunDetail(null);
+            return;
+        }
+        const token = ++runDetailRequestRef.current;
+        setSelectedRunId(runId);
+        setRunDetail(null);
+        setLoadingRunDetail(true);
+        setError(null);
+        try {
+            const detail = await api.getOrchestrationRun(runId);
+            if (token !== runDetailRequestRef.current) return;
+            setRunDetail(detail);
+        } catch (err) {
+            if (token !== runDetailRequestRef.current) return;
+            setError(`Impossible de charger le run ${runId} : ${err.message}`);
+        } finally {
+            if (token === runDetailRequestRef.current) setLoadingRunDetail(false);
+        }
+    };
+
+    // Retour à l'affichage par défaut (dernier run).
+    const handleShowLatestRun = () => {
+        runDetailRequestRef.current += 1;
+        setSelectedRunId(null);
+        setRunDetail(null);
+    };
+
+    // Pagination « charger plus » : appoint borné (≤ RUNS_MAX), gardé par le jeton de
+    // détail du dashboard pour ignorer un appoint périmé après changement de dashboard.
+    const handleLoadMoreRuns = async () => {
+        if (!selectedDashboardId) return;
+        const token = detailRequestRef.current;
+        setLoadingMoreRuns(true);
+        setError(null);
+        try {
+            const more = await api.getOrchestrationRuns(selectedDashboardId, {
+                limit: RUNS_PAGE_SIZE,
+                offset: runs.length
+            });
+            if (token !== detailRequestRef.current) return;
+            const list = Array.isArray(more) ? more : [];
+            setRuns((prev) => {
+                const next = [...prev, ...list];
+                setRunsHasMore(list.length === RUNS_PAGE_SIZE && next.length < RUNS_MAX);
+                return next;
+            });
+        } catch (err) {
+            if (token === detailRequestRef.current) {
+                setError(`Impossible de charger plus de runs : ${err.message}`);
+            }
+        } finally {
+            if (token === detailRequestRef.current) setLoadingMoreRuns(false);
+        }
+    };
+
+    // Run affiché dans la carte détail : le run d'historique sélectionné, sinon le
+    // dernier run par défaut. `activeRunId` sert à surligner la ligne correspondante.
+    const viewingHistory = selectedRunId != null;
+    const displayedRun = viewingHistory ? runDetail : latestRun;
+    const activeRunId = viewingHistory ? selectedRunId : (latestRun ? latestRun.run_id : null);
 
     const busy = refreshing || running;
 
@@ -472,86 +661,93 @@ const OrchestrationCockpitPage = () => {
                         )}
                     </div>
 
-                    {/* Dernier run */}
+                    {/* Historique des runs (vue allégée `RunSummaryRead`, du plus
+                        récent au plus ancien). Cliquer une ligne charge le détail du
+                        run dans la carte « Détail du run » ci-dessous. */}
                     <div className="card">
-                        <h3>Dernier run</h3>
-                        {!latestRun ? (
+                        <h3>Historique des runs</h3>
+                        {loadingRuns ? (
+                            <div className="loading">Chargement de l'historique…</div>
+                        ) : runs.length === 0 ? (
                             <div className="no-data">Aucun run persisté pour ce dashboard.</div>
                         ) : (
                             <>
-                                <div className="contract-info">
-                                    <div><strong>Run ID</strong><br />{latestRun.run_id}</div>
-                                    <div>
-                                        <strong>Statut</strong><br />
-                                        <span className={`badge ${STATUS_BADGE_CLASS[latestRun.status] || 'badge-secondary'}`}>
-                                            {latestRun.status}
-                                        </span>
-                                    </div>
-                                    <div><strong>OK</strong><br />{latestRun.ok ? 'oui' : 'non'}</div>
-                                    <div><strong>Début</strong><br />{formatDate(latestRun.started_at)}</div>
-                                    <div><strong>Fin</strong><br />{formatDate(latestRun.finished_at)}</div>
-                                    <div><strong>Appels</strong><br />{latestRun.total_calls}</div>
-                                    <div><strong>Réussis</strong><br />{latestRun.success_count}</div>
-                                    <div><strong>Échoués</strong><br />{latestRun.failed_count}</div>
-                                </div>
-
-                                <h4>Détail par set</h4>
                                 <table className="data-table">
                                     <thead>
                                         <tr>
-                                            <th>Set ID</th>
+                                            <th>Run ID</th>
                                             <th>Statut</th>
-                                            <th>Durée</th>
-                                            <th>Erreur</th>
-                                            <th>JSON</th>
+                                            <th>OK</th>
+                                            <th>Début</th>
+                                            <th>Fin</th>
+                                            <th>Appels</th>
+                                            <th>Réussis</th>
+                                            <th>Échoués</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {(latestRun.sets || []).length === 0 ? (
-                                            <tr><td colSpan="5" className="text-center">Aucun set dans ce run.</td></tr>
-                                        ) : (
-                                            (latestRun.sets || []).map((rs) => (
-                                                <tr key={rs.id}>
-                                                    <td>{rs.set_id}</td>
+                                        {runs.map((r) => {
+                                            const isActive = String(r.run_id) === String(activeRunId);
+                                            return (
+                                                <tr
+                                                    key={r.run_id}
+                                                    className={`cockpit-run-row${isActive ? ' is-active' : ''}`}
+                                                    onClick={() => handleSelectRun(r.run_id)}
+                                                    style={{ cursor: 'pointer' }}
+                                                >
+                                                    <td>{r.run_id}</td>
                                                     <td>
-                                                        <span className={`badge ${rs.ok ? 'badge-success' : 'badge-danger'}`}>
-                                                            {rs.ok ? 'OK' : 'KO'}
+                                                        <span className={`badge ${STATUS_BADGE_CLASS[r.status] || 'badge-secondary'}`}>
+                                                            {r.status}
                                                         </span>
                                                     </td>
-                                                    <td>{formatDuration(rs.duration_ms)}</td>
-                                                    <td className="cockpit-error">{rs.error || '—'}</td>
-                                                    <td>
-                                                        <details>
-                                                            <summary>payload / réponse</summary>
-                                                            <div className="cockpit-json-pair">
-                                                                <div>
-                                                                    <strong>Payload envoyé</strong>
-                                                                    <pre className="cockpit-json">
-                                                                        {JSON.stringify(rs.payload_sent, null, 2)}
-                                                                    </pre>
-                                                                </div>
-                                                                <div>
-                                                                    <strong>Réponse Symfony</strong>
-                                                                    <pre className="cockpit-json">
-                                                                        {JSON.stringify(rs.response_json, null, 2)}
-                                                                    </pre>
-                                                                </div>
-                                                            </div>
-                                                        </details>
-                                                    </td>
+                                                    <td>{r.ok ? 'oui' : 'non'}</td>
+                                                    <td>{formatDate(r.started_at)}</td>
+                                                    <td>{formatDate(r.finished_at)}</td>
+                                                    <td>{r.total_calls}</td>
+                                                    <td>{r.success_count}</td>
+                                                    <td>{r.failed_count}</td>
                                                 </tr>
-                                            ))
-                                        )}
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
-
-                                <details className="cockpit-last-json">
-                                    <summary>Dernier JSON global</summary>
-                                    <pre className="cockpit-json">
-                                        {JSON.stringify(latestRun.last_json, null, 2)}
-                                    </pre>
-                                </details>
+                                {runsHasMore && (
+                                    <div className="cockpit-actions">
+                                        <button
+                                            className="btn btn-secondary"
+                                            onClick={handleLoadMoreRuns}
+                                            disabled={loadingMoreRuns}
+                                        >
+                                            {loadingMoreRuns ? 'Chargement…' : 'Charger plus'}
+                                        </button>
+                                    </div>
+                                )}
                             </>
+                        )}
+                    </div>
+
+                    {/* Détail du run : dernier run par défaut, ou run sélectionné
+                        dans l'historique. Rendu partagé via <RunDetail>. */}
+                    <div className="card">
+                        <h3>
+                            {viewingHistory ? 'Détail du run sélectionné' : 'Dernier run'}
+                            {viewingHistory && (
+                                <button
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ marginLeft: '1rem' }}
+                                    onClick={handleShowLatestRun}
+                                >
+                                    Revenir au dernier run
+                                </button>
+                            )}
+                        </h3>
+                        {loadingRunDetail ? (
+                            <div className="loading">Chargement du détail du run…</div>
+                        ) : !displayedRun ? (
+                            <div className="no-data">Aucun run persisté pour ce dashboard.</div>
+                        ) : (
+                            <RunDetail run={displayedRun} />
                         )}
                     </div>
                 </>
