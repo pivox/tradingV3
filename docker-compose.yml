@@ -175,9 +175,14 @@ services:
       # Appliquer les migrations avec `alembic upgrade head` (cf. README).
       - DATABASE_URL=postgresql+psycopg://postgres:password@trading-app-db:5432/trading_app
       - ORCHESTRATION_DB_SCHEMA=orchestration
-    # Bridge interne appelé par Temporal/front : pas de port hôte par défaut
-    # (aucun auth/secret pour l'instant). Pour un accès dev local, publier via
-    # un override (docker-compose.override.yml) ou `docker compose run --service-ports`.
+      # Origines autorisées par CORS pour le cockpit (UI-001) : front CRA (:3000)
+      # ou nginx (:8082). Ajuster selon l'origine réelle du front déployé.
+      - CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:8082,http://127.0.0.1:8082
+    # Appelé par Temporal/front. Port publié sur l'hôte pour que le cockpit
+    # (UI-001) puisse joindre l'orchestrateur depuis le navigateur. Service sans
+    # auth pour l'instant : ne pas exposer hors d'un réseau de confiance.
+    ports:
+      - "8099:8099"
     expose:
       - "8099"
     depends_on:

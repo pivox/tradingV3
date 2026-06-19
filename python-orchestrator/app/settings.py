@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Tuple
 
 
 class SettingsError(ValueError):
@@ -25,6 +26,19 @@ def _int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise SettingsError(f"Variable {name!r} invalide : {raw!r} n'est pas un entier.") from exc
+
+
+def _csv_env(name: str, default: Tuple[str, ...]) -> Tuple[str, ...]:
+    """Lit une liste CSV depuis l'environnement (vides ignorés), ou le défaut.
+
+    Utilisé pour ``CORS_ALLOW_ORIGINS`` : ``"http://a, http://b"`` -> ``("http://a", "http://b")``.
+    Une valeur vide/absente retombe sur le défaut ; ``"*"`` reste possible (autorise
+    toute origine, acceptable car le service n'utilise pas de cookies/credentials).
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
 @dataclass(frozen=True)
@@ -46,6 +60,15 @@ class Settings:
     )
     # Schéma PostgreSQL dédié aux tables d'orchestration.
     db_schema: str = "orchestration"
+    # Origines autorisées par CORS pour les appels navigateur du cockpit (UI-001).
+    # Défauts = front servi par CRA (:3000) ou nginx (:8082). Surchargeable via
+    # CORS_ALLOW_ORIGINS (CSV) ; ``"*"`` autorise toute origine.
+    cors_allow_origins: Tuple[str, ...] = (
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8082",
+        "http://127.0.0.1:8082",
+    )
 
     def __post_init__(self) -> None:
         if not 1 <= self.port <= 65535:
@@ -65,6 +88,7 @@ class Settings:
             max_concurrency=_int_env("MAX_CONCURRENCY", cls.max_concurrency),
             database_url=os.getenv("DATABASE_URL", cls.database_url),
             db_schema=os.getenv("ORCHESTRATION_DB_SCHEMA", cls.db_schema),
+            cors_allow_origins=_csv_env("CORS_ALLOW_ORIGINS", cls.cors_allow_origins),
         )
 
 

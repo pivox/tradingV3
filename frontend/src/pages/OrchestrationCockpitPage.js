@@ -103,9 +103,15 @@ const OrchestrationCockpitPage = () => {
     }, [selectedDashboardId, loadDashboardDetail]);
 
     const selectedDashboard = dashboards.find((d) => String(d.id) === String(selectedDashboardId));
+    // Le flag `enabled` du dashboard est un interrupteur de pause global côté
+    // orchestrateur : un dashboard désactivé renvoie toujours `no_sets` (0 appel).
+    // On le reflète dans la preview / le bouton pour ne pas proposer un run vide.
+    const dashboardEnabled = selectedDashboard ? selectedDashboard.enabled : false;
 
-    // Preview : seuls les sets actifs `mtf_run` sont effectivement exécutés.
-    const runnableSets = sets.filter((s) => s.enabled && s.action === 'mtf_run');
+    // Preview : seuls les sets actifs `mtf_run` d'un dashboard actif sont exécutés.
+    const runnableSets = dashboardEnabled
+        ? sets.filter((s) => s.enabled && s.action === 'mtf_run')
+        : [];
     const exchanges = [...new Set(runnableSets.map((s) => s.exchange))];
     const liveSets = runnableSets.filter((s) => !s.dry_run && !forceDryRun);
     const bitmartLiveSets = liveSets.filter((s) => s.exchange === 'bitmart');
@@ -171,7 +177,10 @@ const OrchestrationCockpitPage = () => {
                         className="form-control"
                         value={selectedDashboardId}
                         onChange={(e) => setSelectedDashboardId(e.target.value)}
-                        disabled={loadingDashboards || dashboards.length === 0}
+                        // Verrouillé pendant un refresh/run : empêche de changer de
+                        // dashboard en cours d'action, ce qui ferait recharger le
+                        // détail de l'ancien dashboard après coup (réponse périmée).
+                        disabled={loadingDashboards || dashboards.length === 0 || busy}
                     >
                         {dashboards.length === 0 && <option value="">Aucun dashboard</option>}
                         {dashboards.map((d) => (
@@ -216,6 +225,12 @@ const OrchestrationCockpitPage = () => {
                     {/* Preview du plan d'exécution */}
                     <div className="card">
                         <h3>Preview du plan d'exécution</h3>
+                        {!dashboardEnabled && (
+                            <div className="alert alert-warning">
+                                Ce dashboard est <strong>inactif</strong> : un run renverrait
+                                <code> no_sets</code> (0 appel). Activez-le pour l'exécuter.
+                            </div>
+                        )}
                         <ul className="cockpit-preview">
                             <li>{runnableSets.length} set(s) actif(s) à exécuter (action <code>mtf_run</code>)</li>
                             <li>{runnableSets.length} appel(s) Symfony prévu(s)</li>
