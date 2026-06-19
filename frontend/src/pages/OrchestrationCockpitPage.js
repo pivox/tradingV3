@@ -220,7 +220,17 @@ const OrchestrationCockpitPage = () => {
                     <button
                         className="btn btn-primary"
                         onClick={handleRun}
-                        disabled={!selectedDashboardId || busy || loadingSets || runnableSets.length === 0}
+                        disabled={
+                            !selectedDashboardId
+                            || busy
+                            || loadingSets
+                            || runnableSets.length === 0
+                            // `/orchestrator/run` exécute TOUS les sets actifs du
+                            // dashboard (pas de sélection par set côté backend) : un
+                            // set non matérialisé partirait et serait compté en échec.
+                            // On bloque donc le run tant qu'un refresh est requis.
+                            || pendingMaterializationSets.length > 0
+                        }
                     >
                         {running ? 'Run en cours…' : 'Lancer un run'}
                     </button>
@@ -245,8 +255,11 @@ const OrchestrationCockpitPage = () => {
                         {dashboardEnabled && pendingMaterializationSets.length > 0 && (
                             <div className="alert alert-warning">
                                 {pendingMaterializationSets.length} set(s) actif(s) <strong>non
-                                matérialisé(s)</strong> (contrats pas encore résolus) : exclus du
-                                run tant que « Rafraîchir les contrats » n'a pas été lancé.
+                                matérialisé(s)</strong> (contrats pas encore résolus). Le run est
+                                <strong> bloqué</strong> : <code>/orchestrator/run</code> exécute
+                                tous les sets actifs du dashboard, donc ces sets partiraient et
+                                seraient comptés en échec <code>not materialized</code>. Lancez
+                                « Rafraîchir les contrats » avant de relancer.
                             </div>
                         )}
                         <ul className="cockpit-preview">
