@@ -20,6 +20,11 @@ from app import __version__
 # `workers=1` au début ; on relèvera cette borne dans une PR dédiée.
 MAX_WORKERS_PER_SET = 1
 
+# Un ``set_id`` est adressé en URL (``/dashboards/{id}/sets/{set_id}``,
+# ``/runs/{run_id}/sets/{set_id}``) : il doit être un segment de chemin sûr pour
+# rester récupérable. On le restreint aux caractères d'un identifiant usuel.
+_SET_ID_PATTERN = r"^[A-Za-z0-9_.\-]+$"
+
 
 class Exchange(str, Enum):
     BITMART = "bitmart"
@@ -332,7 +337,13 @@ class SetCreate(BaseModel):
     """Payload de création d'un set rattaché à un dashboard.
 
     ``set_id`` est l'identifiant fonctionnel stable du set au sein du dashboard
-    (unique via ``uq_orchestration_sets_dashboard_set``).
+    (unique via ``uq_orchestration_sets_dashboard_set``). Il est recopié tel quel
+    dans ``RunSet.set_id`` et adressé en URL (``GET /dashboards/{id}/sets/{set_id}``,
+    ``GET /runs/{run_id}/sets/{set_id}`` — PY-006), donc restreint à un **segment
+    de chemin sûr** (alphanumérique + ``_``/``.``/``-``) : un ``set_id`` porteur de
+    ``/`` serait stocké mais non récupérable (les routes à segment simple ne
+    matchent pas les slashes). On rejette plutôt que de sanitiser, car c'est un
+    identifiant choisi par l'utilisateur, immuable et référencé dans sa config.
 
     ``payload`` n'est **pas** accepté ici : c'est un artefact produit côté serveur
     (PY-004) à partir des champs typés ; un client REST ne doit pas pouvoir
@@ -340,7 +351,13 @@ class SetCreate(BaseModel):
     ``symbols``. Il reste exposé en lecture seule via ``SetRead``.
     """
 
-    set_id: str = Field(..., min_length=1, max_length=255, description="Identifiant stable du set.")
+    set_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        pattern=_SET_ID_PATTERN,
+        description="Identifiant stable du set (segment d'URL : alphanumérique, '_', '.', '-').",
+    )
     enabled: bool = Field(default=True, description="Set actif ou non.")
     action: Action = Field(default=Action.MTF_RUN, description="Action à exécuter.")
     exchange: Exchange = Field(..., description="Exchange cible.")

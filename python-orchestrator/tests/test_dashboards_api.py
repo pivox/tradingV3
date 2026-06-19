@@ -109,6 +109,23 @@ def test_create_set_on_missing_dashboard_returns_404(api_client):
     assert api_client.post("/dashboards/123/sets", json=_set_payload()).status_code == 404
 
 
+def test_create_set_rejects_non_url_safe_set_id(api_client):
+    # set_id est adressé en URL (/sets/{set_id}, /runs/{run_id}/sets/{set_id}) : un
+    # set_id porteur de `/` (ou d'espaces) serait stocké mais non récupérable. On le
+    # rejette à l'écriture (422) plutôt que de le sanitiser.
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    for bad in ("mtf/regular/top", "with space", "slash\\back"):
+        resp = api_client.post(
+            f"/dashboards/{dashboard_id}/sets", json=_set_payload(set_id=bad)
+        )
+        assert resp.status_code == 422, bad
+    # Un set_id URL-safe (alphanumérique + _ . -) reste accepté.
+    ok = api_client.post(
+        f"/dashboards/{dashboard_id}/sets", json=_set_payload(set_id="mtf.regular-top_1")
+    )
+    assert ok.status_code == 201
+
+
 def test_duplicate_set_id_returns_409(api_client):
     dashboard_id = _create_dashboard(api_client).json()["id"]
     api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
