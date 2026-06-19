@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
-from app.schemas import OrchestratorSet
+from app.schemas import MAX_WORKERS_PER_SET, OrchestratorSet
 
 # Clé de cache d'un snapshot : (exchange, market_type).
 SnapshotKey = Tuple[str, str]
@@ -40,9 +40,50 @@ class ContractsUnavailableError(RuntimeError):
     """
 
 
-def snapshot_key(a_set: OrchestratorSet) -> SnapshotKey:
-    """Clé de cache du snapshot pour un set."""
-    return (a_set.exchange.value, a_set.market_type.value)
+# Alias de ``market_type`` canonicalisés par Symfony
+# (``ExchangeContextResolver::normalizeMarketType``, après ``strtolower(trim())``).
+# On miroir EXACTEMENT cette table pour que le regroupement snapshot / la détection
+# de conflit live correspondent au marché que Symfony exécutera réellement (sinon
+# un set live ``perp`` et un set live ``perpetual`` viseraient le même marché tout
+# en ayant des clés distinctes côté Python).
+_MARKET_TYPE_ALIASES = {
+    "perpetual": "perpetual",
+    "perp": "perpetual",
+    "future": "perpetual",
+    "futures": "perpetual",
+    "spot": "spot",
+}
+
+
+def _normalize_exchange(value: Any) -> Any:
+    """Normalise un ``exchange`` comme Symfony : ``strtolower(trim())`` (sans alias)."""
+    return value.strip().lower() if isinstance(value, str) else value
+
+
+def _normalize_market_type(value: Any) -> Any:
+    """Normalise un ``market_type`` comme Symfony : casse/espaces + alias canoniques.
+
+    Les valeurs inconnues retombent sur leur forme normalisée (Symfony les
+    rejetterait en 400 ; ici elles ne matchent simplement aucune autre).
+    """
+    if not isinstance(value, str):
+        return value
+    canon = value.strip().lower()
+    return _MARKET_TYPE_ALIASES.get(canon, canon)
+
+
+def snapshot_key(a_set: Any) -> SnapshotKey:
+    """Clé de cache du snapshot pour un set.
+
+    Accepte un set pydantic (``exchange``/``market_type`` sont des enums) **et** un
+    ``OrchestrationSet`` ORM (ce sont des chaînes en base) : on lit ``.value`` quand
+    il existe, sinon la chaîne telle quelle, puis on normalise comme Symfony
+    (casse/espaces + alias de ``market_type``) afin que des variantes
+    (``Bitmart``/``bitmart``, ``perp``/``perpetual``) partagent le même snapshot.
+    """
+    exchange = getattr(a_set.exchange, "value", a_set.exchange)
+    market_type = getattr(a_set.market_type, "value", a_set.market_type)
+    return (_normalize_exchange(exchange), _normalize_market_type(market_type))
 
 
 async def fetch_open_state(
@@ -249,8 +290,14 @@ def generate_set_payload(a_set: Any) -> Optional[Dict[str, Any]]:
     l'univers actif » — jamais l'intention d'un set capé. On laisse donc le
     payload ``null`` jusqu'à ce qu'un refresh (PY-003) renseigne des symboles
     concrets, plutôt que de persister un payload « run-all » trompeur.
+
+    Les symboles vides/blancs sont écartés : Symfony les *trim* puis les filtre
+    avant de résoudre l'univers, donc un ``symbols=[" "]`` y vaudrait « tout
+    l'univers actif ». Une sélection qui se réduit à du vide après nettoyage est
+    donc traitée comme **non matérialisée** (``None``).
     """
-    if not a_set.symbols:
+    symbols = [s.strip() for s in (a_set.symbols or []) if isinstance(s, str) and s.strip()]
+    if not symbols:
         return None
     return _base_mtf_payload(
         dry_run=a_set.dry_run,
@@ -258,7 +305,7 @@ def generate_set_payload(a_set: Any) -> Optional[Dict[str, Any]]:
         exchange=a_set.exchange,
         market_type=a_set.market_type,
         mtf_profile=a_set.mtf_profile,
-        symbols=a_set.symbols,
+        symbols=symbols,
     )
 
 
@@ -285,23 +332,25 @@ def is_business_success(body: Any) -> bool:
     return not errors
 
 
-async def run_mtf_set(
+async def _dispatch_mtf_run(
     client: httpx.AsyncClient,
     base_url: str,
-    a_set: OrchestratorSet,
-    snapshot: Optional[Dict[str, Any]],
-    dry_run: Optional[bool] = None,
+    set_id: str,
+    payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Exécute un set via ``POST /api/mtf/run`` avec le snapshot en cache."""
+    """POST ``/api/mtf/run`` et normalise le résultat (succès métier + corps brut).
+
+    Source unique de l'envoi : partagée entre ``run_mtf_set`` (set pydantic) et
+    ``run_persisted_set`` (set ORM persisté) pour éviter toute dérive.
+    """
     url = f"{base_url.rstrip('/')}/api/mtf/run"
-    payload = build_mtf_payload(a_set, snapshot, dry_run)
     response = await client.post(url, json=payload)
     try:
         body = response.json()
     except ValueError:
         body = response.text
     return {
-        "set_id": a_set.set_id,
+        "set_id": set_id,
         # Succès = HTTP 2xx ET succès métier (sinon un partial_success/rejected
         # renvoyé en 200 serait compté à tort comme réussi).
         "ok": response.is_success and is_business_success(body),
@@ -309,3 +358,72 @@ async def run_mtf_set(
         "business_status": body.get("status") if isinstance(body, dict) else None,
         "body": body,
     }
+
+
+async def run_mtf_set(
+    client: httpx.AsyncClient,
+    base_url: str,
+    a_set: OrchestratorSet,
+    snapshot: Optional[Dict[str, Any]],
+    dry_run: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Exécute un set pydantic via ``POST /api/mtf/run`` avec le snapshot en cache."""
+    payload = build_mtf_payload(a_set, snapshot, dry_run)
+    return await _dispatch_mtf_run(client, base_url, a_set.set_id, payload)
+
+
+async def run_persisted_set(
+    client: httpx.AsyncClient,
+    base_url: str,
+    orm_set: Any,
+    snapshot: Optional[Dict[str, Any]],
+    dry_run: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Exécute un ``OrchestrationSet`` ORM persisté via ``POST /api/mtf/run`` (PY-005).
+
+    Reconstruit **toujours** le payload depuis les COLONNES ORM via la forme
+    canonique ``generate_set_payload`` (allow-list de clés : ``dry_run``,
+    ``workers``, ``exchange``, ``market_type``, ``mtf_profile``, ``symbols`` +
+    ``sync_tables``/``process_tp_sl=false``) — plutôt que de faire confiance au JSON
+    ``orm_set.payload`` stocké. Une ligne écrite hors API pourrait y avoir laissé
+    des **flags de contrôle runner** (ex. ``skip_open_state_filter``), des champs
+    critiques **divergents**, ou un payload **périmé** alors que ``symbols`` a été
+    vidé. Pour une ligne gérée par l'API, ce payload est identique au ``payload``
+    persisté (régénéré par PY-004), donc aucun changement de comportement ; les
+    gardes de l'orchestrateur décident des mêmes colonnes ORM.
+
+    On n'overlay ensuite que le runtime : override ``dry_run`` run-level et
+    ``open_state_snapshot``. Le résultat est augmenté de ``payload_sent`` (l'envoi
+    réel à Symfony).
+
+    Si ``orm_set.symbols`` est vide (sélection non matérialisée), ``generate_set_
+    payload`` renvoie ``None`` : on échoue **fail-closed sans appel HTTP** plutôt
+    que d'envoyer un ``/api/mtf/run`` sans ``symbols`` (qui exécuterait tout
+    l'univers actif).
+    """
+    # Allow-list : repart des colonnes ORM, jamais du JSON stocké (anti control-flag
+    # et anti-divergence). `None` ⇔ symbols vide ⇒ non matérialisé.
+    payload = generate_set_payload(orm_set)
+    if payload is None:
+        return {
+            "set_id": orm_set.set_id,
+            "ok": False,
+            "status": None,
+            "business_status": None,
+            "body": "set payload not materialized (no concrete symbols)",
+            "payload_sent": None,
+        }
+    # Garde runtime workers : la borne MAX_WORKERS_PER_SET n'est imposée qu'au
+    # schéma de persistance (aucune contrainte CHECK en base). Une ligne écrite hors
+    # API avec `workers>1` passerait Symfony en mode parallèle ; on clampe dans
+    # [1, MAX] pour respecter la politique « workers=1 côté Symfony ».
+    payload["workers"] = max(1, min(payload.get("workers") or 1, MAX_WORKERS_PER_SET))
+    # Override run-level (sinon le dry_run de la colonne, déjà posé par
+    # generate_set_payload) puis snapshot runtime.
+    if dry_run is not None:
+        payload["dry_run"] = dry_run
+    if snapshot is not None:
+        payload["open_state_snapshot"] = snapshot
+    result = await _dispatch_mtf_run(client, base_url, orm_set.set_id, payload)
+    result["payload_sent"] = payload
+    return result

@@ -95,3 +95,46 @@ def api_client():
     finally:
         app.dependency_overrides.pop(get_session, None)
         engine.dispose()
+
+
+@pytest.fixture()
+def orchestrator_env():
+    """``(TestClient, Session)`` sur un **même engine** SQLite in-memory (PY-005).
+
+    Permet de seeder des dashboards/sets en direct ORM puis de relire les ``Run``/
+    ``RunSet`` écrits par ``/orchestrator/run``. ``StaticPool`` + connexion unique
+    partagée garantissent que la session de seed et celles des requêtes voient la
+    même base. ``get_session`` est surchargée : aucun PostgreSQL requis.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.db.base import Base
+    from app.db import models  # noqa: F401  (enregistre les tables)
+    from app.db.engine import get_session
+    from app.main import app
+
+    engine = create_engine(
+        "sqlite://",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    _attach_schema_and_fks(engine)
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+    def _override_get_session():
+        session = factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_session] = _override_get_session
+    seed_session = factory()
+    try:
+        yield TestClient(app), seed_session
+    finally:
+        seed_session.close()
+        app.dependency_overrides.pop(get_session, None)
+        engine.dispose()
