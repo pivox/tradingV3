@@ -22,6 +22,7 @@ import MissingKlinesPage from './pages/MissingKlinesPage';
 import GlobalSearchPage from './pages/GlobalSearchPage';
 import HealthMonitoringPage from './pages/HealthMonitoringPage';
 import RuntimeHistoryPage from './pages/RuntimeHistoryPage';
+import OrchestrationCockpitPage from './pages/OrchestrationCockpitPage';
 import './styles/app.css';
 
 function App() {
@@ -32,6 +33,7 @@ function App() {
                     <ul>
                         <li><Link to="/">Dashboard</Link></li>
                         <li><Link to="/mtf-dashboard">Dashboard MTF</Link></li>
+                        <li><Link to="/orchestration">Cockpit Orchestration</Link></li>
                         <li><Link to="/search">Recherche Globale</Link></li>
                         <li><Link to="/graph">Graphiques</Link></li>
                         <li><Link to="/contracts">Contrats</Link></li>
@@ -57,6 +59,7 @@ function App() {
                     <Routes>
                         <Route path="/" element={<DashboardPage />} />
                         <Route path="/mtf-dashboard" element={<MtfDashboardPage />} />
+                        <Route path="/orchestration" element={<OrchestrationCockpitPage />} />
                         <Route path="/search" element={<GlobalSearchPage />} />
                         <Route path="/graph" element={<ChartsPage />} />
                         <Route path="/contracts/:contractId?" element={<ContractPage />} />

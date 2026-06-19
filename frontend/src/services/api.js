@@ -4,7 +4,8 @@ import config from '../config';
 const handleResponse = async (response) => {
     if (!response.ok) {
         const error = await response.json().catch(() => ({ message: 'Erreur réseau' }));
-        throw new Error(error.message || `Erreur ${response.status}`);
+        // FastAPI (API Python Orchestrator) renvoie le message d'erreur dans `detail`.
+        throw new Error(error.message || error.detail || `Erreur ${response.status}`);
     }
     return await response.json();
 };
@@ -338,6 +339,54 @@ const api = {
         });
         const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
         const response = await fetch(`${config.apiUrl}/api/runtime-history${queryString}`);
+        return handleResponse(response);
+    },
+
+    // --- Orchestration cockpit (API Python Orchestrator, UI-001) -------------
+
+    // Liste des dashboards d'orchestration.
+    async getOrchestrationDashboards() {
+        const response = await fetch(`${config.orchestratorApiUrl}/dashboards`);
+        return handleResponse(response);
+    },
+
+    // Sets configurés d'un dashboard (option `enabledOnly` pour ne garder que les actifs).
+    async getOrchestrationSets(dashboardId, { enabledOnly = false } = {}) {
+        const query = enabledOnly ? '?enabled_only=true' : '';
+        const response = await fetch(`${config.orchestratorApiUrl}/dashboards/${dashboardId}/sets${query}`);
+        return handleResponse(response);
+    },
+
+    // Refresh explicite des contrats des sets `mtf_run` actifs (PY-003).
+    async refreshOrchestrationContracts(dashboardId) {
+        const response = await fetch(
+            `${config.orchestratorApiUrl}/dashboards/${dashboardId}/refresh-contracts`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+        );
+        return handleResponse(response);
+    },
+
+    // Déclenche un run d'orchestration (PY-005). `forceDryRun` force le dry-run au niveau run.
+    async triggerOrchestrationRun(dashboardId, { forceDryRun = false } = {}) {
+        const body = { dashboard_id: String(dashboardId) };
+        if (forceDryRun) {
+            body.dry_run = true;
+        }
+        const response = await fetch(`${config.orchestratorApiUrl}/orchestrator/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        return handleResponse(response);
+    },
+
+    // Dernier run d'un dashboard : dernier JSON global + détail par set (PY-006).
+    // Retourne `null` si aucun run n'a encore été persisté (404).
+    async getOrchestrationLatestRun(dashboardId) {
+        const response = await fetch(`${config.orchestratorApiUrl}/dashboards/${dashboardId}/runs/latest`);
+        if (response.status === 404) {
+            return null;
+        }
         return handleResponse(response);
     }
 };

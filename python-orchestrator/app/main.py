@@ -7,9 +7,11 @@ Lancement local :
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.routers import dashboards, health, orchestrator, runs
+from app.settings import get_settings
 
 app = FastAPI(
     title="TradingV3 — Python Orchestrator",
@@ -20,6 +22,17 @@ app = FastAPI(
         "le dernier JSON global et par set (PY-006). "
         "Voir docs/handbook/technical/python-orchestrator.md."
     ),
+)
+
+# CORS : le cockpit (UI-001) appelle cette API directement depuis le navigateur.
+# Origines restreintes par config (CORS_ALLOW_ORIGINS) — pas de wildcard par défaut.
+# Pas de credentials (cookies) : authentification hors périmètre à ce stade.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(get_settings().cors_allow_origins),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(health.router)
