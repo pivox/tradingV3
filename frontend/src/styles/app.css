@@ -983,6 +983,16 @@ h1, h2, h3, h4, h5, h6 {
     margin-bottom: 6px;
 }
 
+/* Lignes cliquables de l'historique des runs : hover + ligne active surlignée. */
+.cockpit-run-row:hover {
+    background-color: var(--light-gray);
+}
+
+.cockpit-run-row.is-active {
+    background-color: var(--light-gray);
+    font-weight: 600;
+}
+
 @media (max-width: 768px) {
     .cockpit-json-pair {
         grid-template-columns: 1fr;
