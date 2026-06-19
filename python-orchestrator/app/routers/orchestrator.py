@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -57,6 +58,14 @@ _HTTP_TIMEOUT = 900.0
 # l'INSERT après coup (run déjà exécuté) sur PostgreSQL.
 _MAX_PERSISTED_LEN = 255
 
+# Un `run_id` est à la fois la PK `runs.run_id` ET un identifiant adressable en URL
+# (`GET /runs/{run_id}`, PY-006). Les routes à segment simple ne matchent pas les
+# slashes : un `run_id` dérivé d'une `idempotency_key`/`dashboard_id` contenant
+# `/` (ex. `temporal/dash/2026-06-19`) serait persisté mais non récupérable. On
+# restreint donc le `run_id` aux caractères sûrs d'un segment de chemin ; tout le
+# reste est haché (cf. `_resolve_run_id`).
+_SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
 # Exchanges dont le live est interdit (OKX/Hyperliquid), en chaînes pour comparer
 # aux colonnes ORM. Le validateur de schéma bloque déjà toute persistance live ;
 # ce miroir sert de garde-fou défense-en-profondeur au moment du run.
@@ -85,11 +94,13 @@ def _resolve_run_id(request: Optional[RunRequest]) -> str:
     if run_id is None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         run_id = f"run_{stamp}_{uuid.uuid4().hex[:6]}"
-    # Borne la PK `runs.run_id` (String(255)) : une idempotency_key/dashboard_id
-    # surdimensionnée ferait échouer l'INSERT après l'exécution du run. Hash
-    # déterministe au-delà de la limite => idempotence préservée (même entrée =>
-    # même run_id), historique non perdu.
-    if len(run_id) > _MAX_PERSISTED_LEN:
+    # Borne la PK `runs.run_id` (String(255)) ET garantit un identifiant URL-safe
+    # (récupérable via `GET /runs/{run_id}`) : une idempotency_key/dashboard_id
+    # surdimensionnée ferait échouer l'INSERT après l'exécution du run, et une clé
+    # porteuse de `/` (ou d'autres caractères hors segment de chemin) produirait un
+    # run_id non adressable. Hash déterministe dans les deux cas => idempotence
+    # préservée (même entrée => même run_id), historique non perdu ET relisible.
+    if len(run_id) > _MAX_PERSISTED_LEN or not _SAFE_RUN_ID.match(run_id):
         run_id = "run_" + hashlib.sha256(run_id.encode()).hexdigest()
     return run_id
 

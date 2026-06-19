@@ -265,3 +265,54 @@ def record_run_set(session: Session, run_set: RunSet) -> RunSet:
         if existing is None:
             raise
         return _update_existing_run_set(session, existing, run_set)
+
+
+# ---------------------------------------------------------------------------
+# Lecture de l'historique des runs (PY-006)
+#
+# Helpers en LECTURE SEULE : l'écriture de l'historique est faite par PY-005
+# (``record_run``/``record_run_set``). Ils servent la surface GET exposée au
+# cockpit (dernier JSON global d'un run + dernier JSON par set).
+# ---------------------------------------------------------------------------
+
+
+def list_runs(
+    session: Session,
+    *,
+    dashboard_id: Optional[int] = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> Sequence[Run]:
+    """Retourne les runs du plus récent au plus ancien (pagination bornée).
+
+    Filtre optionnel par ``dashboard_id``. Tri secondaire stable par ``run_id``
+    pour que des runs partageant le même ``created_at`` (granularité grossière en
+    test) restent ordonnés de façon déterministe.
+    """
+    stmt = select(Run)
+    if dashboard_id is not None:
+        stmt = stmt.where(Run.dashboard_id == dashboard_id)
+    stmt = stmt.order_by(Run.created_at.desc(), Run.run_id.desc()).limit(limit).offset(offset)
+    return session.scalars(stmt).all()
+
+
+def get_latest_run(session: Session, *, dashboard_id: Optional[int] = None) -> Optional[Run]:
+    """Retourne le run le plus récent (optionnellement d'un dashboard), ou ``None``."""
+    stmt = select(Run)
+    if dashboard_id is not None:
+        stmt = stmt.where(Run.dashboard_id == dashboard_id)
+    stmt = stmt.order_by(Run.created_at.desc(), Run.run_id.desc()).limit(1)
+    return session.scalar(stmt)
+
+
+def list_run_sets(session: Session, run_id: str) -> Sequence[RunSet]:
+    """Retourne les résultats par set d'un run, triés par ``set_id``."""
+    stmt = select(RunSet).where(RunSet.run_id == run_id).order_by(RunSet.set_id.asc())
+    return session.scalars(stmt).all()
+
+
+def get_run_set(session: Session, run_id: str, set_id: str) -> Optional[RunSet]:
+    """Retourne le résultat d'un set dans un run par ``(run_id, set_id)``, ou ``None``."""
+    return session.scalar(
+        select(RunSet).where(RunSet.run_id == run_id, RunSet.set_id == set_id)
+    )

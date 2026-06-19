@@ -20,6 +20,11 @@ from app import __version__
 # `workers=1` au début ; on relèvera cette borne dans une PR dédiée.
 MAX_WORKERS_PER_SET = 1
 
+# Un ``set_id`` est adressé en URL (``/dashboards/{id}/sets/{set_id}``,
+# ``/runs/{run_id}/sets/{set_id}``) : il doit être un segment de chemin sûr pour
+# rester récupérable. On le restreint aux caractères d'un identifiant usuel.
+_SET_ID_PATTERN = r"^[A-Za-z0-9_.\-]+$"
+
 
 class Exchange(str, Enum):
     BITMART = "bitmart"
@@ -183,6 +188,85 @@ class RunResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Lecture de l'historique des runs (PY-006)
+#
+# Schémas de sortie des endpoints GET en lecture seule. L'écriture de cet
+# historique est faite par PY-005 ; ici on n'expose que le « dernier JSON »
+# global d'un run (``last_json``) et par set (``payload_sent`` /
+# ``response_json``) pour le cockpit.
+# ---------------------------------------------------------------------------
+
+
+class RunSetRead(BaseModel):
+    """Dernier JSON par set : payload envoyé, réponse Symfony brute, erreur."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    run_id: str
+    set_id: str
+    # Lien optionnel vers le set persistant (rompu si le set a été supprimé).
+    set_ref_id: Optional[int] = None
+    ok: bool
+    error: Optional[str] = None
+    duration_ms: Optional[int] = None
+    payload_sent: Optional[dict] = None
+    response_json: Optional[dict] = None
+    created_at: datetime
+
+
+class RunSummaryRead(BaseModel):
+    """Vue allégée d'un run pour les listes (sans ``last_json`` ni détail par set)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    run_id: str
+    # Nullable : ON DELETE SET NULL conserve le run même si le dashboard disparaît.
+    dashboard_id: Optional[int] = None
+    ok: bool
+    # `status` persisté (success / partial_failure / failed) ; `no_sets` n'est jamais persisté.
+    status: str
+    idempotency_key: Optional[str] = None
+    total_calls: int
+    success_count: int
+    failed_count: int
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class RunDetailRead(RunSummaryRead):
+    """Détail complet d'un run : dernier JSON global + dernier JSON par set."""
+
+    last_json: Optional[dict] = None
+    sets: List[RunSetRead] = Field(default_factory=list)
+
+    @classmethod
+    def from_run(cls, run: object, run_sets: object) -> "RunDetailRead":
+        """Assemble le détail depuis un ``Run`` ORM et ses ``RunSet``.
+
+        Construction explicite (plutôt que ``model_validate(run)``) car le champ
+        ``sets`` ne correspond pas à l'attribut ORM ``run_sets`` : on injecte la
+        liste fournie par l'appelant (ordre déterministe via le repository).
+        """
+        return cls(
+            run_id=run.run_id,
+            dashboard_id=run.dashboard_id,
+            ok=run.ok,
+            status=run.status,
+            idempotency_key=run.idempotency_key,
+            total_calls=run.total_calls,
+            success_count=run.success_count,
+            failed_count=run.failed_count,
+            started_at=run.started_at,
+            finished_at=run.finished_at,
+            created_at=run.created_at,
+            last_json=run.last_json,
+            sets=[RunSetRead.model_validate(rs) for rs in run_sets],
+        )
+
+
+# ---------------------------------------------------------------------------
 # Gestion des dashboards et des sets (PY-002)
 #
 # Schémas d'entrée/sortie de l'API de configuration : création, lecture, mise à
@@ -253,7 +337,13 @@ class SetCreate(BaseModel):
     """Payload de création d'un set rattaché à un dashboard.
 
     ``set_id`` est l'identifiant fonctionnel stable du set au sein du dashboard
-    (unique via ``uq_orchestration_sets_dashboard_set``).
+    (unique via ``uq_orchestration_sets_dashboard_set``). Il est recopié tel quel
+    dans ``RunSet.set_id`` et adressé en URL (``GET /dashboards/{id}/sets/{set_id}``,
+    ``GET /runs/{run_id}/sets/{set_id}`` — PY-006), donc restreint à un **segment
+    de chemin sûr** (alphanumérique + ``_``/``.``/``-``) : un ``set_id`` porteur de
+    ``/`` serait stocké mais non récupérable (les routes à segment simple ne
+    matchent pas les slashes). On rejette plutôt que de sanitiser, car c'est un
+    identifiant choisi par l'utilisateur, immuable et référencé dans sa config.
 
     ``payload`` n'est **pas** accepté ici : c'est un artefact produit côté serveur
     (PY-004) à partir des champs typés ; un client REST ne doit pas pouvoir
@@ -261,7 +351,13 @@ class SetCreate(BaseModel):
     ``symbols``. Il reste exposé en lecture seule via ``SetRead``.
     """
 
-    set_id: str = Field(..., min_length=1, max_length=255, description="Identifiant stable du set.")
+    set_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        pattern=_SET_ID_PATTERN,
+        description="Identifiant stable du set (segment d'URL : alphanumérique, '_', '.', '-').",
+    )
     enabled: bool = Field(default=True, description="Set actif ou non.")
     action: Action = Field(default=Action.MTF_RUN, description="Action à exécuter.")
     exchange: Exchange = Field(..., description="Exchange cible.")

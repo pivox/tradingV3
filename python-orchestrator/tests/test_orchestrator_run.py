@@ -303,6 +303,31 @@ def test_long_idempotency_key_run_id_is_bounded():
     assert run_id == orch._resolve_run_id(RunRequest(idempotency_key=long_key))
 
 
+def test_run_id_with_slashes_is_url_safe_and_deterministic():
+    # Une idempotency_key porteuse de séparateurs (`temporal/dash/2026-06-19`)
+    # produirait un run_id avec `/`, non récupérable via GET /runs/{run_id}. Le
+    # run_id dérivé doit rester un segment de chemin sûr, tout en étant idempotent.
+    from app.schemas import RunRequest
+
+    slash_key = "temporal/dash/2026-06-19"
+    run_id = orch._resolve_run_id(RunRequest(idempotency_key=slash_key))
+    assert "/" not in run_id
+    assert orch._SAFE_RUN_ID.match(run_id)
+    # Déterministe : même clé => même run_id (idempotence préservée).
+    assert run_id == orch._resolve_run_id(RunRequest(idempotency_key=slash_key))
+    # Distinct d'une clé qui ne diffère que par les séparateurs (pas de collision).
+    other = orch._resolve_run_id(RunRequest(idempotency_key="temporal_dash_2026-06-19"))
+    assert run_id != other
+
+
+def test_run_id_with_safe_key_stays_readable():
+    # Une clé déjà URL-safe ne doit PAS être hachée (run_id lisible conservé).
+    from app.schemas import RunRequest
+
+    run_id = orch._resolve_run_id(RunRequest(idempotency_key="abc-123_v2"))
+    assert run_id == "run_abc-123_v2"
+
+
 def test_long_idempotency_key_persists_bounded(orchestrator_env, monkeypatch):
     # Une clé surdimensionnée ne doit pas faire échouer la persistance (run_id et
     # idempotency_key bornés à 255) : l'historique du run déjà exécuté est conservé.
