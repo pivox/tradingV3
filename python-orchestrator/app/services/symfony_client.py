@@ -345,9 +345,9 @@ async def run_persisted_set(
     snapshot), avec repli sur ``generate_set_payload(orm_set)`` s'il est absent —
     plutôt que de re-dériver le schéma ici. Injecte ensuite le
     ``open_state_snapshot`` runtime, applique l'override ``dry_run`` run-level et
-    conserve ``sync_tables``/``process_tp_sl=false`` (déjà dans le payload). Le
-    résultat normalisé est augmenté de ``payload_sent`` (ce qui a réellement été
-    envoyé à Symfony, snapshot inclus).
+    **force** ``sync_tables``/``process_tp_sl=false`` (sans faire confiance au JSON
+    stocké, qui pourrait être périmé/écrit hors API). Le résultat normalisé est
+    augmenté de ``payload_sent`` (ce qui a réellement été envoyé à Symfony).
 
     Si aucun payload n'est disponible (aucun symbole concret matérialisé), renvoie
     un échec **sans appel HTTP** : un set capé non rafraîchi n'a pas de sélection
@@ -365,6 +365,12 @@ async def run_persisted_set(
         }
     # Copie défensive : ne jamais muter le JSON ORM (snapshot/override runtime).
     payload = dict(payload)
+    # SF-002b : forcer les flags de sécurité quel que soit le JSON stocké. Un
+    # payload périmé ou écrit hors API pourrait omettre `process_tp_sl` (Symfony
+    # le défaut à true => recalcul TP/SL non voulu) ou activer `sync_tables` ; le
+    # snapshot partagé remplace tout fetch/effet de bord exchange par set.
+    payload["sync_tables"] = False
+    payload["process_tp_sl"] = False
     if dry_run is not None:
         payload["dry_run"] = dry_run
     if snapshot is not None:

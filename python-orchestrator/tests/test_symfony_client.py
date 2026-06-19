@@ -416,6 +416,39 @@ def test_run_persisted_set_dispatches_persisted_payload_with_snapshot_and_overri
     assert "open_state_snapshot" not in persisted
 
 
+def test_run_persisted_set_forces_safety_flags_over_stored_payload():
+    # Un payload stocké périmé/écrit hors API peut activer sync_tables/process_tp_sl ;
+    # le dispatch doit les forcer à false (le snapshot remplace tout effet de bord).
+    persisted = {
+        "dry_run": True,
+        "workers": 1,
+        "exchange": "bitmart",
+        "market_type": "perpetual",
+        "mtf_profile": "scalper_micro",
+        "sync_tables": True,
+        "process_tp_sl": True,
+        "symbols": ["BTCUSDT"],
+    }
+    orm = _orm_set(set_id="s", payload=persisted, symbols=["BTCUSDT"])
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(client, "http://sym", orm, None)
+
+    result = asyncio.run(_run())
+    assert captured["json"]["sync_tables"] is False
+    assert captured["json"]["process_tp_sl"] is False
+    assert result["payload_sent"]["process_tp_sl"] is False
+    # Le payload stocké n'est pas muté.
+    assert persisted["sync_tables"] is True
+    assert persisted["process_tp_sl"] is True
+
+
 def test_run_persisted_set_falls_back_to_generate_when_payload_missing():
     # payload absent => repli sur generate_set_payload (symboles présents).
     orm = _orm_set(set_id="s", payload=None)
