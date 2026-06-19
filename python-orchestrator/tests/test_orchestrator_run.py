@@ -508,6 +508,42 @@ def test_conflicting_live_set_ids():
     assert orch._conflicting_live_set_ids([a, lower], force_dry_run=False) == {"a", "low"}
 
 
+def test_conflicting_live_set_ids_normalizes_exchange_market_key():
+    from types import SimpleNamespace
+
+    def s(set_id, exchange, market_type="perpetual", symbols=("BTCUSDT",), dry_run=False):
+        return SimpleNamespace(
+            set_id=set_id, exchange=exchange, market_type=market_type,
+            symbols=symbols, dry_run=dry_run,
+        )
+
+    a = s("a", "bitmart")
+    # Même exchange après normalisation casse/espaces => conflit.
+    assert orch._conflicting_live_set_ids([a, s("b", " Bitmart ")], force_dry_run=False) == {"a", "b"}
+    # Casse du market_type normalisée également.
+    assert orch._conflicting_live_set_ids([a, s("c", "bitmart", market_type="PERPETUAL")], force_dry_run=False) == {"a", "c"}
+    # Exchanges réellement différents => pas de conflit.
+    assert orch._conflicting_live_set_ids([a, s("d", "okx")], force_dry_run=False) == set()
+
+
+def test_overlapping_live_sets_rejected_with_mixed_exchange_casing(orchestrator_env, monkeypatch):
+    # Deux lignes live « bitmart » et « BITMART » (écrites hors API) ciblant le même
+    # symbole partageraient le même snapshot pré-run : rejet fail-closed des deux.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "live1", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live2", dry_run=False, exchange="BITMART", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 2, "success": 0, "failed": 2}
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 0
+
+
 def test_overlapping_live_sets_rejected_before_dispatch(orchestrator_env, monkeypatch):
     client, session = orchestrator_env
     dash = _seed_dashboard(session)

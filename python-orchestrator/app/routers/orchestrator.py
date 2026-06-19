@@ -267,7 +267,9 @@ def _conflicting_live_set_ids(mtf_sets: List[Any], force_dry_run: bool) -> set:
     conflicting: set = set()
     for i, a in enumerate(live):
         for b in live[i + 1:]:
-            if (a.exchange, a.market_type) != (b.exchange, b.market_type):
+            # Comparaison via snapshot_key (exchange/market_type normalisés) : deux
+            # sets ne se chevauchent que s'ils partageraient le MÊME snapshot pré-run.
+            if snapshot_key(a) != snapshot_key(b):
                 continue
             if _symbols_overlap(a, b):
                 conflicting.add(a.set_id)

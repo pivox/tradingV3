@@ -127,6 +127,13 @@ def test_snapshot_key_uses_exchange_and_market_type():
     )
 
 
+def test_snapshot_key_normalizes_casing_and_whitespace():
+    # Une ligne ORM hors API peut porter une casse/des espaces ; le regroupement
+    # snapshot doit la normaliser (sinon des variantes échapperaient au partage).
+    orm = SimpleNamespace(exchange=" Bitmart ", market_type="PERPETUAL")
+    assert snapshot_key(orm) == ("bitmart", "perpetual")
+
+
 def _client_with(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 

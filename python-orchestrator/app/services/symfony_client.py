@@ -40,16 +40,27 @@ class ContractsUnavailableError(RuntimeError):
     """
 
 
+def _normalize_key_part(value: Any) -> Any:
+    """Normalise une composante de clé (exchange/market_type) : casse + espaces.
+
+    Symfony normalise le couple avant exécution ; une ligne ORM écrite hors API
+    avec ``Bitmart`` ou `` perpetual `` doit donc être regroupée comme
+    ``bitmart``/``perpetual`` (snapshot partagé ET détection de conflit live).
+    """
+    return value.strip().lower() if isinstance(value, str) else value
+
+
 def snapshot_key(a_set: Any) -> SnapshotKey:
     """Clé de cache du snapshot pour un set.
 
     Accepte un set pydantic (``exchange``/``market_type`` sont des enums) **et** un
     ``OrchestrationSet`` ORM (ce sont des chaînes en base) : on lit ``.value`` quand
-    il existe, sinon la chaîne telle quelle.
+    il existe, sinon la chaîne telle quelle, puis on normalise casse/espaces pour
+    que des variantes (``Bitmart``/``bitmart``) partagent le même snapshot.
     """
     exchange = getattr(a_set.exchange, "value", a_set.exchange)
     market_type = getattr(a_set.market_type, "value", a_set.market_type)
-    return (exchange, market_type)
+    return (_normalize_key_part(exchange), _normalize_key_part(market_type))
 
 
 async def fetch_open_state(
