@@ -354,11 +354,12 @@ async def run_persisted_set(
 
     Part du payload **persisté** (``orm_set.payload``, préparé par PY-004, sans
     snapshot), avec repli sur ``generate_set_payload(orm_set)`` s'il est absent —
-    plutôt que de re-dériver le schéma ici. Injecte ensuite le
-    ``open_state_snapshot`` runtime, applique l'override ``dry_run`` run-level et
-    **force** ``sync_tables``/``process_tp_sl=false`` (sans faire confiance au JSON
-    stocké, qui pourrait être périmé/écrit hors API). Le résultat normalisé est
-    augmenté de ``payload_sent`` (ce qui a réellement été envoyé à Symfony).
+    plutôt que de re-dériver le schéma ici. Réaligne ensuite les champs
+    **critiques** (``exchange``/``market_type``/``symbols``/``dry_run``) sur les
+    colonnes ORM (autorité des gardes de l'orchestrateur), injecte le
+    ``open_state_snapshot`` runtime et **force** ``sync_tables``/``process_tp_sl=
+    false`` — sans faire confiance au JSON stocké, qui pourrait être périmé/écrit
+    hors API. Le résultat est augmenté de ``payload_sent`` (l'envoi réel à Symfony).
 
     Si aucun payload n'est disponible (aucun symbole concret matérialisé), renvoie
     un échec **sans appel HTTP** : un set capé non rafraîchi n'a pas de sélection
@@ -376,14 +377,29 @@ async def run_persisted_set(
         }
     # Copie défensive : ne jamais muter le JSON ORM (snapshot/override runtime).
     payload = dict(payload)
+    # Cohérence garde/dispatch : les gardes de l'orchestrateur (exchange interdit,
+    # regroupement snapshot, chevauchement live, dry_run effectif) décident à partir
+    # des COLONNES ORM. Une ligne écrite hors API pourrait stocker un `payload`
+    # divergent (ex. `payload.exchange='okx'` alors que la colonne dit `bitmart`),
+    # ce qui contournerait ces gardes. On réaligne donc les champs critiques sur les
+    # colonnes ORM avant l'envoi (la forme/les champs non critiques restent ceux du
+    # payload persisté).
+    payload["exchange"] = getattr(orm_set.exchange, "value", orm_set.exchange)
+    payload["market_type"] = getattr(orm_set.market_type, "value", orm_set.market_type)
+    if orm_set.symbols:
+        payload["symbols"] = list(orm_set.symbols)
+    else:
+        # symbols vide en base => « tout l'univers actif » : pas de clé symbols.
+        payload.pop("symbols", None)
+    # dry_run vient de l'override run-level (si fourni) ou de la colonne ORM —
+    # jamais du JSON stocké (qui pourrait être périmé).
+    payload["dry_run"] = dry_run if dry_run is not None else orm_set.dry_run
     # SF-002b : forcer les flags de sécurité quel que soit le JSON stocké. Un
     # payload périmé ou écrit hors API pourrait omettre `process_tp_sl` (Symfony
     # le défaut à true => recalcul TP/SL non voulu) ou activer `sync_tables` ; le
     # snapshot partagé remplace tout fetch/effet de bord exchange par set.
     payload["sync_tables"] = False
     payload["process_tp_sl"] = False
-    if dry_run is not None:
-        payload["dry_run"] = dry_run
     if snapshot is not None:
         payload["open_state_snapshot"] = snapshot
     result = await _dispatch_mtf_run(client, base_url, orm_set.set_id, payload)

@@ -456,6 +456,45 @@ def test_run_persisted_set_forces_safety_flags_over_stored_payload():
     assert persisted["process_tp_sl"] is True
 
 
+def test_run_persisted_set_realigns_safety_fields_from_orm():
+    # Ligne écrite hors API : le `payload` stocké diverge des colonnes ORM. Le
+    # dispatch doit réaligner exchange/market_type/symbols/dry_run sur les colonnes
+    # (autorité des gardes de l'orchestrateur), pas sur le JSON périmé.
+    persisted = {
+        "dry_run": True,            # divergent (colonne dry_run=False)
+        "workers": 1,
+        "exchange": "okx",          # divergent (colonne 'bitmart')
+        "market_type": "spot",      # divergent (colonne 'perpetual')
+        "mtf_profile": "scalper_micro",
+        "sync_tables": False,
+        "process_tp_sl": False,
+        "symbols": ["ETHUSDT"],     # divergent (colonne ['BTCUSDT'])
+    }
+    orm = _orm_set(
+        set_id="s", payload=persisted, exchange="bitmart",
+        market_type="perpetual", symbols=["BTCUSDT"], dry_run=False,
+    )
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            # dry_run=False (override run-level) ; les colonnes font autorité.
+            return await run_persisted_set(client, "http://sym", orm, None, dry_run=False)
+
+    asyncio.run(_run())
+    sent = captured["json"]
+    assert sent["exchange"] == "bitmart"
+    assert sent["market_type"] == "perpetual"
+    assert sent["symbols"] == ["BTCUSDT"]
+    assert sent["dry_run"] is False
+    # Champ non critique : conservé du payload persisté.
+    assert sent["mtf_profile"] == "scalper_micro"
+
+
 def test_run_persisted_set_falls_back_to_generate_when_payload_missing():
     # payload absent => repli sur generate_set_payload (symboles présents).
     orm = _orm_set(set_id="s", payload=None)
