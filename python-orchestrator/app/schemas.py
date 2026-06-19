@@ -89,7 +89,13 @@ def assert_set_persistable(*, dry_run: bool, symbols: list, contracts_limit: Opt
             "persister un set live (dry_run=false) est interdit tant que la "
             "readiness live n'est pas livrée : PY-002 ne stocke que des sets dry-run."
         )
-    if not symbols and contracts_limit is None:
+    # On normalise les symboles (trim + écarte les vides/blancs) comme le fait
+    # `generate_set_payload` au dispatch : une sélection `symbols=[" "]` se réduit à
+    # vide côté exécution (Symfony trim/filtre, ce qui vaudrait « tout l'univers »).
+    # Sans ce nettoyage ici, un tel set passe la validation API mais reste
+    # « not materialized » à chaque run au lieu d'être rejeté à la création.
+    cleaned_symbols = [s.strip() for s in (symbols or []) if isinstance(s, str) and s.strip()]
+    if not cleaned_symbols and contracts_limit is None:
         raise ValueError(
             "set ambigu : fournir une sélection exploitable "
             "('symbols' non vide ou 'contracts_limit')."

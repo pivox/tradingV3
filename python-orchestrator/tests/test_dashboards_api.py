@@ -268,6 +268,21 @@ def test_create_ambiguous_set_rejected(api_client):
     assert resp.status_code == 422
 
 
+def test_create_blank_only_symbols_rejected(api_client):
+    """symbols blancs uniquement (et pas de contracts_limit) → set ambigu, refusé.
+
+    Sans normalisation, une telle liste « non vide » passerait la validation mais
+    se réduirait à vide au dispatch (« not materialized » à chaque run) : on la
+    rejette à la création.
+    """
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    resp = api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(set_id="blank", symbols=["  ", ""], contracts_limit=None),
+    )
+    assert resp.status_code == 422
+
+
 def test_create_with_contracts_limit_only_ok(api_client):
     """Sélection dynamique bornée (contracts_limit) sans symbols explicites."""
     dashboard_id = _create_dashboard(api_client).json()["id"]
