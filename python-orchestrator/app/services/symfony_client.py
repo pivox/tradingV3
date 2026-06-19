@@ -375,20 +375,29 @@ async def run_persisted_set(
 ) -> Dict[str, Any]:
     """Exécute un ``OrchestrationSet`` ORM persisté via ``POST /api/mtf/run`` (PY-005).
 
-    Part du payload **persisté** (``orm_set.payload``, préparé par PY-004, sans
-    snapshot), avec repli sur ``generate_set_payload(orm_set)`` s'il est absent —
-    plutôt que de re-dériver le schéma ici. Réaligne ensuite les champs
-    **critiques** (``exchange``/``market_type``/``symbols``/``dry_run``) sur les
-    colonnes ORM (autorité des gardes de l'orchestrateur), injecte le
-    ``open_state_snapshot`` runtime et **force** ``sync_tables``/``process_tp_sl=
-    false`` — sans faire confiance au JSON stocké, qui pourrait être périmé/écrit
-    hors API. Le résultat est augmenté de ``payload_sent`` (l'envoi réel à Symfony).
+    Reconstruit **toujours** le payload depuis les COLONNES ORM via la forme
+    canonique ``generate_set_payload`` (allow-list de clés : ``dry_run``,
+    ``workers``, ``exchange``, ``market_type``, ``mtf_profile``, ``symbols`` +
+    ``sync_tables``/``process_tp_sl=false``) — plutôt que de faire confiance au JSON
+    ``orm_set.payload`` stocké. Une ligne écrite hors API pourrait y avoir laissé
+    des **flags de contrôle runner** (ex. ``skip_open_state_filter``), des champs
+    critiques **divergents**, ou un payload **périmé** alors que ``symbols`` a été
+    vidé. Pour une ligne gérée par l'API, ce payload est identique au ``payload``
+    persisté (régénéré par PY-004), donc aucun changement de comportement ; les
+    gardes de l'orchestrateur décident des mêmes colonnes ORM.
 
-    Si aucun payload n'est disponible (aucun symbole concret matérialisé), renvoie
-    un échec **sans appel HTTP** : un set capé non rafraîchi n'a pas de sélection
-    exécutable (cf. ``generate_set_payload``).
+    On n'overlay ensuite que le runtime : override ``dry_run`` run-level et
+    ``open_state_snapshot``. Le résultat est augmenté de ``payload_sent`` (l'envoi
+    réel à Symfony).
+
+    Si ``orm_set.symbols`` est vide (sélection non matérialisée), ``generate_set_
+    payload`` renvoie ``None`` : on échoue **fail-closed sans appel HTTP** plutôt
+    que d'envoyer un ``/api/mtf/run`` sans ``symbols`` (qui exécuterait tout
+    l'univers actif).
     """
-    payload = orm_set.payload or generate_set_payload(orm_set)
+    # Allow-list : repart des colonnes ORM, jamais du JSON stocké (anti control-flag
+    # et anti-divergence). `None` ⇔ symbols vide ⇒ non matérialisé.
+    payload = generate_set_payload(orm_set)
     if payload is None:
         return {
             "set_id": orm_set.set_id,
@@ -398,31 +407,10 @@ async def run_persisted_set(
             "body": "set payload not materialized (no concrete symbols)",
             "payload_sent": None,
         }
-    # Copie défensive : ne jamais muter le JSON ORM (snapshot/override runtime).
-    payload = dict(payload)
-    # Cohérence garde/dispatch : les gardes de l'orchestrateur (exchange interdit,
-    # regroupement snapshot, chevauchement live, dry_run effectif) décident à partir
-    # des COLONNES ORM. Une ligne écrite hors API pourrait stocker un `payload`
-    # divergent (ex. `payload.exchange='okx'` alors que la colonne dit `bitmart`),
-    # ce qui contournerait ces gardes. On réaligne donc les champs critiques sur les
-    # colonnes ORM avant l'envoi (la forme/les champs non critiques restent ceux du
-    # payload persisté).
-    payload["exchange"] = getattr(orm_set.exchange, "value", orm_set.exchange)
-    payload["market_type"] = getattr(orm_set.market_type, "value", orm_set.market_type)
-    if orm_set.symbols:
-        payload["symbols"] = list(orm_set.symbols)
-    else:
-        # symbols vide en base => « tout l'univers actif » : pas de clé symbols.
-        payload.pop("symbols", None)
-    # dry_run vient de l'override run-level (si fourni) ou de la colonne ORM —
-    # jamais du JSON stocké (qui pourrait être périmé).
-    payload["dry_run"] = dry_run if dry_run is not None else orm_set.dry_run
-    # SF-002b : forcer les flags de sécurité quel que soit le JSON stocké. Un
-    # payload périmé ou écrit hors API pourrait omettre `process_tp_sl` (Symfony
-    # le défaut à true => recalcul TP/SL non voulu) ou activer `sync_tables` ; le
-    # snapshot partagé remplace tout fetch/effet de bord exchange par set.
-    payload["sync_tables"] = False
-    payload["process_tp_sl"] = False
+    # Override run-level (sinon le dry_run de la colonne, déjà posé par
+    # generate_set_payload) puis snapshot runtime.
+    if dry_run is not None:
+        payload["dry_run"] = dry_run
     if snapshot is not None:
         payload["open_state_snapshot"] = snapshot
     result = await _dispatch_mtf_run(client, base_url, orm_set.set_id, payload)
