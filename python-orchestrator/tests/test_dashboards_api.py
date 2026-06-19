@@ -196,6 +196,40 @@ def test_create_set_generates_payload(api_client):
     }
 
 
+def test_set_read_exposes_effective_payload(api_client):
+    # PY-007 : la lecture d'un set expose le payload /api/mtf/run EFFECTIF (ce qui
+    # part réellement à Symfony), pour que le cockpit n'ait plus à le reconstruire.
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
+
+    body = api_client.get(f"/dashboards/{dashboard_id}/sets/bitmart_regular_top").json()
+
+    assert body["effective_payload"] == {
+        "dry_run": True,
+        "workers": 1,
+        "exchange": "bitmart",
+        "market_type": "perpetual",
+        "mtf_profile": "regular",
+        "sync_tables": False,
+        "process_tp_sl": False,
+        "symbols": ["BTCUSDT", "ETHUSDT"],
+    }
+
+
+def test_set_read_effective_payload_null_when_not_materialized(api_client):
+    # Set capé sans symboles concrets (sélection pas encore rafraîchie) : le payload
+    # effectif est null, et le front en déduit « set non matérialisé ».
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(symbols=[], contracts_limit=5),
+    )
+
+    body = api_client.get(f"/dashboards/{dashboard_id}/sets/bitmart_regular_top").json()
+
+    assert body["effective_payload"] is None
+
+
 def test_patch_set_regenerates_payload(api_client):
     dashboard_id = _create_dashboard(api_client).json()["id"]
     api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())

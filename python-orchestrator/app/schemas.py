@@ -12,7 +12,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from app import __version__
 
@@ -441,6 +441,32 @@ class SetRead(BaseModel):
     payload: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def effective_payload(self) -> Optional[dict]:
+        """Payload ``/api/mtf/run`` réellement envoyé pour ce set (PY-007).
+
+        Champ calculé en lecture seule, exposé pour que le cockpit (preview UI-002)
+        affiche LE payload effectif plutôt que de le reconstruire côté front. Délègue
+        à la fonction canonique ``effective_set_payload`` — exactement celle qu'utilise
+        ``run_persisted_set`` au dispatch (forme + clamp ``workers``), **hors** couche
+        runtime (``open_state_snapshot`` et override ``dry_run`` run-level). Garantit
+        donc l'identité preview ⇆ envoi réel, sans second chemin de construction.
+
+        ``null`` quand la sélection n'est pas matérialisée (symbols vide/blanc),
+        comme ``generate_set_payload`` : le front en déduit « set non matérialisé ».
+
+        Le champ persisté ``payload`` (PY-004) reste exposé tel quel ; ``effective_
+        payload`` y ajoute le clamp ``workers`` appliqué au dispatch et tolère les
+        enums du schéma comme les chaînes ORM.
+
+        Import différé pour éviter le cycle ``schemas`` ⇆ ``services.symfony_client``
+        (ce dernier importe déjà ``MAX_WORKERS_PER_SET``/``OrchestratorSet`` d'ici).
+        """
+        from app.services.symfony_client import effective_set_payload
+
+        return effective_set_payload(self)
 
 
 # ---------------------------------------------------------------------------

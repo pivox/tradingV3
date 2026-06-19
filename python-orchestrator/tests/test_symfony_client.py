@@ -15,6 +15,7 @@ from app.services.symfony_client import (
     ContractsUnavailableError,
     OpenStateUnavailableError,
     build_mtf_payload,
+    effective_set_payload,
     fetch_open_state,
     fetch_selected_contracts,
     generate_set_payload,
@@ -399,6 +400,74 @@ def test_generate_set_payload_matches_build_mtf_payload_shape():
         dry_run=True,
     )
     assert generate_set_payload(orm) == build_mtf_payload(pyd, None)
+
+
+# --- effective_set_payload (PY-007) -----------------------------------------
+
+
+def test_effective_set_payload_matches_generate_when_within_bounds():
+    # Cas nominal (workers déjà dans la borne) : le payload effectif est identique
+    # au payload persisté généré — pas de clamp à appliquer.
+    orm = _orm_set()
+    assert effective_set_payload(orm) == generate_set_payload(orm)
+
+
+def test_effective_set_payload_clamps_oversized_workers():
+    # Ligne écrite hors API avec workers>1 (aucune contrainte DB) : le payload
+    # effectif clampe à la borne, comme l'envoi réel de run_persisted_set.
+    payload = effective_set_payload(_orm_set(symbols=["BTCUSDT"], workers=8))
+    assert payload["workers"] == 1
+
+
+def test_effective_set_payload_none_when_not_materialized():
+    # Sélection non matérialisée (symbols vide/blanc) => null, comme
+    # generate_set_payload : le front en déduit « set non matérialisé ».
+    assert effective_set_payload(_orm_set(symbols=[])) is None
+    assert effective_set_payload(_orm_set(symbols=[" ", "\t"])) is None
+
+
+def test_effective_set_payload_tolerates_enum_fields():
+    # SetRead porte des enums str (exchange/market_type/mtf_profile) là où l'ORM
+    # porte des chaînes : le payload effectif doit être identique dans les deux cas
+    # (mêmes valeurs string), pour que la preview du cockpit colle à l'envoi réel.
+    from app.schemas import Exchange, MarketType, MtfProfile
+
+    enum_set = _orm_set(
+        exchange=Exchange.BITMART,
+        market_type=MarketType.PERPETUAL,
+        mtf_profile=MtfProfile.SCALPER_MICRO,
+    )
+    assert effective_set_payload(enum_set) == effective_set_payload(_orm_set())
+
+
+def test_effective_set_payload_equals_payload_sent_by_run_persisted_set():
+    # Invariant central PY-007 : effective_set_payload == le payload réellement
+    # envoyé par run_persisted_set, une fois retirés open_state_snapshot (runtime)
+    # et l'override dry_run run-level. Garanti par la fonction partagée.
+    orm = _orm_set(set_id="s", symbols=["BTCUSDT"], workers=8)
+    snapshot = {"open_positions": [], "open_orders": []}
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            # On force un dry_run run-level différent du set pour vérifier que
+            # effective_set_payload ne porte PAS cet override (il reste run-level).
+            return await run_persisted_set(client, "http://sym", orm, snapshot, dry_run=False)
+
+    result = asyncio.run(_run())
+    sent = dict(captured["json"])
+    # Retire la couche runtime exclue de effective_set_payload.
+    sent.pop("open_state_snapshot", None)
+    sent.pop("dry_run", None)
+    expected = dict(effective_set_payload(orm))
+    expected.pop("dry_run", None)
+    assert sent == expected
+    # Et le payload effectif a bien clampé workers, comme l'envoi réel.
+    assert expected["workers"] == 1 == result["payload_sent"]["workers"]
 
 
 # --- run_persisted_set (PY-005) ---------------------------------------------
