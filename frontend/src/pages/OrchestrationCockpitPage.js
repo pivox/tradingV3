@@ -115,9 +115,14 @@ const OrchestrationCockpitPage = () => {
     const dashboardEnabled = selectedDashboard ? selectedDashboard.enabled : false;
 
     // Preview : seuls les sets actifs `mtf_run` d'un dashboard actif sont exécutés.
-    const runnableSets = dashboardEnabled
+    const enabledMtfSets = dashboardEnabled
         ? sets.filter((s) => s.enabled && s.action === 'mtf_run')
         : [];
+    // Un set capé non encore rafraîchi a `payload: null` (symbols vide) :
+    // l'orchestrateur le marque « not materialized » et n'appelle pas Symfony.
+    // On l'exclut donc des sets exécutables et on signale qu'un refresh manque.
+    const runnableSets = enabledMtfSets.filter((s) => s.payload);
+    const pendingMaterializationSets = enabledMtfSets.filter((s) => !s.payload);
     const exchanges = [...new Set(runnableSets.map((s) => s.exchange))];
     const liveSets = runnableSets.filter((s) => !s.dry_run && !forceDryRun);
     const bitmartLiveSets = liveSets.filter((s) => s.exchange === 'bitmart');
@@ -235,6 +240,13 @@ const OrchestrationCockpitPage = () => {
                             <div className="alert alert-warning">
                                 Ce dashboard est <strong>inactif</strong> : un run renverrait
                                 <code> no_sets</code> (0 appel). Activez-le pour l'exécuter.
+                            </div>
+                        )}
+                        {dashboardEnabled && pendingMaterializationSets.length > 0 && (
+                            <div className="alert alert-warning">
+                                {pendingMaterializationSets.length} set(s) actif(s) <strong>non
+                                matérialisé(s)</strong> (contrats pas encore résolus) : exclus du
+                                run tant que « Rafraîchir les contrats » n'a pas été lancé.
                             </div>
                         )}
                         <ul className="cockpit-preview">
