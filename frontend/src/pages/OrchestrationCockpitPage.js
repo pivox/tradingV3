@@ -6,7 +6,7 @@
 // configurés, preview du plan d'exécution, déclenchement d'un run et lecture du
 // dernier JSON (résumé global + détail / erreurs par set). Conforme à
 // docs/handbook/functional/orchestration-dashboard.md.
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import api from '../services/api';
 
 // Exchanges verrouillés en dry-run uniquement (cf. garde-fous fonctionnels).
@@ -42,6 +42,11 @@ const OrchestrationCockpitPage = () => {
     const [error, setError] = useState(null);
     const [notice, setNotice] = useState(null);
 
+    // Jeton monotone de requête : un chargement de détail (sets + dernier run)
+    // n'applique son résultat que s'il est toujours le plus récent. Évite qu'une
+    // réponse lente d'un dashboard précédent écrase celle du dashboard courant.
+    const detailRequestRef = useRef(0);
+
     // 1) Chargement initial de la liste des dashboards.
     useEffect(() => {
         let cancelled = false;
@@ -72,6 +77,8 @@ const OrchestrationCockpitPage = () => {
             setLatestRun(null);
             return;
         }
+        const token = ++detailRequestRef.current;
+        const isStale = () => token !== detailRequestRef.current;
         setLoadingSets(true);
         setError(null);
         try {
@@ -79,12 +86,15 @@ const OrchestrationCockpitPage = () => {
                 api.getOrchestrationSets(dashboardId),
                 api.getOrchestrationLatestRun(dashboardId)
             ]);
+            // Une sélection plus récente a été lancée entre-temps : on ignore.
+            if (isStale()) return;
             setSets(Array.isArray(setsData) ? setsData : []);
             setLatestRun(runData);
         } catch (err) {
+            if (isStale()) return;
             setError(`Impossible de charger le dashboard : ${err.message}`);
         } finally {
-            setLoadingSets(false);
+            if (!isStale()) setLoadingSets(false);
         }
     }, []);
 
