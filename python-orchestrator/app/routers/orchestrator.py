@@ -16,6 +16,7 @@ pas à l'aveugle). Les sets dry-run peuvent continuer sans snapshot.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 import uuid
 from datetime import datetime, timezone
@@ -51,6 +52,11 @@ router = APIRouter(tags=["orchestrator"])
 # Timeout (s) des appels Symfony, aligné sur le worker Temporal historique.
 _HTTP_TIMEOUT = 900.0
 
+# Longueur max des colonnes persistées `runs.run_id` / `runs.idempotency_key`
+# (String(255)). Au-delà, on hache de façon déterministe pour ne pas faire échouer
+# l'INSERT après coup (run déjà exécuté) sur PostgreSQL.
+_MAX_PERSISTED_LEN = 255
+
 # Exchanges dont le live est interdit (OKX/Hyperliquid), en chaînes pour comparer
 # aux colonnes ORM. Le validateur de schéma bloque déjà toute persistance live ;
 # ce miroir sert de garde-fou défense-en-profondeur au moment du run.
@@ -65,14 +71,23 @@ def _resolve_run_id(request: Optional[RunRequest]) -> str:
     - sinon ``dashboard_id`` + ``tick_timestamp`` -> identifiant dérivé stable ;
     - sinon (aucun contexte) -> identifiant aléatoire non idempotent.
     """
+    run_id = None
     if request is not None:
         if request.idempotency_key:
-            return f"run_{request.idempotency_key}"
-        if request.dashboard_id and request.tick_timestamp:
+            run_id = f"run_{request.idempotency_key}"
+        elif request.dashboard_id and request.tick_timestamp:
             stamp = request.tick_timestamp.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            return f"run_{request.dashboard_id}_{stamp}"
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    return f"run_{stamp}_{uuid.uuid4().hex[:6]}"
+            run_id = f"run_{request.dashboard_id}_{stamp}"
+    if run_id is None:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        run_id = f"run_{stamp}_{uuid.uuid4().hex[:6]}"
+    # Borne la PK `runs.run_id` (String(255)) : une idempotency_key/dashboard_id
+    # surdimensionnée ferait échouer l'INSERT après l'exécution du run. Hash
+    # déterministe au-delà de la limite => idempotence préservée (même entrée =>
+    # même run_id), historique non perdu.
+    if len(run_id) > _MAX_PERSISTED_LEN:
+        run_id = "run_" + hashlib.sha256(run_id.encode()).hexdigest()
+    return run_id
 
 
 def _resolve_status(success: int, failed: int) -> RunStatus:
@@ -162,6 +177,10 @@ def _persist_run(
     commit est géré ici (la dépendance ``get_session`` ne committe pas).
     """
     idempotency_key = request.idempotency_key if request is not None else None
+    # Borne la colonne unique `runs.idempotency_key` (String(255)) pour ne pas
+    # faire échouer la persistance après coup ; hash déterministe au-delà.
+    if idempotency_key is not None and len(idempotency_key) > _MAX_PERSISTED_LEN:
+        idempotency_key = "sha256:" + hashlib.sha256(idempotency_key.encode()).hexdigest()
     last_json = {
         "run_id": run_id,
         "dashboard_id": dashboard_id,

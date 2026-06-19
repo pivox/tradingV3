@@ -292,6 +292,38 @@ def test_run_id_is_idempotent_from_dashboard_and_tick(orchestrator_env, monkeypa
     assert first == f"run_{dash.id}_20260617T000000Z"
 
 
+def test_long_idempotency_key_run_id_is_bounded():
+    from app.schemas import RunRequest
+
+    long_key = "x" * 300
+    run_id = orch._resolve_run_id(RunRequest(idempotency_key=long_key))
+    assert len(run_id) <= 255
+    assert run_id.startswith("run_")
+    # Déterministe : même clé => même run_id (idempotence préservée).
+    assert run_id == orch._resolve_run_id(RunRequest(idempotency_key=long_key))
+
+
+def test_long_idempotency_key_persists_bounded(orchestrator_env, monkeypatch):
+    # Une clé surdimensionnée ne doit pas faire échouer la persistance (run_id et
+    # idempotency_key bornés à 255) : l'historique du run déjà exécuté est conservé.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    body = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "y" * 300}
+    ).json()
+    run_id = body["run_id"]
+    assert len(run_id) <= 255
+
+    session.expire_all()
+    run = session.get(Run, run_id)
+    assert run is not None
+    assert run.idempotency_key is not None
+    assert len(run.idempotency_key) <= 255
+
+
 def test_run_id_is_random_without_context(orchestrator_env, monkeypatch):
     client, _session = orchestrator_env
     _install_fake_client(monkeypatch, _FakeAsyncClient())
@@ -522,6 +554,8 @@ def test_conflicting_live_set_ids_normalizes_exchange_market_key():
     assert orch._conflicting_live_set_ids([a, s("b", " Bitmart ")], force_dry_run=False) == {"a", "b"}
     # Casse du market_type normalisée également.
     assert orch._conflicting_live_set_ids([a, s("c", "bitmart", market_type="PERPETUAL")], force_dry_run=False) == {"a", "c"}
+    # Alias de market_type (perp == perpetual côté Symfony) => conflit.
+    assert orch._conflicting_live_set_ids([a, s("e", "bitmart", market_type="perp")], force_dry_run=False) == {"a", "e"}
     # Exchanges réellement différents => pas de conflit.
     assert orch._conflicting_live_set_ids([a, s("d", "okx")], force_dry_run=False) == set()
 

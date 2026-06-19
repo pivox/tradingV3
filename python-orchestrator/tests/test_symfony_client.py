@@ -134,6 +134,14 @@ def test_snapshot_key_normalizes_casing_and_whitespace():
     assert snapshot_key(orm) == ("bitmart", "perpetual")
 
 
+@pytest.mark.parametrize("alias", ["perp", "future", "futures", "PERP", " Perpetual "])
+def test_snapshot_key_canonicalizes_market_type_aliases(alias):
+    # Symfony (ExchangeContextResolver) canonicalise perp/future/futures en
+    # perpetual : on miroir la table pour regrouper le même marché.
+    orm = SimpleNamespace(exchange="bitmart", market_type=alias)
+    assert snapshot_key(orm) == ("bitmart", "perpetual")
+
+
 def _client_with(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 

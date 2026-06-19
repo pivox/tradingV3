@@ -40,14 +40,36 @@ class ContractsUnavailableError(RuntimeError):
     """
 
 
-def _normalize_key_part(value: Any) -> Any:
-    """Normalise une composante de clé (exchange/market_type) : casse + espaces.
+# Alias de ``market_type`` canonicalisés par Symfony
+# (``ExchangeContextResolver::normalizeMarketType``, après ``strtolower(trim())``).
+# On miroir EXACTEMENT cette table pour que le regroupement snapshot / la détection
+# de conflit live correspondent au marché que Symfony exécutera réellement (sinon
+# un set live ``perp`` et un set live ``perpetual`` viseraient le même marché tout
+# en ayant des clés distinctes côté Python).
+_MARKET_TYPE_ALIASES = {
+    "perpetual": "perpetual",
+    "perp": "perpetual",
+    "future": "perpetual",
+    "futures": "perpetual",
+    "spot": "spot",
+}
 
-    Symfony normalise le couple avant exécution ; une ligne ORM écrite hors API
-    avec ``Bitmart`` ou `` perpetual `` doit donc être regroupée comme
-    ``bitmart``/``perpetual`` (snapshot partagé ET détection de conflit live).
-    """
+
+def _normalize_exchange(value: Any) -> Any:
+    """Normalise un ``exchange`` comme Symfony : ``strtolower(trim())`` (sans alias)."""
     return value.strip().lower() if isinstance(value, str) else value
+
+
+def _normalize_market_type(value: Any) -> Any:
+    """Normalise un ``market_type`` comme Symfony : casse/espaces + alias canoniques.
+
+    Les valeurs inconnues retombent sur leur forme normalisée (Symfony les
+    rejetterait en 400 ; ici elles ne matchent simplement aucune autre).
+    """
+    if not isinstance(value, str):
+        return value
+    canon = value.strip().lower()
+    return _MARKET_TYPE_ALIASES.get(canon, canon)
 
 
 def snapshot_key(a_set: Any) -> SnapshotKey:
@@ -55,12 +77,13 @@ def snapshot_key(a_set: Any) -> SnapshotKey:
 
     Accepte un set pydantic (``exchange``/``market_type`` sont des enums) **et** un
     ``OrchestrationSet`` ORM (ce sont des chaînes en base) : on lit ``.value`` quand
-    il existe, sinon la chaîne telle quelle, puis on normalise casse/espaces pour
-    que des variantes (``Bitmart``/``bitmart``) partagent le même snapshot.
+    il existe, sinon la chaîne telle quelle, puis on normalise comme Symfony
+    (casse/espaces + alias de ``market_type``) afin que des variantes
+    (``Bitmart``/``bitmart``, ``perp``/``perpetual``) partagent le même snapshot.
     """
     exchange = getattr(a_set.exchange, "value", a_set.exchange)
     market_type = getattr(a_set.market_type, "value", a_set.market_type)
-    return (_normalize_key_part(exchange), _normalize_key_part(market_type))
+    return (_normalize_exchange(exchange), _normalize_market_type(market_type))
 
 
 async def fetch_open_state(
