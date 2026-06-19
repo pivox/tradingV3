@@ -177,9 +177,14 @@ const OrchestrationCockpitPage = () => {
     const loadDashboardDetail = useCallback(async (dashboardId) => {
         // Tout changement de dashboard invalide la sélection d'historique en cours
         // (jeton de détail de run) et revient à l'affichage par défaut (dernier run).
+        // On nettoie aussi les loaders « détail de run » et « charger plus » : leurs
+        // requêtes en vol seront ignorées (jeton périmé) et leur `finally` gardé ne les
+        // remettrait pas à false, ce qui figerait l'UI sur « Chargement… ».
         runDetailRequestRef.current += 1;
         setSelectedRunId(null);
         setRunDetail(null);
+        setLoadingRunDetail(false);
+        setLoadingMoreRuns(false);
         if (!dashboardId) {
             setSets([]);
             setLatestRun(null);
@@ -320,9 +325,13 @@ const OrchestrationCockpitPage = () => {
     const handleSelectRun = async (runId) => {
         if (!runId) return;
         if (latestRun && String(runId) === String(latestRun.run_id)) {
+            // Retour au dernier run : on invalide tout chargement de détail en cours.
+            // Sans `setLoadingRunDetail(false)`, le `finally` de la requête périmée est
+            // gardé par le jeton et ne s'exécute pas → la carte resterait sur « Chargement… ».
             runDetailRequestRef.current += 1;
             setSelectedRunId(null);
             setRunDetail(null);
+            setLoadingRunDetail(false);
             return;
         }
         const token = ++runDetailRequestRef.current;
@@ -342,11 +351,14 @@ const OrchestrationCockpitPage = () => {
         }
     };
 
-    // Retour à l'affichage par défaut (dernier run).
+    // Retour à l'affichage par défaut (dernier run). Comme pour la sélection du
+    // dernier run, on remet `loadingRunDetail` à false : un détail encore en vol est
+    // invalidé par le jeton et son `finally` gardé ne nettoierait pas le loader.
     const handleShowLatestRun = () => {
         runDetailRequestRef.current += 1;
         setSelectedRunId(null);
         setRunDetail(null);
+        setLoadingRunDetail(false);
     };
 
     // Pagination « charger plus » : appoint borné (≤ RUNS_MAX), gardé par le jeton de
