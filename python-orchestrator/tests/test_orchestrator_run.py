@@ -733,11 +733,16 @@ def test_blank_idempotency_key_persisted_as_null(orchestrator_env, monkeypatch):
     second = client.post(
         "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "   "}
     ).json()
+    third = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "   "}
+    ).json()
 
-    # Deux run_id distincts (clé vide => non idempotent) et aucun conflit d'unicité.
-    assert first["run_id"] != second["run_id"]
+    # Une clé blanche n'est pas idempotente : chaque appel obtient un run_id frais
+    # (y compris deux appels « espaces » identiques) et aucun conflit d'unicité.
+    run_ids = {first["run_id"], second["run_id"], third["run_id"]}
+    assert len(run_ids) == 3
     session.expire_all()
-    for run_id in (first["run_id"], second["run_id"]):
+    for run_id in run_ids:
         run = session.get(Run, run_id)
         assert run is not None
         assert run.idempotency_key is None

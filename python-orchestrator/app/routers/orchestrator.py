@@ -73,7 +73,11 @@ def _resolve_run_id(request: Optional[RunRequest]) -> str:
     """
     run_id = None
     if request is not None:
-        if request.idempotency_key:
+        # Une clé blanche/vide est traitée comme absente (cohérent avec
+        # `_persist_run` qui la normalise en None) : sinon `run_   ` serait un
+        # identifiant « stable » et des appels répétés à clé blanche écraseraient
+        # le même historique au lieu d'obtenir des run_id frais.
+        if request.idempotency_key and request.idempotency_key.strip():
             run_id = f"run_{request.idempotency_key}"
         elif request.dashboard_id and request.tick_timestamp:
             stamp = request.tick_timestamp.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
