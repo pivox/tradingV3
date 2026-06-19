@@ -272,6 +272,18 @@ def build_mtf_payload(
     return payload
 
 
+def _enum_value(value: Any) -> Any:
+    """Déplie un membre d'enum en sa ``value``, laisse les chaînes inchangées.
+
+    ``generate_set_payload`` est appelé à la fois sur un ``OrchestrationSet`` ORM
+    (``exchange``/``market_type``/``mtf_profile`` y sont des **chaînes**) et sur le
+    schéma de lecture ``SetRead`` (où ce sont des **enums** ``str``). On normalise
+    en chaîne dans les deux cas pour que le payload effectif d'un même set soit
+    identique quelle que soit la source (cf. ``effective_set_payload``).
+    """
+    return getattr(value, "value", value)
+
+
 def generate_set_payload(a_set: Any) -> Optional[Dict[str, Any]]:
     """Prépare le payload ``/api/mtf/run`` **persisté** d'un set (PY-004).
 
@@ -302,11 +314,41 @@ def generate_set_payload(a_set: Any) -> Optional[Dict[str, Any]]:
     return _base_mtf_payload(
         dry_run=a_set.dry_run,
         workers=a_set.workers,
-        exchange=a_set.exchange,
-        market_type=a_set.market_type,
-        mtf_profile=a_set.mtf_profile,
+        exchange=_enum_value(a_set.exchange),
+        market_type=_enum_value(a_set.market_type),
+        mtf_profile=_enum_value(a_set.mtf_profile),
         symbols=symbols,
     )
+
+
+def _clamp_workers(workers: Any) -> int:
+    """Borne ``workers`` dans ``[1, MAX_WORKERS_PER_SET]``.
+
+    La borne ``MAX_WORKERS_PER_SET`` n'est imposée qu'au schéma de persistance
+    (aucune contrainte CHECK en base) : une ligne écrite hors API pourrait porter
+    ``workers>1``. On clampe donc au dispatch pour respecter la politique
+    « workers=1 côté Symfony ». Source unique du clamp (``effective_set_payload``).
+    """
+    return max(1, min(workers or 1, MAX_WORKERS_PER_SET))
+
+
+def effective_set_payload(a_set: Any) -> Optional[Dict[str, Any]]:
+    """Payload ``/api/mtf/run`` **effectif** d'un set persisté (PY-007).
+
+    Source unique du payload réellement envoyé par ``run_persisted_set``, **hors**
+    couche runtime : sans ``open_state_snapshot`` (récupéré à chaque run) et sans
+    l'override ``dry_run`` run-level. C'est exactement ``generate_set_payload`` +
+    le clamp ``workers`` — ni plus, ni moins — afin que la preview du cockpit
+    (``SetRead.effective_payload``) ne puisse pas dériver de l'envoi réel.
+
+    Renvoie ``None`` quand la sélection n'est pas matérialisée (symbols vide/blanc),
+    comme ``generate_set_payload`` : le front juge alors le set « non matérialisé ».
+    """
+    payload = generate_set_payload(a_set)
+    if payload is None:
+        return None
+    payload["workers"] = _clamp_workers(payload.get("workers"))
+    return payload
 
 
 # Statuts métier renvoyés par /api/mtf/run considérés comme un succès complet.
@@ -382,7 +424,7 @@ async def run_persisted_set(
     """Exécute un ``OrchestrationSet`` ORM persisté via ``POST /api/mtf/run`` (PY-005).
 
     Reconstruit **toujours** le payload depuis les COLONNES ORM via la forme
-    canonique ``generate_set_payload`` (allow-list de clés : ``dry_run``,
+    canonique ``effective_set_payload`` (allow-list de clés : ``dry_run``,
     ``workers``, ``exchange``, ``market_type``, ``mtf_profile``, ``symbols`` +
     ``sync_tables``/``process_tp_sl=false``) — plutôt que de faire confiance au JSON
     ``orm_set.payload`` stocké. Une ligne écrite hors API pourrait y avoir laissé
@@ -402,8 +444,11 @@ async def run_persisted_set(
     l'univers actif).
     """
     # Allow-list : repart des colonnes ORM, jamais du JSON stocké (anti control-flag
-    # et anti-divergence). `None` ⇔ symbols vide ⇒ non matérialisé.
-    payload = generate_set_payload(orm_set)
+    # et anti-divergence). Forme + clamp workers délégués à `effective_set_payload`,
+    # la fonction canonique partagée avec `SetRead.effective_payload` (PY-007) : la
+    # preview du cockpit ne peut donc pas dériver de l'envoi réel. `None` ⇔ symbols
+    # vide ⇒ non matérialisé.
+    payload = effective_set_payload(orm_set)
     if payload is None:
         return {
             "set_id": orm_set.set_id,
@@ -413,13 +458,8 @@ async def run_persisted_set(
             "body": "set payload not materialized (no concrete symbols)",
             "payload_sent": None,
         }
-    # Garde runtime workers : la borne MAX_WORKERS_PER_SET n'est imposée qu'au
-    # schéma de persistance (aucune contrainte CHECK en base). Une ligne écrite hors
-    # API avec `workers>1` passerait Symfony en mode parallèle ; on clampe dans
-    # [1, MAX] pour respecter la politique « workers=1 côté Symfony ».
-    payload["workers"] = max(1, min(payload.get("workers") or 1, MAX_WORKERS_PER_SET))
-    # Override run-level (sinon le dry_run de la colonne, déjà posé par
-    # generate_set_payload) puis snapshot runtime.
+    # On n'overlay ensuite que le runtime, exclu d'`effective_set_payload` : override
+    # run-level `dry_run` (sinon le dry_run de la colonne) puis snapshot runtime.
     if dry_run is not None:
         payload["dry_run"] = dry_run
     if snapshot is not None:

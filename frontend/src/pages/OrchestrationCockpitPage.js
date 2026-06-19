@@ -12,44 +12,6 @@ import api from '../services/api';
 // Exchanges verrouillés en dry-run uniquement (cf. garde-fous fonctionnels).
 const LIVE_FORBIDDEN_EXCHANGES = ['okx', 'hyperliquid'];
 
-// Borne workers côté Symfony, alignée sur `MAX_WORKERS_PER_SET` du runner Python
-// (python-orchestrator/app/schemas.py). Aucune contrainte CHECK en base : le
-// runtime clampe à l'exécution, donc la preview clampe pareil pour ne pas afficher
-// un payload divergent de l'envoi réel.
-const MAX_WORKERS_PER_SET = 1;
-
-// Nettoie les symbols comme le runner / Symfony : trim puis écarte les vides et
-// blancs. Une sélection qui se réduit à du vide vaut « tout l'univers actif » côté
-// Symfony, ce que la matérialisation interdit ; on la traite donc comme non
-// matérialisée (cf. generate_set_payload, app/services/symfony_client.py).
-const cleanSymbols = (symbols) =>
-    (Array.isArray(symbols) ? symbols : [])
-        .filter((s) => typeof s === 'string')
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
-
-// Reconstruit le payload /api/mtf/run depuis les COLONNES du set (allow-list),
-// exactement comme `generate_set_payload` + le clamp workers de `run_persisted_set`
-// côté Python — plutôt que de faire confiance au JSON `payload` persisté, qui peut
-// être périmé (symbols vidés depuis) ou porter des flags de contrôle runner. On ne
-// montre ainsi dans la preview que ce qui partira réellement à Symfony.
-// Renvoie `null` si la sélection n'a aucun symbole concret (non matérialisé :
-// fail-closed, aucun appel). `open_state_snapshot` est joint au runtime, pas ici.
-const buildSetPayload = (s, { dryRun } = {}) => {
-    const symbols = cleanSymbols(s.symbols);
-    if (symbols.length === 0) return null;
-    return {
-        dry_run: dryRun === undefined ? s.dry_run : dryRun,
-        workers: Math.max(1, Math.min(s.workers || 1, MAX_WORKERS_PER_SET)),
-        exchange: s.exchange,
-        market_type: s.market_type,
-        mtf_profile: s.mtf_profile,
-        sync_tables: false,
-        process_tp_sl: false,
-        symbols
-    };
-};
-
 const STATUS_BADGE_CLASS = {
     success: 'badge-success',
     partial_failure: 'badge-warning',
@@ -175,11 +137,12 @@ const OrchestrationCockpitPage = () => {
     // Parmi les sets effectivement dry, on distingue matérialisé / non matérialisé.
     // Un set non matérialisé n'a aucun symbole concret (sélection capée pas encore
     // rafraîchie, ou symbols tous blancs) : le runner renvoie `payload=null` et
-    // n'appelle pas Symfony. On juge la matérialisation sur les COLONNES (comme le
-    // runner), pas sur le JSON `payload` persisté qui pourrait être périmé.
+    // n'appelle pas Symfony. On juge la matérialisation sur `effective_payload`,
+    // LE payload effectif calculé par l'API Python (SetRead.effective_payload,
+    // PY-007) : `null` ⇔ non matérialisé, exactement comme côté runner.
     const effectiveDrySets = enabledMtfSets.filter((s) => effectiveDryRun(s));
-    const runnableSets = effectiveDrySets.filter((s) => cleanSymbols(s.symbols).length > 0);
-    const pendingMaterializationSets = effectiveDrySets.filter((s) => cleanSymbols(s.symbols).length === 0);
+    const runnableSets = effectiveDrySets.filter((s) => s.effective_payload != null);
+    const pendingMaterializationSets = effectiveDrySets.filter((s) => s.effective_payload == null);
     // Les deux autres états de set, à distinguer dans la preview : les sets
     // désactivés (jamais exécutés) et les sets actifs dont l'action n'est pas
     // `mtf_run` (l'orchestrateur ne dispatche aujourd'hui que des `mtf_run`).
@@ -188,9 +151,12 @@ const OrchestrationCockpitPage = () => {
     const disabledSets = sets.filter((s) => !s.enabled);
     const nonMtfRunSets = sets.filter((s) => s.enabled && s.action !== 'mtf_run');
     const exchanges = [...new Set(runnableSets.map((s) => s.exchange))];
-    // Payload /api/mtf/run effectivement envoyé : reconstruit depuis les colonnes
-    // (comme le runner), avec `dry_run` recalé sur la valeur effective.
-    const effectivePayload = (s) => buildSetPayload(s, { dryRun: effectiveDryRun(s) });
+    // Payload /api/mtf/run effectivement envoyé : LE payload calculé par l'API
+    // (SetRead.effective_payload, PY-007), seul `dry_run` étant recalé localement
+    // sur la valeur effective car « Forcer dry-run » est une décision run-level
+    // côté front (transformation triviale, le reste vient de l'API).
+    const effectivePayload = (s) =>
+        s.effective_payload && { ...s.effective_payload, dry_run: effectiveDryRun(s) };
 
     const handleRefreshContracts = async () => {
         if (!selectedDashboardId) return;
@@ -396,8 +362,8 @@ const OrchestrationCockpitPage = () => {
                                                     <span className="cockpit-hint"> (forcé)</span>
                                                 )}
                                             </td>
-                                            <td>{Math.max(1, Math.min(s.workers || 1, MAX_WORKERS_PER_SET))}</td>
-                                            <td>{cleanSymbols(s.symbols).length}</td>
+                                            <td>{s.effective_payload.workers}</td>
+                                            <td>{s.effective_payload.symbols.length}</td>
                                             <td>
                                                 <details>
                                                     <summary>payload</summary>
