@@ -2,6 +2,8 @@
 
 import asyncio
 
+import pytest
+
 import scripts.manage_orchestrator_schedule as schedule_manager
 from scripts.manage_orchestrator_schedule import (
     DEFAULT_URL,
@@ -180,6 +182,40 @@ def test_create_schedule_passes_single_workflow_config_arg(monkeypatch):
     ]
 
 
+def test_create_without_dashboard_fails_fast(monkeypatch):
+    # Un schedule sans dashboard tournerait en no_sets indéfiniment : refus.
+    def fail_schedule_classes():
+        raise AssertionError("must not build Temporal classes when dashboard is missing")
+
+    monkeypatch.setattr(schedule_manager, "temporal_schedule_classes", fail_schedule_classes)
+
+    config = ScheduleConfig(
+        command="create",
+        url=DEFAULT_URL,
+        dashboard_id=None,
+        cron="*/1 * * * *",
+        schedule_id="cron-orchestrator-run-1m",
+        workflow_id="cron-orchestrator-run-runner",
+        dry_run_schedule=False,
+    )
+
+    with pytest.raises(SystemExit, match="no dashboard configured"):
+        asyncio.run(create_schedule(object(), config))
+
+
+def test_dry_run_preview_without_dashboard_warns_but_previews(monkeypatch, capsys):
+    monkeypatch.setattr(schedule_manager, "DEFAULT_DASHBOARD_ID", None)
+    parser = build_parser()
+    args = parser.parse_args(["create", "--dry-run"])
+
+    asyncio.run(async_main(args))
+
+    output = capsys.readouterr().out
+    assert "WARNING: no dashboard configured" in output
+    # La prévisualisation est tout de même affichée (rien n'est créé).
+    assert "[DRY-RUN] would create schedule cron-orchestrator-run-1m" in output
+
+
 def test_create_schedule_handles_already_running(monkeypatch, capsys):
     class DummyScheduleClass:
         def __init__(self, *args, **kwargs):
@@ -212,7 +248,7 @@ def test_create_schedule_handles_already_running(monkeypatch, capsys):
     config = ScheduleConfig(
         command="create",
         url=DEFAULT_URL,
-        dashboard_id=None,
+        dashboard_id="7",
         cron="*/1 * * * *",
         schedule_id="cron-orchestrator-run-1m",
         workflow_id="cron-orchestrator-run-runner",

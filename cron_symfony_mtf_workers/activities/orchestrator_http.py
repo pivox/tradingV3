@@ -73,7 +73,24 @@ async def orchestrator_run(
             "error": f"non-JSON response (HTTP {response.status_code}): {response.text[:500]}",
         }
 
-    # Réponse JSON valide : on la retourne telle quelle. C'est le contrat
+    if not response.is_success:
+        # Corps JSON mais statut HTTP d'erreur : ce n'est PAS un RunResponse.
+        # L'orchestrateur renvoie toujours HTTP 200 pour un vrai run (y compris
+        # ok=false : no_sets / failed / partial_failure). Un non-2xx JSON est
+        # donc un échec d'appel (404 mauvais chemin, 422 validation, 401/403,
+        # 500…), p.ex. le `{"detail": "..."}` de FastAPI. On le normalise en
+        # dict explicite ok=false pour que TM-002 puisse distinguer un appel HTTP
+        # échoué d'un run réellement exécuté, plutôt que de propager un corps qui
+        # n'a pas la forme RunResponse.
+        return {
+            "ok": False,
+            "run_id": None,
+            "status": "error",
+            "summary": {"total_calls": 0, "success": 0, "failed": 0},
+            "error": f"HTTP {response.status_code}: {json.dumps(body)[:500]}",
+        }
+
+    # Réponse JSON valide et 2xx : on la retourne telle quelle. C'est le contrat
     # RunResponse de l'API Python (ok / run_id / status / summary). On ne
     # reconstruit rien — TM-002 décidera de l'échec sur ok=false.
     return body

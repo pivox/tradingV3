@@ -112,7 +112,33 @@ def temporal_schedule_classes():
     return Schedule, ScheduleActionStartWorkflow, SchedulePolicy, ScheduleSpec, overlap
 
 
+def assert_dashboard_configured(config: ScheduleConfig) -> Optional[str]:
+    """Garde-fou ``create`` : un dashboard est requis pour un schedule utile.
+
+    ``/orchestrator/run`` résout un ``dashboard_id`` absent en ``no_sets``
+    immédiat (cf. ``python-orchestrator/app/routers/orchestrator.py``) : un
+    schedule créé sans dashboard tournerait indéfiniment sans exécuter aucun set.
+    On échoue donc vite à la création réelle. En prévisualisation
+    (``--dry-run``), on n'échoue pas mais on retourne le message d'avertissement.
+    """
+    if config.dashboard_id is not None:
+        return None
+    message = (
+        "no dashboard configured: pass --dashboard-id or set ORCHESTRATOR_DASHBOARD_ID. "
+        "/orchestrator/run resolves a missing dashboard to no_sets, so the schedule "
+        "would tick forever without executing any set."
+    )
+    if not config.dry_run_schedule:
+        raise SystemExit(f"refusing to create schedule: {message}")
+    return message
+
+
 async def create_schedule(client: Any, config: ScheduleConfig) -> None:
+    # Fail fast : pas de dashboard => schedule inutile (no_sets en boucle).
+    warning = assert_dashboard_configured(config)
+    if warning is not None:
+        print(f"WARNING: {warning}")
+
     workflow_config = build_workflow_config(
         url=config.url,
         dashboard_id=config.dashboard_id,
@@ -187,6 +213,10 @@ async def async_main(args: argparse.Namespace) -> None:
     config = resolve_schedule_config(args)
 
     if config.command == "create":
+        # Fail fast AVANT toute connexion Temporal : un create sans dashboard est
+        # refusé (sinon la connexion réseau échouerait avant d'atteindre le
+        # garde-fou). En dry-run, l'avertissement est émis par create_schedule.
+        assert_dashboard_configured(config)
         client = None if config.dry_run_schedule else await get_client()
         await create_schedule(client, config)
         return

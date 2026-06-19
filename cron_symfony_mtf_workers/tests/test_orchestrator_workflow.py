@@ -39,6 +39,11 @@ class _FakeResponse:
         self.text = text if text is not None else json.dumps(payload)
         self._raise_json = raise_json
 
+    @property
+    def is_success(self):
+        # Aligné sur httpx.Response.is_success (2xx).
+        return 200 <= self.status_code < 300
+
     def json(self):
         if self._raise_json:
             raise json.JSONDecodeError("invalid", self.text or "", 0)
@@ -143,6 +148,44 @@ def test_activity_network_error_returns_explicit_dict(monkeypatch):
     assert result["status"] == "error"
     assert "boom" in result["error"]
     assert result["summary"] == {"total_calls": 0, "success": 0, "failed": 0}
+
+
+def test_activity_http_error_with_json_body_returns_explicit_dict(monkeypatch):
+    # FastAPI renvoie un JSON {"detail": ...} avec un statut non-2xx (404/422/…).
+    # Ce n'est pas un RunResponse : il doit être normalisé en ok=false, pas
+    # propagé verbatim (sinon TM-002 ne distinguerait pas l'échec HTTP d'un run).
+    _patch_async_client(
+        monkeypatch,
+        response=_FakeResponse({"detail": "Not Found"}, status_code=404),
+    )
+
+    result = asyncio.run(orchestrator_run(DEFAULT_ORCHESTRATOR_URL, None))
+
+    assert result["ok"] is False
+    assert result["status"] == "error"
+    assert "404" in result["error"]
+    assert "Not Found" in result["error"]
+    assert result["summary"] == {"total_calls": 0, "success": 0, "failed": 0}
+    # Le corps brut n'est PAS propagé tel quel.
+    assert "detail" not in result
+
+
+def test_activity_ok_false_with_http_200_is_propagated(monkeypatch):
+    # ok=false avec HTTP 200 (no_sets / failed) reste un RunResponse valide :
+    # il doit être propagé tel quel (pas transformé en erreur HTTP).
+    run_response = {
+        "ok": False,
+        "run_id": "run_x",
+        "status": "no_sets",
+        "summary": {"total_calls": 0, "success": 0, "failed": 0},
+    }
+    _patch_async_client(
+        monkeypatch, response=_FakeResponse(run_response, status_code=200)
+    )
+
+    result = asyncio.run(orchestrator_run(DEFAULT_ORCHESTRATOR_URL, None))
+
+    assert result == run_response
 
 
 def test_activity_non_json_body_returns_explicit_dict(monkeypatch):
