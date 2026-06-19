@@ -123,8 +123,23 @@ const OrchestrationCockpitPage = () => {
     // On l'exclut donc des sets exécutables et on signale qu'un refresh manque.
     const runnableSets = enabledMtfSets.filter((s) => s.payload);
     const pendingMaterializationSets = enabledMtfSets.filter((s) => !s.payload);
+    // Les deux autres états de set, à distinguer dans la preview : les sets
+    // désactivés (jamais exécutés) et les sets actifs dont l'action n'est pas
+    // `mtf_run` (l'orchestrateur ne dispatche aujourd'hui que des `mtf_run`).
+    // Calculés sur `sets` brut (indépendants de `dashboardEnabled`), à titre
+    // informatif : un dashboard inactif n'exécute de toute façon aucun set.
+    const disabledSets = sets.filter((s) => !s.enabled);
+    const nonMtfRunSets = sets.filter((s) => s.enabled && s.action !== 'mtf_run');
     const exchanges = [...new Set(runnableSets.map((s) => s.exchange))];
-    const liveSets = runnableSets.filter((s) => !s.dry_run && !forceDryRun);
+    // Dry-run effectif d'un set : « Forcer dry-run » est un override run-level qui
+    // écrase le `dry_run` configuré de chaque set (cf. RunRequest.dry_run côté
+    // Python). On le reflète dans la preview pour montrer ce qui partira vraiment.
+    const effectiveDryRun = (s) => forceDryRun || s.dry_run;
+    // Payload /api/mtf/run effectivement envoyé : le payload persisté du set, avec
+    // `dry_run` recalé sur la valeur effective. `open_state_snapshot` (joint au
+    // runtime par PY-005) n'est pas connu ici et n'apparaît donc pas dans la preview.
+    const effectivePayload = (s) => ({ ...s.payload, dry_run: effectiveDryRun(s) });
+    const liveSets = runnableSets.filter((s) => !effectiveDryRun(s));
     const bitmartLiveSets = liveSets.filter((s) => s.exchange === 'bitmart');
     const forbiddenLiveSets = liveSets.filter((s) => LIVE_FORBIDDEN_EXCHANGES.includes(s.exchange));
 
@@ -263,8 +278,11 @@ const OrchestrationCockpitPage = () => {
                             </div>
                         )}
                         <ul className="cockpit-preview">
-                            <li>{runnableSets.length} set(s) actif(s) à exécuter (action <code>mtf_run</code>)</li>
+                            <li>{runnableSets.length} set(s) runnable (action <code>mtf_run</code>, payload matérialisé)</li>
                             <li>{runnableSets.length} appel(s) Symfony prévu(s)</li>
+                            <li>{pendingMaterializationSets.length} non matérialisé(s) (exclu(s) du compte)</li>
+                            <li>{disabledSets.length} désactivé(s)</li>
+                            <li>{nonMtfRunSets.length} non-<code>mtf_run</code> (ignoré(s))</li>
                             <li>Exchanges : {exchanges.length > 0 ? exchanges.join(', ') : '—'}</li>
                             <li>Mode : {forceDryRun ? 'dry-run forcé (run-level)' : 'tel que configuré par set'}</li>
                             <li>Concurrence : bornée côté serveur (MAX_CONCURRENCY)</li>
@@ -279,6 +297,86 @@ const OrchestrationCockpitPage = () => {
                                 {forbiddenLiveSets.length} set(s) OKX/Hyperliquid en live :
                                 seront <strong>refusés</strong> (live interdit, fail-closed).
                             </div>
+                        )}
+
+                        {/* Détail par set runnable : ce qui partira réellement à Symfony.
+                            Le payload affiché est le payload /api/mtf/run persisté, avec le
+                            `dry_run` recalé sur la valeur effective (override « Forcer
+                            dry-run »). `open_state_snapshot` est joint au runtime. */}
+                        <h4>Détail des sets runnable</h4>
+                        {loadingSets ? (
+                            <div className="loading">Chargement…</div>
+                        ) : runnableSets.length === 0 ? (
+                            <div className="no-data">Aucun set runnable : rien ne partira à Symfony.</div>
+                        ) : (
+                            <table className="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Set ID</th>
+                                        <th>Exchange</th>
+                                        <th>Marché</th>
+                                        <th>Profil</th>
+                                        <th>Dry-run effectif</th>
+                                        <th>Workers</th>
+                                        <th>Symbols</th>
+                                        <th>Payload /api/mtf/run</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {runnableSets.map((s) => (
+                                        <tr key={s.id}>
+                                            <td>{s.set_id}</td>
+                                            <td>{s.exchange}</td>
+                                            <td>{s.market_type}</td>
+                                            <td>{s.mtf_profile}</td>
+                                            <td>
+                                                <span className={`badge ${effectiveDryRun(s) ? 'badge-info' : 'badge-danger'}`}>
+                                                    {effectiveDryRun(s) ? 'dry' : 'live'}
+                                                </span>
+                                                {forceDryRun && !s.dry_run && (
+                                                    <span className="cockpit-hint"> (forcé)</span>
+                                                )}
+                                            </td>
+                                            <td>{s.workers}</td>
+                                            <td>{Array.isArray(s.payload.symbols) ? s.payload.symbols.length : 0}</td>
+                                            <td>
+                                                <details>
+                                                    <summary>payload</summary>
+                                                    <pre className="cockpit-json">
+                                                        {JSON.stringify(effectivePayload(s), null, 2)}
+                                                    </pre>
+                                                </details>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+
+                        {/* Sets non exécutés, regroupés par raison d'exclusion. */}
+                        {(pendingMaterializationSets.length > 0
+                            || disabledSets.length > 0
+                            || nonMtfRunSets.length > 0) && (
+                            <ul className="cockpit-excluded">
+                                {pendingMaterializationSets.length > 0 && (
+                                    <li>
+                                        <strong>Non matérialisé(s)</strong> (payload <code>null</code>, refresh requis) :{' '}
+                                        {pendingMaterializationSets.map((s) => s.set_id).join(', ')}
+                                    </li>
+                                )}
+                                {disabledSets.length > 0 && (
+                                    <li>
+                                        <strong>Désactivé(s)</strong> :{' '}
+                                        {disabledSets.map((s) => s.set_id).join(', ')}
+                                    </li>
+                                )}
+                                {nonMtfRunSets.length > 0 && (
+                                    <li>
+                                        <strong>Non-<code>mtf_run</code></strong> (action non dispatchée) :{' '}
+                                        {nonMtfRunSets.map((s) => `${s.set_id} (${s.action})`).join(', ')}
+                                    </li>
+                                )}
+                            </ul>
                         )}
                     </div>
 
