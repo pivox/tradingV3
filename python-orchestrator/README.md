@@ -65,6 +65,11 @@ Hors-scope (PR suivantes) :
 | `GET` | `/dashboards/{id}/sets/{set_id}` | Détail d'un set (PY-002). |
 | `PATCH` | `/dashboards/{id}/sets/{set_id}` | Mise à jour partielle d'un set (PY-002). |
 | `DELETE` | `/dashboards/{id}/sets/{set_id}` | Supprime un set (PY-002). |
+| `GET` | `/dashboards/{id}/runs` | Liste les runs d'un dashboard (`?limit=&offset=`) (PY-006). |
+| `GET` | `/dashboards/{id}/runs/latest` | Dernier run d'un dashboard : JSON global + par set (PY-006). |
+| `GET` | `/runs` | Liste les runs (`?dashboard_id=&limit=&offset=`) (PY-006). |
+| `GET` | `/runs/{run_id}` | Dernier JSON global d'un run + détail par set (PY-006). |
+| `GET` | `/runs/{run_id}/sets/{set_id}` | Dernier JSON d'un set (payload + réponse brute) (PY-006). |
 | `GET` | `/docs` | Swagger UI (OpenAPI). |
 
 ### Gestion des dashboards et sets (PY-002)
@@ -141,6 +146,36 @@ Réponse :
 `status` ∈ `success | partial_failure | failed | no_sets`. **Aucun set actif**
 renvoie `status="no_sets"` et `ok=false` : ce n'est pas un succès Temporal
 (le workflow/activity devra échouer, cf. TM-002).
+
+### Historique des runs en lecture (PY-006)
+
+`POST /orchestrator/run` persiste le « dernier JSON » (un `Run` global +
+un `RunSet` par set, cf. *Persistance*). PY-006 l'expose en **lecture seule** :
+
+```bash
+# Liste des derniers runs (toutes origines, vue allégée sans last_json)
+curl -s 'localhost:8099/runs?limit=20'
+
+# Runs d'un dashboard, du plus récent au plus ancien
+curl -s 'localhost:8099/dashboards/1/runs'
+
+# Dernier run d'un dashboard : JSON global + détail par set (404 si aucun run)
+curl -s 'localhost:8099/dashboards/1/runs/latest'
+
+# Détail complet d'un run : last_json global + sets[] (payload + réponse brute)
+curl -s 'localhost:8099/runs/run_dashA_20260617T083000Z'
+
+# Dernier JSON d'un set précis (payload envoyé + réponse Symfony brute)
+curl -s 'localhost:8099/runs/run_dashA_20260617T083000Z/sets/setA'
+```
+
+`GET /runs` et `GET /dashboards/{id}/runs` renvoient une vue **allégée**
+(`RunSummaryRead`, sans `last_json` ni détail par set), triée du plus récent au
+plus ancien et paginée (`limit` borné à 100, `offset`). `GET /runs/{run_id}` et
+`/dashboards/{id}/runs/latest` renvoient le détail complet (`RunDetailRead` :
+`last_json` global + `sets[]` avec `payload_sent`, `response_json`, `error`,
+`duration_ms`). Ces endpoints n'écrivent rien : la persistance est faite par
+PY-005.
 
 ## Lancement local
 

@@ -32,6 +32,8 @@ from app.schemas import (
     DashboardCreate,
     DashboardRead,
     DashboardUpdate,
+    RunDetailRead,
+    RunSummaryRead,
     SetCreate,
     SetRead,
     SetUpdate,
@@ -195,6 +197,44 @@ def delete_set(
     repo.delete_set(session, a_set)
     session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- Historique des runs du dashboard (PY-006) ------------------------------
+
+# Borne la taille de page (alignée sur le router `runs`).
+_MAX_RUNS_PAGE_SIZE = 100
+
+
+@router.get("/{dashboard_id}/runs", response_model=list[RunSummaryRead])
+def list_dashboard_runs(
+    dashboard_id: int,
+    limit: int = 20,
+    offset: int = 0,
+    session: Session = Depends(get_session),
+) -> list:
+    """Liste les runs d'un dashboard, du plus récent au plus ancien (vue allégée)."""
+    _require_dashboard(session, dashboard_id)
+    limit = max(1, min(limit, _MAX_RUNS_PAGE_SIZE))
+    offset = max(0, offset)
+    return list(
+        repo.list_runs(session, dashboard_id=dashboard_id, limit=limit, offset=offset)
+    )
+
+
+@router.get("/{dashboard_id}/runs/latest", response_model=RunDetailRead)
+def get_dashboard_latest_run(
+    dashboard_id: int, session: Session = Depends(get_session)
+) -> RunDetailRead:
+    """Dernier run d'un dashboard : dernier JSON global + dernier JSON par set.
+
+    C'est le retour que le cockpit affiche par défaut (« dernier run »). ``404``
+    si le dashboard n'a encore aucun run persisté.
+    """
+    _require_dashboard(session, dashboard_id)
+    run = repo.get_latest_run(session, dashboard_id=dashboard_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="no run for this dashboard")
+    return RunDetailRead.from_run(run, repo.list_run_sets(session, run.run_id))
 
 
 # --- Refresh des contrats (PY-003) ------------------------------------------

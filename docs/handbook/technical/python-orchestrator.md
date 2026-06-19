@@ -404,6 +404,23 @@ L'API Python garde toujours :
 
 Le front peut donc afficher le même type de retour que le retour existant de Symfony, avec une vue supplémentaire par set.
 
+### Lecture de l'historique (PY-006)
+
+L'écriture de cet historique est faite par PY-005 (`POST /orchestrator/run`).
+PY-006 ajoute la surface **en lecture seule** consommée par le cockpit :
+
+| Méthode | Chemin | Rôle |
+| --- | --- | --- |
+| `GET` | `/runs` | Liste des runs (vue allégée), filtrable par `dashboard_id`, paginée (`limit` ≤ 100, `offset`), du plus récent au plus ancien. |
+| `GET` | `/runs/{run_id}` | Détail complet : dernier JSON global (`last_json`) + détail par set (`sets[]`). |
+| `GET` | `/runs/{run_id}/sets/{set_id}` | Dernier JSON d'un set : `payload_sent`, `response_json` brute, `error`, `duration_ms`. |
+| `GET` | `/dashboards/{id}/runs` | Runs d'un dashboard (vue allégée, paginée). |
+| `GET` | `/dashboards/{id}/runs/latest` | Dernier run d'un dashboard (détail complet) — le retour affiché par défaut au cockpit ; `404` si aucun run. |
+
+La vue allégée (`RunSummaryRead`) omet `last_json` et le détail par set pour
+rester légère sur les listes ; le détail (`RunDetailRead`) porte le dernier JSON
+global et la liste des sets (triés par `set_id`). Ces endpoints n'écrivent rien.
+
 ## Schéma de persistance (DB-001)
 
 La persistance est implémentée dans `python-orchestrator/` avec **SQLAlchemy 2.0 + Alembic**
@@ -442,8 +459,9 @@ La **lecture des sets persistés au moment du run** et l'**écriture des runs** 
 à partir de son `payload` persisté (+ snapshot runtime + override `dry_run`), puis persiste
 l'historique (un `Run` avec `last_json` global, un `RunSet` par set avec `payload_sent`,
 `response_json`, `duration_ms`). L'**exposition en lecture** de cet historique (endpoints `GET`)
-reste portée par **PY-006**. Les migrations s'appliquent via `alembic upgrade head` (voir
-`python-orchestrator/README.md`).
+est livrée par **PY-006** (`GET /runs`, `/runs/{run_id}`, `/runs/{run_id}/sets/{set_id}`,
+`/dashboards/{id}/runs`, `/dashboards/{id}/runs/latest`). Les migrations s'appliquent via
+`alembic upgrade head` (voir `python-orchestrator/README.md`).
 
 ## Garde-fous fonctionnels
 
@@ -476,7 +494,7 @@ Avant tout run :
 | PY-003 ✅ | Refresh explicite des contrats | Livré : `POST /dashboards/{id}/refresh-contracts` fetch `GET /api/mtf/contracts` 1×/(profil,exchange,market_type), persiste `symbols` (cap `contracts_limit`), fail-closed 502 sans écriture partielle, aperçu par set. |
 | PY-004 ✅ | Générer le `payload` `/api/mtf/run` des sets | Livré : `payload` produit côté serveur (cœur partagé avec `build_mtf_payload`, `sync_tables`/`process_tp_sl=false`, sans snapshot) et régénéré à chaque create/update/refresh ; lecture seule via `SetRead`. |
 | PY-005 ✅ | Exécuter les sets persistés + persister les runs | Livré : `/orchestrator/run` lit les sets actifs du dashboard depuis la base, exécute chaque set via son `payload` persisté (+ snapshot runtime + override `dry_run`), et persiste le run (`Run.last_json` global + un `RunSet` par set avec `payload_sent`/`response_json`/`duration_ms`). `no_sets` reste `ok=false`. Garde-fou live défense-en-profondeur au run : OKX/Hyperliquid live (ligne ORM écrite hors API) sont fail-closed avant tout dispatch. |
-| PY-006 | Exposer l'historique des runs en lecture | Endpoints `GET` du dernier JSON global et par set (lecture seule ; l'écriture est faite par PY-005). |
+| PY-006 ✅ | Exposer l'historique des runs en lecture | Livré : endpoints `GET` en lecture seule du dernier JSON global et par set (`/runs`, `/runs/{run_id}`, `/runs/{run_id}/sets/{set_id}`, `/dashboards/{id}/runs`, `/dashboards/{id}/runs/latest`) ; vue allégée paginée pour les listes, détail complet `last_json` + sets. |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 

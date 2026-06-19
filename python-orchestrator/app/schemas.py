@@ -183,6 +183,85 @@ class RunResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Lecture de l'historique des runs (PY-006)
+#
+# Schémas de sortie des endpoints GET en lecture seule. L'écriture de cet
+# historique est faite par PY-005 ; ici on n'expose que le « dernier JSON »
+# global d'un run (``last_json``) et par set (``payload_sent`` /
+# ``response_json``) pour le cockpit.
+# ---------------------------------------------------------------------------
+
+
+class RunSetRead(BaseModel):
+    """Dernier JSON par set : payload envoyé, réponse Symfony brute, erreur."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    run_id: str
+    set_id: str
+    # Lien optionnel vers le set persistant (rompu si le set a été supprimé).
+    set_ref_id: Optional[int] = None
+    ok: bool
+    error: Optional[str] = None
+    duration_ms: Optional[int] = None
+    payload_sent: Optional[dict] = None
+    response_json: Optional[dict] = None
+    created_at: datetime
+
+
+class RunSummaryRead(BaseModel):
+    """Vue allégée d'un run pour les listes (sans ``last_json`` ni détail par set)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    run_id: str
+    # Nullable : ON DELETE SET NULL conserve le run même si le dashboard disparaît.
+    dashboard_id: Optional[int] = None
+    ok: bool
+    # `status` persisté (success / partial_failure / failed) ; `no_sets` n'est jamais persisté.
+    status: str
+    idempotency_key: Optional[str] = None
+    total_calls: int
+    success_count: int
+    failed_count: int
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class RunDetailRead(RunSummaryRead):
+    """Détail complet d'un run : dernier JSON global + dernier JSON par set."""
+
+    last_json: Optional[dict] = None
+    sets: List[RunSetRead] = Field(default_factory=list)
+
+    @classmethod
+    def from_run(cls, run: object, run_sets: object) -> "RunDetailRead":
+        """Assemble le détail depuis un ``Run`` ORM et ses ``RunSet``.
+
+        Construction explicite (plutôt que ``model_validate(run)``) car le champ
+        ``sets`` ne correspond pas à l'attribut ORM ``run_sets`` : on injecte la
+        liste fournie par l'appelant (ordre déterministe via le repository).
+        """
+        return cls(
+            run_id=run.run_id,
+            dashboard_id=run.dashboard_id,
+            ok=run.ok,
+            status=run.status,
+            idempotency_key=run.idempotency_key,
+            total_calls=run.total_calls,
+            success_count=run.success_count,
+            failed_count=run.failed_count,
+            started_at=run.started_at,
+            finished_at=run.finished_at,
+            created_at=run.created_at,
+            last_json=run.last_json,
+            sets=[RunSetRead.model_validate(rs) for rs in run_sets],
+        )
+
+
+# ---------------------------------------------------------------------------
 # Gestion des dashboards et des sets (PY-002)
 #
 # Schémas d'entrée/sortie de l'API de configuration : création, lecture, mise à
