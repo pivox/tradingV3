@@ -285,3 +285,45 @@ def test_executed_run_is_readable_end_to_end(orchestrator_env, monkeypatch):
     # Le dernier run du dashboard pointe le même run.
     latest = client.get(f"/dashboards/{dash.id}/runs/latest").json()
     assert latest["run_id"] == run_id
+
+
+def test_run_with_slash_bearing_key_is_fetchable(orchestrator_env, monkeypatch):
+    # Régression : un idempotency_key porteur de `/` ne doit pas produire un run_id
+    # non récupérable via GET /runs/{run_id} (segment de chemin sans slash).
+    from app.db.models import OrchestrationSet
+    from tests.test_orchestrator_run import _FakeAsyncClient, _install_fake_client
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    session.add(
+        OrchestrationSet(
+            dashboard_id=dash.id,
+            set_id="a",
+            exchange="fake",
+            market_type="perpetual",
+            dry_run=True,
+            symbols=["BTCUSDT"],
+            payload={
+                "dry_run": True,
+                "workers": 1,
+                "exchange": "fake",
+                "market_type": "perpetual",
+                "mtf_profile": "regular",
+                "sync_tables": False,
+                "process_tp_sl": False,
+                "symbols": ["BTCUSDT"],
+            },
+        )
+    )
+    session.commit()
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    run_id = client.post(
+        "/orchestrator/run",
+        json={"dashboard_id": str(dash.id), "idempotency_key": "temporal/dash/2026-06-19"},
+    ).json()["run_id"]
+
+    # Le run_id renvoyé est un segment de chemin sûr et le run est récupérable.
+    assert "/" not in run_id
+    assert client.get(f"/runs/{run_id}").status_code == 200
+    assert client.get(f"/runs/{run_id}/sets/a").status_code == 200
