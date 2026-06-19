@@ -748,6 +748,39 @@ def test_blank_idempotency_key_persisted_as_null(orchestrator_env, monkeypatch):
         assert run.idempotency_key is None
 
 
+def test_persist_reuses_existing_run_id_resolved_by_idempotency_key(
+    orchestrator_env, monkeypatch
+):
+    # record_run peut résoudre un run existant par idempotency_key dont le run_id
+    # diffère du run_id dérivé. La persistance des RunSet doit alors réutiliser le
+    # run_id réellement persisté, sinon ces lignes pointent un parent runs inexistant
+    # et la FK run_sets.run_id casse au commit (après l'exécution Symfony).
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+
+    # Run pré-existant portant idempotency_key="k1" SOUS un run_id distinct du dérivé
+    # ("run_k1"), simulant un writer antérieur (autre convention de run_id).
+    session.add(Run(run_id="run_legacy", idempotency_key="k1", ok=False, status="failed"))
+    session.commit()
+
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+    resp = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "k1"}
+    )
+    assert resp.status_code == 200
+
+    session.expire_all()
+    # Aucun "run_k1" créé : le run existant est mis à jour, et les RunSet pointent le
+    # run réellement persisté (pas d'orphelin, FK respectée).
+    assert session.get(Run, "run_k1") is None
+    legacy = session.get(Run, "run_legacy")
+    assert legacy.status == "success"
+    run_sets = session.scalars(select(RunSet).where(RunSet.run_id == "run_legacy")).all()
+    assert len(run_sets) == 1
+    assert run_sets[0].set_id == "a"
+
+
 def test_persist_run_nulls_stale_fks(orchestrator_env):
     # Régression : la transaction de lecture étant clôturée avant les appels
     # Symfony, un set/dashboard peut être supprimé pendant le run. La persistance

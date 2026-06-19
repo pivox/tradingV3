@@ -233,7 +233,7 @@ def _persist_run(
         ).all()
     )
 
-    repositories.record_run(
+    persisted_run = repositories.record_run(
         session,
         Run(
             run_id=run_id,
@@ -249,6 +249,12 @@ def _persist_run(
             last_json=last_json,
         ),
     )
+    # record_run peut résoudre un run existant par `idempotency_key` dont le
+    # `run_id` diffère du run_id dérivé (cas de retry supporté par le repository) :
+    # on réutilise alors le run_id réellement persisté pour la purge et les RunSet,
+    # sinon ces lignes pointeraient un parent `runs` inexistant et la FK
+    # `run_sets.run_id` casserait au commit (après l'exécution Symfony).
+    run_id = persisted_run.run_id
 
     # Purge des RunSet périmés d'une exécution précédente du MÊME run_id (retry
     # via idempotency_key/dashboard+tick) : si un set a été désactivé/supprimé/
