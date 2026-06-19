@@ -289,11 +289,15 @@ const OrchestrationCockpitPage = () => {
                             || busy
                             || loadingSets
                             || runnableSets.length === 0
-                            // `/orchestrator/run` exécute TOUS les sets actifs du
-                            // dashboard (pas de sélection par set côté backend) : un
-                            // set non matérialisé partirait et serait compté en échec.
-                            // On bloque donc le run tant qu'un refresh est requis.
+                            // `/orchestrator/run` itère TOUS les sets actifs du
+                            // dashboard (pas de sélection par set côté backend) et compte
+                            // chaque set dans `total_calls`/`failed`. Un set non matérialisé
+                            // OU effectivement live finit en échec (`ok=false`), donc le run
+                            // entier finit NON OK. On bloque tant qu'un de ces cas subsiste :
+                            // l'opérateur doit rafraîchir (matérialisation) ou cocher
+                            // « Forcer dry-run » / retirer le set live.
                             || pendingMaterializationSets.length > 0
+                            || liveRefusedSets.length > 0
                         }
                     >
                         {running ? 'Run en cours…' : 'Lancer un run'}
@@ -339,14 +343,17 @@ const OrchestrationCockpitPage = () => {
                         </ul>
                         {liveRefusedSets.length > 0 && (
                             <div className="alert alert-warning">
-                                ⚠️ {liveRefusedSets.length} set(s) en <strong>live effectif</strong> :
-                                seront <strong>refusés</strong> par le runner (exécution live non
-                                activée, fail-closed) — aucun <code>/api/mtf/run</code> envoyé.
+                                {liveRefusedSets.length} set(s) en <strong>live effectif</strong>. Le
+                                run est <strong>bloqué</strong> : <code>/orchestrator/run</code> itère
+                                tous les sets actifs et compte ces sets live en échec
+                                (<code>ok=false</code>, aucun <code>/api/mtf/run</code> envoyé,
+                                fail-closed), donc le run finirait NON OK.
                                 {forbiddenLiveSets.length > 0 && (
                                     <> Dont {forbiddenLiveSets.length} OKX/Hyperliquid (live interdit
                                     même après readiness).</>
                                 )}{' '}
-                                Cochez « Forcer dry-run » pour les exécuter en dry.
+                                Cochez « Forcer dry-run » pour les exécuter en dry, ou désactivez /
+                                retirez ces sets.
                             </div>
                         )}
 
