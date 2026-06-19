@@ -79,6 +79,12 @@ const OrchestrationCockpitPage = () => {
         }
         const token = ++detailRequestRef.current;
         const isStale = () => token !== detailRequestRef.current;
+        // Vide le détail dès le début du chargement : sinon la preview et
+        // `runnableSets` refléteraient l'ancien dashboard pendant la requête (ou
+        // indéfiniment si elle échoue), au risque de lancer un run sur des données
+        // périmées. Combiné au gating sur `loadingSets`, les actions sont neutres.
+        setSets([]);
+        setLatestRun(null);
         setLoadingSets(true);
         setError(null);
         try {
@@ -202,14 +208,14 @@ const OrchestrationCockpitPage = () => {
                     <button
                         className="btn btn-secondary"
                         onClick={handleRefreshContracts}
-                        disabled={!selectedDashboardId || busy}
+                        disabled={!selectedDashboardId || busy || loadingSets}
                     >
                         {refreshing ? 'Refresh…' : 'Rafraîchir les contrats'}
                     </button>
                     <button
                         className="btn btn-primary"
                         onClick={handleRun}
-                        disabled={!selectedDashboardId || busy || runnableSets.length === 0}
+                        disabled={!selectedDashboardId || busy || loadingSets || runnableSets.length === 0}
                     >
                         {running ? 'Run en cours…' : 'Lancer un run'}
                     </button>
