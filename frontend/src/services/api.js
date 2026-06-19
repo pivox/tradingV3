@@ -388,6 +388,24 @@ const api = {
             return null;
         }
         return handleResponse(response);
+    },
+
+    // Historique des runs d'un dashboard (PY-006), du plus récent au plus ancien.
+    // Vue allégée `RunSummaryRead` (sans `last_json` ni détail par set). La page est
+    // bornée côté API (`_MAX_RUNS_PAGE_SIZE=100`).
+    async getOrchestrationRuns(dashboardId, { limit = 20, offset = 0 } = {}) {
+        const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+        const response = await fetch(
+            `${config.orchestratorApiUrl}/dashboards/${dashboardId}/runs?${params.toString()}`
+        );
+        return handleResponse(response);
+    },
+
+    // Détail complet d'un run par son identifiant (PY-006) : dernier JSON global +
+    // détail / erreurs par set (`RunDetailRead`), même forme que le dernier run.
+    async getOrchestrationRun(runId) {
+        const response = await fetch(`${config.orchestratorApiUrl}/runs/${runId}`);
+        return handleResponse(response);
     }
 };
 
