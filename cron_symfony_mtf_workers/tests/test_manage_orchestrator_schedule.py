@@ -199,8 +199,34 @@ def test_create_without_dashboard_fails_fast(monkeypatch):
         dry_run_schedule=False,
     )
 
-    with pytest.raises(SystemExit, match="no dashboard configured"):
+    with pytest.raises(SystemExit, match="no valid dashboard configured"):
         asyncio.run(create_schedule(object(), config))
+
+
+def test_dashboard_is_valid_rejects_blank_and_non_numeric():
+    assert schedule_manager.dashboard_is_valid("7") is True
+    assert schedule_manager.dashboard_is_valid(" 7 ") is True
+    assert schedule_manager.dashboard_is_valid(None) is False
+    assert schedule_manager.dashboard_is_valid("") is False
+    assert schedule_manager.dashboard_is_valid("   ") is False
+    assert schedule_manager.dashboard_is_valid("abc") is False
+
+
+def test_create_with_blank_or_non_numeric_dashboard_fails_fast():
+    def make_config(dashboard_id):
+        return ScheduleConfig(
+            command="create",
+            url=DEFAULT_URL,
+            dashboard_id=dashboard_id,
+            cron="*/1 * * * *",
+            schedule_id="cron-orchestrator-run-1m",
+            workflow_id="cron-orchestrator-run-runner",
+            dry_run_schedule=False,
+        )
+
+    for bad in ("", "   ", "abc"):
+        with pytest.raises(SystemExit, match="no valid dashboard configured"):
+            asyncio.run(create_schedule(object(), make_config(bad)))
 
 
 def test_dry_run_preview_without_dashboard_warns_but_previews(monkeypatch, capsys):
@@ -211,7 +237,7 @@ def test_dry_run_preview_without_dashboard_warns_but_previews(monkeypatch, capsy
     asyncio.run(async_main(args))
 
     output = capsys.readouterr().out
-    assert "WARNING: no dashboard configured" in output
+    assert "WARNING: no valid dashboard configured" in output
     # La prévisualisation est tout de même affichée (rien n'est créé).
     assert "[DRY-RUN] would create schedule cron-orchestrator-run-1m" in output
 

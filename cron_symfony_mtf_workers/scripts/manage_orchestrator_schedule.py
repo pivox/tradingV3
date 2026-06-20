@@ -112,20 +112,43 @@ def temporal_schedule_classes():
     return Schedule, ScheduleActionStartWorkflow, SchedulePolicy, ScheduleSpec, overlap
 
 
-def assert_dashboard_configured(config: ScheduleConfig) -> Optional[str]:
-    """Garde-fou ``create`` : un dashboard est requis pour un schedule utile.
+def dashboard_is_valid(dashboard_id: Optional[str]) -> bool:
+    """Indique si ``dashboard_id`` résoudra un dashboard côté orchestrateur.
 
-    ``/orchestrator/run`` résout un ``dashboard_id`` absent en ``no_sets``
-    immédiat (cf. ``python-orchestrator/app/routers/orchestrator.py``) : un
-    schedule créé sans dashboard tournerait indéfiniment sans exécuter aucun set.
-    On échoue donc vite à la création réelle. En prévisualisation
-    (``--dry-run``), on n'échoue pas mais on retourne le message d'avertissement.
+    ``/orchestrator/run`` fait ``int(dashboard_id)`` et retombe sur ``None``
+    (=> ``no_sets``) pour une valeur absente, blanche ou non numérique
+    (cf. ``_resolve_dashboard_id`` dans
+    ``python-orchestrator/app/routers/orchestrator.py``). On applique la même
+    règle ici pour ne pas créer un schedule qui tournerait à vide.
     """
-    if config.dashboard_id is not None:
+    if dashboard_id is None:
+        return False
+    stripped = str(dashboard_id).strip()
+    if not stripped:
+        return False
+    try:
+        int(stripped)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def assert_dashboard_configured(config: ScheduleConfig) -> Optional[str]:
+    """Garde-fou ``create`` : un dashboard numérique valide est requis.
+
+    ``/orchestrator/run`` résout un ``dashboard_id`` absent / blanc / non
+    numérique en ``no_sets`` immédiat (cf.
+    ``python-orchestrator/app/routers/orchestrator.py``) : un schedule créé
+    ainsi tournerait indéfiniment sans exécuter aucun set. On échoue donc vite à
+    la création réelle. En prévisualisation (``--dry-run``), on n'échoue pas mais
+    on retourne le message d'avertissement.
+    """
+    if dashboard_is_valid(config.dashboard_id):
         return None
     message = (
-        "no dashboard configured: pass --dashboard-id or set ORCHESTRATOR_DASHBOARD_ID. "
-        "/orchestrator/run resolves a missing dashboard to no_sets, so the schedule "
+        f"no valid dashboard configured (got {config.dashboard_id!r}): pass a numeric "
+        "--dashboard-id or set a numeric ORCHESTRATOR_DASHBOARD_ID. /orchestrator/run "
+        "resolves a missing/blank/non-numeric dashboard to no_sets, so the schedule "
         "would tick forever without executing any set."
     )
     if not config.dry_run_schedule:
