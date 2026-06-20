@@ -212,7 +212,9 @@ async def create_schedule(client: Any, config: ScheduleConfig) -> None:
 
 
 async def pause_schedule(handle: Any, config: ScheduleConfig) -> None:
-    await handle.pause("manual pause")
+    # ``note`` est keyword-only sur ScheduleHandle.pause (SDK Temporal Python) :
+    # le passer en positionnel lève TypeError.
+    await handle.pause(note="manual pause")
     print(f"schedule '{config.schedule_id}' paused")
 
 

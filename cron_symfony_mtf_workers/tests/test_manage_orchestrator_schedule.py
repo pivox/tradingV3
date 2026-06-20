@@ -13,7 +13,9 @@ from scripts.manage_orchestrator_schedule import (
     build_parser,
     build_workflow_config,
     create_schedule,
+    pause_schedule,
     resolve_schedule_config,
+    resume_schedule,
 )
 
 
@@ -240,6 +242,38 @@ def test_dry_run_preview_without_dashboard_warns_but_previews(monkeypatch, capsy
     assert "WARNING: no valid dashboard configured" in output
     # La prévisualisation est tout de même affichée (rien n'est créé).
     assert "[DRY-RUN] would create schedule cron-orchestrator-run-1m" in output
+
+
+def test_pause_passes_note_as_keyword():
+    # ScheduleHandle.pause(note=...) est keyword-only : un appel positionnel
+    # lèverait TypeError. Le fake ci-dessous reproduit cette contrainte.
+    class _KwOnlyHandle:
+        def __init__(self):
+            self.calls = []
+
+        async def pause(self, *, note=None):
+            self.calls.append(("pause", note))
+
+        async def unpause(self, *, note=None):
+            self.calls.append(("unpause", note))
+
+    config = ScheduleConfig(
+        command="pause",
+        url=DEFAULT_URL,
+        dashboard_id="7",
+        cron="*/1 * * * *",
+        schedule_id="cron-orchestrator-run-1m",
+        workflow_id="cron-orchestrator-run-runner",
+        dry_run_schedule=False,
+    )
+
+    handle = _KwOnlyHandle()
+    asyncio.run(pause_schedule(handle, config))
+    assert handle.calls == [("pause", "manual pause")]
+
+    # resume ne passe pas de note positionnelle non plus.
+    asyncio.run(resume_schedule(handle, config))
+    assert handle.calls[-1] == ("unpause", None)
 
 
 def test_create_schedule_handles_already_running(monkeypatch, capsys):
