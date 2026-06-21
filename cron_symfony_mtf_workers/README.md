@@ -74,12 +74,13 @@ Chaque schedule définit ses propres overrides via `job.payload`. Voir `models/m
 
 ## 4. Schedules disponibles
 
-### 4.0 Schedule cible — Orchestrateur Python (TM-001)
+### 4.0 Schedule cible — Orchestrateur Python (TM-001 / TM-002)
 
 - **Objectif** : déclencheur cron minimal vers l'orchestrateur Python. Un schedule unique démarre `OrchestratorCronWorkflow`, qui exécute l'unique activity `orchestrator_run` : un seul `POST /orchestrator/run`. **Aucune logique de sélection de contrats côté Temporal** — la sélection des sets, la concurrence, l'agrégation et la conservation du JSON sont portées par l'API Python (PY-005/PY-006).
 - **Fichier CLI** : `scripts/manage_orchestrator_schedule.py`.
 - **Statut** : cible. C'est le chemin à privilégier pour les nouveaux déploiements (les schedules MTF multi-jobs ci-dessous restent en transition, CLEAN-001).
 - **Composants** : `activities/orchestrator_http.py` (`orchestrator_run`) + `workflows/orchestrator_cron.py` (`OrchestratorCronWorkflow`), enregistrés à côté du legacy dans `worker.py` sur la même task queue `cron_symfony_mtf_workers`.
+- **Échec sur `ok=false` (TM-002)** : le workflow journalise `run_id` + `summary` puis, si le `RunResponse` a `ok=false` (`no_sets` / `failed` / `partial_failure` / `error`), lève une `ApplicationError` (`non_retryable=True`) pour que Temporal marque le tick en échec. Sur `ok=true`, le `RunResponse` est propagé inchangé. Le `non_retryable=True` évite un retry en boucle dans le même tick : le prochain tick cron est le « retry » naturel (overlap `BUFFER_ONE`). L'activity reste « return verbatim » (la levée vit uniquement dans le workflow).
 
 L'activity POST le `RunRequest` minimal et retourne le `RunResponse` tel quel :
 
@@ -115,7 +116,7 @@ python scripts/manage_orchestrator_schedule.py resume
 python scripts/manage_orchestrator_schedule.py delete
 ```
 
-> `ok=false` n'est pas un succès Temporal. TM-001 se contente de propager le `RunResponse` complet ; l'échec explicite du workflow sur `ok=false` est livré par **TM-002**.
+> `ok=false` n'est pas un succès Temporal. Le workflow propage le `RunResponse` complet sur `ok=true` et lève une `ApplicationError` non-retryable sur `ok=false` (implémenté par **TM-002**), après avoir journalisé `run_id` + `summary`.
 
 ### 4.1 Runtime Matrix Exchange/Profile
 

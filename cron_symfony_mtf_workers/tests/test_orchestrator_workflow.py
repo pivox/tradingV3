@@ -4,9 +4,12 @@ Couvre :
 - l'activity ``orchestrator_run`` (POST httpx, retour RunResponse tel quel,
   chemins d'erreur réseau / non-JSON) ;
 - le workflow ``OrchestratorCronWorkflow`` : avec l'activity mockée renvoyant
-  ``ok=true`` / ``ok=false``, on vérifie qu'il PROPAGE le résultat sans le
-  modifier (l'échec sur ok=false est TM-002, hors scope ici), et qu'il bâtit un
-  RunRequest minimal avec un ``tick_timestamp`` dérivé de ``workflow.now()``.
+  ``ok=true``, on vérifie qu'il PROPAGE le résultat sans le modifier et qu'il
+  bâtit un RunRequest minimal avec un ``tick_timestamp`` dérivé de
+  ``workflow.now()`` ; avec ``ok=false`` (chaque statut : ``no_sets`` /
+  ``failed`` / ``partial_failure`` / ``error``), on vérifie qu'il lève une
+  ``ApplicationError`` non-retryable APRÈS avoir journalisé ``run_id`` +
+  ``summary`` (TM-002).
 
 Le serveur de test Temporal n'étant pas téléchargeable dans cet environnement,
 le workflow est exercé en patchant les primitives ``workflow.now`` /
@@ -17,6 +20,9 @@ manière d'un test unitaire — cohérent avec le pattern ``asyncio.run`` du rep
 import asyncio
 import json
 from datetime import datetime, timezone
+
+import pytest
+from temporalio.exceptions import ApplicationError
 
 import activities.orchestrator_http as orchestrator_http
 import workflows.orchestrator_cron as orchestrator_cron
@@ -206,21 +212,39 @@ def test_activity_non_json_body_returns_explicit_dict(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-class _DummyLogger:
-    def info(self, *_args, **_kwargs):
-        pass
+class _RecordingLogger:
+    """Logger capturant les messages formatés (pour vérifier le log AVANT levée)."""
 
-    def error(self, *_args, **_kwargs):
-        pass
+    def __init__(self):
+        self.infos = []
+        self.errors = []
+
+    def info(self, msg, *args, **_kwargs):
+        self.infos.append(msg % args if args else msg)
+
+    def error(self, msg, *args, **_kwargs):
+        self.errors.append(msg % args if args else msg)
 
 
 def _run_workflow(monkeypatch, *, config, activity_result):
     """Exécute le workflow en patchant les primitives Temporal.
 
-    Renvoie ``(result, captured_activity_args)``.
+    Renvoie ``(result, captured_activity_args, fixed_now)``.
+
+    Lève (propage) toute exception émise par le workflow — c'est ce que
+    vérifient les tests ok=false.
     """
+    result, captured, fixed_now, _logger = _run_workflow_with_logger(
+        monkeypatch, config=config, activity_result=activity_result
+    )
+    return result, captured, fixed_now
+
+
+def _run_workflow_with_logger(monkeypatch, *, config, activity_result):
+    """Variante exposant le logger enregistré (vérification log avant levée)."""
     fixed_now = datetime(2026, 6, 19, 12, 0, 0, tzinfo=timezone.utc)
     captured = {}
+    logger = _RecordingLogger()
 
     async def _fake_execute_activity(name, *, args, start_to_close_timeout):
         captured["name"] = name
@@ -230,11 +254,11 @@ def _run_workflow(monkeypatch, *, config, activity_result):
 
     monkeypatch.setattr(orchestrator_cron.workflow, "now", lambda: fixed_now)
     monkeypatch.setattr(orchestrator_cron.workflow, "execute_activity", _fake_execute_activity)
-    monkeypatch.setattr(orchestrator_cron.workflow, "logger", _DummyLogger())
+    monkeypatch.setattr(orchestrator_cron.workflow, "logger", logger)
 
     wf = OrchestratorCronWorkflow()
     result = asyncio.run(wf.run(config))
-    return result, captured, fixed_now
+    return result, captured, fixed_now, logger
 
 
 def test_workflow_propagates_ok_true_result(monkeypatch):
@@ -263,22 +287,60 @@ def test_workflow_propagates_ok_true_result(monkeypatch):
     assert request["schedule_id"] == "sched-1"
 
 
-def test_workflow_propagates_ok_false_without_raising(monkeypatch):
-    # TM-001 : ok=false est propagé, PAS converti en échec (TM-002).
+@pytest.mark.parametrize("status", ["no_sets", "failed", "partial_failure", "error"])
+def test_workflow_raises_application_error_on_ok_false(monkeypatch, status):
+    # TM-002 : ok=false (quel que soit le statut) fait échouer le tick Temporal.
     activity_result = {
         "ok": False,
-        "run_id": "run_ko",
-        "status": "failed",
+        "run_id": f"run_ko_{status}",
+        "status": status,
         "summary": {"total_calls": 1, "success": 0, "failed": 1},
     }
 
-    result, _captured, _now = _run_workflow(
-        monkeypatch,
-        config={"dashboard_id": "7"},
-        activity_result=activity_result,
-    )
+    with pytest.raises(ApplicationError) as exc_info:
+        _run_workflow(
+            monkeypatch,
+            config={"dashboard_id": "7"},
+            activity_result=activity_result,
+        )
 
-    assert result == activity_result
+    err = exc_info.value
+    # Message exploitable : statut, run_id et summary y figurent.
+    assert status in str(err)
+    assert f"run_ko_{status}" in str(err)
+    assert "success" in str(err)  # le summary est inclus
+    # Pas de retry en boucle dans le même tick.
+    assert err.non_retryable is True
+
+
+def test_workflow_logs_run_id_and_summary_before_raising(monkeypatch):
+    # Le log run_id + summary DOIT précéder la levée (déterminisme + traçabilité).
+    activity_result = {
+        "ok": False,
+        "run_id": "run_logged",
+        "status": "partial_failure",
+        "summary": {"total_calls": 4, "success": 2, "failed": 2},
+    }
+
+    logger = _RecordingLogger()
+    fixed_now = datetime(2026, 6, 19, 12, 0, 0, tzinfo=timezone.utc)
+
+    async def _fake_execute_activity(name, *, args, start_to_close_timeout):
+        return activity_result
+
+    monkeypatch.setattr(orchestrator_cron.workflow, "now", lambda: fixed_now)
+    monkeypatch.setattr(orchestrator_cron.workflow, "execute_activity", _fake_execute_activity)
+    monkeypatch.setattr(orchestrator_cron.workflow, "logger", logger)
+
+    wf = OrchestratorCronWorkflow()
+    with pytest.raises(ApplicationError):
+        asyncio.run(wf.run({"dashboard_id": "7"}))
+
+    # Le résumé du run a été journalisé avant que l'exception ne soit levée.
+    joined = "\n".join(logger.infos)
+    assert "run_logged" in joined
+    assert "partial_failure" in joined
+    assert "total_calls" in joined
 
 
 def test_workflow_uses_custom_url_and_forwards_optional_fields(monkeypatch):

@@ -1,18 +1,24 @@
-"""Workflow cron minimal vers l'orchestrateur Python (TM-001).
+"""Workflow cron minimal vers l'orchestrateur Python (TM-001 / TM-002).
 
 ``OrchestratorCronWorkflow`` est un déclencheur cron supervisé basique : il
 exécute l'unique activity ``orchestrator_run`` (un seul appel HTTP vers
-``POST /orchestrator/run``), journalise ``run_id`` + ``summary`` et retourne le
-``RunResponse`` tel quel.
+``POST /orchestrator/run``), journalise ``run_id`` + ``summary``, puis :
+
+- sur ``ok=true`` → retourne le ``RunResponse`` tel quel ;
+- sur ``ok=false`` (``no_sets`` / ``failed`` / ``partial_failure`` / ``error``)
+  → lève une ``ApplicationError`` pour que Temporal marque le tick en échec
+  (TM-002). Sans cette levée, un échec métier ou un appel HTTP raté serait
+  affiché « réussi » dans la Schedule view.
 
 Il NE reconstruit AUCUNE logique métier : pas de sélection de contrats, pas de
 jobs multiples, pas d'agrégation. Tout cela reste côté API Python (PY-005/006).
+L'activity reste la source de vérité (« return verbatim ») : la levée vit
+uniquement ici, dans le workflow.
 
 Déterminisme Temporal : aucune I/O ni ``datetime.now()`` dans le workflow. Le
 ``tick_timestamp`` transmis dans le ``RunRequest`` est dérivé via
-``workflow.now()`` (horloge déterministe Temporal), pas ``datetime`` direct.
-
-Hors-scope TM-001 : ne PAS lever d'exception sur ``ok=false`` (c'est TM-002).
+``workflow.now()`` (horloge déterministe Temporal), pas ``datetime`` direct. Le
+log précède toujours la levée.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from temporalio import workflow
+from temporalio.exceptions import ApplicationError
 
 # URL réseau interne par défaut de l'orchestrateur (container python_orchestrator,
 # port 8099, profile compose ``orchestrator``). Surchargeable via la config du
@@ -46,7 +53,14 @@ class OrchestratorCronWorkflow:
 
         Returns:
             Le ``RunResponse`` retourné par l'activity (``{ok, run_id, status,
-            summary}``), propagé tel quel.
+            summary}``), propagé tel quel lorsque ``ok=true``.
+
+        Raises:
+            ApplicationError: lorsque le ``RunResponse`` a ``ok=false`` (échec
+                métier ou appel HTTP raté normalisé par l'activity). Marquée
+                ``non_retryable`` : un tick ``ok=false`` ne doit pas être
+                re-tenté en boucle dans le même tick — le prochain tick cron est
+                le « retry » naturel (overlap ``BUFFER_ONE``).
         """
         config = config or {}
         url = config.get("url") or DEFAULT_ORCHESTRATOR_URL
@@ -84,13 +98,35 @@ class OrchestratorCronWorkflow:
         )
 
         # Journalise run_id + summary (le JSON complet reste côté API Python).
-        # On ne lève pas sur ok=false ici (TM-002) : on propage le RunResponse.
+        # Le log précède TOUJOURS la levée éventuelle (déterminisme + traçabilité
+        # du tick en échec).
+        ok = result.get("ok")
+        run_id = result.get("run_id")
+        status = result.get("status")
+        summary = result.get("summary")
         workflow.logger.info(
-            "[OrchestratorCron] ✅ ok=%s run_id=%s status=%s summary=%s",
-            result.get("ok"),
-            result.get("run_id"),
-            result.get("status"),
-            result.get("summary"),
+            "[OrchestratorCron] %s ok=%s run_id=%s status=%s summary=%s",
+            "✅" if ok else "❌",
+            ok,
+            run_id,
+            status,
+            summary,
         )
+
+        # TM-002 : un RunResponse ok=false (no_sets / failed / partial_failure /
+        # error) DOIT faire échouer le tick Temporal, sinon la Schedule view
+        # l'affiche « réussi » et les échecs passent inaperçus. On lève après le
+        # log, en réutilisant le RunResponse comme source de vérité (aucune
+        # logique métier reconstruite).
+        #
+        # non_retryable=True : pas de retry en boucle dans le même tick. Le
+        # prochain tick cron est le « retry » naturel (overlap BUFFER_ONE).
+        if not ok:
+            raise ApplicationError(
+                f"orchestrator run failed: ok=false status={status} "
+                f"run_id={run_id} summary={summary}",
+                type="OrchestratorRunFailed",
+                non_retryable=True,
+            )
 
         return result
