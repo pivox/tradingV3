@@ -502,10 +502,15 @@ d'idempotence** existe (`idempotency_key`, ou `dashboard_id` + `tick_timestamp` 
 ligne `Run` via `claim_run` (variante *compare-and-set* de `record_run`, savepoint
 anti-course réutilisé) avec `status="running"`, `started_at`, et
 `expires_at = now + TTL de claim`. `claim_run` ne remplace une ligne existante que
-si elle **n'est pas** un claim actif : si un run concurrent a committé son claim
-**entre le pré-check et le seed** (course TOCTOU : les deux requêtes avaient vu une
-absence de ligne), le perdant **réplique l'état en vol sans dispatcher** plutôt que
-d'écraser la ligne partagée et de re-soumettre du travail. Le **TTL de claim réutilise
+si elle **n'est pas** un claim actif. Deux courses sont neutralisées : (1) **INSERT
+concurrent** (la ligne n'existait pas — les deux requêtes ont vu une absence au
+pré-check) → savepoint + violation d'unicité, le perdant relit le gagnant ; (2)
+**UPDATE concurrent** (reprise/reclaim d'une ligne déjà présente) → le read-modify-
+write se fait **sous `SELECT … FOR UPDATE`** (+ `populate_existing` pour ré-évaluer
+le claim sur l'état frais), donc deux reprises d'une même ligne périmée ne peuvent
+pas toutes deux la ré-écrire : la seconde bloque, relit le claim désormais actif et
+s'efface. Dans les deux cas le perdant **réplique l'état en vol sans dispatcher**
+plutôt que d'écraser la ligne partagée et de re-soumettre du travail. Le **TTL de claim réutilise
 le calcul SAFE-001** du pire temps de paroi du run
 (`ceil(n_sets / max_concurrency)` × timeout Symfony + marge `ORCHESTRATION_LOCK_TTL_SECONDS`) :
 aucune variable d'environnement dédiée. Le `now` est lu via `orch._now`

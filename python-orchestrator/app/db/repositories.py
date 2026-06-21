@@ -240,6 +240,45 @@ def record_run(session: Session, run: Run) -> Run:
         return _update_existing_run(session, existing, run)
 
 
+def _lock_run(session: Session, run_id: str) -> Optional[Run]:
+    """Verrouille la ligne ``runs`` (``SELECT ... FOR UPDATE``) et rafraîchit l'instance.
+
+    Sur PostgreSQL, le verrou ligne sérialise le read-modify-write du claim : un
+    claimer concurrent **bloque** ici jusqu'au commit du gagnant, puis relit l'état
+    à jour. ``populate_existing`` force le rafraîchissement des attributs (statut,
+    ``expires_at``) à partir de la lecture verrouillée, sinon l'``identity map``
+    renverrait les valeurs périmées du premier read et l'évaluation du claim actif se
+    ferait sur des données obsolètes. Sur SQLite, ``FOR UPDATE`` est ignoré (accès
+    sérialisé par le verrou base) : aucun impact sur les tests.
+    """
+    return session.scalars(
+        select(Run)
+        .where(Run.run_id == run_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).first()
+
+
+def _claim_locked(session: Session, run_id: str, run: Run, is_active_claim) -> Tuple[Run, bool]:
+    """Tranche le claim sur une ligne existante, **sous verrou ligne** (atomique).
+
+    Verrouille la ligne puis ré-évalue ``is_active_claim`` sur l'état frais : si un
+    run concurrent a posé un claim actif entre-temps, on s'efface (``claimed=False``)
+    au lieu d'écraser ; sinon on reprend la ligne (terminal/claim périmé → nouveau
+    claim). La ligne peut avoir disparu entre la résolution et le verrou (suppression,
+    non attendue en prod) : on retombe alors sur une insertion fraîche.
+    """
+    locked = _lock_run(session, run_id)
+    if locked is None:
+        with session.begin_nested():  # SAVEPOINT : isole l'échec d'insertion
+            session.add(run)
+            session.flush()
+        return run, True
+    if is_active_claim(locked):
+        return locked, False  # un run concurrent détient un claim actif : on s'efface
+    return _update_existing_run(session, locked, run), True
+
+
 def claim_run(session: Session, run: Run, *, is_active_claim) -> Tuple[Run, bool]:
     """Pose un claim de run de façon atomique. Retourne ``(run_persisté, claimed)``.
 
@@ -247,24 +286,25 @@ def claim_run(session: Session, run: Run, *, is_active_claim) -> Tuple[Run, bool
     (SAFE-002). ``claimed=False`` signale que le claim n'a **pas** été obtenu parce
     qu'un run concurrent détient déjà un claim **actif** (``is_active_claim`` vrai) :
     l'appelant doit alors répliquer l'état en vol **sans** dispatcher, au lieu
-    d'écraser la ligne partagée et de re-soumettre du travail (course perdue entre le
-    pré-check ``resolve_run`` et le seed).
+    d'écraser la ligne partagée et de re-soumettre du travail.
 
     ``is_active_claim(existing)`` est fourni par l'appelant (il connaît la sémantique
     des statuts et du TTL) : vrai ssi la ligne existante est un claim non terminal
     **non périmé** d'un autre run en vol. Un run terminal (replay/reprise) ou un claim
-    périmé (reclaim) n'est PAS actif → la ligne est mise à jour vers le nouveau claim.
+    périmé (reclaim) n'est PAS actif → la ligne est reprise par le nouveau claim.
 
-    Même protection anti-course que ``record_run`` (savepoint + rattrapage de la
-    violation d'unicité) : si un writer concurrent insère la même clé entre le lookup
-    et le flush, on relit le gagnant et on tranche via ``is_active_claim`` plutôt que
-    de propager l'erreur ou d'écraser un claim actif.
+    Deux courses sont neutralisées :
+
+    - **INSERT concurrent** (la ligne n'existait pas encore) : savepoint + rattrapage
+      de la violation d'unicité comme ``record_run`` ; le perdant relit le gagnant ;
+    - **UPDATE concurrent** (la ligne existe déjà — reprise/reclaim) : le read-modify-
+      write se fait **sous ``SELECT ... FOR UPDATE``** (``_claim_locked``), donc deux
+      reprises d'une même ligne périmée ne peuvent pas toutes deux la ré-écrire : le
+      second bloque, relit le claim désormais actif et s'efface (``claimed=False``).
     """
     existing = _resolve_existing_run(session, run)
     if existing is not None:
-        if is_active_claim(existing):
-            return existing, False  # course perdue : un run concurrent est en vol
-        return _update_existing_run(session, existing, run), True
+        return _claim_locked(session, existing.run_id, run, is_active_claim)
 
     try:
         with session.begin_nested():  # SAVEPOINT : isole l'échec d'insertion
@@ -278,9 +318,9 @@ def claim_run(session: Session, run: Run, *, is_active_claim) -> Tuple[Run, bool
         existing = _resolve_existing_run(session, run)
         if existing is None:
             raise  # conflit sur une autre contrainte : ne pas masquer
-        if is_active_claim(existing):
-            return existing, False  # le gagnant détient un claim actif : on s'efface
-        return _update_existing_run(session, existing, run), True
+        # La ligne gagnante existe : on tranche sous verrou (le gagnant a pu, depuis,
+        # finir et être repris ; on ré-évalue sur l'état frais et verrouillé).
+        return _claim_locked(session, existing.run_id, run, is_active_claim)
 
 
 def _resolve_existing_run_set(session: Session, run_set: RunSet) -> Optional[RunSet]:

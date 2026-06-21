@@ -1524,61 +1524,6 @@ def test_terminal_success_replays_even_when_dashboard_disabled(orchestrator_env,
     assert len(_mtf_posts(fake)) == 1
 
 
-def test_claim_run_cas_reports_active_vs_reclaimable():
-    # P1 (unité) : claim_run renvoie claimed=False quand un claim ACTIF existe déjà
-    # (course perdue), claimed=True sinon (création, ou reprise d'un terminal/claim
-    # périmé), sans écraser le claim actif.
-    from app.db import repositories as repo
-    from app.db.models import Base  # noqa: F401
-    from sqlalchemy import create_engine, event
-    from sqlalchemy.orm import sessionmaker
-    from sqlalchemy.pool import StaticPool
-
-    engine = create_engine("sqlite://", future=True, connect_args={"check_same_thread": False}, poolclass=StaticPool)
-
-    @event.listens_for(engine, "connect")
-    def _prep(conn, _r):  # noqa: ANN001
-        cur = conn.cursor()
-        cur.execute("PRAGMA foreign_keys=ON")
-        cur.execute("ATTACH DATABASE ':memory:' AS orchestration")
-        cur.close()
-
-    from app.db.base import Base as B
-    B.metadata.create_all(engine)
-    session = sessionmaker(bind=engine, expire_on_commit=False)()
-
-    def _new(run_id="run_x", key="kx"):
-        return Run(run_id=run_id, idempotency_key=key, ok=False, status="running")
-
-    # Claim actif déjà détenu => course perdue (claimed=False), inchangé.
-    active = lambda r: True  # noqa: E731
-    inactive = lambda r: False  # noqa: E731
-
-    # 1) Aucune ligne => création (claimed=True).
-    run, claimed = repo.claim_run(session, _new(), is_active_claim=inactive)
-    session.commit()
-    assert claimed is True and run.run_id == "run_x"
-
-    # 2) Ligne existante considérée ACTIVE => course perdue, pas d'écrasement.
-    run2, claimed2 = repo.claim_run(
-        session, Run(run_id="run_x", idempotency_key="kx", ok=False, status="running", total_calls=7),
-        is_active_claim=active,
-    )
-    assert claimed2 is False
-    assert run2.run_id == "run_x"
-    assert run2.total_calls != 7  # la ligne active n'a pas été écrasée
-
-    # 3) Ligne existante considérée INACTIVE (terminal/périmé) => reprise (claimed=True).
-    run3, claimed3 = repo.claim_run(
-        session, Run(run_id="run_x", idempotency_key="kx", ok=False, status="running", total_calls=9),
-        is_active_claim=inactive,
-    )
-    session.commit()
-    assert claimed3 is True
-    session.close()
-    engine.dispose()
-
-
 def test_concurrent_claim_loser_returns_in_flight_without_dispatch(orchestrator_env, monkeypatch):
     # P1 (intégration) : si un run concurrent pose son claim ENTRE le pré-check et le
     # seed (pré-check qui ne voit pas encore la ligne), le perdant réplique l'état en

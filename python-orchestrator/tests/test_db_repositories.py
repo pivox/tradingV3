@@ -189,6 +189,81 @@ def test_record_run_insert_race_falls_back_to_existing(db_session, monkeypatch):
     assert db_session.query(Run).count() == 1   # pas de doublon créé
 
 
+def test_claim_run_creates_then_blocks_active_then_reclaims(db_session):
+    """claim_run (SAFE-002) : crée, refuse un claim actif, reprend un claim inactif."""
+    inactive = lambda _r: False  # noqa: E731
+    active = lambda _r: True  # noqa: E731
+
+    # 1) Aucune ligne → création (claimed=True).
+    run, claimed = repo.claim_run(
+        db_session, Run(run_id="c1", idempotency_key="k1", ok=False, status="running"),
+        is_active_claim=inactive,
+    )
+    db_session.commit()
+    assert claimed is True and run.run_id == "c1"
+
+    # 2) Ligne considérée ACTIVE → course perdue (claimed=False), aucun écrasement.
+    _, claimed2 = repo.claim_run(
+        db_session,
+        Run(run_id="c1", idempotency_key="k1", ok=False, status="running", total_calls=7),
+        is_active_claim=active,
+    )
+    assert claimed2 is False
+    assert repo.get_run(db_session, "c1").total_calls == 0  # ligne active intacte
+
+    # 3) Ligne considérée INACTIVE (terminal/périmé) → reprise (claimed=True, mise à jour).
+    _, claimed3 = repo.claim_run(
+        db_session,
+        Run(run_id="c1", idempotency_key="k1", ok=False, status="running", total_calls=9),
+        is_active_claim=inactive,
+    )
+    db_session.commit()
+    assert claimed3 is True
+    assert repo.get_run(db_session, "c1").total_calls == 9
+
+
+def test_claim_run_reclaim_rereads_fresh_state_under_lock(db_session):
+    """P1 (atomicité reclaim) : le read-modify-write se fait sous ``FOR UPDATE`` +
+    ``populate_existing``, donc claim_run ré-évalue le claim sur l'état FRAIS, pas sur
+    une copie périmée de l'identity map. Une ligne devenue active entre-temps fait
+    s'effacer la reprise (claimed=False) au lieu d'écraser le gagnant."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import text
+
+    now = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
+    # Ligne running PÉRIMÉE, puis chargée dans la session (identity map = périmé).
+    db_session.add(
+        Run(run_id="r", idempotency_key="k", ok=False, status="running",
+            expires_at=now - timedelta(seconds=1))
+    )
+    db_session.commit()
+    stale = repo.get_run(db_session, "r")  # instance périmée en identity map
+    assert stale is not None
+
+    # Un gagnant concurrent rend la ligne ACTIVE (expiry future), écrit hors ORM pour
+    # que l'identity map reste périmée tant qu'on ne relit pas sous verrou.
+    db_session.execute(
+        text("UPDATE orchestration.runs SET expires_at = :e WHERE run_id = 'r'"),
+        {"e": now + timedelta(hours=1)},
+    )
+
+    def is_active(r):
+        if r.status != "running" or r.expires_at is None:
+            return False
+        exp = r.expires_at if r.expires_at.tzinfo else r.expires_at.replace(tzinfo=timezone.utc)
+        return exp > now
+
+    _, claimed = repo.claim_run(
+        db_session,
+        Run(run_id="r", idempotency_key="k", ok=False, status="running",
+            expires_at=now + timedelta(seconds=10)),
+        is_active_claim=is_active,
+    )
+    # populate_existing a relu l'expiry FUTURE → claim actif → on s'efface.
+    assert claimed is False
+
+
 def test_record_run_set_upsert_same_run_set(db_session):
     """Deux appels sur le même (run_id, set_id) mettent à jour le dernier résultat."""
     repo.record_run(db_session, Run(run_id="run_u", status="success", ok=True))
