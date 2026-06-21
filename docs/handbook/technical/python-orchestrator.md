@@ -593,6 +593,41 @@ est livrée par **PY-006** (`GET /runs`, `/runs/{run_id}`, `/runs/{run_id}/sets/
 `/dashboards/{id}/runs`, `/dashboards/{id}/runs/latest`). Les migrations s'appliquent via
 `alembic upgrade head` (voir `python-orchestrator/README.md`).
 
+## Observabilité / Audit des runs (OBS-001)
+
+Avant OBS-001, les décisions du runner (`POST /orchestrator/run`) n'étaient
+observables qu'**en base**, après coup (`runs.last_json`, `run_sets`) : aucun
+flux corrélé pour le diagnostic temps réel. OBS-001 ajoute une **couche d'audit
+structurée, fail-safe et corrélée par `run_id`**, émise au fil du cycle, **sans
+changer le comportement métier**.
+
+- **Sink** : logs structurés **JSON line** sur stdout (décision produit OBS-001),
+  via `logging` stdlib sur le logger nommé `orchestrator.audit`
+  (`app/services/run_audit.py` expose `emit(event, *, run_id, level, **fields)` ;
+  `app/logging_config.py` porte le `JsonLineFormatter` et la config idempotente).
+  Aucune migration ; container/aggregator-friendly.
+- **Niveau** : `ORCHESTRATION_LOG_LEVEL` (défaut `INFO`, validé au démarrage comme
+  `ORCHESTRATION_LOCK_TTL_SECONDS` — lève sur valeur invalide).
+- **Corrélation** : chaque ligne porte le `run_id` **réellement persisté** (résolu
+  par `_seed_claim`/`_persist_run`, qui peut différer du dérivé). Le `run_id` est
+  aussi propagé à Symfony en en-tête **`X-Run-Id`** sur `POST /api/mtf/run`.
+- **Événements** : `run_started` (run_id, dashboard_id, has_anchor) ;
+  `run_short_circuit` (`reason` = replay / in_flight / resume / reclaim) ;
+  `snapshot_fetch` (couple exchange/market_type, ok/indisponible) ;
+  `set_skipped` (`code` = live_not_enabled / live_forbidden_exchange /
+  live_exchange_not_allowlisted / open_state_unavailable / locked /
+  conflicting_live) ; `set_dispatched` ; `set_result` (ok, business_status,
+  duration_ms) ; `run_finished` (status, compteurs). **Un seul point d'émission
+  par cause.**
+- **Cohérence** : l'audit **complète** `last_json`/`RunSet` (flux temps réel), il
+  ne le remplace pas. Les `code`/`reason` audités sont **identiques** à ceux
+  versés dans `RunSet.error` (source unique SAFE-003) — l'audit ne redéfinit
+  aucune raison métier.
+- **Fail-safe** : une erreur d'audit (sérialisation, handler) ne fait **jamais**
+  échouer ni ralentir un run (`try/except` interne, pas d'I/O bloquante hors
+  `logging`). Locks SAFE-001, idempotence SAFE-002 et garde-fous live SAFE-003
+  restent intacts ; réponses HTTP inchangées.
+
 ## Garde-fous fonctionnels
 
 Avant tout run :
@@ -624,6 +659,12 @@ Avant tout run :
   (interrupteur OFF dans la config livrée) ; persistance ↔ runtime cohérents (une ligne
   ne peut déclencher que ce que le runner exécuterait). Cf. *Couche unique de garde-fous
   live (SAFE-003)* ;
+- **audit des runs** (OBS-001, livré) : piste structurée JSON line corrélée par
+  `run_id` sur le logger `orchestrator.audit`, émise au fil du cycle (started /
+  short-circuit / snapshot / skip / dispatch / result / finished). Fail-safe (ne
+  casse jamais un run), niveau via `ORCHESTRATION_LOG_LEVEL`, trace-id `X-Run-Id`
+  vers Symfony ; ne change aucun comportement métier. Cf. *Observabilité / Audit
+  des runs (OBS-001)* ;
 - ne lancer aucun set live tant que l'interrupteur n'est pas explicitement activé
   (tout set `dry_run=false` skippé par le runner par défaut, en miroir de
   `assert_set_persistable`) ;
@@ -655,6 +696,7 @@ Avant tout run :
 | SAFE-001 ✅ | Locks d'orchestration par symbole et profil | Livré : table `orchestration_locks` (clé `lock_key` UNIQUE), acquisition tout-ou-rien par set avant dispatch (transaction courte, reclaim des locks expirés, skip fail-closed `locked: …`), libération en fin de set, purge des expirés au démarrage. Prérequis readiness live ; ne réactive pas le live. |
 | SAFE-002 ✅ | Idempotence des runs et des sets | Livré : statut non terminal `running` + claim précoce (`runs.expires_at` = TTL de claim, transaction courte) ; court-circuit selon l'état du run existant — replay (terminal success), reprise des sets non réussis (terminal non-ok), réplique en vol (`running` non périmé), reclaim (`running` périmé). Réutilise `record_run`/savepoints et le calcul de TTL SAFE-001. Migration `0003_run_claim_expires_at`. Ne réactive pas le live. |
 | SAFE-003 ✅ | Centraliser et durcir les garde-fous live | Livré : module unique `app/services/live_guard.py` (`assess_live -> LiveDecision`) consommé par `assert_set_persistable`, `assert_live_allowed` et le runner `_dispatch_set` (plus de logique live dupliquée schemas ↔ runner). Hiérarchie fail-closed : bannissements permanents OKX/Hyperliquid (jamais relâchés) > interrupteur `ORCHESTRATION_LIVE_ENABLED` (défaut OFF) > allow-list `ORCHESTRATION_LIVE_EXCHANGES` (défaut vide) > snapshot d'état ouvert présent. `reason`/`code` stables par cause. Persistance ↔ runtime cohérents. **Le live reste désactivé par défaut** : aucune réactivation effective, seule l'activation devient possible/auditable/testée. Pas de migration. |
+| OBS-001 ✅ | Audit des runs d'orchestration | Livré : couche d'audit structurée, fail-safe et corrélée par `run_id` (`app/services/run_audit.py`, `emit`) sur le logger `orchestrator.audit`, format **JSON line** sur stdout (`app/logging_config.py`), niveau piloté par `ORCHESTRATION_LOG_LEVEL` (défaut INFO, validé au démarrage). Points d'audit : `run_started`, `run_short_circuit` (replay/in_flight/resume/reclaim), `snapshot_fetch`, `set_skipped` (codes live_guard / locked / conflicting_live / open_state_unavailable), `set_dispatched`, `set_result`, `run_finished`. `code`/`reason` identiques à `RunSet.error` (source unique SAFE-003). Trace-id `X-Run-Id` propagé à Symfony. **Aucun changement de comportement** (SAFE-001/002/003 intacts, réponses HTTP inchangées). Pas de migration. |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 

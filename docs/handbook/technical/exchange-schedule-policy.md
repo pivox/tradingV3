@@ -110,7 +110,8 @@ Avant d'autoriser une cadence 1m pour un dashboard ou un set, il faut valider :
 - WebSocket privé stable ;
 - idempotence ;
 - lock cross-profile ;
-- audit complet ;
+- audit complet (la piste d'audit structurée minimale est livrée par OBS-001 ;
+  les métriques par set restent à venir, cf. OBS-002) ;
 - dry-run stable ;
 - absence de double soumission ;
 - SL attaché immédiatement ;
@@ -192,7 +193,10 @@ Avant tout nouveau set, vérifier :
 4. le profil est explicitement autorisé ;
 5. la cadence est justifiée ;
 6. les rate limits sont connus ;
-7. l'audit minimal est actif ;
+7. l'audit minimal est actif (**outillé depuis OBS-001** : piste structurée JSON
+   line corrélée par `run_id` sur le logger `orchestrator.audit`, émise au fil du
+   run par `POST /orchestrator/run` — cf. `docs/handbook/technical/python-orchestrator.md`,
+   §*Observabilité / Audit des runs (OBS-001)*) ;
 8. Fake/Paper fallback existe ;
 9. la PR reste atomique ;
 10. les invariants trading ne sont pas cassés.

@@ -282,9 +282,50 @@ un service `postgres:15`.
 | `ORCHESTRATION_LOCK_TTL_SECONDS` | `1800` | Marge (s) anti-deadlock des locks d'orchestration par `(profil, symbole)` (SAFE-001), ≥ 1. Le TTL effectif = pire temps de paroi du run (vagues `max_concurrency` × timeout Symfony) + cette marge, pour qu'un set en file n'expire pas avant son dispatch. **Borne aussi le TTL de claim de run** (SAFE-002, même calcul) : pas de variable dédiée. |
 | `ORCHESTRATION_LIVE_ENABLED` | `false` | **Interrupteur d'activation live** (SAFE-003), défaut **OFF**. OFF ⇒ tout set `dry_run=false` est skippé fail-closed (comportement d'avant SAFE-003). Accepte `true/false`, `1/0`, `yes/no`, `on/off` ; toute autre valeur lève au démarrage. **Ne jamais livrer à `true` sans readiness runtime.** |
 | `ORCHESTRATION_LIVE_EXCHANGES` | *(vide)* | Allow-list CSV des exchanges autorisés live **quand l'interrupteur est ON** (SAFE-003). Normalisée en minuscules, dédupliquée ; chaque entrée doit être un exchange connu (sinon lève au démarrage). En pratique au plus `bitmart` (+ `fake` en simulation). OKX/Hyperliquid restent interdits **même listés** (bannissement permanent). |
+| `ORCHESTRATION_LOG_LEVEL` | `INFO` | **Niveau du log d'audit des runs** (OBS-001) sur le logger `orchestrator.audit`. Accepte `DEBUG/INFO/WARNING/ERROR/CRITICAL` (insensible à la casse) ; toute autre valeur lève au démarrage (comme `ORCHESTRATION_LOCK_TTL_SECONDS`). Cf. *Observabilité / Audit (OBS-001)*. |
 
-Une valeur non entière, non booléenne, hors borne ou un exchange inconnu lève une
-erreur explicite au démarrage (pas de repli silencieux sur le défaut).
+Une valeur non entière, non booléenne, hors borne, un niveau de log inconnu ou un
+exchange inconnu lève une erreur explicite au démarrage (pas de repli silencieux
+sur le défaut).
+
+## Observabilité / Audit (OBS-001)
+
+`POST /orchestrator/run` émet, **au fil du cycle**, une **piste d'audit
+structurée, fail-safe et corrélée par `run_id`** sur le logger nommé
+`orchestrator.audit`. Sink **logs JSON line sur stdout** (aucune migration,
+container/aggregator-friendly) ; le niveau est piloté par `ORCHESTRATION_LOG_LEVEL`
+(défaut `INFO`). L'audit **complète** l'historique DB (`runs.last_json` / `run_sets`,
+PY-005/PY-006) — il ne le remplace pas et n'en change pas le contenu ; les
+`code`/`reason` audités sont **identiques** à ceux versés dans `RunSet.error`
+(source unique SAFE-003).
+
+Événements (clé `event`) :
+
+| `event` | Émis quand | Champs notables |
+| --- | --- | --- |
+| `run_started` | entrée du run | `dashboard_id`, `has_anchor` |
+| `run_short_circuit` | court-circuit SAFE-002 | `reason` = `replay` / `in_flight` / `resume` / `reclaim` |
+| `snapshot_fetch` | fetch d'état ouvert 1×/(exchange, market_type) | `exchange`, `market_type`, `ok` (+ `code` si indisponible) |
+| `set_skipped` | set non dispatché (fail-closed) | `set_id`, `code` = `live_not_enabled` / `live_forbidden_exchange` / `live_exchange_not_allowlisted` / `open_state_unavailable` / `locked` / `conflicting_live` |
+| `set_dispatched` | appel Symfony effectif | `set_id`, `dry_run` |
+| `set_result` | issue de l'appel Symfony | `set_id`, `ok`, `business_status`, `duration_ms` |
+| `run_finished` | clôture (y compris `no_sets`) | `status`, `total_calls`, `success`, `failed` |
+
+Exemple de ligne (stdout) :
+
+```json
+{"timestamp": "2026-06-21T08:30:00.123456+00:00", "level": "INFO", "event": "set_result", "run_id": "run_dashA_20260617T083000Z", "set_id": "bitmart_regular_top", "ok": true, "business_status": "success", "duration_ms": 842}
+```
+
+**Corrélation Symfony (trace-id)** : le `run_id` réellement persisté est propagé
+en en-tête HTTP **`X-Run-Id`** sur `POST /api/mtf/run`, pour relier les logs
+Symfony au run d'orchestration.
+
+**Fail-safe** : une erreur d'audit (sérialisation, handler) ne fait jamais
+échouer ni ralentir un run — l'émission est encapsulée dans un `try/except`
+interne et ne fait aucune I/O bloquante hors `logging` stdlib. **Aucun changement
+de comportement métier** : pas de nouvelle décision, locks SAFE-001 / idempotence
+SAFE-002 / garde-fous live SAFE-003 intacts, réponses HTTP inchangées.
 
 ## Persistance (DB-001)
 
