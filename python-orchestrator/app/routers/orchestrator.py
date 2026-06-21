@@ -50,6 +50,7 @@ from app.services.live_guard import (
 from app.services.symfony_client import (
     OpenStateUnavailableError,
     SnapshotKey,
+    effective_set_payload,
     fetch_open_state,
     run_persisted_set,
     snapshot_key,
@@ -78,6 +79,7 @@ _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9_.\-]+$")
 # propre `code` via `live_guard.LiveDecision`). Stables, réutilisés tels quels.
 _SKIP_CODE_LOCKED = "locked"  # symbole déjà verrouillé par un run actif (SAFE-001)
 _SKIP_CODE_CONFLICTING_LIVE = "conflicting_live"  # sets live chevauchants intra-batch
+_SKIP_CODE_NOT_MATERIALIZED = "not_materialized"  # sélection non matérialisée (aucun POST)
 
 
 def _resolve_run_id(request: Optional[RunRequest]) -> str:
@@ -679,19 +681,22 @@ async def run_orchestrator(
     has_anchor = _has_idempotency_anchor(request)
     idempotency_key = _normalized_idempotency_key(request)
 
-    # OBS-001 : point d'entrée d'audit. `run_id` est celui résolu ici ; un claim
-    # legacy (idempotency_key) pourra le réaligner plus bas — les événements
-    # suivants portent alors le run_id réellement persisté.
+    existing_run = (
+        repositories.resolve_run(session, run_id, idempotency_key) if has_anchor else None
+    )
+
+    # OBS-001 : point d'entrée d'audit, corrélé par le run_id RÉELLEMENT persisté.
+    # Un run ancré peut résoudre une ligne legacy (par `idempotency_key`) dont le
+    # `run_id` diffère du dérivé : on émet alors `run_started` sous cet id-là, pour
+    # que TOUS les événements du run (short_circuit / set_* / finished + X-Run-Id)
+    # partagent la même clé de corrélation.
     run_audit.emit(
         run_audit.RUN_STARTED,
-        run_id=run_id,
+        run_id=existing_run.run_id if existing_run is not None else run_id,
         dashboard_id=_resolve_dashboard_id(request),
         has_anchor=has_anchor,
     )
 
-    existing_run = (
-        repositories.resolve_run(session, run_id, idempotency_key) if has_anchor else None
-    )
     if existing_run is not None:
         if existing_run.status in TERMINAL_RUN_STATUSES and existing_run.ok:
             # Terminal success → REPLAY : summary/run_id reconstruits depuis le run
@@ -998,8 +1003,32 @@ async def run_orchestrator(
                     "payload_sent": None,
                     "duration_ms": None,
                 }
+            # OBS-001 : un set dont la sélection n'est PAS matérialisée (symbols vide
+            # alors qu'il est valide par `contracts_limit`) ne déclenche AUCUN
+            # `POST /api/mtf/run` (`run_persisted_set` renvoie `payload_sent=None`).
+            # On ne doit donc pas auditer un `set_dispatched`/trace-id qui n'a pas eu
+            # lieu : c'est un skip fail-closed, audité comme tel. `effective_set_payload`
+            # est la fonction canonique partagée avec `run_persisted_set` (même verdict).
+            if effective_set_payload(a_set) is None:
+                run_audit.emit(
+                    run_audit.SET_SKIPPED,
+                    run_id=run_id,
+                    level="warning",
+                    set_id=a_set.set_id,
+                    code=_SKIP_CODE_NOT_MATERIALIZED,
+                )
+                return {
+                    "set_id": a_set.set_id,
+                    "ok": False,
+                    "status": None,
+                    "business_status": None,
+                    "body": "set payload not materialized (no concrete symbols)",
+                    "payload_sent": None,
+                    "duration_ms": None,
+                }
             async with semaphore:
-                # OBS-001 : le set franchit toutes les gardes → dispatch effectif.
+                # OBS-001 : le set franchit toutes les gardes ET sa sélection est
+                # matérialisée → dispatch Symfony effectif (POST réel + X-Run-Id).
                 run_audit.emit(
                     run_audit.SET_DISPATCHED,
                     run_id=run_id,

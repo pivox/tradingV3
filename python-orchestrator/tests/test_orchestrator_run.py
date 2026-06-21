@@ -1946,3 +1946,53 @@ def test_audit_emit_failure_does_not_fail_run(orchestrator_env, monkeypatch):
     assert body["ok"] is True
     assert body["status"] == "success"
     assert body["summary"] == {"total_calls": 1, "success": 1, "failed": 0}
+
+
+def test_audit_run_started_uses_persisted_legacy_run_id(
+    orchestrator_env, monkeypatch, audit_records
+):
+    # run_started doit porter le run_id RÉELLEMENT persisté : un run ancré qui
+    # résout une ligne legacy (par idempotency_key) sous un run_id distinct du
+    # dérivé doit voir TOUS ses événements corrélés par ce run_id-là.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    # Run terminal NON-ok legacy (≠ "run_legobs" dérivé) => reprise (ré-exécution).
+    session.add(Run(run_id="run_legacy_obs", idempotency_key="legobs", ok=False, status="failed"))
+    session.commit()
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    body = client.post(
+        "/orchestrator/run",
+        json={"dashboard_id": str(dash.id), "idempotency_key": "legobs"},
+    ).json()
+
+    assert body["run_id"] == "run_legacy_obs"
+    started = _by_event(audit_records, "run_started")
+    assert len(started) == 1
+    assert started[0].run_id == "run_legacy_obs"
+    # Toute la piste du run est corrélée par le run_id persisté (pas d'orphelin).
+    assert {r.run_id for r in audit_records} == {"run_legacy_obs"}
+
+
+def test_audit_not_materialized_set_emits_skip_without_dispatch(
+    orchestrator_env, monkeypatch, audit_records
+):
+    # Un set valide mais à sélection NON matérialisée (symbols vide) ne déclenche
+    # aucun POST /api/mtf/run : on audite un set_skipped (not_materialized), jamais
+    # un set_dispatched/trace-id qui n'a pas eu lieu.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "nomat", symbols=())
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)})
+
+    skipped = _by_event(audit_records, "set_skipped")
+    assert len(skipped) == 1
+    assert skipped[0].audit["set_id"] == "nomat"
+    assert skipped[0].audit["code"] == "not_materialized"
+    # Ni dispatch audité, ni POST réel.
+    assert _by_event(audit_records, "set_dispatched") == []
+    assert _mtf_posts(fake) == []
