@@ -142,3 +142,28 @@ def test_log_level_invalid_raises_at_startup(monkeypatch):
     monkeypatch.setenv("ORCHESTRATION_LOG_LEVEL", "verbose")
     with pytest.raises(SettingsError):
         Settings.from_env()
+
+
+# --- Collecte des métriques d'exécution (OBS-002) ---------------------------
+
+
+def test_metrics_enabled_on_by_default(monkeypatch):
+    monkeypatch.delenv("ORCHESTRATION_METRICS_ENABLED", raising=False)
+    assert Settings.from_env().metrics_enabled is True
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("true", True), ("1", True), ("on", True), ("false", False), ("0", False), ("off", False)],
+)
+def test_metrics_enabled_parsing(monkeypatch, raw, expected):
+    monkeypatch.setenv("ORCHESTRATION_METRICS_ENABLED", raw)
+    assert Settings.from_env().metrics_enabled is expected
+
+
+def test_metrics_enabled_invalid_raises_at_startup(monkeypatch):
+    # Comme les autres interrupteurs : une valeur invalide lève au démarrage plutôt
+    # qu'un repli silencieux.
+    monkeypatch.setenv("ORCHESTRATION_METRICS_ENABLED", "sometimes")
+    with pytest.raises(SettingsError):
+        Settings.from_env()
