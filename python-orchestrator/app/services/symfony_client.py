@@ -379,14 +379,24 @@ async def _dispatch_mtf_run(
     base_url: str,
     set_id: str,
     payload: Dict[str, Any],
+    *,
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """POST ``/api/mtf/run`` et normalise le résultat (succès métier + corps brut).
 
     Source unique de l'envoi : partagée entre ``run_mtf_set`` (set pydantic) et
     ``run_persisted_set`` (set ORM persisté) pour éviter toute dérive.
+
+    OBS-001 : quand un ``run_id`` est fourni, il est propagé en **en-tête de
+    corrélation** ``X-Run-Id`` sur l'appel Symfony (trace-id), pour relier les
+    logs Symfony au run d'orchestration. L'en-tête n'est ajouté que s'il est
+    présent (aucun changement de payload, contrat ``/api/mtf/run`` inchangé).
     """
     url = f"{base_url.rstrip('/')}/api/mtf/run"
-    response = await client.post(url, json=payload)
+    if run_id is not None:
+        response = await client.post(url, json=payload, headers={"X-Run-Id": run_id})
+    else:
+        response = await client.post(url, json=payload)
     try:
         body = response.json()
     except ValueError:
@@ -420,6 +430,8 @@ async def run_persisted_set(
     orm_set: Any,
     snapshot: Optional[Dict[str, Any]],
     dry_run: Optional[bool] = None,
+    *,
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Exécute un ``OrchestrationSet`` ORM persisté via ``POST /api/mtf/run`` (PY-005).
 
@@ -464,6 +476,6 @@ async def run_persisted_set(
         payload["dry_run"] = dry_run
     if snapshot is not None:
         payload["open_state_snapshot"] = snapshot
-    result = await _dispatch_mtf_run(client, base_url, orm_set.set_id, payload)
+    result = await _dispatch_mtf_run(client, base_url, orm_set.set_id, payload, run_id=run_id)
     result["payload_sent"] = payload
     return result

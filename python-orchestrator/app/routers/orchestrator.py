@@ -41,7 +41,12 @@ from app.schemas import (
     RunStatus,
     RunSummary,
 )
-from app.services.live_guard import OPEN_STATE_UNAVAILABLE_REASON, assess_live
+from app.services import run_audit
+from app.services.live_guard import (
+    OPEN_STATE_UNAVAILABLE,
+    OPEN_STATE_UNAVAILABLE_REASON,
+    assess_live,
+)
 from app.services.symfony_client import (
     OpenStateUnavailableError,
     SnapshotKey,
@@ -68,6 +73,11 @@ _MAX_PERSISTED_LEN = 255
 # restreint donc le `run_id` aux caractères sûrs d'un segment de chemin ; tout le
 # reste est haché (cf. `_resolve_run_id`).
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+# Codes de skip d'audit (OBS-001) propres au runner (les refus live portent leur
+# propre `code` via `live_guard.LiveDecision`). Stables, réutilisés tels quels.
+_SKIP_CODE_LOCKED = "locked"  # symbole déjà verrouillé par un run actif (SAFE-001)
+_SKIP_CODE_CONFLICTING_LIVE = "conflicting_live"  # sets live chevauchants intra-batch
 
 
 def _resolve_run_id(request: Optional[RunRequest]) -> str:
@@ -166,7 +176,20 @@ def _no_sets_response(run_id: str) -> RunResponse:
 
     Contrat conservé (cf. ``temporal.md``) : ``ok=false`` n'est pas un succès
     Temporal, donc un tick sans set ne valide pas le schedule.
+
+    OBS-001 : émet un ``run_finished`` corrélé (``status="no_sets"``, compteurs à
+    0) — point d'émission unique partagé par les quatre sorties ``no_sets`` du
+    runner (pas de dashboard, dashboard désactivé, aucun set actif, aucun set
+    ``mtf_run``), sans changer le contrat HTTP.
     """
+    run_audit.emit(
+        run_audit.RUN_FINISHED,
+        run_id=run_id,
+        status="no_sets",
+        total_calls=0,
+        success=0,
+        failed=0,
+    )
     return RunResponse(
         ok=False,
         run_id=run_id,
@@ -587,12 +610,17 @@ async def _collect_snapshots(
     client: httpx.AsyncClient,
     base_url: str,
     mtf_sets: List[Any],
+    *,
+    run_id: str,
 ) -> Dict[SnapshotKey, Dict[str, Any]]:
     """Récupère un snapshot d'état ouvert par couple ``(exchange, market_type)``.
 
     Un seul appel ``GET /api/exchange/open-state`` par couple distinct. Les
     couples dont le fetch échoue restent absents du cache (fail-closed géré par
     l'appelant pour les sets live).
+
+    OBS-001 : chaque couple émet un ``snapshot_fetch`` corrélé (``ok`` /
+    indisponible), pour rendre visible en flux le fetch 1×/(exchange, market_type).
     """
     keys = {snapshot_key(s) for s in mtf_sets}
     snapshots: Dict[SnapshotKey, Dict[str, Any]] = {}
@@ -601,8 +629,24 @@ async def _collect_snapshots(
             snapshots[(exchange, market_type)] = await fetch_open_state(
                 client, base_url, exchange, market_type
             )
+            run_audit.emit(
+                run_audit.SNAPSHOT_FETCH,
+                run_id=run_id,
+                exchange=exchange,
+                market_type=market_type,
+                ok=True,
+            )
         except OpenStateUnavailableError:
             # Pas de snapshot fiable pour ce couple : on ne met rien en cache.
+            run_audit.emit(
+                run_audit.SNAPSHOT_FETCH,
+                run_id=run_id,
+                level="warning",
+                exchange=exchange,
+                market_type=market_type,
+                ok=False,
+                code=OPEN_STATE_UNAVAILABLE,
+            )
             continue
     return snapshots
 
@@ -634,6 +678,17 @@ async def run_orchestrator(
     # gated par la disponibilité des sets (plus bas).
     has_anchor = _has_idempotency_anchor(request)
     idempotency_key = _normalized_idempotency_key(request)
+
+    # OBS-001 : point d'entrée d'audit. `run_id` est celui résolu ici ; un claim
+    # legacy (idempotency_key) pourra le réaligner plus bas — les événements
+    # suivants portent alors le run_id réellement persisté.
+    run_audit.emit(
+        run_audit.RUN_STARTED,
+        run_id=run_id,
+        dashboard_id=_resolve_dashboard_id(request),
+        has_anchor=has_anchor,
+    )
+
     existing_run = (
         repositories.resolve_run(session, run_id, idempotency_key) if has_anchor else None
     )
@@ -641,10 +696,22 @@ async def run_orchestrator(
         if existing_run.status in TERMINAL_RUN_STATUSES and existing_run.ok:
             # Terminal success → REPLAY : summary/run_id reconstruits depuis le run
             # persisté, aucun ré-appel Symfony, indépendant de l'état du dashboard.
+            run_audit.emit(
+                run_audit.RUN_SHORT_CIRCUIT,
+                run_id=existing_run.run_id,
+                level="warning",
+                reason="replay",
+            )
             return _replay_response(existing_run)
         if existing_run.status == RUN_STATUS_RUNNING and not _claim_expired(existing_run, now):
             # `running` non périmé → un autre run est EN VOL : réplique de l'état
             # courant (ok=false + statut running), aucun dispatch.
+            run_audit.emit(
+                run_audit.RUN_SHORT_CIRCUIT,
+                run_id=existing_run.run_id,
+                level="warning",
+                reason="in_flight",
+            )
             return _in_flight_response(existing_run)
 
     # Source des sets : la base, scopée par dashboard. Pas de dashboard / aucun
@@ -746,9 +813,38 @@ async def run_orchestrator(
             # n'a été committé ici (la purge non committée sera annulée à la fermeture de
             # session). `replay` rejoue le succès finalisé par le gagnant ; `in_flight`
             # réplique l'état d'un run encore en vol.
+            run_audit.emit(
+                run_audit.RUN_SHORT_CIRCUIT,
+                run_id=claim_row.run_id,
+                level="warning",
+                reason=yield_reason,
+            )
             if yield_reason == "replay":
                 return _replay_response(claim_row)
             return _in_flight_response(claim_row)
+
+    # OBS-001 : court-circuits SAFE-002 qui RE-EXÉCUTENT (le run_id est désormais
+    # celui réellement persisté par le claim). `resume` : reprise d'un terminal
+    # non-ok, les RunSet déjà réussis sont conservés et non re-dispatchés.
+    # `reclaim` : un `running` périmé (process tué) est repris comme un run neuf.
+    if preserved_results:
+        run_audit.emit(
+            run_audit.RUN_SHORT_CIRCUIT,
+            run_id=run_id,
+            reason="resume",
+            preserved_sets=len(preserved_results),
+        )
+    elif (
+        existing_run is not None
+        and existing_run.status == RUN_STATUS_RUNNING
+        and _claim_expired(existing_run, now)
+    ):
+        run_audit.emit(
+            run_audit.RUN_SHORT_CIRCUIT,
+            run_id=run_id,
+            level="warning",
+            reason="reclaim",
+        )
 
     locked_out: Dict[str, str] = {}
     set_lock_keys: Dict[str, List[str]] = {}
@@ -782,7 +878,9 @@ async def run_orchestrator(
 
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
         # 1) Un seul fetch d'état ouvert par couple (exchange, market_type).
-        snapshots = await _collect_snapshots(client, settings.symfony_base_url, mtf_sets)
+        snapshots = await _collect_snapshots(
+            client, settings.symfony_base_url, mtf_sets, run_id=run_id
+        )
 
         # 2) Exécution bornée des sets avec le snapshot en cache.
         semaphore = asyncio.Semaphore(max(1, settings.max_concurrency))
@@ -794,6 +892,13 @@ async def run_orchestrator(
             if a_set.set_id in preserved_results:
                 return preserved_results[a_set.set_id]
             if a_set.set_id in conflicting_live_ids:
+                run_audit.emit(
+                    run_audit.SET_SKIPPED,
+                    run_id=run_id,
+                    level="warning",
+                    set_id=a_set.set_id,
+                    code=_SKIP_CODE_CONFLICTING_LIVE,
+                )
                 return {
                     "set_id": a_set.set_id,
                     "ok": False,
@@ -806,6 +911,13 @@ async def run_orchestrator(
             # actif est skippé fail-closed (aucun lock acquis pour lui : rien à
             # libérer ici). Les autres sets du run continuent normalement.
             if a_set.set_id in locked_out:
+                run_audit.emit(
+                    run_audit.SET_SKIPPED,
+                    run_id=run_id,
+                    level="warning",
+                    set_id=a_set.set_id,
+                    code=_SKIP_CODE_LOCKED,
+                )
                 return {
                     "set_id": a_set.set_id,
                     "ok": False,
@@ -847,6 +959,17 @@ async def run_orchestrator(
                 settings=settings,
             )
             if not decision.allowed:
+                # OBS-001 : skip garde-fou live — on relaie le `code` STABLE déjà
+                # calculé par `live_guard` (live_not_enabled / live_forbidden_exchange
+                # / live_exchange_not_allowlisted), source unique partagée avec
+                # `RunSet.error`. L'audit ne redéfinit aucune raison.
+                run_audit.emit(
+                    run_audit.SET_SKIPPED,
+                    run_id=run_id,
+                    level="warning",
+                    set_id=a_set.set_id,
+                    code=decision.code,
+                )
                 return {
                     "set_id": a_set.set_id,
                     "ok": False,
@@ -860,6 +983,13 @@ async def run_orchestrator(
             # `assess_live` ne peut pas l'évaluer (le snapshot n'existe pas à la
             # persistance), donc ce garde fail-closed reste ici, après la décision.
             if effective_dry_run is False and snapshot is None:
+                run_audit.emit(
+                    run_audit.SET_SKIPPED,
+                    run_id=run_id,
+                    level="warning",
+                    set_id=a_set.set_id,
+                    code=OPEN_STATE_UNAVAILABLE,
+                )
                 return {
                     "set_id": a_set.set_id,
                     "ok": False,
@@ -869,10 +999,22 @@ async def run_orchestrator(
                     "duration_ms": None,
                 }
             async with semaphore:
+                # OBS-001 : le set franchit toutes les gardes → dispatch effectif.
+                run_audit.emit(
+                    run_audit.SET_DISPATCHED,
+                    run_id=run_id,
+                    set_id=a_set.set_id,
+                    dry_run=effective_dry_run,
+                )
                 start = time.monotonic()
                 try:
                     result = await run_persisted_set(
-                        client, settings.symfony_base_url, a_set, snapshot, effective_dry_run
+                        client,
+                        settings.symfony_base_url,
+                        a_set,
+                        snapshot,
+                        effective_dry_run,
+                        run_id=run_id,
                     )
                 except httpx.HTTPError as exc:  # noqa: BLE001
                     result = {
@@ -884,6 +1026,16 @@ async def run_orchestrator(
                     }
                 # Durée mesurée autour de l'appel Symfony (monotonic, en ms).
                 result["duration_ms"] = int((time.monotonic() - start) * 1000)
+                # OBS-001 : issue du dispatch (ok + statut métier + durée), corrélée.
+                run_audit.emit(
+                    run_audit.SET_RESULT,
+                    run_id=run_id,
+                    level="info" if result.get("ok") else "warning",
+                    set_id=a_set.set_id,
+                    ok=bool(result.get("ok")),
+                    business_status=result.get("business_status"),
+                    duration_ms=result.get("duration_ms"),
+                )
                 return result
 
         results = await asyncio.gather(*(_execute(s) for s in mtf_sets))
@@ -911,6 +1063,18 @@ async def run_orchestrator(
         finished_at=finished_at,
         mtf_sets=mtf_sets,
         results=results,
+    )
+
+    # OBS-001 : clôture du run, corrélée par le run_id RÉELLEMENT persisté (celui
+    # renvoyé par `_persist_run`, qui peut différer du dérivé en cas de retry
+    # legacy par idempotency_key). Compteurs identiques au `summary` HTTP.
+    run_audit.emit(
+        run_audit.RUN_FINISHED,
+        run_id=run_id,
+        status=status,
+        total_calls=summary.total_calls,
+        success=summary.success,
+        failed=summary.failed,
     )
 
     return RunResponse(ok=ok, run_id=run_id, status=status, summary=summary)
