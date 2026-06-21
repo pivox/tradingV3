@@ -74,11 +74,13 @@ def test_runs_columns_and_dashboard_fk_set_null():
     expected = {
         "run_id", "dashboard_id", "ok", "status", "idempotency_key",
         "total_calls", "success_count", "failed_count", "started_at",
-        "finished_at", "last_json", "created_at",
+        "finished_at", "expires_at", "last_json", "created_at",
     }
     assert expected <= set(table.columns.keys())
     assert table.c.run_id.primary_key
     assert table.c.dashboard_id.nullable is True
+    # TTL du claim « en vol » (SAFE-002) : nullable (nul/ignoré sur un run terminal).
+    assert table.c.expires_at.nullable is True
 
     fk = next(iter(table.c.dashboard_id.foreign_keys))
     assert fk.ondelete == "SET NULL"
