@@ -1494,3 +1494,138 @@ def test_claim_reuses_legacy_run_id_resolved_by_idempotency_key(orchestrator_env
     assert legacy.status == "success"
     run_sets = session.scalars(select(RunSet).where(RunSet.run_id == "run_legacy")).all()
     assert {rs.set_id for rs in run_sets} == {"a"}
+
+
+def test_terminal_success_replays_even_when_dashboard_disabled(orchestrator_env, monkeypatch):
+    # P2 : un run terminal réussi doit être REPLAYÉ même si le dashboard a depuis été
+    # désactivé/supprimé — le replay ne nécessite ni dashboard ni sets. Sinon le retry
+    # renverrait `no_sets` au lieu du succès persisté promis par SAFE-002.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    payload = {"dashboard_id": str(dash.id), "idempotency_key": "rk8"}
+    first = client.post("/orchestrator/run", json=payload).json()
+    assert first["ok"] is True and first["status"] == "success"
+    assert len(_mtf_posts(fake)) == 1
+
+    # Le dashboard est désactivé APRÈS le succès.
+    dash.enabled = False
+    session.commit()
+
+    second = client.post("/orchestrator/run", json=payload).json()
+    # Replay (pas de `no_sets`), aucun dispatch supplémentaire.
+    assert second["status"] == "success"
+    assert second["ok"] is True
+    assert second["run_id"] == first["run_id"] == "run_rk8"
+    assert second["summary"] == first["summary"]
+    assert len(_mtf_posts(fake)) == 1
+
+
+def test_claim_run_cas_reports_active_vs_reclaimable():
+    # P1 (unité) : claim_run renvoie claimed=False quand un claim ACTIF existe déjà
+    # (course perdue), claimed=True sinon (création, ou reprise d'un terminal/claim
+    # périmé), sans écraser le claim actif.
+    from app.db import repositories as repo
+    from app.db.models import Base  # noqa: F401
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_engine("sqlite://", future=True, connect_args={"check_same_thread": False}, poolclass=StaticPool)
+
+    @event.listens_for(engine, "connect")
+    def _prep(conn, _r):  # noqa: ANN001
+        cur = conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.execute("ATTACH DATABASE ':memory:' AS orchestration")
+        cur.close()
+
+    from app.db.base import Base as B
+    B.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+
+    def _new(run_id="run_x", key="kx"):
+        return Run(run_id=run_id, idempotency_key=key, ok=False, status="running")
+
+    # Claim actif déjà détenu => course perdue (claimed=False), inchangé.
+    active = lambda r: True  # noqa: E731
+    inactive = lambda r: False  # noqa: E731
+
+    # 1) Aucune ligne => création (claimed=True).
+    run, claimed = repo.claim_run(session, _new(), is_active_claim=inactive)
+    session.commit()
+    assert claimed is True and run.run_id == "run_x"
+
+    # 2) Ligne existante considérée ACTIVE => course perdue, pas d'écrasement.
+    run2, claimed2 = repo.claim_run(
+        session, Run(run_id="run_x", idempotency_key="kx", ok=False, status="running", total_calls=7),
+        is_active_claim=active,
+    )
+    assert claimed2 is False
+    assert run2.run_id == "run_x"
+    assert run2.total_calls != 7  # la ligne active n'a pas été écrasée
+
+    # 3) Ligne existante considérée INACTIVE (terminal/périmé) => reprise (claimed=True).
+    run3, claimed3 = repo.claim_run(
+        session, Run(run_id="run_x", idempotency_key="kx", ok=False, status="running", total_calls=9),
+        is_active_claim=inactive,
+    )
+    session.commit()
+    assert claimed3 is True
+    session.close()
+    engine.dispose()
+
+
+def test_concurrent_claim_loser_returns_in_flight_without_dispatch(orchestrator_env, monkeypatch):
+    # P1 (intégration) : si un run concurrent pose son claim ENTRE le pré-check et le
+    # seed (pré-check qui ne voit pas encore la ligne), le perdant réplique l'état en
+    # vol SANS dispatcher ni écraser la ligne partagée.
+    from datetime import datetime, timedelta, timezone
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+
+    now = datetime.now(timezone.utc)
+    # Le « gagnant » a déjà posé un claim running non périmé.
+    session.add(
+        Run(
+            run_id="run_rk9", idempotency_key="rk9", ok=False, status="running",
+            total_calls=0, success_count=0, failed_count=0,
+            started_at=now, expires_at=now + timedelta(seconds=3600),
+        )
+    )
+    session.commit()
+
+    # On simule la course TOCTOU : le PRÉ-CHECK `resolve_run` (1er appel) ne voit PAS
+    # la ligne, mais le seed (`claim_run` → `_resolve_existing_run`, appels suivants)
+    # la voit — comme si le gagnant avait committé entre les deux.
+    real_resolve = orch.repositories.resolve_run
+    calls = {"n": 0}
+
+    def _racing_resolve(session_, run_id_, key=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return real_resolve(session_, run_id_, key)
+
+    monkeypatch.setattr(orch.repositories, "resolve_run", _racing_resolve)
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "rk9"}
+    ).json()
+
+    assert body["ok"] is False
+    assert body["status"] == "running"
+    assert body["run_id"] == "run_rk9"
+    # Le perdant n'a rien dispatché.
+    assert _mtf_posts(fake) == []
+    # La ligne partagée du gagnant est intacte (toujours running, non écrasée).
+    session.expire_all()
+    winner = session.get(Run, "run_rk9")
+    assert winner.status == "running"

@@ -444,15 +444,22 @@ def _seed_claim(
     idempotency_key: Optional[str],
     now: datetime,
     ttl_seconds: int,
-) -> str:
-    """Pose/reprend le claim « en vol » d'un run (SAFE-002), retourne le run_id persisté.
+) -> tuple[str, Run, bool]:
+    """Pose/reprend le claim « en vol » d'un run (SAFE-002).
+
+    Retourne ``(run_id_persisté, run, claimed)``. ``claimed=False`` signale qu'un run
+    concurrent détient déjà un claim **actif** (course perdue entre le pré-check et le
+    seed) : l'appelant doit alors répliquer l'état en vol sans dispatcher (sinon il
+    écraserait la ligne partagée et re-soumettrait du travail).
 
     Transaction courte (committée par l'appelant AVANT les appels Symfony, jamais
-    maintenue pendant les ~900s, comme les locks SAFE-001) : insère/résout la ligne
-    ``Run`` via le ``record_run`` existant (statut ``running``, ``started_at``,
-    ``expires_at`` = ``now`` + TTL de claim), réutilisant son savepoint anti-course.
+    maintenue pendant les ~900s, comme les locks SAFE-001) : pose la ligne ``Run``
+    via ``claim_run`` (statut ``running``, ``started_at``, ``expires_at`` = ``now`` +
+    TTL de claim), réutilisant le savepoint anti-course de ``record_run``. Le claim ne
+    remplace une ligne existante que si elle n'est **pas** un claim actif (terminal →
+    reprise/replay déjà traités en amont ; claim périmé → reclaim).
 
-    ``record_run`` peut résoudre un run existant (par ``idempotency_key``) dont le
+    ``claim_run`` peut résoudre un run existant (par ``idempotency_key``) dont le
     ``run_id`` diffère du dérivé : on retourne le run_id réellement persisté afin que
     claim, locks et finalisation portent le même identifiant (cf. logique
     ``_persist_run``). On neutralise une FK ``dashboard_id`` périmée (dashboard
@@ -461,7 +468,7 @@ def _seed_claim(
     dashboard_ref = (
         dashboard_id if repositories.get_dashboard(session, dashboard_id) is not None else None
     )
-    persisted = repositories.record_run(
+    persisted, claimed = repositories.claim_run(
         session,
         Run(
             run_id=run_id,
@@ -475,8 +482,12 @@ def _seed_claim(
             started_at=now,
             expires_at=now + timedelta(seconds=ttl_seconds),
         ),
+        # Un claim est « actif » (course perdue) ssi la ligne existante est `running`
+        # ET non périmée : exactement le cas in-flight du pré-check, mais observé au
+        # moment du seed (un run concurrent a committé son claim entre-temps).
+        is_active_claim=lambda r: r.status == RUN_STATUS_RUNNING and not _claim_expired(r, now),
     )
-    return persisted.run_id
+    return persisted.run_id, persisted, claimed
 
 
 def _symbols_overlap(a: Any, b: Any) -> bool:
@@ -605,6 +616,32 @@ async def run_orchestrator(
     settings = get_settings()
     run_id = _resolve_run_id(request)
 
+    # Horloge unique du run (injectable en test via `orch._now`) : partagée par le
+    # claim d'idempotence (SAFE-002), le TTL de claim ET le TTL des locks (SAFE-001).
+    now = _now()
+
+    # SAFE-002 : pré-résolution de l'éventuel run ancré (run_id stable). Les
+    # court-circuits qui NE ré-exécutent PAS — replay (terminal success) et réplique
+    # in-flight (run en vol) — sont traités ICI, AVANT le gating `no_sets` : ils ne
+    # nécessitent ni dashboard ni sets, donc un retry après désactivation/suppression
+    # du dashboard (ou avec la seule clé) doit quand même rejouer le succès persisté
+    # plutôt que renvoyer `no_sets`. La reprise/reclaim, qui re-exécutent, restent
+    # gated par la disponibilité des sets (plus bas).
+    has_anchor = _has_idempotency_anchor(request)
+    idempotency_key = _normalized_idempotency_key(request)
+    existing_run = (
+        repositories.resolve_run(session, run_id, idempotency_key) if has_anchor else None
+    )
+    if existing_run is not None:
+        if existing_run.status in TERMINAL_RUN_STATUSES and existing_run.ok:
+            # Terminal success → REPLAY : summary/run_id reconstruits depuis le run
+            # persisté, aucun ré-appel Symfony, indépendant de l'état du dashboard.
+            return _replay_response(existing_run)
+        if existing_run.status == RUN_STATUS_RUNNING and not _claim_expired(existing_run, now):
+            # `running` non périmé → un autre run est EN VOL : réplique de l'état
+            # courant (ok=false + statut running), aucun dispatch.
+            return _in_flight_response(existing_run)
+
     # Source des sets : la base, scopée par dashboard. Pas de dashboard / aucun
     # set actif => no_sets (aucun appel, aucune persistance).
     dashboard_id = _resolve_dashboard_id(request)
@@ -638,9 +675,6 @@ async def run_orchestrator(
     # trade live ; on les rejette avant dispatch.
     conflicting_live_ids = _conflicting_live_set_ids(mtf_sets, force_dry_run)
 
-    # Horloge unique du run (injectable en test via `orch._now`) : partagée par le
-    # claim d'idempotence (SAFE-002), le TTL de claim ET le TTL des locks (SAFE-001).
-    now = _now()
     # TTL effectif : un set peut rester en file derrière le sémaphore (`max_concurrency`)
     # bien après l'acquisition de son lock. Si son `expires_at` tombait avant son
     # dispatch, un run concurrent pourrait le purger/reclaim et dispatcher le MÊME
@@ -653,33 +687,22 @@ async def run_orchestrator(
     waves = math.ceil(len(mtf_sets) / concurrency)
     effective_ttl_seconds = int(waves * _HTTP_TIMEOUT) + settings.lock_ttl_seconds
 
-    # SAFE-002 : idempotence à l'EXÉCUTION, uniquement lorsqu'un ancrage existe (run_id
-    # stable). Un run_id aléatoire (aucun contexte) reste non idempotent (inchangé). On
-    # inspecte le run existant (résolu par run_id puis idempotency_key) AVANT tout
-    # dispatch/écriture, donc un court-circuit (replay/in-flight) ne fait que des
-    # lectures : la session est simplement fermée par `get_session` (rien à committer).
+    # SAFE-002 (suite) : les court-circuits qui RE-EXÉCUTENT — donc nécessitent des
+    # sets — sont décidés ici, après le gating `no_sets`. `existing_run` a été résolu
+    # en amont (le replay/in-flight ont déjà court-circuité). Reste :
+    #  - terminal non-ok (failed/partial) → REPRISE : on conserve les RunSet déjà
+    #    réussis et on ne re-dispatchera que les sets restants ;
+    #  - `running` périmé (TTL, process tué) → reclaim : ré-exécution comme un nouveau
+    #    run (aucun résultat conservé).
     preserved_results: Dict[str, Dict[str, Any]] = {}
-    has_anchor = _has_idempotency_anchor(request)
-    idempotency_key = _normalized_idempotency_key(request)
-    if has_anchor:
-        existing = repositories.resolve_run(session, run_id, idempotency_key)
-        if existing is not None:
-            if existing.status in TERMINAL_RUN_STATUSES and existing.ok:
-                # Terminal success → REPLAY : aucun ré-appel Symfony, on renvoie le
-                # summary/run_id reconstruits depuis le run persisté.
-                return _replay_response(existing)
-            if existing.status == RUN_STATUS_RUNNING and not _claim_expired(existing, now):
-                # `running` non périmé → un autre run est EN VOL : on ne dispatche pas
-                # (réponse de réplique de l'état courant, ok=false + statut running).
-                return _in_flight_response(existing)
-            if existing.status in TERMINAL_RUN_STATUSES and not existing.ok:
-                # Terminal non-ok (failed/partial) → REPRISE : on conserve les RunSet
-                # déjà réussis et on ne re-dispatchera que les sets restants.
-                preserved_results = _preserved_results(
-                    existing, list(repositories.list_run_sets(session, existing.run_id))
-                )
-            # `running` périmé (TTL, process tué) → reclaim : ré-exécution comme un
-            # nouveau run (aucun résultat conservé).
+    if (
+        existing_run is not None
+        and existing_run.status in TERMINAL_RUN_STATUSES
+        and not existing_run.ok
+    ):
+        preserved_results = _preserved_results(
+            existing_run, list(repositories.list_run_sets(session, existing_run.run_id))
+        )
 
     # SAFE-001 : sérialisation per-(profil, symbole) ENTRE runs/process via des locks
     # DB. Le garde intra-run (`conflicting_live_ids`) ne couvre qu'un seul batch ; deux
@@ -698,11 +721,11 @@ async def run_orchestrator(
 
     # Claim précoce (SAFE-002) : pose/reprend la ligne Run (statut `running`,
     # started_at, expires_at) AVANT le dispatch, dans cette même transaction courte
-    # committée juste après. `record_run` peut résoudre un run existant sous un run_id
+    # committée juste après. `claim_run` peut résoudre un run existant sous un run_id
     # distinct (legacy par idempotency_key) : on réutilise le run_id réellement persisté
     # pour les locks ET la finalisation (claim et finalisation portent le même run_id).
     if has_anchor:
-        run_id = _seed_claim(
+        run_id, claim_row, claimed = _seed_claim(
             session,
             run_id=run_id,
             dashboard_id=dashboard_id,
@@ -710,6 +733,13 @@ async def run_orchestrator(
             now=now,
             ttl_seconds=effective_ttl_seconds,
         )
+        if not claimed:
+            # Course perdue : un run concurrent a committé son claim ENTRE le pré-check
+            # et le seed (les deux requêtes avaient vu une absence de ligne). On réplique
+            # l'état en vol SANS dispatcher ni écrire — sinon on écraserait la ligne
+            # partagée (statut/run_sets) et on re-soumettrait du travail. Rien n'a été
+            # committé ici (la purge non committée sera annulée à la fermeture de session).
+            return _in_flight_response(claim_row)
 
     locked_out: Dict[str, str] = {}
     set_lock_keys: Dict[str, List[str]] = {}

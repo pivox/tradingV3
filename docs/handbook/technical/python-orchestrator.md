@@ -498,13 +498,24 @@ d'idempotence** existe (`idempotency_key`, ou `dashboard_id` + `tick_timestamp` 
 | `no_sets` | — | Aucun set à exécuter ; **jamais persisté** (inchangé). |
 
 **Claim précoce** : avant le dispatch — dans une **transaction courte committée**
-(comme les locks SAFE-001, jamais maintenue pendant les ~900s) — on insère/résout la
-ligne `Run` via le `record_run` existant (savepoint anti-course réutilisé) avec
-`status="running"`, `started_at`, et `expires_at = now + TTL de claim`. Le **TTL de
-claim réutilise le calcul SAFE-001** du pire temps de paroi du run
+(comme les locks SAFE-001, jamais maintenue pendant les ~900s) — on pose/résout la
+ligne `Run` via `claim_run` (variante *compare-and-set* de `record_run`, savepoint
+anti-course réutilisé) avec `status="running"`, `started_at`, et
+`expires_at = now + TTL de claim`. `claim_run` ne remplace une ligne existante que
+si elle **n'est pas** un claim actif : si un run concurrent a committé son claim
+**entre le pré-check et le seed** (course TOCTOU : les deux requêtes avaient vu une
+absence de ligne), le perdant **réplique l'état en vol sans dispatcher** plutôt que
+d'écraser la ligne partagée et de re-soumettre du travail. Le **TTL de claim réutilise
+le calcul SAFE-001** du pire temps de paroi du run
 (`ceil(n_sets / max_concurrency)` × timeout Symfony + marge `ORCHESTRATION_LOCK_TTL_SECONDS`) :
 aucune variable d'environnement dédiée. Le `now` est lu via `orch._now`
 (`datetime.now(timezone.utc)`, injectable en test), partagé avec le TTL des locks.
+
+Le **replay** (terminal success) et la **réplique in-flight** (run en vol) sont
+résolus **avant le gating `no_sets`** : ils ne nécessitent ni dashboard ni sets, donc
+un retry après désactivation/suppression du dashboard (ou avec la seule clé) rejoue
+quand même le succès persisté. La **reprise** et le **reclaim**, qui re-exécutent,
+restent gated par la disponibilité des sets.
 
 **Court-circuit selon l'état du run existant** (résolu par `run_id` puis
 `idempotency_key`) :

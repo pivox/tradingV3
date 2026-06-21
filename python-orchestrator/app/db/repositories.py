@@ -240,6 +240,49 @@ def record_run(session: Session, run: Run) -> Run:
         return _update_existing_run(session, existing, run)
 
 
+def claim_run(session: Session, run: Run, *, is_active_claim) -> Tuple[Run, bool]:
+    """Pose un claim de run de façon atomique. Retourne ``(run_persisté, claimed)``.
+
+    Variante « compare-and-set » de ``record_run`` dédiée au **claim « en vol »**
+    (SAFE-002). ``claimed=False`` signale que le claim n'a **pas** été obtenu parce
+    qu'un run concurrent détient déjà un claim **actif** (``is_active_claim`` vrai) :
+    l'appelant doit alors répliquer l'état en vol **sans** dispatcher, au lieu
+    d'écraser la ligne partagée et de re-soumettre du travail (course perdue entre le
+    pré-check ``resolve_run`` et le seed).
+
+    ``is_active_claim(existing)`` est fourni par l'appelant (il connaît la sémantique
+    des statuts et du TTL) : vrai ssi la ligne existante est un claim non terminal
+    **non périmé** d'un autre run en vol. Un run terminal (replay/reprise) ou un claim
+    périmé (reclaim) n'est PAS actif → la ligne est mise à jour vers le nouveau claim.
+
+    Même protection anti-course que ``record_run`` (savepoint + rattrapage de la
+    violation d'unicité) : si un writer concurrent insère la même clé entre le lookup
+    et le flush, on relit le gagnant et on tranche via ``is_active_claim`` plutôt que
+    de propager l'erreur ou d'écraser un claim actif.
+    """
+    existing = _resolve_existing_run(session, run)
+    if existing is not None:
+        if is_active_claim(existing):
+            return existing, False  # course perdue : un run concurrent est en vol
+        return _update_existing_run(session, existing, run), True
+
+    try:
+        with session.begin_nested():  # SAVEPOINT : isole l'échec d'insertion
+            session.add(run)
+            session.flush()
+        return run, True
+    except IntegrityError:
+        # Un writer concurrent a inséré la même clé/PK entre le lookup et le flush.
+        if run in session:
+            session.expunge(run)
+        existing = _resolve_existing_run(session, run)
+        if existing is None:
+            raise  # conflit sur une autre contrainte : ne pas masquer
+        if is_active_claim(existing):
+            return existing, False  # le gagnant détient un claim actif : on s'efface
+        return _update_existing_run(session, existing, run), True
+
+
 def _resolve_existing_run_set(session: Session, run_set: RunSet) -> Optional[RunSet]:
     return session.scalar(
         select(RunSet).where(
