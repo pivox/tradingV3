@@ -20,9 +20,29 @@ def _table(name: str):
     raise AssertionError(f"table {name!r} absente des métadonnées")
 
 
-def test_four_tables_registered():
+def test_core_tables_registered():
     names = {t.name for t in Base.metadata.tables.values()}
-    assert {"dashboards", "orchestration_sets", "runs", "run_sets"} <= names
+    assert {
+        "dashboards", "orchestration_sets", "runs", "run_sets", "orchestration_locks",
+    } <= names
+
+
+def test_orchestration_locks_columns_and_unique_lock_key():
+    table = _table("orchestration_locks")
+    expected = {
+        "id", "lock_key", "mtf_profile", "exchange", "market_type",
+        "symbol", "run_id", "acquired_at", "expires_at",
+    }
+    assert expected <= set(table.columns.keys())
+
+    # L'exclusion mutuelle repose sur l'unicité de lock_key.
+    assert table.c.lock_key.unique is True
+    assert table.c.lock_key.nullable is False
+    assert table.c.expires_at.nullable is False
+
+    # Index dédié sur expires_at pour la purge.
+    index_names = {idx.name for idx in table.indexes}
+    assert "ix_orchestration_locks_expires_at" in index_names
 
 
 def test_orchestration_sets_columns_and_constraints():
