@@ -8,13 +8,14 @@ test pour le schéma.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Sequence
+from datetime import datetime
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import Dashboard, OrchestrationSet, Run, RunSet
+from app.db.models import Dashboard, OrchestrationLock, OrchestrationSet, Run, RunSet
 
 # Colonnes mutables recopiées lors d'un upsert (la PK et created_at sont exclus).
 _RUN_UPDATABLE = (
@@ -316,3 +317,117 @@ def get_run_set(session: Session, run_id: str, set_id: str) -> Optional[RunSet]:
     return session.scalar(
         select(RunSet).where(RunSet.run_id == run_id, RunSet.set_id == set_id)
     )
+
+
+# ---------------------------------------------------------------------------
+# Locks d'orchestration (SAFE-001)
+#
+# Sérialise deux runs concurrents sur le même (mtf_profile, exchange,
+# market_type, symbol). L'exclusion mutuelle est portée par la contrainte
+# UNIQUE sur ``OrchestrationLock.lock_key`` ; un lock expiré (TTL dépassé) est
+# *reclaim* par le run suivant. Ces helpers ne committent pas : la transaction
+# (courte, posée AVANT les appels Symfony longs) est gérée par l'appelant.
+# ---------------------------------------------------------------------------
+
+
+def build_lock_key(mtf_profile: str, exchange: str, market_type: str, symbol: str) -> str:
+    """Clé canonique d'exclusion mutuelle d'un couple ``(profil, symbole)``.
+
+    Forme : ``{profile}|{exchange}|{market_type}|{symbol}``. Les composantes sont
+    supposées déjà normalisées par l'appelant (exchange/market_type comme Symfony,
+    symbole en MAJUSCULES comme ``_symbols_overlap``) ; on se contente d'un
+    ``strip()`` défensif pour que la clé soit stable. Le séparateur ``|`` n'apparaît
+    pas dans un identifiant d'exchange/symbole, donc la clé est sans ambiguïté.
+    """
+    parts = (mtf_profile, exchange, market_type, symbol)
+    return "|".join(p.strip() for p in parts)
+
+
+def purge_expired_locks(session: Session, now: datetime) -> int:
+    """Supprime tous les locks expirés (``expires_at <= now``).
+
+    Balayage de garde au démarrage d'un run : évite les fuites si un process
+    titulaire a été tué avant le ``finally`` de libération. Retourne le nombre de
+    lignes supprimées (best-effort selon le dialecte).
+    """
+    result = session.execute(
+        delete(OrchestrationLock).where(OrchestrationLock.expires_at <= now)
+    )
+    return result.rowcount or 0
+
+
+def _acquire_one_lock(session: Session, lock: OrchestrationLock, now: datetime) -> Optional[str]:
+    """Tente d'acquérir UN lock. Retourne ``None`` si acquis, sinon le ``run_id`` titulaire.
+
+    Reclaim d'abord un éventuel lock EXPIRÉ sur la même clé (titulaire mort/abandonné)
+    via un ``DELETE ... WHERE expires_at <= now`` : la comparaison du TTL est faite
+    **côté SQL** (le round-trip SQLite perd le fuseau, donc une comparaison Python
+    naïve/aware échouerait). On insère ensuite via un SAVEPOINT : une violation
+    d'unicité (lock encore actif, ou course concurrente entre la purge et le flush)
+    est rattrapée et on relit le titulaire gagnant plutôt que de propager l'erreur.
+    Compatible SQLite et PostgreSQL (pas d'``ON CONFLICT`` dialecte-spécifique).
+    """
+    # Libère la clé si un lock expiré la détient encore (no-op sinon). Le lock actif
+    # n'est PAS supprimé (expires_at > now) : son titulaire est préservé.
+    session.execute(
+        delete(OrchestrationLock).where(
+            OrchestrationLock.lock_key == lock.lock_key,
+            OrchestrationLock.expires_at <= now,
+        )
+    )
+    session.flush()
+
+    try:
+        with session.begin_nested():  # SAVEPOINT : isole l'échec d'insertion
+            session.add(lock)
+            session.flush()
+    except IntegrityError:
+        # Clé encore détenue par un run actif (ou course concurrente) : fail-closed.
+        if lock in session:
+            session.expunge(lock)
+        existing = session.scalar(
+            select(OrchestrationLock).where(OrchestrationLock.lock_key == lock.lock_key)
+        )
+        if existing is None:
+            raise  # conflit sur une autre contrainte : ne pas masquer
+        return existing.run_id
+    return None
+
+
+def acquire_set_locks(
+    session: Session, locks: Sequence[OrchestrationLock], now: datetime
+) -> Optional[Tuple[str, str]]:
+    """Acquiert **tout ou rien** l'ensemble des locks d'un set.
+
+    Retourne ``None`` si tous les locks sont acquis. Si un lock est déjà détenu par
+    un run actif, libère ceux déjà pris pour ce set (aucun lock résiduel) et
+    retourne ``(lock_key, run_id_titulaire)`` du premier conflit.
+    """
+    acquired: list[OrchestrationLock] = []
+    for lock in locks:
+        holder = _acquire_one_lock(session, lock, now)
+        if holder is not None:
+            # Acquisition partielle annulée : on ne laisse aucun lock derrière soi.
+            for got in acquired:
+                session.delete(got)
+            if acquired:
+                session.flush()
+            return (lock.lock_key, holder)
+        acquired.append(lock)
+    return None
+
+
+def release_locks(
+    session: Session, *, run_id: str, lock_keys: Optional[Sequence[str]] = None
+) -> int:
+    """Libère les locks détenus par ``run_id`` (optionnellement restreints à ``lock_keys``).
+
+    Appelé dans le ``finally`` de chaque set (succès/échec/exception). Sans
+    ``lock_keys``, libère tous les locks du run. Retourne le nombre de lignes
+    supprimées (best-effort selon le dialecte).
+    """
+    stmt = delete(OrchestrationLock).where(OrchestrationLock.run_id == run_id)
+    if lock_keys is not None:
+        stmt = stmt.where(OrchestrationLock.lock_key.in_(list(lock_keys)))
+    result = session.execute(stmt)
+    return result.rowcount or 0

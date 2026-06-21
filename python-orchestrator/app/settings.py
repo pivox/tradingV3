@@ -60,6 +60,11 @@ class Settings:
     )
     # Schéma PostgreSQL dédié aux tables d'orchestration.
     db_schema: str = "orchestration"
+    # TTL (s) des locks d'orchestration par (profil, symbole) (SAFE-001). Borne
+    # haute anti-deadlock : un lock dont le titulaire a été tué avant la libération
+    # est reclaimable au-delà. Doit couvrir la durée max d'un run (appels Symfony
+    # bornés à ~900s) avec marge ; défaut 1800s.
+    lock_ttl_seconds: int = 1800
     # Origines autorisées par CORS pour les appels navigateur du cockpit (UI-001).
     # Défauts = front servi par CRA (:3000) ou nginx (:8082). Surchargeable via
     # CORS_ALLOW_ORIGINS (CSV) ; ``"*"`` autorise toute origine.
@@ -79,6 +84,10 @@ class Settings:
             raise SettingsError("DATABASE_URL ne doit pas être vide.")
         if not self.db_schema.strip():
             raise SettingsError("ORCHESTRATION_DB_SCHEMA ne doit pas être vide.")
+        if self.lock_ttl_seconds < 1:
+            raise SettingsError(
+                f"ORCHESTRATION_LOCK_TTL_SECONDS doit être >= 1 (reçu {self.lock_ttl_seconds})."
+            )
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -88,6 +97,7 @@ class Settings:
             max_concurrency=_int_env("MAX_CONCURRENCY", cls.max_concurrency),
             database_url=os.getenv("DATABASE_URL", cls.database_url),
             db_schema=os.getenv("ORCHESTRATION_DB_SCHEMA", cls.db_schema),
+            lock_ttl_seconds=_int_env("ORCHESTRATION_LOCK_TTL_SECONDS", cls.lock_ttl_seconds),
             cors_allow_origins=_csv_env("CORS_ALLOW_ORIGINS", cls.cors_allow_origins),
         )
 
