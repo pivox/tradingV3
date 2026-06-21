@@ -143,9 +143,36 @@ Réponse :
 }
 ```
 
-`status` ∈ `success | partial_failure | failed | no_sets`. **Aucun set actif**
-renvoie `status="no_sets"` et `ok=false` : ce n'est pas un succès Temporal
-(le workflow/activity devra échouer, cf. TM-002).
+`status` ∈ `success | partial_failure | failed | no_sets | running`. **Aucun set
+actif** renvoie `status="no_sets"` et `ok=false` : ce n'est pas un succès Temporal
+(le workflow/activity devra échouer, cf. TM-002). `status="running"` est renvoyé
+(avec `ok=false`) quand un run idempotent identique est **déjà en vol** (cf.
+*Idempotence runs/sets (SAFE-002)*).
+
+### Idempotence runs/sets (SAFE-002)
+
+Quand un **ancrage d'idempotence** existe (`idempotency_key`, ou `dashboard_id` +
+`tick_timestamp` → `run_id` stable), `POST /orchestrator/run` est idempotent **à
+l'exécution** : un run rejoué ne relance pas les appels Symfony.
+
+- **Claim précoce** : avant le dispatch (transaction courte committée, jamais tenue
+  pendant les ~900s), la ligne `Run` est posée en `status="running"` avec
+  `started_at` et `expires_at` (**TTL de claim**).
+- **Court-circuit** selon l'état du run existant (résolu par `run_id` puis
+  `idempotency_key`) :
+  - terminal `success` → **replay** : `run_id`/`summary` reconstruits depuis
+    `last_json`, aucun ré-appel Symfony ;
+  - terminal `failed`/`partial_failure` → **reprise** : seuls les sets sans
+    `RunSet.ok=true` sont re-dispatchés ; les RunSet réussis sont conservés ;
+  - `running` non périmé → **en vol** : pas de dispatch, réponse `ok=false`,
+    `status="running"` ;
+  - `running` périmé (TTL, process tué) → **reclaim** + ré-exécution.
+- Un `run_id` **aléatoire** (aucun contexte) reste **non idempotent** (inchangé) ;
+  `no_sets` reste **non persisté**.
+- Le **live reste désactivé** (tout set `dry_run=false` est skippé) et les locks
+  SAFE-001 sont inchangés. Le **TTL de claim réutilise** le calcul SAFE-001 (pire
+  temps de paroi du run + marge `ORCHESTRATION_LOCK_TTL_SECONDS`) : **pas de nouvelle
+  variable d'environnement**.
 
 ### Historique des runs en lecture (PY-006)
 
@@ -249,7 +276,7 @@ un service `postgres:15`.
 | `MAX_CONCURRENCY` | `2` | Concurrence globale bornée, ≥ 1 (PY-002+). |
 | `DATABASE_URL` | `postgresql+psycopg://postgres:password@trading-app-db:5432/trading_app` | URL SQLAlchemy de la base orchestration (DB-001). |
 | `ORCHESTRATION_DB_SCHEMA` | `orchestration` | Schéma PostgreSQL dédié (DB-001). Identifiant SQL simple validé (`^[A-Za-z_][A-Za-z0-9_]*$`). |
-| `ORCHESTRATION_LOCK_TTL_SECONDS` | `1800` | Marge (s) anti-deadlock des locks d'orchestration par `(profil, symbole)` (SAFE-001), ≥ 1. Le TTL effectif = pire temps de paroi du run (vagues `max_concurrency` × timeout Symfony) + cette marge, pour qu'un set en file n'expire pas avant son dispatch. |
+| `ORCHESTRATION_LOCK_TTL_SECONDS` | `1800` | Marge (s) anti-deadlock des locks d'orchestration par `(profil, symbole)` (SAFE-001), ≥ 1. Le TTL effectif = pire temps de paroi du run (vagues `max_concurrency` × timeout Symfony) + cette marge, pour qu'un set en file n'expire pas avant son dispatch. **Borne aussi le TTL de claim de run** (SAFE-002, même calcul) : pas de variable dédiée. |
 
 Une valeur non entière ou hors borne lève une erreur explicite au démarrage
 (pas de repli silencieux sur le défaut).
@@ -268,7 +295,7 @@ Tables (`app/db/models.py`) :
 | --- | --- |
 | `dashboards` | Configurations d'orchestration (nom, statut). |
 | `orchestration_sets` | Sets prêts à exécuter (miroir d'`OrchestratorSet` + `payload` préparé). |
-| `runs` | Runs déclenchés + **dernier JSON global** (`last_json`). |
+| `runs` | Runs déclenchés + **dernier JSON global** (`last_json`). Statut `running` (claim « en vol ») et `expires_at` (TTL de claim) ajoutés par **SAFE-002**. |
 | `run_sets` | Résultat par set + **dernier JSON par set** (`response_json`). |
 | `orchestration_locks` | Locks par `(mtf_profile, exchange, market_type, symbol)` sérialisant deux runs concurrents (**SAFE-001**). |
 
@@ -294,10 +321,12 @@ cron) ne peuvent donc pas traiter le même couple `(profil, symbole)` en même t
 - **Libération** dans le `finally` de chaque set (succès/échec/exception).
 - Appliqué à **tous** les sets `mtf_run` (inoffensif en dry-run) ; **le live reste
   désactivé** (SAFE-001 ne relâche pas le skip « live execution not yet enabled »).
-  L'`idempotency_key` des runs (SAFE-002) n'est pas modifié.
+  L'idempotence **à l'exécution** des runs/sets est livrée par **SAFE-002** (cf.
+  *Idempotence runs/sets (SAFE-002)* plus haut).
 
 La migration Alembic `0002_orchestration_locks` crée la table ; elle s'applique via
-`alembic upgrade head` (cf. *Migrations*).
+`alembic upgrade head` (cf. *Migrations*). La migration `0003_run_claim_expires_at`
+ajoute la colonne `runs.expires_at` (TTL du claim « en vol », **SAFE-002**).
 
 ### Migrations
 
