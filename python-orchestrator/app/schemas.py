@@ -60,7 +60,23 @@ class Action(str, Enum):
 # dédiée n'a pas été validée (cf. exchange-schedule-policy.md).
 LIVE_FORBIDDEN_EXCHANGES = frozenset({Exchange.OKX, Exchange.HYPERLIQUID})
 
-RunStatus = Literal["success", "partial_failure", "failed", "no_sets"]
+# Statuts de run centralisés (SAFE-002). ``running`` est un statut **non terminal**
+# (claim « en vol » posé au démarrage du run) ; ``no_sets`` n'est jamais persisté.
+# Les statuts terminaux sont dérivés par ``_resolve_status`` à la finalisation.
+RUN_STATUS_SUCCESS = "success"
+RUN_STATUS_PARTIAL_FAILURE = "partial_failure"
+RUN_STATUS_FAILED = "failed"
+RUN_STATUS_NO_SETS = "no_sets"
+RUN_STATUS_RUNNING = "running"
+
+# Statuts terminaux d'un run réellement exécuté (au moins un set). Sert au
+# court-circuit d'idempotence (SAFE-002) : un run terminal success est rejoué
+# (replay), un terminal non-ok est repris (reprise des sets non réussis).
+TERMINAL_RUN_STATUSES = frozenset(
+    {RUN_STATUS_SUCCESS, RUN_STATUS_PARTIAL_FAILURE, RUN_STATUS_FAILED}
+)
+
+RunStatus = Literal["success", "partial_failure", "failed", "no_sets", "running"]
 
 
 def assert_live_allowed(exchange: Exchange, dry_run: bool) -> None:

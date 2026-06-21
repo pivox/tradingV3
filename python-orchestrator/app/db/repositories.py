@@ -20,7 +20,8 @@ from app.db.models import Dashboard, OrchestrationLock, OrchestrationSet, Run, R
 # Colonnes mutables recopiées lors d'un upsert (la PK et created_at sont exclus).
 _RUN_UPDATABLE = (
     "dashboard_id", "ok", "status", "idempotency_key", "total_calls",
-    "success_count", "failed_count", "started_at", "finished_at", "last_json",
+    "success_count", "failed_count", "started_at", "finished_at", "expires_at",
+    "last_json",
 )
 _RUN_SET_UPDATABLE = (
     "set_ref_id", "payload_sent", "response_json", "ok", "error", "duration_ms",
@@ -177,12 +178,26 @@ def get_run_by_idempotency_key(session: Session, idempotency_key: str) -> Option
     return session.scalar(select(Run).where(Run.idempotency_key == idempotency_key))
 
 
+def resolve_run(
+    session: Session, run_id: str, idempotency_key: Optional[str] = None
+) -> Optional[Run]:
+    """Résout un run existant par ``run_id`` puis, à défaut, par ``idempotency_key``.
+
+    Surface publique du court-circuit d'idempotence (SAFE-002) : le runner inspecte
+    l'état du run existant (terminal success → replay, terminal non-ok → reprise,
+    ``running`` non périmé → en vol) **avant** de poser le claim. Même résolution
+    que ``_resolve_existing_run`` (utilisé par ``record_run``), donc le claim posé
+    ensuite via ``record_run`` retombe sur exactement la même ligne.
+    """
+    existing = session.get(Run, run_id)
+    if existing is None and idempotency_key:
+        existing = get_run_by_idempotency_key(session, idempotency_key)
+    return existing
+
+
 def _resolve_existing_run(session: Session, run: Run) -> Optional[Run]:
     """Cherche le run existant par ``run_id`` puis, à défaut, par ``idempotency_key``."""
-    existing = session.get(Run, run.run_id)
-    if existing is None and run.idempotency_key:
-        existing = get_run_by_idempotency_key(session, run.idempotency_key)
-    return existing
+    return resolve_run(session, run.run_id, run.idempotency_key)
 
 
 def _update_existing_run(session: Session, existing: Run, run: Run) -> Run:
@@ -223,6 +238,93 @@ def record_run(session: Session, run: Run) -> Run:
         if existing is None:
             raise  # conflit sur une autre contrainte : ne pas masquer
         return _update_existing_run(session, existing, run)
+
+
+def _lock_run(session: Session, run_id: str) -> Optional[Run]:
+    """Verrouille la ligne ``runs`` (``SELECT ... FOR UPDATE``) et rafraîchit l'instance.
+
+    Sur PostgreSQL, le verrou ligne sérialise le read-modify-write du claim : un
+    claimer concurrent **bloque** ici jusqu'au commit du gagnant, puis relit l'état
+    à jour. ``populate_existing`` force le rafraîchissement des attributs (statut,
+    ``expires_at``) à partir de la lecture verrouillée, sinon l'``identity map``
+    renverrait les valeurs périmées du premier read et l'évaluation du claim actif se
+    ferait sur des données obsolètes. Sur SQLite, ``FOR UPDATE`` est ignoré (accès
+    sérialisé par le verrou base) : aucun impact sur les tests.
+    """
+    return session.scalars(
+        select(Run)
+        .where(Run.run_id == run_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).first()
+
+
+def _claim_locked(session: Session, run_id: str, run: Run, classify) -> Tuple[Run, Optional[str]]:
+    """Tranche le claim sur une ligne existante, **sous verrou ligne** (atomique).
+
+    Verrouille la ligne puis demande à l'appelant de la **classer** sur l'état frais :
+    ``classify(locked)`` renvoie une *raison de céder* (chaîne opaque, ex. ``"replay"``
+    quand la ligne est un succès terminal, ``"in_flight"`` quand un run concurrent est
+    en vol) ou ``None`` pour **reprendre** la ligne (terminal non-ok / claim périmé →
+    nouveau claim). Quand on cède, la ligne **n'est pas écrasée** : on la retourne
+    telle quelle pour que l'appelant rejoue/réplique. La ligne peut avoir disparu entre
+    la résolution et le verrou (suppression, non attendue en prod) : insertion fraîche.
+    """
+    locked = _lock_run(session, run_id)
+    if locked is None:
+        with session.begin_nested():  # SAVEPOINT : isole l'échec d'insertion
+            session.add(run)
+            session.flush()
+        return run, None
+    reason = classify(locked)
+    if reason is not None:
+        return locked, reason  # on cède (replay/in-flight) sans écraser la ligne
+    return _update_existing_run(session, locked, run), None
+
+
+def claim_run(session: Session, run: Run, *, classify) -> Tuple[Run, Optional[str]]:
+    """Pose un claim de run de façon atomique. Retourne ``(run, yield_reason)``.
+
+    Variante « compare-and-set » de ``record_run`` dédiée au **claim « en vol »**
+    (SAFE-002). ``yield_reason`` est ``None`` quand le claim est obtenu (la ligne a été
+    créée ou reprise vers le nouveau claim) ; sinon c'est la chaîne renvoyée par
+    ``classify`` (ex. ``"replay"``/``"in_flight"``) et la ligne existante est retournée
+    **sans modification** pour que l'appelant rejoue le succès persisté ou réplique
+    l'état en vol — au lieu d'écraser la ligne partagée et de re-soumettre du travail.
+
+    ``classify(existing)`` est fourni par l'appelant (il connaît la sémantique des
+    statuts/TTL) : il **doit** céder (raison non ``None``) sur un succès terminal
+    (→ replay) et sur un claim non périmé d'un autre run (→ in-flight), et renvoyer
+    ``None`` pour les états repris (terminal non-ok, claim périmé).
+
+    Deux courses sont neutralisées **sous l'état le plus frais possible** :
+
+    - **INSERT concurrent** (la ligne n'existait pas encore) : savepoint + rattrapage
+      de la violation d'unicité comme ``record_run`` ; le perdant relit le gagnant ;
+    - **UPDATE concurrent** (la ligne existe déjà) : le read-modify-write se fait **sous
+      ``SELECT ... FOR UPDATE``** (``_claim_locked``) — le perdant bloque, relit l'état
+      committé par le gagnant (claim actif **ou succès finalisé**) et cède au lieu de
+      l'écraser.
+    """
+    existing = _resolve_existing_run(session, run)
+    if existing is not None:
+        return _claim_locked(session, existing.run_id, run, classify)
+
+    try:
+        with session.begin_nested():  # SAVEPOINT : isole l'échec d'insertion
+            session.add(run)
+            session.flush()
+        return run, None
+    except IntegrityError:
+        # Un writer concurrent a inséré la même clé/PK entre le lookup et le flush.
+        if run in session:
+            session.expunge(run)
+        existing = _resolve_existing_run(session, run)
+        if existing is None:
+            raise  # conflit sur une autre contrainte : ne pas masquer
+        # La ligne gagnante existe : on tranche sous verrou (le gagnant a pu, depuis,
+        # finir — succès terminal — ou être encore en vol ; on classe l'état frais).
+        return _claim_locked(session, existing.run_id, run, classify)
 
 
 def _resolve_existing_run_set(session: Session, run_set: RunSet) -> Optional[RunSet]:

@@ -1213,3 +1213,410 @@ def test_lock_uses_injected_clock_for_expiry(orchestrator_env, monkeypatch):
     assert body["ok"] is True
     mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
     assert len(mtf_posts) == 1
+
+
+# --------------------------------------------------------------------------
+# SAFE-002 — idempotence à l'exécution (claim, replay, reprise, in-flight)
+# --------------------------------------------------------------------------
+
+
+class _PerSymbolClient(_FakeAsyncClient):
+    """Faux client dont ``/api/mtf/run`` échoue pour les symboles de ``fail_symbols``.
+
+    Permet de produire un run partiellement échoué (un set ok, un set ko) puis, en
+    vidant ``fail_symbols``, de simuler un re-trigger où le set restant réussit.
+    """
+
+    def __init__(self, *, fail_symbols=(), **kw):
+        super().__init__(**kw)
+        self.fail_symbols = set(fail_symbols)
+
+    async def post(self, url: str, json: Dict[str, Any] | None = None) -> _FakeResponse:
+        self.post_calls.append({"url": url, "json": json or {}})
+        symbols = (json or {}).get("symbols") or []
+        if url.endswith("/api/mtf/run") and symbols and symbols[0] in self.fail_symbols:
+            return _FakeResponse(200, {"status": "partial_success", "data": {"errors": ["boom"]}})
+        return _FakeResponse(200, {"status": "success"})
+
+
+def _mtf_posts(fake) -> List[Dict[str, Any]]:
+    return [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+
+
+def test_has_idempotency_anchor_branches():
+    from app.schemas import RunRequest
+
+    assert orch._has_idempotency_anchor(None) is False
+    assert orch._has_idempotency_anchor(RunRequest()) is False
+    # Clé blanche => pas d'ancrage (cohérent avec _resolve_run_id : run_id aléatoire).
+    assert orch._has_idempotency_anchor(RunRequest(idempotency_key="   ")) is False
+    assert orch._has_idempotency_anchor(RunRequest(idempotency_key="k")) is True
+    # dashboard_id seul (sans tick) => pas d'ancrage.
+    assert orch._has_idempotency_anchor(RunRequest(dashboard_id="1")) is False
+    assert (
+        orch._has_idempotency_anchor(
+            RunRequest(dashboard_id="1", tick_timestamp="2026-06-21T00:00:00Z")
+        )
+        is True
+    )
+
+
+def test_claim_expired_handles_missing_and_naive_expiry():
+    from datetime import datetime, timedelta, timezone
+
+    from app.db.models import Run
+
+    now = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
+    # Pas d'expires_at (run running legacy) => traité comme périmé (reclaimable).
+    assert orch._claim_expired(Run(run_id="r", status="running"), now) is True
+    # Expiry future => non périmé.
+    assert orch._claim_expired(
+        Run(run_id="r", status="running", expires_at=now + timedelta(seconds=10)), now
+    ) is False
+    # Expiry passée, fournie naïve (round-trip SQLite) => normalisée UTC, périmée.
+    assert orch._claim_expired(
+        Run(run_id="r", status="running", expires_at=(now - timedelta(seconds=1)).replace(tzinfo=None)),
+        now,
+    ) is True
+
+
+def test_terminal_success_replays_without_redispatch(orchestrator_env, monkeypatch):
+    # Deux runs même idempotency_key : le 1er réussit, le 2nd est un REPLAY (aucun
+    # POST /api/mtf/run supplémentaire, même run_id, même summary).
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "b", symbols=("ETHUSDT",))
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    payload = {"dashboard_id": str(dash.id), "idempotency_key": "rk1"}
+    first = client.post("/orchestrator/run", json=payload).json()
+    assert first["ok"] is True
+    assert len(_mtf_posts(fake)) == 2
+
+    second = client.post("/orchestrator/run", json=payload).json()
+    # Aucun ré-appel Symfony : le compteur de POST reste à 2.
+    assert len(_mtf_posts(fake)) == 2
+    assert second["run_id"] == first["run_id"] == "run_rk1"
+    assert second["status"] == "success"
+    assert second["ok"] is True
+    assert second["summary"] == first["summary"]
+
+
+def test_partial_failure_resumes_only_failed_sets(orchestrator_env, monkeypatch):
+    # Run partiellement échoué puis re-trigger même clé : seuls les sets échoués sont
+    # re-dispatchés, les RunSet réussis sont conservés, le summary est recomposé.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "b", symbols=("ETHUSDT",))
+    fake = _PerSymbolClient(fail_symbols={"ETHUSDT"})
+    _install_fake_client(monkeypatch, fake)
+
+    payload = {"dashboard_id": str(dash.id), "idempotency_key": "rk2"}
+    first = client.post("/orchestrator/run", json=payload).json()
+    assert first["status"] == "partial_failure"
+    assert first["summary"] == {"total_calls": 2, "success": 1, "failed": 1}
+    assert len(_mtf_posts(fake)) == 2
+
+    # Re-trigger même clé ; ETHUSDT réussit désormais.
+    fake.fail_symbols.clear()
+    second = client.post("/orchestrator/run", json=payload).json()
+    assert second["run_id"] == first["run_id"] == "run_rk2"
+    assert second["ok"] is True
+    assert second["status"] == "success"
+    assert second["summary"] == {"total_calls": 2, "success": 2, "failed": 0}
+
+    # Seul le set précédemment échoué (ETHUSDT) est re-dispatché.
+    second_posts = _mtf_posts(fake)[2:]
+    assert len(second_posts) == 1
+    assert second_posts[0]["json"]["symbols"] == ["ETHUSDT"]
+
+    # Persistance : les deux sets sont ok, "a" conservé (non re-dispatché), "b" mis à jour.
+    session.expire_all()
+    run_sets = session.scalars(select(RunSet).where(RunSet.run_id == "run_rk2")).all()
+    by = {rs.set_id: rs for rs in run_sets}
+    assert by["a"].ok is True
+    assert by["b"].ok is True
+    assert by["b"].error is None
+    run = session.get(Run, "run_rk2")
+    assert run.status == "success"
+    assert {d["set_id"]: d["ok"] for d in run.last_json["sets"]} == {"a": True, "b": True}
+
+
+def test_fresh_running_claim_blocks_second_trigger(orchestrator_env, monkeypatch):
+    # Un run `running` frais (ligne seedée, TTL non périmé) : un 2e trigger même clé
+    # ne dispatche pas (réplique de l'état, ok=false + statut running).
+    from datetime import datetime, timedelta, timezone
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    now = datetime.now(timezone.utc)
+    session.add(
+        Run(
+            run_id="run_rk3", idempotency_key="rk3", ok=False, status="running",
+            total_calls=0, success_count=0, failed_count=0,
+            started_at=now, expires_at=now + timedelta(seconds=3600),
+        )
+    )
+    session.commit()
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "rk3"}
+    ).json()
+
+    assert body["ok"] is False
+    assert body["status"] == "running"
+    assert body["run_id"] == "run_rk3"
+    # Aucun dispatch (ni open-state, ni mtf/run) : un autre run est en vol.
+    assert _mtf_posts(fake) == []
+    assert fake.get_calls == []
+
+
+def test_expired_running_claim_is_reclaimed(orchestrator_env, monkeypatch):
+    # Un run `running` périmé (TTL dépassé, process tué) est reclaim : ré-exécution
+    # comme un nouveau run, finalisé en terminal.
+    from datetime import datetime, timedelta, timezone
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    now = datetime.now(timezone.utc)
+    session.add(
+        Run(
+            run_id="run_rk4", idempotency_key="rk4", ok=False, status="running",
+            total_calls=0, success_count=0, failed_count=0,
+            started_at=now - timedelta(hours=2), expires_at=now - timedelta(seconds=1),
+        )
+    )
+    session.commit()
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "rk4"}
+    ).json()
+
+    assert body["ok"] is True
+    assert body["status"] == "success"
+    assert body["run_id"] == "run_rk4"
+    assert len(_mtf_posts(fake)) == 1
+
+    session.expire_all()
+    run = session.get(Run, "run_rk4")
+    assert run.status == "success"
+    assert run.finished_at is not None
+
+
+def test_random_run_id_is_not_idempotent(orchestrator_env, monkeypatch):
+    # run_id aléatoire (dashboard_id sans tick ni clé) : aucun claim, deux exécutions
+    # distinctes (idempotence non appliquée).
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    first = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+    second = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert first["run_id"] != second["run_id"]
+    # Les deux runs ont bien dispatché (aucun court-circuit d'idempotence).
+    assert len(_mtf_posts(fake)) == 2
+
+    session.expire_all()
+    # Aucune ligne `running` résiduelle : un run sans ancrage n'écrit pas de claim.
+    running = session.scalars(select(Run).where(Run.status == "running")).all()
+    assert running == []
+
+
+def test_claim_writes_running_row_with_ttl_during_dispatch(orchestrator_env, monkeypatch):
+    # Le claim précoce écrit une ligne `running` avec un `expires_at` = now + TTL de
+    # claim AVANT le dispatch (observé pendant l'appel Symfony, claim encore en vol).
+    from datetime import datetime, timedelta, timezone
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+
+    base = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(orch, "_now", lambda: base)
+
+    captured: Dict[str, Any] = {}
+
+    class _CapturingClient(_FakeAsyncClient):
+        async def post(self, url, json=None):
+            row = session.scalars(select(Run).where(Run.run_id == "run_rk6")).first()
+            if row is not None:
+                captured["status"] = row.status
+                captured["expires_at"] = row.expires_at
+            return await super().post(url, json=json)
+
+    _install_fake_client(monkeypatch, _CapturingClient())
+
+    body = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "rk6"}
+    ).json()
+    assert body["ok"] is True
+
+    assert captured["status"] == "running"
+    exp = captured["expires_at"]
+    exp_utc = exp if exp.tzinfo else exp.replace(tzinfo=timezone.utc)
+    # 1 set, max_concurrency par défaut = 2 => 1 vague ; TTL = 1*900 + 1800 = 2700s.
+    assert exp_utc == base + timedelta(seconds=2700)
+
+
+def test_claim_reuses_legacy_run_id_resolved_by_idempotency_key(orchestrator_env, monkeypatch):
+    # Régression : si record_run résout un run existant (par idempotency_key) sous un
+    # run_id distinct du dérivé, le claim ET la finalisation doivent porter ce run_id-là.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    # Run terminal NON-ok pré-existant sous un run_id legacy (≠ "run_k1" dérivé).
+    session.add(Run(run_id="run_legacy", idempotency_key="k1", ok=False, status="failed"))
+    session.commit()
+
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+    body = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "k1"}
+    ).json()
+
+    assert body["run_id"] == "run_legacy"
+    assert body["ok"] is True
+    session.expire_all()
+    assert session.get(Run, "run_k1") is None
+    legacy = session.get(Run, "run_legacy")
+    assert legacy.status == "success"
+    run_sets = session.scalars(select(RunSet).where(RunSet.run_id == "run_legacy")).all()
+    assert {rs.set_id for rs in run_sets} == {"a"}
+
+
+def test_terminal_success_replays_even_when_dashboard_disabled(orchestrator_env, monkeypatch):
+    # P2 : un run terminal réussi doit être REPLAYÉ même si le dashboard a depuis été
+    # désactivé/supprimé — le replay ne nécessite ni dashboard ni sets. Sinon le retry
+    # renverrait `no_sets` au lieu du succès persisté promis par SAFE-002.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    payload = {"dashboard_id": str(dash.id), "idempotency_key": "rk8"}
+    first = client.post("/orchestrator/run", json=payload).json()
+    assert first["ok"] is True and first["status"] == "success"
+    assert len(_mtf_posts(fake)) == 1
+
+    # Le dashboard est désactivé APRÈS le succès.
+    dash.enabled = False
+    session.commit()
+
+    second = client.post("/orchestrator/run", json=payload).json()
+    # Replay (pas de `no_sets`), aucun dispatch supplémentaire.
+    assert second["status"] == "success"
+    assert second["ok"] is True
+    assert second["run_id"] == first["run_id"] == "run_rk8"
+    assert second["summary"] == first["summary"]
+    assert len(_mtf_posts(fake)) == 1
+
+
+def test_concurrent_claim_loser_returns_in_flight_without_dispatch(orchestrator_env, monkeypatch):
+    # P1 (intégration) : si un run concurrent pose son claim ENTRE le pré-check et le
+    # seed (pré-check qui ne voit pas encore la ligne), le perdant réplique l'état en
+    # vol SANS dispatcher ni écraser la ligne partagée.
+    from datetime import datetime, timedelta, timezone
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+
+    now = datetime.now(timezone.utc)
+    # Le « gagnant » a déjà posé un claim running non périmé.
+    session.add(
+        Run(
+            run_id="run_rk9", idempotency_key="rk9", ok=False, status="running",
+            total_calls=0, success_count=0, failed_count=0,
+            started_at=now, expires_at=now + timedelta(seconds=3600),
+        )
+    )
+    session.commit()
+
+    # On simule la course TOCTOU : le PRÉ-CHECK `resolve_run` (1er appel) ne voit PAS
+    # la ligne, mais le seed (`claim_run` → `_resolve_existing_run`, appels suivants)
+    # la voit — comme si le gagnant avait committé entre les deux.
+    real_resolve = orch.repositories.resolve_run
+    calls = {"n": 0}
+
+    def _racing_resolve(session_, run_id_, key=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return real_resolve(session_, run_id_, key)
+
+    monkeypatch.setattr(orch.repositories, "resolve_run", _racing_resolve)
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "rk9"}
+    ).json()
+
+    assert body["ok"] is False
+    assert body["status"] == "running"
+    assert body["run_id"] == "run_rk9"
+    # Le perdant n'a rien dispatché.
+    assert _mtf_posts(fake) == []
+    # La ligne partagée du gagnant est intacte (toujours running, non écrasée).
+    session.expire_all()
+    winner = session.get(Run, "run_rk9")
+    assert winner.status == "running"
+
+
+def test_concurrent_claim_loser_replays_when_winner_finalized_success(orchestrator_env, monkeypatch):
+    # P1 : si le gagnant a déjà FINALISÉ EN SUCCÈS au moment où le perdant pose son
+    # claim (pré-check manqué), le perdant doit REJOUER ce succès — pas écraser la
+    # ligne réussie ni ré-exécuter les sets.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+
+    # Le gagnant a déjà finalisé en succès (run terminal réussi persisté).
+    session.add(
+        Run(
+            run_id="run_rk10", idempotency_key="rk10", ok=True, status="success",
+            total_calls=1, success_count=1, failed_count=0,
+            last_json={"run_id": "run_rk10", "ok": True, "status": "success",
+                       "summary": {"total_calls": 1, "success": 1, "failed": 0}},
+        )
+    )
+    session.commit()
+
+    # Course : le pré-check rate la ligne ; le seed (claim_run) la voit (succès terminal).
+    real_resolve = orch.repositories.resolve_run
+    calls = {"n": 0}
+
+    def _racing_resolve(session_, run_id_, key=None):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else real_resolve(session_, run_id_, key)
+
+    monkeypatch.setattr(orch.repositories, "resolve_run", _racing_resolve)
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "rk10"}
+    ).json()
+
+    # Replay : succès renvoyé, run_id conservé, AUCUN dispatch.
+    assert body["ok"] is True
+    assert body["status"] == "success"
+    assert body["run_id"] == "run_rk10"
+    assert body["summary"] == {"total_calls": 1, "success": 1, "failed": 0}
+    assert _mtf_posts(fake) == []
+    # La ligne de succès du gagnant est intacte (non écrasée vers running).
+    session.expire_all()
+    assert session.get(Run, "run_rk10").status == "success"

@@ -432,7 +432,7 @@ Doctrine de Symfony (qui n'introspecte que `public`).
 | --- | --- |
 | `dashboards` | Configurations d'orchestration (nom, statut actif). |
 | `orchestration_sets` | Sets prêts à exécuter (miroir d'`OrchestratorSet`, dont `sync_tables`, `symbols`, `contracts_limit`, et le `payload` préparé). |
-| `runs` | Runs déclenchés (`run_id`, statut, compteurs, idempotency_key) + **dernier JSON global** (`last_json`). |
+| `runs` | Runs déclenchés (`run_id`, statut, compteurs, idempotency_key, `expires_at` = TTL du claim « en vol ») + **dernier JSON global** (`last_json`). |
 | `run_sets` | Détail par set d'un run (payload envoyé, réponse Symfony, statut, erreur, durée) + **dernier JSON par set** (`response_json`). |
 | `orchestration_locks` | Locks d'orchestration par `(mtf_profile, exchange, market_type, symbol)` sérialisant deux runs concurrents (**SAFE-001**). |
 
@@ -479,8 +479,75 @@ complet) ne pose aucun lock : il n'est de toute façon pas dispatché
 (`run_persisted_set` exige une sélection matérialisée). Le `now` est lu via
 `datetime.now(timezone.utc)` (aucune contrainte Temporal ici) et injectable en test.
 
-> Hors-scope SAFE-001 : l'idempotence des runs (`runs.idempotency_key`, **SAFE-002**)
-> n'est pas modifiée.
+### Statuts de run et idempotence à l'exécution (SAFE-002)
+
+SAFE-001 sérialise les dispatches concurrents **au grain symbole**, mais ne fournit
+pas la sémantique de replay/reprise **au grain run**. SAFE-002 rend
+`POST /orchestrator/run` idempotent **à l'exécution** lorsqu'un **ancrage
+d'idempotence** existe (`idempotency_key`, ou `dashboard_id` + `tick_timestamp` →
+`run_id` stable). Un `run_id` aléatoire (aucun contexte) reste non idempotent.
+
+**Statuts de run** (centralisés dans `app/schemas.py`) :
+
+| Statut | Terminal ? | Sens |
+| --- | --- | --- |
+| `running` | non | **Claim « en vol »** posé au démarrage du run (avant le dispatch). |
+| `success` | oui | Tous les sets exécutés réussis (`ok=true`). |
+| `partial_failure` | oui | Au moins un succès et au moins un échec. |
+| `failed` | oui | Aucun set réussi. |
+| `no_sets` | — | Aucun set à exécuter ; **jamais persisté** (inchangé). |
+
+**Claim précoce** : avant le dispatch — dans une **transaction courte committée**
+(comme les locks SAFE-001, jamais maintenue pendant les ~900s) — on pose/résout la
+ligne `Run` via `claim_run` (variante *compare-and-set* de `record_run`, savepoint
+anti-course réutilisé) avec `status="running"`, `started_at`, et
+`expires_at = now + TTL de claim`. `claim_run` **classe** la ligne
+existante sous verrou et ne la remplace que si elle est réellement reprenable
+(terminal non-ok → reprise ; claim périmé → reclaim). Deux courses sont neutralisées
+sur l'état le plus frais possible : (1) **INSERT concurrent** (la ligne n'existait pas
+— les deux requêtes ont vu une absence au pré-check) → savepoint + violation
+d'unicité, le perdant relit le gagnant ; (2) **UPDATE concurrent** (ligne déjà
+présente) → le read-modify-write se fait **sous `SELECT … FOR UPDATE`** (+
+`populate_existing` pour reclasser sur l'état frais). Le perdant **cède** alors selon
+l'état committé par le gagnant : **replay** si le gagnant a déjà **finalisé en succès**
+(on ne ré-écrit pas la ligne réussie et on ne ré-exécute pas), **réplique in-flight**
+si un run est encore en vol — au lieu d'écraser la ligne partagée et de re-soumettre
+du travail. Cette classification sous verrou est la même que celle du pré-check, mais
+ré-évaluée sur l'état frais. Le **TTL de claim réutilise
+le calcul SAFE-001** du pire temps de paroi du run
+(`ceil(n_sets / max_concurrency)` × timeout Symfony + marge `ORCHESTRATION_LOCK_TTL_SECONDS`) :
+aucune variable d'environnement dédiée. Le `now` est lu via `orch._now`
+(`datetime.now(timezone.utc)`, injectable en test), partagé avec le TTL des locks.
+
+Le **replay** (terminal success) et la **réplique in-flight** (run en vol) sont
+résolus **avant le gating `no_sets`** : ils ne nécessitent ni dashboard ni sets, donc
+un retry après désactivation/suppression du dashboard (ou avec la seule clé) rejoue
+quand même le succès persisté. La **reprise** et le **reclaim**, qui re-exécutent,
+restent gated par la disponibilité des sets.
+
+**Court-circuit selon l'état du run existant** (résolu par `run_id` puis
+`idempotency_key`) :
+
+| État existant | Action |
+| --- | --- |
+| terminal `success` (`ok=true`) | **Replay** : `summary`/`run_id` reconstruits depuis `last_json`, **aucun ré-appel Symfony**. |
+| terminal non-ok (`failed`/`partial_failure`) | **Reprise** : ré-exécution des seuls sets **sans** `RunSet.ok=true` ; les RunSet réussis sont conservés et fusionnés au `summary`/`last_json` recomposés. |
+| `running` **non périmé** | Un autre run est **en vol** : pas de dispatch, réponse de réplique (`ok=false`, `status="running"`, summary courant). |
+| `running` **périmé** (TTL dépassé, process tué) | **Reclaim** + ré-exécution comme un nouveau run. |
+
+**Finalisation** : à la fin, le statut terminal résolu (`_resolve_status`) +
+`finished_at` sont écrits via le `_persist_run` existant. Le claim initial et la
+finalisation portent **le même `run_id`** (on réutilise le `run_id` réellement
+persisté renvoyé par `record_run`, y compris quand un run existant est résolu par
+`idempotency_key` sous un `run_id` legacy distinct du dérivé).
+
+**Périmètre** : SAFE-002 **ne réactive pas le live** (tout set `dry_run=false` reste
+skippé par le runner) et **ne modifie pas** les locks SAFE-001 au-delà de la
+coordination claim ↔ locks (même transaction courte, même `now`, même TTL).
+
+> Migration : `0003_run_claim_expires_at` ajoute la colonne nullable
+> `orchestration.runs.expires_at` (TTL de claim), dans le schéma dédié
+> (aucun impact `public`/Doctrine).
 
 **PY-002** câble la couche DB dans une API REST de **configuration** des dashboards et des
 sets (CRUD), sous le préfixe `/dashboards` :
@@ -521,6 +588,14 @@ Avant tout run :
   (`locked: <key> held by run <id>`). Appliqué à **tous** les sets `mtf_run` (le live
   reste désactivé) ; TTL anti-deadlock + purge des locks expirés au démarrage. Cf.
   *Locks d'orchestration (SAFE-001)*. ;
+- **idempotence runs/sets** (SAFE-002, livré) : lorsqu'un ancrage existe (`run_id`
+  stable), un run rejoué ne ré-exécute pas le travail. Un **claim** `running` (TTL)
+  est posé avant le dispatch (transaction courte) ; un run existant terminal réussi
+  est **rejoué** (replay, aucun ré-appel Symfony), un terminal non-ok est **repris**
+  (seuls les sets non réussis sont re-dispatchés, les `RunSet.ok=true` conservés), un
+  `running` non périmé renvoie l'**état en vol** (`ok=false`, `status="running"`, pas
+  de dispatch), un `running` périmé est **reclaim**. Le live reste désactivé. Cf.
+  *Statuts de run et idempotence à l'exécution (SAFE-002)*. ;
 - ne lancer aucun set live tant que la readiness live n'est pas livrée (tout set
   `dry_run=false` est skippé par le runner, en miroir de `assert_set_persistable`) ;
 - ne pas autoriser OKX live (garde permanente, conservée après readiness) ;
@@ -549,6 +624,7 @@ Avant tout run :
 | PY-005 ✅ | Exécuter les sets persistés + persister les runs | Livré : `/orchestrator/run` lit les sets actifs du dashboard depuis la base, exécute chaque set via son `payload` persisté (+ snapshot runtime + override `dry_run`), et persiste le run (`Run.last_json` global + un `RunSet` par set avec `payload_sent`/`response_json`/`duration_ms`). `no_sets` reste `ok=false`. Garde-fou live défense-en-profondeur au run : OKX/Hyperliquid live (ligne ORM écrite hors API) sont fail-closed avant tout dispatch. |
 | PY-006 ✅ | Exposer l'historique des runs en lecture | Livré : endpoints `GET` en lecture seule du dernier JSON global et par set (`/runs`, `/runs/{run_id}`, `/runs/{run_id}/sets/{set_id}`, `/dashboards/{id}/runs`, `/dashboards/{id}/runs/latest`) ; vue allégée paginée pour les listes, détail complet `last_json` + sets. |
 | SAFE-001 ✅ | Locks d'orchestration par symbole et profil | Livré : table `orchestration_locks` (clé `lock_key` UNIQUE), acquisition tout-ou-rien par set avant dispatch (transaction courte, reclaim des locks expirés, skip fail-closed `locked: …`), libération en fin de set, purge des expirés au démarrage. Prérequis readiness live ; ne réactive pas le live. |
+| SAFE-002 ✅ | Idempotence des runs et des sets | Livré : statut non terminal `running` + claim précoce (`runs.expires_at` = TTL de claim, transaction courte) ; court-circuit selon l'état du run existant — replay (terminal success), reprise des sets non réussis (terminal non-ok), réplique en vol (`running` non périmé), reclaim (`running` périmé). Réutilise `record_run`/savepoints et le calcul de TTL SAFE-001. Migration `0003_run_claim_expires_at`. Ne réactive pas le live. |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 
