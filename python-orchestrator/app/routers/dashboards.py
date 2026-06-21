@@ -167,11 +167,17 @@ def update_set(
     effective_dry_run = updates.get("dry_run", a_set.dry_run)
     effective_symbols = updates.get("symbols", a_set.symbols)
     effective_limit = updates.get("contracts_limit", a_set.contracts_limit)
+    effective_exchange = updates.get("exchange", a_set.exchange)
+    effective_market_type = updates.get("market_type", a_set.market_type)
+    effective_environment = updates.get("environment", a_set.environment)
     try:
         assert_set_persistable(
             dry_run=effective_dry_run,
             symbols=effective_symbols,
             contracts_limit=effective_limit,
+            exchange=effective_exchange,
+            market_type=effective_market_type,
+            environment=effective_environment,
         )
     except ValueError as exc:
         # 422 littéral : la constante `status.HTTP_422_*` a été renommée selon
@@ -313,6 +319,9 @@ async def refresh_contracts(
                 dry_run=a_set.dry_run,
                 symbols=symbols,
                 contracts_limit=a_set.contracts_limit,
+                exchange=a_set.exchange,
+                market_type=a_set.market_type,
+                environment=a_set.environment,
             )
         except ValueError as exc:
             raise HTTPException(
