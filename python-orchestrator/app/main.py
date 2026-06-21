@@ -10,8 +10,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
+from app.logging_config import configure_audit_logging
 from app.routers import dashboards, health, orchestrator, runs
 from app.settings import get_settings
+
+# Audit des runs (OBS-001) : on branche le logger JSON line `orchestrator.audit`
+# au démarrage, au niveau piloté par `ORCHESTRATION_LOG_LEVEL` (défaut INFO,
+# validé par `settings`). Idempotent (un seul handler), pas de double émission.
+configure_audit_logging(get_settings().log_level)
 
 app = FastAPI(
     title="TradingV3 — Python Orchestrator",
