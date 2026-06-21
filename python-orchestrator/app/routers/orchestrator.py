@@ -769,6 +769,17 @@ async def run_orchestrator(
             existing_run, list(repositories.list_run_sets(session, existing_run.run_id))
         )
 
+    # OBS-001 : capture l'état « claim périmé » AVANT le claim. `_seed_claim` met à
+    # jour la MÊME instance ORM `existing_run` (reclaim → nouveau `expires_at` futur) :
+    # évalué après, `_claim_expired(existing_run, now)` serait toujours faux et le
+    # `run_short_circuit` reason="reclaim" ne serait jamais émis pour une reprise de
+    # claim périmé. On fige donc le verdict ici, sur l'état pré-claim.
+    reclaim_detected = (
+        existing_run is not None
+        and existing_run.status == RUN_STATUS_RUNNING
+        and _claim_expired(existing_run, now)
+    )
+
     # SAFE-001 : sérialisation per-(profil, symbole) ENTRE runs/process via des locks
     # DB. Le garde intra-run (`conflicting_live_ids`) ne couvre qu'un seul batch ; deux
     # runs concurrents (overlap du cron Temporal, ou front + cron) ne se voient pas
@@ -841,11 +852,7 @@ async def run_orchestrator(
             reason="resume",
             preserved_sets=len(preserved_results),
         )
-    elif (
-        existing_run is not None
-        and existing_run.status == RUN_STATUS_RUNNING
-        and _claim_expired(existing_run, now)
-    ):
+    elif reclaim_detected:
         run_audit.emit(
             run_audit.RUN_SHORT_CIRCUIT,
             run_id=run_id,

@@ -2034,3 +2034,37 @@ def test_audit_run_started_after_claim_on_idempotency_race(
     run_ids = {r.run_id for r in audit_records}
     assert run_ids == {"run_legacy_race"}
     assert "run_krace" not in run_ids
+
+
+def test_audit_reclaim_emits_short_circuit(orchestrator_env, monkeypatch, audit_records):
+    # Un `running` périmé (TTL dépassé) repris doit émettre run_short_circuit
+    # reason="reclaim". Régression : le verdict d'expiration est figé AVANT le claim,
+    # car `_seed_claim` rafraîchit `expires_at` sur la même instance ORM.
+    from datetime import datetime, timedelta, timezone
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    now = datetime.now(timezone.utc)
+    session.add(
+        Run(
+            run_id="run_reclaim_obs", idempotency_key="reclobs", ok=False, status="running",
+            total_calls=0, success_count=0, failed_count=0,
+            started_at=now - timedelta(hours=2), expires_at=now - timedelta(seconds=1),
+        )
+    )
+    session.commit()
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    body = client.post(
+        "/orchestrator/run",
+        json={"dashboard_id": str(dash.id), "idempotency_key": "reclobs"},
+    ).json()
+
+    assert body["run_id"] == "run_reclaim_obs"
+    short = _by_event(audit_records, "run_short_circuit")
+    assert [s.audit["reason"] for s in short] == ["reclaim"]
+    assert short[0].run_id == "run_reclaim_obs"
+    # La reprise ré-exécute : run_started + dispatch + finished également présents.
+    assert _by_event(audit_records, "run_started")
+    assert _by_event(audit_records, "run_finished")
