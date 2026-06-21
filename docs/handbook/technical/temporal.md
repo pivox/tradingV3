@@ -136,7 +136,7 @@ Retour minimal attendu :
 
 Contrat important : `ok=false` n'est pas un succès Temporal.
 
-L'activity ou le workflow minimal doit explicitement échouer lorsque l'orchestrateur retourne `ok=false`, par exemple en levant une erreur après avoir journalisé le `run_id` et le résumé. Il ne faut pas seulement retourner un JSON contenant `ok=false`, sinon Temporal affichera le tick comme réussi.
+Le workflow minimal échoue explicitement lorsque l'orchestrateur retourne `ok=false` (implémenté par **TM-002**) : après avoir journalisé le `run_id` et le résumé, `OrchestratorCronWorkflow` lève une `temporalio.exceptions.ApplicationError` (type `OrchestratorRunFailed`, message incluant `status`, `run_id` et `summary`). Il ne faut pas seulement retourner un JSON contenant `ok=false`, sinon Temporal afficherait le tick comme réussi. L'`ApplicationError` est `non_retryable=True` : un tick `ok=false` ne doit pas être re-tenté en boucle dans le même tick — le prochain tick cron est le « retry » naturel (overlap `BUFFER_ONE`). L'activity `orchestrator_run`, elle, reste inchangée : elle retourne le `RunResponse`/dict `ok=false` verbatim (source de vérité pour la persistance côté API Python) ; la levée vit uniquement dans le workflow.
 
 Le JSON complet et les détails par set restent dans l'API Python et dans la base d'orchestration.
 
@@ -162,8 +162,8 @@ TM-001 livre le déclencheur cron minimal vers l'orchestrateur Python. Un schedu
 
 Composants (à côté du legacy, task queue inchangée `cron_symfony_mtf_workers`) :
 
-- `activities/orchestrator_http.py` (`orchestrator_run`) : POST httpx du `RunRequest` minimal (`dashboard_id`, `schedule_id`, `tick_timestamp`) et retour du `RunResponse` tel quel. En cas d'erreur réseau / corps non JSON, un dict explicite `ok=false` est renvoyé (jamais d'exception).
-- `workflows/orchestrator_cron.py` (`OrchestratorCronWorkflow`) : exécute l'unique activity, journalise `run_id` + `summary`, et propage le résultat. Le `tick_timestamp` est dérivé de `workflow.now()` (déterminisme : aucune I/O ni `datetime.now()` dans le workflow).
+- `activities/orchestrator_http.py` (`orchestrator_run`) : POST httpx du `RunRequest` minimal (`dashboard_id`, `schedule_id`, `tick_timestamp`) et retour du `RunResponse` tel quel. En cas d'erreur réseau / corps non JSON, un dict explicite `ok=false` est renvoyé (jamais d'exception). Inchangée par TM-002 (« return verbatim »).
+- `workflows/orchestrator_cron.py` (`OrchestratorCronWorkflow`) : exécute l'unique activity, journalise `run_id` + `summary`, puis sur `ok=true` propage le résultat et sur `ok=false` lève une `ApplicationError` non-retryable (TM-002) pour marquer le tick en échec. Le `tick_timestamp` est dérivé de `workflow.now()` (déterminisme : aucune I/O ni `datetime.now()` dans le workflow ; le log précède toujours la levée).
 
 Sous-commandes (mêmes conventions que `manage_exchange_profile_schedule.py`) : `create` / `pause` / `resume` / `delete` / `status`. Overlap `BUFFER_ONE`.
 
@@ -189,7 +189,7 @@ python scripts/manage_orchestrator_schedule.py resume
 python scripts/manage_orchestrator_schedule.py delete
 ```
 
-> `ok=false` n'est pas un succès Temporal : l'activity remonte le `RunResponse` complet pour que **TM-002** lève l'erreur côté workflow. TM-001 ne lève pas sur `ok=false`.
+> `ok=false` n'est pas un succès Temporal : l'activity remonte le `RunResponse` complet et le workflow lève une `ApplicationError` non-retryable sur `ok=false` (implémenté par **TM-002**), après avoir journalisé `run_id` + `summary`.
 
 ## Garde-fous live
 
