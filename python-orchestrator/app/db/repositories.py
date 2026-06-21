@@ -20,7 +20,8 @@ from app.db.models import Dashboard, OrchestrationLock, OrchestrationSet, Run, R
 # Colonnes mutables recopiées lors d'un upsert (la PK et created_at sont exclus).
 _RUN_UPDATABLE = (
     "dashboard_id", "ok", "status", "idempotency_key", "total_calls",
-    "success_count", "failed_count", "started_at", "finished_at", "last_json",
+    "success_count", "failed_count", "started_at", "finished_at", "expires_at",
+    "last_json",
 )
 _RUN_SET_UPDATABLE = (
     "set_ref_id", "payload_sent", "response_json", "ok", "error", "duration_ms",
@@ -177,12 +178,26 @@ def get_run_by_idempotency_key(session: Session, idempotency_key: str) -> Option
     return session.scalar(select(Run).where(Run.idempotency_key == idempotency_key))
 
 
+def resolve_run(
+    session: Session, run_id: str, idempotency_key: Optional[str] = None
+) -> Optional[Run]:
+    """Résout un run existant par ``run_id`` puis, à défaut, par ``idempotency_key``.
+
+    Surface publique du court-circuit d'idempotence (SAFE-002) : le runner inspecte
+    l'état du run existant (terminal success → replay, terminal non-ok → reprise,
+    ``running`` non périmé → en vol) **avant** de poser le claim. Même résolution
+    que ``_resolve_existing_run`` (utilisé par ``record_run``), donc le claim posé
+    ensuite via ``record_run`` retombe sur exactement la même ligne.
+    """
+    existing = session.get(Run, run_id)
+    if existing is None and idempotency_key:
+        existing = get_run_by_idempotency_key(session, idempotency_key)
+    return existing
+
+
 def _resolve_existing_run(session: Session, run: Run) -> Optional[Run]:
     """Cherche le run existant par ``run_id`` puis, à défaut, par ``idempotency_key``."""
-    existing = session.get(Run, run.run_id)
-    if existing is None and run.idempotency_key:
-        existing = get_run_by_idempotency_key(session, run.idempotency_key)
-    return existing
+    return resolve_run(session, run.run_id, run.idempotency_key)
 
 
 def _update_existing_run(session: Session, existing: Run, run: Run) -> Run:

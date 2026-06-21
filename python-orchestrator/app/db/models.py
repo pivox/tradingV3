@@ -137,6 +137,11 @@ class Run(Base):
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # TTL du claim « en vol » (SAFE-002). Renseigné au démarrage du run (statut
+    # ``running``) : passé cette date, un run resté ``running`` (process tué avant la
+    # finalisation) est reclaimable par un nouveau déclenchement partageant le même
+    # ancrage d'idempotence. Nul/ignoré sur un run terminal (le statut prime).
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     # Dernier JSON global du run.
     last_json: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
