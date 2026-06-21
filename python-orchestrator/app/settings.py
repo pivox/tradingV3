@@ -45,6 +45,30 @@ def _csv_env(name: str, default: Tuple[str, ...]) -> Tuple[str, ...]:
 _TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
 _FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
 
+# Niveaux de log d'audit acceptés (OBS-001), normalisés en MAJUSCULES — alignés
+# sur les noms standard de ``logging``.
+_VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+
+
+def _log_level_env(name: str, default: str) -> str:
+    """Lit un niveau de log depuis l'environnement, ou lève si invalide (OBS-001).
+
+    Normalisé en MAJUSCULES ; validé contre le jeu fermé des niveaux ``logging``
+    standard. Une valeur inconnue lève au démarrage (comme
+    ``ORCHESTRATION_LOCK_TTL_SECONDS``) plutôt que de retomber silencieusement
+    sur le défaut — pas de configuration d'observabilité ambiguë.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    token = raw.strip().upper()
+    if token not in _VALID_LOG_LEVELS:
+        raise SettingsError(
+            f"Variable {name!r} invalide : {raw!r} "
+            f"(attendu {sorted(_VALID_LOG_LEVELS)})."
+        )
+    return token
+
 
 def _bool_env(name: str, default: bool) -> bool:
     """Lit un booléen depuis l'environnement, ou lève si la valeur est invalide.
@@ -133,6 +157,10 @@ class Settings:
     # (bannissement permanent géré par `live_guard`). En pratique : au plus
     # `bitmart` (+ `fake` en simulation).
     live_exchanges: Tuple[str, ...] = ()
+    # Niveau de log de l'audit des runs (OBS-001), piloté par
+    # ``ORCHESTRATION_LOG_LEVEL`` (défaut INFO). Validé au démarrage : une valeur
+    # inconnue lève (pas de repli silencieux). Cf. ``app/logging_config.py``.
+    log_level: str = "INFO"
     # Origines autorisées par CORS pour les appels navigateur du cockpit (UI-001).
     # Défauts = front servi par CRA (:3000) ou nginx (:8082). Surchargeable via
     # CORS_ALLOW_ORIGINS (CSV) ; ``"*"`` autorise toute origine.
@@ -156,6 +184,11 @@ class Settings:
             raise SettingsError(
                 f"ORCHESTRATION_LOCK_TTL_SECONDS doit être >= 1 (reçu {self.lock_ttl_seconds})."
             )
+        if self.log_level not in _VALID_LOG_LEVELS:
+            raise SettingsError(
+                f"ORCHESTRATION_LOG_LEVEL invalide : {self.log_level!r} "
+                f"(attendu {sorted(_VALID_LOG_LEVELS)})."
+            )
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -168,6 +201,7 @@ class Settings:
             lock_ttl_seconds=_int_env("ORCHESTRATION_LOCK_TTL_SECONDS", cls.lock_ttl_seconds),
             live_enabled=_bool_env("ORCHESTRATION_LIVE_ENABLED", cls.live_enabled),
             live_exchanges=_live_exchanges_env("ORCHESTRATION_LIVE_EXCHANGES", cls.live_exchanges),
+            log_level=_log_level_env("ORCHESTRATION_LOG_LEVEL", cls.log_level),
             cors_allow_origins=_csv_env("CORS_ALLOW_ORIGINS", cls.cors_allow_origins),
         )
 
