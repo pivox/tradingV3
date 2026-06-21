@@ -1996,3 +1996,41 @@ def test_audit_not_materialized_set_emits_skip_without_dispatch(
     # Ni dispatch audité, ni POST réel.
     assert _by_event(audit_records, "set_dispatched") == []
     assert _mtf_posts(fake) == []
+
+
+def test_audit_run_started_after_claim_on_idempotency_race(
+    orchestrator_env, monkeypatch, audit_records
+):
+    # Course SAFE-002 : le pré-check (resolve_run) RATE la ligne, mais le claim la
+    # résout par idempotency_key sous un run_id legacy distinct du dérivé. run_started
+    # étant émis APRÈS le claim, il porte le run_id persisté — pas d'orphelin sous le
+    # dérivé.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    session.add(Run(run_id="run_legacy_race", idempotency_key="krace", ok=False, status="failed"))
+    session.commit()
+
+    real_resolve = orch.repositories.resolve_run
+    calls = {"n": 0}
+
+    def _racing_resolve(session_, run_id_, key=None):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else real_resolve(session_, run_id_, key)
+
+    monkeypatch.setattr(orch.repositories, "resolve_run", _racing_resolve)
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    body = client.post(
+        "/orchestrator/run",
+        json={"dashboard_id": str(dash.id), "idempotency_key": "krace"},
+    ).json()
+
+    assert body["run_id"] == "run_legacy_race"
+    started = _by_event(audit_records, "run_started")
+    assert len(started) == 1
+    assert started[0].run_id == "run_legacy_race"
+    # Toute la piste est corrélée par le run_id persisté ; jamais sous le dérivé.
+    run_ids = {r.run_id for r in audit_records}
+    assert run_ids == {"run_legacy_race"}
+    assert "run_krace" not in run_ids

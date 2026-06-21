@@ -685,18 +685,6 @@ async def run_orchestrator(
         repositories.resolve_run(session, run_id, idempotency_key) if has_anchor else None
     )
 
-    # OBS-001 : point d'entrée d'audit, corrélé par le run_id RÉELLEMENT persisté.
-    # Un run ancré peut résoudre une ligne legacy (par `idempotency_key`) dont le
-    # `run_id` diffère du dérivé : on émet alors `run_started` sous cet id-là, pour
-    # que TOUS les événements du run (short_circuit / set_* / finished + X-Run-Id)
-    # partagent la même clé de corrélation.
-    run_audit.emit(
-        run_audit.RUN_STARTED,
-        run_id=existing_run.run_id if existing_run is not None else run_id,
-        dashboard_id=_resolve_dashboard_id(request),
-        has_anchor=has_anchor,
-    )
-
     if existing_run is not None:
         if existing_run.status in TERMINAL_RUN_STATUSES and existing_run.ok:
             # Terminal success → REPLAY : summary/run_id reconstruits depuis le run
@@ -827,6 +815,20 @@ async def run_orchestrator(
             if yield_reason == "replay":
                 return _replay_response(claim_row)
             return _in_flight_response(claim_row)
+
+    # OBS-001 : point d'entrée d'audit émis ICI — APRÈS que le claim a résolu le
+    # `run_id` réellement persisté (un run ancré peut le réécrire vers une ligne
+    # legacy résolue par `idempotency_key`, y compris sur la course SAFE-002 ratée
+    # au pré-check). Tous les événements du run (short_circuit resume/reclaim, set_*,
+    # finished) + l'en-tête X-Run-Id partagent donc la même clé de corrélation. Les
+    # sorties précoces (replay/in-flight, no_sets, cession de claim) n'exécutent rien
+    # et émettent leur propre événement terminal — pas de `run_started` orphelin.
+    run_audit.emit(
+        run_audit.RUN_STARTED,
+        run_id=run_id,
+        dashboard_id=dashboard_id,
+        has_anchor=has_anchor,
+    )
 
     # OBS-001 : court-circuits SAFE-002 qui RE-EXÉCUTENT (le run_id est désormais
     # celui réellement persisté par le claim). `resume` : reprise d'un terminal
