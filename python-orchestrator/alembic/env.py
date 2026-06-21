@@ -21,7 +21,12 @@ from app.settings import get_settings
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False` : configurer le logging Alembic ne doit PAS
+    # désactiver les autres loggers déjà créés (notamment `orchestrator.audit`,
+    # OBS-001). Le défaut `True` poserait `disabled=True` sur tout logger absent
+    # de `alembic.ini` → l'audit serait silencieusement coupé après un
+    # `alembic upgrade` exécuté dans le même process (ex. smoke test PostgreSQL).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.database_url)

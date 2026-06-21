@@ -147,3 +147,14 @@ def test_configure_audit_logging_is_idempotent():
     assert len(audit_handlers) == 1
     # Propagation coupée : pas de double émission via le root/uvicorn.
     assert logger.propagate is False
+
+
+def test_configure_audit_logging_reenables_disabled_logger():
+    # Régression : un `logging.config.fileConfig(...)` exécuté ailleurs (ex. Alembic
+    # dans le smoke PostgreSQL) avec son défaut `disable_existing_loggers=True`
+    # poserait `disabled=True` sur le logger d'audit, coupant silencieusement
+    # l'émission. `configure_audit_logging` doit le réactiver.
+    logger = logging.getLogger(AUDIT_LOGGER_NAME)
+    logger.disabled = True
+    configure_audit_logging("INFO")
+    assert logger.disabled is False

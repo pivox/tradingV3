@@ -60,13 +60,18 @@ def audit_records():
     handler = _Recorder()
     handler.setLevel(logging.DEBUG)
     previous_level = logger.level
+    previous_disabled = logger.disabled
     logger.setLevel(logging.DEBUG)
+    # Un `fileConfig` exécuté par un test antérieur (ex. Alembic dans le smoke
+    # PostgreSQL) a pu désactiver ce logger : on le réactive pour capturer.
+    logger.disabled = False
     logger.addHandler(handler)
     try:
         yield records
     finally:
         logger.removeHandler(handler)
         logger.setLevel(previous_level)
+        logger.disabled = previous_disabled
 
 
 @pytest.fixture()

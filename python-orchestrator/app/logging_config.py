@@ -72,6 +72,10 @@ def configure_audit_logging(level: str = "INFO") -> logging.Logger:
     """
     logger = logging.getLogger(AUDIT_LOGGER_NAME)
     logger.setLevel(level)
+    # Un `logging.config.fileConfig(...)` exécuté ailleurs (ex. Alembic) avec son
+    # défaut `disable_existing_loggers=True` désactiverait ce logger : on le
+    # réactive explicitement pour que l'audit reste émis quoi qu'il arrive.
+    logger.disabled = False
     # Pas de double émission : la ligne ne remonte pas au root (qui peut porter
     # ses propres handlers, ex. uvicorn) — notre handler dédié suffit.
     logger.propagate = False
