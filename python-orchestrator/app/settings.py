@@ -41,6 +41,63 @@ def _csv_env(name: str, default: Tuple[str, ...]) -> Tuple[str, ...]:
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
+# Valeurs booléennes acceptées (cassse-insensible) pour les interrupteurs d'env.
+_TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
+_FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    """Lit un booléen depuis l'environnement, ou lève si la valeur est invalide.
+
+    Fail-closed : on n'interprète qu'un jeu fermé de jetons (``true/false``,
+    ``1/0``, ``yes/no``, ``on/off``) ; toute autre valeur lève au démarrage plutôt
+    que d'activer/désactiver silencieusement un interrupteur de sécurité (live).
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    token = raw.strip().lower()
+    if token in _TRUE_TOKENS:
+        return True
+    if token in _FALSE_TOKENS:
+        return False
+    raise SettingsError(
+        f"Variable {name!r} invalide : {raw!r} (attendu true/false, 1/0, yes/no, on/off)."
+    )
+
+
+def _live_exchanges_env(name: str, default: Tuple[str, ...]) -> Tuple[str, ...]:
+    """Allow-list live (CSV), normalisée en minuscules et validée au démarrage.
+
+    Chaque entrée doit être un exchange **connu** (valeur de ``schemas.Exchange``) ;
+    sinon on lève (``SettingsError``) plutôt que d'ignorer silencieusement une
+    coquille qui rendrait l'allow-list inopérante. La normalisation casse/espaces
+    s'aligne sur ``live_guard._normalize_exchange`` (``Bitmart`` ⇒ ``bitmart``).
+    Les bannissements permanents (OKX/Hyperliquid) ne sont PAS rejetés ici : ils
+    restent interdits par ``assess_live`` même listés (défense en profondeur).
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    # Import différé : évite tout couplage d'import au chargement du module settings.
+    from app.schemas import Exchange
+
+    known = {e.value for e in Exchange}
+    cleaned: list[str] = []
+    for item in raw.split(","):
+        token = item.strip().lower()
+        if not token:
+            continue
+        if token not in known:
+            raise SettingsError(
+                f"Variable {name!r} invalide : exchange inconnu {token!r} "
+                f"(connus : {sorted(known)})."
+            )
+        if token not in cleaned:
+            cleaned.append(token)
+    return tuple(cleaned)
+
+
 @dataclass(frozen=True)
 class Settings:
     """Paramètres runtime de l'API Python Orchestrator."""
@@ -66,6 +123,16 @@ class Settings:
     # n'expire jamais avant son dispatch ; passé ce délai, un lock dont le titulaire a
     # été tué avant la libération est reclaimable. Défaut 1800s.
     lock_ttl_seconds: int = 1800
+    # Interrupteur d'activation live (SAFE-003). Par défaut **OFF** : tout set
+    # `dry_run=false` est skippé fail-closed (comportement identique à avant
+    # SAFE-003). Tant qu'il reste OFF, aucun ordre live ne peut partir, quelle que
+    # soit l'allow-list. À ne JAMAIS livrer à True sans readiness runtime.
+    live_enabled: bool = False
+    # Allow-list des exchanges autorisés à passer live QUAND l'interrupteur est ON
+    # (défaut **vide** = aucun). OKX/Hyperliquid restent interdits même listés
+    # (bannissement permanent géré par `live_guard`). En pratique : au plus
+    # `bitmart` (+ `fake` en simulation).
+    live_exchanges: Tuple[str, ...] = ()
     # Origines autorisées par CORS pour les appels navigateur du cockpit (UI-001).
     # Défauts = front servi par CRA (:3000) ou nginx (:8082). Surchargeable via
     # CORS_ALLOW_ORIGINS (CSV) ; ``"*"`` autorise toute origine.
@@ -99,6 +166,8 @@ class Settings:
             database_url=os.getenv("DATABASE_URL", cls.database_url),
             db_schema=os.getenv("ORCHESTRATION_DB_SCHEMA", cls.db_schema),
             lock_ttl_seconds=_int_env("ORCHESTRATION_LOCK_TTL_SECONDS", cls.lock_ttl_seconds),
+            live_enabled=_bool_env("ORCHESTRATION_LIVE_ENABLED", cls.live_enabled),
+            live_exchanges=_live_exchanges_env("ORCHESTRATION_LIVE_EXCHANGES", cls.live_exchanges),
             cors_allow_origins=_csv_env("CORS_ALLOW_ORIGINS", cls.cors_allow_origins),
         )
 
