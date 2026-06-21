@@ -35,6 +35,8 @@ from app.db.models import OrchestrationLock, OrchestrationSet, Run, RunSet
 from app.schemas import (
     Action,
     LIVE_FORBIDDEN_EXCHANGES,
+    RUN_STATUS_RUNNING,
+    TERMINAL_RUN_STATUSES,
     RunRequest,
     RunResponse,
     RunStatus,
@@ -104,6 +106,41 @@ def _resolve_run_id(request: Optional[RunRequest]) -> str:
     if len(run_id) > _MAX_PERSISTED_LEN or not _SAFE_RUN_ID.match(run_id):
         run_id = "run_" + hashlib.sha256(run_id.encode()).hexdigest()
     return run_id
+
+
+def _has_idempotency_anchor(request: Optional[RunRequest]) -> bool:
+    """Indique si un ancrage d'idempotence existe (→ ``run_id`` stable, claim posé).
+
+    Miroir exact de ``_resolve_run_id`` : avec un ``idempotency_key`` non blanc, ou
+    ``dashboard_id`` + ``tick_timestamp``, le ``run_id`` est dérivé de façon stable
+    et SAFE-002 s'applique (claim, replay, reprise, in-flight). Sinon le ``run_id``
+    est aléatoire et reste non idempotent (comportement inchangé).
+    """
+    if request is None:
+        return False
+    if request.idempotency_key and request.idempotency_key.strip():
+        return True
+    if request.dashboard_id and request.tick_timestamp:
+        return True
+    return False
+
+
+def _normalized_idempotency_key(request: Optional[RunRequest]) -> Optional[str]:
+    """Clé d'idempotence normalisée pour la colonne UNIQUE ``runs.idempotency_key``.
+
+    - clé absente/vide/blanche → ``None`` (traitée comme absente, cf. ``_resolve_run_id``) ;
+    - clé > 255 → hash déterministe borné (ne pas faire échouer l'INSERT/UPDATE).
+
+    Source **unique** partagée par le claim précoce (SAFE-002) et ``_persist_run`` :
+    le claim et la finalisation portent ainsi exactement la même clé, donc
+    ``record_run`` retombe sur la même ligne.
+    """
+    key = request.idempotency_key if request is not None else None
+    if key is not None and not key.strip():
+        key = None
+    if key is not None and len(key) > _MAX_PERSISTED_LEN:
+        key = "sha256:" + hashlib.sha256(key.encode()).hexdigest()
+    return key
 
 
 def _resolve_status(success: int, failed: int) -> RunStatus:
@@ -211,17 +248,10 @@ def _persist_run(
     doc). ``record_run``/``record_run_set`` sont des upserts idempotents ; le
     commit est géré ici (la dépendance ``get_session`` ne committe pas).
     """
-    idempotency_key = request.idempotency_key if request is not None else None
-    # Une clé vide/blanche est traitée comme absente par `_resolve_run_id` (run_id
-    # aléatoire) : il faut la normaliser en None ici aussi, sinon on persiste ""
-    # dans la colonne UNIQUE `runs.idempotency_key` et un second run à clé vide (avec
-    # un run_id différent) violerait la contrainte d'unicité au commit.
-    if idempotency_key is not None and not idempotency_key.strip():
-        idempotency_key = None
-    # Borne la colonne unique `runs.idempotency_key` (String(255)) pour ne pas
-    # faire échouer la persistance après coup ; hash déterministe au-delà.
-    if idempotency_key is not None and len(idempotency_key) > _MAX_PERSISTED_LEN:
-        idempotency_key = "sha256:" + hashlib.sha256(idempotency_key.encode()).hexdigest()
+    # Clé normalisée (blanche → None, > 255 → hash borné) : source unique partagée
+    # avec le claim précoce (SAFE-002), pour que claim et finalisation portent la
+    # même clé et que `record_run` retombe sur la même ligne.
+    idempotency_key = _normalized_idempotency_key(request)
     last_json = {
         "run_id": run_id,
         "dashboard_id": dashboard_id,
@@ -310,6 +340,143 @@ def _persist_run(
 
     session.commit()
     return run_id
+
+
+def _claim_expired(run: Run, now: datetime) -> bool:
+    """Indique si le claim « en vol » d'un run ``running`` est périmé (TTL dépassé).
+
+    Un ``expires_at`` absent (run ``running`` legacy sans TTL de claim) est traité
+    comme périmé → reclaimable. Le round-trip SQLite peut renvoyer un datetime naïf :
+    on normalise le fuseau en UTC avant comparaison (comme les locks SAFE-001).
+    """
+    expires_at = run.expires_at
+    if expires_at is None:
+        return True
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= now
+
+
+def _replay_response(run: Run) -> RunResponse:
+    """Réponse de **replay** d'un run terminal réussi (SAFE-002).
+
+    Reconstruit le contrat depuis le run persisté (``last_json`` + colonnes) sans
+    ré-exécuter ni ré-appeler Symfony. ``summary`` est relu depuis ``last_json`` (les
+    colonnes de compteurs servent de repli si le JSON est absent/tronqué).
+    """
+    last_json = run.last_json if isinstance(run.last_json, dict) else {}
+    summary = last_json.get("summary") if isinstance(last_json.get("summary"), dict) else {}
+    return RunResponse(
+        ok=bool(run.ok),
+        run_id=run.run_id,
+        status=run.status,
+        summary=RunSummary(
+            total_calls=summary.get("total_calls", run.total_calls),
+            success=summary.get("success", run.success_count),
+            failed=summary.get("failed", run.failed_count),
+        ),
+    )
+
+
+def _in_flight_response(run: Run) -> RunResponse:
+    """Réponse de **réplique** d'un run ``running`` non périmé (un autre run est en vol).
+
+    Décision produit (SAFE-002) : ``ok=false`` (jamais un succès Temporal) + statut
+    non terminal ``running`` ; aucun dispatch, aucun appel Symfony. ``summary``
+    réplique l'état courant (compteurs à 0 tant que la finalisation n'a pas eu lieu).
+    """
+    return RunResponse(
+        ok=False,
+        run_id=run.run_id,
+        status=RUN_STATUS_RUNNING,
+        summary=RunSummary(
+            total_calls=run.total_calls,
+            success=run.success_count,
+            failed=run.failed_count,
+        ),
+    )
+
+
+def _preserved_results(run: Run, run_sets: List[Any]) -> Dict[str, Dict[str, Any]]:
+    """Résultats des sets DÉJÀ réussis d'un run à reprendre (SAFE-002, reprise).
+
+    Pour chaque ``RunSet.ok=true``, reconstruit le dict de résultat attendu par le
+    runner/``_persist_run`` à partir des colonnes persistées (``response_json`` →
+    ``body``, ``payload_sent``, ``duration_ms``). Le ``status``/``business_status``
+    (non stockés en colonne) sont relus depuis le détail ``last_json`` de la
+    tentative précédente quand il est disponible. Ces sets ne sont PAS re-dispatchés :
+    leur résultat conservé est fusionné aux sets re-exécutés pour recomposer le
+    summary et le ``last_json`` final.
+    """
+    detail_by_set: Dict[str, Dict[str, Any]] = {}
+    last_json = run.last_json if isinstance(run.last_json, dict) else {}
+    sets_detail = last_json.get("sets")
+    if isinstance(sets_detail, list):
+        for detail in sets_detail:
+            if isinstance(detail, dict) and detail.get("set_id") is not None:
+                detail_by_set[detail["set_id"]] = detail
+    preserved: Dict[str, Dict[str, Any]] = {}
+    for run_set in run_sets:
+        if not run_set.ok:
+            continue
+        detail = detail_by_set.get(run_set.set_id, {})
+        preserved[run_set.set_id] = {
+            "set_id": run_set.set_id,
+            "ok": True,
+            "status": detail.get("status"),
+            "business_status": detail.get("business_status"),
+            "body": run_set.response_json,
+            "payload_sent": run_set.payload_sent,
+            "duration_ms": (
+                run_set.duration_ms
+                if run_set.duration_ms is not None
+                else detail.get("duration_ms")
+            ),
+        }
+    return preserved
+
+
+def _seed_claim(
+    session: Session,
+    *,
+    run_id: str,
+    dashboard_id: int,
+    idempotency_key: Optional[str],
+    now: datetime,
+    ttl_seconds: int,
+) -> str:
+    """Pose/reprend le claim « en vol » d'un run (SAFE-002), retourne le run_id persisté.
+
+    Transaction courte (committée par l'appelant AVANT les appels Symfony, jamais
+    maintenue pendant les ~900s, comme les locks SAFE-001) : insère/résout la ligne
+    ``Run`` via le ``record_run`` existant (statut ``running``, ``started_at``,
+    ``expires_at`` = ``now`` + TTL de claim), réutilisant son savepoint anti-course.
+
+    ``record_run`` peut résoudre un run existant (par ``idempotency_key``) dont le
+    ``run_id`` diffère du dérivé : on retourne le run_id réellement persisté afin que
+    claim, locks et finalisation portent le même identifiant (cf. logique
+    ``_persist_run``). On neutralise une FK ``dashboard_id`` périmée (dashboard
+    supprimé entre-temps) comme ``_persist_run``, pour ne pas faire échouer l'INSERT.
+    """
+    dashboard_ref = (
+        dashboard_id if repositories.get_dashboard(session, dashboard_id) is not None else None
+    )
+    persisted = repositories.record_run(
+        session,
+        Run(
+            run_id=run_id,
+            dashboard_id=dashboard_ref,
+            ok=False,
+            status=RUN_STATUS_RUNNING,
+            idempotency_key=idempotency_key,
+            total_calls=0,
+            success_count=0,
+            failed_count=0,
+            started_at=now,
+            expires_at=now + timedelta(seconds=ttl_seconds),
+        ),
+    )
+    return persisted.run_id
 
 
 def _symbols_overlap(a: Any, b: Any) -> bool:
@@ -471,6 +638,49 @@ async def run_orchestrator(
     # trade live ; on les rejette avant dispatch.
     conflicting_live_ids = _conflicting_live_set_ids(mtf_sets, force_dry_run)
 
+    # Horloge unique du run (injectable en test via `orch._now`) : partagée par le
+    # claim d'idempotence (SAFE-002), le TTL de claim ET le TTL des locks (SAFE-001).
+    now = _now()
+    # TTL effectif : un set peut rester en file derrière le sémaphore (`max_concurrency`)
+    # bien après l'acquisition de son lock. Si son `expires_at` tombait avant son
+    # dispatch, un run concurrent pourrait le purger/reclaim et dispatcher le MÊME
+    # (profil, exchange, market, symbole) — l'exclusion mutuelle SAFE-001 serait défaite.
+    # On dimensionne donc le TTL pour couvrir le pire temps de paroi du run (chaque vague
+    # de `max_concurrency` sets peut durer jusqu'au timeout Symfony) + la marge configurée.
+    # Le même TTL borne le claim de run « en vol » (SAFE-002) : un run resté `running`
+    # au-delà (process tué avant la finalisation) est reclaimable.
+    concurrency = max(1, settings.max_concurrency)
+    waves = math.ceil(len(mtf_sets) / concurrency)
+    effective_ttl_seconds = int(waves * _HTTP_TIMEOUT) + settings.lock_ttl_seconds
+
+    # SAFE-002 : idempotence à l'EXÉCUTION, uniquement lorsqu'un ancrage existe (run_id
+    # stable). Un run_id aléatoire (aucun contexte) reste non idempotent (inchangé). On
+    # inspecte le run existant (résolu par run_id puis idempotency_key) AVANT tout
+    # dispatch/écriture, donc un court-circuit (replay/in-flight) ne fait que des
+    # lectures : la session est simplement fermée par `get_session` (rien à committer).
+    preserved_results: Dict[str, Dict[str, Any]] = {}
+    has_anchor = _has_idempotency_anchor(request)
+    idempotency_key = _normalized_idempotency_key(request)
+    if has_anchor:
+        existing = repositories.resolve_run(session, run_id, idempotency_key)
+        if existing is not None:
+            if existing.status in TERMINAL_RUN_STATUSES and existing.ok:
+                # Terminal success → REPLAY : aucun ré-appel Symfony, on renvoie le
+                # summary/run_id reconstruits depuis le run persisté.
+                return _replay_response(existing)
+            if existing.status == RUN_STATUS_RUNNING and not _claim_expired(existing, now):
+                # `running` non périmé → un autre run est EN VOL : on ne dispatche pas
+                # (réponse de réplique de l'état courant, ok=false + statut running).
+                return _in_flight_response(existing)
+            if existing.status in TERMINAL_RUN_STATUSES and not existing.ok:
+                # Terminal non-ok (failed/partial) → REPRISE : on conserve les RunSet
+                # déjà réussis et on ne re-dispatchera que les sets restants.
+                preserved_results = _preserved_results(
+                    existing, list(repositories.list_run_sets(session, existing.run_id))
+                )
+            # `running` périmé (TTL, process tué) → reclaim : ré-exécution comme un
+            # nouveau run (aucun résultat conservé).
+
     # SAFE-001 : sérialisation per-(profil, symbole) ENTRE runs/process via des locks
     # DB. Le garde intra-run (`conflicting_live_ids`) ne couvre qu'un seul batch ; deux
     # runs concurrents (overlap du cron Temporal, ou front + cron) ne se voient pas
@@ -478,30 +688,36 @@ async def run_orchestrator(
     # (clé UNIQUE = mutex) AVANT le dispatch, dans la transaction de lecture courte
     # qui sera committée juste après (jamais maintenue pendant les ~900s d'appels
     # Symfony). Politique : appliqué à TOUS les sets `mtf_run` (inoffensif en dry-run,
-    # le live restant désactivé), sauf ceux déjà rejetés par le garde intra-run.
-    # Acquisition « tout ou rien » par set ; un set dont un symbole est déjà verrouillé
-    # par un run actif est skippé fail-closed (cohérent avec les autres skips du runner).
-    lock_now = _now()
+    # le live restant désactivé), sauf ceux déjà rejetés par le garde intra-run ou déjà
+    # réussis (reprise SAFE-002). Acquisition « tout ou rien » par set ; un set dont un
+    # symbole est déjà verrouillé par un run actif est skippé fail-closed.
+    lock_now = now
     # Balayage des locks expirés au démarrage : libère les fuites d'un process tué
     # avant son `finally` de libération (anti-deadlock via TTL).
     repositories.purge_expired_locks(session, lock_now)
-    # TTL effectif : tous les locks d'un run partagent ce `lock_now`, mais un set
-    # peut rester en file derrière le sémaphore (`max_concurrency`) bien après
-    # l'acquisition. Si son `expires_at` tombait avant son dispatch, un run concurrent
-    # pourrait le purger/reclaim et dispatcher le MÊME (profil, exchange, market, symbole)
-    # — l'exclusion mutuelle SAFE-001 serait défaite. On dimensionne donc le TTL pour
-    # couvrir le pire temps de paroi du run (chaque vague de `max_concurrency` sets peut
-    # durer jusqu'au timeout Symfony) + la marge anti-deadlock configurée : aucun lock en
-    # file n'expire avant la fin de son set, tout en gardant une expiration finie en cas
-    # de crash. (Le `finally` libère de toute façon chaque lock dès la fin de son set.)
-    concurrency = max(1, settings.max_concurrency)
-    waves = math.ceil(len(mtf_sets) / concurrency)
-    effective_ttl_seconds = int(waves * _HTTP_TIMEOUT) + settings.lock_ttl_seconds
+
+    # Claim précoce (SAFE-002) : pose/reprend la ligne Run (statut `running`,
+    # started_at, expires_at) AVANT le dispatch, dans cette même transaction courte
+    # committée juste après. `record_run` peut résoudre un run existant sous un run_id
+    # distinct (legacy par idempotency_key) : on réutilise le run_id réellement persisté
+    # pour les locks ET la finalisation (claim et finalisation portent le même run_id).
+    if has_anchor:
+        run_id = _seed_claim(
+            session,
+            run_id=run_id,
+            dashboard_id=dashboard_id,
+            idempotency_key=idempotency_key,
+            now=now,
+            ttl_seconds=effective_ttl_seconds,
+        )
+
     locked_out: Dict[str, str] = {}
     set_lock_keys: Dict[str, List[str]] = {}
     for a_set in mtf_sets:
         if a_set.set_id in conflicting_live_ids:
             continue  # déjà rejeté, jamais dispatché : rien à verrouiller
+        if a_set.set_id in preserved_results:
+            continue  # reprise SAFE-002 : set déjà réussi, pas de re-dispatch à sérialiser
         locks = _lock_specs_for_set(a_set, run_id, lock_now, effective_ttl_seconds)
         if not locks:
             continue  # univers complet / aucun symbole concret : rien à sérialiser
@@ -533,6 +749,11 @@ async def run_orchestrator(
         semaphore = asyncio.Semaphore(max(1, settings.max_concurrency))
 
         async def _execute(a_set: Any) -> Dict[str, Any]:
+            # Reprise SAFE-002 : un set déjà réussi lors d'une tentative précédente du
+            # même run n'est PAS re-dispatché (aucun appel Symfony, aucun lock posé) ;
+            # son résultat conservé est fusionné au summary/last_json recomposés.
+            if a_set.set_id in preserved_results:
+                return preserved_results[a_set.set_id]
             if a_set.set_id in conflicting_live_ids:
                 return {
                     "set_id": a_set.set_id,
