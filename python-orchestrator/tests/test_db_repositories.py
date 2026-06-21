@@ -189,44 +189,44 @@ def test_record_run_insert_race_falls_back_to_existing(db_session, monkeypatch):
     assert db_session.query(Run).count() == 1   # pas de doublon créé
 
 
-def test_claim_run_creates_then_blocks_active_then_reclaims(db_session):
-    """claim_run (SAFE-002) : crée, refuse un claim actif, reprend un claim inactif."""
-    inactive = lambda _r: False  # noqa: E731
-    active = lambda _r: True  # noqa: E731
+def test_claim_run_creates_then_yields_active_then_reclaims(db_session):
+    """claim_run (SAFE-002) : crée, cède sur un claim actif, reprend un claim inactif."""
+    none = lambda _r: None  # noqa: E731
+    in_flight = lambda _r: "in_flight"  # noqa: E731
 
-    # 1) Aucune ligne → création (claimed=True).
-    run, claimed = repo.claim_run(
+    # 1) Aucune ligne → création (claim obtenu, yield_reason=None).
+    run, reason = repo.claim_run(
         db_session, Run(run_id="c1", idempotency_key="k1", ok=False, status="running"),
-        is_active_claim=inactive,
+        classify=none,
     )
     db_session.commit()
-    assert claimed is True and run.run_id == "c1"
+    assert reason is None and run.run_id == "c1"
 
-    # 2) Ligne considérée ACTIVE → course perdue (claimed=False), aucun écrasement.
-    _, claimed2 = repo.claim_run(
+    # 2) Ligne classée à céder (in_flight) → on s'efface, aucun écrasement.
+    _, reason2 = repo.claim_run(
         db_session,
         Run(run_id="c1", idempotency_key="k1", ok=False, status="running", total_calls=7),
-        is_active_claim=active,
+        classify=in_flight,
     )
-    assert claimed2 is False
-    assert repo.get_run(db_session, "c1").total_calls == 0  # ligne active intacte
+    assert reason2 == "in_flight"
+    assert repo.get_run(db_session, "c1").total_calls == 0  # ligne intacte
 
-    # 3) Ligne considérée INACTIVE (terminal/périmé) → reprise (claimed=True, mise à jour).
-    _, claimed3 = repo.claim_run(
+    # 3) Ligne non cédée (terminal/périmé) → reprise (yield_reason=None, mise à jour).
+    _, reason3 = repo.claim_run(
         db_session,
         Run(run_id="c1", idempotency_key="k1", ok=False, status="running", total_calls=9),
-        is_active_claim=inactive,
+        classify=none,
     )
     db_session.commit()
-    assert claimed3 is True
+    assert reason3 is None
     assert repo.get_run(db_session, "c1").total_calls == 9
 
 
-def test_claim_run_reclaim_rereads_fresh_state_under_lock(db_session):
-    """P1 (atomicité reclaim) : le read-modify-write se fait sous ``FOR UPDATE`` +
-    ``populate_existing``, donc claim_run ré-évalue le claim sur l'état FRAIS, pas sur
+def test_claim_run_rereads_fresh_state_under_lock(db_session):
+    """P1 (atomicité) : le read-modify-write se fait sous ``FOR UPDATE`` +
+    ``populate_existing``, donc ``classify`` est ré-évalué sur l'état FRAIS, pas sur
     une copie périmée de l'identity map. Une ligne devenue active entre-temps fait
-    s'effacer la reprise (claimed=False) au lieu d'écraser le gagnant."""
+    céder la reprise (yield_reason='in_flight') au lieu d'écraser le gagnant."""
     from datetime import datetime, timedelta, timezone
 
     from sqlalchemy import text
@@ -248,20 +248,47 @@ def test_claim_run_reclaim_rereads_fresh_state_under_lock(db_session):
         {"e": now + timedelta(hours=1)},
     )
 
-    def is_active(r):
-        if r.status != "running" or r.expires_at is None:
-            return False
-        exp = r.expires_at if r.expires_at.tzinfo else r.expires_at.replace(tzinfo=timezone.utc)
-        return exp > now
+    def classify(r):
+        if r.status == "running" and r.expires_at is not None:
+            exp = r.expires_at if r.expires_at.tzinfo else r.expires_at.replace(tzinfo=timezone.utc)
+            if exp > now:
+                return "in_flight"
+        return None
 
-    _, claimed = repo.claim_run(
+    _, reason = repo.claim_run(
         db_session,
         Run(run_id="r", idempotency_key="k", ok=False, status="running",
             expires_at=now + timedelta(seconds=10)),
-        is_active_claim=is_active,
+        classify=classify,
     )
-    # populate_existing a relu l'expiry FUTURE → claim actif → on s'efface.
-    assert claimed is False
+    # populate_existing a relu l'expiry FUTURE → classify cède → on n'écrase pas.
+    assert reason == "in_flight"
+
+
+def test_claim_run_yields_terminal_success_for_replay(db_session):
+    """P1 (race winner finalise en succès) : si la ligne verrouillée est un succès
+    terminal, claim_run cède ('replay') sans l'écraser — le perdant rejouera au lieu
+    de ré-exécuter."""
+    db_session.add(
+        Run(run_id="s", idempotency_key="ks", ok=True, status="success",
+            total_calls=2, success_count=2, last_json={"ok": True})
+    )
+    db_session.commit()
+
+    def classify(r):
+        if r.status in ("success", "partial_failure", "failed") and r.ok:
+            return "replay"
+        return None
+
+    run, reason = repo.claim_run(
+        db_session,
+        Run(run_id="s", idempotency_key="ks", ok=False, status="running"),
+        classify=classify,
+    )
+    assert reason == "replay"
+    # La ligne de succès n'a PAS été écrasée vers running.
+    assert run.status == "success" and run.ok is True
+    assert repo.get_run(db_session, "s").status == "success"
 
 
 def test_record_run_set_upsert_same_run_set(db_session):

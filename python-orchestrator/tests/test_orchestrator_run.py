@@ -1574,3 +1574,49 @@ def test_concurrent_claim_loser_returns_in_flight_without_dispatch(orchestrator_
     session.expire_all()
     winner = session.get(Run, "run_rk9")
     assert winner.status == "running"
+
+
+def test_concurrent_claim_loser_replays_when_winner_finalized_success(orchestrator_env, monkeypatch):
+    # P1 : si le gagnant a déjà FINALISÉ EN SUCCÈS au moment où le perdant pose son
+    # claim (pré-check manqué), le perdant doit REJOUER ce succès — pas écraser la
+    # ligne réussie ni ré-exécuter les sets.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+
+    # Le gagnant a déjà finalisé en succès (run terminal réussi persisté).
+    session.add(
+        Run(
+            run_id="run_rk10", idempotency_key="rk10", ok=True, status="success",
+            total_calls=1, success_count=1, failed_count=0,
+            last_json={"run_id": "run_rk10", "ok": True, "status": "success",
+                       "summary": {"total_calls": 1, "success": 1, "failed": 0}},
+        )
+    )
+    session.commit()
+
+    # Course : le pré-check rate la ligne ; le seed (claim_run) la voit (succès terminal).
+    real_resolve = orch.repositories.resolve_run
+    calls = {"n": 0}
+
+    def _racing_resolve(session_, run_id_, key=None):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else real_resolve(session_, run_id_, key)
+
+    monkeypatch.setattr(orch.repositories, "resolve_run", _racing_resolve)
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "idempotency_key": "rk10"}
+    ).json()
+
+    # Replay : succès renvoyé, run_id conservé, AUCUN dispatch.
+    assert body["ok"] is True
+    assert body["status"] == "success"
+    assert body["run_id"] == "run_rk10"
+    assert body["summary"] == {"total_calls": 1, "success": 1, "failed": 0}
+    assert _mtf_posts(fake) == []
+    # La ligne de succès du gagnant est intacte (non écrasée vers running).
+    session.expire_all()
+    assert session.get(Run, "run_rk10").status == "success"

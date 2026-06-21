@@ -259,58 +259,62 @@ def _lock_run(session: Session, run_id: str) -> Optional[Run]:
     ).first()
 
 
-def _claim_locked(session: Session, run_id: str, run: Run, is_active_claim) -> Tuple[Run, bool]:
+def _claim_locked(session: Session, run_id: str, run: Run, classify) -> Tuple[Run, Optional[str]]:
     """Tranche le claim sur une ligne existante, **sous verrou ligne** (atomique).
 
-    Verrouille la ligne puis ré-évalue ``is_active_claim`` sur l'état frais : si un
-    run concurrent a posé un claim actif entre-temps, on s'efface (``claimed=False``)
-    au lieu d'écraser ; sinon on reprend la ligne (terminal/claim périmé → nouveau
-    claim). La ligne peut avoir disparu entre la résolution et le verrou (suppression,
-    non attendue en prod) : on retombe alors sur une insertion fraîche.
+    Verrouille la ligne puis demande à l'appelant de la **classer** sur l'état frais :
+    ``classify(locked)`` renvoie une *raison de céder* (chaîne opaque, ex. ``"replay"``
+    quand la ligne est un succès terminal, ``"in_flight"`` quand un run concurrent est
+    en vol) ou ``None`` pour **reprendre** la ligne (terminal non-ok / claim périmé →
+    nouveau claim). Quand on cède, la ligne **n'est pas écrasée** : on la retourne
+    telle quelle pour que l'appelant rejoue/réplique. La ligne peut avoir disparu entre
+    la résolution et le verrou (suppression, non attendue en prod) : insertion fraîche.
     """
     locked = _lock_run(session, run_id)
     if locked is None:
         with session.begin_nested():  # SAVEPOINT : isole l'échec d'insertion
             session.add(run)
             session.flush()
-        return run, True
-    if is_active_claim(locked):
-        return locked, False  # un run concurrent détient un claim actif : on s'efface
-    return _update_existing_run(session, locked, run), True
+        return run, None
+    reason = classify(locked)
+    if reason is not None:
+        return locked, reason  # on cède (replay/in-flight) sans écraser la ligne
+    return _update_existing_run(session, locked, run), None
 
 
-def claim_run(session: Session, run: Run, *, is_active_claim) -> Tuple[Run, bool]:
-    """Pose un claim de run de façon atomique. Retourne ``(run_persisté, claimed)``.
+def claim_run(session: Session, run: Run, *, classify) -> Tuple[Run, Optional[str]]:
+    """Pose un claim de run de façon atomique. Retourne ``(run, yield_reason)``.
 
     Variante « compare-and-set » de ``record_run`` dédiée au **claim « en vol »**
-    (SAFE-002). ``claimed=False`` signale que le claim n'a **pas** été obtenu parce
-    qu'un run concurrent détient déjà un claim **actif** (``is_active_claim`` vrai) :
-    l'appelant doit alors répliquer l'état en vol **sans** dispatcher, au lieu
-    d'écraser la ligne partagée et de re-soumettre du travail.
+    (SAFE-002). ``yield_reason`` est ``None`` quand le claim est obtenu (la ligne a été
+    créée ou reprise vers le nouveau claim) ; sinon c'est la chaîne renvoyée par
+    ``classify`` (ex. ``"replay"``/``"in_flight"``) et la ligne existante est retournée
+    **sans modification** pour que l'appelant rejoue le succès persisté ou réplique
+    l'état en vol — au lieu d'écraser la ligne partagée et de re-soumettre du travail.
 
-    ``is_active_claim(existing)`` est fourni par l'appelant (il connaît la sémantique
-    des statuts et du TTL) : vrai ssi la ligne existante est un claim non terminal
-    **non périmé** d'un autre run en vol. Un run terminal (replay/reprise) ou un claim
-    périmé (reclaim) n'est PAS actif → la ligne est reprise par le nouveau claim.
+    ``classify(existing)`` est fourni par l'appelant (il connaît la sémantique des
+    statuts/TTL) : il **doit** céder (raison non ``None``) sur un succès terminal
+    (→ replay) et sur un claim non périmé d'un autre run (→ in-flight), et renvoyer
+    ``None`` pour les états repris (terminal non-ok, claim périmé).
 
-    Deux courses sont neutralisées :
+    Deux courses sont neutralisées **sous l'état le plus frais possible** :
 
     - **INSERT concurrent** (la ligne n'existait pas encore) : savepoint + rattrapage
       de la violation d'unicité comme ``record_run`` ; le perdant relit le gagnant ;
-    - **UPDATE concurrent** (la ligne existe déjà — reprise/reclaim) : le read-modify-
-      write se fait **sous ``SELECT ... FOR UPDATE``** (``_claim_locked``), donc deux
-      reprises d'une même ligne périmée ne peuvent pas toutes deux la ré-écrire : le
-      second bloque, relit le claim désormais actif et s'efface (``claimed=False``).
+    - **UPDATE concurrent** (la ligne existe déjà) : le read-modify-write se fait **sous
+      ``SELECT ... FOR UPDATE``** (``_claim_locked``) — le perdant bloque, relit l'état
+      committé par le gagnant (claim actif **ou succès finalisé**) et cède au lieu de
+      l'écraser.
     """
     existing = _resolve_existing_run(session, run)
     if existing is not None:
-        return _claim_locked(session, existing.run_id, run, is_active_claim)
+        return _claim_locked(session, existing.run_id, run, classify)
 
     try:
         with session.begin_nested():  # SAVEPOINT : isole l'échec d'insertion
             session.add(run)
             session.flush()
-        return run, True
+        return run, None
     except IntegrityError:
         # Un writer concurrent a inséré la même clé/PK entre le lookup et le flush.
         if run in session:
@@ -319,8 +323,8 @@ def claim_run(session: Session, run: Run, *, is_active_claim) -> Tuple[Run, bool
         if existing is None:
             raise  # conflit sur une autre contrainte : ne pas masquer
         # La ligne gagnante existe : on tranche sous verrou (le gagnant a pu, depuis,
-        # finir et être repris ; on ré-évalue sur l'état frais et verrouillé).
-        return _claim_locked(session, existing.run_id, run, is_active_claim)
+        # finir — succès terminal — ou être encore en vol ; on classe l'état frais).
+        return _claim_locked(session, existing.run_id, run, classify)
 
 
 def _resolve_existing_run_set(session: Session, run_set: RunSet) -> Optional[RunSet]:

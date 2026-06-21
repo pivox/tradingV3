@@ -444,20 +444,23 @@ def _seed_claim(
     idempotency_key: Optional[str],
     now: datetime,
     ttl_seconds: int,
-) -> tuple[str, Run, bool]:
+) -> tuple[str, Run, Optional[str]]:
     """Pose/reprend le claim « en vol » d'un run (SAFE-002).
 
-    Retourne ``(run_id_persisté, run, claimed)``. ``claimed=False`` signale qu'un run
-    concurrent détient déjà un claim **actif** (course perdue entre le pré-check et le
-    seed) : l'appelant doit alors répliquer l'état en vol sans dispatcher (sinon il
-    écraserait la ligne partagée et re-soumettrait du travail).
+    Retourne ``(run_id_persisté, run, yield_reason)``. ``yield_reason`` vaut ``None``
+    quand le claim est obtenu (création ou reprise). Sinon, un run concurrent a changé
+    l'état **entre le pré-check et le seed** (course TOCTOU) et l'appelant doit céder
+    sans dispatcher ni écraser la ligne partagée :
+
+    - ``"replay"`` : le gagnant a déjà **finalisé en succès** → on rejoue le succès ;
+    - ``"in_flight"`` : un run concurrent est **en vol** (claim non périmé) → réplique.
 
     Transaction courte (committée par l'appelant AVANT les appels Symfony, jamais
     maintenue pendant les ~900s, comme les locks SAFE-001) : pose la ligne ``Run``
     via ``claim_run`` (statut ``running``, ``started_at``, ``expires_at`` = ``now`` +
-    TTL de claim), réutilisant le savepoint anti-course de ``record_run``. Le claim ne
-    remplace une ligne existante que si elle n'est **pas** un claim actif (terminal →
-    reprise/replay déjà traités en amont ; claim périmé → reclaim).
+    TTL de claim) **sous verrou ligne** (savepoint anti-course + ``FOR UPDATE``). Le
+    claim ne remplace une ligne existante que si ``classify`` ne demande PAS de céder
+    (terminal non-ok → reprise ; claim périmé → reclaim).
 
     ``claim_run`` peut résoudre un run existant (par ``idempotency_key``) dont le
     ``run_id`` diffère du dérivé : on retourne le run_id réellement persisté afin que
@@ -468,7 +471,17 @@ def _seed_claim(
     dashboard_ref = (
         dashboard_id if repositories.get_dashboard(session, dashboard_id) is not None else None
     )
-    persisted, claimed = repositories.claim_run(
+
+    def _classify(existing: Run) -> Optional[str]:
+        # Mêmes court-circuits que le pré-check, mais ré-évalués sur l'état FRAIS et
+        # VERROUILLÉ (le gagnant d'une course a pu, depuis, finaliser ou rester en vol).
+        if existing.status in TERMINAL_RUN_STATUSES and existing.ok:
+            return "replay"  # succès finalisé → rejouer (ne PAS écraser/ré-exécuter)
+        if existing.status == RUN_STATUS_RUNNING and not _claim_expired(existing, now):
+            return "in_flight"  # un autre run est en vol → répliquer
+        return None  # terminal non-ok / claim périmé → reprise/reclaim
+
+    persisted, yield_reason = repositories.claim_run(
         session,
         Run(
             run_id=run_id,
@@ -482,12 +495,9 @@ def _seed_claim(
             started_at=now,
             expires_at=now + timedelta(seconds=ttl_seconds),
         ),
-        # Un claim est « actif » (course perdue) ssi la ligne existante est `running`
-        # ET non périmée : exactement le cas in-flight du pré-check, mais observé au
-        # moment du seed (un run concurrent a committé son claim entre-temps).
-        is_active_claim=lambda r: r.status == RUN_STATUS_RUNNING and not _claim_expired(r, now),
+        classify=_classify,
     )
-    return persisted.run_id, persisted, claimed
+    return persisted.run_id, persisted, yield_reason
 
 
 def _symbols_overlap(a: Any, b: Any) -> bool:
@@ -725,7 +735,7 @@ async def run_orchestrator(
     # distinct (legacy par idempotency_key) : on réutilise le run_id réellement persisté
     # pour les locks ET la finalisation (claim et finalisation portent le même run_id).
     if has_anchor:
-        run_id, claim_row, claimed = _seed_claim(
+        run_id, claim_row, yield_reason = _seed_claim(
             session,
             run_id=run_id,
             dashboard_id=dashboard_id,
@@ -733,12 +743,16 @@ async def run_orchestrator(
             now=now,
             ttl_seconds=effective_ttl_seconds,
         )
-        if not claimed:
-            # Course perdue : un run concurrent a committé son claim ENTRE le pré-check
-            # et le seed (les deux requêtes avaient vu une absence de ligne). On réplique
-            # l'état en vol SANS dispatcher ni écrire — sinon on écraserait la ligne
-            # partagée (statut/run_sets) et on re-soumettrait du travail. Rien n'a été
-            # committé ici (la purge non committée sera annulée à la fermeture de session).
+        if yield_reason is not None:
+            # Course perdue : un run concurrent a changé l'état ENTRE le pré-check et le
+            # seed (les deux requêtes avaient vu une absence de ligne, ou le gagnant a
+            # finalisé depuis). On cède SANS dispatcher ni écrire — sinon on écraserait
+            # la ligne partagée (statut/run_sets) et on re-soumettrait du travail. Rien
+            # n'a été committé ici (la purge non committée sera annulée à la fermeture de
+            # session). `replay` rejoue le succès finalisé par le gagnant ; `in_flight`
+            # réplique l'état d'un run encore en vol.
+            if yield_reason == "replay":
+                return _replay_response(claim_row)
             return _in_flight_response(claim_row)
 
     locked_out: Dict[str, str] = {}

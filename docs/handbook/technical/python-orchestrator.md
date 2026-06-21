@@ -501,16 +501,19 @@ d'idempotence** existe (`idempotency_key`, ou `dashboard_id` + `tick_timestamp` 
 (comme les locks SAFE-001, jamais maintenue pendant les ~900s) — on pose/résout la
 ligne `Run` via `claim_run` (variante *compare-and-set* de `record_run`, savepoint
 anti-course réutilisé) avec `status="running"`, `started_at`, et
-`expires_at = now + TTL de claim`. `claim_run` ne remplace une ligne existante que
-si elle **n'est pas** un claim actif. Deux courses sont neutralisées : (1) **INSERT
-concurrent** (la ligne n'existait pas — les deux requêtes ont vu une absence au
-pré-check) → savepoint + violation d'unicité, le perdant relit le gagnant ; (2)
-**UPDATE concurrent** (reprise/reclaim d'une ligne déjà présente) → le read-modify-
-write se fait **sous `SELECT … FOR UPDATE`** (+ `populate_existing` pour ré-évaluer
-le claim sur l'état frais), donc deux reprises d'une même ligne périmée ne peuvent
-pas toutes deux la ré-écrire : la seconde bloque, relit le claim désormais actif et
-s'efface. Dans les deux cas le perdant **réplique l'état en vol sans dispatcher**
-plutôt que d'écraser la ligne partagée et de re-soumettre du travail. Le **TTL de claim réutilise
+`expires_at = now + TTL de claim`. `claim_run` **classe** la ligne
+existante sous verrou et ne la remplace que si elle est réellement reprenable
+(terminal non-ok → reprise ; claim périmé → reclaim). Deux courses sont neutralisées
+sur l'état le plus frais possible : (1) **INSERT concurrent** (la ligne n'existait pas
+— les deux requêtes ont vu une absence au pré-check) → savepoint + violation
+d'unicité, le perdant relit le gagnant ; (2) **UPDATE concurrent** (ligne déjà
+présente) → le read-modify-write se fait **sous `SELECT … FOR UPDATE`** (+
+`populate_existing` pour reclasser sur l'état frais). Le perdant **cède** alors selon
+l'état committé par le gagnant : **replay** si le gagnant a déjà **finalisé en succès**
+(on ne ré-écrit pas la ligne réussie et on ne ré-exécute pas), **réplique in-flight**
+si un run est encore en vol — au lieu d'écraser la ligne partagée et de re-soumettre
+du travail. Cette classification sous verrou est la même que celle du pré-check, mais
+ré-évaluée sur l'état frais. Le **TTL de claim réutilise
 le calcul SAFE-001** du pire temps de paroi du run
 (`ceil(n_sets / max_concurrency)` × timeout Symfony + marge `ORCHESTRATION_LOCK_TTL_SECONDS`) :
 aucune variable d'environnement dédiée. Le `now` est lu via `orch._now`
