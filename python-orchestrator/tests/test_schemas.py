@@ -11,6 +11,7 @@ from app.schemas import (
     MtfProfile,
     OrchestratorSet,
     SetRead,
+    assert_set_persistable,
 )
 
 
@@ -32,6 +33,60 @@ def test_okx_dry_run_is_allowed():
 def test_bitmart_live_is_allowed():
     s = OrchestratorSet(set_id="x", exchange="bitmart", dry_run=False)
     assert s.dry_run is False
+
+
+# --- assert_set_persistable ⇆ assess_live (SAFE-003) ------------------------
+#
+# La persistance d'un set live n'est autorisée que si le runner l'exécuterait
+# (mêmes gardes via `live_guard.assess_live`). On vérifie ici la cohérence
+# persistance ↔ runtime en pilotant l'interrupteur d'activation par l'env.
+
+
+def _persist(exchange="bitmart", dry_run=False):
+    assert_set_persistable(
+        dry_run=dry_run,
+        symbols=["BTCUSDT"],
+        contracts_limit=None,
+        exchange=exchange,
+        market_type="perpetual",
+        environment="mainnet",
+    )
+
+
+def test_persist_live_refused_by_default(monkeypatch):
+    # Interrupteur OFF (config livrée) : aucun set live persistable, comme avant SAFE-003.
+    monkeypatch.delenv("ORCHESTRATION_LIVE_ENABLED", raising=False)
+    monkeypatch.delenv("ORCHESTRATION_LIVE_EXCHANGES", raising=False)
+    with pytest.raises(ValueError):
+        _persist(exchange="bitmart", dry_run=False)
+
+
+def test_persist_dry_run_allowed_by_default(monkeypatch):
+    monkeypatch.delenv("ORCHESTRATION_LIVE_ENABLED", raising=False)
+    monkeypatch.delenv("ORCHESTRATION_LIVE_EXCHANGES", raising=False)
+    _persist(exchange="bitmart", dry_run=True)  # ne lève pas
+
+
+def test_persist_live_allowed_when_switch_on_and_allowlisted(monkeypatch):
+    # Interrupteur ON + bitmart allow-listé ⇒ assess_live autorise ⇒ persistance OK.
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart")
+    _persist(exchange="bitmart", dry_run=False)  # ne lève pas
+
+
+def test_persist_live_okx_refused_even_when_switch_on(monkeypatch):
+    # Bannissement permanent : OKX live refusé même interrupteur ON + allow-listé.
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "okx,bitmart")
+    with pytest.raises(ValueError):
+        _persist(exchange="okx", dry_run=False)
+
+
+def test_persist_live_refused_when_exchange_not_allowlisted(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "fake")
+    with pytest.raises(ValueError):
+        _persist(exchange="bitmart", dry_run=False)
 
 
 def test_unknown_exchange_is_rejected():

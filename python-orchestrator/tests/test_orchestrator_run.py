@@ -528,6 +528,119 @@ def test_live_forbidden_exchange_skipped_with_uppercase_name(orchestrator_env, m
     assert len(mtf_posts) == 0
 
 
+# --------------------------------------------------------------------------
+# SAFE-003 — interrupteur d'activation live (live_guard)
+# --------------------------------------------------------------------------
+
+
+def test_live_bitmart_dispatched_when_switch_on_with_snapshot(orchestrator_env, monkeypatch):
+    # Interrupteur ON + bitmart allow-listé + snapshot présent ⇒ le set live est
+    # réellement dispatché (POST /api/mtf/run avec dry_run=false).
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart")
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    snapshot = {"open_positions": [], "open_orders": []}
+    fake = _FakeAsyncClient(open_state=snapshot)
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is True
+    assert body["summary"] == {"total_calls": 1, "success": 1, "failed": 0}
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1
+    assert mtf_posts[0]["json"]["dry_run"] is False
+    assert mtf_posts[0]["json"]["open_state_snapshot"] == snapshot
+
+
+def test_live_skipped_when_switch_on_but_snapshot_absent(orchestrator_env, monkeypatch):
+    # Live autorisé (ON + allow-listé) mais snapshot indisponible ⇒ skip fail-closed
+    # `open_state_unavailable` : on ne trade pas à l'aveugle.
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart")
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient(open_state_status=503)
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 1, "success": 0, "failed": 1}
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 0
+
+    session.expire_all()
+    run_set = session.scalars(select(RunSet).where(RunSet.set_id == "live")).one()
+    assert "open_state_snapshot unavailable" in run_set.error
+
+
+def test_live_okx_forbidden_even_when_switch_on_and_allowlisted(orchestrator_env, monkeypatch):
+    # Bannissement permanent : OKX live reste skippé même interrupteur ON + listé.
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "okx,bitmart")
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "okx_live", dry_run=False, exchange="okx", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()  # snapshot dispo
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 1, "success": 0, "failed": 1}
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 0
+    session.expire_all()
+    run_set = session.scalars(select(RunSet).where(RunSet.set_id == "okx_live")).one()
+    assert "live forbidden for exchange" in run_set.error
+
+
+def test_live_skipped_when_exchange_not_allowlisted(orchestrator_env, monkeypatch):
+    # Interrupteur ON mais bitmart hors allow-list ⇒ skip fail-closed.
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "fake")
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 1, "success": 0, "failed": 1}
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 0
+    session.expire_all()
+    run_set = session.scalars(select(RunSet).where(RunSet.set_id == "live")).one()
+    assert "not allow-listed" in run_set.error
+
+
+def test_run_level_dry_run_override_forces_dry_even_when_switch_on(orchestrator_env, monkeypatch):
+    # Prééminence sécurité : {"dry_run": true} force le dry quel que soit l'état de
+    # l'interrupteur (même ON + allow-listé), et même sans snapshot.
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart")
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient(open_state_status=503)
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post(
+        "/orchestrator/run", json={"dashboard_id": str(dash.id), "dry_run": True}
+    ).json()
+
+    assert body["ok"] is True
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1
+    assert mtf_posts[0]["json"]["dry_run"] is True
+
+
 def test_disabled_dashboard_returns_no_sets(orchestrator_env, monkeypatch):
     # Le flag enabled du dashboard est un interrupteur de pause global : un
     # dashboard désactivé ne lance aucun set, même s'ils sont actifs.
