@@ -8,7 +8,9 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from activities.mtf_http import mtf_api_call
+from activities.orchestrator_http import orchestrator_run
 from workflows.mtf_workers import CronSymfonyMtfWorkersWorkflow
+from workflows.orchestrator_cron import OrchestratorCronWorkflow
 
 
 TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
@@ -38,8 +40,10 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        workflows=[CronSymfonyMtfWorkersWorkflow],
-        activities=[mtf_api_call],
+        # Legacy (transition, CLEAN-001) + cron cible orchestrateur (TM-001),
+        # enregistrés côte à côte sur la même task queue.
+        workflows=[CronSymfonyMtfWorkersWorkflow, OrchestratorCronWorkflow],
+        activities=[mtf_api_call, orchestrator_run],
     )
     await worker.run()
 

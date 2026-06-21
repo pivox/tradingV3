@@ -150,7 +150,46 @@ Le JSON complet et les détails par set restent dans l'API Python et dans la bas
 | `scripts/manage_contract_sync_schedule.py` | actif | Sync quotidienne des contrats via `/api/mtf/sync-contracts`. |
 | `scripts/manage_cleanup_schedule.py` | actif | Jobs de cleanup. |
 
-Le prochain chemin cible documenté est un schedule unique vers l'orchestrateur Python. Les scripts legacy restent disponibles tant que la transition n'est pas terminée.
+Le chemin cible documenté est un schedule unique vers l'orchestrateur Python. Les scripts legacy restent disponibles tant que la transition n'est pas terminée.
+
+## Schedule cible (orchestrateur)
+
+TM-001 livre le déclencheur cron minimal vers l'orchestrateur Python. Un schedule unique démarre `OrchestratorCronWorkflow`, qui exécute l'unique activity `orchestrator_run` : un seul `POST /orchestrator/run`. Aucune sélection de contrats côté Temporal — la sélection des sets, la concurrence, l'agrégation et la conservation du JSON sont portées par l'API Python (PY-005/PY-006).
+
+| Script | Statut | Usage |
+| --- | --- | --- |
+| `scripts/manage_orchestrator_schedule.py` | cible | Schedule cron unique vers `POST /orchestrator/run` (`OrchestratorCronWorkflow`). |
+
+Composants (à côté du legacy, task queue inchangée `cron_symfony_mtf_workers`) :
+
+- `activities/orchestrator_http.py` (`orchestrator_run`) : POST httpx du `RunRequest` minimal (`dashboard_id`, `schedule_id`, `tick_timestamp`) et retour du `RunResponse` tel quel. En cas d'erreur réseau / corps non JSON, un dict explicite `ok=false` est renvoyé (jamais d'exception).
+- `workflows/orchestrator_cron.py` (`OrchestratorCronWorkflow`) : exécute l'unique activity, journalise `run_id` + `summary`, et propage le résultat. Le `tick_timestamp` est dérivé de `workflow.now()` (déterminisme : aucune I/O ni `datetime.now()` dans le workflow).
+
+Sous-commandes (mêmes conventions que `manage_exchange_profile_schedule.py`) : `create` / `pause` / `resume` / `delete` / `status`. Overlap `BUFFER_ONE`.
+
+Paramètres via env (surchargés par les options CLI `--url`, `--dashboard-id`, `--cron`, `--schedule-id`, `--workflow-id`) :
+
+| Variable | Défaut |
+| --- | --- |
+| `ORCHESTRATOR_RUN_URL` | `http://python-orchestrator:8099/orchestrator/run` |
+| `ORCHESTRATOR_DASHBOARD_ID` | _(aucun)_ |
+| `ORCHESTRATOR_SCHEDULE_ID` | `cron-orchestrator-run-1m` |
+| `ORCHESTRATOR_WORKFLOW_ID` | `cron-orchestrator-run-runner` |
+| `ORCHESTRATOR_CRON` | `*/1 * * * *` |
+
+```bash
+# Prévisualiser le schedule cible sans rien créer
+python scripts/manage_orchestrator_schedule.py create --dry-run --dashboard-id 7
+
+# Créer / piloter le schedule
+python scripts/manage_orchestrator_schedule.py create --dashboard-id 7
+python scripts/manage_orchestrator_schedule.py status
+python scripts/manage_orchestrator_schedule.py pause
+python scripts/manage_orchestrator_schedule.py resume
+python scripts/manage_orchestrator_schedule.py delete
+```
+
+> `ok=false` n'est pas un succès Temporal : l'activity remonte le `RunResponse` complet pour que **TM-002** lève l'erreur côté workflow. TM-001 ne lève pas sur `ok=false`.
 
 ## Garde-fous live
 
@@ -183,6 +222,8 @@ Depuis `cron_symfony_mtf_workers/` :
 pytest
 pytest tests/test_response_formatter.py
 pytest tests/test_manage_exchange_profile_schedule.py
+pytest tests/test_orchestrator_workflow.py
+pytest tests/test_manage_orchestrator_schedule.py
 ```
 
 Après création de l'orchestrateur Python, les tests attendus devront aussi couvrir :

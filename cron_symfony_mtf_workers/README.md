@@ -74,6 +74,49 @@ Chaque schedule définit ses propres overrides via `job.payload`. Voir `models/m
 
 ## 4. Schedules disponibles
 
+### 4.0 Schedule cible — Orchestrateur Python (TM-001)
+
+- **Objectif** : déclencheur cron minimal vers l'orchestrateur Python. Un schedule unique démarre `OrchestratorCronWorkflow`, qui exécute l'unique activity `orchestrator_run` : un seul `POST /orchestrator/run`. **Aucune logique de sélection de contrats côté Temporal** — la sélection des sets, la concurrence, l'agrégation et la conservation du JSON sont portées par l'API Python (PY-005/PY-006).
+- **Fichier CLI** : `scripts/manage_orchestrator_schedule.py`.
+- **Statut** : cible. C'est le chemin à privilégier pour les nouveaux déploiements (les schedules MTF multi-jobs ci-dessous restent en transition, CLEAN-001).
+- **Composants** : `activities/orchestrator_http.py` (`orchestrator_run`) + `workflows/orchestrator_cron.py` (`OrchestratorCronWorkflow`), enregistrés à côté du legacy dans `worker.py` sur la même task queue `cron_symfony_mtf_workers`.
+
+L'activity POST le `RunRequest` minimal et retourne le `RunResponse` tel quel :
+
+```json
+{
+  "ok": true,
+  "run_id": "run_20260619_001",
+  "status": "success",
+  "summary": { "total_calls": 6, "success": 6, "failed": 0 }
+}
+```
+
+Paramètres via env (surchargés par les options CLI `--url`, `--dashboard-id`, `--cron`, `--schedule-id`, `--workflow-id`) :
+
+| Variable | Défaut |
+| --- | --- |
+| `ORCHESTRATOR_RUN_URL` | `http://python-orchestrator:8099/orchestrator/run` |
+| `ORCHESTRATOR_DASHBOARD_ID` | _(aucun)_ |
+| `ORCHESTRATOR_SCHEDULE_ID` | `cron-orchestrator-run-1m` |
+| `ORCHESTRATOR_WORKFLOW_ID` | `cron-orchestrator-run-runner` |
+| `ORCHESTRATOR_CRON` | `*/1 * * * *` |
+
+Commandes principales (overlap `BUFFER_ONE`) :
+
+```bash
+# Prévisualiser le schedule cible sans rien créer
+python scripts/manage_orchestrator_schedule.py create --dry-run --dashboard-id 7
+
+python scripts/manage_orchestrator_schedule.py create --dashboard-id 7
+python scripts/manage_orchestrator_schedule.py status
+python scripts/manage_orchestrator_schedule.py pause
+python scripts/manage_orchestrator_schedule.py resume
+python scripts/manage_orchestrator_schedule.py delete
+```
+
+> `ok=false` n'est pas un succès Temporal. TM-001 se contente de propager le `RunResponse` complet ; l'échec explicite du workflow sur `ok=false` est livré par **TM-002**.
+
 ### 4.1 Runtime Matrix Exchange/Profile
 
 - **Objectif** : gérer les schedules MTF explicites par couple `exchange/market_type/profile`.
