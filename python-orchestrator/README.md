@@ -70,6 +70,7 @@ Hors-scope (PR suivantes) :
 | `GET` | `/runs` | Liste les runs (`?dashboard_id=&limit=&offset=`) (PY-006). |
 | `GET` | `/runs/{run_id}` | Dernier JSON global d'un run + détail par set (PY-006). |
 | `GET` | `/runs/{run_id}/sets/{set_id}` | Dernier JSON d'un set (payload + réponse brute) (PY-006). |
+| `GET` | `/runs/{run_id}/outcome` | Rapprochement run ↔ trades (`position_trade_analysis`) : PnL net, win-rate, MFE/MAE, ventilation par symbole (OBS-003). |
 | `GET` | `/metrics` | Métriques d'exécution agrégées (compteurs + histogramme de durée), JSON dérivé du registre (OBS-002). |
 | `GET` | `/docs` | Swagger UI (OpenAPI). |
 
@@ -207,6 +208,52 @@ plus ancien et paginée (`limit` borné à 100, `offset`). `GET /runs/{run_id}` 
 `last_json` global + `sets[]` avec `payload_sent`, `response_json`, `error`,
 `duration_ms`). Ces endpoints n'écrivent rien : la persistance est faite par
 PY-005.
+
+### Rapprochement runs ↔ trades (OBS-003)
+
+`GET /runs/{run_id}/outcome` relie un run d'orchestration à ses **trades
+résultants** exposés par la vue Symfony `position_trade_analysis`, par `run_id`,
+en **lecture seule**. La source est l'endpoint Symfony
+`GET /api/positions/analysis?run_id=…` (consommé en HTTP, le PnL n'est jamais
+recalculé). Le run_id est tronqué à 64 caractères (`reconciled_run_id`) pour
+matcher `trade_lifecycle_event.run_id` (VARCHAR(64)) ; ce même run_id est désormais
+propagé à Symfony via l'en-tête `X-Run-Id` et **utilisé** comme run_id du run (avant
+OBS-003, Symfony générait un UUID et le join restait vide).
+
+```bash
+curl -s 'localhost:8099/runs/run_dashA_20260617T083000Z/outcome'
+```
+
+```json
+{
+  "run_id": "run_dashA_20260617T083000Z",
+  "reconciled_run_id": "run_dashA_20260617T083000Z",
+  "run_found": true,
+  "source_available": true,
+  "trade_count": 3,
+  "closed_count": 2,
+  "open_count": 1,
+  "win_count": 1,
+  "loss_count": 1,
+  "win_rate": 0.5,
+  "pnl_usdt": 12.34,
+  "pnl_r": 1.2,
+  "mfe_pct_avg": 0.8,
+  "mfe_pct_median": 0.8,
+  "mae_pct_avg": -0.4,
+  "mae_pct_median": -0.4,
+  "holding_time_sec_avg": 123.0,
+  "by_symbol": [
+    { "symbol": "BTCUSDT", "trade_count": 2, "pnl_usdt": 6.0, "pnl_r": 0.5, "win_rate": 0.5 }
+  ]
+}
+```
+
+**Fail-safe** : un run inconnu, un run **sans trade** ou une **vue Symfony
+indisponible** renvoient un agrégat vide explicite (HTTP 200, jamais de 500).
+`run_found` indique si le run existe côté orchestration ; `source_available` si la
+vue a répondu (False = agrégat vide non fiable). Aucune variable d'env ajoutée :
+l'endpoint réutilise `SYMFONY_BASE_URL`.
 
 ## Lancement local
 

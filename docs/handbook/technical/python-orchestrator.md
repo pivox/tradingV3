@@ -666,6 +666,55 @@ pas de redéfinition de cause métier.
   idempotence, réponses HTTP et forme de `last_json`/`RunSet` inchangés ; OBS-001
   et SAFE-001/002/003 intacts.
 
+### Rapprochement runs ↔ trades (OBS-003)
+
+OBS-001/002 rendent visible l'**exécution** d'un run (audit + métriques), mais pas
+son **résultat de trading** : pour un `run_id` donné, impossible de répondre
+programmatiquement à « quels trades ont été ouverts/fermés, quel PnL net, quels
+MFE/MAE, quel win-rate ? ». OBS-003 ajoute la **couche OUTCOME** : une surface de
+**lecture seule** reliant un run d'orchestration (schéma `orchestration`) à ses
+trades résultants exposés par la vue Symfony `position_trade_analysis`, par `run_id`.
+
+- **Source** (décision produit) : un **nouvel endpoint Symfony** en lecture seule,
+  `GET /api/positions/analysis?run_id=…` (`PositionAnalysisApiController` →
+  `RunTradeOutcomeService` → vue `position_trade_analysis`), consommé par
+  l'orchestrateur en **HTTP** (`app/services/symfony_client.py:fetch_run_trade_outcome`).
+  L'orchestrateur n'est **pas couplé** au schéma interne Symfony : il parle à Symfony
+  comme pour tout le reste (snapshot, contrats, run). Le **PnL n'est jamais recalculé** :
+  Symfony agrège les valeurs déjà exposées par la vue.
+- **Surface orchestrateur** : `GET /runs/{run_id}/outcome` (`app/routers/runs.py`),
+  renvoie un agrégat **par run** + **ventilation par symbole** :
+  - `trade_count`, `closed_count`, `open_count`, `win_count`, `loss_count` ;
+  - `win_rate` (sur les trades **clôturés**, `null` si aucun) ;
+  - **PnL net** : `pnl_usdt` et `pnl_r` (sommes, jamais recalculées) ;
+  - `mfe_pct_avg` / `mfe_pct_median`, `mae_pct_avg` / `mae_pct_median` ;
+  - `holding_time_sec_avg` ;
+  - `by_symbol[]` : les mêmes agrégats par symbole.
+- **Réconciliation du `run_id`** (point dur, **vérifié et tranché**) : avant OBS-003,
+  Symfony **n'utilisait pas** l'en-tête `X-Run-Id` — `RunnerController` l'ignorait et
+  `MtfRunnerService` générait un `Uuid::uuid4()`, qui finissait sur
+  `trade_lifecycle_event.run_id` → la vue. Un join par `run_id` renvoyait donc **0
+  ligne**. OBS-003 **câble** `X-Run-Id` côté Symfony : `RunnerController` lit l'en-tête
+  et le propage au runner (`MtfRunnerRequestDto::runId`), utilisé comme `run_id` du run
+  (sinon fallback UUID, comportement CLI/appel direct inchangé). Comme
+  `trade_lifecycle_event.run_id` (== `position_trade_analysis.run_id`) est un
+  **VARCHAR(64)** alors que l'orchestration `runs.run_id` peut atteindre 255 (forme
+  hachée = 68), le run_id est **tronqué à 64** des deux côtés : le runner Symfony borne
+  l'en-tête avant de le stocker, et `GET /runs/{run_id}/outcome` interroge la vue avec
+  le même `run_id[:64]` (champ `reconciled_run_id` de la réponse). Règle unique, donc
+  les deux côtés utilisent strictement le même identifiant.
+- **Fail-safe** : un run inconnu, un run **sans trade** ou une **vue indisponible**
+  renvoient un agrégat **vide explicite** (`trade_count=0`, `by_symbol=[]`), jamais un
+  500 ni un blocage. Les drapeaux `run_found` (run connu côté orchestration) et
+  `source_available` (la vue Symfony a répondu) qualifient le résultat. Côté Symfony,
+  `RunTradeOutcomeService` enveloppe la lecture dans un `try/catch` (vue absente / erreur
+  SQL → `available=false`). Lecture seule, transaction courte, aucune écriture sur la vue.
+- **Aucun changement de comportement métier** : pas de dispatch, décisions
+  live/lock/idempotence inchangées, réponses HTTP de `/orchestrator/run` et forme de
+  `last_json`/`RunSet` inchangées, vue `position_trade_analysis` non modifiée. Seul
+  ajout : la consommation de `X-Run-Id` côté runner (identifiant de corrélation), sans
+  effet sur les décisions. Pas de migration.
+
 ## Garde-fous fonctionnels
 
 Avant tout run :
@@ -736,6 +785,7 @@ Avant tout run :
 | SAFE-003 ✅ | Centraliser et durcir les garde-fous live | Livré : module unique `app/services/live_guard.py` (`assess_live -> LiveDecision`) consommé par `assert_set_persistable`, `assert_live_allowed` et le runner `_dispatch_set` (plus de logique live dupliquée schemas ↔ runner). Hiérarchie fail-closed : bannissements permanents OKX/Hyperliquid (jamais relâchés) > interrupteur `ORCHESTRATION_LIVE_ENABLED` (défaut OFF) > allow-list `ORCHESTRATION_LIVE_EXCHANGES` (défaut vide) > snapshot d'état ouvert présent. `reason`/`code` stables par cause. Persistance ↔ runtime cohérents. **Le live reste désactivé par défaut** : aucune réactivation effective, seule l'activation devient possible/auditable/testée. Pas de migration. |
 | OBS-001 ✅ | Audit des runs d'orchestration | Livré : couche d'audit structurée, fail-safe et corrélée par `run_id` (`app/services/run_audit.py`, `emit`) sur le logger `orchestrator.audit`, format **JSON line** sur stdout (`app/logging_config.py`), niveau piloté par `ORCHESTRATION_LOG_LEVEL` (défaut INFO, validé au démarrage). Points d'audit : `run_started`, `run_short_circuit` (replay/in_flight/resume/reclaim), `snapshot_fetch`, `set_skipped` (codes live_guard / locked / conflicting_live / open_state_unavailable), `set_dispatched`, `set_result`, `run_finished`. `code`/`reason` identiques à `RunSet.error` (source unique SAFE-003). Trace-id `X-Run-Id` propagé à Symfony. **Aucun changement de comportement** (SAFE-001/002/003 intacts, réponses HTTP inchangées). Pas de migration. |
 | OBS-002 ✅ | Métriques d'exécution par set | Livré : registre de métriques in-process (`app/services/run_metrics.py`) branché aux **mêmes points** qu'OBS-001 (`set_dispatched`/`set_result`/`set_skipped`/`snapshot_fetch`/`run_finished`). Compteurs (runs par status ; sets dispatched/results ok+`business_status`/skipped par `code` ; snapshots ok/indispo) + **histogramme** de durée de dispatch (`set_result.duration_ms`, bornes « le »). Sink = **endpoint JSON dérivé** `GET /metrics` (`app/routers/metrics.py`), aucune migration ni écriture DB. Labels **faible cardinalité** (`exchange`/`market_type`/`mtf_profile` + `code`/`business_status`/`status`), ni `set_id` ni `dashboard_id`. Activation `ORCHESTRATION_METRICS_ENABLED` (défaut ON, validé au démarrage). Réconcilie avec `summary`. **Fail-safe**, **aucun changement de comportement** (OBS-001 et SAFE-001/002/003 intacts, réponses HTTP inchangées). Pas de migration. |
+| OBS-003 ✅ | Relier les runs d'orchestration à `position_trade_analysis` | Livré : couche **OUTCOME** read-only reliant un run à ses trades par `run_id`. Source = nouvel endpoint Symfony `GET /api/positions/analysis?run_id=…` (`PositionAnalysisApiController` → `RunTradeOutcomeService` → vue `position_trade_analysis`, PnL jamais recalculé), consommé en HTTP (`symfony_client.fetch_run_trade_outcome`). Surface orchestrateur `GET /runs/{run_id}/outcome` : agrégat par run (count, `pnl_usdt`/`pnl_r`, win-rate, MFE/MAE moyens+médians, holding-time) + ventilation `by_symbol`. **Réconciliation `run_id`** : `X-Run-Id` désormais **consommé** par `RunnerController`/`MtfRunnerService` (avant : UUID, join vide), tronqué à 64 des deux côtés (`reconciled_run_id`) pour matcher `trade_lifecycle_event.run_id` VARCHAR(64). **Fail-safe** (run inconnu / sans trade / vue indisponible → agrégat vide, `run_found`/`source_available`, jamais 500). **Aucun changement de comportement métier** (vue non modifiée, réponses `/orchestrator/run` inchangées, OBS-001/002 et SAFE-001/002/003 intacts). Pas de migration. |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 
@@ -777,6 +827,66 @@ Réponse :
 ```
 
 L'API Python utilise cet endpoint lors du « refresh contrats » pour préparer les sets.
+
+## Endpoint Symfony : rapprochement trades par run (OBS-003)
+
+`GET /api/positions/analysis?run_id=…` expose, en **lecture seule**, l'agrégat des
+trades d'un run à partir de la vue `position_trade_analysis`
+(`PositionAnalysisApiController` → `RunTradeOutcomeService`). Consommé par
+l'orchestrateur via `GET /runs/{run_id}/outcome`. Le **PnL n'est jamais recalculé** :
+on somme/moyenne les valeurs déjà exposées par la vue.
+
+| Param | Requis | Rôle |
+| --- | --- | --- |
+| `run_id` | oui | `run_id` de corrélation (déjà borné à 64 par l'appelant). |
+
+Le service borne lui-même `run_id` à 64 caractères (largeur de
+`position_trade_analysis.run_id`) : la même règle s'applique côté orchestrateur, donc
+les deux côtés interrogent le même identifiant.
+
+Réponse (agrégat global + ventilation `by_symbol`) :
+
+```json
+{
+  "run_id": "run_20260621_120000_ab12cd",
+  "available": true,
+  "trade_count": 3,
+  "closed_count": 2,
+  "open_count": 1,
+  "win_count": 1,
+  "loss_count": 1,
+  "win_rate": 0.5,
+  "pnl_usdt": 12.34,
+  "pnl_r": 1.2,
+  "mfe_pct_avg": 0.8,
+  "mfe_pct_median": 0.8,
+  "mae_pct_avg": -0.4,
+  "mae_pct_median": -0.4,
+  "holding_time_sec_avg": 123.0,
+  "by_symbol": [
+    {
+      "symbol": "BTCUSDT",
+      "trade_count": 2,
+      "closed_count": 2,
+      "open_count": 0,
+      "win_count": 1,
+      "loss_count": 1,
+      "win_rate": 0.5,
+      "pnl_usdt": 6.0,
+      "pnl_r": 0.5,
+      "mfe_pct_avg": 0.9,
+      "mfe_pct_median": 0.9,
+      "mae_pct_avg": -0.5,
+      "mae_pct_median": -0.5,
+      "holding_time_sec_avg": 100.0
+    }
+  ]
+}
+```
+
+**Fail-safe** : un `run_id` manquant donne un `400` ; une vue indisponible / erreur SQL
+retombe sur `available: false` (agrégat vide, HTTP 200) ; un run sans trade donne
+`available: true` avec compteurs à 0. Jamais de 500. La vue n'est jamais modifiée.
 
 ## Hors-scope de la première PR code
 

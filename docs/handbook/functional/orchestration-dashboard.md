@@ -169,12 +169,23 @@ Le cockpit ne doit pas :
 
 Les runs doivent ensuite pouvoir être rapprochés de :
 
-- `position_trade_analysis` ;
-- PnL net ;
-- MFE / MAE ;
-- durée de trade ;
+- `position_trade_analysis` ✅ (OBS-003) ;
+- PnL net ✅ (OBS-003 : `pnl_usdt` / `pnl_r`) ;
+- MFE / MAE ✅ (OBS-003 : moyens et médians) ;
+- durée de trade ✅ (OBS-003 : `holding_time_sec_avg`) ;
 - frais / spread / slippage ;
 - erreurs d'exécution ;
 - trades évités ou bloqués.
+
+Ce rapprochement est **disponible** depuis OBS-003 : `GET /runs/{run_id}/outcome`
+(orchestrateur) relie un run à ses trades via la vue Symfony
+`position_trade_analysis` (par `run_id`, en lecture seule, PnL non recalculé). Il
+expose le nombre de trades, le PnL net (USDT / R), le win-rate, les MFE/MAE moyens et
+médians et la durée de détention, avec ventilation par symbole. Le `run_id` est
+propagé à Symfony via l'en-tête `X-Run-Id` puis stocké sur les events (tronqué à 64
+des deux côtés pour la réconciliation). Fail-safe : un run sans trade ou une vue
+indisponible renvoie un agrégat vide explicite. Voir
+`docs/handbook/technical/python-orchestrator.md` (§ *Rapprochement runs ↔ trades
+(OBS-003)*).
 
 L'objectif reste la qualité des setups et l'expectancy nette, pas le nombre brut d'appels ou de trades.
