@@ -32,6 +32,31 @@ Un déclenchement doit déclarer explicitement :
 | `live_forbidden` | Interdit en live. |
 | `live_candidate` | Potentiellement live plus tard, après PR dédiée. |
 
+## Couche unique de garde-fous live (orchestrateur)
+
+Côté `python-orchestrator`, la décision « ce set peut-il s'exécuter en live ? »
+est centralisée en **un seul module fail-closed**, `app/services/live_guard.py`
+(`assess_live(...) -> LiveDecision`). La persistance des sets
+(`assert_set_persistable`), les sets en mémoire (`assert_live_allowed`) et le
+runner (`_dispatch_set`) délèguent tous à cette source unique — il n'y a plus de
+politique live dupliquée. La décision distingue explicitement :
+
+- **interdictions permanentes** : OKX et Hyperliquid live restent interdits
+  **même interrupteur d'activation activé et même exchange allow-listé** (garde
+  jamais relâchée, normalisation casse/espaces incluse) ;
+- **verrou transitoire** : un interrupteur d'activation explicite
+  `ORCHESTRATION_LIVE_ENABLED` (défaut **OFF**) + une allow-list
+  `ORCHESTRATION_LIVE_EXCHANGES` (défaut **vide**, au plus `bitmart`, + `fake` en
+  simulation). Tant que l'interrupteur est OFF, **tout** set `dry_run=false` est
+  skippé fail-closed, comme avant ;
+- **prérequis runtime** : même live autorisé, un set n'est dispatché que si le
+  snapshot d'état ouvert est présent (sinon skip `open_state_unavailable`), et
+  l'override run-level `{"dry_run": true}` force toujours le dry (prééminence
+  sécurité).
+
+Le live reste **désactivé par défaut** dans la config livrée : l'interrupteur
+rend l'activation *possible, explicite, auditable et testée*, sans la réactiver.
+
 ## Politique par exchange
 
 | Exchange | Simulation | Dry-run | Live | Commentaire |

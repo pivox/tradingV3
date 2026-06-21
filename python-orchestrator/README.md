@@ -83,8 +83,11 @@ Garde-fous appliqués dès la création/mise à jour des sets (revalidés sur le
 `PATCH` partiels, l'état résultant étant fusionné avec la ligne persistée) :
 
 - `workers` borné à `MAX_WORKERS_PER_SET` (1 au début) → `422` au-delà ;
-- **aucun live persistable** : `dry_run=false` est refusé pour tous les
-  exchanges/environnements tant que la readiness live n'est pas livrée → `422` ;
+- **aucun live persistable par défaut** : `dry_run=false` est refusé tant que
+  l'interrupteur d'activation live est OFF (config livrée) → `422`. La décision
+  délègue à la couche unique `app/services/live_guard.py` (`assess_live`), mêmes
+  gardes que le runner — une ligne stockée ne peut déclencher que ce que le runner
+  exécuterait. Cf. *Garde-fous live (SAFE-003)* ;
 - **sélection exploitable obligatoire** : un set doit avoir `symbols` non vide
   **ou** `contracts_limit` renseigné (pas de set ambigu) → `422` ;
 - **`payload` non writable** : produit côté serveur (PY-004), exposé en lecture
@@ -277,9 +280,11 @@ un service `postgres:15`.
 | `DATABASE_URL` | `postgresql+psycopg://postgres:password@trading-app-db:5432/trading_app` | URL SQLAlchemy de la base orchestration (DB-001). |
 | `ORCHESTRATION_DB_SCHEMA` | `orchestration` | Schéma PostgreSQL dédié (DB-001). Identifiant SQL simple validé (`^[A-Za-z_][A-Za-z0-9_]*$`). |
 | `ORCHESTRATION_LOCK_TTL_SECONDS` | `1800` | Marge (s) anti-deadlock des locks d'orchestration par `(profil, symbole)` (SAFE-001), ≥ 1. Le TTL effectif = pire temps de paroi du run (vagues `max_concurrency` × timeout Symfony) + cette marge, pour qu'un set en file n'expire pas avant son dispatch. **Borne aussi le TTL de claim de run** (SAFE-002, même calcul) : pas de variable dédiée. |
+| `ORCHESTRATION_LIVE_ENABLED` | `false` | **Interrupteur d'activation live** (SAFE-003), défaut **OFF**. OFF ⇒ tout set `dry_run=false` est skippé fail-closed (comportement d'avant SAFE-003). Accepte `true/false`, `1/0`, `yes/no`, `on/off` ; toute autre valeur lève au démarrage. **Ne jamais livrer à `true` sans readiness runtime.** |
+| `ORCHESTRATION_LIVE_EXCHANGES` | *(vide)* | Allow-list CSV des exchanges autorisés live **quand l'interrupteur est ON** (SAFE-003). Normalisée en minuscules, dédupliquée ; chaque entrée doit être un exchange connu (sinon lève au démarrage). En pratique au plus `bitmart` (+ `fake` en simulation). OKX/Hyperliquid restent interdits **même listés** (bannissement permanent). |
 
-Une valeur non entière ou hors borne lève une erreur explicite au démarrage
-(pas de repli silencieux sur le défaut).
+Une valeur non entière, non booléenne, hors borne ou un exchange inconnu lève une
+erreur explicite au démarrage (pas de repli silencieux sur le défaut).
 
 ## Persistance (DB-001)
 
@@ -327,6 +332,33 @@ cron) ne peuvent donc pas traiter le même couple `(profil, symbole)` en même t
 La migration Alembic `0002_orchestration_locks` crée la table ; elle s'applique via
 `alembic upgrade head` (cf. *Migrations*). La migration `0003_run_claim_expires_at`
 ajoute la colonne `runs.expires_at` (TTL du claim « en vol », **SAFE-002**).
+
+### Garde-fous live (SAFE-003)
+
+Toute la politique « ce set peut-il s'exécuter en live ? » est centralisée dans
+**un seul module fail-closed**, `app/services/live_guard.py`, exposant
+`assess_live(exchange, market_type, environment, dry_run, settings) -> LiveDecision`.
+La persistance (`schemas.assert_set_persistable`), les sets en mémoire
+(`schemas.assert_live_allowed`) et le runner (`_dispatch_set`) **délèguent** tous à
+cette source unique : plus de logique live dupliquée entre `schemas` et le runner.
+
+Hiérarchie de décision (fail-closed, l'ordre est sécuritaire) :
+
+1. `dry_run` effectif ⇒ autorisé (l'override run-level `{"dry_run": true}` force
+   toujours le dry, quelle que soit la suite) ;
+2. **bannissement permanent** OKX/Hyperliquid ⇒ refusé, **même interrupteur ON et
+   même exchange allow-listé** (normalisation casse/espaces incluse) ;
+3. interrupteur `ORCHESTRATION_LIVE_ENABLED` **OFF** (défaut) ⇒ refusé
+   (`live_not_enabled`) — comportement identique à avant SAFE-003 ;
+4. exchange hors allow-list `ORCHESTRATION_LIVE_EXCHANGES` (défaut vide) ⇒ refusé
+   (`live_exchange_not_allowlisted`) ;
+5. sinon ⇒ autorisé, **mais** le runner exige encore le snapshot d'état ouvert
+   (sinon skip `open_state_unavailable`).
+
+Chaque refus porte un `reason`/`code` stable versé dans `RunSet.error` / `last_json`.
+**Le live reste désactivé par défaut** : la config livrée garde l'interrupteur OFF
+et l'allow-list vide. SAFE-003 rend l'activation *possible, explicite, auditable et
+testée*, sans la réactiver, et **n'ajoute aucune migration**.
 
 ### Migrations
 

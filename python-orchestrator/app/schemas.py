@@ -15,6 +15,11 @@ from typing import List, Literal, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from app import __version__
+from app.services.live_guard import (
+    PERMANENT_LIVE_FORBIDDEN_EXCHANGES,
+    assess_live,
+    is_permanently_forbidden,
+)
 
 # Nombre maximum de workers Symfony autorisés par set. La cible impose
 # `workers=1` au début ; on relèvera cette borne dans une PR dédiée.
@@ -56,9 +61,14 @@ class Action(str, Enum):
     REPORTING = "reporting"
 
 
-# Exchanges verrouillés en dry-run uniquement tant qu'une PR de readiness live
-# dédiée n'a pas été validée (cf. exchange-schedule-policy.md).
-LIVE_FORBIDDEN_EXCHANGES = frozenset({Exchange.OKX, Exchange.HYPERLIQUID})
+# Exchanges interdits live **en permanence** (OKX/Hyperliquid, cf.
+# exchange-schedule-policy.md). Dérivé de la source **unique**
+# ``live_guard.PERMANENT_LIVE_FORBIDDEN_EXCHANGES`` (SAFE-003) : plus de liste
+# dupliquée entre schemas et runner. Conservé sous forme d'enums pour les usages
+# typés historiques.
+LIVE_FORBIDDEN_EXCHANGES = frozenset(
+    e for e in Exchange if e.value in PERMANENT_LIVE_FORBIDDEN_EXCHANGES
+)
 
 # Statuts de run centralisés (SAFE-002). ``running`` est un statut **non terminal**
 # (claim « en vol » posé au démarrage du run) ; ``no_sets`` n'est jamais persisté.
@@ -80,25 +90,38 @@ RunStatus = Literal["success", "partial_failure", "failed", "no_sets", "running"
 
 
 def assert_live_allowed(exchange: Exchange, dry_run: bool) -> None:
-    """Garde-fou live : interdit ``dry_run=false`` sur OKX/Hyperliquid.
+    """Garde-fou live des ``OrchestratorSet`` en mémoire : OKX/Hyperliquid interdits.
 
-    Utilisé par ``OrchestratorSet`` (sets simulés en mémoire, non persistés). La
-    configuration persistante (PY-002) applique une règle **plus stricte** via
-    ``assert_set_persistable``. Lève ``ValueError`` (mappé en 422 côté API).
+    Utilisé par ``OrchestratorSet`` (sets simulés en mémoire, non persistés). Délègue
+    la connaissance des exchanges bannis à ``live_guard.is_permanently_forbidden``
+    (source **unique** SAFE-003) : seuls les bannissements **permanents** s'appliquent
+    ici. Le verrou d'activation live (interrupteur + allow-list) est appliqué à la
+    persistance (``assert_set_persistable``) et au runtime (runner), pas sur l'objet
+    en mémoire. Lève ``ValueError`` (mappé en 422 côté API).
     """
-    if dry_run is False and exchange in LIVE_FORBIDDEN_EXCHANGES:
+    if dry_run is False and is_permanently_forbidden(exchange):
         raise ValueError(
             f"{exchange.value} live est interdit : dry_run doit rester true."
         )
 
 
-def assert_set_persistable(*, dry_run: bool, symbols: list, contracts_limit: Optional[int]) -> None:
+def assert_set_persistable(
+    *,
+    dry_run: bool,
+    symbols: list,
+    contracts_limit: Optional[int],
+    exchange: object,
+    market_type: object = None,
+    environment: object = None,
+) -> None:
     """Invariants d'un set **persisté** via l'API de configuration (PY-002).
 
-    1. Aucun live persistable tant que la readiness live n'est pas livrée : un
-       set stocké pourra être consommé tel quel par PY-005 sans nouvelle
-       validation humaine, donc on refuse tout ``dry_run=false`` (tous exchanges,
-       tous environnements) à ce stade.
+    1. Cohérence persistance ↔ runtime (SAFE-003) : un set ``dry_run=false`` n'est
+       persistable que si ``live_guard.assess_live`` l'autorise — **exactement** les
+       gardes appliquées par le runner au dispatch. Une ligne stockée ne peut donc
+       jamais déclencher un live que le runner refuserait (et inversement). Par
+       défaut (interrupteur OFF), tout ``dry_run=false`` reste refusé, comme avant
+       SAFE-003.
     2. Pas de set ambigu : il faut une sélection exploitable — soit ``symbols``
        non vide, soit ``contracts_limit`` renseigné — sinon PY-005 devrait
        deviner quoi exécuter.
@@ -106,10 +129,22 @@ def assert_set_persistable(*, dry_run: bool, symbols: list, contracts_limit: Opt
     Lève ``ValueError`` (mappé en 422 côté API).
     """
     if dry_run is False:
-        raise ValueError(
-            "persister un set live (dry_run=false) est interdit tant que la "
-            "readiness live n'est pas livrée : PY-002 ne stocke que des sets dry-run."
+        # Import différé de `get_settings` : la politique live lit l'environnement
+        # courant (interrupteur + allow-list) sans coupler le module au runtime.
+        from app.settings import get_settings
+
+        decision = assess_live(
+            exchange=exchange,
+            market_type=market_type,
+            environment=environment,
+            dry_run=False,
+            settings=get_settings(),
         )
+        if not decision.allowed:
+            raise ValueError(
+                decision.reason
+                or "live non autorisé pour la persistance (fail-closed)."
+            )
     # On normalise les symboles (trim + écarte les vides/blancs) comme le fait
     # `generate_set_payload` au dispatch : une sélection `symbols=[" "]` se réduit à
     # vide côté exécution (Symfony trim/filtre, ce qui vaudrait « tout l'univers »).
@@ -390,7 +425,12 @@ class SetCreate(BaseModel):
     @model_validator(mode="after")
     def _enforce_persistable_invariants(self) -> "SetCreate":
         assert_set_persistable(
-            dry_run=self.dry_run, symbols=self.symbols, contracts_limit=self.contracts_limit
+            dry_run=self.dry_run,
+            symbols=self.symbols,
+            contracts_limit=self.contracts_limit,
+            exchange=self.exchange,
+            market_type=self.market_type,
+            environment=self.environment,
         )
         return self
 

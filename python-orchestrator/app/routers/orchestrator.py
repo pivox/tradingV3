@@ -34,7 +34,6 @@ from app.db.engine import get_session
 from app.db.models import OrchestrationLock, OrchestrationSet, Run, RunSet
 from app.schemas import (
     Action,
-    LIVE_FORBIDDEN_EXCHANGES,
     RUN_STATUS_RUNNING,
     TERMINAL_RUN_STATUSES,
     RunRequest,
@@ -42,6 +41,7 @@ from app.schemas import (
     RunStatus,
     RunSummary,
 )
+from app.services.live_guard import OPEN_STATE_UNAVAILABLE_REASON, assess_live
 from app.services.symfony_client import (
     OpenStateUnavailableError,
     SnapshotKey,
@@ -68,11 +68,6 @@ _MAX_PERSISTED_LEN = 255
 # restreint donc le `run_id` aux caractères sûrs d'un segment de chemin ; tout le
 # reste est haché (cf. `_resolve_run_id`).
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9_.\-]+$")
-
-# Exchanges dont le live est interdit (OKX/Hyperliquid), en chaînes pour comparer
-# aux colonnes ORM. Le validateur de schéma bloque déjà toute persistance live ;
-# ce miroir sert de garde-fou défense-en-profondeur au moment du run.
-_LIVE_FORBIDDEN_EXCHANGES = frozenset(e.value for e in LIVE_FORBIDDEN_EXCHANGES)
 
 
 def _resolve_run_id(request: Optional[RunRequest]) -> str:
@@ -834,48 +829,42 @@ async def run_orchestrator(
 
         async def _dispatch_set(a_set: Any) -> Dict[str, Any]:
             snapshot = snapshots.get(snapshot_key(a_set))
+            # État live EFFECTIF (override run-level `{"dry_run": true}` déjà reflété) :
+            # le forçage ne peut que rendre un set plus sûr, jamais downgrader dry→live.
             effective_dry_run = a_set.dry_run or force_dry_run
-            exchange = getattr(a_set.exchange, "value", a_set.exchange)
-            # Garde live défense-en-profondeur : OKX/Hyperliquid live sont interdits.
-            # La persistance les bloque déjà (assert_set_persistable), mais une ligne
-            # ORM écrite hors API ne doit jamais déclencher un /api/mtf/run live ici.
-            # Un override run-level dry_run rend le set sûr (effective_dry_run=True).
-            # On normalise (casse/espaces) avant comparaison : une ligne hors API
-            # avec `OKX` ou ` hyperliquid ` doit fail-closer comme `okx`/`hyperliquid`.
-            normalized_exchange = exchange.strip().lower() if isinstance(exchange, str) else exchange
-            if effective_dry_run is False and normalized_exchange in _LIVE_FORBIDDEN_EXCHANGES:
+            # Couche UNIQUE de garde-fous live (SAFE-003) : toute la politique
+            # (bannissements permanents OKX/Hyperliquid, interrupteur d'activation,
+            # allow-list) vit dans `live_guard.assess_live`. Le runner DB-backed
+            # délègue ici exactement comme `assert_set_persistable` à la persistance :
+            # une ligne ORM écrite hors API ne peut jamais déclencher un /api/mtf/run
+            # live que la persistance refuserait. Par défaut (interrupteur OFF), tout
+            # set effectivement live est skippé fail-closed, comme avant SAFE-003.
+            decision = assess_live(
+                exchange=getattr(a_set.exchange, "value", a_set.exchange),
+                market_type=getattr(a_set.market_type, "value", a_set.market_type),
+                environment=getattr(a_set.environment, "value", a_set.environment),
+                dry_run=effective_dry_run,
+                settings=settings,
+            )
+            if not decision.allowed:
                 return {
                     "set_id": a_set.set_id,
                     "ok": False,
                     "status": None,
-                    "body": f"live forbidden for exchange '{exchange}': set skipped (fail-closed)",
+                    "body": decision.reason,
                     "payload_sent": None,
                     "duration_ms": None,
                 }
-            # Fail-closed live (phase actuelle) : tant que la readiness live n'est pas
-            # livrée, `assert_set_persistable` (app/schemas.py) interdit la persistance
-            # de TOUT set live (tous exchanges/environnements). Le runner DB-backed
-            # applique la même politique de bout en bout : une ligne ORM effectivement
-            # live — écrite hors API, même avec un snapshot disponible — ne doit jamais
-            # déclencher un /api/mtf/run live. L'override run-level dry_run reste le seul
-            # moyen de rendre un set exécutable (en dry). À relâcher quand la readiness
-            # live (SAFE-001/SAFE-002, TM-001) sera livrée.
-            if effective_dry_run is False:
+            # Prérequis runtime conservé : un set autorisé live mais sans snapshot
+            # d'état ouvert fiable n'est PAS dispatché (on ne trade pas à l'aveugle).
+            # `assess_live` ne peut pas l'évaluer (le snapshot n'existe pas à la
+            # persistance), donc ce garde fail-closed reste ici, après la décision.
+            if effective_dry_run is False and snapshot is None:
                 return {
                     "set_id": a_set.set_id,
                     "ok": False,
                     "status": None,
-                    "body": "live execution not yet enabled: live set skipped (fail-closed)",
-                    "payload_sent": None,
-                    "duration_ms": None,
-                }
-            # Fail-closed live : pas de snapshot fiable + set (effectivement) live => on n'exécute pas.
-            if snapshot is None and effective_dry_run is False:
-                return {
-                    "set_id": a_set.set_id,
-                    "ok": False,
-                    "status": None,
-                    "body": "open_state_snapshot unavailable: live set skipped (fail-closed)",
+                    "body": OPEN_STATE_UNAVAILABLE_REASON,
                     "payload_sent": None,
                     "duration_ms": None,
                 }

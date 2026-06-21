@@ -61,3 +61,53 @@ def test_port_out_of_range_raises(monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_PORT", "70000")
     with pytest.raises(SettingsError):
         Settings.from_env()
+
+
+# --- Interrupteur d'activation live (SAFE-003) ------------------------------
+
+
+def test_live_switch_off_by_default(monkeypatch):
+    # La config livrée garde le live désactivé : interrupteur OFF + allow-list vide.
+    monkeypatch.delenv("ORCHESTRATION_LIVE_ENABLED", raising=False)
+    monkeypatch.delenv("ORCHESTRATION_LIVE_EXCHANGES", raising=False)
+    settings = Settings.from_env()
+    assert settings.live_enabled is False
+    assert settings.live_exchanges == ()
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("true", True),
+        ("True", True),
+        ("1", True),
+        ("yes", True),
+        ("on", True),
+        ("false", False),
+        ("0", False),
+        ("no", False),
+        ("off", False),
+    ],
+)
+def test_live_enabled_parsing(monkeypatch, raw, expected):
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", raw)
+    assert Settings.from_env().live_enabled is expected
+
+
+def test_live_enabled_invalid_raises(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "maybe")
+    with pytest.raises(SettingsError):
+        Settings.from_env()
+
+
+def test_live_exchanges_parsed_normalized_and_deduped(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", " Bitmart , bitmart , FAKE ")
+    assert Settings.from_env().live_exchanges == ("bitmart", "fake")
+
+
+def test_live_exchanges_unknown_raises(monkeypatch):
+    # Une coquille (exchange inconnu) doit lever au démarrage plutôt que de rendre
+    # l'allow-list silencieusement inopérante (fail-closed explicite).
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart,binance")
+    with pytest.raises(SettingsError):
+        Settings.from_env()
