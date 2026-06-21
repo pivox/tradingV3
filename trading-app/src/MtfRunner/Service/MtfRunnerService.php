@@ -90,7 +90,15 @@ final class MtfRunnerService
     public function run(RunnerRequestDto $request): array
     {
         $profiler = new PerformanceProfiler();
-        $runId = Uuid::uuid4()->toString();
+        // OBS-001/OBS-003 : si l'orchestrateur a propagé un run_id de corrélation
+        // (en-tête X-Run-Id, déjà borné à 64 caractères dans le DTO), on l'utilise
+        // comme run_id du run afin que les trade_lifecycle_event portent ce même
+        // identifiant et que la vue `position_trade_analysis` soit rapprochable du run
+        // d'orchestration. Sans en-tête (CLI / appel direct), on retombe sur un UUID :
+        // comportement strictement inchangé.
+        $runId = ($request->runId !== null && $request->runId !== '')
+            ? $request->runId
+            : Uuid::uuid4()->toString();
         $startTime = microtime(true);
         $openPositions = null;
         $openOrders = null;

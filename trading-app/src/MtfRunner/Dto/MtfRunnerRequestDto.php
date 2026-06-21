@@ -39,6 +39,15 @@ final class MtfRunnerRequestDto
          * @var array{open_positions?: array<int,mixed>, open_orders?: array<int,mixed>}|null
          */
         public readonly ?array $openStateSnapshot = null,
+        /**
+         * Identifiant de run de corrélation propagé par l'orchestrateur via l'en-tête
+         * HTTP `X-Run-Id` (OBS-001/OBS-003). Quand il est fourni, il est utilisé comme
+         * `run_id` du run (stocké sur les trade_lifecycle_event) au lieu d'un UUID
+         * généré, ce qui permet de rapprocher un run d'orchestration de ses trades
+         * (`position_trade_analysis`). Absent (CLI, appel direct) : fallback UUID,
+         * comportement inchangé.
+         */
+        public readonly ?string $runId = null,
     ) {}
 
     public static function fromArray(array $data): self
@@ -65,6 +74,7 @@ final class MtfRunnerRequestDto
             profile: $profile,
             validationMode: $validationMode,
             openStateSnapshot: self::extractOpenStateSnapshot($data),
+            runId: self::extractRunId($data),
         );
     }
 
@@ -89,7 +99,34 @@ final class MtfRunnerRequestDto
             'profile' => $this->profile,
             'validation_mode' => $this->validationMode,
             'open_state_snapshot' => $this->openStateSnapshot,
+            'run_id' => $this->runId,
         ];
+    }
+
+    /**
+     * Normalise le `run_id` de corrélation fourni par l'orchestrateur (X-Run-Id).
+     *
+     * Une valeur vide/blanche est traitée comme absente (fallback UUID). La valeur
+     * est bornée à 64 caractères : c'est la largeur de `trade_lifecycle_event.run_id`
+     * (et donc de `position_trade_analysis.run_id`). Au-delà, PostgreSQL rejetterait
+     * l'insertion ; on tronque donc de façon déterministe pour que la même règle
+     * s'applique des deux côtés du rapprochement OBS-003 (l'orchestrateur requête la
+     * vue avec le même `run_id[:64]`).
+     *
+     * @param array<string,mixed> $data
+     */
+    private static function extractRunId(array $data): ?string
+    {
+        $raw = $data['run_id'] ?? null;
+        if (!is_string($raw)) {
+            return null;
+        }
+        $trimmed = trim($raw);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        return mb_substr($trimmed, 0, 64);
     }
 
     /**

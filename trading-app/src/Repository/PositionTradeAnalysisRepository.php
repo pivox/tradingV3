@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Trading\Entity\PositionTradeAnalysis;
+use App\Trading\Service\PositionTradeAnalysisReaderInterface;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
-final class PositionTradeAnalysisRepository extends ServiceEntityRepository
+final class PositionTradeAnalysisRepository extends ServiceEntityRepository implements PositionTradeAnalysisReaderInterface
 {
     public function __construct(ManagerRegistry $registry)
     {
@@ -69,5 +70,27 @@ final class PositionTradeAnalysisRepository extends ServiceEntityRepository
         $qb->orderBy('pta.' . $sort, $direction);
 
         return $qb->getQuery()->getResult();
+    }
+
+    /**
+     * Toutes les lignes de la vue rattachées à un `run_id` (OBS-003).
+     *
+     * Lecture seule, bornée par run : un run touche au plus l'univers actif (~100
+     * symboles) et n'ouvre en pratique que peu de trades. Tri stable par symbole puis
+     * date d'entrée pour une agrégation déterministe. Une borne `$limit` garde la
+     * requête courte même si un run_id (tronqué à 64) venait à collisionner.
+     *
+     * @return PositionTradeAnalysis[]
+     */
+    public function findByRunId(string $runId, int $limit = 1000): array
+    {
+        return $this->createQueryBuilder('pta')
+            ->andWhere('pta.runId = :runId')
+            ->setParameter('runId', $runId)
+            ->orderBy('pta.symbol', 'ASC')
+            ->addOrderBy('pta.entryTime', 'ASC')
+            ->setMaxResults($limit)
+            ->getQuery()
+            ->getResult();
     }
 }

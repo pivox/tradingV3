@@ -54,6 +54,14 @@ class RunnerController extends AbstractController
             $openStateSnapshot = $data['open_state_snapshot'] ?? null;
             $openStateSnapshot = is_array($openStateSnapshot) ? $openStateSnapshot : null;
 
+            // OBS-001/OBS-003 : run_id de corrélation propagé par l'orchestrateur via
+            // l'en-tête `X-Run-Id`. Utilisé comme run_id du run (stocké sur les events)
+            // pour rapprocher un run d'orchestration de ses trades. Absent (CLI / appel
+            // direct) : le runner retombe sur un UUID, comportement inchangé. Le corps
+            // JSON ne porte pas cette clé (elle vient de l'en-tête HTTP), mais on laisse
+            // un éventuel `run_id` du body comme repli défensif.
+            $runId = $request->headers->get('X-Run-Id') ?? ($data['run_id'] ?? null);
+
             // Normaliser les symboles fournis sans appliquer de fallback/queue
             $symbols = [];
             if (is_string($symbolsInput)) {
@@ -105,6 +113,7 @@ class RunnerController extends AbstractController
                 'context_mode' => $data['context_mode'] ?? null,
                 'mode' => $data['mode'] ?? null,
                 'open_state_snapshot' => $openStateSnapshot,
+                'run_id' => $runId,
             ]);
             $result = $runMtfCycle->run($runnerRequest);
 
