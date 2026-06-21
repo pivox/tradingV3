@@ -1134,6 +1134,52 @@ def test_lock_released_even_on_dispatch_exception(orchestrator_env, monkeypatch)
     assert _all_locks(session) == []
 
 
+def test_queued_lock_ttl_covers_worst_case_run(orchestrator_env, monkeypatch):
+    # Régression (review #176) : le TTL d'un lock doit couvrir le PIRE temps de paroi
+    # du run (vagues de `max_concurrency` * timeout Symfony) + marge anti-deadlock,
+    # sinon un set resté en file derrière le sémaphore pourrait voir son lock expirer
+    # AVANT son dispatch et être reclaim par un run concurrent (exclusion défaite).
+    # On observe `expires_at` PENDANT le dispatch (lock encore détenu).
+    from datetime import datetime, timedelta, timezone
+
+    from app.db.models import OrchestrationLock
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "b", exchange="bitmart", symbols=("ETHUSDT",))
+    _seed_set(session, dash.id, "c", exchange="bitmart", symbols=("XRPUSDT",))
+
+    base = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(orch, "_now", lambda: base)
+
+    captured: Dict[str, Any] = {}
+
+    class _CapturingClient(_FakeAsyncClient):
+        async def post(self, url, json=None):
+            symbols = (json or {}).get("symbols") or []
+            if symbols:
+                row = session.scalars(
+                    select(OrchestrationLock).where(OrchestrationLock.symbol == symbols[0])
+                ).first()
+                if row is not None:
+                    captured[symbols[0]] = row.expires_at
+            return await super().post(url, json=json)
+
+    _install_fake_client(monkeypatch, _CapturingClient())
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+    assert body["ok"] is True
+
+    # 3 sets, max_concurrency par défaut = 2 => 2 vagues ; TTL = 2*900 + 1800 = 3600s.
+    expected = base + timedelta(seconds=2 * 900 + 1800)
+    assert captured  # au moins un lock observé pendant le dispatch
+    for exp in captured.values():
+        # SQLite peut renvoyer un datetime naïf : on normalise le fuseau pour comparer.
+        exp_utc = exp if exp.tzinfo else exp.replace(tzinfo=timezone.utc)
+        assert exp_utc == expected
+
+
 def test_lock_uses_injected_clock_for_expiry(orchestrator_env, monkeypatch):
     # Le `now` de l'orchestrateur est injectable (orch._now) : un lock dont l'expiry
     # est antérieur au `now` injecté est reclaim, postérieur il bloque.

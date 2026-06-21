@@ -60,10 +60,11 @@ class Settings:
     )
     # Schéma PostgreSQL dédié aux tables d'orchestration.
     db_schema: str = "orchestration"
-    # TTL (s) des locks d'orchestration par (profil, symbole) (SAFE-001). Borne
-    # haute anti-deadlock : un lock dont le titulaire a été tué avant la libération
-    # est reclaimable au-delà. Doit couvrir la durée max d'un run (appels Symfony
-    # bornés à ~900s) avec marge ; défaut 1800s.
+    # Marge (s) anti-deadlock des locks d'orchestration par (profil, symbole)
+    # (SAFE-001). Le TTL effectif d'un lock = pire temps de paroi du run (vagues de
+    # `max_concurrency` * timeout Symfony) + cette marge, afin qu'un set resté en file
+    # n'expire jamais avant son dispatch ; passé ce délai, un lock dont le titulaire a
+    # été tué avant la libération est reclaimable. Défaut 1800s.
     lock_ttl_seconds: int = 1800
     # Origines autorisées par CORS pour les appels navigateur du cockpit (UI-001).
     # Défauts = front servi par CRA (:3000) ou nginx (:8082). Surchargeable via

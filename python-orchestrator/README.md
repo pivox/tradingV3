@@ -249,7 +249,7 @@ un service `postgres:15`.
 | `MAX_CONCURRENCY` | `2` | Concurrence globale bornée, ≥ 1 (PY-002+). |
 | `DATABASE_URL` | `postgresql+psycopg://postgres:password@trading-app-db:5432/trading_app` | URL SQLAlchemy de la base orchestration (DB-001). |
 | `ORCHESTRATION_DB_SCHEMA` | `orchestration` | Schéma PostgreSQL dédié (DB-001). Identifiant SQL simple validé (`^[A-Za-z_][A-Za-z0-9_]*$`). |
-| `ORCHESTRATION_LOCK_TTL_SECONDS` | `1800` | TTL (s) des locks d'orchestration par `(profil, symbole)` (SAFE-001), ≥ 1. Borne haute anti-deadlock (doit couvrir la durée max d'un run). |
+| `ORCHESTRATION_LOCK_TTL_SECONDS` | `1800` | Marge (s) anti-deadlock des locks d'orchestration par `(profil, symbole)` (SAFE-001), ≥ 1. Le TTL effectif = pire temps de paroi du run (vagues `max_concurrency` × timeout Symfony) + cette marge, pour qu'un set en file n'expire pas avant son dispatch. |
 
 Une valeur non entière ou hors borne lève une erreur explicite au démarrage
 (pas de repli silencieux sur le défaut).
@@ -287,8 +287,10 @@ cron) ne peuvent donc pas traiter le même couple `(profil, symbole)` en même t
   avant** les appels Symfony (jamais maintenue pendant les ~900s). Un set dont un
   symbole est déjà verrouillé par un run actif est **skippé fail-closed**
   (`ok=false`, `locked: <key> held by run <id>`) ; les autres sets continuent.
-- **Reclaim des locks expirés** (TTL `ORCHESTRATION_LOCK_TTL_SECONDS`) + purge au
-  démarrage : pas de deadlock si un process est tué avant la libération.
+- **Reclaim des locks expirés** + purge au démarrage : pas de deadlock si un process
+  est tué avant la libération. Le TTL effectif couvre le pire temps de paroi du run
+  (vagues `max_concurrency` × timeout Symfony) + la marge `ORCHESTRATION_LOCK_TTL_SECONDS`,
+  donc un set resté en file derrière le sémaphore n'expire jamais avant son dispatch.
 - **Libération** dans le `finally` de chaque set (succès/échec/exception).
 - Appliqué à **tous** les sets `mtf_run` (inoffensif en dry-run) ; **le live reste
   désactivé** (SAFE-001 ne relâche pas le skip « live execution not yet enabled »).

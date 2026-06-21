@@ -454,7 +454,7 @@ reste skippé par le runner).
 | `lock_key` (UNIQUE) | Clé canonique `{profile}\|{exchange}\|{market_type}\|{symbol}` — **c'est la contrainte d'unicité qui réalise l'exclusion mutuelle**. |
 | `mtf_profile`, `exchange`, `market_type`, `symbol` | Composantes dénormalisées (exchange/market_type normalisés comme Symfony, symbole en MAJUSCULES comme `_symbols_overlap`). |
 | `run_id` | Titulaire courant ; libère ses locks par `run_id` à la fin du set. |
-| `acquired_at`, `expires_at` (indexé) | `expires_at` = TTL anti-deadlock (`ORCHESTRATION_LOCK_TTL_SECONDS`, défaut 1800s). |
+| `acquired_at`, `expires_at` (indexé) | TTL anti-deadlock. `expires_at` = pire temps de paroi du run (`ceil(n_sets / max_concurrency)` × timeout Symfony) + marge `ORCHESTRATION_LOCK_TTL_SECONDS` (défaut 1800s), pour qu'un set resté en file n'expire jamais avant son dispatch. |
 
 **Acquisition** (avant le dispatch de chaque set, dans une transaction courte
 committée **avant** les appels Symfony — jamais maintenue pendant les ~900s) :

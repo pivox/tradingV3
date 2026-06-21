@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import re
 import time
 import uuid
@@ -484,12 +485,24 @@ async def run_orchestrator(
     # Balayage des locks expirés au démarrage : libère les fuites d'un process tué
     # avant son `finally` de libération (anti-deadlock via TTL).
     repositories.purge_expired_locks(session, lock_now)
+    # TTL effectif : tous les locks d'un run partagent ce `lock_now`, mais un set
+    # peut rester en file derrière le sémaphore (`max_concurrency`) bien après
+    # l'acquisition. Si son `expires_at` tombait avant son dispatch, un run concurrent
+    # pourrait le purger/reclaim et dispatcher le MÊME (profil, exchange, market, symbole)
+    # — l'exclusion mutuelle SAFE-001 serait défaite. On dimensionne donc le TTL pour
+    # couvrir le pire temps de paroi du run (chaque vague de `max_concurrency` sets peut
+    # durer jusqu'au timeout Symfony) + la marge anti-deadlock configurée : aucun lock en
+    # file n'expire avant la fin de son set, tout en gardant une expiration finie en cas
+    # de crash. (Le `finally` libère de toute façon chaque lock dès la fin de son set.)
+    concurrency = max(1, settings.max_concurrency)
+    waves = math.ceil(len(mtf_sets) / concurrency)
+    effective_ttl_seconds = int(waves * _HTTP_TIMEOUT) + settings.lock_ttl_seconds
     locked_out: Dict[str, str] = {}
     set_lock_keys: Dict[str, List[str]] = {}
     for a_set in mtf_sets:
         if a_set.set_id in conflicting_live_ids:
             continue  # déjà rejeté, jamais dispatché : rien à verrouiller
-        locks = _lock_specs_for_set(a_set, run_id, lock_now, settings.lock_ttl_seconds)
+        locks = _lock_specs_for_set(a_set, run_id, lock_now, effective_ttl_seconds)
         if not locks:
             continue  # univers complet / aucun symbole concret : rien à sérialiser
         conflict = repositories.acquire_set_locks(session, locks, lock_now)
