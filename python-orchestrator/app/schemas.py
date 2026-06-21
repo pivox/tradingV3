@@ -318,6 +318,109 @@ class RunDetailRead(RunSummaryRead):
 
 
 # ---------------------------------------------------------------------------
+# Rapprochement run ↔ trades (OBS-003)
+#
+# Surface de LECTURE SEULE reliant un run d'orchestration (schéma `orchestration`)
+# à ses résultats de trading exposés par la vue Symfony `position_trade_analysis`,
+# par `run_id`. Le PnL n'est jamais recalculé : ces schémas ne font que transporter
+# l'agrégat fourni par Symfony (`GET /api/positions/analysis`). Fail-safe : un run
+# inconnu / sans trade / une vue indisponible donnent un agrégat vide explicite.
+# ---------------------------------------------------------------------------
+
+
+class RunOutcomeSymbolRead(BaseModel):
+    """Agrégat de trades d'un run pour un symbole (ventilation)."""
+
+    symbol: str
+    trade_count: int = 0
+    closed_count: int = 0
+    open_count: int = 0
+    win_count: int = 0
+    loss_count: int = 0
+    win_rate: Optional[float] = None
+    pnl_usdt: Optional[float] = None
+    pnl_r: Optional[float] = None
+    mfe_pct_avg: Optional[float] = None
+    mfe_pct_median: Optional[float] = None
+    mae_pct_avg: Optional[float] = None
+    mae_pct_median: Optional[float] = None
+    holding_time_sec_avg: Optional[float] = None
+
+
+class RunOutcomeRead(BaseModel):
+    """Rapprochement d'un run d'orchestration avec ses trades (`position_trade_analysis`).
+
+    ``run_id`` est l'identifiant d'orchestration demandé ; ``reconciled_run_id`` est
+    la forme ≤64 caractères réellement utilisée pour interroger la vue (règle de
+    réconciliation, cf. ``GET /runs/{run_id}/outcome``). ``run_found`` indique si le
+    run existe côté orchestration ; ``source_available`` si la source Symfony a
+    répondu (False = vue indisponible/injoignable, agrégat vide non fiable).
+    """
+
+    run_id: str
+    reconciled_run_id: str
+    run_found: bool = False
+    source_available: bool = False
+    trade_count: int = 0
+    closed_count: int = 0
+    open_count: int = 0
+    win_count: int = 0
+    loss_count: int = 0
+    win_rate: Optional[float] = None
+    pnl_usdt: Optional[float] = None
+    pnl_r: Optional[float] = None
+    mfe_pct_avg: Optional[float] = None
+    mfe_pct_median: Optional[float] = None
+    mae_pct_avg: Optional[float] = None
+    mae_pct_median: Optional[float] = None
+    holding_time_sec_avg: Optional[float] = None
+    by_symbol: List[RunOutcomeSymbolRead] = Field(default_factory=list)
+
+    @classmethod
+    def from_source(
+        cls,
+        *,
+        run_id: str,
+        reconciled_run_id: str,
+        run_found: bool,
+        source: dict,
+    ) -> "RunOutcomeRead":
+        """Assemble la réponse depuis l'agrégat Symfony (fail-safe sur clés absentes).
+
+        ``source`` est le dict renvoyé par ``fetch_run_trade_outcome`` (réponse de
+        ``GET /api/positions/analysis`` ou agrégat vide ``available=False``). On lit
+        chaque champ défensivement : une réponse partielle ne doit jamais lever.
+        """
+        src = source if isinstance(source, dict) else {}
+        raw_symbols = src.get("by_symbol")
+        by_symbol = [
+            RunOutcomeSymbolRead.model_validate(s)
+            for s in (raw_symbols if isinstance(raw_symbols, list) else [])
+            if isinstance(s, dict)
+        ]
+        return cls(
+            run_id=run_id,
+            reconciled_run_id=reconciled_run_id,
+            run_found=run_found,
+            source_available=bool(src.get("available", False)),
+            trade_count=int(src.get("trade_count") or 0),
+            closed_count=int(src.get("closed_count") or 0),
+            open_count=int(src.get("open_count") or 0),
+            win_count=int(src.get("win_count") or 0),
+            loss_count=int(src.get("loss_count") or 0),
+            win_rate=src.get("win_rate"),
+            pnl_usdt=src.get("pnl_usdt"),
+            pnl_r=src.get("pnl_r"),
+            mfe_pct_avg=src.get("mfe_pct_avg"),
+            mfe_pct_median=src.get("mfe_pct_median"),
+            mae_pct_avg=src.get("mae_pct_avg"),
+            mae_pct_median=src.get("mae_pct_median"),
+            holding_time_sec_avg=src.get("holding_time_sec_avg"),
+            by_symbol=by_symbol,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Gestion des dashboards et des sets (PY-002)
 #
 # Schémas d'entrée/sortie de l'API de configuration : création, lecture, mise à

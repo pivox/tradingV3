@@ -424,6 +424,82 @@ async def run_mtf_set(
     return await _dispatch_mtf_run(client, base_url, a_set.set_id, payload)
 
 
+# Clés de l'agrégat de rapprochement run ↔ trades (OBS-003), miroir de la réponse
+# de `GET /api/positions/analysis` côté Symfony. Source unique de la forme attendue ;
+# `_empty_run_outcome` les remplit à vide quand la source est indisponible.
+_OUTCOME_NUMERIC_FIELDS = (
+    "trade_count",
+    "closed_count",
+    "open_count",
+    "win_count",
+    "loss_count",
+)
+
+
+def _empty_run_outcome(run_id: str, *, available: bool) -> Dict[str, Any]:
+    """Agrégat de rapprochement vide explicite (source indisponible / run sans trade).
+
+    ``available`` distingue « la source a répondu, mais 0 trade » (True) de « la
+    source Symfony est injoignable / a renvoyé une réponse invalide » (False). Dans
+    les deux cas, c'est un résultat exploitable, jamais une exception.
+    """
+    outcome: Dict[str, Any] = {
+        "run_id": run_id,
+        "available": available,
+        "win_rate": None,
+        "pnl_usdt": None,
+        "pnl_r": None,
+        "mfe_pct_avg": None,
+        "mfe_pct_median": None,
+        "mae_pct_avg": None,
+        "mae_pct_median": None,
+        "holding_time_sec_avg": None,
+        "by_symbol": [],
+    }
+    for field in _OUTCOME_NUMERIC_FIELDS:
+        outcome[field] = 0
+    return outcome
+
+
+async def fetch_run_trade_outcome(
+    client: httpx.AsyncClient,
+    base_url: str,
+    run_id: str,
+) -> Dict[str, Any]:
+    """Rapproche un run de ses trades via Symfony (OBS-003), en LECTURE SEULE.
+
+    Appelle ``GET /api/positions/analysis?run_id=…`` (vue ``position_trade_analysis``
+    agrégée par run_id, côté Symfony) et renvoie l'agrégat tel quel. Le PnL n'est
+    jamais recalculé ici : Symfony est la source de vérité des valeurs.
+
+    Fail-safe : toute défaillance (erreur réseau, HTTP != 200, JSON invalide, forme
+    inattendue) retombe sur un agrégat vide EXPLICITE (``available=False``) — jamais
+    une exception, pour que ``GET /runs/{run_id}/outcome`` ne renvoie pas de 500.
+
+    NB : ``run_id`` doit déjà être borné à 64 caractères par l'appelant (règle de
+    réconciliation : c'est la largeur de ``position_trade_analysis.run_id``, et le
+    runner Symfony tronque X-Run-Id à la même longueur avant de le stocker).
+    """
+    url = f"{base_url.rstrip('/')}/api/positions/analysis"
+    try:
+        response = await client.get(url, params={"run_id": run_id})
+    except httpx.HTTPError:
+        return _empty_run_outcome(run_id, available=False)
+
+    if response.status_code != 200:
+        return _empty_run_outcome(run_id, available=False)
+
+    try:
+        body = response.json()
+    except ValueError:
+        return _empty_run_outcome(run_id, available=False)
+
+    if not isinstance(body, dict):
+        return _empty_run_outcome(run_id, available=False)
+
+    return body
+
+
 async def run_persisted_set(
     client: httpx.AsyncClient,
     base_url: str,
