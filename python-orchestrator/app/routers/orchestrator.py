@@ -464,16 +464,25 @@ def _seed_claim(
     idempotency_key: Optional[str],
     now: datetime,
     ttl_seconds: int,
-) -> tuple[str, Run, Optional[str]]:
+) -> tuple[str, Run, Optional[str], Optional[str]]:
     """Pose/reprend le claim « en vol » d'un run (SAFE-002).
 
-    Retourne ``(run_id_persisté, run, yield_reason)``. ``yield_reason`` vaut ``None``
-    quand le claim est obtenu (création ou reprise). Sinon, un run concurrent a changé
-    l'état **entre le pré-check et le seed** (course TOCTOU) et l'appelant doit céder
-    sans dispatcher ni écraser la ligne partagée :
+    Retourne ``(run_id_persisté, run, yield_reason, claim_reason)``. ``yield_reason``
+    vaut ``None`` quand le claim est obtenu (création ou reprise). Sinon, un run
+    concurrent a changé l'état **entre le pré-check et le seed** (course TOCTOU) et
+    l'appelant doit céder sans dispatcher ni écraser la ligne partagée :
 
     - ``"replay"`` : le gagnant a déjà **finalisé en succès** → on rejoue le succès ;
     - ``"in_flight"`` : un run concurrent est **en vol** (claim non périmé) → réplique.
+
+    ``claim_reason`` (OBS-001, observation d'audit pure) qualifie le claim OBTENU
+    (``yield_reason is None``) d'après l'état PRÉ-claim **réellement classé** par
+    ``claim_run`` (la ligne fraîche verrouillée — pas le résultat du pré-check, qui
+    peut rater la ligne dans une course SAFE-002) :
+
+    - ``"reclaim"`` : reprise d'un ``running`` périmé (TTL dépassé, process tué) ;
+    - ``"resume"`` : reprise d'un terminal non-ok ;
+    - ``None`` : création d'une ligne neuve (aucune existante) ou cession (yield).
 
     Transaction courte (committée par l'appelant AVANT les appels Symfony, jamais
     maintenue pendant les ~900s, comme les locks SAFE-001) : pose la ligne ``Run``
@@ -492,6 +501,14 @@ def _seed_claim(
         dashboard_id if repositories.get_dashboard(session, dashboard_id) is not None else None
     )
 
+    # OBS-001 : capture la cause du claim OBTENU depuis l'état PRÉ-claim que
+    # `claim_run` classe réellement (la ligne fraîche verrouillée passée à
+    # `_classify`). C'est la seule source fiable : le pré-check `existing_run` peut
+    # rater la ligne dans une course SAFE-002, et `preserved_results` est vide pour
+    # une reprise « full-failure » (aucun RunSet réussi). `_classify` n'est invoqué
+    # que si une ligne existe ; un INSERT neuf laisse donc `claim_reason` à None.
+    observed: Dict[str, Optional[str]] = {"reason": None}
+
     def _classify(existing: Run) -> Optional[str]:
         # Mêmes court-circuits que le pré-check, mais ré-évalués sur l'état FRAIS et
         # VERROUILLÉ (le gagnant d'une course a pu, depuis, finaliser ou rester en vol).
@@ -499,6 +516,11 @@ def _seed_claim(
             return "replay"  # succès finalisé → rejouer (ne PAS écraser/ré-exécuter)
         if existing.status == RUN_STATUS_RUNNING and not _claim_expired(existing, now):
             return "in_flight"  # un autre run est en vol → répliquer
+        # Claim repris : on note la cause (audit) avant de céder la reprise au claim.
+        if existing.status == RUN_STATUS_RUNNING:
+            observed["reason"] = "reclaim"  # `running` périmé (TTL dépassé)
+        elif existing.status in TERMINAL_RUN_STATUSES:
+            observed["reason"] = "resume"  # terminal non-ok
         return None  # terminal non-ok / claim périmé → reprise/reclaim
 
     persisted, yield_reason = repositories.claim_run(
@@ -517,7 +539,10 @@ def _seed_claim(
         ),
         classify=_classify,
     )
-    return persisted.run_id, persisted, yield_reason
+    # Une cession (yield_reason non None) n'est pas une reprise : on n'expose alors
+    # aucune `claim_reason` (l'appelant émettra le short-circuit replay/in_flight).
+    claim_reason = observed["reason"] if yield_reason is None else None
+    return persisted.run_id, persisted, yield_reason, claim_reason
 
 
 def _symbols_overlap(a: Any, b: Any) -> bool:
@@ -769,16 +794,11 @@ async def run_orchestrator(
             existing_run, list(repositories.list_run_sets(session, existing_run.run_id))
         )
 
-    # OBS-001 : capture l'état « claim périmé » AVANT le claim. `_seed_claim` met à
-    # jour la MÊME instance ORM `existing_run` (reclaim → nouveau `expires_at` futur) :
-    # évalué après, `_claim_expired(existing_run, now)` serait toujours faux et le
-    # `run_short_circuit` reason="reclaim" ne serait jamais émis pour une reprise de
-    # claim périmé. On fige donc le verdict ici, sur l'état pré-claim.
-    reclaim_detected = (
-        existing_run is not None
-        and existing_run.status == RUN_STATUS_RUNNING
-        and _claim_expired(existing_run, now)
-    )
+    # OBS-001 : la cause d'un éventuel court-circuit SAFE-002 « reprise » (resume /
+    # reclaim) est déterminée par le claim lui-même (`_seed_claim` → `claim_reason`),
+    # depuis l'état PRÉ-claim réellement classé — fiable même quand le pré-check
+    # `existing_run` rate la ligne (course) ou quand aucun RunSet n'a été conservé.
+    claim_reason: Optional[str] = None
 
     # SAFE-001 : sérialisation per-(profil, symbole) ENTRE runs/process via des locks
     # DB. Le garde intra-run (`conflicting_live_ids`) ne couvre qu'un seul batch ; deux
@@ -801,7 +821,7 @@ async def run_orchestrator(
     # distinct (legacy par idempotency_key) : on réutilise le run_id réellement persisté
     # pour les locks ET la finalisation (claim et finalisation portent le même run_id).
     if has_anchor:
-        run_id, claim_row, yield_reason = _seed_claim(
+        run_id, claim_row, yield_reason, claim_reason = _seed_claim(
             session,
             run_id=run_id,
             dashboard_id=dashboard_id,
@@ -841,18 +861,20 @@ async def run_orchestrator(
         has_anchor=has_anchor,
     )
 
-    # OBS-001 : court-circuits SAFE-002 qui RE-EXÉCUTENT (le run_id est désormais
-    # celui réellement persisté par le claim). `resume` : reprise d'un terminal
-    # non-ok, les RunSet déjà réussis sont conservés et non re-dispatchés.
-    # `reclaim` : un `running` périmé (process tué) est repris comme un run neuf.
-    if preserved_results:
+    # OBS-001 : court-circuits SAFE-002 qui RE-EXÉCUTENT, fondés sur la cause réelle
+    # du claim (`claim_reason`), pas sur le pré-check ni sur `preserved_results` :
+    #  - `resume` : reprise d'un terminal non-ok — émis MÊME si aucun RunSet n'a été
+    #    conservé (reprise « full-failure » → `preserved_sets=0`) ;
+    #  - `reclaim` : reprise d'un `running` périmé (process tué), y compris quand le
+    #    pré-check a raté la ligne et que seul le claim l'a résolue (course SAFE-002).
+    if claim_reason == "resume":
         run_audit.emit(
             run_audit.RUN_SHORT_CIRCUIT,
             run_id=run_id,
             reason="resume",
             preserved_sets=len(preserved_results),
         )
-    elif reclaim_detected:
+    elif claim_reason == "reclaim":
         run_audit.emit(
             run_audit.RUN_SHORT_CIRCUIT,
             run_id=run_id,

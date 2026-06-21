@@ -2068,3 +2068,70 @@ def test_audit_reclaim_emits_short_circuit(orchestrator_env, monkeypatch, audit_
     # La reprise ré-exécute : run_started + dispatch + finished également présents.
     assert _by_event(audit_records, "run_started")
     assert _by_event(audit_records, "run_finished")
+
+
+def test_audit_resume_emits_short_circuit_even_with_no_preserved_sets(
+    orchestrator_env, monkeypatch, audit_records
+):
+    # Reprise « full-failure » : terminal non-ok SANS aucun RunSet réussi → preserved
+    # vide, mais c'est bien le chemin resume de SAFE-002. L'audit doit l'émettre
+    # (preserved_sets=0), pas le confondre avec un run neuf.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    session.add(Run(run_id="run_resume_obs", idempotency_key="resobs", ok=False, status="failed"))
+    session.commit()
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    body = client.post(
+        "/orchestrator/run",
+        json={"dashboard_id": str(dash.id), "idempotency_key": "resobs"},
+    ).json()
+
+    assert body["run_id"] == "run_resume_obs"
+    short = _by_event(audit_records, "run_short_circuit")
+    assert [s.audit["reason"] for s in short] == ["resume"]
+    assert short[0].audit["preserved_sets"] == 0
+    assert short[0].run_id == "run_resume_obs"
+
+
+def test_audit_reclaim_emits_short_circuit_on_claim_race(
+    orchestrator_env, monkeypatch, audit_records
+):
+    # Course SAFE-002 : le pré-check rate la ligne `running` périmée, seul le claim la
+    # résout (et la reclaim). reason="reclaim" doit quand même être audité — le verdict
+    # vient du claim, pas du pré-check.
+    from datetime import datetime, timedelta, timezone
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    now = datetime.now(timezone.utc)
+    session.add(
+        Run(
+            run_id="run_reclaim_race", idempotency_key="rcrace", ok=False, status="running",
+            total_calls=0, success_count=0, failed_count=0,
+            started_at=now - timedelta(hours=2), expires_at=now - timedelta(seconds=1),
+        )
+    )
+    session.commit()
+
+    real_resolve = orch.repositories.resolve_run
+    calls = {"n": 0}
+
+    def _racing_resolve(session_, run_id_, key=None):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else real_resolve(session_, run_id_, key)
+
+    monkeypatch.setattr(orch.repositories, "resolve_run", _racing_resolve)
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    body = client.post(
+        "/orchestrator/run",
+        json={"dashboard_id": str(dash.id), "idempotency_key": "rcrace"},
+    ).json()
+
+    assert body["run_id"] == "run_reclaim_race"
+    short = _by_event(audit_records, "run_short_circuit")
+    assert [s.audit["reason"] for s in short] == ["reclaim"]
+    assert short[0].run_id == "run_reclaim_race"
