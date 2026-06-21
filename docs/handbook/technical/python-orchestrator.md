@@ -61,15 +61,33 @@ ce snapshot à chaque `POST /api/mtf/run` dans le champ `open_state_snapshot` av
 `sync_tables=false`. Côté Symfony, la présence du snapshot **court-circuite**
 totalement le fetch exchange (priorité : snapshot > `sync_tables=true` > filtre).
 
-**Fail-closed live (phase actuelle)** : tant que la readiness live n'est pas
-livrée, `assert_set_persistable` interdit la persistance de **tout** set live
-(`dry_run=false`, tous exchanges/environnements). Le runner DB-backed applique la
-même politique de bout en bout : **tout set effectivement live est skippé**
-(marqué en erreur, aucun `POST /api/mtf/run`), **même sur un exchange autorisé et
-même avec un snapshot disponible**, car la seule façon d'obtenir une ligne live
-est de contourner l'API. Seul un override run-level `dry_run=true` rend un set
-exécutable (en dry). Ce garde-fou sera relâché quand la readiness live
-(SAFE-001/SAFE-002, TM-001) sera livrée.
+**Couche unique de garde-fous live (SAFE-003)** : toute la politique « ce set
+peut-il s'exécuter en live ? » vit dans **un seul module** fail-closed,
+`app/services/live_guard.py`, exposant `assess_live(exchange, market_type,
+environment, dry_run, settings) -> LiveDecision`. La persistance
+(`assert_set_persistable`), les `OrchestratorSet` en mémoire
+(`assert_live_allowed`) et le runner (`_dispatch_set`) **délèguent** à cette
+source unique — plus de logique live dupliquée entre `schemas` et le runner. La
+décision suit une hiérarchie : (1) dry-run ⇒ autorisé ; (2) **bannissement
+permanent** OKX/Hyperliquid ⇒ refusé, *même interrupteur activé + exchange
+allow-listé* ; (3) **interrupteur** `ORCHESTRATION_LIVE_ENABLED` OFF (défaut) ⇒
+refusé ; (4) exchange hors **allow-list** `ORCHESTRATION_LIVE_EXCHANGES` (défaut
+vide) ⇒ refusé ; (5) sinon ⇒ autorisé. Chaque refus porte un `reason`/`code`
+stable (`live_forbidden_exchange`, `live_not_enabled`,
+`live_exchange_not_allowlisted`, `open_state_unavailable`) versé dans
+`RunSet.error` / `last_json`.
+
+**Le live reste désactivé par défaut** : la config livrée garde l'interrupteur
+OFF et l'allow-list vide, donc **tout set effectivement live est skippé** (marqué
+en erreur, aucun `POST /api/mtf/run`), **même sur un exchange autorisé et même
+avec un snapshot disponible** — comportement identique à avant SAFE-003. SAFE-003
+ne fait que rendre l'activation *possible, explicite, auditable et testée* (via
+l'interrupteur + l'allow-list + le snapshot d'état ouvert présent), sans la
+réactiver. Seul un override run-level `dry_run=true` rend un set exécutable (en
+dry), quel que soit l'état de l'interrupteur (prééminence sécurité). La
+persistance d'un set `dry_run=false` n'est autorisée que si `assess_live`
+l'autorise (mêmes gardes) : une ligne stockée ne peut jamais déclencher un live
+que le runner refuserait, et inversement.
 
 **Fail-closed live (post-readiness)** : si le fetch du snapshot échoue pour un
 couple, les sets **live** (`dry_run=false`) de ce couple sont marqués en erreur et
@@ -596,10 +614,21 @@ Avant tout run :
   `running` non périmé renvoie l'**état en vol** (`ok=false`, `status="running"`, pas
   de dispatch), un `running` périmé est **reclaim**. Le live reste désactivé. Cf.
   *Statuts de run et idempotence à l'exécution (SAFE-002)*. ;
-- ne lancer aucun set live tant que la readiness live n'est pas livrée (tout set
-  `dry_run=false` est skippé par le runner, en miroir de `assert_set_persistable`) ;
-- ne pas autoriser OKX live (garde permanente, conservée après readiness) ;
-- ne pas autoriser Hyperliquid live (garde permanente, conservée après readiness) ;
+- **couche unique de garde-fous live** (SAFE-003, livré) : `app/services/live_guard.py`
+  (`assess_live`) est la **source unique** consommée par la persistance
+  (`assert_set_persistable`), les `OrchestratorSet` en mémoire (`assert_live_allowed`)
+  et le runner (`_dispatch_set`). Hiérarchie fail-closed : bannissements permanents
+  OKX/Hyperliquid (jamais relâchés) > interrupteur `ORCHESTRATION_LIVE_ENABLED`
+  (défaut OFF) > allow-list `ORCHESTRATION_LIVE_EXCHANGES` (défaut vide) > prérequis
+  runtime (snapshot d'état ouvert présent). **Le live reste désactivé par défaut**
+  (interrupteur OFF dans la config livrée) ; persistance ↔ runtime cohérents (une ligne
+  ne peut déclencher que ce que le runner exécuterait). Cf. *Couche unique de garde-fous
+  live (SAFE-003)* ;
+- ne lancer aucun set live tant que l'interrupteur n'est pas explicitement activé
+  (tout set `dry_run=false` skippé par le runner par défaut, en miroir de
+  `assert_set_persistable`) ;
+- ne pas autoriser OKX live (garde permanente, conservée même interrupteur activé) ;
+- ne pas autoriser Hyperliquid live (garde permanente, conservée même interrupteur activé) ;
 - garder `workers=1` côté Symfony au début ;
 - borner la concurrence globale ;
 - refuser les valeurs dangereuses de workers, concurrence ou nombre de contrats ;
@@ -625,6 +654,7 @@ Avant tout run :
 | PY-006 ✅ | Exposer l'historique des runs en lecture | Livré : endpoints `GET` en lecture seule du dernier JSON global et par set (`/runs`, `/runs/{run_id}`, `/runs/{run_id}/sets/{set_id}`, `/dashboards/{id}/runs`, `/dashboards/{id}/runs/latest`) ; vue allégée paginée pour les listes, détail complet `last_json` + sets. |
 | SAFE-001 ✅ | Locks d'orchestration par symbole et profil | Livré : table `orchestration_locks` (clé `lock_key` UNIQUE), acquisition tout-ou-rien par set avant dispatch (transaction courte, reclaim des locks expirés, skip fail-closed `locked: …`), libération en fin de set, purge des expirés au démarrage. Prérequis readiness live ; ne réactive pas le live. |
 | SAFE-002 ✅ | Idempotence des runs et des sets | Livré : statut non terminal `running` + claim précoce (`runs.expires_at` = TTL de claim, transaction courte) ; court-circuit selon l'état du run existant — replay (terminal success), reprise des sets non réussis (terminal non-ok), réplique en vol (`running` non périmé), reclaim (`running` périmé). Réutilise `record_run`/savepoints et le calcul de TTL SAFE-001. Migration `0003_run_claim_expires_at`. Ne réactive pas le live. |
+| SAFE-003 ✅ | Centraliser et durcir les garde-fous live | Livré : module unique `app/services/live_guard.py` (`assess_live -> LiveDecision`) consommé par `assert_set_persistable`, `assert_live_allowed` et le runner `_dispatch_set` (plus de logique live dupliquée schemas ↔ runner). Hiérarchie fail-closed : bannissements permanents OKX/Hyperliquid (jamais relâchés) > interrupteur `ORCHESTRATION_LIVE_ENABLED` (défaut OFF) > allow-list `ORCHESTRATION_LIVE_EXCHANGES` (défaut vide) > snapshot d'état ouvert présent. `reason`/`code` stables par cause. Persistance ↔ runtime cohérents. **Le live reste désactivé par défaut** : aucune réactivation effective, seule l'activation devient possible/auditable/testée. Pas de migration. |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 
