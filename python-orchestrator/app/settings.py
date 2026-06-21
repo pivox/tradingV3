@@ -161,6 +161,13 @@ class Settings:
     # ``ORCHESTRATION_LOG_LEVEL`` (défaut INFO). Validé au démarrage : une valeur
     # inconnue lève (pas de repli silencieux). Cf. ``app/logging_config.py``.
     log_level: str = "INFO"
+    # Collecte des métriques d'exécution par set (OBS-002), pilotée par
+    # ``ORCHESTRATION_METRICS_ENABLED`` (défaut **ON**). Validé au démarrage
+    # (jeu fermé true/false…, comme ``ORCHESTRATION_LIVE_ENABLED``) : une valeur
+    # invalide lève plutôt qu'un repli silencieux. À OFF, les ``observe_*`` du
+    # registre deviennent des no-op et ``GET /metrics`` renvoie un snapshot vide.
+    # Cf. ``app/services/run_metrics.py``.
+    metrics_enabled: bool = True
     # Origines autorisées par CORS pour les appels navigateur du cockpit (UI-001).
     # Défauts = front servi par CRA (:3000) ou nginx (:8082). Surchargeable via
     # CORS_ALLOW_ORIGINS (CSV) ; ``"*"`` autorise toute origine.
@@ -202,6 +209,7 @@ class Settings:
             live_enabled=_bool_env("ORCHESTRATION_LIVE_ENABLED", cls.live_enabled),
             live_exchanges=_live_exchanges_env("ORCHESTRATION_LIVE_EXCHANGES", cls.live_exchanges),
             log_level=_log_level_env("ORCHESTRATION_LOG_LEVEL", cls.log_level),
+            metrics_enabled=_bool_env("ORCHESTRATION_METRICS_ENABLED", cls.metrics_enabled),
             cors_allow_origins=_csv_env("CORS_ALLOW_ORIGINS", cls.cors_allow_origins),
         )
 

@@ -41,7 +41,7 @@ from app.schemas import (
     RunStatus,
     RunSummary,
 )
-from app.services import run_audit
+from app.services import run_audit, run_metrics
 from app.services.live_guard import (
     OPEN_STATE_UNAVAILABLE,
     OPEN_STATE_UNAVAILABLE_REASON,
@@ -192,6 +192,9 @@ def _no_sets_response(run_id: str) -> RunResponse:
         success=0,
         failed=0,
     )
+    # OBS-002 : un run sans set compte comme un run terminé `no_sets` (débit de
+    # runs par status), sans aucun compteur de set/dispatch.
+    run_metrics.observe_run_finished(status="no_sets", total_calls=0, success=0, failed=0)
     return RunResponse(
         ok=False,
         run_id=run_id,
@@ -583,6 +586,21 @@ def _conflicting_live_set_ids(mtf_sets: List[Any], force_dry_run: bool) -> set:
     return conflicting
 
 
+def _set_labels(a_set: Any) -> Dict[str, str]:
+    """Labels de métriques d'un set (OBS-002), cardinalité bornée.
+
+    Limité à ``exchange`` / ``market_type`` / ``mtf_profile`` (valeurs d'enum
+    résolues, normalisées en chaîne) — décision produit OBS-002 : ni ``set_id``
+    ni ``dashboard_id`` (qui feraient exploser le nombre de séries). Mêmes valeurs
+    que celles versées dans l'audit/Symfony, donc réconciliables.
+    """
+    return {
+        "exchange": str(getattr(a_set.exchange, "value", a_set.exchange)),
+        "market_type": str(getattr(a_set.market_type, "value", a_set.market_type)),
+        "mtf_profile": str(getattr(a_set.mtf_profile, "value", a_set.mtf_profile)),
+    }
+
+
 def _now() -> datetime:
     """Horloge de l'orchestrateur (UTC, déterministe).
 
@@ -663,6 +681,9 @@ async def _collect_snapshots(
                 market_type=market_type,
                 ok=True,
             )
+            run_metrics.observe_snapshot_fetch(
+                exchange=exchange, market_type=market_type, ok=True
+            )
         except OpenStateUnavailableError:
             # Pas de snapshot fiable pour ce couple : on ne met rien en cache.
             run_audit.emit(
@@ -673,6 +694,9 @@ async def _collect_snapshots(
                 market_type=market_type,
                 ok=False,
                 code=OPEN_STATE_UNAVAILABLE,
+            )
+            run_metrics.observe_snapshot_fetch(
+                exchange=exchange, market_type=market_type, ok=False
             )
             continue
     return snapshots
@@ -935,6 +959,9 @@ async def run_orchestrator(
                     set_id=a_set.set_id,
                     code=_SKIP_CODE_CONFLICTING_LIVE,
                 )
+                run_metrics.observe_set_skipped(
+                    code=_SKIP_CODE_CONFLICTING_LIVE, **_set_labels(a_set)
+                )
                 return {
                     "set_id": a_set.set_id,
                     "ok": False,
@@ -953,6 +980,9 @@ async def run_orchestrator(
                     level="warning",
                     set_id=a_set.set_id,
                     code=_SKIP_CODE_LOCKED,
+                )
+                run_metrics.observe_set_skipped(
+                    code=_SKIP_CODE_LOCKED, **_set_labels(a_set)
                 )
                 return {
                     "set_id": a_set.set_id,
@@ -1006,6 +1036,9 @@ async def run_orchestrator(
                     set_id=a_set.set_id,
                     code=decision.code,
                 )
+                run_metrics.observe_set_skipped(
+                    code=decision.code, **_set_labels(a_set)
+                )
                 return {
                     "set_id": a_set.set_id,
                     "ok": False,
@@ -1025,6 +1058,9 @@ async def run_orchestrator(
                     level="warning",
                     set_id=a_set.set_id,
                     code=OPEN_STATE_UNAVAILABLE,
+                )
+                run_metrics.observe_set_skipped(
+                    code=OPEN_STATE_UNAVAILABLE, **_set_labels(a_set)
                 )
                 return {
                     "set_id": a_set.set_id,
@@ -1048,6 +1084,9 @@ async def run_orchestrator(
                     set_id=a_set.set_id,
                     code=_SKIP_CODE_NOT_MATERIALIZED,
                 )
+                run_metrics.observe_set_skipped(
+                    code=_SKIP_CODE_NOT_MATERIALIZED, **_set_labels(a_set)
+                )
                 return {
                     "set_id": a_set.set_id,
                     "ok": False,
@@ -1066,6 +1105,7 @@ async def run_orchestrator(
                     set_id=a_set.set_id,
                     dry_run=effective_dry_run,
                 )
+                run_metrics.observe_set_dispatched(**_set_labels(a_set))
                 start = time.monotonic()
                 try:
                     result = await run_persisted_set(
@@ -1095,6 +1135,12 @@ async def run_orchestrator(
                     ok=bool(result.get("ok")),
                     business_status=result.get("business_status"),
                     duration_ms=result.get("duration_ms"),
+                )
+                run_metrics.observe_set_result(
+                    ok=bool(result.get("ok")),
+                    business_status=result.get("business_status"),
+                    duration_ms=result.get("duration_ms"),
+                    **_set_labels(a_set),
                 )
                 return result
 
@@ -1131,6 +1177,16 @@ async def run_orchestrator(
     run_audit.emit(
         run_audit.RUN_FINISHED,
         run_id=run_id,
+        status=status,
+        total_calls=summary.total_calls,
+        success=summary.success,
+        failed=summary.failed,
+    )
+    # OBS-002 : débit de runs par status. Les compteurs par set (dispatched /
+    # results / skipped) ont déjà été observés au fil du run ; sur un run nominal
+    # (sans skip ni reprise) `sets_dispatched` réconcilie avec `summary.total_calls`
+    # et `sets_result` (ok=true/false) avec `summary.success`/`summary.failed`.
+    run_metrics.observe_run_finished(
         status=status,
         total_calls=summary.total_calls,
         success=summary.success,

@@ -111,7 +111,9 @@ Avant d'autoriser une cadence 1m pour un dashboard ou un set, il faut valider :
 - idempotence ;
 - lock cross-profile ;
 - audit complet (la piste d'audit structurée minimale est livrée par OBS-001 ;
-  les métriques par set restent à venir, cf. OBS-002) ;
+  les **métriques d'exécution par set** sont livrées par OBS-002 — registre
+  in-process exposé en JSON via `GET /metrics`, cf. §*Métriques d'exécution
+  par set (OBS-002)* de `python-orchestrator.md`) ;
 - dry-run stable ;
 - absence de double soumission ;
 - SL attaché immédiatement ;

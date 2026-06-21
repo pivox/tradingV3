@@ -628,6 +628,44 @@ changer le comportement métier**.
   `logging`). Locks SAFE-001, idempotence SAFE-002 et garde-fous live SAFE-003
   restent intacts ; réponses HTTP inchangées.
 
+### Métriques d'exécution par set (OBS-002)
+
+OBS-001 fournit un **flux d'événements** et un **historique DB**, mais aucune
+**couche quantitative** prête à grapher/alerter. OBS-002 ajoute un **registre
+de métriques in-process** (`app/services/run_metrics.py`), alimenté aux **mêmes
+points d'instrumentation** qu'OBS-001 (`set_dispatched` / `set_result` /
+`set_skipped` / `snapshot_fetch` / `run_finished`) — pas de duplication de schéma,
+pas de redéfinition de cause métier.
+
+- **Sink** : **endpoint JSON dérivé** du registre — `GET /metrics`
+  (`app/routers/metrics.py`). Aucune migration, aucune écriture DB, aucune I/O
+  bloquante pendant les ~900 s d'appels Symfony ; le pattern transaction courte
+  du runner est inchangé.
+- **Métriques** :
+  - compteurs de **runs** par `status` (débit, par status terminal y compris
+    `no_sets`) ;
+  - compteurs de **sets** : `dispatched`, `results` (ok=true/false +
+    `business_status`), `skipped` (par `code` stable) ;
+  - compteurs de **snapshots** (`snapshot_fetch` ok / indisponible) ;
+  - **histogramme** de durée de dispatch (`set_result.duration_ms`, bornes ms
+    cumulées « le » + `+Inf` + somme).
+- **Labels** (cardinalité bornée, décision produit OBS-002) : `exchange`,
+  `market_type`, `mtf_profile` (+ `code` de skip, `business_status`, `status` de
+  run). **Ni `set_id` ni `dashboard_id`** (qui feraient exploser le nombre de
+  séries). Les `code`/`status` réutilisent les valeurs **stables** OBS-001/SAFE-003.
+- **Activation** : `ORCHESTRATION_METRICS_ENABLED` (défaut **ON**, validé au
+  démarrage comme `ORCHESTRATION_LIVE_ENABLED` — lève sur valeur invalide). À OFF,
+  les `observe_*` deviennent des no-op et `GET /metrics` renvoie un snapshot vide.
+- **Cohérence** : sur un run nominal (sans skip ni reprise), `sets.dispatched`
+  réconcilie avec `summary.total_calls` et `sets.results` (ok=true/false) avec
+  `summary.success` / `summary.failed`. Les skips réconcilient avec les `code`
+  audités.
+- **Fail-safe** : une erreur de métrique (état corrompu, sérialisation) est
+  absorbée (`try/except` interne) et ne fait **jamais** échouer ni ralentir un
+  run. **Aucun changement de comportement** : dispatch, décisions live/lock/
+  idempotence, réponses HTTP et forme de `last_json`/`RunSet` inchangés ; OBS-001
+  et SAFE-001/002/003 intacts.
+
 ## Garde-fous fonctionnels
 
 Avant tout run :
@@ -697,6 +735,7 @@ Avant tout run :
 | SAFE-002 ✅ | Idempotence des runs et des sets | Livré : statut non terminal `running` + claim précoce (`runs.expires_at` = TTL de claim, transaction courte) ; court-circuit selon l'état du run existant — replay (terminal success), reprise des sets non réussis (terminal non-ok), réplique en vol (`running` non périmé), reclaim (`running` périmé). Réutilise `record_run`/savepoints et le calcul de TTL SAFE-001. Migration `0003_run_claim_expires_at`. Ne réactive pas le live. |
 | SAFE-003 ✅ | Centraliser et durcir les garde-fous live | Livré : module unique `app/services/live_guard.py` (`assess_live -> LiveDecision`) consommé par `assert_set_persistable`, `assert_live_allowed` et le runner `_dispatch_set` (plus de logique live dupliquée schemas ↔ runner). Hiérarchie fail-closed : bannissements permanents OKX/Hyperliquid (jamais relâchés) > interrupteur `ORCHESTRATION_LIVE_ENABLED` (défaut OFF) > allow-list `ORCHESTRATION_LIVE_EXCHANGES` (défaut vide) > snapshot d'état ouvert présent. `reason`/`code` stables par cause. Persistance ↔ runtime cohérents. **Le live reste désactivé par défaut** : aucune réactivation effective, seule l'activation devient possible/auditable/testée. Pas de migration. |
 | OBS-001 ✅ | Audit des runs d'orchestration | Livré : couche d'audit structurée, fail-safe et corrélée par `run_id` (`app/services/run_audit.py`, `emit`) sur le logger `orchestrator.audit`, format **JSON line** sur stdout (`app/logging_config.py`), niveau piloté par `ORCHESTRATION_LOG_LEVEL` (défaut INFO, validé au démarrage). Points d'audit : `run_started`, `run_short_circuit` (replay/in_flight/resume/reclaim), `snapshot_fetch`, `set_skipped` (codes live_guard / locked / conflicting_live / open_state_unavailable), `set_dispatched`, `set_result`, `run_finished`. `code`/`reason` identiques à `RunSet.error` (source unique SAFE-003). Trace-id `X-Run-Id` propagé à Symfony. **Aucun changement de comportement** (SAFE-001/002/003 intacts, réponses HTTP inchangées). Pas de migration. |
+| OBS-002 ✅ | Métriques d'exécution par set | Livré : registre de métriques in-process (`app/services/run_metrics.py`) branché aux **mêmes points** qu'OBS-001 (`set_dispatched`/`set_result`/`set_skipped`/`snapshot_fetch`/`run_finished`). Compteurs (runs par status ; sets dispatched/results ok+`business_status`/skipped par `code` ; snapshots ok/indispo) + **histogramme** de durée de dispatch (`set_result.duration_ms`, bornes « le »). Sink = **endpoint JSON dérivé** `GET /metrics` (`app/routers/metrics.py`), aucune migration ni écriture DB. Labels **faible cardinalité** (`exchange`/`market_type`/`mtf_profile` + `code`/`business_status`/`status`), ni `set_id` ni `dashboard_id`. Activation `ORCHESTRATION_METRICS_ENABLED` (défaut ON, validé au démarrage). Réconcilie avec `summary`. **Fail-safe**, **aucun changement de comportement** (OBS-001 et SAFE-001/002/003 intacts, réponses HTTP inchangées). Pas de migration. |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 

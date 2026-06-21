@@ -70,6 +70,7 @@ Hors-scope (PR suivantes) :
 | `GET` | `/runs` | Liste les runs (`?dashboard_id=&limit=&offset=`) (PY-006). |
 | `GET` | `/runs/{run_id}` | Dernier JSON global d'un run + détail par set (PY-006). |
 | `GET` | `/runs/{run_id}/sets/{set_id}` | Dernier JSON d'un set (payload + réponse brute) (PY-006). |
+| `GET` | `/metrics` | Métriques d'exécution agrégées (compteurs + histogramme de durée), JSON dérivé du registre (OBS-002). |
 | `GET` | `/docs` | Swagger UI (OpenAPI). |
 
 ### Gestion des dashboards et sets (PY-002)
@@ -283,6 +284,7 @@ un service `postgres:15`.
 | `ORCHESTRATION_LIVE_ENABLED` | `false` | **Interrupteur d'activation live** (SAFE-003), défaut **OFF**. OFF ⇒ tout set `dry_run=false` est skippé fail-closed (comportement d'avant SAFE-003). Accepte `true/false`, `1/0`, `yes/no`, `on/off` ; toute autre valeur lève au démarrage. **Ne jamais livrer à `true` sans readiness runtime.** |
 | `ORCHESTRATION_LIVE_EXCHANGES` | *(vide)* | Allow-list CSV des exchanges autorisés live **quand l'interrupteur est ON** (SAFE-003). Normalisée en minuscules, dédupliquée ; chaque entrée doit être un exchange connu (sinon lève au démarrage). En pratique au plus `bitmart` (+ `fake` en simulation). OKX/Hyperliquid restent interdits **même listés** (bannissement permanent). |
 | `ORCHESTRATION_LOG_LEVEL` | `INFO` | **Niveau du log d'audit des runs** (OBS-001) sur le logger `orchestrator.audit`. Accepte `DEBUG/INFO/WARNING/ERROR/CRITICAL` (insensible à la casse) ; toute autre valeur lève au démarrage (comme `ORCHESTRATION_LOCK_TTL_SECONDS`). Cf. *Observabilité / Audit (OBS-001)*. |
+| `ORCHESTRATION_METRICS_ENABLED` | `true` | **Collecte des métriques d'exécution par set** (OBS-002), défaut **ON**. Accepte `true/false`, `1/0`, `yes/no`, `on/off` ; toute autre valeur lève au démarrage. À OFF, les compteurs/histogramme ne sont plus alimentés et `GET /metrics` renvoie un snapshot vide. Cf. *Métriques d'exécution (OBS-002)*. |
 
 Une valeur non entière, non booléenne, hors borne, un niveau de log inconnu ou un
 exchange inconnu lève une erreur explicite au démarrage (pas de repli silencieux
@@ -326,6 +328,56 @@ Symfony au run d'orchestration.
 interne et ne fait aucune I/O bloquante hors `logging` stdlib. **Aucun changement
 de comportement métier** : pas de nouvelle décision, locks SAFE-001 / idempotence
 SAFE-002 / garde-fous live SAFE-003 intacts, réponses HTTP inchangées.
+
+## Métriques d'exécution (OBS-002)
+
+OBS-001 donne un **flux d'événements** ; OBS-002 ajoute la **couche quantitative**
+prête à grapher/alerter. Un **registre de métriques in-process**
+(`app/services/run_metrics.py`) est alimenté aux **mêmes points** que l'audit
+(`set_dispatched` / `set_result` / `set_skipped` / `snapshot_fetch` /
+`run_finished`) et exposé en **JSON dérivé** via `GET /metrics`
+(`app/routers/metrics.py`) — aucune migration, aucune écriture DB.
+
+| Métrique | Type | Labels |
+| --- | --- | --- |
+| `runs` | compteur | `status` (y compris `no_sets`) |
+| `sets.dispatched` | compteur | `exchange`, `market_type`, `mtf_profile` |
+| `sets.results` | compteur | `exchange`, `market_type`, `mtf_profile`, `ok`, `business_status` |
+| `sets.skipped` | compteur | `code` (stable OBS-001/SAFE-003), `exchange`, `market_type`, `mtf_profile` |
+| `snapshots` | compteur | `exchange`, `market_type`, `ok` |
+| `dispatch_duration_ms` | histogramme | `exchange`, `market_type`, `mtf_profile` (bornes ms cumulées « le » + `+Inf` + somme) |
+
+**Cardinalité bornée** (décision produit OBS-002) : ni `set_id` ni `dashboard_id`
+en labels. **Réconciliation** : sur un run nominal (sans skip ni reprise),
+`sets.dispatched` = `summary.total_calls`, `sets.results` (ok=true/false) =
+`summary.success`/`summary.failed`.
+
+Exemple :
+
+```bash
+curl -s http://localhost:8099/metrics | jq .
+```
+
+```json
+{
+  "enabled": true,
+  "runs": [{"status": "success", "value": 12}],
+  "sets": {
+    "dispatched": [{"exchange": "bitmart", "market_type": "perpetual", "mtf_profile": "scalper_micro", "value": 34}],
+    "results": [{"exchange": "bitmart", "market_type": "perpetual", "mtf_profile": "scalper_micro", "ok": "true", "business_status": "success", "value": 31}],
+    "skipped": [{"code": "locked", "exchange": "bitmart", "market_type": "perpetual", "mtf_profile": "scalper_micro", "value": 2}]
+  },
+  "snapshots": [{"exchange": "bitmart", "market_type": "perpetual", "ok": "true", "value": 12}],
+  "dispatch_duration_ms": {"buckets": [100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000, 120000, 300000, 600000, 900000],
+    "series": [{"exchange": "bitmart", "market_type": "perpetual", "mtf_profile": "scalper_micro", "count": 31, "sum_ms": 26102, "buckets": {"100": 0, "250": 4, "500": 18, "...": "...", "+Inf": 31}}]}
+}
+```
+
+**Fail-safe** : une erreur de métrique (état corrompu, sérialisation) est absorbée
+(`try/except` interne) et ne fait jamais échouer ni ralentir un run. Désactivable
+via `ORCHESTRATION_METRICS_ENABLED=false`. **Aucun changement de comportement** :
+dispatch, décisions live/lock/idempotence, réponses HTTP et forme de
+`last_json`/`RunSet` inchangés ; OBS-001 et SAFE-001/002/003 intacts.
 
 ## Persistance (DB-001)
 
