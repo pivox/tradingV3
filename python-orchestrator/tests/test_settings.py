@@ -111,3 +111,34 @@ def test_live_exchanges_unknown_raises(monkeypatch):
     monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart,binance")
     with pytest.raises(SettingsError):
         Settings.from_env()
+
+
+# --- Niveau de log d'audit (OBS-001) ----------------------------------------
+
+
+def test_log_level_defaults_to_info(monkeypatch):
+    monkeypatch.delenv("ORCHESTRATION_LOG_LEVEL", raising=False)
+    assert Settings.from_env().log_level == "INFO"
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("debug", "DEBUG"),
+        ("INFO", "INFO"),
+        (" warning ", "WARNING"),
+        ("Error", "ERROR"),
+        ("critical", "CRITICAL"),
+    ],
+)
+def test_log_level_parsed_and_normalized(monkeypatch, raw, expected):
+    monkeypatch.setenv("ORCHESTRATION_LOG_LEVEL", raw)
+    assert Settings.from_env().log_level == expected
+
+
+def test_log_level_invalid_raises_at_startup(monkeypatch):
+    # Une valeur invalide lève au démarrage (comme ORCHESTRATION_LOCK_TTL_SECONDS),
+    # pas de repli silencieux sur le défaut.
+    monkeypatch.setenv("ORCHESTRATION_LOG_LEVEL", "verbose")
+    with pytest.raises(SettingsError):
+        Settings.from_env()

@@ -38,6 +38,38 @@ def _attach_schema_and_fks(engine) -> None:
 
 
 @pytest.fixture()
+def audit_records():
+    """Capture les ``LogRecord`` d'audit ``orchestrator.audit`` (OBS-001).
+
+    Attache un handler de test **directement** au logger d'audit (sa propagation
+    est coupée en prod pour éviter la double émission, donc ``caplog`` — branché
+    sur le root — ne le verrait pas). Les tests lisent ``record.event`` /
+    ``record.run_id`` / ``record.audit`` plutôt que le format brut.
+    """
+    import logging
+
+    from app.services.run_audit import AUDIT_LOGGER_NAME
+
+    logger = logging.getLogger(AUDIT_LOGGER_NAME)
+    records: list = []
+
+    class _Recorder(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Recorder()
+    handler.setLevel(logging.DEBUG)
+    previous_level = logger.level
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+
+@pytest.fixture()
 def db_session():
     """Session SQLite in-memory avec le schéma orchestration attaché."""
     from app.db.base import Base

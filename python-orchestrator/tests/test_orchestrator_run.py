@@ -158,8 +158,15 @@ class _FakeAsyncClient:
         self.get_calls.append({"url": url, "params": params or {}})
         return _FakeResponse(self._open_state_status, self._open_state)
 
-    async def post(self, url: str, json: Dict[str, Any] | None = None) -> _FakeResponse:
-        self.post_calls.append({"url": url, "json": json or {}})
+    async def post(
+        self,
+        url: str,
+        json: Dict[str, Any] | None = None,
+        headers: Dict[str, Any] | None = None,
+    ) -> _FakeResponse:
+        # OBS-001 : on enregistre aussi les en-têtes pour vérifier la propagation
+        # du trace-id `X-Run-Id` sur `POST /api/mtf/run`.
+        self.post_calls.append({"url": url, "json": json or {}, "headers": headers or {}})
         return _FakeResponse(self._mtf_status, self._mtf_body)
 
 
@@ -1269,7 +1276,7 @@ def test_queued_lock_ttl_covers_worst_case_run(orchestrator_env, monkeypatch):
     captured: Dict[str, Any] = {}
 
     class _CapturingClient(_FakeAsyncClient):
-        async def post(self, url, json=None):
+        async def post(self, url, json=None, headers=None):
             symbols = (json or {}).get("symbols") or []
             if symbols:
                 row = session.scalars(
@@ -1277,7 +1284,7 @@ def test_queued_lock_ttl_covers_worst_case_run(orchestrator_env, monkeypatch):
                 ).first()
                 if row is not None:
                     captured[symbols[0]] = row.expires_at
-            return await super().post(url, json=json)
+            return await super().post(url, json=json, headers=headers)
 
     _install_fake_client(monkeypatch, _CapturingClient())
 
@@ -1344,8 +1351,13 @@ class _PerSymbolClient(_FakeAsyncClient):
         super().__init__(**kw)
         self.fail_symbols = set(fail_symbols)
 
-    async def post(self, url: str, json: Dict[str, Any] | None = None) -> _FakeResponse:
-        self.post_calls.append({"url": url, "json": json or {}})
+    async def post(
+        self,
+        url: str,
+        json: Dict[str, Any] | None = None,
+        headers: Dict[str, Any] | None = None,
+    ) -> _FakeResponse:
+        self.post_calls.append({"url": url, "json": json or {}, "headers": headers or {}})
         symbols = (json or {}).get("symbols") or []
         if url.endswith("/api/mtf/run") and symbols and symbols[0] in self.fail_symbols:
             return _FakeResponse(200, {"status": "partial_success", "data": {"errors": ["boom"]}})
@@ -1562,12 +1574,12 @@ def test_claim_writes_running_row_with_ttl_during_dispatch(orchestrator_env, mon
     captured: Dict[str, Any] = {}
 
     class _CapturingClient(_FakeAsyncClient):
-        async def post(self, url, json=None):
+        async def post(self, url, json=None, headers=None):
             row = session.scalars(select(Run).where(Run.run_id == "run_rk6")).first()
             if row is not None:
                 captured["status"] = row.status
                 captured["expires_at"] = row.expires_at
-            return await super().post(url, json=json)
+            return await super().post(url, json=json, headers=headers)
 
     _install_fake_client(monkeypatch, _CapturingClient())
 
@@ -1733,3 +1745,204 @@ def test_concurrent_claim_loser_replays_when_winner_finalized_success(orchestrat
     # La ligne de succès du gagnant est intacte (non écrasée vers running).
     session.expire_all()
     assert session.get(Run, "run_rk10").status == "success"
+
+
+# --------------------------------------------------------------------------
+# Audit des runs (OBS-001)
+# --------------------------------------------------------------------------
+
+
+def _events(records) -> List[str]:
+    """Liste ordonnée des noms d'événements d'audit capturés."""
+    return [r.event for r in records]
+
+
+def _by_event(records, event: str) -> List[Any]:
+    """Records d'audit d'un événement donné."""
+    return [r for r in records if r.event == event]
+
+
+def test_audit_nominal_run_emits_started_then_finished_correlated(
+    orchestrator_env, monkeypatch, audit_records
+):
+    # Un run nominal émet run_started … run_finished, tous corrélés par le MÊME
+    # run_id (celui réellement persisté/renvoyé).
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    body = client.post(
+        "/orchestrator/run",
+        json={"dashboard_id": str(dash.id), "idempotency_key": "obs_nominal"},
+    ).json()
+    run_id = body["run_id"]
+
+    events = _events(audit_records)
+    assert events[0] == "run_started"
+    assert events[-1] == "run_finished"
+    # Tout est corrélé par le run_id persisté/renvoyé.
+    assert {r.run_id for r in audit_records} == {run_id}
+
+    finished = _by_event(audit_records, "run_finished")[0]
+    assert finished.audit["status"] == "success"
+    assert finished.audit["total_calls"] == 1
+    assert finished.audit["success"] == 1
+    assert finished.audit["failed"] == 0
+
+
+def test_audit_emits_set_dispatched_and_result(orchestrator_env, monkeypatch, audit_records):
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    client.post(
+        "/orchestrator/run",
+        json={"dashboard_id": str(dash.id), "idempotency_key": "obs_disp"},
+    )
+
+    dispatched = _by_event(audit_records, "set_dispatched")
+    assert [r.audit["set_id"] for r in dispatched] == ["a"]
+    result = _by_event(audit_records, "set_result")
+    assert len(result) == 1
+    assert result[0].audit["set_id"] == "a"
+    assert result[0].audit["ok"] is True
+    assert result[0].audit["business_status"] == "success"
+    assert isinstance(result[0].audit["duration_ms"], int)
+    # snapshot_fetch émis pour le couple (exchange, market_type).
+    assert _by_event(audit_records, "snapshot_fetch")
+
+
+def test_audit_trace_id_propagated_to_symfony_header(orchestrator_env, monkeypatch):
+    # OBS-001 (décision produit : inclus) : le run_id est propagé en en-tête
+    # X-Run-Id sur POST /api/mtf/run.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post(
+        "/orchestrator/run",
+        json={"dashboard_id": str(dash.id), "idempotency_key": "obs_trace"},
+    ).json()
+
+    posts = _mtf_posts(fake)
+    assert len(posts) == 1
+    assert posts[0]["headers"].get("X-Run-Id") == body["run_id"]
+
+
+def test_audit_live_off_emits_set_skipped_live_not_enabled(
+    orchestrator_env, monkeypatch, audit_records
+):
+    # Interrupteur live OFF (défaut) : un set live est skippé fail-closed avec le
+    # code stable live_not_enabled (relayé depuis live_guard, pas redéfini).
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "live", exchange="bitmart", dry_run=False, symbols=("BTCUSDT",))
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)})
+
+    skipped = _by_event(audit_records, "set_skipped")
+    assert len(skipped) == 1
+    assert skipped[0].audit["set_id"] == "live"
+    assert skipped[0].audit["code"] == "live_not_enabled"
+    # Skip => aucun set_dispatched pour ce set.
+    assert _by_event(audit_records, "set_dispatched") == []
+
+
+def test_audit_okx_live_emits_set_skipped_forbidden_exchange(
+    orchestrator_env, monkeypatch, audit_records
+):
+    # OKX live : bannissement permanent => code live_forbidden_exchange.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "okx", exchange="okx", dry_run=False, symbols=("BTCUSDT",))
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)})
+
+    skipped = _by_event(audit_records, "set_skipped")
+    assert len(skipped) == 1
+    assert skipped[0].audit["code"] == "live_forbidden_exchange"
+
+
+def test_audit_locked_set_emits_set_skipped_locked(orchestrator_env, monkeypatch, audit_records):
+    # Un couple (profil, symbole) déjà verrouillé par un autre run => set_skipped
+    # avec le motif locked.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "locked", exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_lock(session, "run_other", "BTCUSDT")
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)})
+
+    skipped = _by_event(audit_records, "set_skipped")
+    assert len(skipped) == 1
+    assert skipped[0].audit["set_id"] == "locked"
+    assert skipped[0].audit["code"] == "locked"
+
+
+def test_audit_replay_emits_short_circuit_without_dispatch(
+    orchestrator_env, monkeypatch, audit_records
+):
+    # Un replay SAFE-002 émet run_short_circuit et n'émet PAS set_dispatched.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    payload = {"dashboard_id": str(dash.id), "idempotency_key": "obs_replay"}
+    client.post("/orchestrator/run", json=payload)  # 1er run (succès persisté)
+    audit_records.clear()  # on n'observe que le 2e run (replay)
+
+    body = client.post("/orchestrator/run", json=payload).json()
+
+    short = _by_event(audit_records, "run_short_circuit")
+    assert len(short) == 1
+    assert short[0].audit["reason"] == "replay"
+    assert short[0].run_id == body["run_id"]
+    # Replay : aucun nouveau dispatch.
+    assert _by_event(audit_records, "set_dispatched") == []
+
+
+def test_audit_no_sets_emits_run_finished(orchestrator_env, monkeypatch, audit_records):
+    client, _session = orchestrator_env
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    client.post("/orchestrator/run")  # aucun dashboard => no_sets
+
+    finished = _by_event(audit_records, "run_finished")
+    assert len(finished) == 1
+    assert finished[0].audit["status"] == "no_sets"
+
+
+def test_audit_emit_failure_does_not_fail_run(orchestrator_env, monkeypatch):
+    # Fail-safe : une erreur interne d'audit (logger qui lève sur tout appel) ne
+    # doit JAMAIS faire échouer le run.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", symbols=("BTCUSDT",))
+    _install_fake_client(monkeypatch, _FakeAsyncClient())
+
+    class _BoomLogger:
+        def log(self, *_a, **_k):
+            raise RuntimeError("boom")
+
+        def exception(self, *_a, **_k):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(orch.run_audit, "_logger", _BoomLogger())
+
+    body = client.post(
+        "/orchestrator/run",
+        json={"dashboard_id": str(dash.id), "idempotency_key": "obs_failsafe"},
+    ).json()
+
+    # Le run aboutit normalement malgré l'audit en échec.
+    assert body["ok"] is True
+    assert body["status"] == "success"
+    assert body["summary"] == {"total_calls": 1, "success": 1, "failed": 0}
