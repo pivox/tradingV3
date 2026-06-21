@@ -249,6 +249,7 @@ un service `postgres:15`.
 | `MAX_CONCURRENCY` | `2` | Concurrence globale bornée, ≥ 1 (PY-002+). |
 | `DATABASE_URL` | `postgresql+psycopg://postgres:password@trading-app-db:5432/trading_app` | URL SQLAlchemy de la base orchestration (DB-001). |
 | `ORCHESTRATION_DB_SCHEMA` | `orchestration` | Schéma PostgreSQL dédié (DB-001). Identifiant SQL simple validé (`^[A-Za-z_][A-Za-z0-9_]*$`). |
+| `ORCHESTRATION_LOCK_TTL_SECONDS` | `1800` | Marge (s) anti-deadlock des locks d'orchestration par `(profil, symbole)` (SAFE-001), ≥ 1. Le TTL effectif = pire temps de paroi du run (vagues `max_concurrency` × timeout Symfony) + cette marge, pour qu'un set en file n'expire pas avant son dispatch. |
 
 Une valeur non entière ou hors borne lève une erreur explicite au démarrage
 (pas de repli silencieux sur le défaut).
@@ -269,16 +270,41 @@ Tables (`app/db/models.py`) :
 | `orchestration_sets` | Sets prêts à exécuter (miroir d'`OrchestratorSet` + `payload` préparé). |
 | `runs` | Runs déclenchés + **dernier JSON global** (`last_json`). |
 | `run_sets` | Résultat par set + **dernier JSON par set** (`response_json`). |
+| `orchestration_locks` | Locks par `(mtf_profile, exchange, market_type, symbol)` sérialisant deux runs concurrents (**SAFE-001**). |
 
 La couche DB (`app/db/`) est **découplée** des routers/services : le câblage
 applicatif (CRUD, lecture des sets au run) est l'objet de **PY-002**.
+
+### Lock per-symbole/profil (SAFE-001)
+
+`POST /orchestrator/run` acquiert, **avant le dispatch de chaque set**, un lock
+persistant (`orchestration_locks`) par symbole — clé canonique
+`{profile}|{exchange}|{market_type}|{symbol}`, l'**unicité de `lock_key` réalisant
+l'exclusion mutuelle**. Deux runs concurrents (overlap du cron Temporal, ou front +
+cron) ne peuvent donc pas traiter le même couple `(profil, symbole)` en même temps.
+
+- **Acquisition tout ou rien par set**, dans une transaction **courte committée
+  avant** les appels Symfony (jamais maintenue pendant les ~900s). Un set dont un
+  symbole est déjà verrouillé par un run actif est **skippé fail-closed**
+  (`ok=false`, `locked: <key> held by run <id>`) ; les autres sets continuent.
+- **Reclaim des locks expirés** + purge au démarrage : pas de deadlock si un process
+  est tué avant la libération. Le TTL effectif couvre le pire temps de paroi du run
+  (vagues `max_concurrency` × timeout Symfony) + la marge `ORCHESTRATION_LOCK_TTL_SECONDS`,
+  donc un set resté en file derrière le sémaphore n'expire jamais avant son dispatch.
+- **Libération** dans le `finally` de chaque set (succès/échec/exception).
+- Appliqué à **tous** les sets `mtf_run` (inoffensif en dry-run) ; **le live reste
+  désactivé** (SAFE-001 ne relâche pas le skip « live execution not yet enabled »).
+  L'`idempotency_key` des runs (SAFE-002) n'est pas modifié.
+
+La migration Alembic `0002_orchestration_locks` crée la table ; elle s'applique via
+`alembic upgrade head` (cf. *Migrations*).
 
 ### Migrations
 
 ```bash
 cd python-orchestrator
 export DATABASE_URL=postgresql+psycopg://postgres:password@trading-app-db:5432/trading_app
-alembic upgrade head        # crée le schéma `orchestration` + les 4 tables
+alembic upgrade head        # crée le schéma `orchestration` + les 5 tables
 alembic downgrade base      # supprime les tables (laisse le schéma)
 alembic upgrade head --sql  # prévisualise le DDL sans l'appliquer
 ```

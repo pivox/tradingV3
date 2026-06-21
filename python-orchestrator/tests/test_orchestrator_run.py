@@ -946,3 +946,270 @@ def test_no_sets_run_is_not_persisted(orchestrator_env, monkeypatch):
 
     session.expire_all()
     assert session.get(Run, run_id) is None
+
+
+# --------------------------------------------------------------------------
+# SAFE-001 — locks d'orchestration par (profil, symbole)
+# --------------------------------------------------------------------------
+
+
+def _seed_lock(
+    session,
+    run_id: str,
+    symbol: str,
+    *,
+    profile: str = "regular",
+    exchange: str = "bitmart",
+    market_type: str = "perpetual",
+    ttl_seconds: int = 1800,
+    acquired_offset_seconds: int = 0,
+):
+    """Insère un ``OrchestrationLock`` détenu par ``run_id`` (simule un run concurrent).
+
+    ``acquired_offset_seconds`` décale ``acquired_at`` dans le passé ; combiné à
+    ``ttl_seconds`` il permet de produire un lock déjà expiré (TTL dépassé).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.db import repositories as repo
+    from app.db.models import OrchestrationLock
+
+    acquired = datetime.now(timezone.utc) - timedelta(seconds=acquired_offset_seconds)
+    lock = OrchestrationLock(
+        lock_key=repo.build_lock_key(profile, exchange, market_type, symbol),
+        mtf_profile=profile,
+        exchange=exchange,
+        market_type=market_type,
+        symbol=symbol,
+        run_id=run_id,
+        acquired_at=acquired,
+        expires_at=acquired + timedelta(seconds=ttl_seconds),
+    )
+    session.add(lock)
+    session.commit()
+    return lock
+
+
+def _all_locks(session):
+    from app.db.models import OrchestrationLock
+
+    session.expire_all()
+    return session.scalars(select(OrchestrationLock)).all()
+
+
+def test_lock_acquired_then_released_after_successful_run(orchestrator_env, monkeypatch):
+    # Acquisition réussie -> set exécuté (POST mtf/run) -> lock libéré en fin de run.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is True
+    assert body["summary"]["success"] == 1
+    # Le set a bien été dispatché.
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1
+    # Et plus aucun lock résiduel : libéré dans le finally du set.
+    assert _all_locks(session) == []
+
+
+def test_set_skipped_when_symbol_locked_by_other_run(orchestrator_env, monkeypatch):
+    # Un couple (profil, symbole) déjà verrouillé par un autre run actif => set skippé
+    # (ok=false, message "locked"), les AUTRES sets du run continuent.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "locked", exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "free", exchange="bitmart", symbols=("ETHUSDT",))
+    # Run concurrent détenant déjà BTCUSDT (regular/bitmart/perpetual).
+    _seed_lock(session, "run_other", "BTCUSDT")
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["summary"]["total_calls"] == 2
+    assert body["summary"]["success"] == 1
+    assert body["summary"]["failed"] == 1
+
+    # Seul le set "free" (ETHUSDT) est dispatché ; "locked" est skippé sans POST.
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1
+
+    run_id = body["run_id"]
+    rs_locked = session.scalars(
+        select(RunSet).where(RunSet.run_id == run_id, RunSet.set_id == "locked")
+    ).one()
+    assert rs_locked.ok is False
+    assert rs_locked.error.startswith("locked: ")
+    assert "held by run run_other" in rs_locked.error
+
+    # Le lock du run concurrent reste intact ; aucun lock de ce run ne subsiste.
+    remaining = _all_locks(session)
+    assert {l.run_id for l in remaining} == {"run_other"}
+    assert {l.symbol for l in remaining} == {"BTCUSDT"}
+
+
+def test_expired_lock_is_reclaimed_and_set_runs(orchestrator_env, monkeypatch):
+    # Un lock expiré (TTL dépassé) ne bloque pas : il est reclaim, le set s'exécute.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+    # Lock détenu par un run mort, acquis il y a 2h avec un TTL de 10s => expiré.
+    _seed_lock(session, "run_dead", "BTCUSDT", ttl_seconds=10, acquired_offset_seconds=7200)
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is True
+    assert body["summary"]["success"] == 1
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1
+    # Lock du run mort reclaim puis libéré : table vide en fin de run.
+    assert _all_locks(session) == []
+
+
+def test_partial_lock_leaves_no_residual_lock(orchestrator_env, monkeypatch):
+    # Acquisition « tout ou rien » : un set [BTCUSDT, ETHUSDT] dont ETHUSDT est déjà
+    # verrouillé est skippé, et NE laisse aucun lock résiduel sur BTCUSDT.
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "multi", exchange="bitmart", symbols=("BTCUSDT", "ETHUSDT"))
+    _seed_lock(session, "run_other", "ETHUSDT")
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 1, "success": 0, "failed": 1}
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 0
+
+    # Seul le lock concurrent ETHUSDT subsiste : pas de BTCUSDT résiduel.
+    remaining = _all_locks(session)
+    assert {(l.run_id, l.symbol) for l in remaining} == {("run_other", "ETHUSDT")}
+
+
+def test_lock_released_even_when_set_fails(orchestrator_env, monkeypatch):
+    # Libération garantie dans le finally même si le set échoue (erreur métier).
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+    _install_fake_client(
+        monkeypatch,
+        _FakeAsyncClient(mtf_status=500, mtf_body={"status": "error", "message": "boom"}),
+    )
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"]["failed"] == 1
+    # Échec métier => le lock est tout de même libéré (aucun lock résiduel).
+    assert _all_locks(session) == []
+
+
+def test_lock_released_even_on_dispatch_exception(orchestrator_env, monkeypatch):
+    # Libération garantie dans le finally même si le dispatch lève (HTTPError caught).
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+
+    fake = _FakeAsyncClient()
+
+    async def _raise(*_a, **_k):
+        raise __import__("httpx").HTTPError("connection reset")
+
+    fake.post = _raise  # type: ignore[assignment]
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"]["failed"] == 1
+    # Exception de dispatch => lock libéré quand même.
+    assert _all_locks(session) == []
+
+
+def test_queued_lock_ttl_covers_worst_case_run(orchestrator_env, monkeypatch):
+    # Régression (review #176) : le TTL d'un lock doit couvrir le PIRE temps de paroi
+    # du run (vagues de `max_concurrency` * timeout Symfony) + marge anti-deadlock,
+    # sinon un set resté en file derrière le sémaphore pourrait voir son lock expirer
+    # AVANT son dispatch et être reclaim par un run concurrent (exclusion défaite).
+    # On observe `expires_at` PENDANT le dispatch (lock encore détenu).
+    from datetime import datetime, timedelta, timezone
+
+    from app.db.models import OrchestrationLock
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "b", exchange="bitmart", symbols=("ETHUSDT",))
+    _seed_set(session, dash.id, "c", exchange="bitmart", symbols=("XRPUSDT",))
+
+    base = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(orch, "_now", lambda: base)
+
+    captured: Dict[str, Any] = {}
+
+    class _CapturingClient(_FakeAsyncClient):
+        async def post(self, url, json=None):
+            symbols = (json or {}).get("symbols") or []
+            if symbols:
+                row = session.scalars(
+                    select(OrchestrationLock).where(OrchestrationLock.symbol == symbols[0])
+                ).first()
+                if row is not None:
+                    captured[symbols[0]] = row.expires_at
+            return await super().post(url, json=json)
+
+    _install_fake_client(monkeypatch, _CapturingClient())
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+    assert body["ok"] is True
+
+    # 3 sets, max_concurrency par défaut = 2 => 2 vagues ; TTL = 2*900 + 1800 = 3600s.
+    expected = base + timedelta(seconds=2 * 900 + 1800)
+    assert captured  # au moins un lock observé pendant le dispatch
+    for exp in captured.values():
+        # SQLite peut renvoyer un datetime naïf : on normalise le fuseau pour comparer.
+        exp_utc = exp if exp.tzinfo else exp.replace(tzinfo=timezone.utc)
+        assert exp_utc == expected
+
+
+def test_lock_uses_injected_clock_for_expiry(orchestrator_env, monkeypatch):
+    # Le `now` de l'orchestrateur est injectable (orch._now) : un lock dont l'expiry
+    # est antérieur au `now` injecté est reclaim, postérieur il bloque.
+    from datetime import datetime, timedelta, timezone
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+
+    base = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
+    # Lock qui expire 1s AVANT le now injecté => reclaimable.
+    from app.db import repositories as repo
+    from app.db.models import OrchestrationLock
+
+    session.add(
+        OrchestrationLock(
+            lock_key=repo.build_lock_key("regular", "bitmart", "perpetual", "BTCUSDT"),
+            mtf_profile="regular", exchange="bitmart", market_type="perpetual",
+            symbol="BTCUSDT", run_id="run_old",
+            acquired_at=base - timedelta(hours=1),
+            expires_at=base - timedelta(seconds=1),
+        )
+    )
+    session.commit()
+
+    monkeypatch.setattr(orch, "_now", lambda: base)
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+    assert body["ok"] is True
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1

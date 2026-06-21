@@ -1,11 +1,13 @@
-"""Modèles ORM des tables d'orchestration (DB-001).
+"""Modèles ORM des tables d'orchestration (DB-001, SAFE-001).
 
-Quatre tables alignées sur la cible documentée :
+Cinq tables alignées sur la cible documentée :
 
 - ``dashboards``           : configurations d'orchestration ;
 - ``orchestration_sets``   : sets prêts à exécuter (cf. ``OrchestratorSet``) ;
 - ``runs``                 : runs déclenchés + dernier JSON global ;
-- ``run_sets``             : résultat par set + dernier JSON par set.
+- ``run_sets``             : résultat par set + dernier JSON par set ;
+- ``orchestration_locks``  : locks d'orchestration par (profil, exchange,
+  market_type, symbole) sérialisant deux runs concurrents (SAFE-001).
 
 Les colonnes JSON utilisent ``JSONB`` sur PostgreSQL et retombent sur ``JSON``
 sur SQLite (tests). Aucun branchement avec les routers/services existants :
@@ -176,3 +178,49 @@ class RunSet(Base):
     )
 
     run: Mapped[Run] = relationship(back_populates="run_sets")
+
+
+class OrchestrationLock(Base):
+    """Lock d'orchestration par couple ``(profil, symbole)`` (SAFE-001).
+
+    Sérialise deux exécutions concurrentes (overlap du cron Temporal, ou front +
+    cron) qui cibleraient le même ``(mtf_profile, exchange, market_type, symbol)``.
+    Sans ce lock partagé en base, l'activation future du live exposerait à des
+    soumissions dupliquées : le garde intra-run (``_conflicting_live_set_ids``) ne
+    couvre qu'un seul batch, pas deux runs/process distincts.
+
+    L'exclusion mutuelle est réalisée par la **contrainte UNIQUE sur ``lock_key``** :
+    deux runs qui tentent d'insérer la même clé entrent en conflit ; seul le premier
+    l'obtient. Le lock est acquis avant le dispatch d'un set et libéré à sa fin
+    (succès comme échec). ``expires_at`` est un TTL anti-deadlock : un lock dont le
+    titulaire a été tué (process killé avant le ``finally`` de libération) est
+    *reclaim* par le run suivant une fois expiré.
+
+    NB : ce lock est posé pour **tous** les sets ``mtf_run`` (pas seulement les sets
+    live). La sérialisation per-symbole/profil est inoffensive en dry-run et rend
+    l'infra testable dès maintenant, alors que le live reste désactivé.
+    """
+
+    __tablename__ = "orchestration_locks"
+    __table_args__ = (
+        # La purge des locks expirés balaie ``expires_at`` : index dédié pour
+        # éviter un seq scan. Nom aligné sur la migration (anti-drift autogenerate).
+        Index("ix_orchestration_locks_expires_at", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    # Clé canonique d'exclusion mutuelle : ``{profile}|{exchange}|{market_type}|{symbol}``
+    # (cf. ``repositories.build_lock_key``). UNIQUE => mutex partagé entre runs/process.
+    lock_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    # Composantes dénormalisées (lisibilité / requêtes ad hoc / purge ciblée).
+    mtf_profile: Mapped[str] = mapped_column(String(32), nullable=False)
+    exchange: Mapped[str] = mapped_column(String(32), nullable=False)
+    market_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Titulaire courant : libère ses locks par ``run_id`` à la fin du set.
+    run_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    # TTL anti-deadlock : passé cette date, le lock est reclaimable par un autre run.
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

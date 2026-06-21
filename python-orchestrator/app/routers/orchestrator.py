@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -30,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.db import repositories
 from app.db.engine import get_session
-from app.db.models import OrchestrationSet, Run, RunSet
+from app.db.models import OrchestrationLock, OrchestrationSet, Run, RunSet
 from app.schemas import (
     Action,
     LIVE_FORBIDDEN_EXCHANGES,
@@ -349,6 +350,56 @@ def _conflicting_live_set_ids(mtf_sets: List[Any], force_dry_run: bool) -> set:
     return conflicting
 
 
+def _now() -> datetime:
+    """Horloge de l'orchestrateur (UTC, déterministe).
+
+    Aucune contrainte Temporal ici (contrairement au workflow) : on lit l'heure
+    système. Indirection dédiée pour pouvoir l'injecter dans les tests (monkeypatch
+    de ``orch._now``) sans figer ``datetime.now`` globalement.
+    """
+    return datetime.now(timezone.utc)
+
+
+def _lock_specs_for_set(
+    a_set: Any, run_id: str, now: datetime, ttl_seconds: int
+) -> List[OrchestrationLock]:
+    """Construit un ``OrchestrationLock`` par symbole concret d'un set (SAFE-001).
+
+    Symboles normalisés en MAJUSCULES (comme ``_symbols_overlap``) et dédupliqués ;
+    ``exchange``/``market_type`` normalisés comme Symfony (via ``snapshot_key``) ;
+    ``mtf_profile`` normalisé (casse/espaces). Un set sans symbole concret (univers
+    complet) ne produit AUCUN lock : il ne sera de toute façon pas dispatché
+    (``run_persisted_set`` exige une sélection matérialisée), donc il n'y a rien à
+    sérialiser per-symbole.
+    """
+    exchange, market_type = snapshot_key(a_set)
+    raw_profile = getattr(a_set.mtf_profile, "value", a_set.mtf_profile)
+    profile = raw_profile.strip().lower() if isinstance(raw_profile, str) else str(raw_profile)
+    expires_at = now + timedelta(seconds=ttl_seconds)
+    seen: set = set()
+    locks: List[OrchestrationLock] = []
+    for raw in a_set.symbols or []:
+        if not isinstance(raw, str):
+            continue
+        symbol = raw.strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        locks.append(
+            OrchestrationLock(
+                lock_key=repositories.build_lock_key(profile, exchange, market_type, symbol),
+                mtf_profile=profile,
+                exchange=exchange,
+                market_type=market_type,
+                symbol=symbol,
+                run_id=run_id,
+                acquired_at=now,
+                expires_at=expires_at,
+            )
+        )
+    return locks
+
+
 async def _collect_snapshots(
     client: httpx.AsyncClient,
     base_url: str,
@@ -420,14 +471,57 @@ async def run_orchestrator(
     # trade live ; on les rejette avant dispatch.
     conflicting_live_ids = _conflicting_live_set_ids(mtf_sets, force_dry_run)
 
-    # Détache les sets et clôt la transaction de lecture AVANT les appels Symfony
-    # (jusqu'à 900s) : sinon la connexion PostgreSQL resterait « idle in
-    # transaction » pendant toute l'attente réseau (risque d'épuisement du pool /
-    # timeouts idle sous charge). Les colonnes déjà chargées restent lisibles sur
-    # les instances détachées (`expire_on_commit=False`, aucune relation lazy
-    # accédée pendant le run) ; `_persist_run` rouvre une transaction fraîche.
-    session.expunge_all()
+    # SAFE-001 : sérialisation per-(profil, symbole) ENTRE runs/process via des locks
+    # DB. Le garde intra-run (`conflicting_live_ids`) ne couvre qu'un seul batch ; deux
+    # runs concurrents (overlap du cron Temporal, ou front + cron) ne se voient pas
+    # sans lock partagé en base. On pose donc, pour chaque set, un lock par symbole
+    # (clé UNIQUE = mutex) AVANT le dispatch, dans la transaction de lecture courte
+    # qui sera committée juste après (jamais maintenue pendant les ~900s d'appels
+    # Symfony). Politique : appliqué à TOUS les sets `mtf_run` (inoffensif en dry-run,
+    # le live restant désactivé), sauf ceux déjà rejetés par le garde intra-run.
+    # Acquisition « tout ou rien » par set ; un set dont un symbole est déjà verrouillé
+    # par un run actif est skippé fail-closed (cohérent avec les autres skips du runner).
+    lock_now = _now()
+    # Balayage des locks expirés au démarrage : libère les fuites d'un process tué
+    # avant son `finally` de libération (anti-deadlock via TTL).
+    repositories.purge_expired_locks(session, lock_now)
+    # TTL effectif : tous les locks d'un run partagent ce `lock_now`, mais un set
+    # peut rester en file derrière le sémaphore (`max_concurrency`) bien après
+    # l'acquisition. Si son `expires_at` tombait avant son dispatch, un run concurrent
+    # pourrait le purger/reclaim et dispatcher le MÊME (profil, exchange, market, symbole)
+    # — l'exclusion mutuelle SAFE-001 serait défaite. On dimensionne donc le TTL pour
+    # couvrir le pire temps de paroi du run (chaque vague de `max_concurrency` sets peut
+    # durer jusqu'au timeout Symfony) + la marge anti-deadlock configurée : aucun lock en
+    # file n'expire avant la fin de son set, tout en gardant une expiration finie en cas
+    # de crash. (Le `finally` libère de toute façon chaque lock dès la fin de son set.)
+    concurrency = max(1, settings.max_concurrency)
+    waves = math.ceil(len(mtf_sets) / concurrency)
+    effective_ttl_seconds = int(waves * _HTTP_TIMEOUT) + settings.lock_ttl_seconds
+    locked_out: Dict[str, str] = {}
+    set_lock_keys: Dict[str, List[str]] = {}
+    for a_set in mtf_sets:
+        if a_set.set_id in conflicting_live_ids:
+            continue  # déjà rejeté, jamais dispatché : rien à verrouiller
+        locks = _lock_specs_for_set(a_set, run_id, lock_now, effective_ttl_seconds)
+        if not locks:
+            continue  # univers complet / aucun symbole concret : rien à sérialiser
+        conflict = repositories.acquire_set_locks(session, locks, lock_now)
+        if conflict is not None:
+            key, holder = conflict
+            locked_out[a_set.set_id] = f"locked: {key} held by run {holder}"
+        else:
+            set_lock_keys[a_set.set_id] = [lock.lock_key for lock in locks]
+
+    # Persiste la purge + les locks acquis, PUIS détache les sets et clôt la
+    # transaction de lecture AVANT les appels Symfony (jusqu'à 900s) : sinon la
+    # connexion PostgreSQL resterait « idle in transaction » pendant toute l'attente
+    # réseau (risque d'épuisement du pool / timeouts idle sous charge). L'ordre
+    # commit→expunge importe : `expunge_all()` avant le commit jetterait les INSERT de
+    # locks en attente. Les colonnes déjà chargées restent lisibles sur les instances
+    # détachées (`expire_on_commit=False`, aucune relation lazy accédée pendant le
+    # run) ; `_persist_run` rouvre une transaction fraîche.
     session.commit()
+    session.expunge_all()
 
     started_at = datetime.now(timezone.utc)
 
@@ -448,6 +542,32 @@ async def run_orchestrator(
                     "payload_sent": None,
                     "duration_ms": None,
                 }
+            # SAFE-001 : un set dont un symbole est déjà verrouillé par un autre run
+            # actif est skippé fail-closed (aucun lock acquis pour lui : rien à
+            # libérer ici). Les autres sets du run continuent normalement.
+            if a_set.set_id in locked_out:
+                return {
+                    "set_id": a_set.set_id,
+                    "ok": False,
+                    "status": None,
+                    "body": locked_out[a_set.set_id],
+                    "payload_sent": None,
+                    "duration_ms": None,
+                }
+            try:
+                return await _dispatch_set(a_set)
+            finally:
+                # SAFE-001 : libération des locks de CE set, quoi qu'il arrive (succès,
+                # échec métier, skip fail-closed, exception). Le bloc delete+commit ne
+                # contient aucun `await` : il s'exécute atomiquement vis-à-vis des autres
+                # coroutines (ordonnancement coopératif), donc partager la session de
+                # requête entre les `_execute` concurrents est sûr.
+                lock_keys = set_lock_keys.get(a_set.set_id)
+                if lock_keys:
+                    repositories.release_locks(session, run_id=run_id, lock_keys=lock_keys)
+                    session.commit()
+
+        async def _dispatch_set(a_set: Any) -> Dict[str, Any]:
             snapshot = snapshots.get(snapshot_key(a_set))
             effective_dry_run = a_set.dry_run or force_dry_run
             exchange = getattr(a_set.exchange, "value", a_set.exchange)

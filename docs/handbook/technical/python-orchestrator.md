@@ -434,8 +434,53 @@ Doctrine de Symfony (qui n'introspecte que `public`).
 | `orchestration_sets` | Sets prêts à exécuter (miroir d'`OrchestratorSet`, dont `sync_tables`, `symbols`, `contracts_limit`, et le `payload` préparé). |
 | `runs` | Runs déclenchés (`run_id`, statut, compteurs, idempotency_key) + **dernier JSON global** (`last_json`). |
 | `run_sets` | Détail par set d'un run (payload envoyé, réponse Symfony, statut, erreur, durée) + **dernier JSON par set** (`response_json`). |
+| `orchestration_locks` | Locks d'orchestration par `(mtf_profile, exchange, market_type, symbol)` sérialisant deux runs concurrents (**SAFE-001**). |
 
 DB-001 ne livre que la couche schéma (modèles, migration, moteur/session, repositories).
+
+### Locks d'orchestration (SAFE-001)
+
+La table `orchestration_locks` empêche deux exécutions concurrentes (overlap du
+cron Temporal `BUFFER_ONE`, ou front + cron) de traiter le **même couple
+`(mtf_profile, exchange, market_type, symbol)`** en même temps. Le garde intra-run
+(`_conflicting_live_set_ids`) ne couvre qu'un seul batch ; sans lock partagé en
+base, l'activation future du live exposerait à des soumissions dupliquées sur un
+même instrument. SAFE-001 est un **prérequis** au relâchement de la readiness live
+(avec SAFE-002/SAFE-003) ; il **ne réactive pas le live** (tout set `dry_run=false`
+reste skippé par le runner).
+
+| Colonne | Rôle |
+| --- | --- |
+| `lock_key` (UNIQUE) | Clé canonique `{profile}\|{exchange}\|{market_type}\|{symbol}` — **c'est la contrainte d'unicité qui réalise l'exclusion mutuelle**. |
+| `mtf_profile`, `exchange`, `market_type`, `symbol` | Composantes dénormalisées (exchange/market_type normalisés comme Symfony, symbole en MAJUSCULES comme `_symbols_overlap`). |
+| `run_id` | Titulaire courant ; libère ses locks par `run_id` à la fin du set. |
+| `acquired_at`, `expires_at` (indexé) | TTL anti-deadlock. `expires_at` = pire temps de paroi du run (`ceil(n_sets / max_concurrency)` × timeout Symfony) + marge `ORCHESTRATION_LOCK_TTL_SECONDS` (défaut 1800s), pour qu'un set resté en file n'expire jamais avant son dispatch. |
+
+**Acquisition** (avant le dispatch de chaque set, dans une transaction courte
+committée **avant** les appels Symfony — jamais maintenue pendant les ~900s) :
+pour chaque set on dérive un `lock_key` **par symbole** (symboles normalisés
+UPPERCASE), puis on insère sous `SAVEPOINT` (rattrapage `IntegrityError`,
+compatible SQLite/PostgreSQL). Un lock **expiré** (`expires_at <= now`, comparaison
+côté SQL) est *reclaim* (supprimé) avant l'insertion. L'acquisition est **tout ou
+rien** par set : si un symbole du set est déjà détenu par un run actif, les locks
+déjà pris pour ce set sont relâchés et le set est **skippé fail-closed**
+(`ok=false`, `body="locked: <key> held by run <id>"`), tandis que les autres sets
+du run continuent.
+
+**Libération** : dans le `finally` de chaque set (succès, échec métier ou
+exception), les locks détenus par ce `run_id` sont supprimés. Un **balayage des
+locks expirés au démarrage** du run (`purge_expired_locks`) évite les fuites si un
+process est tué avant son `finally`.
+
+**Périmètre** : le lock est posé pour **tous** les sets `mtf_run` (pas seulement
+les sets live) — l'infra est ainsi testable dès maintenant, la sérialisation
+per-symbole/profil étant inoffensive en dry-run. Un set à `symbols` vide (univers
+complet) ne pose aucun lock : il n'est de toute façon pas dispatché
+(`run_persisted_set` exige une sélection matérialisée). Le `now` est lu via
+`datetime.now(timezone.utc)` (aucune contrainte Temporal ici) et injectable en test.
+
+> Hors-scope SAFE-001 : l'idempotence des runs (`runs.idempotency_key`, **SAFE-002**)
+> n'est pas modifiée.
 
 **PY-002** câble la couche DB dans une API REST de **configuration** des dashboards et des
 sets (CRUD), sous le préfixe `/dashboards` :
@@ -468,6 +513,14 @@ est livrée par **PY-006** (`GET /runs`, `/runs/{run_id}`, `/runs/{run_id}/sets/
 Avant tout run :
 
 - ne jamais lancer deux sets live incompatibles sur le même symbole ;
+- **idempotence et lock par symbole** (SAFE-001, livré) : deux runs concurrents ne
+  peuvent pas traiter le même `(mtf_profile, exchange, market_type, symbol)` en même
+  temps. Un lock persistant (`orchestration_locks`, clé `lock_key` UNIQUE) est acquis
+  avant le dispatch de chaque set et libéré à sa fin (succès/échec/exception) ; un set
+  dont un symbole est déjà verrouillé par un run actif est skippé fail-closed
+  (`locked: <key> held by run <id>`). Appliqué à **tous** les sets `mtf_run` (le live
+  reste désactivé) ; TTL anti-deadlock + purge des locks expirés au démarrage. Cf.
+  *Locks d'orchestration (SAFE-001)*. ;
 - ne lancer aucun set live tant que la readiness live n'est pas livrée (tout set
   `dry_run=false` est skippé par le runner, en miroir de `assert_set_persistable`) ;
 - ne pas autoriser OKX live (garde permanente, conservée après readiness) ;
@@ -495,6 +548,7 @@ Avant tout run :
 | PY-004 ✅ | Générer le `payload` `/api/mtf/run` des sets | Livré : `payload` produit côté serveur (cœur partagé avec `build_mtf_payload`, `sync_tables`/`process_tp_sl=false`, sans snapshot) et régénéré à chaque create/update/refresh ; lecture seule via `SetRead`. |
 | PY-005 ✅ | Exécuter les sets persistés + persister les runs | Livré : `/orchestrator/run` lit les sets actifs du dashboard depuis la base, exécute chaque set via son `payload` persisté (+ snapshot runtime + override `dry_run`), et persiste le run (`Run.last_json` global + un `RunSet` par set avec `payload_sent`/`response_json`/`duration_ms`). `no_sets` reste `ok=false`. Garde-fou live défense-en-profondeur au run : OKX/Hyperliquid live (ligne ORM écrite hors API) sont fail-closed avant tout dispatch. |
 | PY-006 ✅ | Exposer l'historique des runs en lecture | Livré : endpoints `GET` en lecture seule du dernier JSON global et par set (`/runs`, `/runs/{run_id}`, `/runs/{run_id}/sets/{set_id}`, `/dashboards/{id}/runs`, `/dashboards/{id}/runs/latest`) ; vue allégée paginée pour les listes, détail complet `last_json` + sets. |
+| SAFE-001 ✅ | Locks d'orchestration par symbole et profil | Livré : table `orchestration_locks` (clé `lock_key` UNIQUE), acquisition tout-ou-rien par set avant dispatch (transaction courte, reclaim des locks expirés, skip fail-closed `locked: …`), libération en fin de set, purge des expirés au démarrage. Prérequis readiness live ; ne réactive pas le live. |
 | UI-001 | Ajouter cockpit minimal | Liste des sets, preview, dernier JSON, erreurs par set. |
 | TM-001 | Brancher Temporal en cron basique | Une activity appelle `/orchestrator/run` et échoue si `ok=false`. |
 

@@ -1,7 +1,7 @@
 """Smoke test PostgreSQL/Alembic du schéma orchestration (DB-001).
 
 Contrairement aux tests SQLite, ce test valide le **vrai contrat PostgreSQL** :
-cycle ``alembic upgrade head`` / ``downgrade base``, présence des 4 tables +
+cycle ``alembic upgrade head`` / ``downgrade base``, présence des 5 tables +
 ``alembic_version`` dans le schéma dédié, schéma ``public`` intact, et absence de
 drift entre les modèles ORM et la migration (``compare_metadata``).
 
@@ -26,7 +26,13 @@ pytestmark = pytest.mark.skipif(
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = "orchestration"
-EXPECTED_TABLES = {"dashboards", "orchestration_sets", "runs", "run_sets"}
+EXPECTED_TABLES = {
+    "dashboards",
+    "orchestration_sets",
+    "runs",
+    "run_sets",
+    "orchestration_locks",
+}
 
 
 def _alembic_config():

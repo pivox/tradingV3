@@ -9,11 +9,25 @@ def test_defaults(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("ORCHESTRATION_DB_SCHEMA", raising=False)
 
+    monkeypatch.delenv("ORCHESTRATION_LOCK_TTL_SECONDS", raising=False)
+
     settings = Settings.from_env()
     assert settings.max_concurrency == 2
     assert settings.port == 8099
     assert settings.database_url.startswith("postgresql+psycopg://")
     assert settings.db_schema == "orchestration"
+    assert settings.lock_ttl_seconds == 1800
+
+
+def test_lock_ttl_from_env(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATION_LOCK_TTL_SECONDS", "900")
+    assert Settings.from_env().lock_ttl_seconds == 900
+
+
+def test_lock_ttl_must_be_positive(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATION_LOCK_TTL_SECONDS", "0")
+    with pytest.raises(SettingsError):
+        Settings.from_env()
 
 
 def test_database_url_and_schema_from_env(monkeypatch):
