@@ -17,6 +17,7 @@ from app.services.symfony_client import (
     build_mtf_payload,
     effective_set_payload,
     fetch_open_state,
+    fetch_run_trade_outcome,
     fetch_selected_contracts,
     generate_set_payload,
     is_business_success,
@@ -696,3 +697,87 @@ def test_run_persisted_set_not_materialized_without_symbols():
     assert result["payload_sent"] is None
     assert "not materialized" in result["body"]
     assert calls == []  # aucun appel HTTP
+
+
+# ---------------------------------------------------------------------------
+# fetch_run_trade_outcome (OBS-003) — rapprochement run ↔ trades, fail-safe
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_run_trade_outcome_passes_through_symfony_aggregate():
+    aggregate = {
+        "run_id": "run_42",
+        "available": True,
+        "trade_count": 2,
+        "closed_count": 2,
+        "win_count": 1,
+        "loss_count": 1,
+        "win_rate": 0.5,
+        "pnl_usdt": 6.0,
+        "pnl_r": 0.5,
+        "by_symbol": [{"symbol": "BTCUSDT", "trade_count": 2}],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/positions/analysis"
+        assert request.url.params["run_id"] == "run_42"
+        return httpx.Response(200, json=aggregate)
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://symfony", "run_42")
+
+    outcome = asyncio.run(_run())
+    assert outcome == aggregate
+
+
+def test_fetch_run_trade_outcome_failsafe_on_http_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=request)
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://symfony", "run_x")
+
+    outcome = asyncio.run(_run())
+    # Source injoignable : agrégat vide explicite, jamais d'exception.
+    assert outcome["available"] is False
+    assert outcome["trade_count"] == 0
+    assert outcome["by_symbol"] == []
+
+
+def test_fetch_run_trade_outcome_failsafe_on_non_200():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"status": "error"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://symfony", "run_x")
+
+    outcome = asyncio.run(_run())
+    assert outcome["available"] is False
+    assert outcome["trade_count"] == 0
+
+
+def test_fetch_run_trade_outcome_failsafe_on_invalid_json():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not-json")
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://symfony", "run_x")
+
+    outcome = asyncio.run(_run())
+    assert outcome["available"] is False
+
+
+def test_fetch_run_trade_outcome_failsafe_on_non_dict_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=["unexpected"])
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://symfony", "run_x")
+
+    outcome = asyncio.run(_run())
+    assert outcome["available"] is False

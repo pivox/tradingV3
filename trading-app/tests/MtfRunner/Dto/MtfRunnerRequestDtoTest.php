@@ -116,6 +116,38 @@ final class MtfRunnerRequestDtoTest extends TestCase
         ])->openStateSnapshot);
     }
 
+    public function testFromArrayKeepsCorrelationRunId(): void
+    {
+        // OBS-003 : run_id de corrélation propagé par l'orchestrateur (X-Run-Id).
+        $request = MtfRunnerRequestDto::fromArray(['run_id' => 'run_20260621_abc123']);
+
+        self::assertSame('run_20260621_abc123', $request->runId);
+    }
+
+    public function testFromArrayDefaultsRunIdToNull(): void
+    {
+        self::assertNull(MtfRunnerRequestDto::fromArray([])->runId);
+    }
+
+    public function testFromArrayTreatsBlankRunIdAsAbsent(): void
+    {
+        self::assertNull(MtfRunnerRequestDto::fromArray(['run_id' => '   '])->runId);
+        self::assertNull(MtfRunnerRequestDto::fromArray(['run_id' => ['nope']])->runId);
+    }
+
+    public function testFromArrayTruncatesRunIdTo64Chars(): void
+    {
+        // L'orchestration run_id peut atteindre 255 (forme hachée = 68) alors que
+        // trade_lifecycle_event.run_id / position_trade_analysis.run_id est VARCHAR(64).
+        // On tronque de façon déterministe pour ne pas faire échouer l'INSERT et pour
+        // que les deux côtés du rapprochement (OBS-003) utilisent le même identifiant.
+        $longRunId = 'run_' . str_repeat('a', 80);
+        $request = MtfRunnerRequestDto::fromArray(['run_id' => $longRunId]);
+
+        self::assertSame(64, mb_strlen((string) $request->runId));
+        self::assertSame(mb_substr($longRunId, 0, 64), $request->runId);
+    }
+
     public function testFromArrayIgnoresNonArrayOpenStateSnapshot(): void
     {
         self::assertNull(MtfRunnerRequestDto::fromArray(['open_state_snapshot' => 'nope'])->openStateSnapshot);

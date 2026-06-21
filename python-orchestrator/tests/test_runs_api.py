@@ -327,3 +327,131 @@ def test_run_with_slash_bearing_key_is_fetchable(orchestrator_env, monkeypatch):
     assert "/" not in run_id
     assert client.get(f"/runs/{run_id}").status_code == 200
     assert client.get(f"/runs/{run_id}/sets/a").status_code == 200
+
+
+# --------------------------------------------------------------------------
+# GET /runs/{run_id}/outcome (OBS-003) — rapprochement run ↔ trades
+# --------------------------------------------------------------------------
+
+
+def _override_outcome(client_app, source):
+    """Surcharge le fetcher d'agrégat par un stub renvoyant ``source``.
+
+    ``source`` peut être un dict (réponse Symfony simulée) ou un callable
+    ``run_id -> dict`` pour inspecter le run_id réellement requêté.
+    """
+    from app.main import app
+    from app.routers.runs import get_outcome_fetcher
+
+    async def _fake_fetch(run_id: str) -> dict:
+        return source(run_id) if callable(source) else source
+
+    app.dependency_overrides[get_outcome_fetcher] = lambda: _fake_fetch
+    return get_outcome_fetcher
+
+
+def _clear_outcome_override(key):
+    from app.main import app
+
+    app.dependency_overrides.pop(key, None)
+
+
+def test_run_outcome_with_trades(orchestrator_env):
+    client, session = orchestrator_env
+    _seed_run(session, "run_o1")
+    aggregate = {
+        "run_id": "run_o1",
+        "available": True,
+        "trade_count": 3,
+        "closed_count": 3,
+        "open_count": 0,
+        "win_count": 2,
+        "loss_count": 1,
+        "win_rate": 0.6667,
+        "pnl_usdt": 12.0,
+        "pnl_r": 1.0,
+        "mfe_pct_avg": 2.0,
+        "mfe_pct_median": 2.0,
+        "mae_pct_avg": -1.5,
+        "mae_pct_median": -1.5,
+        "holding_time_sec_avg": 200.0,
+        "by_symbol": [{"symbol": "BTCUSDT", "trade_count": 2, "pnl_usdt": 6.0, "win_rate": 0.5}],
+    }
+    key = _override_outcome(client, aggregate)
+    try:
+        body = client.get("/runs/run_o1/outcome").json()
+    finally:
+        _clear_outcome_override(key)
+
+    assert body["run_id"] == "run_o1"
+    assert body["reconciled_run_id"] == "run_o1"
+    assert body["run_found"] is True
+    assert body["source_available"] is True
+    assert body["trade_count"] == 3
+    assert body["pnl_usdt"] == 12.0
+    assert body["pnl_r"] == 1.0
+    assert body["win_rate"] == 0.6667
+    assert body["by_symbol"][0]["symbol"] == "BTCUSDT"
+    assert body["by_symbol"][0]["pnl_usdt"] == 6.0
+
+
+def test_run_outcome_without_trades_is_empty_but_available(orchestrator_env):
+    client, session = orchestrator_env
+    _seed_run(session, "run_empty")
+    # Source a répondu, 0 trade : agrégat vide explicite, available=True.
+    empty = {"run_id": "run_empty", "available": True, "trade_count": 0, "by_symbol": []}
+    key = _override_outcome(client, empty)
+    try:
+        resp = client.get("/runs/run_empty/outcome")
+    finally:
+        _clear_outcome_override(key)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["run_found"] is True
+    assert body["source_available"] is True
+    assert body["trade_count"] == 0
+    assert body["win_rate"] is None
+    assert body["pnl_usdt"] is None
+    assert body["by_symbol"] == []
+
+
+def test_run_outcome_unknown_run_and_unavailable_source_is_failsafe(orchestrator_env):
+    client, _session = orchestrator_env
+    # Run inconnu côté orchestration ET source indisponible : pas de 500, agrégat vide.
+    unavailable = {"run_id": "ghost", "available": False, "trade_count": 0, "by_symbol": []}
+    key = _override_outcome(client, unavailable)
+    try:
+        resp = client.get("/runs/ghost/outcome")
+    finally:
+        _clear_outcome_override(key)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["run_found"] is False
+    assert body["source_available"] is False
+    assert body["trade_count"] == 0
+
+
+def test_run_outcome_reconciles_run_id_to_64_chars(orchestrator_env):
+    client, session = orchestrator_env
+    long_run_id = "run_" + ("a" * 80)  # 84 chars > 64
+    _seed_run(session, long_run_id)
+    seen = {}
+
+    def _source(run_id: str) -> dict:
+        seen["run_id"] = run_id
+        return {"run_id": run_id, "available": True, "trade_count": 0, "by_symbol": []}
+
+    key = _override_outcome(client, _source)
+    try:
+        body = client.get(f"/runs/{long_run_id}/outcome").json()
+    finally:
+        _clear_outcome_override(key)
+
+    # La vue est requêtée avec le run_id tronqué à 64 (forme stockée côté Symfony).
+    assert len(seen["run_id"]) == 64
+    assert seen["run_id"] == long_run_id[:64]
+    assert body["reconciled_run_id"] == long_run_id[:64]
+    # run_id complet conservé dans la réponse (identifiant d'orchestration demandé).
+    assert body["run_id"] == long_run_id
