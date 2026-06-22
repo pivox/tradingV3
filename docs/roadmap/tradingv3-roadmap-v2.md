@@ -87,11 +87,12 @@ La comparaison entre `regular`, `scalper` et `scalper_micro` doit reposer sur :
 Lors de la dernière relecture :
 
 - les lots UI, Temporal, sécurité, audit, tests et nettoyage étaient majoritairement fusionnés ;
-- la PR [#181](https://github.com/pivox/tradingV3/pull/181), liée à la corrélation outcome/PnL, restait le principal point à finaliser ou à rebaser ;
-- même après cette PR, le lineage complet par `set_id` et profil devait encore être traité séparément ;
-- une recette de bout en bout sur la stack réelle restait nécessaire.
+- la PR [#181](https://github.com/pivox/tradingV3/pull/181) reste une référence historique, mais son périmètre incomplet est désormais repris par [#189](https://github.com/pivox/tradingV3/issues/189) et [#190](https://github.com/pivox/tradingV3/issues/190) ;
+- le lineage complet par `set_id`, profil, exchange et trade est suivi dans #189 ;
+- la fiabilité de `position_trade_analysis` et du PnL net est suivie dans #190 ;
+- la recette de bout en bout sur la stack réelle est suivie dans [#188](https://github.com/pivox/tradingV3/issues/188).
 
-Les statuts de PR doivent être revérifiés avant mise à jour définitive de #173.
+L’état d’avancement doit désormais être maintenu dans les issues de suivi plutôt que dupliqué dans #173.
 
 ---
 
@@ -148,11 +149,29 @@ Les éléments suivants rendent l’issue illisible et doivent être déplacés 
 
 ---
 
-## 7. Issues filles recommandées
+## 7. Issues de suivi créées ou réutilisées
+
+Les lots ci-dessous possèdent désormais une issue GitHub dédiée. Les issues existantes #132 et #133 sont réutilisées afin d’éviter les doublons.
+
+| Domaine | Issue | Statut de création |
+|---|---|---|
+| Recette runtime orchestrateur | [#188 — TV3-ORCH-001](https://github.com/pivox/tradingV3/issues/188) | Créée |
+| Lineage run → set → trade | [#189 — TV3-DATA-001](https://github.com/pivox/tradingV3/issues/189) | Créée |
+| Fiabilité `position_trade_analysis` | [#190 — TV3-DATA-002](https://github.com/pivox/tradingV3/issues/190) | Créée |
+| Baseline « bad trades first » | [#132 — Rapport PnL](https://github.com/pivox/tradingV3/issues/132) | Réutilisée |
+| Backtesting net | [#191 — TV3-BACKTEST-001](https://github.com/pivox/tradingV3/issues/191) | Créée |
+| Effective Config en couches | [#133 — Config YAML layered](https://github.com/pivox/tradingV3/issues/133) | Réutilisée |
+| Effective Config Viewer | [#192 — TV3-CONFIG-002](https://github.com/pivox/tradingV3/issues/192) | Créée |
+| Décision Front Ops | [#193 — TV3-FRONT-001](https://github.com/pivox/tradingV3/issues/193) | Créée |
+| Roadmap Front Ops investigation | [#194 — TV3-FRONT-002](https://github.com/pivox/tradingV3/issues/194) | Créée |
+| Inventaire Bitmart | [#195 — TV3-EXCHANGE-001](https://github.com/pivox/tradingV3/issues/195) | Créée |
+| Readiness Fake/Paper | [#196 — TV3-EXCHANGE-002](https://github.com/pivox/tradingV3/issues/196) | Créée |
+| Readiness OKX dry-run | [#197 — TV3-EXCHANGE-003](https://github.com/pivox/tradingV3/issues/197) | Créée |
+| Readiness Hyperliquid dry-run | [#198 — TV3-EXCHANGE-004](https://github.com/pivox/tradingV3/issues/198) | Créée |
 
 ### Orchestration et observabilité
 
-#### ORCH-001 — Recette runtime de l’orchestrateur Python
+#### [#188 — TV3-ORCH-001 : Recette runtime de l’orchestrateur Python](https://github.com/pivox/tradingV3/issues/188)
 
 Objectif : valider l’orchestrateur sur la stack réelle.
 
@@ -170,7 +189,7 @@ Critères principaux :
 - rollback testé ;
 - vérification dans Temporal UI.
 
-#### OBS-001 — Lineage complet run, set et trade
+#### [#189 — TV3-DATA-001 : Lineage complet run, set et trade](https://github.com/pivox/tradingV3/issues/189)
 
 Propager et persister :
 
@@ -183,7 +202,7 @@ Propager et persister :
 - `symbol` ;
 - identifiant du trade ou de la position.
 
-#### OBS-002 — Fiabiliser `position_trade_analysis`
+#### [#190 — TV3-DATA-002 : Fiabiliser `position_trade_analysis`](https://github.com/pivox/tradingV3/issues/190)
 
 Vérifier notamment :
 
@@ -195,7 +214,7 @@ Vérifier notamment :
 
 ### Analytics et stratégie
 
-#### ANALYTICS-001 — Baseline « bad trades first »
+#### [#132 — Baseline « bad trades first »](https://github.com/pivox/tradingV3/issues/132)
 
 Produire une baseline séparée pour :
 
@@ -215,7 +234,7 @@ Mesurer au minimum :
 - coûts ;
 - causes récurrentes de pertes.
 
-#### BACKTEST-001 — Backtesting net réaliste
+#### [#191 — TV3-BACKTEST-001 : Backtesting net réaliste](https://github.com/pivox/tradingV3/issues/191)
 
 Inclure :
 
@@ -234,7 +253,7 @@ Aucun résultat de backtest ne doit être inventé ou extrapolé sans données.
 
 ### Effective Config
 
-#### CONFIG-001 — Brancher l’Effective Config au runtime
+#### [#133 — Effective Config en couches et branchement runtime](https://github.com/pivox/tradingV3/issues/133)
 
 Architecture cible :
 
@@ -249,7 +268,7 @@ base
 
 Le branchement doit être progressif, avec possibilité de comparer ancien et nouveau comportement.
 
-#### CONFIG-002 — Effective Config Viewer
+#### [#192 — TV3-CONFIG-002 : Effective Config Viewer](https://github.com/pivox/tradingV3/issues/192)
 
 Afficher :
 
@@ -262,7 +281,7 @@ Afficher :
 
 ### Front Ops
 
-#### FRONT-001 — Décider la surface Front Ops canonique
+#### [#193 — TV3-FRONT-001 : Décider la surface Front Ops canonique](https://github.com/pivox/tradingV3/issues/193)
 
 Décider explicitement entre :
 
@@ -273,7 +292,7 @@ Décider explicitement entre :
 
 Aucun gros chantier d’écran ne doit démarrer avant cette décision.
 
-#### FRONT-002 — Roadmap Front Ops orientée investigation
+#### [#194 — TV3-FRONT-002 : Roadmap Front Ops orientée investigation](https://github.com/pivox/tradingV3/issues/194)
 
 Prioriser les parcours permettant de comprendre :
 
@@ -286,7 +305,7 @@ Prioriser les parcours permettant de comprendre :
 
 ### Exchanges
 
-#### EXCHANGE-001 — Inventaire Bitmart
+#### [#195 — TV3-EXCHANGE-001 : Inventaire Bitmart](https://github.com/pivox/tradingV3/issues/195)
 
 Inventorier :
 
@@ -300,7 +319,7 @@ Inventorier :
 - comportements spécifiques ;
 - dépendances cachées.
 
-#### EXCHANGE-002 — Readiness Fake/Paper
+#### [#196 — TV3-EXCHANGE-002 : Readiness Fake/Paper](https://github.com/pivox/tradingV3/issues/196)
 
 Vérifier que Fake/Paper représente suffisamment :
 
@@ -313,7 +332,7 @@ Vérifier que Fake/Paper représente suffisamment :
 - les positions ;
 - les SL/TP.
 
-#### EXCHANGE-003 — Readiness OKX dry-run
+#### [#197 — TV3-EXCHANGE-003 : Readiness OKX dry-run](https://github.com/pivox/tradingV3/issues/197)
 
 Le lot doit couvrir :
 
@@ -327,7 +346,7 @@ Le lot doit couvrir :
 - tests d’intégration ;
 - rollback.
 
-#### EXCHANGE-004 — Readiness Hyperliquid dry-run
+#### [#198 — TV3-EXCHANGE-004 : Readiness Hyperliquid dry-run](https://github.com/pivox/tradingV3/issues/198)
 
 Le lot doit couvrir :
 
@@ -347,40 +366,40 @@ Le lot doit couvrir :
 
 ### P0 — Fiabiliser l’exécution et la donnée
 
-1. Finaliser la corrélation outcome/PnL.
-2. Ajouter le lineage complet `run -> set -> trade`.
-3. Fiabiliser `position_trade_analysis`.
-4. Exécuter la recette runtime de l’orchestrateur.
-5. Tester reprise, replay et rollback.
+1. Finaliser le lineage complet via [#189](https://github.com/pivox/tradingV3/issues/189).
+2. Fiabiliser `position_trade_analysis` et le PnL net via [#190](https://github.com/pivox/tradingV3/issues/190).
+3. Exécuter la recette runtime via [#188](https://github.com/pivox/tradingV3/issues/188).
+4. Tester reprise, replay, idempotence et rollback dans #188.
+5. Ne basculer aucun legacy avant validation de ces trois issues.
 
 ### P1 — Comprendre les pertes
 
-1. Produire la baseline par profil.
+1. Produire la baseline par profil dans [#132](https://github.com/pivox/tradingV3/issues/132).
 2. Classer les causes de trades perdants.
-3. Vérifier l’impact réel des frais et du slippage.
-4. Proposer des corrections atomiques.
+3. Vérifier l’impact réel des frais et du slippage à partir des données certifiées de #190.
+4. Proposer des corrections atomiques, sans tuning de fréquence prématuré.
 
 ### P2 — Backtesting net
 
-1. Construire le modèle de coûts.
+1. Construire le moteur et le modèle de coûts dans [#191](https://github.com/pivox/tradingV3/issues/191).
 2. Rejouer chaque profil séparément.
 3. Comparer expectancy, drawdown et profit factor.
 4. Préparer un forward test d’au moins 500 trades lorsque les données le permettent.
 
 ### P3 — Config effective et Front Ops
 
-1. Brancher l’Effective Config progressivement.
-2. Ajouter le viewer.
-3. Décider React contre Symfony/Twig.
-4. Construire les écrans d’investigation prioritaires.
+1. Brancher l’Effective Config progressivement via [#133](https://github.com/pivox/tradingV3/issues/133).
+2. Ajouter le viewer via [#192](https://github.com/pivox/tradingV3/issues/192).
+3. Décider la surface canonique via [#193](https://github.com/pivox/tradingV3/issues/193).
+4. Construire la roadmap d’investigation via [#194](https://github.com/pivox/tradingV3/issues/194).
 
 ### P4 — Nouveaux exchanges
 
-1. Inventorier Bitmart.
-2. Stabiliser Fake/Paper.
-3. Valider OKX en dry-run.
-4. Valider Hyperliquid en dry-run.
-5. N’envisager le live qu’après runtime-check et rollback validés.
+1. Inventorier Bitmart via [#195](https://github.com/pivox/tradingV3/issues/195).
+2. Stabiliser Fake/Paper via [#196](https://github.com/pivox/tradingV3/issues/196).
+3. Valider OKX en dry-run via [#197](https://github.com/pivox/tradingV3/issues/197).
+4. Valider Hyperliquid en dry-run via [#198](https://github.com/pivox/tradingV3/issues/198).
+5. N’envisager le live qu’après runtime-check, recette et rollback validés.
 
 ---
 
@@ -427,7 +446,15 @@ Construire un moteur de trading modulaire, observable et testable, piloté par l
 
 ## Suivi
 
-Les critères détaillés sont suivis dans les issues filles ORCH, OBS, ANALYTICS, BACKTEST, CONFIG, FRONT et EXCHANGE.
+Les critères détaillés sont suivis dans :
+
+- orchestration : #188 ;
+- lineage et données : #189, #190 ;
+- analytics : #132 ;
+- backtesting : #191 ;
+- configuration : #133, #192 ;
+- Front Ops : #193, #194 ;
+- exchanges : #195, #196, #197, #198.
 
 La roadmap détaillée est maintenue dans :
 
@@ -448,7 +475,30 @@ Cette issue sera clôturée lorsque :
 
 ---
 
-## 10. Sources projet
+## 10. Sources projet et suivi
+
+### Pilotage
+
+- [Issue #173](https://github.com/pivox/tradingV3/issues/173)
+- [PR #187 — Documentation roadmap V2](https://github.com/pivox/tradingV3/pull/187)
+
+### Issues de suivi
+
+- [#188 — Recette runtime orchestrateur](https://github.com/pivox/tradingV3/issues/188)
+- [#189 — Lineage run → set → trade](https://github.com/pivox/tradingV3/issues/189)
+- [#190 — Fiabilité position_trade_analysis](https://github.com/pivox/tradingV3/issues/190)
+- [#132 — Baseline PnL / bad trades first](https://github.com/pivox/tradingV3/issues/132)
+- [#191 — Backtesting net](https://github.com/pivox/tradingV3/issues/191)
+- [#133 — Effective Config en couches](https://github.com/pivox/tradingV3/issues/133)
+- [#192 — Effective Config Viewer](https://github.com/pivox/tradingV3/issues/192)
+- [#193 — Décision Front Ops](https://github.com/pivox/tradingV3/issues/193)
+- [#194 — Roadmap Front Ops investigation](https://github.com/pivox/tradingV3/issues/194)
+- [#195 — Inventaire Bitmart](https://github.com/pivox/tradingV3/issues/195)
+- [#196 — Readiness Fake/Paper](https://github.com/pivox/tradingV3/issues/196)
+- [#197 — Readiness OKX dry-run](https://github.com/pivox/tradingV3/issues/197)
+- [#198 — Readiness Hyperliquid dry-run](https://github.com/pivox/tradingV3/issues/198)
+
+### PR et documents historiques
 
 - [Issue #173](https://github.com/pivox/tradingV3/issues/173)
 - [PR #141 — Architecture TradingCore](https://github.com/pivox/tradingV3/pull/141)
@@ -472,8 +522,8 @@ Issue parent #173
 Documents dans docs/
     -> décisions et descriptions durables
 
-Issues filles
-    -> critères d’acceptation atomiques
+Issues de suivi #132, #133 et #188 à #198
+    -> critères d’acceptation détaillés et découpage PR atomique
 
 PR
     -> implémentation et tests
