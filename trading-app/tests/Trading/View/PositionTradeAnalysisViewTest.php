@@ -178,6 +178,32 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertNull($rows[0]['recorded_pnl_usdt'], 'aucun vieux PnL attribué au run courant');
     }
 
+    public function testRealCloseAfterEntryMatchesDespiteAnOrphanStaleCloseBefore(): void
+    {
+        $run = 'run_orphan_then_real';
+        // Clôture orpheline/périmée AVANT l'entrée (position_id réutilisé `PO`, aucune
+        // entrée antérieure) — elle ne doit pas voler le rang à la vraie clôture.
+        $this->close('BTCUSDT', $run, ['pnl' => 999.0], 'PO', '2026-06-17 08:00:00+00', 800);
+        // Entrée réelle (trade TO) + pont vers `PO` + VRAIE clôture postérieure.
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TO'], '2026-06-17 09:00:00+00', 801);
+        $this->opened('BTCUSDT', $run, 'TO', 'PO', '2026-06-17 09:00:30+00', 802);
+        $this->close('BTCUSDT', $run, ['pnl' => 7.0, 'pnl_R' => 1.0], 'PO', '2026-06-17 10:00:00+00', 803);
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT trade_id, close_match_status, close_matched_by, close_event_id, recorded_pnl_usdt
+             FROM position_trade_analysis WHERE run_id = ?',
+            [$run]
+        );
+
+        self::assertCount(1, $rows, 'une seule entrée (la clôture orpheline ne crée pas de ligne)');
+        self::assertSame('TO', $rows[0]['trade_id']);
+        // La vraie clôture postérieure est rapprochée (pas laissée unmatched par la périmée).
+        self::assertSame('matched', $rows[0]['close_match_status']);
+        self::assertSame('matched_position_id', $rows[0]['close_matched_by']);
+        self::assertSame(803, (int) $rows[0]['close_event_id']);
+        self::assertEqualsWithDelta(7.0, (float) $rows[0]['recorded_pnl_usdt'], 1e-9);
+    }
+
     private function createMinimalSchema(): void
     {
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');

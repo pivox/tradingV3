@@ -162,24 +162,39 @@ tid_pairs AS (
 ),
 -- (2) Appariement par position_id, UNIQUEMENT pour les entrées et clôtures non
 -- déjà appariées par trade_id (aucune clôture réutilisée entre les deux passes).
-entry_pid AS (
-  SELECT id, eff_position_id, symbol, happened_at,
-         ROW_NUMBER() OVER (PARTITION BY eff_position_id ORDER BY happened_at, id) AS rn
+entry_pid_base AS (
+  SELECT id, eff_position_id, symbol, happened_at
   FROM entry_resolved
   WHERE eff_position_id IS NOT NULL
     AND id NOT IN (SELECT entry_event_id FROM tid_pairs)
 ),
+entry_pid AS (
+  SELECT id, eff_position_id, symbol, happened_at,
+         ROW_NUMBER() OVER (PARTITION BY eff_position_id ORDER BY happened_at, id) AS rn
+  FROM entry_pid_base
+),
+-- P2 : ne RANGE que les clôtures ÉLIGIBLES — celles précédées d'au moins une entrée
+-- (même position_id effectif + même symbole) à cet instant. Une clôture orpheline /
+-- périmée ANTÉRIEURE à l'entrée est ainsi écartée du jeu de candidats AVANT le
+-- ROW_NUMBER (et non rejetée après), de sorte qu'elle ne « vole » pas le rang 1 à la
+-- vraie clôture postérieure : un trade réellement clôturé ne reste donc pas `unmatched`.
 close_pid AS (
-  SELECT id, match_position_id, symbol, happened_at,
-         ROW_NUMBER() OVER (PARTITION BY match_position_id ORDER BY happened_at, id) AS rn
-  FROM close_events
-  WHERE match_position_id IS NOT NULL
-    AND id NOT IN (SELECT close_event_id FROM tid_pairs)
+  SELECT c.id, c.match_position_id, c.symbol, c.happened_at,
+         ROW_NUMBER() OVER (PARTITION BY c.match_position_id ORDER BY c.happened_at, c.id) AS rn
+  FROM close_events c
+  WHERE c.match_position_id IS NOT NULL
+    AND c.id NOT IN (SELECT close_event_id FROM tid_pairs)
+    AND EXISTS (
+      SELECT 1 FROM entry_pid_base e
+      WHERE e.eff_position_id = c.match_position_id
+        AND e.symbol = c.symbol
+        AND e.happened_at <= c.happened_at
+    )
 ),
 pid_pairs AS (
-  -- P2 : appariement par position_id EFFECTIF, borné au même symbole ET à une clôture
-  -- postérieure à l'entrée. Une clôture périmée / un position_id réutilisé ne peut donc
-  -- pas attribuer un vieux PnL au run courant ; au pire l'entrée reste `unmatched`.
+  -- Appariement 1-pour-1 par position_id EFFECTIF, borné au même symbole ET à une
+  -- clôture postérieure à l'entrée. Combiné à l'éligibilité ci-dessus : ni clôture
+  -- périmée attribuée (vieux PnL), ni trade clôturé laissé `unmatched`.
   SELECT e.id AS entry_event_id, c.id AS close_event_id
   FROM entry_pid e
   JOIN close_pid c
