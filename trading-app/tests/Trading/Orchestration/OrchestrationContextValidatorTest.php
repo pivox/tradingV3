@@ -8,6 +8,7 @@ use App\Trading\Orchestration\OrchestrationContextException;
 use App\Trading\Orchestration\OrchestrationContextValidator;
 use App\Trading\Service\RunCorrelationId;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -95,6 +96,44 @@ final class OrchestrationContextValidatorTest extends TestCase
     {
         $this->assertCode('ORCHESTRATION_MARKET_TYPE_MISMATCH', function (): void {
             $this->validator->validate(null, null, null, null, ['market_type' => 'perpetual', 'type_contract' => 'spot']);
+        });
+    }
+
+    /**
+     * @return iterable<string,array{0:string,1:string}>
+     */
+    public static function equivalentMarketAliasProvider(): iterable
+    {
+        // Tous équivalents à MarketType::PERPETUAL côté ExchangeContextResolver.
+        yield 'perpetual + perp'   => ['perpetual', 'perp'];
+        yield 'futures + perpetual' => ['futures', 'perpetual'];
+        yield 'future + perp'      => ['future', 'perp'];
+        yield 'casse/espaces'      => [' Perpetual ', 'PERP'];
+    }
+
+    #[DataProvider('equivalentMarketAliasProvider')]
+    public function testEquivalentMarketAliasesAreAccepted(string $marketType, string $typeContract): void
+    {
+        // Alias équivalents : aucune contradiction (compat clients legacy).
+        $this->expectNotToPerformAssertions();
+        $this->validator->validate(null, null, null, null, [
+            'market_type' => $marketType,
+            'type_contract' => $typeContract,
+        ]);
+    }
+
+    public function testRealMarketTypeMismatchPerpVsSpotIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_MARKET_TYPE_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, ['market_type' => 'perp', 'type_contract' => 'spot']);
+        });
+    }
+
+    public function testInvalidMarketTypeIsRejectedFailClosed(): void
+    {
+        // Valeur invalide quand les deux champs sont fournis : refus structuré fail-closed.
+        $this->assertCode('ORCHESTRATION_MARKET_TYPE_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, ['market_type' => 'perpetual', 'type_contract' => 'bogus']);
         });
     }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Trading\Orchestration;
 
+use App\Provider\Context\ExchangeContextResolver;
 use App\Trading\Service\RunCorrelationId;
 
 /**
@@ -95,18 +96,40 @@ final class OrchestrationContextValidator
             );
         }
 
-        // 6. market_type vs type_contract (alias du même champ).
-        $marketType = self::cleanLower($data['market_type'] ?? null);
-        $typeContract = self::cleanLower($data['type_contract'] ?? null);
-        if ($marketType !== null && $typeContract !== null && $marketType !== $typeContract) {
-            throw new OrchestrationContextException(
-                'ORCHESTRATION_MARKET_TYPE_MISMATCH',
-                sprintf(
-                    'market_type (%s) et type_contract (%s) du payload sont contradictoires.',
-                    $marketType,
-                    $typeContract,
-                ),
-            );
+        // 6. market_type vs type_contract (alias du même champ). On NORMALISE les deux
+        // via ExchangeContextResolver (perp/future/futures ≡ perpetual) AVANT de comparer,
+        // pour ne pas rejeter des alias pourtant équivalents (compat clients legacy qui
+        // envoient les deux champs). Une valeur invalide reste refusée fail-closed.
+        $marketType = self::clean($data['market_type'] ?? null);
+        $typeContract = self::clean($data['type_contract'] ?? null);
+        if ($marketType !== null && $typeContract !== null) {
+            try {
+                $normalizedMarket = ExchangeContextResolver::normalizeMarketType($marketType);
+                $normalizedContract = ExchangeContextResolver::normalizeMarketType($typeContract);
+            } catch (\InvalidArgumentException $e) {
+                throw new OrchestrationContextException(
+                    'ORCHESTRATION_MARKET_TYPE_MISMATCH',
+                    sprintf(
+                        'Type de marché invalide entre market_type (%s) et type_contract (%s) : %s',
+                        $marketType,
+                        $typeContract,
+                        $e->getMessage(),
+                    ),
+                );
+            }
+
+            if ($normalizedMarket !== $normalizedContract) {
+                throw new OrchestrationContextException(
+                    'ORCHESTRATION_MARKET_TYPE_MISMATCH',
+                    sprintf(
+                        'market_type (%s) et type_contract (%s) du payload sont contradictoires (%s vs %s).',
+                        $marketType,
+                        $typeContract,
+                        $normalizedMarket->value,
+                        $normalizedContract->value,
+                    ),
+                );
+            }
         }
     }
 
