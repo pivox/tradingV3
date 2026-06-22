@@ -7,6 +7,8 @@ namespace App\Controller;
 use App\Config\TradeEntryModeContext;
 use App\MtfRunner\Application\RunMtfCycleUseCase;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
+use App\Trading\Orchestration\OrchestrationContextException;
+use App\Trading\Orchestration\OrchestrationContextValidator;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -19,6 +21,7 @@ class RunnerController extends AbstractController
     public function __construct(
         private readonly LoggerInterface $logger,
         private readonly TradeEntryModeContext $modeContext,
+        private readonly OrchestrationContextValidator $orchestrationContextValidator,
     ) {
     }
 
@@ -76,6 +79,17 @@ class RunnerController extends AbstractController
             $headerCorrelationId = $request->headers->get('X-Run-Correlation-Id');
             $headerSetId = $request->headers->get('X-Orchestration-Set-Id');
             $headerDashboardId = $request->headers->get('X-Orchestration-Dashboard-Id');
+
+            // OBS-003 : refuser fail-closed un contexte d'orchestration contradictoire
+            // (en-têtes vs payload, ou doublons contradictoires du payload). Le chemin
+            // legacy (sans en-tête ni doublon) ne déclenche aucun contrôle.
+            $this->orchestrationContextValidator->validate(
+                $headerRunId,
+                $headerCorrelationId,
+                $headerSetId,
+                $headerDashboardId,
+                $data,
+            );
 
             // Injection automatique du profile depuis la configuration si non fourni
             // ROLLBACK: Si besoin de revenir en arrière, supprimer cette logique et remettre:
@@ -167,6 +181,18 @@ class RunnerController extends AbstractController
                 ],
             ]);
 
+        } catch (OrchestrationContextException $e) {
+            // Incohérence de contexte vérifiable dans la requête : 422 avec code stable.
+            $this->logger->warning('[Runner Controller] Orchestration context mismatch', [
+                'error_code' => $e->errorCode,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $this->json([
+                'status' => 'error',
+                'error_code' => $e->errorCode,
+                'message' => $e->getMessage(),
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (\Throwable $e) {
             $this->logger->error('[Runner Controller] Failed to run MTF cycle', [
                 'error' => $e->getMessage(),
