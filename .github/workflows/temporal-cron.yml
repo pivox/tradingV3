@@ -1,0 +1,61 @@
+name: Temporal Cron
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/temporal-cron.yml'
+      - 'cron_symfony_mtf_workers/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/temporal-cron.yml'
+      - 'cron_symfony_mtf_workers/**'
+
+jobs:
+  tests:
+    name: pytest (coverage gate)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: cron_symfony_mtf_workers
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        # requirements-dev.txt tire requirements.txt (temporalio + httpx, requis
+        # pour importer les tests) puis ajoute pytest + pytest-cov (dev-only).
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests (with coverage gate)
+        # Couverture mesurée UNIQUEMENT sur les fichiers du cron orchestrateur
+        # (QA-003 : activities/orchestrator_http.py, workflows/orchestrator_cron.py,
+        # scripts/manage_orchestrator_schedule.py — périmètre figé dans
+        # pyproject.toml). `--cov-fail-under=99` (baseline 99.12 %, branches
+        # activées) fait échouer la CI sous le seuil et empêche toute régression.
+        # Aucun service Temporal/PostgreSQL : les tests patchent les primitives
+        # workflow.* et utilisent des fakes httpx (aucune I/O réseau).
+        run: >-
+          python -m pytest
+          --cov
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-fail-under=99
+
+      - name: Archive coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml-temporal-cron
+          path: cron_symfony_mtf_workers/coverage.xml
+          if-no-files-found: ignore
