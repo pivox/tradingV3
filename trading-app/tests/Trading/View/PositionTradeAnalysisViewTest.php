@@ -204,6 +204,41 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(7.0, (float) $rows[0]['recorded_pnl_usdt'], 1e-9);
     }
 
+    public function testReusedPositionIdAcrossTwoSymbolsMatchesEachOnItsOwnClose(): void
+    {
+        $run = 'run_xsym';
+        // Même position_id `PX` réutilisé sur BTC et ETH. L'entrée BTC est la première,
+        // mais la clôture ETH arrive AVANT la clôture BTC : sans partition par symbole,
+        // les rangs se croiseraient et le garde de symbole rejetterait les deux clôtures.
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TB'], '2026-06-17 09:00:00+00', 900);
+        $this->opened('BTCUSDT', $run, 'TB', 'PX', '2026-06-17 09:00:30+00', 901);
+        $this->entry('ETHUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TE'], '2026-06-17 09:10:00+00', 902);
+        $this->opened('ETHUSDT', $run, 'TE', 'PX', '2026-06-17 09:10:30+00', 903);
+        $this->close('ETHUSDT', $run, ['pnl' => 3.0], 'PX', '2026-06-17 09:20:00+00', 904);
+        $this->close('BTCUSDT', $run, ['pnl' => 5.0], 'PX', '2026-06-17 09:30:00+00', 905);
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT symbol, trade_id, close_match_status, close_event_id, recorded_pnl_usdt
+             FROM position_trade_analysis WHERE run_id = ? ORDER BY symbol',
+            [$run]
+        );
+
+        self::assertCount(2, $rows);
+        $bySymbol = [];
+        foreach ($rows as $r) {
+            $bySymbol[$r['symbol']] = $r;
+        }
+
+        // Chaque symbole est rapproché de SA propre clôture (pas de croisement de rangs).
+        self::assertSame('matched', $bySymbol['BTCUSDT']['close_match_status']);
+        self::assertSame(905, (int) $bySymbol['BTCUSDT']['close_event_id']);
+        self::assertEqualsWithDelta(5.0, (float) $bySymbol['BTCUSDT']['recorded_pnl_usdt'], 1e-9);
+
+        self::assertSame('matched', $bySymbol['ETHUSDT']['close_match_status']);
+        self::assertSame(904, (int) $bySymbol['ETHUSDT']['close_event_id']);
+        self::assertEqualsWithDelta(3.0, (float) $bySymbol['ETHUSDT']['recorded_pnl_usdt'], 1e-9);
+    }
+
     private function createMinimalSchema(): void
     {
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');

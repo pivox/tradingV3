@@ -169,8 +169,11 @@ entry_pid_base AS (
     AND id NOT IN (SELECT entry_event_id FROM tid_pairs)
 ),
 entry_pid AS (
+  -- Rang par (position_id effectif, symbole) : un position_id réutilisé sur deux
+  -- symboles ne doit pas mélanger les rangs (le garde `c.symbol = e.symbol` au join
+  -- rejetterait alors des clôtures pourtant valides). Cf. revue OBS-003 v2 (P2).
   SELECT id, eff_position_id, symbol, happened_at,
-         ROW_NUMBER() OVER (PARTITION BY eff_position_id ORDER BY happened_at, id) AS rn
+         ROW_NUMBER() OVER (PARTITION BY eff_position_id, symbol ORDER BY happened_at, id) AS rn
   FROM entry_pid_base
 ),
 -- P2 : ne RANGE que les clôtures ÉLIGIBLES — celles précédées d'au moins une entrée
@@ -180,7 +183,7 @@ entry_pid AS (
 -- vraie clôture postérieure : un trade réellement clôturé ne reste donc pas `unmatched`.
 close_pid AS (
   SELECT c.id, c.match_position_id, c.symbol, c.happened_at,
-         ROW_NUMBER() OVER (PARTITION BY c.match_position_id ORDER BY c.happened_at, c.id) AS rn
+         ROW_NUMBER() OVER (PARTITION BY c.match_position_id, c.symbol ORDER BY c.happened_at, c.id) AS rn
   FROM close_events c
   WHERE c.match_position_id IS NOT NULL
     AND c.id NOT IN (SELECT close_event_id FROM tid_pairs)
