@@ -46,7 +46,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U trading"
+          --health-cmd "pg_isready -U trading -d trading_app_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -86,16 +86,20 @@ jobs:
       - name: Lint YAML config
         run: php bin/console lint:yaml config
 
+      # NB : bootstrap = vendor/autoload.php (comme le job trading-core-config) — le
+      # bootstrap par défaut (tests/bootstrap.php) exige un fichier .env absent en CI.
+      # Ces suites OBS-003 n'amorcent pas le kernel (readers stubés + connexion vue dédiée)
+      # et lisent DATABASE_URL depuis les variables d'environnement du job.
       - name: PHPUnit — Trading + MtfRunner
-        run: vendor/bin/phpunit tests/Trading tests/MtfRunner
+        run: vendor/bin/phpunit --bootstrap vendor/autoload.php tests/Trading tests/MtfRunner
 
       - name: PHPUnit — Contract MtfValidator DTOs (OBS-003)
-        run: vendor/bin/phpunit tests/Contract/MtfValidator/Dto
+        run: vendor/bin/phpunit --bootstrap vendor/autoload.php tests/Contract/MtfValidator/Dto
 
       - name: PostgreSQL view test — must run, never skipped
         # --fail-on-skipped : si la connexion PostgreSQL manque, le test se skip et le job
         # ÉCHOUE (au lieu de masquer une vue non testée).
-        run: vendor/bin/phpunit --fail-on-skipped tests/Trading/View/PositionTradeAnalysisViewTest.php
+        run: vendor/bin/phpunit --bootstrap vendor/autoload.php --fail-on-skipped tests/Trading/View/PositionTradeAnalysisViewTest.php
 
       - name: PHPStan — OBS-003 services/validator/controller
         run: >-
