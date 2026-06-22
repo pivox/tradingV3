@@ -1,0 +1,11 @@
+# Dépendances de développement / test UNIQUEMENT (QA-003).
+# Jamais embarquées dans l'image (cf. Dockerfile : seul requirements.txt est
+# installé) ni en runtime.
+#
+# temporalio / httpx (déjà en runtime) sont requis pour importer les tests
+# (primitives workflow.* patchées, fakes httpx) : on réutilise donc le
+# requirements.txt de runtime, sans le dupliquer.
+-r requirements.txt
+pytest==8.4.2
+# Mesure de couverture unitaire + gate CI (QA-003). Dev-only.
+pytest-cov==7.1.0

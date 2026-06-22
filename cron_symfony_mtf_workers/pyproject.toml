@@ -1,0 +1,38 @@
+[project]
+name = "cron-symfony-mtf-workers"
+version = "0.1.0"
+description = "TradingV3 Temporal cron driving the Python orchestrator (TM-001/TM-002)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-q"
+
+# Mesure de couverture (QA-003). La collecte n'est activée que lorsqu'on passe
+# explicitement `--cov` (CI + commande locale documentée), afin de garder les
+# runs `pytest` standards rapides.
+#
+# Périmètre figé (décision produit QA-003) : UNIQUEMENT les fichiers du cron
+# cible orchestrateur (TM-001/TM-002). Le code legacy MTF (mtf_http.py,
+# mtf_workers.py, manage_*_schedule.py historiques) est hors-scope QA-003 et
+# n'est donc pas mesuré — sinon il écraserait la baseline et rendrait le gate
+# insignifiant.
+[tool.coverage.run]
+branch = true
+relative_files = true
+include = [
+    "activities/orchestrator_http.py",
+    "workflows/orchestrator_cron.py",
+    "scripts/manage_orchestrator_schedule.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# Baseline QA-003 mesurée à 99.12 % (couverture de branches activée ; seul le
+# garde `if __name__ == "__main__": main()` reste non couvert — non
+# instrumentable sans modifier un fichier applicatif). Seuil figé à l'entier
+# inférieur (99) pour empêcher toute régression sans rendre la CI rouge à
+# l'ouverture (cohérent QA-001). Voir README §Tests.
+fail_under = 99

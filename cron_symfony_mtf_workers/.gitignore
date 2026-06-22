@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.env
+# Artefacts de couverture (QA-003) : générés en CI/local, jamais versionnés.
+.coverage
+coverage.xml
+htmlcov/
