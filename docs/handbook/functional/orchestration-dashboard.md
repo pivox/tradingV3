@@ -197,7 +197,12 @@ fiables » :
 - **Rapprochement honnête** : l'entrée est appariée à sa clôture par identifiants
   exacts (`trade_id` puis `position_id`), jamais « la première clôture du même
   symbole ». Un trade non rapprochable reste visible (`unmatched`), pas masqué.
-- **PnL non maquillé** : la valeur enregistrée (`recorded_pnl_usdt`) n'est jamais
-  présentée comme « nette ». Le PnL net n'apparaît que si frais + funding + slippage
-  sont présents (`net_pnl_complete`). Une source indisponible est signalée
-  explicitement (jamais affichée comme « 0 trade »).
+- **PnL jamais maquillé** : la valeur enregistrée (`recorded_pnl_usdt`) n'est jamais
+  présentée comme « nette ». Seule une **estimation** best-effort
+  (`estimated_net_pnl_usdt`) est exposée, accompagnée de `cost_completeness` ; le PnL net
+  **certifié** est réservé au contrat de coûts complet (issue #190, non livré ici) et
+  n'est donc jamais affiché. Une source indisponible est signalée explicitement (jamais
+  affichée comme « 0 trade »).
+- **États distincts** : `matched_closed` (clôturé+rapproché), `unmatched` (état réel
+  inconnu — jamais compté comme position ouverte confirmée), `confirmed_open` et
+  `unknown_state` ; le winrate ne porte que sur les trades clôturés rapprochés avec PnL.
