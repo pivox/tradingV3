@@ -287,6 +287,124 @@ def test_executed_run_is_readable_end_to_end(orchestrator_env, monkeypatch):
     assert latest["run_id"] == run_id
 
 
+# --------------------------------------------------------------------------
+# GET /runs/{run_id}/outcome (OBS-003)
+# --------------------------------------------------------------------------
+
+
+def test_run_outcome_404_when_run_unknown(orchestrator_env):
+    client, _session = orchestrator_env
+    assert client.get("/runs/nope/outcome").status_code == 404
+
+
+def test_run_outcome_200_with_trades(orchestrator_env, monkeypatch):
+    from app.routers import runs as runs_router
+
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_run(session, "run_obs", dashboard_id=dash.id)
+
+    async def fake_outcome(http_client, base_url, run_id, set_id=None):
+        assert run_id == "run_obs"
+        return {
+            "run_id": run_id,
+            "correlation_run_id": run_id,
+            "source_available": True,
+            "data_complete": True,
+            "summary": {"trade_count": 2, "recorded_pnl_usdt": 8.0, "win_rate_closed": 0.5},
+            "by_set": [{"key": "s1", "trade_count": 2}],
+            "by_profile": [{"key": "scalper", "trade_count": 2}],
+            "by_exchange": [{"key": "bitmart", "trade_count": 2}],
+            "by_symbol": [{"key": "BTCUSDT", "trade_count": 2}],
+        }
+
+    monkeypatch.setattr(runs_router, "fetch_run_trade_outcome", fake_outcome)
+
+    resp = client.get("/runs/run_obs/outcome")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["run_found"] is True
+    assert body["source_available"] is True
+    assert body["dashboard_id"] == dash.id
+    assert body["summary"]["trade_count"] == 2
+    assert body["by_symbol"][0]["key"] == "BTCUSDT"
+
+
+def test_run_outcome_200_run_without_trade_is_explicit_empty(orchestrator_env, monkeypatch):
+    from app.routers import runs as runs_router
+
+    client, session = orchestrator_env
+    _seed_run(session, "run_empty")
+
+    async def fake_outcome(http_client, base_url, run_id, set_id=None):
+        return {
+            "run_id": run_id,
+            "correlation_run_id": run_id,
+            "source_available": True,
+            "data_complete": True,
+            "summary": {"trade_count": 0, "win_rate_closed": None, "recorded_pnl_usdt": None},
+            "by_set": [],
+            "by_profile": [],
+            "by_exchange": [],
+            "by_symbol": [],
+        }
+
+    monkeypatch.setattr(runs_router, "fetch_run_trade_outcome", fake_outcome)
+
+    body = client.get("/runs/run_empty/outcome").json()
+    assert body["source_available"] is True
+    assert body["summary"]["trade_count"] == 0
+    assert body["by_symbol"] == []
+
+
+def test_run_outcome_503_when_source_unavailable(orchestrator_env, monkeypatch):
+    from app.routers import runs as runs_router
+    from app.services.symfony_client import OutcomeUnavailableError
+
+    client, session = orchestrator_env
+    _seed_run(session, "run_down")
+
+    async def fake_outcome(http_client, base_url, run_id, set_id=None):
+        raise OutcomeUnavailableError("view down")
+
+    monkeypatch.setattr(runs_router, "fetch_run_trade_outcome", fake_outcome)
+
+    resp = client.get("/runs/run_down/outcome")
+    assert resp.status_code == 503
+    body = resp.json()
+    # L'indisponibilité est explicite, jamais un "0 trade".
+    assert body["source_available"] is False
+    assert body["error_code"] == "outcome_source_unavailable"
+    assert "summary" not in body
+
+
+def test_run_outcome_forwards_set_id_filter(orchestrator_env, monkeypatch):
+    from app.routers import runs as runs_router
+
+    client, session = orchestrator_env
+    _seed_run(session, "run_set")
+    seen = {}
+
+    async def fake_outcome(http_client, base_url, run_id, set_id=None):
+        seen["set_id"] = set_id
+        return {
+            "correlation_run_id": run_id,
+            "source_available": True,
+            "data_complete": True,
+            "summary": {"trade_count": 0},
+            "by_set": [],
+            "by_profile": [],
+            "by_exchange": [],
+            "by_symbol": [],
+        }
+
+    monkeypatch.setattr(runs_router, "fetch_run_trade_outcome", fake_outcome)
+
+    body = client.get("/runs/run_set/outcome", params={"set_id": "s7"}).json()
+    assert seen["set_id"] == "s7"
+    assert body["set_id"] == "s7"
+
+
 def test_run_with_slash_bearing_key_is_fetchable(orchestrator_env, monkeypatch):
     # Régression : un idempotency_key porteur de `/` ne doit pas produire un run_id
     # non récupérable via GET /runs/{run_id} (segment de chemin sans slash).

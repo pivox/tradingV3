@@ -11,12 +11,15 @@ import httpx
 import pytest
 
 from app.schemas import OrchestratorSet
+from app.services.correlation import canonical_correlation_id
 from app.services.symfony_client import (
     ContractsUnavailableError,
     OpenStateUnavailableError,
+    OutcomeUnavailableError,
     build_mtf_payload,
     effective_set_payload,
     fetch_open_state,
+    fetch_run_trade_outcome,
     fetch_selected_contracts,
     generate_set_payload,
     is_business_success,
@@ -696,3 +699,157 @@ def test_run_persisted_set_not_materialized_without_symbols():
     assert result["payload_sent"] is None
     assert "not materialized" in result["body"]
     assert calls == []  # aucun appel HTTP
+
+
+# --- OBS-003 : en-têtes de lineage + fetch_run_trade_outcome ----------------
+
+
+def test_run_persisted_set_propagates_orchestration_headers():
+    orm = _orm_set(set_id="s1", dashboard_id=42, symbols=["BTCUSDT"])
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(
+                client, "http://sym", orm, None, dry_run=True, run_id="run_dashA_20260617"
+            )
+
+    asyncio.run(_run())
+    headers = captured["headers"]
+    assert headers["x-run-id"] == "run_dashA_20260617"
+    # corrélation = algorithme PARTAGÉ avec Symfony (identité ici car court+sûr).
+    assert headers["x-run-correlation-id"] == canonical_correlation_id("run_dashA_20260617")
+    assert headers["x-orchestration-set-id"] == "s1"
+    assert headers["x-orchestration-dashboard-id"] == "42"
+
+
+def test_run_persisted_set_hashes_long_run_id_in_correlation_header():
+    orm = _orm_set(set_id="s1", dashboard_id=1, symbols=["BTCUSDT"])
+    long_run = "run_" + "b" * 64  # 68 chars > 64
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(
+                client, "http://sym", orm, None, dry_run=True, run_id=long_run
+            )
+
+    asyncio.run(_run())
+    headers = captured["headers"]
+    assert headers["x-run-id"] == long_run  # original conservé
+    corr = headers["x-run-correlation-id"]
+    assert len(corr) == 64 and corr != long_run[:64]  # haché, jamais tronqué
+
+
+def test_run_persisted_set_without_run_id_sends_no_orchestration_headers():
+    orm = _orm_set(set_id="s1", dashboard_id=42, symbols=["BTCUSDT"])
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(client, "http://sym", orm, None, dry_run=True)
+
+    asyncio.run(_run())
+    headers = captured["headers"]
+    assert "x-run-id" not in headers
+    assert "x-run-correlation-id" not in headers
+    assert "x-orchestration-set-id" not in headers
+
+
+def test_fetch_run_trade_outcome_returns_body_and_forwards_params():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["params"] = dict(request.url.params)
+        return httpx.Response(200, json={
+            "run_id": "run_x",
+            "correlation_run_id": "run_x",
+            "source_available": True,
+            "summary": {"trade_count": 3},
+        })
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://sym", "run_x", "s1")
+
+    body = asyncio.run(_run())
+    assert captured["path"] == "/api/positions/analysis"
+    assert captured["params"] == {"run_id": "run_x", "set_id": "s1"}
+    assert body["summary"]["trade_count"] == 3
+
+
+def test_fetch_run_trade_outcome_run_without_trade_is_success():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "correlation_run_id": "run_x",
+            "source_available": True,
+            "summary": {"trade_count": 0},
+        })
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://sym", "run_x")
+
+    body = asyncio.run(_run())
+    assert body["summary"]["trade_count"] == 0
+
+
+def test_fetch_run_trade_outcome_raises_on_source_unavailable_flag():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"source_available": False, "error": "source_unavailable"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://sym", "run_x")
+
+    with pytest.raises(OutcomeUnavailableError):
+        asyncio.run(_run())
+
+
+def test_fetch_run_trade_outcome_raises_on_5xx():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://sym", "run_x")
+
+    with pytest.raises(OutcomeUnavailableError):
+        asyncio.run(_run())
+
+
+def test_fetch_run_trade_outcome_raises_on_http_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://sym", "run_x")
+
+    with pytest.raises(OutcomeUnavailableError):
+        asyncio.run(_run())
+
+
+def test_fetch_run_trade_outcome_raises_on_invalid_json():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not-json", headers={"content-type": "application/json"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://sym", "run_x")
+
+    with pytest.raises(OutcomeUnavailableError):
+        asyncio.run(_run())
