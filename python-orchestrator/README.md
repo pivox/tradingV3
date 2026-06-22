@@ -266,10 +266,36 @@ python -m pytest
 La CI (`.github/workflows/python-orchestrator.yml`) l'exécute automatiquement avec
 un service `postgres:15`.
 
+### Couverture (QA-001)
+
+La couverture unitaire est mesurée avec `pytest-cov` (config dans `pyproject.toml` :
+`[tool.coverage.run] source=["app"]`, `branch=true` ; `[tool.coverage.report]`
+`show_missing`/`skip_covered`/`fail_under=95`).
+
+```bash
+cd python-orchestrator
+pytest --cov=app --cov-report=term-missing
+```
+
+Lecture du rapport `term-missing` : chaque module liste `Stmts` (instructions),
+`Miss` (non exercées), `Branch`/`BrPart` (branches et branches partielles), `Cover`
+(% combiné) et `Missing` (lignes/branches non couvertes, ex. `84->83` = branche non
+prise). Les fichiers à 100 % sont masqués (`skip_covered`).
+
+**Baseline QA-001 : 95.15 %** (1460/1517 lignes, couverture de branches activée).
+Le garde-fou CI est `--cov-fail-under=95` : la suite échoue sous ce seuil pour
+empêcher toute régression. Un XML (`coverage.xml`) est produit pour archivage.
+
+```bash
+# Reproduire la commande CI (gate + XML) :
+pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=95
+```
+
 ## Dépendances
 
 - `requirements.txt` : runtime uniquement, versions **épinglées** (reproductibilité).
-- `requirements-dev.txt` : runtime + `pytest` (non installé dans l'image).
+- `requirements-dev.txt` : runtime + `pytest` + `pytest-cov` (dev only, jamais en
+  runtime, non installés dans l'image).
 
 ## Configuration (variables d'environnement)
 

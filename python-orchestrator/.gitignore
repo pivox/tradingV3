@@ -5,3 +5,7 @@ __pycache__/
 *.pyd
 .pytest_cache/
 .env
+# Artefacts de couverture (QA-001) : générés en CI/local, jamais versionnés.
+.coverage
+coverage.xml
+htmlcov/

@@ -56,5 +56,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Run tests
-        run: python -m pytest
+      - name: Run tests (with coverage gate)
+        # Couverture mesurée sur `app/` (QA-001) : rapport term-missing lisible +
+        # XML archivé. `--cov-fail-under=95` (baseline 95.15 %, branches activées)
+        # fait échouer la CI sous le seuil et empêche toute régression. Le smoke
+        # PostgreSQL tourne dans le même run (services postgres ci-dessus).
+        run: >-
+          python -m pytest
+          --cov=app
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-fail-under=95
+
+      - name: Archive coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: python-orchestrator/coverage.xml
+          if-no-files-found: ignore

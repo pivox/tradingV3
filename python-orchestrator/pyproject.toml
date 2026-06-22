@@ -8,3 +8,21 @@ requires-python = ">=3.11"
 testpaths = ["tests"]
 python_files = "test_*.py"
 addopts = "-q"
+
+# Mesure de couverture (QA-001). La collecte n'est activée que lorsqu'on passe
+# explicitement `--cov` (CI + commande locale documentée), afin de garder les
+# runs `pytest` standards rapides et le job smoke PostgreSQL inchangé.
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = [
+    "app/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# Baseline QA-001 mesurée à 95.15 % (couverture de branches activée). Seuil figé
+# à l'entier inférieur (95) pour empêcher toute régression sans rendre la CI
+# rouge à l'ouverture.
+fail_under = 95
