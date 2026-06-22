@@ -427,6 +427,15 @@ final class MtfRunnerService
         $response = $this->mtfValidator->run($mtfRequest);
         $this->tradeDecisionDispatcher->dispatchFromResponse($mtfRequest, $response);
 
+        // OBS-003 : le validateur génère son propre UUID, mais les décisions/lifecycle
+        // events utilisent le run_id de corrélation propagé (`requestId`, prioritaire dans
+        // le dispatcher). On aligne donc le `run_id` du résumé séquentiel sur `$runId`
+        // (comme le fait déjà le chemin parallèle), sinon `/api/mtf/run` et
+        // `RunSet.response_json.summary.run_id` pointeraient un UUID absent des lignes
+        // d'outcome/lifecycle.
+        $summary = $response->toArray();
+        $summary['run_id'] = $runId;
+
         $resultsMap = [];
         foreach ($response->results as $entry) {
             if (!is_array($entry)) {
@@ -453,7 +462,7 @@ final class MtfRunnerService
         }
 
         return [
-            'summary' => $response->toArray(),
+            'summary' => $summary,
             'results' => $resultsMap,
             'errors' => $response->errors,
         ];
