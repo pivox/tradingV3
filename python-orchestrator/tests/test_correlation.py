@@ -42,9 +42,13 @@ def test_canonical_matches_shared_vectors(vector):
     result = canonical_correlation_id(vector["input"])
     assert result == vector["expected"]
 
-    if vector["transform"] == "identity":
-        assert result == vector["input"]
+    if vector["transform"] in ("identity", "trim"):
+        # identity : conservé tel quel ; trim : conservé après suppression des espaces.
         assert len(result) <= CORRELATION_ID_MAX_LEN
+        if vector["transform"] == "identity":
+            assert result == vector["input"]
+        else:
+            assert result == vector["input"].strip()
     else:
         assert vector["transform"] == "sha256"
         # Hash hex minuscule de 64 caractères, jamais une troncature du préfixe.

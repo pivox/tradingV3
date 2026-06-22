@@ -10,11 +10,14 @@ canonique* déterministe, et **identique** à l'implémentation PHP
 
 Règle (cf. ``tests/fixtures/run_correlation_vectors.json``, partagé Python ↔ PHP) :
 
-1. une chaîne vide est refusée (``ValueError``) — un run d'orchestration a toujours
-   un ``run_id`` ;
-2. si ``run_id`` respecte ``^[A-Za-z0-9._:-]+$`` ET ``len <= 64`` : il est conservé
+1. la valeur est d'abord *trim* (espaces/tabs/retours en tête et fin retirés) —
+   normalisation identique au ``trim()`` PHP ; un ``run_id`` n'est jamais censé porter
+   d'espaces de bord, et cela garantit le MÊME résultat dans les deux langages ;
+2. une chaîne vide (après trim) est refusée (``ValueError``) — un run d'orchestration a
+   toujours un ``run_id`` ;
+3. si ``run_id`` respecte ``^[A-Za-z0-9._:-]+$`` ET ``len <= 64`` : il est conservé
    tel quel (lisible, déjà compatible avec la colonne) ;
-3. sinon : ``sha256(run_id)`` en hexadécimal minuscule (exactement 64 caractères).
+4. sinon : ``sha256(run_id)`` en hexadécimal minuscule (exactement 64 caractères).
 
 Interdits explicites : aucune troncature silencieuse (``run_id[:64]``), aucun UUID
 aléatoire pour un run issu de l'orchestrateur, aucune divergence d'algorithme entre
@@ -38,11 +41,16 @@ def canonical_correlation_id(run_id: str) -> str:
 
     Déterministe et sans collision : deux ``run_id`` distincts produisent toujours
     deux identifiants distincts (les longs/non-sûrs passent par ``sha256``, jamais
-    par une troncature). Voir le module pour la règle complète.
+    par une troncature). La valeur est *trim* d'abord (miroir exact du ``trim()`` PHP).
+    Voir le module pour la règle complète.
 
-    :raises ValueError: si ``run_id`` est vide ou n'est pas une chaîne.
+    :raises ValueError: si ``run_id`` est vide (après trim) ou n'est pas une chaîne.
     """
-    if not isinstance(run_id, str) or run_id == "":
+    if not isinstance(run_id, str):
+        raise ValueError("run_id must be a non-empty string")
+
+    run_id = run_id.strip()
+    if run_id == "":
         raise ValueError("run_id must be a non-empty string")
 
     if len(run_id) <= CORRELATION_ID_MAX_LEN and _SAFE_RUN_ID.match(run_id):

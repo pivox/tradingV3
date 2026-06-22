@@ -61,9 +61,14 @@ final class RunCorrelationIdTest extends TestCase
         $result = RunCorrelationId::canonical($vector['input']);
         self::assertSame($vector['expected'], $result);
 
-        if ($vector['transform'] === 'identity') {
-            self::assertSame($vector['input'], $result);
+        if ($vector['transform'] === 'identity' || $vector['transform'] === 'trim') {
+            // identity : conservé tel quel ; trim : conservé après trim des espaces.
             self::assertLessThanOrEqual(RunCorrelationId::MAX_LENGTH, mb_strlen($result));
+            if ($vector['transform'] === 'identity') {
+                self::assertSame($vector['input'], $result);
+            } else {
+                self::assertSame(trim($vector['input']), $result);
+            }
         } else {
             self::assertSame('sha256', $vector['transform']);
             // Hash hex de 64 caractères, jamais une troncature du préfixe.

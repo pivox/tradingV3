@@ -1,5 +1,5 @@
 {
-  "_comment": "Shared canonical-correlation-id vectors for OBS-003. Read by BOTH Python (tests/test_correlation.py) and PHP (RunCorrelationIdTest). Rule: reject empty; keep run_id if it matches ^[A-Za-z0-9._:-]+$ AND len<=64; otherwise sha256 hex (lowercase, 64 chars). Never silently truncate.",
+  "_comment": "Shared canonical-correlation-id vectors for OBS-003. Read by BOTH Python (tests/test_correlation.py) and PHP (RunCorrelationIdTest). Rule (identical in both languages): (1) trim leading/trailing whitespace (PHP trim() == Python str.strip()); (2) reject empty after trim; (3) keep run_id if it matches ^[A-Za-z0-9._:-]+$ AND len<=64; (4) otherwise sha256 hex (lowercase, 64 chars) of the TRIMMED value. Never silently truncate. transform: identity = kept as-is; trim = kept after trimming; sha256 = hashed.",
   "safe_pattern": "^[A-Za-z0-9._:-]+$",
   "max_len": 64,
   "vectors": [
@@ -8,6 +8,30 @@
       "input": "run_dashA_20260617T083000Z",
       "transform": "identity",
       "expected": "run_dashA_20260617T083000Z"
+    },
+    {
+      "name": "surrounding_spaces_trimmed",
+      "input": " abc ",
+      "transform": "trim",
+      "expected": "abc"
+    },
+    {
+      "name": "trailing_space_trimmed",
+      "input": "abc ",
+      "transform": "trim",
+      "expected": "abc"
+    },
+    {
+      "name": "leading_space_trimmed",
+      "input": " abc",
+      "transform": "trim",
+      "expected": "abc"
+    },
+    {
+      "name": "tabs_newlines_trimmed",
+      "input": "\tabc\n",
+      "transform": "trim",
+      "expected": "abc"
     },
     {
       "name": "exactly_64_safe_unchanged",
