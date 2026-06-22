@@ -1,0 +1,50 @@
+{
+  "_comment": "Shared canonical-correlation-id vectors for OBS-003. Read by BOTH Python (tests/test_correlation.py) and PHP (RunCorrelationIdTest). Rule: reject empty; keep run_id if it matches ^[A-Za-z0-9._:-]+$ AND len<=64; otherwise sha256 hex (lowercase, 64 chars). Never silently truncate.",
+  "safe_pattern": "^[A-Za-z0-9._:-]+$",
+  "max_len": 64,
+  "vectors": [
+    {
+      "name": "short_safe_unchanged",
+      "input": "run_dashA_20260617T083000Z",
+      "transform": "identity",
+      "expected": "run_dashA_20260617T083000Z"
+    },
+    {
+      "name": "exactly_64_safe_unchanged",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "transform": "identity",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "length_65_hashed",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "transform": "sha256",
+      "expected": "635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0"
+    },
+    {
+      "name": "run_prefixed_68_hashed",
+      "input": "run_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "transform": "sha256",
+      "expected": "2b32d0527c6757ecabe29505f37b5b3ac4cd7c613667a07bd2ec64031231b341"
+    },
+    {
+      "name": "unsafe_chars_hashed",
+      "input": "run/dashA 2026#06:17",
+      "transform": "sha256",
+      "expected": "8cf76b39f0306e7c44965851bca1cdd1db873a1140047f623b002a04d3d96426"
+    },
+    {
+      "name": "prefix_collision_a",
+      "input": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc_alpha",
+      "transform": "sha256",
+      "expected": "5c64791f01ad417c050643bfeaddeb649dcd473f0050d18fb0ada1084cf25966"
+    },
+    {
+      "name": "prefix_collision_b",
+      "input": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc_beta",
+      "transform": "sha256",
+      "expected": "48535e7cf51aa701ef2a04d9834c1c8e5a9dd1899679342e1632ede24293543c"
+    }
+  ],
+  "empty_must_raise": true
+}
