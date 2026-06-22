@@ -60,6 +60,11 @@ mtf_api_audit:
   resource: '../src/MtfValidator/Controller/Api/MtfAuditController.php'
   type: attribute
 
+# Trading API controllers (OBS-003: outcome read surface)
+trading_api:
+  resource: '../src/Trading/Controller/'
+  type: attribute
+
 # Indicator controllers
 indicator_web:
   resource: '../src/Indicator/Controller/IndicatorTestController.php'

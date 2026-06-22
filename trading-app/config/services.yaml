@@ -525,6 +525,9 @@ services:
     App\Trading\Storage\PositionStateRepositoryInterface: '@App\Trading\Storage\PositionPositionStateRepository'
     App\Trading\Storage\OrderStateRepositoryInterface: '@App\Trading\Storage\FuturesOrderOrderStateRepository'
 
+    # OBS-003 — source de lecture des trades d'un run (vue position_trade_analysis)
+    App\Trading\Service\PositionTradeAnalysisReaderInterface: '@App\Repository\PositionTradeAnalysisRepository'
+
     # TradingStateSyncRunner - utilise les providers depuis MainProvider
     App\Trading\Sync\TradingStateSyncRunner:
         arguments:

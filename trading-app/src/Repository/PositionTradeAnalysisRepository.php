@@ -5,14 +5,38 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Trading\Entity\PositionTradeAnalysis;
+use App\Trading\Service\PositionTradeAnalysisReaderInterface;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
-final class PositionTradeAnalysisRepository extends ServiceEntityRepository
+final class PositionTradeAnalysisRepository extends ServiceEntityRepository implements PositionTradeAnalysisReaderInterface
 {
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, PositionTradeAnalysis::class);
+    }
+
+    /**
+     * OBS-003 — toutes les lignes de la vue rattachées à un identifiant de corrélation
+     * (== `trade_lifecycle_event.run_id`), en lecture seule et bornée. `$setId` filtre
+     * en plus sur le set d'orchestration quand il est fourni.
+     *
+     * @return PositionTradeAnalysis[]
+     */
+    public function findByCorrelationRunId(string $correlationRunId, ?string $setId = null, int $limit = 2000): array
+    {
+        $qb = $this->createQueryBuilder('pta')
+            ->andWhere('pta.runId = :rid')
+            ->setParameter('rid', $correlationRunId)
+            ->orderBy('pta.entryTime', 'ASC')
+            ->setMaxResults(max(1, $limit));
+
+        if ($setId !== null && $setId !== '') {
+            $qb->andWhere('pta.setId = :sid')
+                ->setParameter('sid', $setId);
+        }
+
+        return $qb->getQuery()->getResult();
     }
 
     /**
@@ -52,12 +76,18 @@ final class PositionTradeAnalysisRepository extends ServiceEntityRepository
             $direction = 'DESC';
         }
 
+        // Alias de compat : la colonne `pnl_usdt` a été renommée `recorded_pnl_usdt`
+        // (OBS-003). On accepte encore l'ancien nom de tri côté reporting.
+        if ($sort === 'pnlUsdt') {
+            $sort = 'recordedPnlUsdt';
+        }
+
         $allowedSorts = [
             'entryTime',
             'closeTime',
             'expectedRMultiple',
             'pnlR',
-            'pnlUsdt',
+            'recordedPnlUsdt',
             'mfePct',
             'maePct',
         ];

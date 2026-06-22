@@ -7,6 +7,16 @@ namespace App\Trading\Entity;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
+/**
+ * Vue en lecture seule `position_trade_analysis` (cf. Version20260622000000).
+ *
+ * OBS-003 v2 — la vue rapproche désormais une entrée (`order_submitted`) à sa clôture
+ * (`position_closed`) par identifiants EXACTS (`trade_id` puis `position_id`, jamais par
+ * symbole), et expose le lineage d'orchestration (`correlation_run_id`,
+ * `orchestration_run_id`, `dashboard_id`, `set_id`, `exchange`, `market_type`,
+ * `mtf_profile`) ainsi qu'une sémantique de PnL explicite (`recorded_pnl_usdt` vs
+ * `net_pnl_usdt` + `net_pnl_complete`).
+ */
 #[ORM\Entity(readOnly: true)]
 #[ORM\Table(name: 'position_trade_analysis')]
 class PositionTradeAnalysis
@@ -24,17 +34,57 @@ class PositionTradeAnalysis
     #[ORM\Column(type: Types::STRING, length: 10, nullable: true)]
     private ?string $timeframe = null;
 
+    // --- Lineage d'orchestration -------------------------------------------------
+
+    /** Identifiant de corrélation (== `trade_lifecycle_event.run_id`, VARCHAR(64)). */
     #[ORM\Column(type: Types::STRING, length: 64, nullable: true, name: 'run_id')]
     private ?string $runId = null;
 
+    #[ORM\Column(type: Types::STRING, length: 64, nullable: true, name: 'correlation_run_id')]
+    private ?string $correlationRunId = null;
+
+    /** Identifiant original du run d'orchestration (peut dépasser 64 ; `extra`). */
+    #[ORM\Column(type: Types::STRING, length: 255, nullable: true, name: 'orchestration_run_id')]
+    private ?string $orchestrationRunId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 128, nullable: true, name: 'dashboard_id')]
+    private ?string $dashboardId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 128, nullable: true, name: 'set_id')]
+    private ?string $setId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, nullable: true)]
+    private ?string $exchange = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'market_type')]
+    private ?string $marketType = null;
+
+    #[ORM\Column(type: Types::STRING, length: 64, nullable: true, name: 'mtf_profile')]
+    private ?string $mtfProfile = null;
+
     #[ORM\Column(type: Types::STRING, length: 128, nullable: true, name: 'trade_id')]
     private ?string $tradeId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 64, nullable: true, name: 'position_id')]
+    private ?string $positionId = null;
 
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, name: 'entry_time')]
     private \DateTimeImmutable $entryTime;
 
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, name: 'close_time')]
     private ?\DateTimeImmutable $closeTime = null;
+
+    // --- Rapprochement entrée/clôture -------------------------------------------
+
+    /** `matched` si une clôture exacte est rattachée, sinon `unmatched`. */
+    #[ORM\Column(type: Types::STRING, length: 16, name: 'close_match_status')]
+    private string $closeMatchStatus = 'unmatched';
+
+    /** `matched_trade_id` | `matched_position_id` | `unmatched`. */
+    #[ORM\Column(type: Types::STRING, length: 32, name: 'close_matched_by')]
+    private string $closeMatchedBy = 'unmatched';
+
+    // --- Plan / sizing à l'entrée -----------------------------------------------
 
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'expected_r_multiple')]
     private ?float $expectedRMultiple = null;
@@ -72,11 +122,17 @@ class PositionTradeAnalysis
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_vwap')]
     private ?float $entryVwap = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'pnl_R')]
+    // --- Résultat / PnL ----------------------------------------------------------
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'pnl_r')]
     private ?float $pnlR = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'pnl_usdt')]
-    private ?float $pnlUsdt = null;
+    /**
+     * PnL ENREGISTRÉ tel quel par la source : on ne garantit PAS qu'il est net de tous
+     * les coûts (frais/funding/slippage). Voir {@see getNetPnlUsdt()}/{@see isNetPnlComplete()}.
+     */
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'recorded_pnl_usdt')]
+    private ?float $recordedPnlUsdt = null;
 
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'pnl_pct')]
     private ?float $pnlPct = null;
@@ -89,6 +145,22 @@ class PositionTradeAnalysis
 
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'holding_time_sec')]
     private ?float $holdingTimeSec = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'fees_usdt')]
+    private ?float $feesUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'funding_usdt')]
+    private ?float $fundingUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'slippage_usdt')]
+    private ?float $slippageUsdt = null;
+
+    /** PnL net UNIQUEMENT si recorded + tous les coûts sont présents, sinon `null`. */
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'net_pnl_usdt')]
+    private ?float $netPnlUsdt = null;
+
+    #[ORM\Column(type: Types::BOOLEAN, name: 'net_pnl_complete')]
+    private bool $netPnlComplete = false;
 
     public function getEntryEventId(): int
     {
@@ -115,9 +187,49 @@ class PositionTradeAnalysis
         return $this->runId;
     }
 
+    public function getCorrelationRunId(): ?string
+    {
+        return $this->correlationRunId;
+    }
+
+    public function getOrchestrationRunId(): ?string
+    {
+        return $this->orchestrationRunId;
+    }
+
+    public function getDashboardId(): ?string
+    {
+        return $this->dashboardId;
+    }
+
+    public function getSetId(): ?string
+    {
+        return $this->setId;
+    }
+
+    public function getExchange(): ?string
+    {
+        return $this->exchange;
+    }
+
+    public function getMarketType(): ?string
+    {
+        return $this->marketType;
+    }
+
+    public function getMtfProfile(): ?string
+    {
+        return $this->mtfProfile;
+    }
+
     public function getTradeId(): ?string
     {
         return $this->tradeId;
+    }
+
+    public function getPositionId(): ?string
+    {
+        return $this->positionId;
     }
 
     public function getEntryTime(): \DateTimeImmutable
@@ -128,6 +240,26 @@ class PositionTradeAnalysis
     public function getCloseTime(): ?\DateTimeImmutable
     {
         return $this->closeTime;
+    }
+
+    public function getCloseMatchStatus(): string
+    {
+        return $this->closeMatchStatus;
+    }
+
+    public function getCloseMatchedBy(): string
+    {
+        return $this->closeMatchedBy;
+    }
+
+    public function isClosed(): bool
+    {
+        return $this->closeEventId !== null;
+    }
+
+    public function isMatched(): bool
+    {
+        return $this->closeMatchStatus === 'matched';
     }
 
     public function getExpectedRMultiple(): ?float
@@ -195,9 +327,20 @@ class PositionTradeAnalysis
         return $this->pnlR;
     }
 
+    public function getRecordedPnlUsdt(): ?float
+    {
+        return $this->recordedPnlUsdt;
+    }
+
+    /**
+     * Alias de compatibilité ascendante pour les consommateurs existants (template Twig
+     * de reporting). Renvoie le PnL ENREGISTRÉ — pas garanti net (cf. {@see getNetPnlUsdt()}).
+     *
+     * @deprecated Utiliser {@see getRecordedPnlUsdt()} (ou {@see getNetPnlUsdt()}).
+     */
     public function getPnlUsdt(): ?float
     {
-        return $this->pnlUsdt;
+        return $this->recordedPnlUsdt;
     }
 
     public function getPnlPct(): ?float
@@ -218,5 +361,30 @@ class PositionTradeAnalysis
     public function getHoldingTimeSec(): ?float
     {
         return $this->holdingTimeSec;
+    }
+
+    public function getFeesUsdt(): ?float
+    {
+        return $this->feesUsdt;
+    }
+
+    public function getFundingUsdt(): ?float
+    {
+        return $this->fundingUsdt;
+    }
+
+    public function getSlippageUsdt(): ?float
+    {
+        return $this->slippageUsdt;
+    }
+
+    public function getNetPnlUsdt(): ?float
+    {
+        return $this->netPnlUsdt;
+    }
+
+    public function isNetPnlComplete(): bool
+    {
+        return $this->netPnlComplete;
     }
 }
