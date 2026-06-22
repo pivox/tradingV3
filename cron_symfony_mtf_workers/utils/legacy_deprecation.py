@@ -52,6 +52,14 @@ def warn_legacy_deprecation(component: str, *, stacklevel: int = 2) -> str:
     Ne lève jamais d'exception : le chemin legacy reste utilisable.
     """
     message = legacy_deprecation_message(component)
-    # ``stacklevel + 1`` pour compenser cette fonction intermédiaire.
-    warnings.warn(message, DeprecationWarning, stacklevel=stacklevel + 1)
+    # Garantie « ne lève jamais » : sous un filtre transformant les
+    # DeprecationWarning en erreurs (``PYTHONWARNINGS=error::DeprecationWarning``
+    # ou ``-W error``), un ``warnings.warn`` nu *relèverait* l'avertissement comme
+    # exception et casserait le CLI legacy (y compris ``--help``). On force donc
+    # localement le filtre ``always`` : l'avertissement reste émis et VISIBLE,
+    # mais ne peut pas être escaladé en exception, quel que soit le filtre global.
+    with warnings.catch_warnings():
+        warnings.simplefilter("always", DeprecationWarning)
+        # ``stacklevel + 1`` pour compenser cette fonction intermédiaire.
+        warnings.warn(message, DeprecationWarning, stacklevel=stacklevel + 1)
     return message

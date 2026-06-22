@@ -52,6 +52,22 @@ def test_legacy_deprecation_message_is_shared_and_prefixed():
     assert LEGACY_DEPRECATION_MESSAGE in message
 
 
+def test_warn_legacy_deprecation_never_raises_under_error_filter():
+    # Garantie « ne lève jamais » même sous -W error::DeprecationWarning
+    # (PYTHONWARNINGS=error::DeprecationWarning) : le helper force un filtre
+    # local ``always`` pour que le CLI legacy reste fonctionnel.
+    import warnings
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("error", DeprecationWarning)
+        # Ne doit PAS lever, bien que DeprecationWarning soit configuré en erreur.
+        message = warn_legacy_deprecation("legacy_cli.py")
+
+    assert "legacy_cli.py" in message
+    # L'avertissement reste émis (visible) malgré le filtre error global.
+    assert any(isinstance(w.message, DeprecationWarning) for w in record)
+
+
 # ---------------------------------------------------------------------------
 # Scripts legacy : main() émet l'avertissement ET continue de fonctionner
 # ---------------------------------------------------------------------------
