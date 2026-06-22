@@ -156,6 +156,21 @@ def test_activity_network_error_returns_explicit_dict(monkeypatch):
     assert result["summary"] == {"total_calls": 0, "success": 0, "failed": 0}
 
 
+def test_activity_timeout_returns_explicit_dict(monkeypatch):
+    # Un timeout httpx est une sous-classe d'Exception : il doit suivre le même
+    # mapping réseau → ok=false (jamais d'exception propagée hors de l'activity).
+    import httpx
+
+    _patch_async_client(monkeypatch, exc=httpx.ReadTimeout("timed out"))
+
+    result = asyncio.run(orchestrator_run(DEFAULT_ORCHESTRATOR_URL, {"dashboard_id": "1"}))
+
+    assert result["ok"] is False
+    assert result["status"] == "error"
+    assert "timed out" in result["error"]
+    assert result["summary"] == {"total_calls": 0, "success": 0, "failed": 0}
+
+
 def test_activity_http_error_with_json_body_returns_explicit_dict(monkeypatch):
     # FastAPI renvoie un JSON {"detail": ...} avec un statut non-2xx (404/422/…).
     # Ce n'est pas un RunResponse : il doit être normalisé en ok=false, pas

@@ -1,6 +1,13 @@
-"""Tests du gestionnaire de schedule cron cible vers l'orchestrateur (TM-001)."""
+"""Tests du gestionnaire de schedule cron cible vers l'orchestrateur (TM-001).
+
+QA-003 complète l'existant pour couvrir les branches restantes du script :
+import réel des classes Temporal (sans serveur), ``get_client``, routage cycle
+de vie de ``async_main`` (pause/resume/delete/status + create connecté),
+``delete``/``describe``, re-levée d'une erreur inattendue et ``main()``.
+"""
 
 import asyncio
+import sys
 
 import pytest
 
@@ -13,10 +20,47 @@ from scripts.manage_orchestrator_schedule import (
     build_parser,
     build_workflow_config,
     create_schedule,
+    describe_schedule,
+    delete_schedule,
     pause_schedule,
     resolve_schedule_config,
     resume_schedule,
 )
+
+
+def _make_config(command, **overrides):
+    """Fabrique une ScheduleConfig valide (dashboard numérique) surchargeable."""
+    base = dict(
+        command=command,
+        url=DEFAULT_URL,
+        dashboard_id="7",
+        cron="*/1 * * * *",
+        schedule_id="cron-orchestrator-run-1m",
+        workflow_id="cron-orchestrator-run-runner",
+        dry_run_schedule=False,
+    )
+    base.update(overrides)
+    return ScheduleConfig(**base)
+
+
+class _DummyScheduleClass:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+
+def _patch_schedule_classes(monkeypatch):
+    monkeypatch.setattr(
+        schedule_manager,
+        "temporal_schedule_classes",
+        lambda: (
+            _DummyScheduleClass,
+            lambda *a, **k: _DummyScheduleClass(),
+            _DummyScheduleClass,
+            _DummyScheduleClass,
+            "buffer_one",
+        ),
+    )
 
 
 def test_build_workflow_config_includes_url_schedule_and_dashboard():
@@ -319,3 +363,199 @@ def test_create_schedule_handles_already_running(monkeypatch, capsys):
 
     output = capsys.readouterr().out
     assert "already exists" in output
+
+
+# ---------------------------------------------------------------------------
+# QA-003 : branches restantes (sans serveur Temporal)
+# ---------------------------------------------------------------------------
+
+
+def test_temporal_schedule_classes_returns_sdk_tuple():
+    # Import RÉEL des classes Temporal (SDK installé, aucun serveur requis) :
+    # couvre les fallbacks d'import et la résolution de l'overlap policy.
+    Schedule, action, policy, spec, overlap = schedule_manager.temporal_schedule_classes()
+
+    assert all(item is not None for item in (Schedule, action, policy, spec))
+    assert overlap is not None
+    # L'action est bien le starter de workflow consommé par create_schedule.
+    assert action.__name__ == "ScheduleActionStartWorkflow"
+
+
+def test_get_client_connects_with_configured_address(monkeypatch):
+    import temporalio.client as temporal_client
+
+    captured = {}
+
+    class FakeClient:
+        pass
+
+    async def fake_connect(address, namespace=None):
+        captured["address"] = address
+        captured["namespace"] = namespace
+        return FakeClient()
+
+    monkeypatch.setattr(temporal_client.Client, "connect", fake_connect)
+
+    client = asyncio.run(schedule_manager.get_client())
+
+    assert isinstance(client, FakeClient)
+    assert captured["address"] == schedule_manager.TEMPORAL_ADDRESS
+    assert captured["namespace"] == schedule_manager.TEMPORAL_NAMESPACE
+
+
+def test_delete_schedule_invokes_handle(capsys):
+    class FakeHandle:
+        def __init__(self):
+            self.deleted = False
+
+        async def delete(self):
+            self.deleted = True
+
+    handle = FakeHandle()
+    asyncio.run(delete_schedule(handle, _make_config("delete")))
+
+    assert handle.deleted is True
+    assert "deleted" in capsys.readouterr().out
+
+
+def test_describe_schedule_prints_description(capsys):
+    class FakeHandle:
+        async def describe(self):
+            return "DESCRIBE-OBJECT"
+
+    asyncio.run(describe_schedule(FakeHandle()))
+
+    output = capsys.readouterr().out
+    assert "schedule status" in output
+    assert "DESCRIBE-OBJECT" in output
+
+
+def test_create_schedule_reraises_unexpected_error(monkeypatch):
+    # Une erreur qui N'EST PAS ScheduleAlreadyRunningError doit être propagée
+    # (pas masquée en "already exists").
+    _patch_schedule_classes(monkeypatch)
+
+    class BoomClient:
+        async def create_schedule(self, schedule_id, schedule):
+            raise RuntimeError("boom-unexpected")
+
+    with pytest.raises(RuntimeError, match="boom-unexpected"):
+        asyncio.run(create_schedule(BoomClient(), _make_config("create")))
+
+
+def test_async_main_create_connects_and_creates(monkeypatch, capsys):
+    _patch_schedule_classes(monkeypatch)
+    created = {}
+
+    class FakeClient:
+        async def create_schedule(self, schedule_id, schedule):
+            created["schedule_id"] = schedule_id
+
+    async def fake_get_client():
+        return FakeClient()
+
+    monkeypatch.setattr(schedule_manager, "get_client", fake_get_client)
+
+    parser = build_parser()
+    args = parser.parse_args(["create", "--dashboard-id", "7"])
+    asyncio.run(async_main(args))
+
+    assert created["schedule_id"] == "cron-orchestrator-run-1m"
+    assert "created schedule" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("command", ["pause", "resume", "delete", "status"])
+def test_async_main_routes_lifecycle_commands(monkeypatch, command):
+    calls = []
+
+    class FakeHandle:
+        async def pause(self, *, note=None):
+            calls.append(("pause", note))
+
+        async def unpause(self, *, note=None):
+            calls.append(("unpause", note))
+
+        async def delete(self):
+            calls.append(("delete",))
+
+        async def describe(self):
+            calls.append(("describe",))
+            return "DESC"
+
+    class FakeClient:
+        def get_schedule_handle(self, schedule_id):
+            calls.append(("handle", schedule_id))
+            return FakeHandle()
+
+    async def fake_get_client():
+        return FakeClient()
+
+    monkeypatch.setattr(schedule_manager, "get_client", fake_get_client)
+
+    parser = build_parser()
+    args = parser.parse_args([command, "--schedule-id", "cron-orchestrator-run-1m"])
+    asyncio.run(async_main(args))
+
+    # Le handle est résolu sur le bon schedule_id, puis l'action est invoquée.
+    assert ("handle", "cron-orchestrator-run-1m") in calls
+    actions = {c[0] for c in calls}
+    expected = {
+        "pause": "pause",
+        "resume": "unpause",
+        "delete": "delete",
+        "status": "describe",
+    }[command]
+    assert expected in actions
+
+
+def test_async_main_unknown_command_resolves_handle_but_noops(monkeypatch):
+    # Branche défensive : une commande hors {create,pause,resume,delete,status}
+    # (non atteignable via le parser, mais possible via une Namespace forgée)
+    # résout le handle puis ne fait rien — aucune action n'est invoquée.
+    import argparse
+
+    calls = []
+
+    class FakeHandle:
+        async def pause(self, *, note=None):
+            calls.append("pause")
+
+        async def unpause(self, *, note=None):
+            calls.append("unpause")
+
+        async def delete(self):
+            calls.append("delete")
+
+        async def describe(self):
+            calls.append("describe")
+
+    class FakeClient:
+        def get_schedule_handle(self, schedule_id):
+            calls.append(("handle", schedule_id))
+            return FakeHandle()
+
+    async def fake_get_client():
+        return FakeClient()
+
+    monkeypatch.setattr(schedule_manager, "get_client", fake_get_client)
+
+    args = argparse.Namespace(command="bogus", schedule_id="cron-orchestrator-run-1m")
+    asyncio.run(async_main(args))
+
+    assert calls == [("handle", "cron-orchestrator-run-1m")]
+
+
+def test_main_parses_args_and_runs(monkeypatch):
+    ran = {}
+
+    async def fake_async_main(args):
+        ran["command"] = args.command
+        ran["schedule_id"] = args.schedule_id
+
+    monkeypatch.setattr(schedule_manager, "async_main", fake_async_main)
+    monkeypatch.setattr(sys, "argv", ["prog", "status", "--schedule-id", "x"])
+
+    schedule_manager.main()
+
+    assert ran["command"] == "status"
+    assert ran["schedule_id"] == "x"
