@@ -168,7 +168,8 @@ legacy ci-dessus sont **dépréciés (CLEAN-001)** : ils restent disponibles et
 fonctionnels tant que la transition n'est pas terminée, mais émettent un
 `DeprecationWarning` au lancement et ne doivent plus servir à créer de nouveaux
 schedules. La suppression effective est un jalon ultérieur ; le guide de
-migration détaillé est CLEAN-002.
+migration détaillé (CLEAN-002) est
+[Migration legacy → orchestrateur](legacy-migration.md).
 
 ## Schedule cible (orchestrateur)
 
