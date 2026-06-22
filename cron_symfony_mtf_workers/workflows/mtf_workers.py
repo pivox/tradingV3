@@ -1,3 +1,17 @@
+"""DEPRECATED (CLEAN-001) — workflow legacy multi-jobs.
+
+``CronSymfonyMtfWorkersWorkflow`` normalise N ``MtfJob`` et boucle des appels
+``mtf_api_call`` vers ``/api/mtf/run``. Ce chemin est **déprécié** : la cible est
+le schedule orchestrateur unique (``scripts/manage_orchestrator_schedule.py`` →
+``OrchestratorCronWorkflow`` → un seul ``POST /orchestrator/run``). Le workflow
+reste enregistré et 100 % fonctionnel pendant la transition (la suppression est
+un jalon ultérieur, hors CLEAN-001) ; il émet désormais un avertissement de
+dépréciation via ``workflow.logger.warning`` au début de chaque run.
+
+Ne pas étendre ce chemin : toute nouvelle logique d'orchestration vit dans
+``python-orchestrator/`` (PY-005/PY-006).
+"""
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -24,6 +38,15 @@ def _normalize_jobs(raw_jobs: Iterable[Any]) -> List[MtfJob]:
 class CronSymfonyMtfWorkersWorkflow:
     @workflow.run
     async def run(self, jobs: Iterable[Any]) -> None:
+        # Avertissement de dépréciation (CLEAN-001) — déterministe : on reste sur
+        # workflow.logger (aucune I/O, aucun datetime.now()). Le legacy continue
+        # de s'exécuter normalement ; la cible est le schedule orchestrateur
+        # unique (scripts/manage_orchestrator_schedule.py → /orchestrator/run).
+        workflow.logger.warning(
+            "[CronMtfWorkers] DEPRECATED (CLEAN-001): legacy multi-jobs workflow; "
+            "migrate to the single orchestrator schedule "
+            "(manage_orchestrator_schedule.py -> POST /orchestrator/run)."
+        )
         normalized = _normalize_jobs(jobs)
         for job in normalized:
             payload = job.payload()

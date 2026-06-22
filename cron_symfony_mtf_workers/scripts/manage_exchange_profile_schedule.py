@@ -1,11 +1,30 @@
+"""DEPRECATED (CLEAN-001) — schedule legacy/transition par exchange/profile.
+
+Ce script crée/gère des schedules legacy démarrant
+``CronSymfonyMtfWorkersWorkflow`` par couple ``exchange/market_type/profile``.
+Il est **déprécié** : la cible est le schedule orchestrateur unique
+(``scripts/manage_orchestrator_schedule.py`` → ``POST /orchestrator/run``), où la
+sélection des sets / exchanges vit côté ``python-orchestrator/``. Le script reste
+fonctionnel pendant la transition (y compris les garde-fous live OKX/Hyperliquid)
+et émet un ``DeprecationWarning`` à son lancement (suppression = jalon ultérieur,
+hors CLEAN-001).
+"""
+
 import argparse
 import asyncio
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Permet l'exécution directe `python scripts/manage_*.py` (où sys.path[0] est le
+# dossier scripts/) de résoudre le paquet `utils` à la racine du projet cron.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from utils.legacy_deprecation import warn_legacy_deprecation
 
 
 TEMPORAL_ADDRESS = os.getenv("TEMPORAL_ADDRESS", "temporal:7233")
@@ -388,7 +407,14 @@ def add_common_options(parser: argparse.ArgumentParser, *, require_matrix: bool)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Manage exchange/profile Temporal MTF schedules")
+    parser = argparse.ArgumentParser(
+        description=(
+            "[DEPRECATED — CLEAN-001] Manage legacy exchange/profile Temporal "
+            "MTF schedules (CronSymfonyMtfWorkersWorkflow). Use "
+            "scripts/manage_orchestrator_schedule.py (single orchestrator "
+            "schedule → POST /orchestrator/run) instead."
+        )
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     create_cmd = sub.add_parser("create", help="Create a schedule")
@@ -404,6 +430,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    warn_legacy_deprecation("manage_exchange_profile_schedule.py")
     parser = build_parser()
     args = parser.parse_args()
     asyncio.run(async_main(args))

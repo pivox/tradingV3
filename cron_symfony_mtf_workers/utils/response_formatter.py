@@ -1,4 +1,11 @@
-"""Format MTF API responses for concise Temporal output."""
+"""Format MTF API responses for concise Temporal output.
+
+DEPRECATED (CLEAN-001) : ce formatter ne sert que le chemin legacy multi-jobs
+(``mtf_api_call`` / ``CronSymfonyMtfWorkersWorkflow``). La cible est le schedule
+orchestrateur unique (``scripts/manage_orchestrator_schedule.py`` →
+``POST /orchestrator/run``), dont l'agrégation/persistance vit côté
+``python-orchestrator/``. Conservé fonctionnel pendant la transition.
+"""
 from __future__ import annotations
 
 import json

@@ -1,3 +1,13 @@
+"""DEPRECATED (CLEAN-001) — modèle de job du chemin legacy multi-jobs.
+
+``MtfJob`` normalise un job legacy (url, workers, dry_run, exchange, profile…)
+consommé par ``CronSymfonyMtfWorkersWorkflow`` / ``mtf_api_call``. Ce chemin est
+**déprécié** au profit du schedule orchestrateur unique
+(``scripts/manage_orchestrator_schedule.py`` → ``POST /orchestrator/run``), qui
+ne construit plus de jobs côté Temporal. Le modèle reste fonctionnel pendant la
+transition (suppression = jalon ultérieur, hors CLEAN-001) ; ne pas l'étendre.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

@@ -1,10 +1,27 @@
+"""DEPRECATED (CLEAN-001) — schedule legacy dédié au profil ``scalper_micro``.
+
+Ce script crée/gère un schedule legacy démarrant
+``CronSymfonyMtfWorkersWorkflow`` avec ``mtf_profile=scalper_micro``. Il est
+**déprécié** : utiliser le schedule orchestrateur unique
+(``scripts/manage_orchestrator_schedule.py`` → ``POST /orchestrator/run``). Le
+script reste fonctionnel pendant la transition et émet un ``DeprecationWarning``
+à son lancement (suppression = jalon ultérieur, hors CLEAN-001).
+"""
+
 import argparse
 import asyncio
 import os
+import sys
 from typing import Any, Dict
 
 from temporalio.client import Client
 from temporalio.api.enums.v1 import ScheduleOverlapPolicy
+
+# Permet l'exécution directe `python scripts/manage_*.py` (où sys.path[0] est le
+# dossier scripts/) de résoudre le paquet `utils` à la racine du projet cron.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from utils.legacy_deprecation import warn_legacy_deprecation
 
 # Support both modern (>=1.6) and legacy (<1.6) Temporal Python SDK layouts
 try:
@@ -137,7 +154,14 @@ async def async_main(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Manage the CronSymfonyMtfWorkers schedule for scalper_micro profile")
+    parser = argparse.ArgumentParser(
+        description=(
+            "[DEPRECATED — CLEAN-001] Manage the legacy CronSymfonyMtfWorkers "
+            "schedule for the scalper_micro profile. Use "
+            "scripts/manage_orchestrator_schedule.py (single orchestrator "
+            "schedule → POST /orchestrator/run) instead."
+        )
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     create_cmd = sub.add_parser("create", help="Create the schedule if it does not exist")
@@ -152,6 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    warn_legacy_deprecation("manage_scalper_micro_schedule.py")
     parser = build_parser()
     args = parser.parse_args()
     asyncio.run(async_main(args))
