@@ -1,0 +1,109 @@
+name: OBS-003 Trading (outcome + lineage)
+
+# Gate dédié OBS-003 : exécute RÉELLEMENT les suites PHP touchées (Trading, MtfRunner,
+# contrats DTO) ET le test d'intégration PostgreSQL de la vue `position_trade_analysis_v2`
+# (jamais self-skippé : un service PostgreSQL est fourni et le job échoue si le test est
+# ignoré via --fail-on-skipped).
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/obs003-trading.yml'
+      - 'trading-app/src/Trading/**'
+      - 'trading-app/src/Controller/RunnerController.php'
+      - 'trading-app/src/MtfRunner/**'
+      - 'trading-app/src/MtfValidator/**'
+      - 'trading-app/src/Contract/MtfValidator/**'
+      - 'trading-app/migrations/**'
+      - 'trading-app/tests/Trading/**'
+      - 'trading-app/tests/MtfRunner/**'
+      - 'trading-app/tests/Contract/MtfValidator/**'
+      - 'trading-app/config/**'
+      - 'tests/fixtures/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/obs003-trading.yml'
+      - 'trading-app/src/Trading/**'
+      - 'trading-app/src/MtfRunner/**'
+      - 'trading-app/migrations/**'
+      - 'trading-app/tests/Trading/**'
+      - 'tests/fixtures/**'
+
+jobs:
+  obs003-trading:
+    name: OBS-003 Trading (PHP + PostgreSQL view)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: trading_app_test
+          POSTGRES_USER: trading
+          POSTGRES_PASSWORD: trading
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trading"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      APP_ENV: test
+      APP_SECRET: ci-obs003-secret
+      DEFAULT_URI: 'http://localhost'
+      REDIS_URL: 'redis://127.0.0.1:6379'
+      # La vue est testée via une connexion DBAL PostgreSQL distincte qui lit DATABASE_URL.
+      # (L'ORM de test reste sur sqlite via config/packages/test/doctrine.yaml ; ces suites
+      # OBS-003 n'utilisent pas l'ORM — readers stubés + connexion vue dédiée.)
+      DATABASE_URL: 'postgresql://trading:trading@127.0.0.1:5432/trading_app_test?serverVersion=16&charset=utf8'
+
+    defaults:
+      run:
+        working-directory: trading-app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: redis, pdo_pgsql, intl, opcache
+          coverage: none
+          tools: composer:v2
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Lint container
+        run: php bin/console lint:container
+
+      - name: Lint YAML config
+        run: php bin/console lint:yaml config
+
+      - name: PHPUnit — Trading + MtfRunner
+        run: vendor/bin/phpunit tests/Trading tests/MtfRunner
+
+      - name: PHPUnit — Contract MtfValidator DTOs (OBS-003)
+        run: vendor/bin/phpunit tests/Contract/MtfValidator/Dto
+
+      - name: PostgreSQL view test — must run, never skipped
+        # --fail-on-skipped : si la connexion PostgreSQL manque, le test se skip et le job
+        # ÉCHOUE (au lieu de masquer une vue non testée).
+        run: vendor/bin/phpunit --fail-on-skipped tests/Trading/View/PositionTradeAnalysisViewTest.php
+
+      - name: PHPStan — OBS-003 services/validator/controller
+        run: >-
+          vendor/bin/phpstan analyse --no-progress
+          src/Trading/Service/RunTradeOutcomeService.php
+          src/Trading/Service/PositionTradeOutcomeSourceException.php
+          src/Trading/Service/PositionTradeAnalysisReaderInterface.php
+          src/Trading/Service/RunCorrelationId.php
+          src/Trading/Orchestration/OrchestrationContextValidator.php
+          src/Trading/Orchestration/OrchestrationContextException.php
+          src/Trading/Controller/Api/PositionAnalysisApiController.php
