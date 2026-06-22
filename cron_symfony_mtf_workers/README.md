@@ -53,7 +53,13 @@ Ne plus créer de nouveaux schedules via les scripts legacy ci-dessus.
   l'identique, avec en plus l'avertissement.
 - **Ne supprime rien**, ne change aucune signature publique, et le `worker.py`
   enregistre toujours les deux chemins. La suppression effective est un **jalon
-  ultérieur** (hors CLEAN-001) ; le guide de migration détaillé est **CLEAN-002**.
+  ultérieur** (hors CLEAN-001).
+
+**Comment migrer.** Le guide opérationnel pas-à-pas (CLEAN-002) — inventaire des
+schedules legacy, correspondance des paramètres `MtfJob` → sets de dashboard,
+ordre des opérations (créer/valider la cible, basculer, pauser puis supprimer le
+legacy), rollback et échéance de suppression — vit dans le handbook :
+[Migration legacy → orchestrateur](../docs/handbook/technical/legacy-migration.md).
 - Ne touche **pas** les scripts **actifs** `manage_contract_sync` (§4.3) et
   `manage_cleanup` (§4.5), ni le chemin cible orchestrateur (§4.0).
 
