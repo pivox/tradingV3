@@ -392,5 +392,3 @@ opérationnelle. La ligne de suppression du code reste à planifier dans le
   par exchange.
 - `cron_symfony_mtf_workers/README.md` §0 (Dépréciation CLEAN-001) et §4
   (schedules disponibles).
-</content>
-</invoke>
