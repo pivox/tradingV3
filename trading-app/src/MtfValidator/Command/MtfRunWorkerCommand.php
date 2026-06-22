@@ -45,7 +45,11 @@ final class MtfRunWorkerCommand extends Command
             ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
             ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)')
             ->addOption('trade-profile', null, InputOption::VALUE_OPTIONAL, 'Profil TradeEntry/MTF à utiliser (ex: scalper, regular)')
-            ->addOption('validation-mode', null, InputOption::VALUE_OPTIONAL, 'Mode de validation du contexte (pragmatic|strict|ultra-pragmatig)');
+            ->addOption('validation-mode', null, InputOption::VALUE_OPTIONAL, 'Mode de validation du contexte (pragmatic|strict|ultra-pragmatig)')
+            ->addOption('request-id', null, InputOption::VALUE_OPTIONAL, 'OBS-003 : run_id de corrélation (≤64) à utiliser comme run_id du run')
+            ->addOption('orchestration-run-id', null, InputOption::VALUE_OPTIONAL, 'OBS-003 : run_id ORIGINAL du run d\'orchestration')
+            ->addOption('dashboard-id', null, InputOption::VALUE_OPTIONAL, 'OBS-003 : dashboard d\'orchestration exécuté')
+            ->addOption('set-id', null, InputOption::VALUE_OPTIONAL, 'OBS-003 : set d\'orchestration dispatché');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -82,6 +86,11 @@ final class MtfRunWorkerCommand extends Command
         $validationModeOpt = $input->getOption('validation-mode');
         $validationMode = is_string($validationModeOpt) && $validationModeOpt !== '' ? strtolower(trim($validationModeOpt)) : null;
 
+        $requestId = $this->optString($input->getOption('request-id'));
+        $orchestrationRunId = $this->optString($input->getOption('orchestration-run-id'));
+        $dashboardId = $this->optString($input->getOption('dashboard-id'));
+        $setId = $this->optString($input->getOption('set-id'));
+
         try {
             // En mode worker, activer le verrou par symbole pour éviter le blocage global
             $request = MtfRunRequestDto::fromArray([
@@ -99,6 +108,10 @@ final class MtfRunWorkerCommand extends Command
                 'market_type' => $marketTypeOpt !== null && $marketTypeOpt !== '' ? $marketTypeOpt : MarketType::PERPETUAL->value,
                 'profile' => $profile,
                 'validation_mode' => $validationMode,
+                'request_id' => $requestId,
+                'orchestration_run_id' => $orchestrationRunId,
+                'dashboard_id' => $dashboardId,
+                'set_id' => $setId,
             ]);
             $response = $this->mtfValidator->run($request);
             $this->tradeDecisionDispatcher->dispatchFromResponse($request, $response);
@@ -163,5 +176,10 @@ final class MtfRunWorkerCommand extends Command
             ], JSON_THROW_ON_ERROR));
             return Command::FAILURE;
         }
+    }
+
+    private function optString(mixed $value): ?string
+    {
+        return is_string($value) && trim($value) !== '' ? trim($value) : null;
     }
 }

@@ -38,17 +38,25 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
                 continue;
             }
 
-            $mtfRun = $this->buildRunDto($request, $response->runId, $result);
+            // OBS-003 : si la requête fournit un run_id de corrélation (X-Run-Id côté
+            // orchestrateur), il prime sur l'identifiant généré par le validateur, afin que
+            // `trade_lifecycle_event.run_id` corresponde au run d'orchestration. Sinon,
+            // comportement historique inchangé (run_id du validateur).
+            $effectiveRunId = ($request->requestId !== null && $request->requestId !== '')
+                ? $request->requestId
+                : $response->runId;
+
+            $mtfRun = $this->buildRunDto($request, $effectiveRunId, $result);
 
             try {
                 $this->messageBus->dispatch(new MtfTradingDecisionMessage(
-                    $response->runId,
+                    $effectiveRunId,
                     $mtfRun,
                     $result,
                 ));
 
                 $this->mtfLogger->debug('[MTF Dispatcher] Trading decision dispatched', [
-                    'run_id' => $response->runId,
+                    'run_id' => $effectiveRunId,
                     'symbol' => $result->symbol,
                     'execution_tf' => $result->executionTimeframe,
                     'side' => $result->side,
@@ -88,6 +96,12 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
                 'ip_address' => $request->ipAddress,
                 'exchange' => $request->exchange?->value,
                 'market_type' => $request->marketType?->value,
+                // OBS-003 : lineage transporté jusqu'au TradingDecisionHandler, qui
+                // l'inscrit dans l'`extra` de `order_submitted`.
+                'correlation_run_id' => $runId,
+                'orchestration_run_id' => $request->orchestrationRunId,
+                'orchestration_dashboard_id' => $request->dashboardId,
+                'orchestration_set_id' => $request->setId,
             ],
         );
     }

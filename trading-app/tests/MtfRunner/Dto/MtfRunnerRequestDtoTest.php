@@ -120,4 +120,72 @@ final class MtfRunnerRequestDtoTest extends TestCase
     {
         self::assertNull(MtfRunnerRequestDto::fromArray(['open_state_snapshot' => 'nope'])->openStateSnapshot);
     }
+
+    // --- OBS-003 : lineage d'orchestration --------------------------------------
+
+    public function testFromArrayParsesOrchestrationLineage(): void
+    {
+        $dto = MtfRunnerRequestDto::fromArray([
+            'symbols' => ['BTCUSDT'],
+            'run_id' => 'run_dashA_20260617',
+            'correlation_run_id' => 'run_dashA_20260617',
+            'orchestration_dashboard_id' => 'dashA',
+            'orchestration_set_id' => 's1',
+        ]);
+
+        self::assertSame('run_dashA_20260617', $dto->originalRunId);
+        self::assertSame('run_dashA_20260617', $dto->correlationRunId);
+        self::assertSame('dashA', $dto->dashboardId);
+        self::assertSame('s1', $dto->setId);
+    }
+
+    public function testFromArrayAcceptsShortDashboardAndSetAliases(): void
+    {
+        $dto = MtfRunnerRequestDto::fromArray([
+            'symbols' => ['BTCUSDT'],
+            'dashboard_id' => 'dashB',
+            'set_id' => 's2',
+        ]);
+
+        self::assertSame('dashB', $dto->dashboardId);
+        self::assertSame('s2', $dto->setId);
+    }
+
+    public function testLegacyRequestHasNullLineage(): void
+    {
+        $dto = MtfRunnerRequestDto::fromArray(['symbols' => ['BTCUSDT']]);
+
+        self::assertNull($dto->originalRunId);
+        self::assertNull($dto->correlationRunId);
+        self::assertNull($dto->dashboardId);
+        self::assertNull($dto->setId);
+    }
+
+    public function testBlankLineageValuesAreNormalisedToNull(): void
+    {
+        $dto = MtfRunnerRequestDto::fromArray([
+            'symbols' => ['BTCUSDT'],
+            'run_id' => '   ',
+            'set_id' => '',
+        ]);
+
+        self::assertNull($dto->originalRunId);
+        self::assertNull($dto->setId);
+    }
+
+    public function testToArrayRoundTripsLineage(): void
+    {
+        $array = MtfRunnerRequestDto::fromArray([
+            'symbols' => ['BTCUSDT'],
+            'run_id' => 'orig',
+            'correlation_run_id' => 'corr',
+            'dashboard_id' => 'd',
+            'set_id' => 's',
+        ])->toArray();
+
+        self::assertSame('orig', $array['run_id']);
+        self::assertSame('corr', $array['correlation_run_id']);
+        self::assertSame('d', $array['dashboard_id']);
+        self::assertSame('s', $array['set_id']);
+    }
 }

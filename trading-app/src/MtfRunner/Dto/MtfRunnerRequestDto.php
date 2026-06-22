@@ -39,6 +39,15 @@ final class MtfRunnerRequestDto
          * @var array{open_positions?: array<int,mixed>, open_orders?: array<int,mixed>}|null
          */
         public readonly ?array $openStateSnapshot = null,
+        /**
+         * OBS-003 — lineage d'orchestration (en-têtes `X-Run-Id` / `X-Run-Correlation-Id`
+         * / `X-Orchestration-Dashboard-Id` / `X-Orchestration-Set-Id`). Tous nullables :
+         * CLI et appel HTTP legacy (sans en-têtes) restent strictement inchangés.
+         */
+        public readonly ?string $originalRunId = null,
+        public readonly ?string $correlationRunId = null,
+        public readonly ?string $dashboardId = null,
+        public readonly ?string $setId = null,
     ) {}
 
     public static function fromArray(array $data): self
@@ -65,7 +74,16 @@ final class MtfRunnerRequestDto
             profile: $profile,
             validationMode: $validationMode,
             openStateSnapshot: self::extractOpenStateSnapshot($data),
+            originalRunId: self::nonEmptyString($data['run_id'] ?? $data['original_run_id'] ?? null),
+            correlationRunId: self::nonEmptyString($data['correlation_run_id'] ?? null),
+            dashboardId: self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null),
+            setId: self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null),
         );
+    }
+
+    private static function nonEmptyString(mixed $value): ?string
+    {
+        return is_string($value) && trim($value) !== '' ? trim($value) : null;
     }
 
     public function toArray(): array
@@ -89,6 +107,10 @@ final class MtfRunnerRequestDto
             'profile' => $this->profile,
             'validation_mode' => $this->validationMode,
             'open_state_snapshot' => $this->openStateSnapshot,
+            'run_id' => $this->originalRunId,
+            'correlation_run_id' => $this->correlationRunId,
+            'dashboard_id' => $this->dashboardId,
+            'set_id' => $this->setId,
         ];
     }
 

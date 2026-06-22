@@ -67,6 +67,16 @@ class RunnerController extends AbstractController
             }
             $symbols = array_values(array_unique($symbols));
 
+            // OBS-003 : lineage d'orchestration porté par les en-têtes HTTP. L'en-tête a
+            // priorité sur le corps ; absence d'en-tête = comportement historique (run_id
+            // UUID généré en aval). Le run_id ORIGINAL (X-Run-Id) est la source de vérité ;
+            // l'identifiant de corrélation canonique est (re)dérivé côté Symfony, jamais
+            // tronqué. X-Run-Correlation-Id n'est qu'un repli/indication.
+            $headerRunId = $request->headers->get('X-Run-Id');
+            $headerCorrelationId = $request->headers->get('X-Run-Correlation-Id');
+            $headerSetId = $request->headers->get('X-Orchestration-Set-Id');
+            $headerDashboardId = $request->headers->get('X-Orchestration-Dashboard-Id');
+
             // Injection automatique du profile depuis la configuration si non fourni
             // ROLLBACK: Si besoin de revenir en arrière, supprimer cette logique et remettre:
             // 'profile' => $data['profile'] ?? $data['mtf_profile'] ?? null,
@@ -105,6 +115,10 @@ class RunnerController extends AbstractController
                 'context_mode' => $data['context_mode'] ?? null,
                 'mode' => $data['mode'] ?? null,
                 'open_state_snapshot' => $openStateSnapshot,
+                'run_id' => $headerRunId ?? ($data['run_id'] ?? null),
+                'correlation_run_id' => $headerCorrelationId ?? ($data['correlation_run_id'] ?? null),
+                'orchestration_dashboard_id' => $headerDashboardId ?? ($data['dashboard_id'] ?? null),
+                'orchestration_set_id' => $headerSetId ?? ($data['set_id'] ?? null),
             ]);
             $result = $runMtfCycle->run($runnerRequest);
 

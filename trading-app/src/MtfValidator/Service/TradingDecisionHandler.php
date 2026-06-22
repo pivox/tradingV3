@@ -134,6 +134,14 @@ final class TradingDecisionHandler
             ->merge([
                 'config_version' => $tradeEntryConfig->getVersion(),
                 'run_id' => $runId,
+                // OBS-003 : lineage d'orchestration inscrit dans l'`extra` de
+                // `order_submitted` (merge() ignore les valeurs nulles : CLI/legacy
+                // n'ajoutent rien). `correlation_run_id` == `run_id` (≤64) ; le run_id
+                // ORIGINAL reste disponible via `orchestration_run_id`.
+                'correlation_run_id' => $mtfRunDto->options['correlation_run_id'] ?? null,
+                'orchestration_run_id' => $mtfRunDto->options['orchestration_run_id'] ?? null,
+                'orchestration_dashboard_id' => $mtfRunDto->options['orchestration_dashboard_id'] ?? null,
+                'orchestration_set_id' => $mtfRunDto->options['orchestration_set_id'] ?? null,
             ]);
 
         // 3. Construction via Builder (délégation) avec champs minimaux
