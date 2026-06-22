@@ -42,6 +42,18 @@ sequenceDiagram
 
 ## Responsabilités legacy
 
+> **DEPRECATED (CLEAN-001).** Le chemin legacy multi-jobs ci-dessous
+> (`CronSymfonyMtfWorkersWorkflow` + `mtf_api_call` + `MtfJob` +
+> `response_formatter` et les 3 scripts `manage_mtf_workers` /
+> `manage_scalper_micro` / `manage_exchange_profile`) est **déprécié**. La cible
+> est le **schedule orchestrateur unique** (`scripts/manage_orchestrator_schedule.py`
+> → `OrchestratorCronWorkflow` → un seul `POST /orchestrator/run`, cf. §Schedule
+> cible). Il reste 100 % fonctionnel pendant la transition : lancer un script
+> legacy émet désormais un `DeprecationWarning`, et le workflow legacy journalise
+> un avertissement (`workflow.logger.warning`). Aucune suppression n'est faite
+> dans CLEAN-001 (jalon ultérieur) ; les scripts **actifs** `manage_contract_sync`
+> et `manage_cleanup` ne sont pas concernés.
+
 | Composant | Fichier | Rôle |
 | --- | --- | --- |
 | Worker process | `cron_symfony_mtf_workers/worker.py` | Se connecte à Temporal, enregistre workflow et activity sur la task queue. |
@@ -144,13 +156,19 @@ Le JSON complet et les détails par set restent dans l'API Python et dans la bas
 
 | Script | Statut | Usage |
 | --- | --- | --- |
-| `scripts/manage_exchange_profile_schedule.py` | legacy / transition | Schedule explicite par `exchange`, `market_type`, `profile`, cadence et dry-run. |
-| `scripts/manage_mtf_workers_schedule.py` | legacy | Ancien schedule générique vers `/api/mtf/run`. |
-| `scripts/manage_scalper_micro_schedule.py` | legacy | Ancien schedule dédié `scalper_micro`. |
+| `scripts/manage_exchange_profile_schedule.py` | **DEPRECATED (CLEAN-001)** | Schedule explicite par `exchange`, `market_type`, `profile`, cadence et dry-run. → Migrer vers `manage_orchestrator_schedule.py`. |
+| `scripts/manage_mtf_workers_schedule.py` | **DEPRECATED (CLEAN-001)** | Ancien schedule générique vers `/api/mtf/run`. → Migrer vers `manage_orchestrator_schedule.py`. |
+| `scripts/manage_scalper_micro_schedule.py` | **DEPRECATED (CLEAN-001)** | Ancien schedule dédié `scalper_micro`. → Migrer vers `manage_orchestrator_schedule.py`. |
 | `scripts/manage_contract_sync_schedule.py` | actif | Sync quotidienne des contrats via `/api/mtf/sync-contracts`. |
 | `scripts/manage_cleanup_schedule.py` | actif | Jobs de cleanup. |
 
-Le chemin cible documenté est un schedule unique vers l'orchestrateur Python. Les scripts legacy restent disponibles tant que la transition n'est pas terminée.
+Le chemin cible est le **schedule unique vers l'orchestrateur Python**
+(`scripts/manage_orchestrator_schedule.py`, cf. §Schedule cible). Les 3 scripts
+legacy ci-dessus sont **dépréciés (CLEAN-001)** : ils restent disponibles et
+fonctionnels tant que la transition n'est pas terminée, mais émettent un
+`DeprecationWarning` au lancement et ne doivent plus servir à créer de nouveaux
+schedules. La suppression effective est un jalon ultérieur ; le guide de
+migration détaillé est CLEAN-002.
 
 ## Schedule cible (orchestrateur)
 
