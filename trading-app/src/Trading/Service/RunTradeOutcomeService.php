@@ -4,24 +4,30 @@ declare(strict_types=1);
 
 namespace App\Trading\Service;
 
-use App\Trading\Entity\PositionTradeAnalysis;
+use App\Trading\Entity\PositionTradeAnalysisV2;
 use Psr\Log\LoggerInterface;
 
 /**
  * OBS-003 — Agrégation OUTCOME d'un run : relie un run d'orchestration à ses trades
- * résultants (vue `position_trade_analysis`) par identifiant de corrélation, en lecture
+ * résultants (vue `position_trade_analysis_v2`) par identifiant de corrélation, en lecture
  * seule. Le PnL n'est JAMAIS recalculé : on agrège les valeurs déjà exposées par la vue
- * (somme/moyenne/médiane). Le winrate ne porte que sur les trades clôturés ET rapprochés.
+ * (somme/moyenne/médiane).
  *
- * Distinction stricte recorded vs net PnL : `recorded_pnl_usdt` est la valeur enregistrée
- * (pas garantie nette de tous les coûts), `net_pnl_usdt` n'est agrégé que sur les lignes
- * dont la vue atteste `net_pnl_complete = true` ; `data_complete` est vrai uniquement si
- * tous les trades clôturés ont un net complet.
+ * Qualité (issue #190) — distinctions strictes :
+ *  - `matched_closed` : entrée rapprochée d'une clôture par identifiant exact (seule base
+ *    d'un trade certifié) ;
+ *  - `unmatched` : entrée sans clôture rapprochée — état réel INCONNU (peut être ouverte
+ *    OU clôturée non-rapprochable) ; jamais comptée comme position ouverte confirmée ;
+ *  - `confirmed_open` : 0 ici (la vue read-only ne porte pas de preuve d'ouverture ; le
+ *    confirmer exige l'état ouvert live, hors périmètre OBS-003).
  *
- * Fail-safe : la source indisponible (exception du reader) est signalée par
- * `source_available = false` et NE doit jamais être confondue avec « 0 trade » — c'est à
- * l'appelant (contrôleur HTTP) de distinguer les deux. Ici, une exception est relancée
- * pour que le contrôleur réponde explicitement (jamais un agrégat vide silencieux).
+ * PnL — on n'expose JAMAIS un net certifié : `recorded_pnl_usdt` (enregistré) et
+ * `estimated_net_pnl_usdt` (estimation best-effort, cf. `cost_completeness`) sont distincts.
+ * `data_complete` n'est vrai que si toutes les lignes pertinentes sont rapprochées ET au
+ * contrat de coûts complet (jamais le cas tant que le contrat #190 n'est pas livré).
+ *
+ * Fail-safe : la source indisponible (exception du reader) est relancée pour que le
+ * contrôleur HTTP réponde explicitement (jamais un agrégat vide silencieux).
  */
 final class RunTradeOutcomeService
 {
@@ -32,9 +38,6 @@ final class RunTradeOutcomeService
     }
 
     /**
-     * Construit l'agrégat OUTCOME pour un `run_id` ORIGINAL (l'identifiant de corrélation
-     * canonique est dérivé ici, identique à Python).
-     *
      * @return array<string,mixed>
      *
      * @throws PositionTradeOutcomeSourceException si la source est indisponible.
@@ -65,21 +68,21 @@ final class RunTradeOutcomeService
             'source_available' => true,
             'data_complete' => $this->isDataComplete($rows),
             'summary' => $this->aggregate($rows),
-            'by_set' => $this->group($rows, static fn (PositionTradeAnalysis $r) => $r->getSetId()),
-            'by_profile' => $this->group($rows, static fn (PositionTradeAnalysis $r) => $r->getMtfProfile()),
-            'by_exchange' => $this->group($rows, static fn (PositionTradeAnalysis $r) => $r->getExchange()),
-            'by_symbol' => $this->group($rows, static fn (PositionTradeAnalysis $r) => $r->getSymbol()),
+            'by_set' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getSetId()),
+            'by_profile' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getMtfProfile()),
+            'by_exchange' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getExchange()),
+            'by_symbol' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getSymbol()),
         ];
     }
 
     /**
-     * @param PositionTradeAnalysis[] $rows
-     * @param callable(PositionTradeAnalysis):?string $keyFn
+     * @param PositionTradeAnalysisV2[] $rows
+     * @param callable(PositionTradeAnalysisV2):?string $keyFn
      * @return list<array<string,mixed>>
      */
     private function group(array $rows, callable $keyFn): array
     {
-        /** @var array<string,PositionTradeAnalysis[]> $buckets */
+        /** @var array<string,PositionTradeAnalysisV2[]> $buckets */
         $buckets = [];
         foreach ($rows as $row) {
             $key = $keyFn($row);
@@ -100,23 +103,20 @@ final class RunTradeOutcomeService
     }
 
     /**
-     * @param PositionTradeAnalysis[] $rows
+     * @param PositionTradeAnalysisV2[] $rows
      * @return array<string,mixed>
      */
     private function aggregate(array $rows): array
     {
         $tradeCount = count($rows);
-        $closed = array_values(array_filter($rows, static fn (PositionTradeAnalysis $r): bool => $r->isClosed()));
         $matchedClosed = array_values(array_filter(
-            $closed,
-            static fn (PositionTradeAnalysis $r): bool => $r->isMatched()
+            $rows,
+            static fn (PositionTradeAnalysisV2 $r): bool => $r->isMatchedClosed()
         ));
+        $matchedClosedCount = count($matchedClosed);
+        $unmatchedCount = $tradeCount - $matchedClosedCount;
 
-        $closedCount = count($closed);
-        $matchedCount = count(array_filter($rows, static fn (PositionTradeAnalysis $r): bool => $r->isMatched()));
-        $unmatchedCount = $tradeCount - $matchedCount;
-
-        // Winrate : trades clôturés ET rapprochés uniquement (PnL fiable).
+        // Winrate : trades clôturés ET rapprochés disposant d'un PnL enregistré uniquement.
         $winCount = 0;
         $lossCount = 0;
         foreach ($matchedClosed as $r) {
@@ -133,32 +133,30 @@ final class RunTradeOutcomeService
         $decided = $winCount + $lossCount;
         $winRate = $decided > 0 ? round($winCount / $decided, 6) : null;
 
-        $recordedPnl = $this->sum($rows, static fn (PositionTradeAnalysis $r): ?float => $r->getRecordedPnlUsdt());
-        $pnlR = $this->sum($rows, static fn (PositionTradeAnalysis $r): ?float => $r->getPnlR());
+        $recordedPnl = $this->sum($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getRecordedPnlUsdt());
+        $pnlR = $this->sum($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getPnlR());
+        // Somme d'ESTIMATIONS (best-effort), jamais présentée comme nette certifiée.
+        $estimatedNet = $this->sum($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getEstimatedNetPnlUsdt());
 
-        // Net PnL : somme UNIQUEMENT sur les lignes au net complet ; sinon null + flag.
-        $netComplete = $this->isDataComplete($rows);
-        $netPnl = $netComplete
-            ? $this->sum($rows, static fn (PositionTradeAnalysis $r): ?float => $r->getNetPnlUsdt())
-            : null;
-
-        $mfeValues = $this->values($rows, static fn (PositionTradeAnalysis $r): ?float => $r->getMfePct());
-        $maeValues = $this->values($rows, static fn (PositionTradeAnalysis $r): ?float => $r->getMaePct());
-        $holdValues = $this->values($rows, static fn (PositionTradeAnalysis $r): ?float => $r->getHoldingTimeSec());
+        $mfeValues = $this->values($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMfePct());
+        $maeValues = $this->values($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMaePct());
+        $holdValues = $this->values($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getHoldingTimeSec());
 
         return [
             'trade_count' => $tradeCount,
-            'closed_count' => $closedCount,
-            'open_count' => $tradeCount - $closedCount,
-            'matched_count' => $matchedCount,
+            // unmatched n'est JAMAIS compté comme position ouverte confirmée.
+            'matched_closed_count' => $matchedClosedCount,
             'unmatched_count' => $unmatchedCount,
+            'confirmed_open_count' => 0,
+            'unknown_state_count' => $unmatchedCount,
             'win_count' => $winCount,
             'loss_count' => $lossCount,
             'win_rate_closed' => $winRate,
             'recorded_pnl_usdt' => $recordedPnl,
             'pnl_r' => $pnlR,
-            'net_pnl_usdt' => $netPnl,
-            'net_pnl_complete' => $netComplete,
+            'estimated_net_pnl_usdt' => $estimatedNet,
+            'cost_completeness' => $this->aggregateCostCompleteness($rows),
+            'data_complete' => $this->isDataComplete($rows),
             'mfe_pct_avg' => $this->avg($mfeValues),
             'mfe_pct_median' => $this->median($mfeValues),
             'mae_pct_avg' => $this->avg($maeValues),
@@ -168,15 +166,44 @@ final class RunTradeOutcomeService
     }
 
     /**
-     * Net complet ssi tous les trades CLÔTURÉS le sont (un run sans trade clôturé est
-     * « complet » de façon vide : il n'y a aucun PnL net manquant).
+     * Complétude agrégée des coûts sur les lignes clôturées-rapprochées :
+     * `not_applicable` (aucune), `complete`/`partial`/`unknown` sinon, `mixed` si plusieurs
+     * niveaux coexistent. Jamais `complete` tant que le contrat #190 n'est pas livré.
      *
-     * @param PositionTradeAnalysis[] $rows
+     * @param PositionTradeAnalysisV2[] $rows
+     */
+    private function aggregateCostCompleteness(array $rows): string
+    {
+        $levels = [];
+        foreach ($rows as $row) {
+            if ($row->isMatchedClosed()) {
+                $levels[$row->getCostCompleteness()] = true;
+            }
+        }
+        if ($levels === []) {
+            return 'not_applicable';
+        }
+        if (count($levels) === 1) {
+            return array_key_first($levels);
+        }
+
+        return 'mixed';
+    }
+
+    /**
+     * Données complètes ssi tout est exploitable comme KPI certifié : aucune ligne
+     * unmatched ET tous les trades clôturés au contrat de coûts complet (jamais le cas
+     * tant que les producteurs #190 ne fournissent pas brut + frais détaillés + spread).
+     *
+     * @param PositionTradeAnalysisV2[] $rows
      */
     private function isDataComplete(array $rows): bool
     {
         foreach ($rows as $row) {
-            if ($row->isClosed() && !$row->isNetPnlComplete()) {
+            if (!$row->isMatchedClosed()) {
+                return false;
+            }
+            if (!$row->isCostComplete()) {
                 return false;
             }
         }
@@ -185,8 +212,8 @@ final class RunTradeOutcomeService
     }
 
     /**
-     * @param PositionTradeAnalysis[] $rows
-     * @param callable(PositionTradeAnalysis):?float $fn
+     * @param PositionTradeAnalysisV2[] $rows
+     * @param callable(PositionTradeAnalysisV2):?float $fn
      */
     private function sum(array $rows, callable $fn): ?float
     {
@@ -199,8 +226,8 @@ final class RunTradeOutcomeService
     }
 
     /**
-     * @param PositionTradeAnalysis[] $rows
-     * @param callable(PositionTradeAnalysis):?float $fn
+     * @param PositionTradeAnalysisV2[] $rows
+     * @param callable(PositionTradeAnalysisV2):?float $fn
      * @return list<float>
      */
     private function values(array $rows, callable $fn): array

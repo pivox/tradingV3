@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
 /**
- * OBS-003 — Test d'INTÉGRATION de la vue `position_trade_analysis` sur un vrai PostgreSQL.
+ * OBS-003 — Test d'INTÉGRATION de la vue `position_trade_analysis_v2` sur un vrai PostgreSQL.
  *
  * Exécute le SQL RÉEL de la migration {@see Version20260622000000} (via `getSql()`),
  * sur des tables minimales `trade_lifecycle_event` + `indicator_snapshots`, puis vérifie
@@ -48,7 +48,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
     protected function tearDown(): void
     {
         if (isset($this->conn)) {
-            $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
+            $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
             $this->conn->executeStatement('DROP TABLE IF EXISTS trade_lifecycle_event');
             $this->conn->executeStatement('DROP TABLE IF EXISTS indicator_snapshots');
             $this->conn->close();
@@ -85,7 +85,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $this->close('SOLUSDT', $run, ['trade_id' => 'ORPHAN', 'pnl' => 99.0], 'PX', '2026-06-17 08:50:00+00', 999);
 
         $rows = $this->conn->fetchAllAssociative(
-            'SELECT * FROM position_trade_analysis WHERE run_id = ? ORDER BY entry_time',
+            'SELECT * FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY entry_time',
             [$run]
         );
 
@@ -113,23 +113,28 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('perpetual', $t1['market_type']);
         self::assertSame($run, $t1['orchestration_run_id']);
         self::assertSame($run, $t1['correlation_run_id']);
+        self::assertSame('matched_closed', $t1['analysis_status']);
         self::assertEqualsWithDelta(12.0, (float) $t1['recorded_pnl_usdt'], 1e-9);
-        self::assertTrue($this->asBool($t1['net_pnl_complete']));
-        self::assertEqualsWithDelta(10.7, (float) $t1['net_pnl_usdt'], 1e-9); // 12 - 1 - 0.2 - 0.1
+        // Coûts présents mais contrat #190 incomplet (ni spread ni brut) => 'partial',
+        // JAMAIS 'complete'. estimated_net est une ESTIMATION best-effort, pas un net certifié.
+        self::assertSame('partial', $t1['cost_completeness']);
+        self::assertEqualsWithDelta(10.7, (float) $t1['estimated_net_pnl_usdt'], 1e-9); // 12 - 1 - 0.2 - 0.1
 
-        // T2 : rapproché par position_id, net INCOMPLET (pas de fees/funding/slippage).
+        // T2 : rapproché par position_id, aucune composante de coût => 'unknown', sans estimation.
         $t2 = $byTrade['T2'];
         self::assertSame('matched', $t2['close_match_status']);
         self::assertSame('matched_position_id', $t2['close_matched_by']);
         self::assertSame('P2', $t2['position_id']);
         self::assertEqualsWithDelta(-4.0, (float) $t2['recorded_pnl_usdt'], 1e-9);
-        self::assertFalse($this->asBool($t2['net_pnl_complete']));
-        self::assertNull($t2['net_pnl_usdt']);
+        self::assertSame('unknown', $t2['cost_completeness']);
+        self::assertNull($t2['estimated_net_pnl_usdt']);
 
-        // ETH : aucune clôture -> unmatched / ouvert, pas de PnL.
+        // ETH : aucune clôture -> unmatched, état réel INCONNU (jamais "open confirmé"), pas de PnL.
         $eth = $byTrade['T3'];
         self::assertSame('unmatched', $eth['close_match_status']);
         self::assertSame('unmatched', $eth['close_matched_by']);
+        self::assertSame('unmatched', $eth['analysis_status']);
+        self::assertSame('not_applicable', $eth['cost_completeness']);
         self::assertNull($eth['close_event_id']);
         self::assertNull($eth['recorded_pnl_usdt']);
     }
@@ -145,7 +150,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $this->close('BTCUSDT', $run, ['pnl' => 2.0], 'PSHARED', '2026-06-17 09:11:00+00', 401);
 
         $rows = $this->conn->fetchAllAssociative(
-            'SELECT entry_event_id, close_event_id FROM position_trade_analysis WHERE run_id = ? ORDER BY entry_time',
+            'SELECT entry_event_id, close_event_id FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY entry_time',
             [$run]
         );
 
@@ -167,7 +172,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
 
         $rows = $this->conn->fetchAllAssociative(
             'SELECT trade_id, close_match_status, close_event_id, recorded_pnl_usdt
-             FROM position_trade_analysis WHERE run_id = ?',
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
             [$run]
         );
 
@@ -191,7 +196,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
 
         $rows = $this->conn->fetchAllAssociative(
             'SELECT trade_id, close_match_status, close_matched_by, close_event_id, recorded_pnl_usdt
-             FROM position_trade_analysis WHERE run_id = ?',
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
             [$run]
         );
 
@@ -219,7 +224,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
 
         $rows = $this->conn->fetchAllAssociative(
             'SELECT symbol, trade_id, close_match_status, close_event_id, recorded_pnl_usdt
-             FROM position_trade_analysis WHERE run_id = ? ORDER BY symbol',
+             FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY symbol',
             [$run]
         );
 
@@ -254,7 +259,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
 
         $rows = $this->conn->fetchAllAssociative(
             'SELECT exchange, trade_id, close_match_status, close_event_id, recorded_pnl_usdt
-             FROM position_trade_analysis WHERE run_id = ? ORDER BY exchange',
+             FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY exchange',
             [$run]
         );
 
@@ -276,7 +281,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
 
     private function createMinimalSchema(): void
     {
-        $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
+        $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
         $this->conn->executeStatement('DROP TABLE IF EXISTS trade_lifecycle_event');
         $this->conn->executeStatement('DROP TABLE IF EXISTS indicator_snapshots');
 
@@ -379,10 +384,5 @@ SQL);
              VALUES (?, ?, \'position_closed\', ?, ?, ?, ?, ?::jsonb, ?)',
             [$forcedId, $symbol, $runId, $positionId, $exchange, $marketType, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
         );
-    }
-
-    private function asBool(mixed $value): bool
-    {
-        return $value === true || $value === 't' || $value === '1' || $value === 1;
     }
 }
