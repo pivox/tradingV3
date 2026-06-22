@@ -6,6 +6,57 @@ Temporal worker qui orchestre les exécutions planifiées de `/api/mtf/run` et d
 - un formatteur de réponse pour rendre les logs Temporal lisibles (< 15 lignes par run) ;
 - le Dockerfile + scripts de déploiement.
 
+> ⚠️ **Dépréciation (CLEAN-001).** Le chemin **legacy multi-jobs**
+> (`CronSymfonyMtfWorkersWorkflow` + `mtf_api_call` et les 3 scripts
+> `manage_mtf_workers` / `manage_scalper_micro` / `manage_exchange_profile`) est
+> **déprécié** au profit du **schedule orchestrateur unique**
+> (`scripts/manage_orchestrator_schedule.py` → `POST /orchestrator/run`). Voir
+> [§Dépréciation (CLEAN-001)](#0-dépréciation-clean-001). Le legacy reste 100 %
+> fonctionnel pendant la transition.
+
+---
+
+## 0. Dépréciation (CLEAN-001)
+
+**Quoi est déprécié.** Le chemin legacy multi-jobs Temporal :
+
+| Composant legacy | Fichier |
+| --- | --- |
+| Workflow | `workflows/mtf_workers.py` (`CronSymfonyMtfWorkersWorkflow`) |
+| Activity HTTP | `activities/mtf_http.py` (`mtf_api_call`) |
+| Modèle de job | `models/mtf_job.py` (`MtfJob`) |
+| Formatter | `utils/response_formatter.py` (`format_mtf_response`) |
+| Script schedule générique | `scripts/manage_mtf_workers_schedule.py` |
+| Script schedule `scalper_micro` | `scripts/manage_scalper_micro_schedule.py` |
+| Script schedule exchange/profile | `scripts/manage_exchange_profile_schedule.py` |
+
+**Pourquoi.** Ce chemin enchaîne N appels `POST /api/mtf/run` par tick et porte la
+logique de sélection côté Temporal. La cible (TM-001/TM-002, PY-005/PY-006)
+déporte toute la logique métier (sélection des sets, concurrence, agrégation,
+persistance) dans l'API Python : un tick = **un seul** `POST /orchestrator/run`.
+
+**Vers quoi migrer.** Le **schedule orchestrateur unique**
+`scripts/manage_orchestrator_schedule.py` (cf. [§4.0](#40-schedule-cible--orchestrateur-python-tm-001--tm-002)).
+Ne plus créer de nouveaux schedules via les scripts legacy ci-dessus.
+
+**Ce que CLEAN-001 fait (et ne fait pas).**
+
+- Marque le legacy comme déprécié : notices `DEPRECATED (CLEAN-001)` dans les
+  docstrings et dans la description `--help` des 3 scripts.
+- Émet un `DeprecationWarning` au lancement de chaque script legacy (helper
+  partagé `utils/legacy_deprecation.py`) et un `workflow.logger.warning` au début
+  du workflow legacy **uniquement pour les jobs MTF-run** (`/api/mtf/run`).
+  `CronSymfonyMtfWorkersWorkflow` est aussi réutilisé par les schedules **actifs**
+  contract-sync (`/api/mtf/sync-contracts`) et cleanup (`/api/maintenance/cleanup`),
+  qui ne sont **pas** dépréciés et n'émettent donc aucun avertissement.
+  **Aucune exception n'est levée** : le legacy continue de fonctionner à
+  l'identique, avec en plus l'avertissement.
+- **Ne supprime rien**, ne change aucune signature publique, et le `worker.py`
+  enregistre toujours les deux chemins. La suppression effective est un **jalon
+  ultérieur** (hors CLEAN-001) ; le guide de migration détaillé est **CLEAN-002**.
+- Ne touche **pas** les scripts **actifs** `manage_contract_sync` (§4.3) et
+  `manage_cleanup` (§4.5), ni le chemin cible orchestrateur (§4.0).
+
 ---
 
 ## 1. Vue d’ensemble
@@ -118,10 +169,11 @@ python scripts/manage_orchestrator_schedule.py delete
 
 > `ok=false` n'est pas un succès Temporal. Le workflow propage le `RunResponse` complet sur `ok=true` et lève une `ApplicationError` non-retryable sur `ok=false` (implémenté par **TM-002**), après avoir journalisé `run_id` + `summary`.
 
-### 4.1 Runtime Matrix Exchange/Profile
+### 4.1 Runtime Matrix Exchange/Profile (legacy, DEPRECATED CLEAN-001)
 
+- **Statut** : **DEPRECATED (CLEAN-001)** — legacy multi-jobs. Conservé pour les déploiements existants ; ne plus créer de nouveaux schedules. Migrer vers le schedule orchestrateur unique (§4.0). Lancer ce script émet un `DeprecationWarning`.
 - **Objectif** : gérer les schedules MTF explicites par couple `exchange/market_type/profile`.
-- **Fichier CLI recommandé** : `scripts/manage_exchange_profile_schedule.py`.
+- **Fichier CLI** : `scripts/manage_exchange_profile_schedule.py`.
 - **Règle de sécurité** : `dry_run=true` est le défaut pour tous les exchanges, y compris BitMart.
 - **Diagnostic live** : avant `dry_run=false`, le script appelle `docker compose exec -T trading-app-php php bin/console app:exchange:runtime-check <exchange> <market_type>`.
 
@@ -177,11 +229,11 @@ Matrice recommandée :
 
 En `dry_run=true`, le script autorise la création même si `app:exchange:runtime-check` retourne `Schedule ready: no`, avec un warning explicite. En `dry_run=false`, la création est refusée tant que le diagnostic runtime, les credentials et les flags live ne passent pas.
 
-### 4.2 MTF Workers (profil standard, legacy)
+### 4.2 MTF Workers (profil standard, legacy DEPRECATED CLEAN-001)
 
 - **Objectif** : relancer `/api/mtf/run` toutes les minutes (profil actuel du runner).
 - **Fichier CLI** : `scripts/manage_mtf_workers_schedule.py`.
-- **Statut** : legacy. À conserver pour les déploiements existants, mais ne pas utiliser pour les nouveaux schedules multi-exchange.
+- **Statut** : **DEPRECATED (CLEAN-001)** — legacy. À conserver pour les déploiements existants, mais ne pas utiliser pour les nouveaux schedules. Migrer vers le schedule orchestrateur unique (§4.0). Lancer ce script émet un `DeprecationWarning`.
 
 | Variable | Défaut | Commentaire |
 | --- | --- | --- |
@@ -213,11 +265,11 @@ python scripts/manage_mtf_workers_schedule.py delete       # supprime
 | `CONTRACT_SYNC_CRON` | `0 9 * * *` |
 | `CONTRACT_SYNC_URL` | `http://trading-app-nginx:80/api/mtf/sync-contracts` |
 
-### 4.4 Scalper Micro (legacy)
+### 4.4 Scalper Micro (legacy DEPRECATED CLEAN-001)
 
 - **Objectif** : reproduire le run MTF avec le profil `scalper_micro` (4 workers) toutes les minutes.
 - **Script** : `scripts/manage_scalper_micro_schedule.py`.
-- **Statut** : legacy. À conserver pour les déploiements existants, mais ne pas utiliser pour les nouveaux schedules multi-exchange.
+- **Statut** : **DEPRECATED (CLEAN-001)** — legacy. À conserver pour les déploiements existants, mais ne pas utiliser pour les nouveaux schedules. Migrer vers le schedule orchestrateur unique (§4.0). Lancer ce script émet un `DeprecationWarning`.
 
 | Variable | Défaut |
 | --- | --- |

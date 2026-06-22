@@ -1,3 +1,13 @@
+"""DEPRECATED (CLEAN-001) — activity HTTP legacy multi-jobs.
+
+L'activity ``mtf_api_call`` POST un payload vers ``/api/mtf/run`` puis formate la
+réponse (``utils/response_formatter.py``). Ce chemin est **déprécié** : la cible
+est l'activity unique ``orchestrator_run`` (``activities/orchestrator_http.py``)
+qui appelle ``POST /orchestrator/run``. L'activity reste enregistrée et 100 %
+fonctionnelle pendant la transition (suppression = jalon ultérieur, hors
+CLEAN-001). Voir ``scripts/manage_orchestrator_schedule.py`` pour la cible.
+"""
+
 from __future__ import annotations
 
 import json
