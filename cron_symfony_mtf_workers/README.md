@@ -247,7 +247,55 @@ Des scripts supplémentaires sont fournis pour gérer les schedules de cleanup (
 
 ---
 
-## 6. Déploiement & opérations
+## 6. Tests & couverture (QA-003)
+
+La suite de tests du cron tourne **sans serveur Temporal ni dépendance réseau** :
+les primitives Temporal (`workflow.now` / `workflow.execute_activity` /
+`workflow.logger`) sont patchées et les appels HTTP utilisent des fakes `httpx`
+(pattern `asyncio.run` du repo). Aucun service Temporal/PostgreSQL n'est requis.
+
+```bash
+cd cron_symfony_mtf_workers
+
+# 1. Installer les dépendances de test (dev-only, pinnées)
+pip install -r requirements-dev.txt
+
+# 2. Lancer la suite avec couverture + rapport des lignes manquantes
+pytest --cov --cov-report=term-missing
+```
+
+- **Dépendances de test** : `requirements-dev.txt` (jamais embarqué dans
+  l'image — le `Dockerfile` n'installe que `requirements.txt`). Il tire
+  `requirements.txt` (`temporalio` + `httpx`, requis pour importer les tests)
+  puis ajoute `pytest` et `pytest-cov`.
+- **Périmètre de couverture** (figé dans `pyproject.toml`, section
+  `[tool.coverage.run]`) : **uniquement** les fichiers du cron cible
+  orchestrateur — `activities/orchestrator_http.py`,
+  `workflows/orchestrator_cron.py`, `scripts/manage_orchestrator_schedule.py`.
+  Le code legacy MTF (`mtf_http.py`, `mtf_workers.py`, schedules historiques)
+  est hors-scope QA-003 et n'est donc pas mesuré.
+- **Gate de couverture** : `--cov-fail-under=99` (baseline mesurée à 99.12 %,
+  couverture de branches activée ; seule la ligne `if __name__ == "__main__":
+  main()` reste non couverte). Le seuil est figé à l'entier inférieur de la
+  baseline (cohérent QA-001) et fait échouer la CI sous ce seuil.
+- **CI** : le workflow GitHub Actions dédié `.github/workflows/temporal-cron.yml`
+  installe `requirements-dev.txt` et rejoue `pytest --cov --cov-fail-under=99`
+  sur ce périmètre, sans aucun service externe.
+
+Branches couvertes au minimum :
+- **Activity** : succès `RunResponse` verbatim ; erreur réseau/timeout, corps
+  non-JSON et HTTP non-2xx JSON → `ok=false` explicite (jamais d'exception).
+- **Workflow** : propagation sur `ok=true` ; levée d'une `ApplicationError`
+  non-retryable APRÈS le log pour chaque statut `ok=false`
+  (`no_sets`/`failed`/`partial_failure`/`error`, TM-002) ; `tick_timestamp`
+  dérivé de `workflow.now()` (déterminisme) ; clés optionnelles / URL custom.
+- **Script de schedule** : `build_workflow_config`, garde-fous dashboard,
+  preview `--dry-run`, routage `async_main` (create/pause/resume/delete/status),
+  import réel des classes Temporal, `main()`.
+
+---
+
+## 7. Déploiement & opérations
 
 - **Docker** : `Dockerfile` contient l’image utilisée sur Temporal Cloud / cluster interne. `deploy.sh` déclenche la build/push/tag (cf. `DEPLOYMENT.md` pour les registres acceptés et le process de rotation).
 - **Monitoring** : surveiller Temporal UI (Schedule view) + les logs du worker (stdout). Tout échec d’appel HTTP remontera en `ActivityTaskFailed`. Les retries sont gérés par Temporal ; au-delà, l’alerte doit être propagée (PagerDuty ou Slack).
