@@ -291,6 +291,44 @@ empêcher toute régression. Un XML (`coverage.xml`) est produit pour archivage.
 pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=95
 ```
 
+### Tests d'intégration Symfony ↔ orchestrateur (QA-002)
+
+Le **contrat HTTP** entre le sous-projet Python et Symfony (le moteur métier MTF)
+est validé par une couche de tests d'intégration qui exerce `app/services/symfony_client.py`
+et le runner `POST /orchestrator/run` contre un **Symfony simulé à la frontière HTTP**,
+**sans aucune socket ni backend Symfony/PostgreSQL applicatif** (la persistance reste
+sur SQLite in-memory, comme QA-001).
+
+- **Frontière de simulation retenue : `httpx.MockTransport` scénarisé** (zéro dépendance
+  de test supplémentaire). Le faux Symfony (`FakeSymfony`, dans `tests/conftest.py`)
+  rejoue les **trois endpoints réellement appelés** — `GET /api/mtf/contracts`,
+  `POST /api/mtf/run`, `GET /api/exchange/open-state` — au travers d'un **vrai**
+  `httpx.AsyncClient` : la sérialisation/parsing JSON, les en-têtes et les codes HTTP
+  sont réels. La fixture `symfony` câble ce stub comme client HTTP du runner.
+- **Ce qui est couvert** (`tests/test_integration_symfony_contract.py` +
+  `tests/test_integration_orchestrator_e2e.py`) :
+  - forme **exacte** des requêtes sortantes (méthode, chemin, params, corps JSON,
+    en-tête de corrélation `X-Run-Id`) ;
+  - contrat du payload `/api/mtf/run` : `sync_tables=false` / `process_tp_sl=false`,
+    override `dry_run` run-level, `open_state_snapshot` joint, allow-list stricte des clés ;
+  - réponses **dégradées** : `502`, timeout/erreur de connexion (`httpx.HTTPError`),
+    payload malformé (corps non-JSON), mapping `ok=false` → `Run.ok=false` ;
+  - **fail-closed live** sur snapshot indisponible (502) → aucun `POST /api/mtf/run`
+    (pas d'écriture partielle) ;
+  - **parallélisme borné** par `MAX_CONCURRENCY` (parallélisme maximal observé rendu
+    déterministe via `asyncio.sleep(0)`, sans horloge réelle) ;
+  - **idempotence** (SAFE-002, replay sans re-dispatch), **audit** (OBS-001) et
+    **métriques** (OBS-002) cohérents avec les appels simulés.
+
+```bash
+cd python-orchestrator
+pytest tests/test_integration_symfony_contract.py tests/test_integration_orchestrator_e2e.py
+```
+
+Ces tests visent notamment les branches d'erreur de `symfony_client.py` (transport,
+JSON malformé) ; la couverture globale monte au-dessus de la baseline QA-001 et le gate
+`--cov-fail-under=95` reste inchangé.
+
 ## Dépendances
 
 - `requirements.txt` : runtime uniquement, versions **épinglées** (reproductibilité).
