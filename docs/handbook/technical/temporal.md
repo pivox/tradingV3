@@ -226,6 +226,22 @@ pytest tests/test_orchestrator_workflow.py
 pytest tests/test_manage_orchestrator_schedule.py
 ```
 
+**Couverture + gate CI (QA-003)** — le cron a son filet de couverture propre,
+**sans serveur Temporal ni réseau** (primitives `workflow.*` patchées, fakes
+`httpx`) :
+
+```bash
+pip install -r requirements-dev.txt
+pytest --cov --cov-report=term-missing   # gate --cov-fail-under=99
+```
+
+Périmètre mesuré (figé dans `pyproject.toml`) : les seuls fichiers du cron
+orchestrateur (`activities/orchestrator_http.py`, `workflows/orchestrator_cron.py`,
+`scripts/manage_orchestrator_schedule.py`). Baseline 99.12 %, gate
+`--cov-fail-under=99` câblé dans `.github/workflows/temporal-cron.yml` (workflow
+CI dédié, aucun service externe). Détails : `cron_symfony_mtf_workers/README.md`
+§6 et la ligne QA-003 du plan de PR dans `python-orchestrator.md`.
+
 Après création de l'orchestrateur Python, les tests attendus devront aussi couvrir :
 
 - appel unique Temporal vers `/orchestrator/run` ;
