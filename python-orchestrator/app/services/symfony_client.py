@@ -540,7 +540,11 @@ async def fetch_run_trade_outcome(
     except httpx.HTTPError as exc:  # noqa: BLE001 - on remonte une erreur métier claire
         raise OutcomeUnavailableError(f"outcome fetch failed for {run_id}: {exc}") from exc
 
-    if response.status_code >= 500:
+    # Toute réponse non-2xx est une indisponibilité de la source : la route peut être
+    # absente (déploiement échelonné), ou un proxy/une couche d'auth renvoyer 401/403/404.
+    # L'orchestrateur a déjà vérifié que le run existe localement, donc un non-succès ici
+    # n'est jamais « 0 trade » — on lève (l'appelant répondra 503), jamais un agrégat vide.
+    if not response.is_success:
         raise OutcomeUnavailableError(
             f"outcome fetch returned HTTP {response.status_code} for {run_id}"
         )

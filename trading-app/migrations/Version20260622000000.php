@@ -31,9 +31,11 @@ use Doctrine\Migrations\AbstractMigration;
  * DEUX ; on l'utilise comme pont pour résoudre le `position_id` effectif d'une entrée
  * (sinon le rapprochement exact laisserait tout `unmatched`). Cf. revue OBS-003 v2 (P1).
  *
- * Garde anti-clôture périmée (P2) : le rapprochement par `position_id` exige la même
- * `symbol` et `close.happened_at >= entry.happened_at`, pour qu'un `position_id` réutilisé
- * ou une clôture importée ancienne n'attribue jamais un vieux PnL au run courant.
+ * Garde anti-clôture périmée / cross-venue (P2) : le rapprochement par `position_id`
+ * partitionne ET joint par la VENUE complète (`symbol` + `exchange` + `market_type`) et
+ * exige `close.happened_at >= entry.happened_at`. Un `position_id` réutilisé (autre
+ * symbole, autre exchange/marché) ou une clôture importée ancienne n'attribue donc jamais
+ * un PnL erroné/périmé au run courant (ni au mauvais bucket `by_exchange`).
  *
  * Colonnes ajoutées :
  *  - lineage : `correlation_run_id`, `orchestration_run_id`, `dashboard_id`, `set_id`,
@@ -94,6 +96,8 @@ close_events AS (
   SELECT
     e.id,
     e.symbol,
+    e.exchange,
+    e.market_type,
     e.run_id,
     e.happened_at,
     e.extra,
@@ -163,27 +167,35 @@ tid_pairs AS (
 -- (2) Appariement par position_id, UNIQUEMENT pour les entrées et clôtures non
 -- déjà appariées par trade_id (aucune clôture réutilisée entre les deux passes).
 entry_pid_base AS (
-  SELECT id, eff_position_id, symbol, happened_at
+  SELECT id, eff_position_id, symbol, exchange, market_type, happened_at
   FROM entry_resolved
   WHERE eff_position_id IS NOT NULL
     AND id NOT IN (SELECT entry_event_id FROM tid_pairs)
 ),
 entry_pid AS (
-  -- Rang par (position_id effectif, symbole) : un position_id réutilisé sur deux
-  -- symboles ne doit pas mélanger les rangs (le garde `c.symbol = e.symbol` au join
-  -- rejetterait alors des clôtures pourtant valides). Cf. revue OBS-003 v2 (P2).
-  SELECT id, eff_position_id, symbol, happened_at,
-         ROW_NUMBER() OVER (PARTITION BY eff_position_id, symbol ORDER BY happened_at, id) AS rn
+  -- Rang par (position_id effectif, symbole, exchange, market_type) : un position_id
+  -- réutilisé sur deux symboles OU deux venues (le même symbole dispatché sur plusieurs
+  -- exchanges/marchés peut porter des position_id qui se recoupent) ne doit pas mélanger
+  -- les rangs, sinon les gardes `symbol`/`exchange`/`market_type` du join rejetteraient
+  -- des clôtures pourtant valides. Cf. revue OBS-003 v2 (P2).
+  SELECT id, eff_position_id, symbol, exchange, market_type, happened_at,
+         ROW_NUMBER() OVER (
+           PARTITION BY eff_position_id, symbol, exchange, market_type
+           ORDER BY happened_at, id
+         ) AS rn
   FROM entry_pid_base
 ),
 -- P2 : ne RANGE que les clôtures ÉLIGIBLES — celles précédées d'au moins une entrée
--- (même position_id effectif + même symbole) à cet instant. Une clôture orpheline /
--- périmée ANTÉRIEURE à l'entrée est ainsi écartée du jeu de candidats AVANT le
--- ROW_NUMBER (et non rejetée après), de sorte qu'elle ne « vole » pas le rang 1 à la
+-- (même position_id effectif + même symbole + même venue) à cet instant. Une clôture
+-- orpheline / périmée ANTÉRIEURE à l'entrée est ainsi écartée du jeu de candidats AVANT
+-- le ROW_NUMBER (et non rejetée après), de sorte qu'elle ne « vole » pas le rang 1 à la
 -- vraie clôture postérieure : un trade réellement clôturé ne reste donc pas `unmatched`.
 close_pid AS (
-  SELECT c.id, c.match_position_id, c.symbol, c.happened_at,
-         ROW_NUMBER() OVER (PARTITION BY c.match_position_id, c.symbol ORDER BY c.happened_at, c.id) AS rn
+  SELECT c.id, c.match_position_id, c.symbol, c.exchange, c.market_type, c.happened_at,
+         ROW_NUMBER() OVER (
+           PARTITION BY c.match_position_id, c.symbol, c.exchange, c.market_type
+           ORDER BY c.happened_at, c.id
+         ) AS rn
   FROM close_events c
   WHERE c.match_position_id IS NOT NULL
     AND c.id NOT IN (SELECT close_event_id FROM tid_pairs)
@@ -191,19 +203,24 @@ close_pid AS (
       SELECT 1 FROM entry_pid_base e
       WHERE e.eff_position_id = c.match_position_id
         AND e.symbol = c.symbol
+        AND e.exchange = c.exchange
+        AND e.market_type = c.market_type
         AND e.happened_at <= c.happened_at
     )
 ),
 pid_pairs AS (
-  -- Appariement 1-pour-1 par position_id EFFECTIF, borné au même symbole ET à une
-  -- clôture postérieure à l'entrée. Combiné à l'éligibilité ci-dessus : ni clôture
-  -- périmée attribuée (vieux PnL), ni trade clôturé laissé `unmatched`.
+  -- Appariement 1-pour-1 par position_id EFFECTIF, borné à la même venue (symbole +
+  -- exchange + market_type) ET à une clôture postérieure à l'entrée. Combiné à
+  -- l'éligibilité ci-dessus : ni clôture périmée/cross-venue attribuée (vieux/mauvais
+  -- PnL, mauvais bucket `by_exchange`), ni trade clôturé laissé `unmatched`.
   SELECT e.id AS entry_event_id, c.id AS close_event_id
   FROM entry_pid e
   JOIN close_pid c
     ON c.match_position_id = e.eff_position_id
    AND c.rn = e.rn
    AND c.symbol = e.symbol
+   AND c.exchange = e.exchange
+   AND c.market_type = e.market_type
    AND c.happened_at >= e.happened_at
 ),
 matched AS (

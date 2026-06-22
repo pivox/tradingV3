@@ -239,6 +239,41 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(3.0, (float) $bySymbol['ETHUSDT']['recorded_pnl_usdt'], 1e-9);
     }
 
+    public function testReusedPositionIdAcrossVenuesDoesNotCrossMatch(): void
+    {
+        $run = 'run_venue';
+        // Même symbole BTC + même position_id `PV`, mais deux venues (bitmart / okx).
+        // Une clôture OKX ne doit pas être appariée à l'entrée bitmart (PnL au mauvais
+        // bucket by_exchange) et inversement.
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TBB'], '2026-06-17 09:00:00+00', 920);
+        $this->opened('BTCUSDT', $run, 'TBB', 'PV', '2026-06-17 09:00:30+00', 921);
+        $this->entry('BTCUSDT', $run, 's2', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TBO'], '2026-06-17 09:05:00+00', 922);
+        $this->opened('BTCUSDT', $run, 'TBO', 'PV', '2026-06-17 09:05:30+00', 923);
+        $this->close('BTCUSDT', $run, ['pnl' => 5.0], 'PV', '2026-06-17 09:30:00+00', 924, 'bitmart', 'perpetual');
+        $this->close('BTCUSDT', $run, ['pnl' => 8.0], 'PV', '2026-06-17 09:35:00+00', 925, 'okx', 'perpetual');
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT exchange, trade_id, close_match_status, close_event_id, recorded_pnl_usdt
+             FROM position_trade_analysis WHERE run_id = ? ORDER BY exchange',
+            [$run]
+        );
+
+        self::assertCount(2, $rows);
+        $byExchange = [];
+        foreach ($rows as $r) {
+            $byExchange[$r['exchange']] = $r;
+        }
+
+        // Chaque venue est rapprochée de SA propre clôture, jamais en cross-venue.
+        self::assertSame('matched', $byExchange['bitmart']['close_match_status']);
+        self::assertSame(924, (int) $byExchange['bitmart']['close_event_id']);
+        self::assertEqualsWithDelta(5.0, (float) $byExchange['bitmart']['recorded_pnl_usdt'], 1e-9);
+
+        self::assertSame('matched', $byExchange['okx']['close_match_status']);
+        self::assertSame(925, (int) $byExchange['okx']['close_event_id']);
+        self::assertEqualsWithDelta(8.0, (float) $byExchange['okx']['recorded_pnl_usdt'], 1e-9);
+    }
+
     private function createMinimalSchema(): void
     {
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
@@ -329,12 +364,20 @@ SQL);
     /**
      * @param array<string,mixed> $extra
      */
-    private function close(string $symbol, string $runId, array $extra, ?string $positionId, string $happenedAt, int $forcedId): void
-    {
+    private function close(
+        string $symbol,
+        string $runId,
+        array $extra,
+        ?string $positionId,
+        string $happenedAt,
+        int $forcedId,
+        string $exchange = 'bitmart',
+        string $marketType = 'perpetual',
+    ): void {
         $this->conn->executeStatement(
-            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, extra, happened_at)
-             VALUES (?, ?, \'position_closed\', ?, ?, ?::jsonb, ?)',
-            [$forcedId, $symbol, $runId, $positionId, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
+            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, exchange, market_type, extra, happened_at)
+             VALUES (?, ?, \'position_closed\', ?, ?, ?, ?, ?::jsonb, ?)',
+            [$forcedId, $symbol, $runId, $positionId, $exchange, $marketType, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
         );
     }
 

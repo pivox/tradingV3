@@ -853,3 +853,17 @@ def test_fetch_run_trade_outcome_raises_on_invalid_json():
 
     with pytest.raises(OutcomeUnavailableError):
         asyncio.run(_run())
+
+
+def test_fetch_run_trade_outcome_raises_on_4xx():
+    # 404/403 (route absente pendant un deploy, proxy/auth) = indisponibilite, jamais
+    # un agregat vide "0 trade" : le run est deja confirme cote orchestrateur.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "not found"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_run_trade_outcome(client, "http://sym", "run_x")
+
+    with pytest.raises(OutcomeUnavailableError):
+        asyncio.run(_run())
