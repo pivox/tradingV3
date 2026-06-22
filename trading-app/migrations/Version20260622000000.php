@@ -18,11 +18,22 @@ use Doctrine\Migrations\AbstractMigration;
  *
  * Nouvelle règle de rapprochement, par identifiants EXACTS et en 1-pour-1 :
  *   1. `trade_id` exact (entrée.extra->>'trade_id' = clôture.extra->>'trade_id') ;
- *   2. sinon `position_id` exact (entrée.position_id|extra = clôture.position_id|extra) ;
+ *   2. sinon `position_id` EFFECTIF exact, borné au même symbole et à une clôture
+ *      postérieure à l'entrée ;
  *   3. sinon `unmatched` (aucune clôture rattachée, le trade reste visible « ouvert »).
- * Jamais de repli par symbole. L'appariement utilise `ROW_NUMBER()` par clé pour
+ * Jamais de repli par symbole seul. L'appariement utilise `ROW_NUMBER()` par clé pour
  * garantir qu'une clôture n'est jamais réutilisée par deux entrées et que la jointure
  * ne multiplie pas les lignes (exactement une ligne par entrée).
+ *
+ * Pont trade_id ↔ position_id : dans le cycle MTF normal, `order_submitted` ne porte que
+ * le `trade_id` et la clôture synchronisée que le `position_id` — les deux côtés n'ont
+ * donc pas de clé commune. L'événement `position_opened` (issu du flux MTF) porte les
+ * DEUX ; on l'utilise comme pont pour résoudre le `position_id` effectif d'une entrée
+ * (sinon le rapprochement exact laisserait tout `unmatched`). Cf. revue OBS-003 v2 (P1).
+ *
+ * Garde anti-clôture périmée (P2) : le rapprochement par `position_id` exige la même
+ * `symbol` et `close.happened_at >= entry.happened_at`, pour qu'un `position_id` réutilisé
+ * ou une clôture importée ancienne n'attribue jamais un vieux PnL au run courant.
  *
  * Colonnes ajoutées :
  *  - lineage : `correlation_run_id`, `orchestration_run_id`, `dashboard_id`, `set_id`,
@@ -91,6 +102,33 @@ close_events AS (
   FROM trade_lifecycle_event e
   WHERE e.event_type = 'position_closed'
 ),
+-- Pont trade_id -> position_id : l'événement `position_opened` issu du flux MTF porte
+-- À LA FOIS le `trade_id` (contexte lifecycle) ET le `position_id` (métadonnée d'ordre).
+-- `order_submitted` n'a que le trade_id et la clôture synchronisée n'a que le
+-- position_id ; sans ce pont, le rapprochement exact ne matcherait jamais le cycle
+-- normal. Les `position_opened` de synchro pure (sans trade_id) sont naturellement exclus.
+opened_bridge AS (
+  SELECT
+    NULLIF(e.extra->> 'trade_id', '') AS trade_id,
+    COALESCE(NULLIF(e.position_id, ''), NULLIF(e.extra->> 'position_id', '')) AS position_id,
+    ROW_NUMBER() OVER (
+      PARTITION BY NULLIF(e.extra->> 'trade_id', '')
+      ORDER BY e.happened_at, e.id
+    ) AS rn
+  FROM trade_lifecycle_event e
+  WHERE e.event_type = 'position_opened'
+    AND NULLIF(e.extra->> 'trade_id', '') IS NOT NULL
+    AND COALESCE(NULLIF(e.position_id, ''), NULLIF(e.extra->> 'position_id', '')) IS NOT NULL
+),
+-- position_id EFFECTIF d'une entrée : le sien s'il existe, sinon celui résolu via le
+-- pont (premier `position_opened` partageant le même trade_id).
+entry_resolved AS (
+  SELECT
+    ee.*,
+    COALESCE(ee.match_position_id, ob.position_id) AS eff_position_id
+  FROM entry_events ee
+  LEFT JOIN opened_bridge ob ON ob.trade_id = ee.match_trade_id AND ob.rn = 1
+),
 snapshot_values AS (
   SELECT
     es.id               AS event_id,
@@ -125,23 +163,30 @@ tid_pairs AS (
 -- (2) Appariement par position_id, UNIQUEMENT pour les entrées et clôtures non
 -- déjà appariées par trade_id (aucune clôture réutilisée entre les deux passes).
 entry_pid AS (
-  SELECT id, match_position_id,
-         ROW_NUMBER() OVER (PARTITION BY match_position_id ORDER BY happened_at, id) AS rn
-  FROM entry_events
-  WHERE match_position_id IS NOT NULL
+  SELECT id, eff_position_id, symbol, happened_at,
+         ROW_NUMBER() OVER (PARTITION BY eff_position_id ORDER BY happened_at, id) AS rn
+  FROM entry_resolved
+  WHERE eff_position_id IS NOT NULL
     AND id NOT IN (SELECT entry_event_id FROM tid_pairs)
 ),
 close_pid AS (
-  SELECT id, match_position_id,
+  SELECT id, match_position_id, symbol, happened_at,
          ROW_NUMBER() OVER (PARTITION BY match_position_id ORDER BY happened_at, id) AS rn
   FROM close_events
   WHERE match_position_id IS NOT NULL
     AND id NOT IN (SELECT close_event_id FROM tid_pairs)
 ),
 pid_pairs AS (
+  -- P2 : appariement par position_id EFFECTIF, borné au même symbole ET à une clôture
+  -- postérieure à l'entrée. Une clôture périmée / un position_id réutilisé ne peut donc
+  -- pas attribuer un vieux PnL au run courant ; au pire l'entrée reste `unmatched`.
   SELECT e.id AS entry_event_id, c.id AS close_event_id
   FROM entry_pid e
-  JOIN close_pid c ON c.match_position_id = e.match_position_id AND c.rn = e.rn
+  JOIN close_pid c
+    ON c.match_position_id = e.eff_position_id
+   AND c.rn = e.rn
+   AND c.symbol = e.symbol
+   AND c.happened_at >= e.happened_at
 ),
 matched AS (
   SELECT entry_event_id, close_event_id, 'matched_trade_id'    AS matched_by FROM tid_pairs
@@ -163,7 +208,7 @@ SELECT
   ee.market_type,
   ee.mtf_profile,
   COALESCE(ee.match_trade_id, ce.match_trade_id)        AS trade_id,
-  COALESCE(ce.match_position_id, ee.match_position_id)  AS position_id,
+  COALESCE(ce.match_position_id, ee.eff_position_id)    AS position_id,
   ee.happened_at                AS entry_time,
   ce.happened_at                AS close_time,
   CASE WHEN m.close_event_id IS NOT NULL THEN 'matched' ELSE 'unmatched' END AS close_match_status,
@@ -212,7 +257,7 @@ SELECT
       - (ce.extra->> 'funding')::numeric
       - (ce.extra->> 'slippage')::numeric
   ELSE NULL END                                   AS net_pnl_usdt
-FROM entry_events ee
+FROM entry_resolved ee
 LEFT JOIN matched m        ON m.entry_event_id = ee.id
 LEFT JOIN close_events ce  ON ce.id = m.close_event_id
 LEFT JOIN snapshot_values sv ON sv.event_id = ee.id;

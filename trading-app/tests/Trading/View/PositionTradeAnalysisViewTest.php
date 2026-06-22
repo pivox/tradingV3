@@ -67,10 +67,13 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'mae_pct' => -0.5, 'holding_time_sec' => 100, 'fees' => 1.0, 'funding' => 0.2, 'slippage' => 0.1,
         ], null, '2026-06-17 08:40:00+00', 200);
 
-        // Entrée T2 (BTC, set s2, regular) : pas de trade_id sur la clôture -> match par position_id.
+        // Entrée T2 (BTC, set s2, regular) : cycle NORMAL — `order_submitted` n'a que le
+        // trade_id, la clôture synchronisée n'a que le position_id. Le pont `position_opened`
+        // (trade_id T2 -> position_id P2) permet le rapprochement par position_id (P1).
         $this->entry('BTCUSDT', $run, 's2', 'regular', 'bitmart', 'perpetual', [
-            'trade_id' => 'T2', 'position_id' => 'P2',
+            'trade_id' => 'T2',
         ], '2026-06-17 08:31:00+00', 101);
+        $this->opened('BTCUSDT', $run, 'T2', 'P2', '2026-06-17 08:32:30+00', 150);
         $this->close('BTCUSDT', $run, ['pnl' => -4.0, 'pnl_R' => -1.0], 'P2', '2026-06-17 08:45:00+00', 201);
 
         // Entrée ETH (set s1, scalper) : aucune clôture -> unmatched / ouvert.
@@ -152,6 +155,29 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame($closeIds, array_unique($closeIds), 'chaque clôture sert une seule entrée');
     }
 
+    public function testStaleReusedPositionIdIsNotAttributedToCurrentEntry(): void
+    {
+        $run = 'run_stale';
+        // Une clôture ANCIENNE (08:00) porte un position_id `PR` qui sera réutilisé.
+        $this->close('BTCUSDT', $run, ['pnl' => 999.0], 'PR', '2026-06-17 08:00:00+00', 700);
+        // Nouvelle entrée (09:00) réutilisant `PR` via le pont : la clôture périmée
+        // (antérieure à l'entrée) ne doit PAS lui être attribuée -> unmatched, pas de PnL.
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TS'], '2026-06-17 09:00:00+00', 701);
+        $this->opened('BTCUSDT', $run, 'TS', 'PR', '2026-06-17 09:00:30+00', 702);
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT trade_id, close_match_status, close_event_id, recorded_pnl_usdt
+             FROM position_trade_analysis WHERE run_id = ?',
+            [$run]
+        );
+
+        self::assertCount(1, $rows, 'une seule entrée (la clôture orpheline ne crée pas de ligne)');
+        self::assertSame('TS', $rows[0]['trade_id']);
+        self::assertSame('unmatched', $rows[0]['close_match_status']);
+        self::assertNull($rows[0]['close_event_id']);
+        self::assertNull($rows[0]['recorded_pnl_usdt'], 'aucun vieux PnL attribué au run courant');
+    }
+
     private function createMinimalSchema(): void
     {
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
@@ -223,6 +249,19 @@ SQL);
             'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, config_profile, exchange, market_type, extra, happened_at)
              VALUES (?, ?, \'order_submitted\', ?, ?, ?, ?, ?::jsonb, ?)',
             [$forcedId, $symbol, $runId, $profile, $exchange, $marketType, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
+        );
+    }
+
+    /**
+     * Événement `position_opened` du flux MTF : porte À LA FOIS le `trade_id` (contexte
+     * lifecycle) et le `position_id` (métadonnée d'ordre) — c'est le pont OBS-003 v2.
+     */
+    private function opened(string $symbol, string $runId, string $tradeId, string $positionId, string $happenedAt, int $forcedId): void
+    {
+        $this->conn->executeStatement(
+            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, extra, happened_at)
+             VALUES (?, ?, \'position_opened\', ?, ?, ?::jsonb, ?)',
+            [$forcedId, $symbol, $runId, $positionId, json_encode(['trade_id' => $tradeId], JSON_THROW_ON_ERROR), $happenedAt]
         );
     }
 
