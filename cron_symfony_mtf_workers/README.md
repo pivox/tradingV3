@@ -45,8 +45,12 @@ Ne plus créer de nouveaux schedules via les scripts legacy ci-dessus.
   docstrings et dans la description `--help` des 3 scripts.
 - Émet un `DeprecationWarning` au lancement de chaque script legacy (helper
   partagé `utils/legacy_deprecation.py`) et un `workflow.logger.warning` au début
-  du workflow legacy. **Aucune exception n'est levée** : le legacy continue de
-  fonctionner à l'identique, avec en plus l'avertissement.
+  du workflow legacy **uniquement pour les jobs MTF-run** (`/api/mtf/run`).
+  `CronSymfonyMtfWorkersWorkflow` est aussi réutilisé par les schedules **actifs**
+  contract-sync (`/api/mtf/sync-contracts`) et cleanup (`/api/maintenance/cleanup`),
+  qui ne sont **pas** dépréciés et n'émettent donc aucun avertissement.
+  **Aucune exception n'est levée** : le legacy continue de fonctionner à
+  l'identique, avec en plus l'avertissement.
 - **Ne supprime rien**, ne change aucune signature publique, et le `worker.py`
   enregistre toujours les deux chemins. La suppression effective est un **jalon
   ultérieur** (hors CLEAN-001) ; le guide de migration détaillé est **CLEAN-002**.

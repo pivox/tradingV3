@@ -34,20 +34,36 @@ def _normalize_jobs(raw_jobs: Iterable[Any]) -> List[MtfJob]:
     return jobs
 
 
+def _is_legacy_mtf_run_job(job: MtfJob) -> bool:
+    """Vrai si le job vise le chemin legacy MTF-run déprécié (``/api/mtf/run``).
+
+    Le même ``CronSymfonyMtfWorkersWorkflow`` est réutilisé par des schedules
+    ACTIFS (contract-sync → ``/api/mtf/sync-contracts``, cleanup →
+    ``/api/maintenance/cleanup``) qui ne sont PAS concernés par CLEAN-001. On ne
+    déclenche donc l'avertissement de dépréciation que pour les jobs ``/api/mtf/run``.
+    """
+    url = (job.url or "").split("?", 1)[0].rstrip("/")
+    return url.endswith("/api/mtf/run")
+
+
 @workflow.defn(name="CronSymfonyMtfWorkersWorkflow")
 class CronSymfonyMtfWorkersWorkflow:
     @workflow.run
     async def run(self, jobs: Iterable[Any]) -> None:
-        # Avertissement de dépréciation (CLEAN-001) — déterministe : on reste sur
-        # workflow.logger (aucune I/O, aucun datetime.now()). Le legacy continue
-        # de s'exécuter normalement ; la cible est le schedule orchestrateur
-        # unique (scripts/manage_orchestrator_schedule.py → /orchestrator/run).
-        workflow.logger.warning(
-            "[CronMtfWorkers] DEPRECATED (CLEAN-001): legacy multi-jobs workflow; "
-            "migrate to the single orchestrator schedule "
-            "(manage_orchestrator_schedule.py -> POST /orchestrator/run)."
-        )
         normalized = _normalize_jobs(jobs)
+        # Avertissement de dépréciation (CLEAN-001) — déterministe : on reste sur
+        # workflow.logger (aucune I/O, aucun datetime.now()). Restreint aux jobs
+        # legacy MTF-run (/api/mtf/run) : ce workflow est aussi réutilisé par les
+        # schedules ACTIFS contract-sync / cleanup, qui ne sont PAS dépréciés et
+        # ne doivent donc pas être marqués. Le legacy continue de s'exécuter
+        # normalement ; la cible est le schedule orchestrateur unique
+        # (scripts/manage_orchestrator_schedule.py → /orchestrator/run).
+        if any(_is_legacy_mtf_run_job(job) for job in normalized):
+            workflow.logger.warning(
+                "[CronMtfWorkers] DEPRECATED (CLEAN-001): legacy MTF-run multi-jobs "
+                "workflow; migrate to the single orchestrator schedule "
+                "(manage_orchestrator_schedule.py -> POST /orchestrator/run)."
+            )
         for job in normalized:
             payload = job.payload()
             payload.setdefault("workers", job.workers)

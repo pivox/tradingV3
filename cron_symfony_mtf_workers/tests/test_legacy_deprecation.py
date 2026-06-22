@@ -173,3 +173,48 @@ def test_legacy_workflow_logs_deprecation_warning(monkeypatch):
     assert "manage_orchestrator_schedule.py" in joined
     # Le run a bien continué (résumé de l'activity journalisé en info).
     assert any("ok" in info for info in logger.infos)
+
+
+def _run_workflow_with_logger(monkeypatch, url):
+    """Exécute le workflow legacy pour un job d'URL donnée, renvoie le logger."""
+    import workflows.mtf_workers as mtf_workers
+
+    logger = _RecordingLogger()
+
+    async def _fake_execute_activity(name, *, args, start_to_close_timeout):
+        return {"summary": "ok"}
+
+    monkeypatch.setattr(mtf_workers.workflow, "logger", logger)
+    monkeypatch.setattr(mtf_workers.workflow, "execute_activity", _fake_execute_activity)
+
+    wf = mtf_workers.CronSymfonyMtfWorkersWorkflow()
+    asyncio.run(wf.run([{"url": url}]))
+    return logger
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://trading-app-nginx:80/api/mtf/sync-contracts",  # contract-sync (actif)
+        "http://trading-app-nginx:80/api/maintenance/cleanup",  # cleanup (actif)
+    ],
+)
+def test_legacy_workflow_does_not_warn_for_active_maintenance_jobs(monkeypatch, url):
+    # Le même workflow est réutilisé par les schedules ACTIFS contract-sync /
+    # cleanup : ils ne sont PAS dépréciés (CLEAN-001) et ne doivent donc PAS
+    # émettre l'avertissement de dépréciation, même si le job tourne via ce
+    # workflow legacy.
+    logger = _run_workflow_with_logger(monkeypatch, url)
+
+    assert logger.warnings == []
+    # Le job de maintenance a bien continué de s'exécuter.
+    assert any("ok" in info for info in logger.infos)
+
+
+def test_legacy_workflow_warns_only_for_mtf_run_jobs(monkeypatch):
+    # Job legacy MTF-run : l'avertissement DOIT être émis.
+    logger = _run_workflow_with_logger(
+        monkeypatch, "http://trading-app-nginx:80/api/mtf/run"
+    )
+
+    assert any("DEPRECATED (CLEAN-001)" in w for w in logger.warnings)
