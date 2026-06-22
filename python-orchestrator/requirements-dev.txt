@@ -2,3 +2,5 @@
 # httpx (déjà en runtime) est requis par fastapi.testclient.
 -r requirements.txt
 pytest==8.4.2
+# Mesure de couverture unitaire (QA-001). Dev-only : jamais en runtime.
+pytest-cov==7.1.0
