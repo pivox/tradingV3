@@ -113,13 +113,20 @@ close_events AS (
   FROM trade_lifecycle_event e
   WHERE e.event_type = 'position_closed'
 ),
--- Pont trade_id -> position_id : `position_opened` (flux MTF) porte les DEUX.
+-- Pont trade_id -> position_id : `position_opened` (flux MTF) porte les DEUX. Le pont est
+-- BORNÉ à la même VENUE (symbole + exchange + market_type) : le trade_id n'étant unique que
+-- par (exchange, market_type, trade_id), un même trade_id réutilisé sur une autre venue ne
+-- doit pas faire hériter à une entrée le position_id d'une autre venue (mauvais bucket
+-- by_exchange). Le rang est donc partitionné par (trade_id + venue complète).
 opened_bridge AS (
   SELECT
     NULLIF(e.extra->> 'trade_id', '') AS trade_id,
+    e.symbol,
+    e.exchange,
+    e.market_type,
     COALESCE(NULLIF(e.position_id, ''), NULLIF(e.extra->> 'position_id', '')) AS position_id,
     ROW_NUMBER() OVER (
-      PARTITION BY NULLIF(e.extra->> 'trade_id', '')
+      PARTITION BY NULLIF(e.extra->> 'trade_id', ''), e.symbol, e.exchange, e.market_type
       ORDER BY e.happened_at, e.id
     ) AS rn
   FROM trade_lifecycle_event e
@@ -132,7 +139,12 @@ entry_resolved AS (
     ee.*,
     COALESCE(ee.match_position_id, ob.position_id) AS eff_position_id
   FROM entry_events ee
-  LEFT JOIN opened_bridge ob ON ob.trade_id = ee.match_trade_id AND ob.rn = 1
+  LEFT JOIN opened_bridge ob
+    ON ob.trade_id = ee.match_trade_id
+   AND ob.symbol = ee.symbol
+   AND ob.exchange = ee.exchange
+   AND ob.market_type = ee.market_type
+   AND ob.rn = 1
 ),
 snapshot_values AS (
   SELECT

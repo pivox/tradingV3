@@ -251,9 +251,9 @@ final class PositionTradeAnalysisViewTest extends TestCase
         // Une clôture OKX ne doit pas être appariée à l'entrée bitmart (PnL au mauvais
         // bucket by_exchange) et inversement.
         $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TBB'], '2026-06-17 09:00:00+00', 920);
-        $this->opened('BTCUSDT', $run, 'TBB', 'PV', '2026-06-17 09:00:30+00', 921);
+        $this->opened('BTCUSDT', $run, 'TBB', 'PV', '2026-06-17 09:00:30+00', 921, 'bitmart', 'perpetual');
         $this->entry('BTCUSDT', $run, 's2', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TBO'], '2026-06-17 09:05:00+00', 922);
-        $this->opened('BTCUSDT', $run, 'TBO', 'PV', '2026-06-17 09:05:30+00', 923);
+        $this->opened('BTCUSDT', $run, 'TBO', 'PV', '2026-06-17 09:05:30+00', 923, 'okx', 'perpetual');
         $this->close('BTCUSDT', $run, ['pnl' => 5.0], 'PV', '2026-06-17 09:30:00+00', 924, 'bitmart', 'perpetual');
         $this->close('BTCUSDT', $run, ['pnl' => 8.0], 'PV', '2026-06-17 09:35:00+00', 925, 'okx', 'perpetual');
 
@@ -314,6 +314,46 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('matched', $byExchange['okx']['close_match_status']);
         self::assertSame('matched_trade_id', $byExchange['okx']['close_matched_by']);
         self::assertSame(1202, (int) $byExchange['okx']['close_event_id']);
+        self::assertEqualsWithDelta(8.0, (float) $byExchange['okx']['recorded_pnl_usdt'], 1e-9);
+    }
+
+    public function testOpenedBridgeIsScopedByVenue(): void
+    {
+        $run = 'run_bridge_venue';
+        // Même trade_id `TG` émis par DEUX venues, chacune avec son `position_opened`
+        // (le pont) résolvant un position_id DISTINCT, puis sa clôture par position_id.
+        // Sans périmètre venue dans le pont, l'entrée okx pourrait hériter du position_id
+        // bitmart (rang croisé) et matcher la mauvaise venue (mauvais bucket by_exchange).
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TG'], '2026-06-17 09:00:00+00', 1300);
+        $this->opened('BTCUSDT', $run, 'TG', 'PGB', '2026-06-17 09:00:30+00', 1301, 'bitmart', 'perpetual');
+        $this->entry('BTCUSDT', $run, 's2', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TG'], '2026-06-17 09:05:00+00', 1302);
+        $this->opened('BTCUSDT', $run, 'TG', 'PGO', '2026-06-17 09:05:30+00', 1303, 'okx', 'perpetual');
+        $this->close('BTCUSDT', $run, ['pnl' => 8.0], 'PGO', '2026-06-17 09:20:00+00', 1304, 'okx', 'perpetual');
+        $this->close('BTCUSDT', $run, ['pnl' => 5.0], 'PGB', '2026-06-17 09:30:00+00', 1305, 'bitmart', 'perpetual');
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT exchange, position_id, close_match_status, close_matched_by, close_event_id, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY exchange',
+            [$run]
+        );
+
+        self::assertCount(2, $rows);
+        $byExchange = [];
+        foreach ($rows as $r) {
+            $byExchange[$r['exchange']] = $r;
+        }
+
+        // Chaque entrée résout le position_id de SA venue via le pont, puis matche SA clôture.
+        self::assertSame('PGB', $byExchange['bitmart']['position_id']);
+        self::assertSame('matched', $byExchange['bitmart']['close_match_status']);
+        self::assertSame('matched_position_id', $byExchange['bitmart']['close_matched_by']);
+        self::assertSame(1305, (int) $byExchange['bitmart']['close_event_id']);
+        self::assertEqualsWithDelta(5.0, (float) $byExchange['bitmart']['recorded_pnl_usdt'], 1e-9);
+
+        self::assertSame('PGO', $byExchange['okx']['position_id']);
+        self::assertSame('matched', $byExchange['okx']['close_match_status']);
+        self::assertSame('matched_position_id', $byExchange['okx']['close_matched_by']);
+        self::assertSame(1304, (int) $byExchange['okx']['close_event_id']);
         self::assertEqualsWithDelta(8.0, (float) $byExchange['okx']['recorded_pnl_usdt'], 1e-9);
     }
 
@@ -441,12 +481,20 @@ SQL);
      * Événement `position_opened` du flux MTF : porte À LA FOIS le `trade_id` (contexte
      * lifecycle) et le `position_id` (métadonnée d'ordre) — c'est le pont OBS-003 v2.
      */
-    private function opened(string $symbol, string $runId, string $tradeId, string $positionId, string $happenedAt, int $forcedId): void
-    {
+    private function opened(
+        string $symbol,
+        string $runId,
+        string $tradeId,
+        string $positionId,
+        string $happenedAt,
+        int $forcedId,
+        string $exchange = 'bitmart',
+        string $marketType = 'perpetual',
+    ): void {
         $this->conn->executeStatement(
-            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, extra, happened_at)
-             VALUES (?, ?, \'position_opened\', ?, ?, ?::jsonb, ?)',
-            [$forcedId, $symbol, $runId, $positionId, json_encode(['trade_id' => $tradeId], JSON_THROW_ON_ERROR), $happenedAt]
+            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, exchange, market_type, extra, happened_at)
+             VALUES (?, ?, \'position_opened\', ?, ?, ?, ?, ?::jsonb, ?)',
+            [$forcedId, $symbol, $runId, $positionId, $exchange, $marketType, json_encode(['trade_id' => $tradeId], JSON_THROW_ON_ERROR), $happenedAt]
         );
     }
 
