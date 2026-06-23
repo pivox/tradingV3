@@ -72,6 +72,33 @@ final class OrchestrationContextValidatorTest extends TestCase
         });
     }
 
+    public function testContradictorySetAliasesInBodyAreRejected(): void
+    {
+        // Body-only : set_id et orchestration_set_id différents => fail-closed.
+        $this->assertCode('ORCHESTRATION_SET_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, ['set_id' => 's1', 'orchestration_set_id' => 's2']);
+        });
+    }
+
+    public function testContradictoryDashboardAliasesInBodyAreRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_DASHBOARD_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, [
+                'dashboard_id' => 'dashA',
+                'orchestration_dashboard_id' => 'dashB',
+            ]);
+        });
+    }
+
+    public function testEqualSetAndDashboardAliasesPass(): void
+    {
+        $this->expectNotToPerformAssertions();
+        $this->validator->validate(null, null, null, null, [
+            'set_id' => 's1', 'orchestration_set_id' => 's1',
+            'dashboard_id' => 'dashA', 'orchestration_dashboard_id' => 'dashA',
+        ]);
+    }
+
     public function testProfileMismatchIsRejected(): void
     {
         $this->assertCode('ORCHESTRATION_PROFILE_MISMATCH', function (): void {

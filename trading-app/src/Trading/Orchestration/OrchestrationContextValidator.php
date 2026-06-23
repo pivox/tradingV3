@@ -54,8 +54,19 @@ final class OrchestrationContextValidator
             }
         }
 
-        // 2. set_id : en-tête vs payload.
-        $setBody = self::clean($data['set_id'] ?? $data['orchestration_set_id'] ?? null);
+        // 2. set_id : d'abord les DEUX alias du payload entre eux (set_id vs
+        // orchestration_set_id), puis l'en-tête vs le payload. Sans ce contrôle inter-alias,
+        // deux valeurs contradictoires seraient silencieusement coalescées (mauvaise
+        // attribution du set), alors que le validateur doit fail-closed.
+        $setShort = self::clean($data['set_id'] ?? null);
+        $setLong = self::clean($data['orchestration_set_id'] ?? null);
+        if ($setShort !== null && $setLong !== null && $setShort !== $setLong) {
+            throw new OrchestrationContextException(
+                'ORCHESTRATION_SET_MISMATCH',
+                sprintf('set_id (%s) et orchestration_set_id (%s) du payload sont contradictoires.', $setShort, $setLong),
+            );
+        }
+        $setBody = $setShort ?? $setLong;
         if ($setHeader !== null && $setBody !== null && $setHeader !== $setBody) {
             throw new OrchestrationContextException(
                 'ORCHESTRATION_SET_MISMATCH',
@@ -63,8 +74,20 @@ final class OrchestrationContextValidator
             );
         }
 
-        // 3. dashboard_id : en-tête vs payload.
-        $dashboardBody = self::clean($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null);
+        // 3. dashboard_id : idem — alias du payload entre eux, puis en-tête vs payload.
+        $dashboardShort = self::clean($data['dashboard_id'] ?? null);
+        $dashboardLong = self::clean($data['orchestration_dashboard_id'] ?? null);
+        if ($dashboardShort !== null && $dashboardLong !== null && $dashboardShort !== $dashboardLong) {
+            throw new OrchestrationContextException(
+                'ORCHESTRATION_DASHBOARD_MISMATCH',
+                sprintf(
+                    'dashboard_id (%s) et orchestration_dashboard_id (%s) du payload sont contradictoires.',
+                    $dashboardShort,
+                    $dashboardLong,
+                ),
+            );
+        }
+        $dashboardBody = $dashboardShort ?? $dashboardLong;
         if ($dashboardHeader !== null && $dashboardBody !== null && $dashboardHeader !== $dashboardBody) {
             throw new OrchestrationContextException(
                 'ORCHESTRATION_DASHBOARD_MISMATCH',
