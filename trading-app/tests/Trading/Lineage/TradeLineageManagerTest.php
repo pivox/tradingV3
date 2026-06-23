@@ -90,17 +90,19 @@ final class TradeLineageManagerTest extends KernelTestCase
     public function testPersistsExplicitLineageContextColumnsForAuditAndReplay(): void
     {
         $intent = $this->persistIntent('cid-lineage', 'BTCUSDT', Exchange::BITMART, MarketType::PERPETUAL);
+        $longOriginalRunId = 'run-original-' . str_repeat('x', 140);
+        $longReplayRunId = 'run-source-' . str_repeat('y', 140);
 
         $lineage = $this->manager->ensureForIntent($intent, [
             'internal_trade_id' => 'itd-lineage',
             'run_id' => 'corr-run',
             'correlation_run_id' => 'corr-run',
-            'orchestration_run_id' => 'orchestrator-run',
+            'orchestration_run_id' => $longOriginalRunId,
             'orchestration_set_id' => 'set-a',
             'orchestration_dashboard_id' => 'dash-a',
             'profile' => 'scalper_micro',
             'origin' => 'replay',
-            'replay_of_run_id' => 'source-run',
+            'replay_of_run_id' => $longReplayRunId,
             'replay_of_correlation_id' => 'source-corr',
             'attempt_number' => 2,
             'config_hash' => 'cfg-123',
@@ -112,7 +114,8 @@ final class TradeLineageManagerTest extends KernelTestCase
 
         self::assertSame('itd-lineage', $reloaded->getInternalTradeId());
         self::assertSame('replay', $reloaded->getOrigin());
-        self::assertSame('source-run', $reloaded->getReplayOfRunId());
+        self::assertSame($longOriginalRunId, $reloaded->getOrchestrationRunId());
+        self::assertSame($longReplayRunId, $reloaded->getReplayOfRunId());
         self::assertSame('source-corr', $reloaded->getReplayOfCorrelationId());
         self::assertSame(2, $reloaded->getAttemptNumber());
         self::assertSame('cfg-123', $reloaded->getConfigHash());

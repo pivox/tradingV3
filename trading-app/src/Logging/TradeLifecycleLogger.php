@@ -211,11 +211,11 @@ final class TradeLifecycleLogger
         $event
             ->setInternalPositionId($this->limitedStringValue($extra['internal_position_id'] ?? null, 96))
             ->setCorrelationRunId($this->limitedStringValue($extra['correlation_run_id'] ?? null, 96))
-            ->setOrchestrationRunId($this->limitedStringValue($extra['orchestration_run_id'] ?? null, 96))
+            ->setOrchestrationRunId($this->limitedStringValue($extra['orchestration_run_id'] ?? null, 255))
             ->setOrchestrationSetId($this->limitedStringValue($extra['orchestration_set_id'] ?? null, 96))
             ->setOrchestrationDashboardId($this->limitedStringValue($extra['orchestration_dashboard_id'] ?? null, 96))
             ->setOrigin($this->limitedStringValue($extra['origin'] ?? null, 24) ?? 'legacy')
-            ->setReplayOfRunId($this->limitedStringValue($extra['replay_of_run_id'] ?? null, 96))
+            ->setReplayOfRunId($this->limitedStringValue($extra['replay_of_run_id'] ?? null, 255))
             ->setReplayOfCorrelationId($this->limitedStringValue($extra['replay_of_correlation_id'] ?? null, 96))
             ->setAttemptNumber($this->intValue($extra['attempt_number'] ?? null))
             ->setConfigHash($this->limitedStringValue($extra['config_hash'] ?? null, 128));

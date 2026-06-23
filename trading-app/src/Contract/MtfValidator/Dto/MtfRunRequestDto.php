@@ -145,7 +145,7 @@ final class MtfRunRequestDto
 
         if ($hasOrchestratorLineage || self::nonEmptyString($data['origin'] ?? null) !== null) {
             return LineageContext::fromOrchestratorPayload($data + [
-                'run_id' => $data['request_id'] ?? $data['requestId'] ?? $data['orchestration_run_id'] ?? null,
+                'run_id' => $data['orchestration_run_id'] ?? $data['original_run_id'] ?? $data['run_id'] ?? $data['request_id'] ?? $data['requestId'] ?? null,
                 'correlation_run_id' => $data['request_id'] ?? $data['requestId'] ?? null,
                 'profile' => $profile,
                 'exchange' => $exchange?->value,

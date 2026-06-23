@@ -145,7 +145,7 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
         ]);
 
         self::assertNotNull($lineage);
-        self::assertLessThanOrEqual(96, strlen($lineage->getOrchestrationRunId() ?? ''));
+        self::assertSame(140, strlen($lineage->getOrchestrationRunId() ?? ''));
         self::assertLessThanOrEqual(96, strlen($lineage->getOrchestrationSetId() ?? ''));
         self::assertLessThanOrEqual(96, strlen($lineage->getOrchestrationDashboardId() ?? ''));
     }

@@ -128,7 +128,7 @@ class OrderIntent
     #[ORM\Column(name: 'correlation_run_id', type: Types::STRING, length: 96, nullable: true)]
     private ?string $correlationRunId = null;
 
-    #[ORM\Column(name: 'orchestration_run_id', type: Types::STRING, length: 96, nullable: true)]
+    #[ORM\Column(name: 'orchestration_run_id', type: Types::STRING, length: 255, nullable: true)]
     private ?string $orchestrationRunId = null;
 
     #[ORM\Column(name: 'orchestration_set_id', type: Types::STRING, length: 96, nullable: true)]
@@ -140,7 +140,7 @@ class OrderIntent
     #[ORM\Column(name: 'origin', type: Types::STRING, length: 24, options: ['default' => 'legacy'])]
     private string $origin = 'legacy';
 
-    #[ORM\Column(name: 'replay_of_run_id', type: Types::STRING, length: 96, nullable: true)]
+    #[ORM\Column(name: 'replay_of_run_id', type: Types::STRING, length: 255, nullable: true)]
     private ?string $replayOfRunId = null;
 
     #[ORM\Column(name: 'replay_of_correlation_id', type: Types::STRING, length: 96, nullable: true)]

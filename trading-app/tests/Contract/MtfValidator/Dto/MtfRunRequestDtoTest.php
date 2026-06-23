@@ -85,4 +85,23 @@ final class MtfRunRequestDtoTest extends TestCase
         self::assertSame('scalper', $dto->lineageContext->mtfProfile);
         self::assertSame(2, $dto->lineageContext->attemptNumber);
     }
+
+    public function testLineageContextKeepsOriginalRunIdSeparateFromCorrelationRequestId(): void
+    {
+        $originalRunId = 'run-original-' . str_repeat('x', 120);
+
+        $dto = MtfRunRequestDto::fromArray([
+            'symbols' => ['BTCUSDT'],
+            'request_id' => 'corr-run',
+            'orchestration_run_id' => $originalRunId,
+            'dashboard_id' => 'dash-a',
+            'set_id' => 'set-a',
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame('corr-run', $dto->requestId);
+        self::assertSame($originalRunId, $dto->lineageContext->orchestrationRunId);
+        self::assertSame('corr-run', $dto->lineageContext->correlationRunId);
+    }
 }

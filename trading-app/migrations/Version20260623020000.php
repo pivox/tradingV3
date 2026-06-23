@@ -20,11 +20,11 @@ final class Version20260623020000 extends AbstractMigration
             'internal_trade_id VARCHAR(96) DEFAULT NULL',
             'internal_position_id VARCHAR(96) DEFAULT NULL',
             'correlation_run_id VARCHAR(96) DEFAULT NULL',
-            'orchestration_run_id VARCHAR(96) DEFAULT NULL',
+            'orchestration_run_id VARCHAR(255) DEFAULT NULL',
             'orchestration_set_id VARCHAR(96) DEFAULT NULL',
             'orchestration_dashboard_id VARCHAR(96) DEFAULT NULL',
             "origin VARCHAR(24) DEFAULT 'legacy' NOT NULL",
-            'replay_of_run_id VARCHAR(96) DEFAULT NULL',
+            'replay_of_run_id VARCHAR(255) DEFAULT NULL',
             'replay_of_correlation_id VARCHAR(96) DEFAULT NULL',
             'attempt_number INT DEFAULT 1 NOT NULL',
             'config_hash VARCHAR(128) DEFAULT NULL',
@@ -35,10 +35,12 @@ final class Version20260623020000 extends AbstractMigration
         }
 
         $this->addSql('ALTER TABLE trade_lineage ADD COLUMN IF NOT EXISTS internal_position_id VARCHAR(96) DEFAULT NULL');
-        $this->addSql('ALTER TABLE trade_lineage ADD COLUMN IF NOT EXISTS replay_of_run_id VARCHAR(96) DEFAULT NULL');
+        $this->addSql('ALTER TABLE trade_lineage ADD COLUMN IF NOT EXISTS replay_of_run_id VARCHAR(255) DEFAULT NULL');
         $this->addSql('ALTER TABLE trade_lineage ADD COLUMN IF NOT EXISTS replay_of_correlation_id VARCHAR(96) DEFAULT NULL');
         $this->addSql('ALTER TABLE trade_lineage ADD COLUMN IF NOT EXISTS attempt_number INT DEFAULT 1 NOT NULL');
         $this->addSql('ALTER TABLE trade_lineage ADD COLUMN IF NOT EXISTS config_hash VARCHAR(128) DEFAULT NULL');
+        $this->addSql('ALTER TABLE trade_lineage ALTER COLUMN orchestration_run_id TYPE VARCHAR(255)');
+        $this->addSql('ALTER TABLE trade_lineage ALTER COLUMN replay_of_run_id TYPE VARCHAR(255)');
         $this->addSql("ALTER TABLE trade_lineage ALTER COLUMN origin SET DEFAULT 'legacy'");
 
         foreach ($lineageColumns as $definition) {
