@@ -33,9 +33,7 @@ final class TradeLifecycleLoggerListener
         $position = $event->position;
         $marketType = $this->marketTypeFromExtra($event->extra);
 
-        $rawPositionId = $position->raw['position_id']
-            ?? $position->raw['positionId']
-            ?? null;
+        $rawPositionId = $this->positionIdFromRaw($position->raw);
         $positionId = $rawPositionId
             ?? sprintf('%s:%s:%s', $position->symbol, strtolower($position->side->value), $position->openedAt->format('U'));
         $lineage = $this->safeResolveLineageFromPositionPayload($position->raw, $event->extra, $marketType, $rawPositionId);
@@ -71,9 +69,7 @@ final class TradeLifecycleLoggerListener
         $history = $event->positionHistory;
         $marketType = $this->marketTypeFromExtra($event->extra);
 
-        $rawPositionId = $history->raw['position_id']
-            ?? $history->raw['positionId']
-            ?? null;
+        $rawPositionId = $this->positionIdFromRaw($history->raw);
         $positionId = $rawPositionId
             ?? sprintf('%s:%s:%s', $history->symbol, strtolower($history->side->value), $history->closedAt->format('U'));
         $lineage = $this->safeResolveLineageFromPositionPayload($history->raw, $event->extra, $marketType, $rawPositionId);
@@ -355,6 +351,29 @@ final class TradeLifecycleLoggerListener
         } catch (\Throwable) {
             // Le lifecycle reste prioritaire; le lineage sera récupéré par un identifiant exact ultérieur.
         }
+    }
+
+    /**
+     * @param array<string,mixed> $raw
+     */
+    private function positionIdFromRaw(array $raw): mixed
+    {
+        return $raw['position_id']
+            ?? $raw['positionId']
+            ?? $this->positionIdFromNestedRaw($raw['raw_history'] ?? null)
+            ?? $this->positionIdFromNestedRaw($raw['raw_snapshot'] ?? null)
+            ?? null;
+    }
+
+    private function positionIdFromNestedRaw(mixed $raw): mixed
+    {
+        if (!\is_array($raw)) {
+            return null;
+        }
+
+        return $raw['position_id']
+            ?? $raw['positionId']
+            ?? null;
     }
 
     private function stringValue(mixed $value): ?string

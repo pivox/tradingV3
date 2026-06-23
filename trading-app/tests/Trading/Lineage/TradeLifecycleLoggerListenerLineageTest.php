@@ -107,6 +107,47 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         self::assertSame(2.0, $closed->getExtra()['pnl_R'] ?? null);
     }
 
+    public function testClosedPositionResolvesLineageFromNestedRawHistoryPositionId(): void
+    {
+        $lineage = $this->persistLineageWithPosition();
+        $this->persistOrderSubmitted($lineage->getRunId(), '25', new \DateTimeImmutable('2026-06-23 10:01:00 UTC'));
+
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            null,
+            $this->tradeLineageManager(),
+        );
+
+        $listener->onPositionClosed(new PositionClosedEvent(
+            positionHistory: new PositionHistoryEntryDto(
+                symbol: 'BTCUSDT',
+                side: PositionSide::LONG,
+                size: BigDecimal::of('1'),
+                entryPrice: BigDecimal::of('100'),
+                exitPrice: BigDecimal::of('150'),
+                realizedPnl: BigDecimal::of('50'),
+                fees: null,
+                openedAt: new \DateTimeImmutable('2026-06-23 10:00:00 UTC'),
+                closedAt: new \DateTimeImmutable('2026-06-23 10:05:00 UTC'),
+                raw: ['raw_history' => ['position_id' => 'pos-real']],
+            ),
+            runId: null,
+            exchange: Exchange::BITMART->value,
+            extra: ['market_type' => MarketType::PERPETUAL->value],
+        ));
+
+        /** @var TradeLifecycleEvent|null $closed */
+        $closed = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'position_closed',
+            'positionId' => 'pos-real',
+        ]);
+
+        self::assertNotNull($closed);
+        self::assertSame('run-real', $closed->getRunId());
+        self::assertSame(2.0, $closed->getExtra()['pnl_R'] ?? null);
+    }
+
     public function testOpenedPositionLifecycleIsLoggedWhenLineageTableIsMissing(): void
     {
         (new SchemaTool($this->em))->dropSchema([
