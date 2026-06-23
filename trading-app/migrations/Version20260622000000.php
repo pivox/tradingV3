@@ -96,7 +96,20 @@ close_events AS (
     e.happened_at,
     e.extra,
     NULLIF(e.extra->> 'trade_id', '') AS match_trade_id,
-    COALESCE(NULLIF(e.position_id, ''), NULLIF(e.extra->> 'position_id', '')) AS match_position_id
+    COALESCE(NULLIF(e.position_id, ''), NULLIF(e.extra->> 'position_id', '')) AS match_position_id,
+    -- Temps de clôture EFFECTIF : `happened_at` est le moment où la synchro LOGGE
+    -- l'événement (peut être très postérieur à la clôture réelle pour un import tardif).
+    -- La vraie heure d'exchange est dans extra.close_time ('Y-m-d H:i:s' UTC) : on l'utilise
+    -- pour le rang/l'éligibilité/le garde temporel, avec repli sur happened_at si absente
+    -- ou mal formée (cast sûr via garde regex).
+    COALESCE(
+      CASE
+        WHEN (e.extra->> 'close_time') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}'
+        THEN (e.extra->> 'close_time')::timestamp AT TIME ZONE 'UTC'
+        ELSE NULL
+      END,
+      e.happened_at
+    ) AS effective_close_time
   FROM trade_lifecycle_event e
   WHERE e.event_type = 'position_closed'
 ),
@@ -171,10 +184,10 @@ entry_pid AS (
 -- une clôture orpheline/périmée antérieure est écartée AVANT le rang (et non rejetée
 -- après), donc elle ne vole pas le rang 1 à la vraie clôture postérieure.
 close_pid AS (
-  SELECT c.id, c.match_position_id, c.symbol, c.exchange, c.market_type, c.happened_at,
+  SELECT c.id, c.match_position_id, c.symbol, c.exchange, c.market_type, c.effective_close_time,
          ROW_NUMBER() OVER (
            PARTITION BY c.match_position_id, c.symbol, c.exchange, c.market_type
-           ORDER BY c.happened_at, c.id
+           ORDER BY c.effective_close_time, c.id
          ) AS rn
   FROM close_events c
   WHERE c.match_position_id IS NOT NULL
@@ -185,7 +198,7 @@ close_pid AS (
         AND e.symbol = c.symbol
         AND e.exchange = c.exchange
         AND e.market_type = c.market_type
-        AND e.happened_at <= c.happened_at
+        AND e.happened_at <= c.effective_close_time
     )
 ),
 pid_pairs AS (
@@ -197,7 +210,7 @@ pid_pairs AS (
    AND c.symbol = e.symbol
    AND c.exchange = e.exchange
    AND c.market_type = e.market_type
-   AND c.happened_at >= e.happened_at
+   AND c.effective_close_time >= e.happened_at
 ),
 matched AS (
   SELECT entry_event_id, close_event_id, 'matched_trade_id'    AS matched_by FROM tid_pairs
@@ -220,7 +233,7 @@ SELECT
   COALESCE(ee.match_trade_id, ce.match_trade_id)        AS trade_id,
   COALESCE(ce.match_position_id, ee.eff_position_id)     AS position_id,
   ee.happened_at                AS entry_time,
-  ce.happened_at                AS close_time,
+  ce.effective_close_time       AS close_time,
   CASE WHEN m.close_event_id IS NOT NULL THEN 'matched' ELSE 'unmatched' END AS close_match_status,
   COALESCE(m.matched_by, 'unmatched')                   AS close_matched_by,
   -- Statut de qualité de la ligne (issue #190, étape 7). On ne prétend pas « ouvert » :

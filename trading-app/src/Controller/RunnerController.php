@@ -129,10 +129,15 @@ class RunnerController extends AbstractController
                 'context_mode' => $data['context_mode'] ?? null,
                 'mode' => $data['mode'] ?? null,
                 'open_state_snapshot' => $openStateSnapshot,
-                'run_id' => $headerRunId ?? ($data['run_id'] ?? null),
+                'run_id' => $headerRunId ?? ($data['run_id'] ?? $data['original_run_id'] ?? null),
                 'correlation_run_id' => $headerCorrelationId ?? ($data['correlation_run_id'] ?? null),
-                'orchestration_dashboard_id' => $headerDashboardId ?? ($data['dashboard_id'] ?? null),
-                'orchestration_set_id' => $headerSetId ?? ($data['set_id'] ?? null),
+                // On accepte les deux formes d'alias dans le corps (`dashboard_id` court ET
+                // `orchestration_dashboard_id` long) pour ne pas perdre le lineage sur le
+                // chemin body-only sans en-têtes (cohérent avec le validateur et le DTO).
+                'orchestration_dashboard_id' => $headerDashboardId
+                    ?? ($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null),
+                'orchestration_set_id' => $headerSetId
+                    ?? ($data['set_id'] ?? $data['orchestration_set_id'] ?? null),
             ]);
             $result = $runMtfCycle->run($runnerRequest);
 

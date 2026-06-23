@@ -279,6 +279,52 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(8.0, (float) $byExchange['okx']['recorded_pnl_usdt'], 1e-9);
     }
 
+    public function testStaleCloseDetectedViaRealCloseTimeNotLogTime(): void
+    {
+        $run = 'run_realtime';
+        // Entrée réelle à 09:00 (trade TCT, pont -> PCT).
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TCT'], '2026-06-17 09:00:00+00', 1000);
+        $this->opened('BTCUSDT', $run, 'TCT', 'PCT', '2026-06-17 09:00:30+00', 1001);
+        // Clôture périmée d'un ancien trade au MÊME position_id : LOGGÉE tardivement
+        // (happened_at 10:00, après l'entrée) mais close_time RÉEL à 08:00 (avant l'entrée).
+        // Le temps réel doit primer => non éligible => entrée unmatched, aucun PnL attribué.
+        $this->close('BTCUSDT', $run, ['pnl' => 999.0, 'close_time' => '2026-06-17 08:00:00'], 'PCT', '2026-06-17 10:00:00+00', 1002);
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT trade_id, close_match_status, close_event_id, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$run]
+        );
+
+        self::assertCount(1, $rows);
+        self::assertSame('TCT', $rows[0]['trade_id']);
+        self::assertSame('unmatched', $rows[0]['close_match_status']);
+        self::assertNull($rows[0]['close_event_id']);
+        self::assertNull($rows[0]['recorded_pnl_usdt'], 'aucun PnL périmé attribué via le log time');
+    }
+
+    public function testMatchedCloseExposesRealCloseTime(): void
+    {
+        $run = 'run_realtime_ok';
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TMC'], '2026-06-17 09:00:00+00', 1100);
+        $this->opened('BTCUSDT', $run, 'TMC', 'PMC', '2026-06-17 09:00:30+00', 1101);
+        // Clôture réelle à 10:00 mais loggée à 10:05 : effective_close_time = close_time réel.
+        $this->close('BTCUSDT', $run, ['pnl' => 5.0, 'close_time' => '2026-06-17 10:00:00'], 'PMC', '2026-06-17 10:05:00+00', 1102);
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT close_match_status, close_event_id, close_time, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$run]
+        );
+
+        self::assertCount(1, $rows);
+        self::assertSame('matched', $rows[0]['close_match_status']);
+        self::assertSame(1102, (int) $rows[0]['close_event_id']);
+        self::assertEqualsWithDelta(5.0, (float) $rows[0]['recorded_pnl_usdt'], 1e-9);
+        // close_time exposé = heure RÉELLE de clôture (10:00), pas le log time (10:05).
+        self::assertStringContainsString('10:00:00', (string) $rows[0]['close_time']);
+    }
+
     private function createMinimalSchema(): void
     {
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
