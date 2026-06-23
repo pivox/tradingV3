@@ -251,10 +251,7 @@ final class ExecuteOrderPlan
         }
 
         try {
-            if ($this->tradeLineageManager !== null) {
-                $lineage = $this->tradeLineageManager->ensureForIntent($intent);
-                $this->tradeLineageManager->attachExchangeOrderId($lineage, $result->exchangeOrderId);
-            }
+            $this->syncLineageAfterExecution($intent, $result);
 
             if ($result->exchangeOrderId !== null && $this->shouldMarkIntentSent($result)) {
                 $this->orderIntentManager->markAsSent($intent, $result->exchangeOrderId);
@@ -276,6 +273,26 @@ final class ExecuteOrderPlan
             $this->positionsLogger->warning('execute_order_plan.intent_status_sync_failed', [
                 'order_intent_id' => $intent->getId(),
                 'client_order_id' => $intent->getClientOrderId(),
+                'status' => $result->status,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function syncLineageAfterExecution(OrderIntent $intent, ExecutionResult $result): void
+    {
+        if ($this->tradeLineageManager === null) {
+            return;
+        }
+
+        try {
+            $lineage = $this->tradeLineageManager->ensureForIntent($intent);
+            $this->tradeLineageManager->attachExchangeOrderId($lineage, $result->exchangeOrderId);
+        } catch (\Throwable $e) {
+            $this->positionsLogger->warning('execute_order_plan.lineage_sync_failed', [
+                'order_intent_id' => $intent->getId(),
+                'client_order_id' => $intent->getClientOrderId(),
+                'exchange_order_id' => $result->exchangeOrderId,
                 'status' => $result->status,
                 'error' => $e->getMessage(),
             ]);
