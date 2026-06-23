@@ -12,6 +12,8 @@ use Doctrine\Persistence\ManagerRegistry;
 /**
  * OBS-003 — Repository de la vue versionnée `position_trade_analysis_v2`. Implémente la
  * source de lecture des outcomes (lecture seule, bornée), distincte de la vue v1.
+ *
+ * @extends ServiceEntityRepository<PositionTradeAnalysisV2>
  */
 final class PositionTradeAnalysisV2Repository extends ServiceEntityRepository implements PositionTradeAnalysisReaderInterface
 {

@@ -8,6 +8,7 @@ use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Schema\Schema;
 use DoctrineMigrations\Version20260622000000;
+use DoctrineMigrations\Version20260623010000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -16,13 +17,16 @@ use Psr\Log\NullLogger;
  * OBS-003 — Test d'INTÉGRATION de la vue `position_trade_analysis_v2` sur un vrai PostgreSQL.
  *
  * Exécute le SQL RÉEL de la migration {@see Version20260622000000} (via `getSql()`),
+ * puis la migration FIFO {@see Version20260623010000},
  * sur des tables minimales `trade_lifecycle_event` + `indicator_snapshots`, puis vérifie
- * le rapprochement par identifiants EXACTS (trade_id puis position_id, jamais par symbole),
+ * le rapprochement par identifiants EXACTS (internal_trade_id, trade_id puis position_id,
+ * jamais par symbole),
  * l'absence de duplication / de réutilisation de clôture, le lineage et la sémantique PnL.
  *
  * Skippé proprement si aucun PostgreSQL n'est disponible (DATABASE_URL non-postgres).
  */
 #[CoversClass(Version20260622000000::class)]
+#[CoversClass(Version20260623010000::class)]
 final class PositionTradeAnalysisViewTest extends TestCase
 {
     private Connection $conn;
@@ -37,6 +41,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         try {
             $this->conn = DriverManager::getConnection(['url' => $dsn]);
             $this->conn->executeQuery('SELECT 1');
+            $this->conn->executeStatement("SET TIME ZONE 'UTC'");
         } catch (\Throwable $e) {
             self::markTestSkipped('PostgreSQL not reachable: ' . $e->getMessage());
         }
@@ -143,7 +148,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
     {
         $run = 'run_reuse';
         // 2 entrées + 2 clôtures partageant le même position_id : appariement 1-pour-1
-        // par ROW_NUMBER, jamais de réutilisation ni de multiplication de lignes.
+        // par FIFO, jamais de réutilisation ni de multiplication de lignes.
         $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['position_id' => 'PSHARED'], '2026-06-17 09:00:00+00', 300);
         $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['position_id' => 'PSHARED'], '2026-06-17 09:01:00+00', 301);
         $this->close('BTCUSDT', $run, ['pnl' => 1.0], 'PSHARED', '2026-06-17 09:10:00+00', 400);
@@ -158,6 +163,34 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $closeIds = array_column($rows, 'close_event_id');
         self::assertNotContains(null, $closeIds, 'les deux entrées sont rapprochées');
         self::assertSame($closeIds, array_unique($closeIds), 'chaque clôture sert une seule entrée');
+    }
+
+    public function testFifoSkipsExcessCloseBetweenTwoEntriesSharingTheSamePositionId(): void
+    {
+        $run = 'run_fifo_excess_close';
+
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['position_id' => 'PFIFO'], '2026-06-17 09:00:00+00', 500);
+        $this->close('BTCUSDT', $run, ['pnl' => 1.0], 'PFIFO', '2026-06-17 09:10:00+00', 501);
+        // Clôture excédentaire entre deux entrées : elle ne doit pas voler le rang de E2.
+        $this->close('BTCUSDT', $run, ['pnl' => 999.0], 'PFIFO', '2026-06-17 09:20:00+00', 502);
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['position_id' => 'PFIFO'], '2026-06-17 09:30:00+00', 503);
+        $this->close('BTCUSDT', $run, ['pnl' => 3.0], 'PFIFO', '2026-06-17 09:40:00+00', 504);
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT entry_event_id, close_event_id, close_match_status, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY entry_time',
+            [$run]
+        );
+
+        self::assertCount(2, $rows, 'la clôture excédentaire ne crée aucune ligne entry-based');
+        self::assertSame(500, (int) $rows[0]['entry_event_id']);
+        self::assertSame(501, (int) $rows[0]['close_event_id']);
+        self::assertEqualsWithDelta(1.0, (float) $rows[0]['recorded_pnl_usdt'], 1e-9);
+
+        self::assertSame(503, (int) $rows[1]['entry_event_id']);
+        self::assertSame('matched', $rows[1]['close_match_status']);
+        self::assertSame(504, (int) $rows[1]['close_event_id'], 'E2 doit matcher C3, jamais Cx');
+        self::assertEqualsWithDelta(3.0, (float) $rows[1]['recorded_pnl_usdt'], 1e-9);
     }
 
     public function testStaleReusedPositionIdIsNotAttributedToCurrentEntry(): void
@@ -395,6 +428,39 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(3.0, (float) $rowsC[0]['recorded_pnl_usdt'], 1e-9);
     }
 
+    public function testInternalTradeIdHasPriorityOverLegacyPositionId(): void
+    {
+        $run = 'run_internal_priority';
+
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', [
+            'internal_trade_id' => 'itd-first',
+            'position_id' => 'P-REUSED',
+        ], '2026-06-17 09:00:00+00', 1500);
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', [
+            'internal_trade_id' => 'itd-second',
+            'position_id' => 'P-REUSED',
+        ], '2026-06-17 09:01:00+00', 1501);
+        $this->close('BTCUSDT', $run, ['internal_trade_id' => 'itd-second', 'pnl' => 2.0], 'P-REUSED', '2026-06-17 09:10:00+00', 1502);
+        $this->close('BTCUSDT', $run, ['internal_trade_id' => 'itd-first', 'pnl' => 1.0], 'P-REUSED', '2026-06-17 09:11:00+00', 1503);
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT internal_trade_id, close_event_id, close_matched_by, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY entry_time',
+            [$run]
+        );
+
+        self::assertCount(2, $rows);
+        self::assertSame('itd-first', $rows[0]['internal_trade_id']);
+        self::assertSame('matched_internal_trade_id', $rows[0]['close_matched_by']);
+        self::assertSame(1503, (int) $rows[0]['close_event_id']);
+        self::assertEqualsWithDelta(1.0, (float) $rows[0]['recorded_pnl_usdt'], 1e-9);
+
+        self::assertSame('itd-second', $rows[1]['internal_trade_id']);
+        self::assertSame('matched_internal_trade_id', $rows[1]['close_matched_by']);
+        self::assertSame(1502, (int) $rows[1]['close_event_id']);
+        self::assertEqualsWithDelta(2.0, (float) $rows[1]['recorded_pnl_usdt'], 1e-9);
+    }
+
     public function testStaleCloseDetectedViaRealCloseTimeNotLogTime(): void
     {
         $run = 'run_realtime';
@@ -441,6 +507,47 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertStringContainsString('10:00:00', (string) $rows[0]['close_time']);
     }
 
+    public function testFifoHandlesThousandsOfEventsWithoutReusingOrMultiplyingCloses(): void
+    {
+        $run = 'run_fifo_bulk';
+        $base = new \DateTimeImmutable('2026-06-17 00:00:00', new \DateTimeZone('UTC'));
+        $entryCount = 1200;
+        $nextId = 10000;
+
+        for ($i = 0; $i < $entryCount; $i++) {
+            $entryTime = $base->modify(sprintf('+%d minutes', $i * 3))->format('Y-m-d H:i:sP');
+            $closeTime = $base->modify(sprintf('+%d minutes', ($i * 3) + 1))->format('Y-m-d H:i:sP');
+            $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['position_id' => 'PBULK'], $entryTime, $nextId++);
+            $this->close('BTCUSDT', $run, ['pnl' => 1.0], 'PBULK', $closeTime, $nextId++);
+
+            if ($i % 100 === 0) {
+                $orphanCloseTime = $base->modify(sprintf('+%d minutes', ($i * 3) + 2))->format('Y-m-d H:i:sP');
+                $this->close('BTCUSDT', $run, ['pnl' => 999.0], 'PBULK', $orphanCloseTime, $nextId++);
+            }
+        }
+
+        $summary = $this->conn->fetchAssociative(
+            'SELECT COUNT(*) AS rows_count,
+                    COUNT(close_event_id) AS matched_count,
+                    COUNT(DISTINCT close_event_id) AS distinct_close_count,
+                    SUM(recorded_pnl_usdt) AS recorded_pnl
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$run]
+        );
+        self::assertIsArray($summary);
+        self::assertSame($entryCount, (int) $summary['rows_count']);
+        self::assertSame($entryCount, (int) $summary['matched_count']);
+        self::assertSame($entryCount, (int) $summary['distinct_close_count']);
+        self::assertEqualsWithDelta((float) $entryCount, (float) $summary['recorded_pnl'], 1e-9);
+
+        $plan = $this->conn->fetchFirstColumn(
+            'EXPLAIN (ANALYZE, BUFFERS)
+             SELECT * FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY entry_time',
+            [$run]
+        );
+        self::assertNotSame([], $plan, 'EXPLAIN doit produire un plan PostgreSQL exploitable.');
+    }
+
     private function createMinimalSchema(): void
     {
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
@@ -453,6 +560,7 @@ CREATE TABLE trade_lifecycle_event (
     symbol VARCHAR(50) NOT NULL,
     event_type VARCHAR(32) NOT NULL,
     run_id VARCHAR(64),
+    internal_trade_id VARCHAR(96),
     position_id VARCHAR(64),
     timeframe VARCHAR(8),
     config_profile VARCHAR(64),
@@ -480,11 +588,16 @@ SQL);
         if (!class_exists(Version20260622000000::class, false)) {
             require_once \dirname(__DIR__, 3) . '/migrations/Version20260622000000.php';
         }
+        if (!class_exists(Version20260623010000::class, false)) {
+            require_once \dirname(__DIR__, 3) . '/migrations/Version20260623010000.php';
+        }
 
-        $migration = new Version20260622000000($this->conn, new NullLogger());
-        $migration->up(new Schema());
-        foreach ($migration->getSql() as $query) {
-            $this->conn->executeStatement($query->getStatement(), $query->getParameters(), $query->getTypes());
+        foreach ([Version20260622000000::class, Version20260623010000::class] as $migrationClass) {
+            $migration = new $migrationClass($this->conn, new NullLogger());
+            $migration->up(new Schema());
+            foreach ($migration->getSql() as $query) {
+                $this->conn->executeStatement($query->getStatement(), $query->getParameters(), $query->getTypes());
+            }
         }
     }
 
