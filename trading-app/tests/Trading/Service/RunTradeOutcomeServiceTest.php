@@ -54,6 +54,7 @@ final class RunTradeOutcomeServiceTest extends TestCase
         self::assertSame('run_dashA', $out['run_id']);
         self::assertSame('run_dashA', $out['correlation_run_id']);
         self::assertTrue($out['source_available']);
+        self::assertFalse($out['truncated']);
         // Une ligne unmatched + des coûts incomplets => données non complètes.
         self::assertFalse($out['data_complete']);
 
@@ -179,6 +180,34 @@ final class RunTradeOutcomeServiceTest extends TestCase
         self::assertSame('partial', $out['summary']['cost_completeness']);
         self::assertNull($out['summary']['estimated_net_pnl_usdt']);
         self::assertSame(5.0, $out['summary']['recorded_pnl_usdt']);
+    }
+
+    public function testRowCapTruncationIsFlaggedNotSilentlyUndercounted(): void
+    {
+        $rows = [
+            $this->row(['symbol' => 'BTCUSDT', 'closeEventId' => 1, 'closeMatchStatus' => 'matched', 'closeMatchedBy' => 'matched_trade_id', 'analysisStatus' => 'matched_closed', 'recordedPnlUsdt' => 1.0, 'costCompleteness' => 'partial']),
+            $this->row(['symbol' => 'ETHUSDT', 'closeEventId' => 2, 'closeMatchStatus' => 'matched', 'closeMatchedBy' => 'matched_trade_id', 'analysisStatus' => 'matched_closed', 'recordedPnlUsdt' => 2.0, 'costCompleteness' => 'partial']),
+            $this->row(['symbol' => 'SOLUSDT', 'closeEventId' => 3, 'closeMatchStatus' => 'matched', 'closeMatchedBy' => 'matched_trade_id', 'analysisStatus' => 'matched_closed', 'recordedPnlUsdt' => 3.0, 'costCompleteness' => 'partial']),
+        ];
+
+        // Plafond bas (2) pour 3 lignes => troncature signalée, jamais sous-comptée en silence.
+        $service = new RunTradeOutcomeService($this->reader($rows), null, 2);
+        $out = $service->buildOutcome('run_big');
+
+        self::assertTrue($out['truncated']);
+        self::assertSame(2, $out['row_cap']);
+        self::assertFalse($out['data_complete']);
+        // Agrégat calculé sur les lignes capées (2), pas faussement présenté comme complet.
+        self::assertSame(2, $out['summary']['trade_count']);
+    }
+
+    public function testWithinRowCapIsNotTruncated(): void
+    {
+        $service = new RunTradeOutcomeService($this->reader([]), null, 2);
+        $out = $service->buildOutcome('run_small');
+
+        self::assertFalse($out['truncated']);
+        self::assertSame(0, $out['summary']['trade_count']);
     }
 
     private function reader(array $rows): PositionTradeAnalysisReaderInterface

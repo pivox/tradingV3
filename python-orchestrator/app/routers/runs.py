@@ -133,6 +133,9 @@ async def get_run_outcome(
             "set_id": set_id,
             "run_found": True,
             "source_available": True,
+            # Relayé tel quel : si Symfony a tronqué l'agrégat (run très large), on le
+            # signale (data_complete est alors faux côté source) plutôt que de le masquer.
+            "truncated": outcome.get("truncated"),
             "data_complete": outcome.get("data_complete"),
             "summary": outcome.get("summary"),
             "by_set": outcome.get("by_set"),

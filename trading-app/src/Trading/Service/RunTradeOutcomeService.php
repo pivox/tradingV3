@@ -34,6 +34,10 @@ final class RunTradeOutcomeService
     public function __construct(
         private readonly PositionTradeAnalysisReaderInterface $reader,
         private readonly ?LoggerInterface $logger = null,
+        // Plafond de lignes agrégées (lecture bornée). On lit `rowCap + 1` pour DÉTECTER
+        // un dépassement et le signaler explicitement (`truncated`) plutôt que de
+        // sous-compter silencieusement les KPI.
+        private readonly int $rowCap = 5000,
     ) {
     }
 
@@ -47,7 +51,8 @@ final class RunTradeOutcomeService
         $correlationRunId = RunCorrelationId::canonical($originalRunId);
 
         try {
-            $rows = $this->reader->findByCorrelationRunId($correlationRunId, $setId);
+            // rowCap + 1 : si on récupère plus que le plafond, le résultat est tronqué.
+            $rows = $this->reader->findByCorrelationRunId($correlationRunId, $setId, $this->rowCap + 1);
         } catch (\Throwable $e) {
             $this->logger?->warning('obs003.outcome.source_unavailable', [
                 'run_id' => $originalRunId,
@@ -61,12 +66,29 @@ final class RunTradeOutcomeService
             );
         }
 
+        // Troncature : les KPI ne porteraient que sur une partie des lignes. On le SIGNALE
+        // explicitement (jamais un agrégat partiel présenté comme complet) et `data_complete`
+        // passe à faux. Un run réel produit bien moins de trades que le plafond ; ce garde
+        // protège les tableaux de bord larges / multi-sets répétés.
+        $truncated = count($rows) > $this->rowCap;
+        if ($truncated) {
+            $rows = array_slice($rows, 0, $this->rowCap);
+            $this->logger?->warning('obs003.outcome.truncated', [
+                'run_id' => $originalRunId,
+                'correlation_run_id' => $correlationRunId,
+                'row_cap' => $this->rowCap,
+            ]);
+        }
+
         return [
             'run_id' => $originalRunId,
             'correlation_run_id' => $correlationRunId,
             'set_id' => $setId,
             'source_available' => true,
-            'data_complete' => $this->isDataComplete($rows),
+            // Tronqué => les agrégats ne sont pas complets, quel que soit l'état des lignes.
+            'truncated' => $truncated,
+            'row_cap' => $this->rowCap,
+            'data_complete' => !$truncated && $this->isDataComplete($rows),
             'summary' => $this->aggregate($rows),
             'by_set' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getSetId()),
             'by_profile' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getMtfProfile()),
