@@ -9,6 +9,7 @@ use App\Contract\Provider\MainProviderInterface;
 use App\Logging\TradeLifecycleLogger;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeLifecycleEventRepository;
+use App\Trading\Lineage\TradeLineageManager;
 use App\Trading\Event\OrderStateChangedEvent;
 use App\Trading\Event\PositionClosedEvent;
 use App\Trading\Event\PositionOpenedEvent;
@@ -21,6 +22,7 @@ final class TradeLifecycleLoggerListener
         private readonly TradeLifecycleLogger $tradeLifecycleLogger,
         private readonly TradeLifecycleEventRepository $tradeLifecycleRepository,
         private readonly ?MainProviderInterface $mainProvider = null,
+        private readonly ?TradeLineageManager $tradeLineageManager = null,
     ) {}
 
     // --- POSITION OUVERTE ----------------------------------------------------
@@ -31,9 +33,19 @@ final class TradeLifecycleLoggerListener
         $position = $event->position;
         $marketType = $this->marketTypeFromExtra($event->extra);
 
-        $positionId = $position->raw['position_id']
-            ?? $position->raw['positionId']
+        $rawPositionId = $this->positionIdFromRaw($position->raw);
+        $positionId = $rawPositionId
             ?? sprintf('%s:%s:%s', $position->symbol, strtolower($position->side->value), $position->openedAt->format('U'));
+        $lineage = $this->safeResolveLineageFromPositionPayload($position->raw, $event->extra, $marketType, $rawPositionId);
+        $this->safeAttachPositionId($lineage, $rawPositionId);
+        $extra = array_merge(
+            $lineage !== null ? $this->tradeLineageManager?->lifecycleExtra($lineage) ?? [] : [],
+            [
+                'source' => 'trading_state_sync',
+                'raw'    => $position->raw,
+            ],
+            $event->extra,
+        );
 
         $this->tradeLifecycleLogger->logPositionOpened(
             symbol: $position->symbol,
@@ -41,13 +53,10 @@ final class TradeLifecycleLoggerListener
             side: strtoupper($position->side->value),
             qty: $position->size->__toString(),
             entryPrice: $position->entryPrice->__toString(),
-            runId: $event->runId,
+            runId: $event->runId ?? $lineage?->getRunId(),
             exchange: $event->exchange,
             accountId: $event->accountId,
-            extra: array_merge([
-                'source' => 'trading_state_sync',
-                'raw'    => $position->raw,
-            ], $event->extra),
+            extra: $extra,
             marketType: $marketType,
         );
     }
@@ -60,9 +69,11 @@ final class TradeLifecycleLoggerListener
         $history = $event->positionHistory;
         $marketType = $this->marketTypeFromExtra($event->extra);
 
-        $positionId = $history->raw['position_id']
-            ?? $history->raw['positionId']
+        $rawPositionId = $this->positionIdFromRaw($history->raw);
+        $positionId = $rawPositionId
             ?? sprintf('%s:%s:%s', $history->symbol, strtolower($history->side->value), $history->closedAt->format('U'));
+        $lineage = $this->safeResolveLineageFromPositionPayload($history->raw, $event->extra, $marketType, $rawPositionId);
+        $this->safeAttachPositionId($lineage, $rawPositionId);
 
         // Déterminer le reasonCode si non fourni
         $reasonCode = $event->reasonCode;
@@ -81,6 +92,7 @@ final class TradeLifecycleLoggerListener
         $pnlFloat = (float)$history->realizedPnl->__toString();
         $pnlPct = $notional !== null && $notional > 0.0 ? $pnlFloat / $notional : null;
         $holdingTimeSec = $history->closedAt->getTimestamp() - $history->openedAt->getTimestamp();
+        $effectiveRunId = $event->runId ?? $lineage?->getRunId();
 
         // Approximate initial risk in USDT from the most recent ORDER_SUBMITTED lifecycle event
         $pnlR = null;
@@ -89,14 +101,17 @@ final class TradeLifecycleLoggerListener
                 'symbol' => strtoupper($history->symbol),
                 'eventType' => 'order_submitted',
             ];
-            if ($event->runId !== null) {
-                $criteria['runId'] = $event->runId;
+            if ($effectiveRunId !== null) {
+                $criteria['runId'] = $effectiveRunId;
             }
             if ($event->exchange !== null) {
                 $criteria['exchange'] = $event->exchange;
             }
             if ($marketType !== null) {
                 $criteria['marketType'] = $marketType;
+            }
+            if ($lineage !== null) {
+                $criteria['internalTradeId'] = $lineage->getInternalTradeId();
             }
             $recent = $this->tradeLifecycleRepository->findRecentBy($criteria, 10);
             foreach ($recent as $lifecycleEvent) {
@@ -181,27 +196,31 @@ final class TradeLifecycleLoggerListener
             symbol: $history->symbol,
             positionId: (string) $positionId,
             side: strtoupper($history->side->value),
-            runId: $event->runId,
+            runId: $effectiveRunId,
             exchange: $event->exchange,
             accountId: $event->accountId,
             reasonCode: $reasonCode,
-            extra: array_merge([
-                'pnl'  => $history->realizedPnl->__toString(),
-                'pnl_pct' => $pnlPct,
-                'pnl_R' => $pnlR,
-                'notional_usdt' => $notional,
-                'entry_price' => $history->entryPrice->__toString(),
-                'exit_price' => $history->exitPrice->__toString(),
-                'entry_time' => $history->openedAt->format('Y-m-d H:i:s'),
-                'close_time' => $history->closedAt->format('Y-m-d H:i:s'),
-                'holding_time_sec' => $holdingTimeSec,
-                'max_favorable_price' => $mfePrice,
-                'max_adverse_price' => $maePrice,
-                'mfe_pct' => $mfePct,
-                'mae_pct' => $maePct,
-                'fees' => $history->fees?->__toString(),
-                'raw'  => $history->raw,
-            ], $event->extra),
+            extra: array_merge(
+                $lineage !== null ? $this->tradeLineageManager?->lifecycleExtra($lineage) ?? [] : [],
+                [
+                    'pnl'  => $history->realizedPnl->__toString(),
+                    'pnl_pct' => $pnlPct,
+                    'pnl_R' => $pnlR,
+                    'notional_usdt' => $notional,
+                    'entry_price' => $history->entryPrice->__toString(),
+                    'exit_price' => $history->exitPrice->__toString(),
+                    'entry_time' => $history->openedAt->format('Y-m-d H:i:s'),
+                    'close_time' => $history->closedAt->format('Y-m-d H:i:s'),
+                    'holding_time_sec' => $holdingTimeSec,
+                    'max_favorable_price' => $mfePrice,
+                    'max_adverse_price' => $maePrice,
+                    'mfe_pct' => $mfePct,
+                    'mae_pct' => $maePct,
+                    'fees' => $history->fees?->__toString(),
+                    'raw'  => $history->raw,
+                ],
+                $event->extra,
+            ),
             marketType: $marketType,
         );
     }
@@ -270,5 +289,104 @@ final class TradeLifecycleLoggerListener
         $marketType = $extra['market_type'] ?? $extra['marketType'] ?? null;
 
         return \is_string($marketType) && $marketType !== '' ? $marketType : null;
+    }
+
+    /**
+     * @param array<string,mixed> $raw
+     * @param array<string,mixed> $extra
+     */
+    private function resolveLineageFromPositionPayload(
+        array $raw,
+        array $extra,
+        ?string $marketType,
+        mixed $positionId,
+    ): ?\App\Entity\TradeLineage {
+        if ($this->tradeLineageManager === null) {
+            return null;
+        }
+
+        $context = ExchangeContext::fromValues(
+            $this->stringValue($raw['exchange'] ?? $extra['exchange'] ?? null),
+            $marketType ?? $this->stringValue($raw['market_type'] ?? $extra['market_type'] ?? null),
+        );
+
+        return $this->tradeLineageManager->resolve(
+            $context,
+            internalTradeId: $this->stringValue($extra['internal_trade_id'] ?? $raw['internal_trade_id'] ?? null),
+            clientOrderId: $this->stringValue($extra['client_order_id'] ?? $raw['client_order_id'] ?? null),
+            exchangeOrderId: $this->stringValue(
+                $extra['exchange_order_id']
+                    ?? $raw['exchange_order_id']
+                    ?? $raw['order_id']
+                    ?? $raw['last_order_id']
+                    ?? null
+            ),
+            positionId: $this->stringValue($positionId),
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $raw
+     * @param array<string,mixed> $extra
+     */
+    private function safeResolveLineageFromPositionPayload(
+        array $raw,
+        array $extra,
+        ?string $marketType,
+        mixed $positionId,
+    ): ?\App\Entity\TradeLineage {
+        try {
+            return $this->resolveLineageFromPositionPayload($raw, $extra, $marketType, $positionId);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function safeAttachPositionId(?\App\Entity\TradeLineage $lineage, mixed $positionId): void
+    {
+        $positionId = $this->stringValue($positionId);
+        if ($lineage === null || $positionId === null) {
+            return;
+        }
+
+        try {
+            $this->tradeLineageManager?->attachPositionId($lineage, $positionId);
+        } catch (\Throwable) {
+            // Le lifecycle reste prioritaire; le lineage sera récupéré par un identifiant exact ultérieur.
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $raw
+     */
+    private function positionIdFromRaw(array $raw): mixed
+    {
+        return $raw['position_id']
+            ?? $raw['positionId']
+            ?? $this->positionIdFromNestedRaw($raw['raw_history'] ?? null)
+            ?? $this->positionIdFromNestedRaw($raw['raw_snapshot'] ?? null)
+            ?? null;
+    }
+
+    private function positionIdFromNestedRaw(mixed $raw): mixed
+    {
+        if (!\is_array($raw)) {
+            return null;
+        }
+
+        return $raw['position_id']
+            ?? $raw['positionId']
+            ?? null;
+    }
+
+    private function stringValue(mixed $value): ?string
+    {
+        if (!\is_scalar($value)) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
     }
 }

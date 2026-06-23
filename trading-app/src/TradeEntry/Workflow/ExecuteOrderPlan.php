@@ -6,6 +6,7 @@ namespace App\TradeEntry\Workflow;
 use App\Entity\OrderIntent;
 use App\Exchange\Adapter\BitmartLegacyOrderMapper;
 use App\Service\OrderIntentManager;
+use App\Trading\Lineage\TradeLineageManager;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\ExchangeExecutionService;
 use App\TradeEntry\Execution\ExecutionBox;
@@ -26,6 +27,7 @@ final class ExecuteOrderPlan
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         private readonly ?OrderIntentManager $orderIntentManager = null,
         private readonly ?IdempotencyPolicy $idempotency = null,
+        private readonly ?TradeLineageManager $tradeLineageManager = null,
         ?BitmartLegacyOrderMapper $bitmartOrders = null,
     ) {
         $this->bitmartOrders = $bitmartOrders ?? new BitmartLegacyOrderMapper();
@@ -100,6 +102,7 @@ final class ExecuteOrderPlan
                 }
 
                 $intent = $reservation->intent;
+
                 $validationErrors = $this->orderIntentManager->validateOrderParams($this->intentOrderParams($executionPlan, $decisionKey, $clientOrderId));
                 if (!$this->orderIntentManager->validateIntent($intent, $validationErrors)) {
                     return new ExecutionResult(
@@ -116,6 +119,7 @@ final class ExecuteOrderPlan
                 }
 
                 $this->orderIntentManager->markReadyToSend($intent);
+                $this->syncLineageBeforeExecution($intent, $contextBuilder);
             }
 
             $result = $useApiFirstExecution
@@ -244,6 +248,8 @@ final class ExecuteOrderPlan
         }
 
         try {
+            $this->syncLineageAfterExecution($intent, $result);
+
             if ($result->exchangeOrderId !== null && $this->shouldMarkIntentSent($result)) {
                 $this->orderIntentManager->markAsSent($intent, $result->exchangeOrderId);
                 return;
@@ -264,6 +270,44 @@ final class ExecuteOrderPlan
             $this->positionsLogger->warning('execute_order_plan.intent_status_sync_failed', [
                 'order_intent_id' => $intent->getId(),
                 'client_order_id' => $intent->getClientOrderId(),
+                'status' => $result->status,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function syncLineageBeforeExecution(OrderIntent $intent, ?LifecycleContextBuilder $contextBuilder): void
+    {
+        if ($this->tradeLineageManager === null) {
+            return;
+        }
+
+        try {
+            $lineage = $this->tradeLineageManager->ensureForIntent($intent, $contextBuilder?->toArray() ?? []);
+            $contextBuilder?->merge($this->tradeLineageManager->lifecycleExtra($lineage));
+        } catch (\Throwable $e) {
+            $this->positionsLogger->warning('execute_order_plan.lineage_pre_submit_sync_failed', [
+                'order_intent_id' => $intent->getId(),
+                'client_order_id' => $intent->getClientOrderId(),
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function syncLineageAfterExecution(OrderIntent $intent, ExecutionResult $result): void
+    {
+        if ($this->tradeLineageManager === null) {
+            return;
+        }
+
+        try {
+            $lineage = $this->tradeLineageManager->ensureForIntent($intent);
+            $this->tradeLineageManager->attachExchangeOrderId($lineage, $result->exchangeOrderId);
+        } catch (\Throwable $e) {
+            $this->positionsLogger->warning('execute_order_plan.lineage_sync_failed', [
+                'order_intent_id' => $intent->getId(),
+                'client_order_id' => $intent->getClientOrderId(),
+                'exchange_order_id' => $result->exchangeOrderId,
                 'status' => $result->status,
                 'error' => $e->getMessage(),
             ]);

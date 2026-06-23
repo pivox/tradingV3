@@ -38,6 +38,11 @@ final class LifecycleContextBuilder
         return $this->set('trade_id', $tradeId);
     }
 
+    public function withInternalTradeId(?string $internalTradeId): self
+    {
+        return $this->set('internal_trade_id', $internalTradeId);
+    }
+
     public function withProfile(?string $profile): self
     {
         return $this->set('profile', $profile);

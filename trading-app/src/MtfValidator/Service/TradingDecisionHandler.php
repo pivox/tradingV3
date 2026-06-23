@@ -126,6 +126,7 @@ final class TradingDecisionHandler
 
         $lifecycleContext = $this->lifecycleContextFactory->create($symbolResult->symbol)
             ->withDecisionKey($decisionKey)
+            ->withInternalTradeId($tradeId)
             ->withTradeId($tradeId)
             ->withProfile($resolvedMode)
             ->withMtfContext($effectiveTf, $this->extractMtfContext($symbolResult), $symbolResult->blockingTf)
