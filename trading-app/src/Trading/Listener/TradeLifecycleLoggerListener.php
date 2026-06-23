@@ -100,6 +100,7 @@ final class TradeLifecycleLoggerListener
         $pnlFloat = (float)$history->realizedPnl->__toString();
         $pnlPct = $notional !== null && $notional > 0.0 ? $pnlFloat / $notional : null;
         $holdingTimeSec = $history->closedAt->getTimestamp() - $history->openedAt->getTimestamp();
+        $effectiveRunId = $event->runId ?? $lineage?->getRunId();
 
         // Approximate initial risk in USDT from the most recent ORDER_SUBMITTED lifecycle event
         $pnlR = null;
@@ -108,8 +109,8 @@ final class TradeLifecycleLoggerListener
                 'symbol' => strtoupper($history->symbol),
                 'eventType' => 'order_submitted',
             ];
-            if ($event->runId !== null) {
-                $criteria['runId'] = $event->runId;
+            if ($effectiveRunId !== null) {
+                $criteria['runId'] = $effectiveRunId;
             }
             if ($event->exchange !== null) {
                 $criteria['exchange'] = $event->exchange;
@@ -200,7 +201,7 @@ final class TradeLifecycleLoggerListener
             symbol: $history->symbol,
             positionId: (string) $positionId,
             side: strtoupper($history->side->value),
-            runId: $event->runId ?? $lineage?->getRunId(),
+            runId: $effectiveRunId,
             exchange: $event->exchange,
             accountId: $event->accountId,
             reasonCode: $reasonCode,

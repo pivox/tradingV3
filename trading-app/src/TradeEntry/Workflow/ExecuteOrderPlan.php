@@ -102,10 +102,7 @@ final class ExecuteOrderPlan
                 }
 
                 $intent = $reservation->intent;
-                if ($this->tradeLineageManager !== null) {
-                    $lineage = $this->tradeLineageManager->ensureForIntent($intent, $contextBuilder?->toArray() ?? []);
-                    $contextBuilder?->merge($this->tradeLineageManager->lifecycleExtra($lineage));
-                }
+                $this->syncLineageBeforeExecution($intent, $contextBuilder);
 
                 $validationErrors = $this->orderIntentManager->validateOrderParams($this->intentOrderParams($executionPlan, $decisionKey, $clientOrderId));
                 if (!$this->orderIntentManager->validateIntent($intent, $validationErrors)) {
@@ -274,6 +271,24 @@ final class ExecuteOrderPlan
                 'order_intent_id' => $intent->getId(),
                 'client_order_id' => $intent->getClientOrderId(),
                 'status' => $result->status,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function syncLineageBeforeExecution(OrderIntent $intent, ?LifecycleContextBuilder $contextBuilder): void
+    {
+        if ($this->tradeLineageManager === null) {
+            return;
+        }
+
+        try {
+            $lineage = $this->tradeLineageManager->ensureForIntent($intent, $contextBuilder?->toArray() ?? []);
+            $contextBuilder?->merge($this->tradeLineageManager->lifecycleExtra($lineage));
+        } catch (\Throwable $e) {
+            $this->positionsLogger->warning('execute_order_plan.lineage_pre_submit_sync_failed', [
+                'order_intent_id' => $intent->getId(),
+                'client_order_id' => $intent->getClientOrderId(),
                 'error' => $e->getMessage(),
             ]);
         }

@@ -11,6 +11,7 @@ use App\Entity\TradeLineage;
 use App\Repository\OrderIntentRepository;
 use App\Repository\TradeLineageRepository;
 use App\Service\OrderIntentManager;
+use App\Logging\Dto\LifecycleContextBuilder;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\ExchangeExecutionService;
 use App\TradeEntry\Execution\ExecutionBox;
@@ -82,6 +83,27 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
 
         self::assertSame(OrderIntent::STATUS_SENT, $intent->getStatus());
         self::assertSame('exchange-accepted-1', $intent->getExchangeOrderId());
+    }
+
+    public function testPreSubmitLineageSyncIsBestEffortWhenLineageTableIsMissing(): void
+    {
+        $intent = $this->persistReadyIntent();
+        $contextBuilder = (new LifecycleContextBuilder('BTCUSDT'))
+            ->withInternalTradeId('itd-from-mtf')
+            ->withTradeId('itd-from-mtf');
+
+        $workflow = new ExecuteOrderPlan(
+            $this->uninitialized(ExecutionBox::class),
+            $this->uninitialized(ExchangeExecutionService::class),
+            new NullLogger(),
+            $this->orderIntentManager(),
+            null,
+            $this->tradeLineageManager(),
+        );
+        $method = new \ReflectionMethod(ExecuteOrderPlan::class, 'syncLineageBeforeExecution');
+        $method->invoke($workflow, $intent, $contextBuilder);
+
+        self::assertSame('itd-from-mtf', $contextBuilder->toArray()['internal_trade_id'] ?? null);
     }
 
     private function persistReadyIntent(): OrderIntent
