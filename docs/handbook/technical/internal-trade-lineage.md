@@ -20,8 +20,11 @@ La table `trade_lineage` porte le mapping exact :
 - `position_id`
 - `run_id`, `correlation_run_id`, `orchestration_run_id`, `orchestration_set_id`, `orchestration_dashboard_id`
 - `exchange`, `market_type`, `symbol`, `side`, `profile`, `origin`
+- `replay_of_run_id`, `replay_of_correlation_id`, `attempt_number`, `config_hash`
 
 `trade_lifecycle_event.internal_trade_id` est une colonne additive indexée. La même valeur reste aussi dans `extra.internal_trade_id` pour les consommateurs existants ; `extra.trade_id` est conservé pour la vue `position_trade_analysis_v2`.
+
+Depuis le lot DATA-001 #189, le contexte complet est porté par `LineageContext` puis persisté en colonnes dédiées sur `order_intent`, `trade_lineage` et `trade_lifecycle_event`. `extra` reste un snapshot de compatibilité, pas la source principale.
 
 ## Résolution
 

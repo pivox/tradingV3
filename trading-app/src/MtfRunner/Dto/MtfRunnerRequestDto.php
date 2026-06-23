@@ -7,12 +7,19 @@ namespace App\MtfRunner\Dto;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Provider\Context\ExchangeContextResolver;
+use App\Trading\Lineage\LineageContext;
 
 /**
  * DTO pour les requêtes d'exécution du Runner MTF
  */
 final class MtfRunnerRequestDto
 {
+    public readonly LineageContext $lineageContext;
+
+    /**
+     * @param string[] $symbols
+     * @param array{open_positions: array<int,mixed>, open_orders: array<int,mixed>}|null $openStateSnapshot
+     */
     public function __construct(
         public readonly array $symbols = [],
         public readonly bool $dryRun = false,
@@ -48,12 +55,25 @@ final class MtfRunnerRequestDto
         public readonly ?string $correlationRunId = null,
         public readonly ?string $dashboardId = null,
         public readonly ?string $setId = null,
-    ) {}
+        ?LineageContext $lineageContext = null,
+    ) {
+        $this->lineageContext = $lineageContext ?? LineageContext::legacy(
+            symbol: $symbols[0] ?? null,
+            exchange: $exchange?->value,
+            marketType: $marketType?->value,
+            mtfProfile: $profile,
+        );
+    }
 
+    /**
+     * @param array<string,mixed> $data
+     */
     public static function fromArray(array $data): self
     {
         [$exchange, $marketType] = self::extractContext($data);
         [$profile, $validationMode] = self::extractProfileAndMode($data);
+
+        $lineageContext = self::buildLineageContext($data, $exchange, $marketType, $profile);
 
         return new self(
             symbols: $data['symbols'] ?? [],
@@ -78,6 +98,7 @@ final class MtfRunnerRequestDto
             correlationRunId: self::nonEmptyString($data['correlation_run_id'] ?? null),
             dashboardId: self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null),
             setId: self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null),
+            lineageContext: $lineageContext,
         );
     }
 
@@ -86,6 +107,9 @@ final class MtfRunnerRequestDto
         return is_string($value) && trim($value) !== '' ? trim($value) : null;
     }
 
+    /**
+     * @return array<string,mixed>
+     */
     public function toArray(): array
     {
         return [
@@ -111,7 +135,41 @@ final class MtfRunnerRequestDto
             'correlation_run_id' => $this->correlationRunId,
             'dashboard_id' => $this->dashboardId,
             'set_id' => $this->setId,
+            'lineage_context' => $this->lineageContext->toArray(),
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     */
+    private static function buildLineageContext(array $data, ?Exchange $exchange, ?MarketType $marketType, ?string $profile): LineageContext
+    {
+        if (isset($data['lineage_context']) && \is_array($data['lineage_context'])) {
+            return LineageContext::fromArray($data['lineage_context']);
+        }
+
+        $hasOrchestratorLineage = self::nonEmptyString($data['run_id'] ?? $data['original_run_id'] ?? $data['orchestration_run_id'] ?? null) !== null
+            || self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null) !== null
+            || self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null) !== null;
+
+        $payload = $data + [
+            'profile' => $profile,
+            'exchange' => $exchange?->value,
+            'market_type' => $marketType?->value,
+        ];
+
+        if ($hasOrchestratorLineage || self::nonEmptyString($data['origin'] ?? null) !== null) {
+            return LineageContext::fromOrchestratorPayload($payload);
+        }
+
+        $symbols = isset($data['symbols']) && is_array($data['symbols']) ? $data['symbols'] : [];
+
+        return LineageContext::legacy(
+            symbol: is_string($symbols[0] ?? null) ? $symbols[0] : null,
+            exchange: $exchange?->value,
+            marketType: $marketType?->value,
+            mtfProfile: $profile,
+        );
     }
 
     /**
@@ -146,6 +204,7 @@ final class MtfRunnerRequestDto
     }
 
     /**
+     * @param array<string,mixed> $data
      * @return array{0: ?Exchange, 1: ?MarketType}
      */
     private static function extractContext(array $data): array
@@ -182,6 +241,10 @@ final class MtfRunnerRequestDto
         return ExchangeContextResolver::normalizeMarketType($value);
     }
 
+    /**
+     * @param array<string,mixed> $data
+     * @return array{0: ?string, 1: ?string}
+     */
     private static function extractProfileAndMode(array $data): array
     {
         $profileSources = [

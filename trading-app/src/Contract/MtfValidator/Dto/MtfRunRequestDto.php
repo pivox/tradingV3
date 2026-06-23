@@ -9,8 +9,14 @@ namespace App\Contract\MtfValidator\Dto;
  */
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Trading\Lineage\LineageContext;
 final class MtfRunRequestDto
 {
+    public readonly LineageContext $lineageContext;
+
+    /**
+     * @param string[] $symbols
+     */
     public function __construct(
         public readonly array $symbols,
         public readonly bool $dryRun = false,
@@ -38,7 +44,15 @@ final class MtfRunRequestDto
         public readonly ?string $dashboardId = null,
         /** OBS-003 — set d'orchestration réellement dispatché. */
         public readonly ?string $setId = null,
-    ) {}
+        ?LineageContext $lineageContext = null,
+    ) {
+        $this->lineageContext = $lineageContext ?? LineageContext::legacy(
+            symbol: $symbols[0] ?? null,
+            exchange: $exchange?->value,
+            marketType: $marketType?->value,
+            mtfProfile: $profile,
+        );
+    }
 
     /**
      * @param array<string,mixed> $data
@@ -89,6 +103,8 @@ final class MtfRunRequestDto
         $dashboardId = self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null);
         $setId = self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null);
 
+        $lineageContext = self::buildLineageContext($data, $symbols, $exchange, $marketType, $profile);
+
         return new self(
             symbols: $symbols,
             dryRun: $dryRun,
@@ -108,6 +124,7 @@ final class MtfRunRequestDto
             orchestrationRunId: $orchestrationRunId,
             dashboardId: $dashboardId,
             setId: $setId,
+            lineageContext: $lineageContext,
         );
     }
 
@@ -116,6 +133,38 @@ final class MtfRunRequestDto
         return is_string($value) && trim($value) !== '' ? trim($value) : null;
     }
 
+    /**
+     * @param array<string,mixed> $data
+     * @param string[] $symbols
+     */
+    private static function buildLineageContext(array $data, array $symbols, ?Exchange $exchange, ?MarketType $marketType, ?string $profile): LineageContext
+    {
+        $hasOrchestratorLineage = self::nonEmptyString($data['request_id'] ?? $data['requestId'] ?? $data['orchestration_run_id'] ?? null) !== null
+            || self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null) !== null
+            || self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null) !== null;
+
+        if ($hasOrchestratorLineage || self::nonEmptyString($data['origin'] ?? null) !== null) {
+            return LineageContext::fromOrchestratorPayload($data + [
+                'run_id' => $data['orchestration_run_id'] ?? $data['original_run_id'] ?? $data['run_id'] ?? $data['request_id'] ?? $data['requestId'] ?? null,
+                'correlation_run_id' => $data['request_id'] ?? $data['requestId'] ?? null,
+                'profile' => $profile,
+                'exchange' => $exchange?->value,
+                'market_type' => $marketType?->value,
+            ]);
+        }
+
+        return LineageContext::legacy(
+            symbol: is_string($symbols[0] ?? null) ? $symbols[0] : null,
+            exchange: $exchange?->value,
+            marketType: $marketType?->value,
+            mtfProfile: $profile,
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     * @return array{0: ?string, 1: ?string}
+     */
     private static function extractProfileAndMode(array $data): array
     {
         $profileSources = [

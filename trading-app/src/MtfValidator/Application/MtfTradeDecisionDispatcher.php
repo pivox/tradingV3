@@ -102,6 +102,12 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
                 'orchestration_run_id' => $request->orchestrationRunId,
                 'orchestration_dashboard_id' => $request->dashboardId,
                 'orchestration_set_id' => $request->setId,
+                'origin' => $request->lineageContext->origin,
+                'replay_of_run_id' => $request->lineageContext->replayOfRunId,
+                'replay_of_correlation_id' => $request->lineageContext->replayOfCorrelationId,
+                'attempt_number' => $request->lineageContext->attemptNumber,
+                'config_hash' => $request->lineageContext->configHash,
+                'lineage_context' => $request->lineageContext->toArray(),
             ],
         );
     }

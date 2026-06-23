@@ -140,6 +140,9 @@ final class TradeLifecycleLogger
         $this->persist($event);
     }
 
+    /**
+     * @param array<string,mixed>|null $extra
+     */
     public function logPositionClosed(
         string $symbol,
         string $positionId,
@@ -182,8 +185,9 @@ final class TradeLifecycleLogger
         if (\is_array($extra)) {
             $internalTradeId = $extra['internal_trade_id'] ?? null;
             if (\is_scalar($internalTradeId) && trim((string) $internalTradeId) !== '') {
-                $event->setInternalTradeId((string) $internalTradeId);
+                $event->setInternalTradeId($this->limitString((string) $internalTradeId, 96));
             }
+            $this->copyLineageExtraToColumns($event, $extra);
         }
 
         $this->entityManager->persist($event);
@@ -197,5 +201,60 @@ final class TradeLifecycleLogger
     private function normalizeExtra(array $extra): ?array
     {
         return $extra === [] ? null : $extra;
+    }
+
+    /**
+     * @param array<string,mixed> $extra
+     */
+    private function copyLineageExtraToColumns(TradeLifecycleEvent $event, array $extra): void
+    {
+        $event
+            ->setInternalPositionId($this->limitedStringValue($extra['internal_position_id'] ?? null, 96))
+            ->setCorrelationRunId($this->limitedStringValue($extra['correlation_run_id'] ?? null, 96))
+            ->setOrchestrationRunId($this->limitedStringValue($extra['orchestration_run_id'] ?? null, 255))
+            ->setOrchestrationSetId($this->limitedStringValue($extra['orchestration_set_id'] ?? null, 96))
+            ->setOrchestrationDashboardId($this->limitedStringValue($extra['orchestration_dashboard_id'] ?? null, 96))
+            ->setOrigin($this->limitedStringValue($extra['origin'] ?? null, 24) ?? 'legacy')
+            ->setReplayOfRunId($this->limitedStringValue($extra['replay_of_run_id'] ?? null, 255))
+            ->setReplayOfCorrelationId($this->limitedStringValue($extra['replay_of_correlation_id'] ?? null, 96))
+            ->setAttemptNumber($this->intValue($extra['attempt_number'] ?? null))
+            ->setConfigHash($this->limitedStringValue($extra['config_hash'] ?? null, 128));
+    }
+
+    private function limitedStringValue(mixed $value, int $maxLength): ?string
+    {
+        return $this->limitString($this->stringValue($value), $maxLength);
+    }
+
+    private function stringValue(mixed $value): ?string
+    {
+        if (!\is_scalar($value)) {
+            return null;
+        }
+
+        $trimmed = trim((string) $value);
+
+        return $trimmed !== '' ? $trimmed : null;
+    }
+
+    private function intValue(mixed $value): int
+    {
+        if (\is_int($value)) {
+            return max(1, $value);
+        }
+        if (\is_string($value) && ctype_digit($value)) {
+            return max(1, (int) $value);
+        }
+
+        return 1;
+    }
+
+    private function limitString(?string $value, int $maxLength): ?string
+    {
+        if ($value === null || strlen($value) <= $maxLength) {
+            return $value;
+        }
+
+        return substr($value, 0, $maxLength);
     }
 }

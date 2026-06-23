@@ -98,15 +98,18 @@ class OrderIntent
     #[ORM\Column(type: Types::STRING, length: 30)]
     private string $presetMode; // none, preset_on_entry, position_tp_sl
 
+    /** @var array<string,mixed> */
     #[ORM\Column(type: Types::JSON, options: ['jsonb' => true])]
     private array $quantization = []; // tick_size, step_size, min_notional, price_precision, vol_precision, etc.
 
     #[ORM\Column(type: Types::STRING, length: 30)]
     private string $status = self::STATUS_DRAFT;
 
+    /** @var array<string,mixed>|null */
     #[ORM\Column(type: Types::JSON, options: ['jsonb' => true], nullable: true)]
     private ?array $rawInputs = null; // Données brutes avant normalisation
 
+    /** @var array<string,mixed>|null */
     #[ORM\Column(type: Types::JSON, options: ['jsonb' => true], nullable: true)]
     private ?array $validationErrors = null; // Erreurs de validation
 
@@ -116,9 +119,43 @@ class OrderIntent
     #[ORM\Column(name: 'exchange_order_id', type: Types::STRING, length: 80, nullable: true)]
     private ?string $exchangeOrderId = null;
 
+    #[ORM\Column(name: 'internal_trade_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $internalTradeId = null;
+
+    #[ORM\Column(name: 'internal_position_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $internalPositionId = null;
+
+    #[ORM\Column(name: 'correlation_run_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $correlationRunId = null;
+
+    #[ORM\Column(name: 'orchestration_run_id', type: Types::STRING, length: 255, nullable: true)]
+    private ?string $orchestrationRunId = null;
+
+    #[ORM\Column(name: 'orchestration_set_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $orchestrationSetId = null;
+
+    #[ORM\Column(name: 'orchestration_dashboard_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $orchestrationDashboardId = null;
+
+    #[ORM\Column(name: 'origin', type: Types::STRING, length: 24, options: ['default' => 'legacy'])]
+    private string $origin = 'legacy';
+
+    #[ORM\Column(name: 'replay_of_run_id', type: Types::STRING, length: 255, nullable: true)]
+    private ?string $replayOfRunId = null;
+
+    #[ORM\Column(name: 'replay_of_correlation_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $replayOfCorrelationId = null;
+
+    #[ORM\Column(name: 'attempt_number', type: Types::INTEGER, options: ['default' => 1])]
+    private int $attemptNumber = 1;
+
+    #[ORM\Column(name: 'config_hash', type: Types::STRING, length: 128, nullable: true)]
+    private ?string $configHash = null;
+
     #[ORM\Column(type: Types::STRING, length: 500, nullable: true)]
     private ?string $failureReason = null; // Raison de l'échec
 
+    /** @var Collection<int, OrderProtection> */
     #[ORM\OneToMany(targetEntity: OrderProtection::class, mappedBy: 'orderIntent', cascade: ['persist', 'remove'])]
     private Collection $protections;
 
@@ -436,6 +473,127 @@ class OrderIntent
         return $this->touch();
     }
 
+    public function getInternalTradeId(): ?string
+    {
+        return $this->internalTradeId;
+    }
+
+    public function setInternalTradeId(?string $internalTradeId): self
+    {
+        $this->internalTradeId = self::blankToNull($internalTradeId);
+        return $this->touch();
+    }
+
+    public function getInternalPositionId(): ?string
+    {
+        return $this->internalPositionId;
+    }
+
+    public function setInternalPositionId(?string $internalPositionId): self
+    {
+        $this->internalPositionId = self::blankToNull($internalPositionId);
+        return $this->touch();
+    }
+
+    public function getCorrelationRunId(): ?string
+    {
+        return $this->correlationRunId;
+    }
+
+    public function setCorrelationRunId(?string $correlationRunId): self
+    {
+        $this->correlationRunId = self::blankToNull($correlationRunId);
+        return $this->touch();
+    }
+
+    public function getOrchestrationRunId(): ?string
+    {
+        return $this->orchestrationRunId;
+    }
+
+    public function setOrchestrationRunId(?string $orchestrationRunId): self
+    {
+        $this->orchestrationRunId = self::blankToNull($orchestrationRunId);
+        return $this->touch();
+    }
+
+    public function getOrchestrationSetId(): ?string
+    {
+        return $this->orchestrationSetId;
+    }
+
+    public function setOrchestrationSetId(?string $orchestrationSetId): self
+    {
+        $this->orchestrationSetId = self::blankToNull($orchestrationSetId);
+        return $this->touch();
+    }
+
+    public function getOrchestrationDashboardId(): ?string
+    {
+        return $this->orchestrationDashboardId;
+    }
+
+    public function setOrchestrationDashboardId(?string $orchestrationDashboardId): self
+    {
+        $this->orchestrationDashboardId = self::blankToNull($orchestrationDashboardId);
+        return $this->touch();
+    }
+
+    public function getOrigin(): string
+    {
+        return $this->origin;
+    }
+
+    public function setOrigin(string $origin): self
+    {
+        $this->origin = self::blankToNull($origin) ?? 'legacy';
+        return $this->touch();
+    }
+
+    public function getReplayOfRunId(): ?string
+    {
+        return $this->replayOfRunId;
+    }
+
+    public function setReplayOfRunId(?string $replayOfRunId): self
+    {
+        $this->replayOfRunId = self::blankToNull($replayOfRunId);
+        return $this->touch();
+    }
+
+    public function getReplayOfCorrelationId(): ?string
+    {
+        return $this->replayOfCorrelationId;
+    }
+
+    public function setReplayOfCorrelationId(?string $replayOfCorrelationId): self
+    {
+        $this->replayOfCorrelationId = self::blankToNull($replayOfCorrelationId);
+        return $this->touch();
+    }
+
+    public function getAttemptNumber(): int
+    {
+        return $this->attemptNumber;
+    }
+
+    public function setAttemptNumber(int $attemptNumber): self
+    {
+        $this->attemptNumber = max(1, $attemptNumber);
+        return $this->touch();
+    }
+
+    public function getConfigHash(): ?string
+    {
+        return $this->configHash;
+    }
+
+    public function setConfigHash(?string $configHash): self
+    {
+        $this->configHash = self::blankToNull($configHash);
+        return $this->touch();
+    }
+
     public function getFailureReason(): ?string
     {
         return $this->failureReason;
@@ -566,5 +724,16 @@ class OrderIntent
     {
         $this->updatedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
         return $this;
+    }
+
+    private static function blankToNull(?string $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $trimmed = trim($value);
+
+        return $trimmed !== '' ? $trimmed : null;
     }
 }
