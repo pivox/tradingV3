@@ -12,6 +12,7 @@ use App\Logging\TradeLifecycleLogger;
 use App\Logging\TradeLifecycleReason;
 use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Message\LimitFillWatchMessage;
+use App\Trading\Lineage\TradeLineageManager;
 use Brick\Math\RoundingMode;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -32,6 +33,7 @@ final class LimitFillWatchMessageHandler
         private readonly LoggerInterface $positionsLogger,
         private readonly MessageBusInterface $bus,
         private readonly TradeLifecycleLogger $tradeLifecycleLogger,
+        private readonly ?TradeLineageManager $tradeLineageManager = null,
     ) {}
 
     public function __invoke(LimitFillWatchMessage $message): void
@@ -219,6 +221,18 @@ final class LimitFillWatchMessageHandler
                 'decision_key' => $message->decisionKey,
                 'source' => 'limit_watch',
             ]);
+            $context = $this->contextFromLifecycle($extra);
+            $lineage = $this->tradeLineageManager?->resolve(
+                $context,
+                internalTradeId: $this->stringValue($extra['internal_trade_id'] ?? null),
+                clientOrderId: $message->clientOrderId,
+                exchangeOrderId: $order->orderId,
+            );
+            if ($lineage !== null) {
+                $positionId = $this->stringValue($order->metadata['position_id'] ?? null);
+                $this->tradeLineageManager?->attachPositionId($lineage, $positionId);
+                $extra = array_merge($this->tradeLineageManager->lifecycleExtra($lineage), $extra);
+            }
 
             $this->tradeLifecycleLogger->logPositionOpened(
                 symbol: $order->symbol,
@@ -226,7 +240,11 @@ final class LimitFillWatchMessageHandler
                 side: $order->side->value,
                 qty: $filledQty->toScale(8, RoundingMode::DOWN)->__toString(),
                 entryPrice: $avgPrice?->toScale(8, RoundingMode::DOWN)->__toString(),
+                runId: $this->stringValue($extra['run_id'] ?? null),
+                exchange: $context->exchange->value,
+                accountId: null,
                 extra: $extra,
+                marketType: $context->marketType->value,
             );
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('limit_watch.lifecycle_position_log_failed', [
@@ -248,6 +266,28 @@ final class LimitFillWatchMessageHandler
         }
 
         return array_merge($message->lifecycleContext, $extra);
+    }
+
+    /**
+     * @param array<string,mixed> $extra
+     */
+    private function contextFromLifecycle(array $extra): ExchangeContext
+    {
+        return ExchangeContext::fromValues(
+            $this->stringValue($extra['exchange'] ?? null),
+            $this->stringValue($extra['market_type'] ?? null),
+        );
+    }
+
+    private function stringValue(mixed $value): ?string
+    {
+        if (!\is_scalar($value)) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
     }
 
     private function rescheduleWatch(

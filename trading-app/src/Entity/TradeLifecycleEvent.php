@@ -37,6 +37,9 @@ class TradeLifecycleEvent
     #[ORM\Column(length: 64, nullable: true)]
     private ?string $positionId = null;
 
+    #[ORM\Column(name: 'internal_trade_id', length: 96, nullable: true)]
+    private ?string $internalTradeId = null;
+
     #[ORM\Column(length: 16, nullable: true)]
     private ?string $side = null;
 
@@ -142,6 +145,20 @@ class TradeLifecycleEvent
     public function setPositionId(?string $positionId): self
     {
         $this->positionId = $positionId;
+
+        return $this;
+    }
+
+    public function getInternalTradeId(): ?string
+    {
+        return $this->internalTradeId;
+    }
+
+    public function setInternalTradeId(?string $internalTradeId): self
+    {
+        $this->internalTradeId = $internalTradeId !== null && trim($internalTradeId) !== ''
+            ? trim($internalTradeId)
+            : null;
 
         return $this;
     }

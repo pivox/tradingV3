@@ -6,6 +6,7 @@ namespace App\TradeEntry\Workflow;
 use App\Entity\OrderIntent;
 use App\Exchange\Adapter\BitmartLegacyOrderMapper;
 use App\Service\OrderIntentManager;
+use App\Trading\Lineage\TradeLineageManager;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\ExchangeExecutionService;
 use App\TradeEntry\Execution\ExecutionBox;
@@ -26,6 +27,7 @@ final class ExecuteOrderPlan
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         private readonly ?OrderIntentManager $orderIntentManager = null,
         private readonly ?IdempotencyPolicy $idempotency = null,
+        private readonly ?TradeLineageManager $tradeLineageManager = null,
         ?BitmartLegacyOrderMapper $bitmartOrders = null,
     ) {
         $this->bitmartOrders = $bitmartOrders ?? new BitmartLegacyOrderMapper();
@@ -100,6 +102,11 @@ final class ExecuteOrderPlan
                 }
 
                 $intent = $reservation->intent;
+                if ($this->tradeLineageManager !== null) {
+                    $lineage = $this->tradeLineageManager->ensureForIntent($intent, $contextBuilder?->toArray() ?? []);
+                    $contextBuilder?->merge($this->tradeLineageManager->lifecycleExtra($lineage));
+                }
+
                 $validationErrors = $this->orderIntentManager->validateOrderParams($this->intentOrderParams($executionPlan, $decisionKey, $clientOrderId));
                 if (!$this->orderIntentManager->validateIntent($intent, $validationErrors)) {
                     return new ExecutionResult(
@@ -244,6 +251,11 @@ final class ExecuteOrderPlan
         }
 
         try {
+            if ($this->tradeLineageManager !== null) {
+                $lineage = $this->tradeLineageManager->ensureForIntent($intent);
+                $this->tradeLineageManager->attachExchangeOrderId($lineage, $result->exchangeOrderId);
+            }
+
             if ($result->exchangeOrderId !== null && $this->shouldMarkIntentSent($result)) {
                 $this->orderIntentManager->markAsSent($intent, $result->exchangeOrderId);
                 return;

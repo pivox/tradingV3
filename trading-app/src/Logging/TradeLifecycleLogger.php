@@ -178,6 +178,14 @@ final class TradeLifecycleLogger
 
     private function persist(TradeLifecycleEvent $event): void
     {
+        $extra = $event->getExtra();
+        if (\is_array($extra)) {
+            $internalTradeId = $extra['internal_trade_id'] ?? null;
+            if (\is_scalar($internalTradeId) && trim((string) $internalTradeId) !== '') {
+                $event->setInternalTradeId((string) $internalTradeId);
+            }
+        }
+
         $this->entityManager->persist($event);
         $this->entityManager->flush();
     }

@@ -87,9 +87,8 @@ final class PositionDto extends BaseDto
             leverage: BigDecimal::of($leverage),
             openedAt: $openedAt,
             closedAt: $closedAt,
-            metadata: $data['metadata'] ?? []
+            metadata: \is_array($data['metadata'] ?? null) ? array_replace($data, $data['metadata']) : $data
         );
     }
 }
-
 
