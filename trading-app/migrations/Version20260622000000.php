@@ -28,6 +28,22 @@ use Doctrine\Migrations\AbstractMigration;
  * porte les deux) pour le cycle MTF normal où `order_submitted` n'a que le trade_id et la
  * clôture synchronisée que le position_id.
  *
+ * LIMITE DE PRODUCTION CONNUE (clé de rapprochement partagée — suivi #190/#189) : la vue
+ * est CORRECTE mais ne peut relier que ce que les producteurs émettent. Dans le chemin
+ * runtime ACTUEL, `order_submitted` (TradeEntryService) porte le `trade_id` (via
+ * LifecycleContextBuilder) mais pas le `position_id`, tandis que les `position_opened` /
+ * `position_closed` synchronisés (`TradingStateSyncRunner`) portent le `position_id` de
+ * l'exchange mais PAS le `trade_id`. Aucune clé n'est donc partagée des deux côtés :
+ *   - le passage `trade_id` ne s'arme pas (la clôture n'a pas de `trade_id`) ;
+ *   - le pont `trade_id -> position_id` ne s'arme pas (`position_opened` n'a pas de
+ *     `trade_id`), donc `eff_position_id` reste NULL et le passage `position_id` non plus.
+ * Conséquence : un trade MTF réel ressort `unmatched` (état HONNÊTE « inconnu », jamais un
+ * faux rapprochement ni un PnL inventé), tant que les producteurs ne propagent pas une clé
+ * commune (trade_id sur open/close, ou un order_id partagé). Propager cette clé touche le
+ * chemin live et fait l'objet d'un SUIVI dédié (hors périmètre de cette PR, qui livre la
+ * surface d'analyse fiable + le contrat PnL explicite). Le pont reste en place pour le
+ * jour où `position_opened` portera le `trade_id`, et est couvert par les tests de la vue.
+ *
  * Contrat PnL EXPLICITE (issue #190) — aucune valeur estimée présentée comme certifiée :
  *   - `recorded_pnl_usdt` : valeur enregistrée telle quelle (ni brute ni nette garanties) ;
  *   - `fees_usdt` / `funding_usdt` / `slippage_usdt` : composantes brutes si présentes

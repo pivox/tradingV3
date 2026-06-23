@@ -39,15 +39,43 @@ final class OrchestrationContextValidator
         $setHeader = self::clean($setHeader);
         $dashboardHeader = self::clean($dashboardHeader);
 
-        // 1. L'identifiant de corrélation fourni doit correspondre au X-Run-Id canonique.
-        if ($runIdHeader !== null && $correlationHeader !== null) {
-            $expected = RunCorrelationId::canonical($runIdHeader);
-            if (!hash_equals($expected, $correlationHeader)) {
+        // 1. Identifiant de corrélation : il doit correspondre à la forme canonique du
+        // run_id ORIGINAL, que les valeurs viennent des EN-TÊTES ou du CORPS (chemin
+        // body-only). Le `RunnerController` transmet désormais `run_id`/`correlation_run_id`
+        // du payload ; sans ce contrôle, un payload `run_id=runA` + `correlation_run_id=runB`
+        // serait accepté et les lignes lifecycle enregistrées sous `canonical(runA)`,
+        // contredisant le 422 annoncé pour une incohérence vérifiable.
+        $bodyRun = self::clean($data['run_id'] ?? null);
+        $bodyRunOriginal = self::clean($data['original_run_id'] ?? null);
+        if ($bodyRun !== null && $bodyRunOriginal !== null && $bodyRun !== $bodyRunOriginal) {
+            throw new OrchestrationContextException(
+                'ORCHESTRATION_CORRELATION_MISMATCH',
+                sprintf('run_id (%s) et original_run_id (%s) du payload sont contradictoires.', $bodyRun, $bodyRunOriginal),
+            );
+        }
+        $effectiveRunId = $runIdHeader ?? $bodyRun ?? $bodyRunOriginal;
+
+        $bodyCorrelation = self::clean($data['correlation_run_id'] ?? null);
+        if ($correlationHeader !== null && $bodyCorrelation !== null && !hash_equals($correlationHeader, $bodyCorrelation)) {
+            throw new OrchestrationContextException(
+                'ORCHESTRATION_CORRELATION_MISMATCH',
+                sprintf(
+                    'X-Run-Correlation-Id (%s) contredit correlation_run_id du payload (%s).',
+                    $correlationHeader,
+                    $bodyCorrelation,
+                ),
+            );
+        }
+        $effectiveCorrelation = $correlationHeader ?? $bodyCorrelation;
+
+        if ($effectiveRunId !== null && $effectiveCorrelation !== null) {
+            $expected = RunCorrelationId::canonical($effectiveRunId);
+            if (!hash_equals($expected, $effectiveCorrelation)) {
                 throw new OrchestrationContextException(
                     'ORCHESTRATION_CORRELATION_MISMATCH',
                     sprintf(
-                        'X-Run-Correlation-Id (%s) ne correspond pas à la forme canonique de X-Run-Id (%s).',
-                        $correlationHeader,
+                        'L\'identifiant de corrélation (%s) ne correspond pas à la forme canonique du run_id (%s).',
+                        $effectiveCorrelation,
                         $expected,
                     ),
                 );

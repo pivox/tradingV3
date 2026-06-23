@@ -135,7 +135,10 @@ async def get_run_outcome(
             "source_available": True,
             # Relayé tel quel : si Symfony a tronqué l'agrégat (run très large), on le
             # signale (data_complete est alors faux côté source) plutôt que de le masquer.
+            # `row_cap` accompagne `truncated` pour que les dashboards/clients connaissent le
+            # seuil derrière des agrégats partiels (sinon impossible d'expliquer/paginer).
             "truncated": outcome.get("truncated"),
+            "row_cap": outcome.get("row_cap"),
             "data_complete": outcome.get("data_complete"),
             "summary": outcome.get("summary"),
             "by_set": outcome.get("by_set"),

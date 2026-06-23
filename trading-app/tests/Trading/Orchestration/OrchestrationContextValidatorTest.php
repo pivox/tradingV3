@@ -58,6 +58,48 @@ final class OrchestrationContextValidatorTest extends TestCase
         $this->validator->validate($long, RunCorrelationId::canonical($long), null, null, []);
     }
 
+    public function testBodyOnlyCorrelationMismatchIsRejected(): void
+    {
+        // Aucun en-tête : run_id + correlation_run_id du payload (chemin body-only) doivent
+        // tout de même être cohérents, sinon fail-closed.
+        $this->assertCode('ORCHESTRATION_CORRELATION_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, [
+                'run_id' => 'runA',
+                'correlation_run_id' => 'runB',
+            ]);
+        });
+    }
+
+    public function testBodyOnlyCorrelationMatchingCanonicalPasses(): void
+    {
+        $this->expectNotToPerformAssertions();
+        $runId = 'run_dashA_20260617';
+        $this->validator->validate(null, null, null, null, [
+            'run_id' => $runId,
+            'correlation_run_id' => RunCorrelationId::canonical($runId),
+        ]);
+    }
+
+    public function testBodyRunIdAndOriginalRunIdContradictionIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_CORRELATION_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, [
+                'run_id' => 'runA',
+                'original_run_id' => 'runB',
+            ]);
+        });
+    }
+
+    public function testHeaderCorrelationContradictingBodyCorrelationIsRejected(): void
+    {
+        $runId = 'run_dashA_20260617';
+        $this->assertCode('ORCHESTRATION_CORRELATION_MISMATCH', function () use ($runId): void {
+            $this->validator->validate($runId, RunCorrelationId::canonical($runId), null, null, [
+                'correlation_run_id' => 'not-the-canonical',
+            ]);
+        });
+    }
+
     public function testSetMismatchIsRejected(): void
     {
         $this->assertCode('ORCHESTRATION_SET_MISMATCH', function (): void {

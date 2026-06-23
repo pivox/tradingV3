@@ -357,6 +357,38 @@ def test_run_outcome_200_run_without_trade_is_explicit_empty(orchestrator_env, m
     assert body["by_symbol"] == []
 
 
+def test_run_outcome_relays_truncation_with_row_cap(orchestrator_env, monkeypatch):
+    from app.routers import runs as runs_router
+
+    client, session = orchestrator_env
+    _seed_run(session, "run_big")
+
+    async def fake_outcome(http_client, base_url, run_id, set_id=None):
+        return {
+            "run_id": run_id,
+            "correlation_run_id": run_id,
+            "source_available": True,
+            # Source tronquée : agrégats partiels, jamais présentés comme complets.
+            "truncated": True,
+            "row_cap": 5000,
+            "data_complete": False,
+            "summary": {"trade_count": 5000},
+            "by_set": [],
+            "by_profile": [],
+            "by_exchange": [],
+            "by_symbol": [],
+        }
+
+    monkeypatch.setattr(runs_router, "fetch_run_trade_outcome", fake_outcome)
+
+    body = client.get("/runs/run_big/outcome").json()
+    assert body["source_available"] is True
+    assert body["truncated"] is True
+    # `row_cap` doit accompagner `truncated` (sinon dashboards/clients ne peuvent expliquer).
+    assert body["row_cap"] == 5000
+    assert body["data_complete"] is False
+
+
 def test_run_outcome_503_when_source_unavailable(orchestrator_env, monkeypatch):
     from app.routers import runs as runs_router
     from app.services.symfony_client import OutcomeUnavailableError
