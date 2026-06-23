@@ -89,11 +89,15 @@ final class RunTradeOutcomeService
             'truncated' => $truncated,
             'row_cap' => $this->rowCap,
             'data_complete' => !$truncated && $this->isDataComplete($rows),
-            'summary' => $this->aggregate($rows),
-            'by_set' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getSetId()),
-            'by_profile' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getMtfProfile()),
-            'by_exchange' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getExchange()),
-            'by_symbol' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getSymbol()),
+            // Tronqué => on PROPAGE l'incomplétude dans summary ET chaque agrégat groupé :
+            // sinon un client lisant `summary.data_complete` ou un `data_complete` de groupe
+            // prendrait des KPI partiels (calculés sur les seules lignes tranchées) pour des
+            // KPI complets malgré la troncature.
+            'summary' => $this->aggregate($rows, $truncated),
+            'by_set' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getSetId(), $truncated),
+            'by_profile' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getMtfProfile(), $truncated),
+            'by_exchange' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getExchange(), $truncated),
+            'by_symbol' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getSymbol(), $truncated),
         ];
     }
 
@@ -102,7 +106,7 @@ final class RunTradeOutcomeService
      * @param callable(PositionTradeAnalysisV2):?string $keyFn
      * @return list<array<string,mixed>>
      */
-    private function group(array $rows, callable $keyFn): array
+    private function group(array $rows, callable $keyFn, bool $forceIncomplete = false): array
     {
         /** @var array<string,PositionTradeAnalysisV2[]> $buckets */
         $buckets = [];
@@ -118,7 +122,7 @@ final class RunTradeOutcomeService
 
         $out = [];
         foreach ($buckets as $key => $bucketRows) {
-            $out[] = ['key' => $key] + $this->aggregate($bucketRows);
+            $out[] = ['key' => $key] + $this->aggregate($bucketRows, $forceIncomplete);
         }
 
         return $out;
@@ -126,9 +130,11 @@ final class RunTradeOutcomeService
 
     /**
      * @param PositionTradeAnalysisV2[] $rows
+     * @param bool $forceIncomplete Force `data_complete=false` (ex. agrégat tronqué) quel que
+     *                              soit l'état des lignes tranchées.
      * @return array<string,mixed>
      */
-    private function aggregate(array $rows): array
+    private function aggregate(array $rows, bool $forceIncomplete = false): array
     {
         $tradeCount = count($rows);
         $matchedClosed = array_values(array_filter(
@@ -178,7 +184,7 @@ final class RunTradeOutcomeService
             'pnl_r' => $pnlR,
             'estimated_net_pnl_usdt' => $estimatedNet,
             'cost_completeness' => $this->aggregateCostCompleteness($rows),
-            'data_complete' => $this->isDataComplete($rows),
+            'data_complete' => !$forceIncomplete && $this->isDataComplete($rows),
             'mfe_pct_avg' => $this->avg($mfeValues),
             'mfe_pct_median' => $this->median($mfeValues),
             'mae_pct_avg' => $this->avg($maeValues),

@@ -198,8 +198,15 @@ snapshot_values AS (
 -- NB (suivi #200) : le rang FIFO est sûr tant qu'il n'existe pas de clôture DOUBLON pour la
 -- même clé+venue entre deux entrées (sinon l'entrée concernée reste `unmatched` — échec sûr,
 -- jamais une mauvaise attribution). Voir la « LIMITE D'ORDONNANCEMENT CONNUE » du docblock.
+-- Garde de RUN (parité v1) : une clôture ne peut être consommée que par une entrée du
+-- MÊME run (ou une clôture sans run — `run_id IS NULL` — qui reste rapprochable par tout
+-- run, cas du chemin live où la synchro émet les clôtures sans run_id). Sans ce garde, si
+-- deux runs produisent le même identifiant exact sur la même venue, la clôture d'un autre
+-- run pourrait être consommée et son PnL attribué au run demandé (l'API filtre les entrées
+-- par run APRÈS l'appariement). Appliqué à l'éligibilité ET à la jointure (échec sûr en cas
+-- de collision multi-run : entrée laissée `unmatched`, jamais une mauvaise attribution).
 entry_tid AS (
-  SELECT id, match_trade_id, symbol, exchange, market_type, happened_at,
+  SELECT id, match_trade_id, symbol, exchange, market_type, run_id, happened_at,
          ROW_NUMBER() OVER (
            PARTITION BY match_trade_id, symbol, exchange, market_type
            ORDER BY happened_at, id
@@ -207,10 +214,10 @@ entry_tid AS (
   FROM entry_events WHERE match_trade_id IS NOT NULL
 ),
 -- Ne RANGE que les clôtures ÉLIGIBLES (précédées d'au moins une entrée de même venue ET
--- même trade_id) : une clôture orpheline/antérieure ne vole pas le rang 1 à la vraie
--- clôture postérieure (symétrique au passage position_id).
+-- même trade_id ET même run) : une clôture orpheline/antérieure ne vole pas le rang 1 à la
+-- vraie clôture postérieure (symétrique au passage position_id).
 close_tid AS (
-  SELECT c.id, c.match_trade_id, c.symbol, c.exchange, c.market_type, c.effective_close_time,
+  SELECT c.id, c.match_trade_id, c.symbol, c.exchange, c.market_type, c.run_id, c.effective_close_time,
          ROW_NUMBER() OVER (
            PARTITION BY c.match_trade_id, c.symbol, c.exchange, c.market_type
            ORDER BY c.effective_close_time, c.id
@@ -223,6 +230,7 @@ close_tid AS (
         AND e.symbol = c.symbol
         AND e.exchange = c.exchange
         AND e.market_type = c.market_type
+        AND (c.run_id IS NULL OR c.run_id = e.run_id)
         AND e.happened_at <= c.effective_close_time
     )
 ),
@@ -235,11 +243,12 @@ tid_pairs AS (
    AND c.symbol = e.symbol
    AND c.exchange = e.exchange
    AND c.market_type = e.market_type
+   AND (c.run_id IS NULL OR c.run_id = e.run_id)
    AND c.effective_close_time >= e.happened_at
 ),
 -- (2) Appariement par position_id effectif, non déjà appariés par trade_id.
 entry_pid_base AS (
-  SELECT id, eff_position_id, symbol, exchange, market_type, happened_at
+  SELECT id, eff_position_id, symbol, exchange, market_type, run_id, happened_at
   FROM entry_resolved
   WHERE eff_position_id IS NOT NULL
     AND id NOT IN (SELECT entry_event_id FROM tid_pairs)
@@ -247,18 +256,18 @@ entry_pid_base AS (
 entry_pid AS (
   -- Rang par (position_id effectif + venue complète) : un position_id réutilisé sur
   -- un autre symbole/exchange/marché ne mélange pas les rangs.
-  SELECT id, eff_position_id, symbol, exchange, market_type, happened_at,
+  SELECT id, eff_position_id, symbol, exchange, market_type, run_id, happened_at,
          ROW_NUMBER() OVER (
            PARTITION BY eff_position_id, symbol, exchange, market_type
            ORDER BY happened_at, id
          ) AS rn
   FROM entry_pid_base
 ),
--- Ne RANGE que les clôtures ÉLIGIBLES (précédées d'au moins une entrée même venue) :
--- une clôture orpheline/périmée antérieure est écartée AVANT le rang (et non rejetée
--- après), donc elle ne vole pas le rang 1 à la vraie clôture postérieure.
+-- Ne RANGE que les clôtures ÉLIGIBLES (précédées d'au moins une entrée même venue ET même
+-- run) : une clôture orpheline/périmée antérieure (ou d'un autre run) est écartée AVANT le
+-- rang (et non rejetée après), donc elle ne vole pas le rang 1 à la vraie clôture postérieure.
 close_pid AS (
-  SELECT c.id, c.match_position_id, c.symbol, c.exchange, c.market_type, c.effective_close_time,
+  SELECT c.id, c.match_position_id, c.symbol, c.exchange, c.market_type, c.run_id, c.effective_close_time,
          ROW_NUMBER() OVER (
            PARTITION BY c.match_position_id, c.symbol, c.exchange, c.market_type
            ORDER BY c.effective_close_time, c.id
@@ -272,6 +281,7 @@ close_pid AS (
         AND e.symbol = c.symbol
         AND e.exchange = c.exchange
         AND e.market_type = c.market_type
+        AND (c.run_id IS NULL OR c.run_id = e.run_id)
         AND e.happened_at <= c.effective_close_time
     )
 ),
@@ -284,6 +294,7 @@ pid_pairs AS (
    AND c.symbol = e.symbol
    AND c.exchange = e.exchange
    AND c.market_type = e.market_type
+   AND (c.run_id IS NULL OR c.run_id = e.run_id)
    AND c.effective_close_time >= e.happened_at
 ),
 matched AS (

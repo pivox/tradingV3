@@ -357,6 +357,44 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(8.0, (float) $byExchange['okx']['recorded_pnl_usdt'], 1e-9);
     }
 
+    public function testCloseMatchingIsScopedByRun(): void
+    {
+        // (a) Anti cross-run : entrée runA + clôture TAGUÉE runB (même trade_id + venue).
+        // La clôture d'un AUTRE run ne doit pas être consommée par l'entrée runA (sinon son
+        // PnL serait attribué à runA, que l'API filtre par run APRÈS l'appariement).
+        $this->entry('BTCUSDT', 'runA', 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TR'], '2026-06-17 09:00:00+00', 1400);
+        $this->close('BTCUSDT', 'runB', ['trade_id' => 'TR', 'pnl' => 8.0], null, '2026-06-17 09:30:00+00', 1401, 'bitmart', 'perpetual');
+
+        $rowsA = $this->conn->fetchAllAssociative(
+            'SELECT trade_id, close_match_status, close_event_id, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            ['runA']
+        );
+        self::assertCount(1, $rowsA);
+        self::assertSame('unmatched', $rowsA[0]['close_match_status']);
+        self::assertNull($rowsA[0]['close_event_id']);
+        self::assertNull($rowsA[0]['recorded_pnl_usdt'], 'aucune clôture d\'un autre run attribuée');
+
+        // (b) Chemin LIVE : la synchro émet les clôtures SANS run_id (run_id NULL) — elles
+        // restent rapprochables par le run de l'entrée (le garde est permissif sur NULL).
+        $this->entry('ETHUSDT', 'runC', 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TN'], '2026-06-17 09:00:00+00', 1410);
+        $this->conn->executeStatement(
+            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, exchange, market_type, extra, happened_at)
+             VALUES (?, ?, \'position_closed\', NULL, NULL, ?, ?, ?::jsonb, ?)',
+            [1411, 'ETHUSDT', 'bitmart', 'perpetual', json_encode(['trade_id' => 'TN', 'pnl' => 3.0], JSON_THROW_ON_ERROR), '2026-06-17 09:30:00+00']
+        );
+
+        $rowsC = $this->conn->fetchAllAssociative(
+            'SELECT trade_id, close_match_status, close_matched_by, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            ['runC']
+        );
+        self::assertCount(1, $rowsC);
+        self::assertSame('matched', $rowsC[0]['close_match_status']);
+        self::assertSame('matched_trade_id', $rowsC[0]['close_matched_by']);
+        self::assertEqualsWithDelta(3.0, (float) $rowsC[0]['recorded_pnl_usdt'], 1e-9);
+    }
+
     public function testStaleCloseDetectedViaRealCloseTimeNotLogTime(): void
     {
         $run = 'run_realtime';

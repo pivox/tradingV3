@@ -201,6 +201,31 @@ final class RunTradeOutcomeServiceTest extends TestCase
         self::assertSame(2, $out['summary']['trade_count']);
     }
 
+    public function testTruncationForcesNestedDataCompleteFalse(): void
+    {
+        // Lignes qui SERAIENT complètes (matched_closed + cost 'complete') : sans propagation,
+        // `summary.data_complete` et les `data_complete` de groupe seraient vrais sur les
+        // lignes capées, présentant des KPI partiels comme complets malgré la troncature.
+        $rows = [
+            $this->row(['symbol' => 'BTCUSDT', 'setId' => 's1', 'closeEventId' => 1, 'closeMatchStatus' => 'matched', 'closeMatchedBy' => 'matched_trade_id', 'analysisStatus' => 'matched_closed', 'recordedPnlUsdt' => 1.0, 'costCompleteness' => 'complete']),
+            $this->row(['symbol' => 'ETHUSDT', 'setId' => 's2', 'closeEventId' => 2, 'closeMatchStatus' => 'matched', 'closeMatchedBy' => 'matched_trade_id', 'analysisStatus' => 'matched_closed', 'recordedPnlUsdt' => 2.0, 'costCompleteness' => 'complete']),
+            $this->row(['symbol' => 'SOLUSDT', 'setId' => 's3', 'closeEventId' => 3, 'closeMatchStatus' => 'matched', 'closeMatchedBy' => 'matched_trade_id', 'analysisStatus' => 'matched_closed', 'recordedPnlUsdt' => 3.0, 'costCompleteness' => 'complete']),
+        ];
+
+        $service = new RunTradeOutcomeService($this->reader($rows), null, 2);
+        $out = $service->buildOutcome('run_big');
+
+        self::assertTrue($out['truncated']);
+        self::assertFalse($out['data_complete']);
+        // Propagation : summary ET chaque agrégat groupé signalent l'incomplétude.
+        self::assertFalse($out['summary']['data_complete']);
+        foreach (['by_set', 'by_profile', 'by_exchange', 'by_symbol'] as $group) {
+            foreach ($out[$group] as $bucket) {
+                self::assertFalse($bucket['data_complete'], "data_complete propagé sur {$group}");
+            }
+        }
+    }
+
     public function testWithinRowCapIsNotTruncated(): void
     {
         $service = new RunTradeOutcomeService($this->reader([]), null, 2);
