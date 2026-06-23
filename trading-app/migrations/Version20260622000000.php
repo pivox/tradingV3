@@ -147,21 +147,49 @@ snapshot_values AS (
   FROM entry_events es
   JOIN indicator_snapshots s ON s.id = es.snapshot_id
 ),
--- (1) Appariement 1-pour-1 par trade_id (unique par trade ; rang = anti-réutilisation).
+-- (1) Appariement 1-pour-1 par trade_id, BORNÉ à la même VENUE (symbole + exchange +
+-- market_type) et à une clôture postérieure à l'entrée. Le trade_id n'est unique que
+-- par (exchange, market_type, trade_id) côté table : sans le périmètre venue, deux
+-- exchanges/marchés émettant le même trade_id échangeraient leurs outcomes (cross-venue
+-- swap). On applique le même garde temporel que le passage position_id.
 entry_tid AS (
-  SELECT id, match_trade_id,
-         ROW_NUMBER() OVER (PARTITION BY match_trade_id ORDER BY happened_at, id) AS rn
+  SELECT id, match_trade_id, symbol, exchange, market_type, happened_at,
+         ROW_NUMBER() OVER (
+           PARTITION BY match_trade_id, symbol, exchange, market_type
+           ORDER BY happened_at, id
+         ) AS rn
   FROM entry_events WHERE match_trade_id IS NOT NULL
 ),
+-- Ne RANGE que les clôtures ÉLIGIBLES (précédées d'au moins une entrée de même venue ET
+-- même trade_id) : une clôture orpheline/antérieure ne vole pas le rang 1 à la vraie
+-- clôture postérieure (symétrique au passage position_id).
 close_tid AS (
-  SELECT id, match_trade_id,
-         ROW_NUMBER() OVER (PARTITION BY match_trade_id ORDER BY happened_at, id) AS rn
-  FROM close_events WHERE match_trade_id IS NOT NULL
+  SELECT c.id, c.match_trade_id, c.symbol, c.exchange, c.market_type, c.effective_close_time,
+         ROW_NUMBER() OVER (
+           PARTITION BY c.match_trade_id, c.symbol, c.exchange, c.market_type
+           ORDER BY c.effective_close_time, c.id
+         ) AS rn
+  FROM close_events c
+  WHERE c.match_trade_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1 FROM entry_events e
+      WHERE e.match_trade_id = c.match_trade_id
+        AND e.symbol = c.symbol
+        AND e.exchange = c.exchange
+        AND e.market_type = c.market_type
+        AND e.happened_at <= c.effective_close_time
+    )
 ),
 tid_pairs AS (
   SELECT e.id AS entry_event_id, c.id AS close_event_id
   FROM entry_tid e
-  JOIN close_tid c ON c.match_trade_id = e.match_trade_id AND c.rn = e.rn
+  JOIN close_tid c
+    ON c.match_trade_id = e.match_trade_id
+   AND c.rn = e.rn
+   AND c.symbol = e.symbol
+   AND c.exchange = e.exchange
+   AND c.market_type = e.market_type
+   AND c.effective_close_time >= e.happened_at
 ),
 -- (2) Appariement par position_id effectif, non déjà appariés par trade_id.
 entry_pid_base AS (

@@ -279,6 +279,44 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(8.0, (float) $byExchange['okx']['recorded_pnl_usdt'], 1e-9);
     }
 
+    public function testSameTradeIdAcrossVenuesMatchesEachOnItsOwnVenue(): void
+    {
+        $run = 'run_tid_venue';
+        // Même trade_id `TX` émis par DEUX venues (bitmart / okx) — possible car le
+        // trade_id n'est unique que par (exchange, market_type, trade_id). L'entrée
+        // bitmart est la première, mais la clôture OKX arrive AVANT la clôture bitmart :
+        // sans périmètre venue dans le passage trade_id, les rangs se croiseraient et
+        // l'entrée bitmart hériterait du PnL OKX (cross-venue swap).
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TX'], '2026-06-17 09:00:00+00', 1200);
+        $this->entry('BTCUSDT', $run, 's2', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TX'], '2026-06-17 09:05:00+00', 1201);
+        $this->close('BTCUSDT', $run, ['trade_id' => 'TX', 'pnl' => 8.0], null, '2026-06-17 09:20:00+00', 1202, 'okx', 'perpetual');
+        $this->close('BTCUSDT', $run, ['trade_id' => 'TX', 'pnl' => 5.0], null, '2026-06-17 09:30:00+00', 1203, 'bitmart', 'perpetual');
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT exchange, trade_id, close_match_status, close_matched_by, close_event_id, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY exchange',
+            [$run]
+        );
+
+        self::assertCount(2, $rows);
+        $byExchange = [];
+        foreach ($rows as $r) {
+            $byExchange[$r['exchange']] = $r;
+        }
+
+        // Rapprochement PAR trade_id (pas position_id) mais borné à la venue : chaque
+        // entrée hérite du PnL de SA propre clôture, jamais en cross-venue.
+        self::assertSame('matched', $byExchange['bitmart']['close_match_status']);
+        self::assertSame('matched_trade_id', $byExchange['bitmart']['close_matched_by']);
+        self::assertSame(1203, (int) $byExchange['bitmart']['close_event_id']);
+        self::assertEqualsWithDelta(5.0, (float) $byExchange['bitmart']['recorded_pnl_usdt'], 1e-9);
+
+        self::assertSame('matched', $byExchange['okx']['close_match_status']);
+        self::assertSame('matched_trade_id', $byExchange['okx']['close_matched_by']);
+        self::assertSame(1202, (int) $byExchange['okx']['close_event_id']);
+        self::assertEqualsWithDelta(8.0, (float) $byExchange['okx']['recorded_pnl_usdt'], 1e-9);
+    }
+
     public function testStaleCloseDetectedViaRealCloseTimeNotLogTime(): void
     {
         $run = 'run_realtime';
