@@ -68,8 +68,8 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
     public function testClosedPositionRiskLookupUsesResolvedLineageRunId(): void
     {
         $lineage = $this->persistLineageWithPosition();
-        $this->persistOrderSubmitted('run-other', '1', new \DateTimeImmutable('2026-06-23 10:02:00 UTC'));
-        $this->persistOrderSubmitted($lineage->getRunId(), '50', new \DateTimeImmutable('2026-06-23 10:01:00 UTC'));
+        $this->persistOrderSubmitted($lineage->getRunId(), '1', new \DateTimeImmutable('2026-06-23 10:02:00 UTC'), 'itd-other');
+        $this->persistOrderSubmitted($lineage->getRunId(), '50', new \DateTimeImmutable('2026-06-23 10:01:00 UTC'), $lineage->getInternalTradeId());
 
         $listener = new TradeLifecycleLoggerListener(
             new TradeLifecycleLogger($this->em, $this->fixedClock()),
@@ -110,7 +110,7 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
     public function testClosedPositionResolvesLineageFromNestedRawHistoryPositionId(): void
     {
         $lineage = $this->persistLineageWithPosition();
-        $this->persistOrderSubmitted($lineage->getRunId(), '25', new \DateTimeImmutable('2026-06-23 10:01:00 UTC'));
+        $this->persistOrderSubmitted($lineage->getRunId(), '25', new \DateTimeImmutable('2026-06-23 10:01:00 UTC'), $lineage->getInternalTradeId());
 
         $listener = new TradeLifecycleLoggerListener(
             new TradeLifecycleLogger($this->em, $this->fixedClock()),
@@ -214,13 +214,17 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         return $lineage;
     }
 
-    private function persistOrderSubmitted(string $runId, string $riskUsdt, \DateTimeImmutable $happenedAt): void
+    private function persistOrderSubmitted(string $runId, string $riskUsdt, \DateTimeImmutable $happenedAt, ?string $internalTradeId = null): void
     {
         $event = (new TradeLifecycleEvent('BTCUSDT', 'order_submitted', $happenedAt))
             ->setRunId($runId)
             ->setExchange(Exchange::BITMART)
             ->setMarketType(MarketType::PERPETUAL)
-            ->setExtra(['risk_usdt' => $riskUsdt]);
+            ->setInternalTradeId($internalTradeId)
+            ->setExtra(array_filter([
+                'risk_usdt' => $riskUsdt,
+                'internal_trade_id' => $internalTradeId,
+            ], static fn (mixed $value): bool => $value !== null));
 
         $this->em->persist($event);
         $this->em->flush();

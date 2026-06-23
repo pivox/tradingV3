@@ -46,8 +46,8 @@ final class TradeLineageManager
             return $existingByClient;
         }
 
-        $internalTradeId = $this->contextString($context, 'internal_trade_id')
-            ?? $this->contextString($context, 'trade_id')
+        $internalTradeId = $this->contextString($context, 'internal_trade_id', 96)
+            ?? $this->contextString($context, 'trade_id', 96)
             ?? $this->generateInternalTradeId();
 
         $lineage = (new TradeLineage($internalTradeId, $intent->getClientOrderId(), $intent->getSymbol()))
@@ -55,13 +55,13 @@ final class TradeLineageManager
             ->setExchange($intent->getExchange())
             ->setMarketType($intent->getMarketType())
             ->setSide($this->sideFromIntent($intent))
-            ->setProfile($this->contextString($context, 'profile') ?? $intent->getStrategyProfile())
-            ->setRunId($this->contextString($context, 'run_id'))
-            ->setCorrelationRunId($this->contextString($context, 'correlation_run_id'))
-            ->setOrchestrationRunId($this->contextString($context, 'orchestration_run_id'))
-            ->setOrchestrationSetId($this->contextString($context, 'orchestration_set_id'))
-            ->setOrchestrationDashboardId($this->contextString($context, 'orchestration_dashboard_id'))
-            ->setOrigin($this->contextString($context, 'origin') ?? 'runtime');
+            ->setProfile($this->contextString($context, 'profile', 80) ?? $this->limitString($intent->getStrategyProfile(), 80))
+            ->setRunId($this->contextString($context, 'run_id', 96))
+            ->setCorrelationRunId($this->contextString($context, 'correlation_run_id', 96))
+            ->setOrchestrationRunId($this->contextString($context, 'orchestration_run_id', 96))
+            ->setOrchestrationSetId($this->contextString($context, 'orchestration_set_id', 96))
+            ->setOrchestrationDashboardId($this->contextString($context, 'orchestration_dashboard_id', 96))
+            ->setOrigin($this->contextString($context, 'origin', 24) ?? 'runtime');
 
         $this->entityManager->persist($lineage);
         $this->entityManager->flush();
@@ -88,7 +88,7 @@ final class TradeLineageManager
             return;
         }
 
-        $lineage->setExchangeOrderId($exchangeOrderId);
+        $lineage->setExchangeOrderId($this->limitString($exchangeOrderId, 96));
         $this->entityManager->flush();
     }
 
@@ -102,7 +102,7 @@ final class TradeLineageManager
             return;
         }
 
-        $lineage->setPositionId($positionId);
+        $lineage->setPositionId($this->limitString($positionId, 96));
         $this->entityManager->flush();
     }
 
@@ -161,9 +161,9 @@ final class TradeLineageManager
     /**
      * @param array<string,mixed> $context
      */
-    private function contextString(array $context, string $key): ?string
+    private function contextString(array $context, string $key, ?int $maxLength = null): ?string
     {
-        return $this->normalize($context[$key] ?? null);
+        return $this->limitString($this->normalize($context[$key] ?? null), $maxLength);
     }
 
     private function normalize(mixed $value): ?string
@@ -175,6 +175,15 @@ final class TradeLineageManager
         $normalized = trim((string) $value);
 
         return $normalized !== '' ? $normalized : null;
+    }
+
+    private function limitString(?string $value, ?int $maxLength): ?string
+    {
+        if ($value === null || $maxLength === null || strlen($value) <= $maxLength) {
+            return $value;
+        }
+
+        return substr($value, 0, $maxLength);
     }
 
     private function generateInternalTradeId(): string

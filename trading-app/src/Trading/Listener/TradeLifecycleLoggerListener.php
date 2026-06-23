@@ -110,6 +110,9 @@ final class TradeLifecycleLoggerListener
             if ($marketType !== null) {
                 $criteria['marketType'] = $marketType;
             }
+            if ($lineage !== null) {
+                $criteria['internalTradeId'] = $lineage->getInternalTradeId();
+            }
             $recent = $this->tradeLifecycleRepository->findRecentBy($criteria, 10);
             foreach ($recent as $lifecycleEvent) {
                 $extra = $lifecycleEvent->getExtra();

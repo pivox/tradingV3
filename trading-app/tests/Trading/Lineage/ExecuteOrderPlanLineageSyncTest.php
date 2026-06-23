@@ -106,6 +106,50 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
         self::assertSame('itd-from-mtf', $contextBuilder->toArray()['internal_trade_id'] ?? null);
     }
 
+    public function testPreSubmitLineageSyncNormalizesOverlongOrchestrationIds(): void
+    {
+        $schemaTool = new SchemaTool($this->em);
+        $schemaTool->dropSchema([
+            $this->em->getClassMetadata(OrderIntent::class),
+            $this->em->getClassMetadata(TradeLineage::class),
+        ]);
+        $schemaTool->createSchema([
+            $this->em->getClassMetadata(OrderIntent::class),
+            $this->em->getClassMetadata(TradeLineage::class),
+        ]);
+
+        $intent = $this->persistReadyIntent();
+        $contextBuilder = (new LifecycleContextBuilder('BTCUSDT'))
+            ->withInternalTradeId('itd-from-mtf')
+            ->withTradeId('itd-from-mtf')
+            ->merge([
+                'orchestration_run_id' => str_repeat('r', 140),
+                'orchestration_set_id' => str_repeat('s', 140),
+                'orchestration_dashboard_id' => str_repeat('d', 140),
+            ]);
+
+        $workflow = new ExecuteOrderPlan(
+            $this->uninitialized(ExecutionBox::class),
+            $this->uninitialized(ExchangeExecutionService::class),
+            new NullLogger(),
+            $this->orderIntentManager(),
+            null,
+            $this->tradeLineageManager(),
+        );
+        $method = new \ReflectionMethod(ExecuteOrderPlan::class, 'syncLineageBeforeExecution');
+        $method->invoke($workflow, $intent, $contextBuilder);
+
+        /** @var TradeLineage $lineage */
+        $lineage = $this->em->getRepository(TradeLineage::class)->findOneBy([
+            'internalTradeId' => 'itd-from-mtf',
+        ]);
+
+        self::assertNotNull($lineage);
+        self::assertLessThanOrEqual(96, strlen($lineage->getOrchestrationRunId() ?? ''));
+        self::assertLessThanOrEqual(96, strlen($lineage->getOrchestrationSetId() ?? ''));
+        self::assertLessThanOrEqual(96, strlen($lineage->getOrchestrationDashboardId() ?? ''));
+    }
+
     private function persistReadyIntent(): OrderIntent
     {
         $intent = (new OrderIntent())
