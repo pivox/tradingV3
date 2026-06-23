@@ -64,4 +64,25 @@ final class MtfRunRequestDtoTest extends TestCase
         self::assertNull($dto->requestId);
         self::assertNull($dto->setId);
     }
+
+    public function testCarriesTypedLineageContextThroughMessengerBoundary(): void
+    {
+        $dto = MtfRunRequestDto::fromArray([
+            'symbols' => ['BTCUSDT'],
+            'request_id' => 'run-a',
+            'orchestration_run_id' => 'run-a',
+            'dashboard_id' => 'dash-a',
+            'set_id' => 'set-a',
+            'profile' => 'scalper',
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'attempt_number' => 2,
+        ]);
+
+        self::assertSame('orchestrator', $dto->lineageContext->origin);
+        self::assertSame('run-a', $dto->lineageContext->correlationRunId);
+        self::assertSame('set-a', $dto->lineageContext->orchestrationSetId);
+        self::assertSame('scalper', $dto->lineageContext->mtfProfile);
+        self::assertSame(2, $dto->lineageContext->attemptNumber);
+    }
 }

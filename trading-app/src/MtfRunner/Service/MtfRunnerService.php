@@ -422,6 +422,7 @@ final class MtfRunnerService
             orchestrationRunId: $request->originalRunId,
             dashboardId: $request->dashboardId,
             setId: $request->setId,
+            lineageContext: $request->lineageContext,
         );
 
         $response = $this->mtfValidator->run($mtfRequest);
@@ -512,6 +513,11 @@ final class MtfRunnerService
             'orchestration_run_id' => $request->originalRunId,
             'dashboard_id' => $request->dashboardId,
             'set_id' => $request->setId,
+            'origin' => $request->lineageContext->origin,
+            'replay_of_run_id' => $request->lineageContext->replayOfRunId,
+            'replay_of_correlation_id' => $request->lineageContext->replayOfCorrelationId,
+            'attempt_number' => $request->lineageContext->attemptNumber,
+            'config_hash' => $request->lineageContext->configHash,
         ];
 
         $this->mtfLogger->info('[MTF Runner] Starting parallel execution', [
@@ -711,6 +717,15 @@ final class MtfRunnerService
      *     market_type: string,
      *     profile: ?string,
      *     validation_mode: ?string,
+     *     request_id?: ?string,
+     *     orchestration_run_id?: ?string,
+     *     dashboard_id?: ?string,
+     *     set_id?: ?string,
+     *     origin?: ?string,
+     *     replay_of_run_id?: ?string,
+     *     replay_of_correlation_id?: ?string,
+     *     attempt_number?: int,
+     *     config_hash?: ?string,
      * } $options
      * @return string[]
      */
@@ -774,6 +789,21 @@ final class MtfRunnerService
         }
         if (!empty($options['set_id'])) {
             $command[] = '--set-id=' . $options['set_id'];
+        }
+        if (!empty($options['origin'])) {
+            $command[] = '--origin=' . $options['origin'];
+        }
+        if (!empty($options['replay_of_run_id'])) {
+            $command[] = '--replay-of-run-id=' . $options['replay_of_run_id'];
+        }
+        if (!empty($options['replay_of_correlation_id'])) {
+            $command[] = '--replay-of-correlation-id=' . $options['replay_of_correlation_id'];
+        }
+        if (!empty($options['attempt_number'])) {
+            $command[] = '--attempt-number=' . $options['attempt_number'];
+        }
+        if (!empty($options['config_hash'])) {
+            $command[] = '--config-hash=' . $options['config_hash'];
         }
 
         return $command;

@@ -41,6 +41,9 @@ final class TradeLineage
     #[ORM\Column(name: 'position_id', type: Types::STRING, length: 96, nullable: true)]
     private ?string $positionId = null;
 
+    #[ORM\Column(name: 'internal_position_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $internalPositionId = null;
+
     #[ORM\Column(name: 'run_id', type: Types::STRING, length: 96, nullable: true)]
     private ?string $runId = null;
 
@@ -71,8 +74,20 @@ final class TradeLineage
     #[ORM\Column(type: Types::STRING, length: 80, nullable: true)]
     private ?string $profile = null;
 
-    #[ORM\Column(type: Types::STRING, length: 24, options: ['default' => 'runtime'])]
-    private string $origin = 'runtime';
+    #[ORM\Column(type: Types::STRING, length: 24, options: ['default' => 'legacy'])]
+    private string $origin = 'legacy';
+
+    #[ORM\Column(name: 'replay_of_run_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $replayOfRunId = null;
+
+    #[ORM\Column(name: 'replay_of_correlation_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $replayOfCorrelationId = null;
+
+    #[ORM\Column(name: 'attempt_number', type: Types::INTEGER, options: ['default' => 1])]
+    private int $attemptNumber = 1;
+
+    #[ORM\Column(name: 'config_hash', type: Types::STRING, length: 128, nullable: true)]
+    private ?string $configHash = null;
 
     #[ORM\Column(name: 'created_at', type: Types::DATETIMETZ_IMMUTABLE)]
     private \DateTimeImmutable $createdAt;
@@ -137,6 +152,18 @@ final class TradeLineage
     public function setPositionId(?string $positionId): self
     {
         $this->positionId = self::blankToNull($positionId);
+
+        return $this->touch();
+    }
+
+    public function getInternalPositionId(): ?string
+    {
+        return $this->internalPositionId;
+    }
+
+    public function setInternalPositionId(?string $internalPositionId): self
+    {
+        $this->internalPositionId = self::blankToNull($internalPositionId);
 
         return $this->touch();
     }
@@ -262,6 +289,54 @@ final class TradeLineage
     public function setOrigin(string $origin): self
     {
         $this->origin = strtolower(trim($origin)) !== '' ? strtolower(trim($origin)) : 'legacy';
+
+        return $this->touch();
+    }
+
+    public function getReplayOfRunId(): ?string
+    {
+        return $this->replayOfRunId;
+    }
+
+    public function setReplayOfRunId(?string $replayOfRunId): self
+    {
+        $this->replayOfRunId = self::blankToNull($replayOfRunId);
+
+        return $this->touch();
+    }
+
+    public function getReplayOfCorrelationId(): ?string
+    {
+        return $this->replayOfCorrelationId;
+    }
+
+    public function setReplayOfCorrelationId(?string $replayOfCorrelationId): self
+    {
+        $this->replayOfCorrelationId = self::blankToNull($replayOfCorrelationId);
+
+        return $this->touch();
+    }
+
+    public function getAttemptNumber(): int
+    {
+        return $this->attemptNumber;
+    }
+
+    public function setAttemptNumber(int $attemptNumber): self
+    {
+        $this->attemptNumber = max(1, $attemptNumber);
+
+        return $this->touch();
+    }
+
+    public function getConfigHash(): ?string
+    {
+        return $this->configHash;
+    }
+
+    public function setConfigHash(?string $configHash): self
+    {
+        $this->configHash = self::blankToNull($configHash);
 
         return $this->touch();
     }

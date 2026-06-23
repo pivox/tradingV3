@@ -188,4 +188,30 @@ final class MtfRunnerRequestDtoTest extends TestCase
         self::assertSame('d', $array['dashboard_id']);
         self::assertSame('s', $array['set_id']);
     }
+
+    public function testCreatesTypedLineageContextForOrchestratorAndLegacy(): void
+    {
+        $orchestrated = MtfRunnerRequestDto::fromArray([
+            'symbols' => ['BTCUSDT'],
+            'run_id' => 'run-a',
+            'correlation_run_id' => 'run-a',
+            'set_id' => 'set-a',
+            'dashboard_id' => 'dash-a',
+            'profile' => 'scalper_micro',
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'dry_run' => true,
+            'attempt_number' => 3,
+        ]);
+
+        self::assertSame('orchestrator', $orchestrated->lineageContext->origin);
+        self::assertSame('run-a', $orchestrated->lineageContext->orchestrationRunId);
+        self::assertSame('set-a', $orchestrated->lineageContext->orchestrationSetId);
+        self::assertSame(3, $orchestrated->lineageContext->attemptNumber);
+
+        $legacy = MtfRunnerRequestDto::fromArray(['symbols' => ['ETHUSDT']]);
+
+        self::assertSame('legacy', $legacy->lineageContext->origin);
+        self::assertNull($legacy->lineageContext->orchestrationSetId);
+    }
 }

@@ -49,7 +49,12 @@ final class MtfRunWorkerCommand extends Command
             ->addOption('request-id', null, InputOption::VALUE_OPTIONAL, 'OBS-003 : run_id de corrélation (≤64) à utiliser comme run_id du run')
             ->addOption('orchestration-run-id', null, InputOption::VALUE_OPTIONAL, 'OBS-003 : run_id ORIGINAL du run d\'orchestration')
             ->addOption('dashboard-id', null, InputOption::VALUE_OPTIONAL, 'OBS-003 : dashboard d\'orchestration exécuté')
-            ->addOption('set-id', null, InputOption::VALUE_OPTIONAL, 'OBS-003 : set d\'orchestration dispatché');
+            ->addOption('set-id', null, InputOption::VALUE_OPTIONAL, 'OBS-003 : set d\'orchestration dispatché')
+            ->addOption('origin', null, InputOption::VALUE_OPTIONAL, 'DATA-001 : origine du lineage (orchestrator|legacy|manual|replay)')
+            ->addOption('replay-of-run-id', null, InputOption::VALUE_OPTIONAL, 'DATA-001 : run d\'origine en cas de replay')
+            ->addOption('replay-of-correlation-id', null, InputOption::VALUE_OPTIONAL, 'DATA-001 : correlation d\'origine en cas de replay')
+            ->addOption('attempt-number', null, InputOption::VALUE_OPTIONAL, 'DATA-001 : tentative fonctionnelle du lineage', '1')
+            ->addOption('config-hash', null, InputOption::VALUE_OPTIONAL, 'DATA-001 : hash/version de config effective');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -90,6 +95,11 @@ final class MtfRunWorkerCommand extends Command
         $orchestrationRunId = $this->optString($input->getOption('orchestration-run-id'));
         $dashboardId = $this->optString($input->getOption('dashboard-id'));
         $setId = $this->optString($input->getOption('set-id'));
+        $origin = $this->optString($input->getOption('origin'));
+        $replayOfRunId = $this->optString($input->getOption('replay-of-run-id'));
+        $replayOfCorrelationId = $this->optString($input->getOption('replay-of-correlation-id'));
+        $attemptNumber = (int) ($input->getOption('attempt-number') ?? 1);
+        $configHash = $this->optString($input->getOption('config-hash'));
 
         try {
             // En mode worker, activer le verrou par symbole pour éviter le blocage global
@@ -112,6 +122,11 @@ final class MtfRunWorkerCommand extends Command
                 'orchestration_run_id' => $orchestrationRunId,
                 'dashboard_id' => $dashboardId,
                 'set_id' => $setId,
+                'origin' => $origin,
+                'replay_of_run_id' => $replayOfRunId,
+                'replay_of_correlation_id' => $replayOfCorrelationId,
+                'attempt_number' => $attemptNumber,
+                'config_hash' => $configHash,
             ]);
             $response = $this->mtfValidator->run($request);
             $this->tradeDecisionDispatcher->dispatchFromResponse($request, $response);

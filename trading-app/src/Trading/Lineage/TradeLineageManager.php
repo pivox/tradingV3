@@ -61,7 +61,14 @@ final class TradeLineageManager
             ->setOrchestrationRunId($this->contextString($context, 'orchestration_run_id', 96))
             ->setOrchestrationSetId($this->contextString($context, 'orchestration_set_id', 96))
             ->setOrchestrationDashboardId($this->contextString($context, 'orchestration_dashboard_id', 96))
-            ->setOrigin($this->contextString($context, 'origin', 24) ?? 'runtime');
+            ->setOrigin($this->contextString($context, 'origin', 24) ?? 'legacy')
+            ->setInternalPositionId($this->contextString($context, 'internal_position_id', 96))
+            ->setReplayOfRunId($this->contextString($context, 'replay_of_run_id', 96))
+            ->setReplayOfCorrelationId($this->contextString($context, 'replay_of_correlation_id', 96))
+            ->setAttemptNumber($this->contextInt($context, 'attempt_number'))
+            ->setConfigHash($this->contextString($context, 'config_hash', 128));
+
+        $this->syncIntentLineage($intent, $lineage);
 
         $this->entityManager->persist($lineage);
         $this->entityManager->flush();
@@ -155,6 +162,11 @@ final class TradeLineageManager
             'orchestration_dashboard_id' => $lineage->getOrchestrationDashboardId(),
             'profile' => $lineage->getProfile(),
             'origin' => $lineage->getOrigin(),
+            'internal_position_id' => $lineage->getInternalPositionId(),
+            'replay_of_run_id' => $lineage->getReplayOfRunId(),
+            'replay_of_correlation_id' => $lineage->getReplayOfCorrelationId(),
+            'attempt_number' => $lineage->getAttemptNumber(),
+            'config_hash' => $lineage->getConfigHash(),
         ], static fn (mixed $value): bool => $value !== null && $value !== '');
     }
 
@@ -164,6 +176,42 @@ final class TradeLineageManager
     private function contextString(array $context, string $key, ?int $maxLength = null): ?string
     {
         return $this->limitString($this->normalize($context[$key] ?? null), $maxLength);
+    }
+
+    /**
+     * @param array<string,mixed> $context
+     */
+    private function contextInt(array $context, string $key): int
+    {
+        $value = $context[$key] ?? null;
+        if (\is_int($value)) {
+            return max(1, $value);
+        }
+        if (\is_string($value) && ctype_digit($value)) {
+            return max(1, (int) $value);
+        }
+
+        return 1;
+    }
+
+    private function syncIntentLineage(OrderIntent $intent, TradeLineage $lineage): void
+    {
+        if (!method_exists($intent, 'setInternalTradeId')) {
+            return;
+        }
+
+        $intent
+            ->setInternalTradeId($lineage->getInternalTradeId())
+            ->setInternalPositionId($lineage->getInternalPositionId())
+            ->setCorrelationRunId($lineage->getCorrelationRunId())
+            ->setOrchestrationRunId($lineage->getOrchestrationRunId())
+            ->setOrchestrationSetId($lineage->getOrchestrationSetId())
+            ->setOrchestrationDashboardId($lineage->getOrchestrationDashboardId())
+            ->setOrigin($lineage->getOrigin())
+            ->setReplayOfRunId($lineage->getReplayOfRunId())
+            ->setReplayOfCorrelationId($lineage->getReplayOfCorrelationId())
+            ->setAttemptNumber($lineage->getAttemptNumber())
+            ->setConfigHash($lineage->getConfigHash());
     }
 
     private function normalize(mixed $value): ?string

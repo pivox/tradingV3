@@ -140,6 +140,9 @@ final class TradeLifecycleLogger
         $this->persist($event);
     }
 
+    /**
+     * @param array<string,mixed>|null $extra
+     */
     public function logPositionClosed(
         string $symbol,
         string $positionId,
@@ -184,6 +187,7 @@ final class TradeLifecycleLogger
             if (\is_scalar($internalTradeId) && trim((string) $internalTradeId) !== '') {
                 $event->setInternalTradeId((string) $internalTradeId);
             }
+            $this->copyLineageExtraToColumns($event, $extra);
         }
 
         $this->entityManager->persist($event);
@@ -197,5 +201,46 @@ final class TradeLifecycleLogger
     private function normalizeExtra(array $extra): ?array
     {
         return $extra === [] ? null : $extra;
+    }
+
+    /**
+     * @param array<string,mixed> $extra
+     */
+    private function copyLineageExtraToColumns(TradeLifecycleEvent $event, array $extra): void
+    {
+        $event
+            ->setInternalPositionId($this->stringValue($extra['internal_position_id'] ?? null))
+            ->setCorrelationRunId($this->stringValue($extra['correlation_run_id'] ?? null))
+            ->setOrchestrationRunId($this->stringValue($extra['orchestration_run_id'] ?? null))
+            ->setOrchestrationSetId($this->stringValue($extra['orchestration_set_id'] ?? null))
+            ->setOrchestrationDashboardId($this->stringValue($extra['orchestration_dashboard_id'] ?? null))
+            ->setOrigin($this->stringValue($extra['origin'] ?? null) ?? 'legacy')
+            ->setReplayOfRunId($this->stringValue($extra['replay_of_run_id'] ?? null))
+            ->setReplayOfCorrelationId($this->stringValue($extra['replay_of_correlation_id'] ?? null))
+            ->setAttemptNumber($this->intValue($extra['attempt_number'] ?? null))
+            ->setConfigHash($this->stringValue($extra['config_hash'] ?? null));
+    }
+
+    private function stringValue(mixed $value): ?string
+    {
+        if (!\is_scalar($value)) {
+            return null;
+        }
+
+        $trimmed = trim((string) $value);
+
+        return $trimmed !== '' ? $trimmed : null;
+    }
+
+    private function intValue(mixed $value): int
+    {
+        if (\is_int($value)) {
+            return max(1, $value);
+        }
+        if (\is_string($value) && ctype_digit($value)) {
+            return max(1, (int) $value);
+        }
+
+        return 1;
     }
 }

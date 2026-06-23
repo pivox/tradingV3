@@ -143,6 +143,11 @@ final class TradingDecisionHandler
                 'orchestration_run_id' => $mtfRunDto->options['orchestration_run_id'] ?? null,
                 'orchestration_dashboard_id' => $mtfRunDto->options['orchestration_dashboard_id'] ?? null,
                 'orchestration_set_id' => $mtfRunDto->options['orchestration_set_id'] ?? null,
+                'origin' => $mtfRunDto->options['origin'] ?? null,
+                'replay_of_run_id' => $mtfRunDto->options['replay_of_run_id'] ?? null,
+                'replay_of_correlation_id' => $mtfRunDto->options['replay_of_correlation_id'] ?? null,
+                'attempt_number' => $mtfRunDto->options['attempt_number'] ?? null,
+                'config_hash' => $mtfRunDto->options['config_hash'] ?? null,
             ]);
 
         // 3. Construction via Builder (délégation) avec champs minimaux
