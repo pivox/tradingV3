@@ -102,7 +102,6 @@ final class ExecuteOrderPlan
                 }
 
                 $intent = $reservation->intent;
-                $this->syncLineageBeforeExecution($intent, $contextBuilder);
 
                 $validationErrors = $this->orderIntentManager->validateOrderParams($this->intentOrderParams($executionPlan, $decisionKey, $clientOrderId));
                 if (!$this->orderIntentManager->validateIntent($intent, $validationErrors)) {
@@ -120,6 +119,7 @@ final class ExecuteOrderPlan
                 }
 
                 $this->orderIntentManager->markReadyToSend($intent);
+                $this->syncLineageBeforeExecution($intent, $contextBuilder);
             }
 
             $result = $useApiFirstExecution
