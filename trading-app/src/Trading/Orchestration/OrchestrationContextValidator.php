@@ -53,6 +53,21 @@ final class OrchestrationContextValidator
                 sprintf('run_id (%s) et original_run_id (%s) du payload sont contradictoires.', $bodyRun, $bodyRunOriginal),
             );
         }
+        // L'en-tête X-Run-Id doit aussi correspondre aux alias run_id du payload AVANT le
+        // coalescing (comme les contrôles set/dashboard en-tête vs corps). Sans cela,
+        // `X-Run-Id=runA` + `run_id=runB` (sans correlation) serait silencieusement coalescé
+        // sur l'en-tête : les lignes lifecycle seraient enregistrées sous `runA` alors que le
+        // payload nomme `runB` — incohérence vérifiable qui doit fail-closed (et non passer).
+        if ($runIdHeader !== null) {
+            foreach (['run_id' => $bodyRun, 'original_run_id' => $bodyRunOriginal] as $field => $value) {
+                if ($value !== null && $runIdHeader !== $value) {
+                    throw new OrchestrationContextException(
+                        'ORCHESTRATION_CORRELATION_MISMATCH',
+                        sprintf('X-Run-Id (%s) contredit %s du payload (%s).', $runIdHeader, $field, $value),
+                    );
+                }
+            }
+        }
         $effectiveRunId = $runIdHeader ?? $bodyRun ?? $bodyRunOriginal;
 
         $bodyCorrelation = self::clean($data['correlation_run_id'] ?? null);

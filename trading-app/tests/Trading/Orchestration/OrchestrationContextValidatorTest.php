@@ -100,6 +100,31 @@ final class OrchestrationContextValidatorTest extends TestCase
         });
     }
 
+    public function testHeaderRunIdVsBodyRunIdMismatchIsRejected(): void
+    {
+        // X-Run-Id=runA + run_id=runB (sans correlation) : contradiction vérifiable du
+        // run_id en-tête vs payload, à fail-closer AVANT le coalescing sur l'en-tête.
+        $this->assertCode('ORCHESTRATION_CORRELATION_MISMATCH', function (): void {
+            $this->validator->validate('runA', null, null, null, ['run_id' => 'runB']);
+        });
+    }
+
+    public function testHeaderRunIdVsBodyOriginalRunIdMismatchIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_CORRELATION_MISMATCH', function (): void {
+            $this->validator->validate('runA', null, null, null, ['original_run_id' => 'runB']);
+        });
+    }
+
+    public function testHeaderRunIdEqualBodyRunIdAliasesPasses(): void
+    {
+        // En-tête et alias du corps identiques : aucune contradiction.
+        $this->expectNotToPerformAssertions();
+        $this->validator->validate('runA', null, null, null, [
+            'run_id' => 'runA', 'original_run_id' => 'runA',
+        ]);
+    }
+
     public function testSetMismatchIsRejected(): void
     {
         $this->assertCode('ORCHESTRATION_SET_MISMATCH', function (): void {
