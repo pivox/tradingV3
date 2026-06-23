@@ -144,6 +144,10 @@ final class MtfRunnerRequestDto
      */
     private static function buildLineageContext(array $data, ?Exchange $exchange, ?MarketType $marketType, ?string $profile): LineageContext
     {
+        if (isset($data['lineage_context']) && \is_array($data['lineage_context'])) {
+            return LineageContext::fromArray($data['lineage_context']);
+        }
+
         $hasOrchestratorLineage = self::nonEmptyString($data['run_id'] ?? $data['original_run_id'] ?? $data['orchestration_run_id'] ?? null) !== null
             || self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null) !== null
             || self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null) !== null;

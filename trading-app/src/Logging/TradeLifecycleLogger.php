@@ -185,7 +185,7 @@ final class TradeLifecycleLogger
         if (\is_array($extra)) {
             $internalTradeId = $extra['internal_trade_id'] ?? null;
             if (\is_scalar($internalTradeId) && trim((string) $internalTradeId) !== '') {
-                $event->setInternalTradeId((string) $internalTradeId);
+                $event->setInternalTradeId($this->limitString((string) $internalTradeId, 96));
             }
             $this->copyLineageExtraToColumns($event, $extra);
         }
@@ -209,16 +209,21 @@ final class TradeLifecycleLogger
     private function copyLineageExtraToColumns(TradeLifecycleEvent $event, array $extra): void
     {
         $event
-            ->setInternalPositionId($this->stringValue($extra['internal_position_id'] ?? null))
-            ->setCorrelationRunId($this->stringValue($extra['correlation_run_id'] ?? null))
-            ->setOrchestrationRunId($this->stringValue($extra['orchestration_run_id'] ?? null))
-            ->setOrchestrationSetId($this->stringValue($extra['orchestration_set_id'] ?? null))
-            ->setOrchestrationDashboardId($this->stringValue($extra['orchestration_dashboard_id'] ?? null))
-            ->setOrigin($this->stringValue($extra['origin'] ?? null) ?? 'legacy')
-            ->setReplayOfRunId($this->stringValue($extra['replay_of_run_id'] ?? null))
-            ->setReplayOfCorrelationId($this->stringValue($extra['replay_of_correlation_id'] ?? null))
+            ->setInternalPositionId($this->limitedStringValue($extra['internal_position_id'] ?? null, 96))
+            ->setCorrelationRunId($this->limitedStringValue($extra['correlation_run_id'] ?? null, 96))
+            ->setOrchestrationRunId($this->limitedStringValue($extra['orchestration_run_id'] ?? null, 96))
+            ->setOrchestrationSetId($this->limitedStringValue($extra['orchestration_set_id'] ?? null, 96))
+            ->setOrchestrationDashboardId($this->limitedStringValue($extra['orchestration_dashboard_id'] ?? null, 96))
+            ->setOrigin($this->limitedStringValue($extra['origin'] ?? null, 24) ?? 'legacy')
+            ->setReplayOfRunId($this->limitedStringValue($extra['replay_of_run_id'] ?? null, 96))
+            ->setReplayOfCorrelationId($this->limitedStringValue($extra['replay_of_correlation_id'] ?? null, 96))
             ->setAttemptNumber($this->intValue($extra['attempt_number'] ?? null))
-            ->setConfigHash($this->stringValue($extra['config_hash'] ?? null));
+            ->setConfigHash($this->limitedStringValue($extra['config_hash'] ?? null, 128));
+    }
+
+    private function limitedStringValue(mixed $value, int $maxLength): ?string
+    {
+        return $this->limitString($this->stringValue($value), $maxLength);
     }
 
     private function stringValue(mixed $value): ?string
@@ -242,5 +247,14 @@ final class TradeLifecycleLogger
         }
 
         return 1;
+    }
+
+    private function limitString(?string $value, int $maxLength): ?string
+    {
+        if ($value === null || strlen($value) <= $maxLength) {
+            return $value;
+        }
+
+        return substr($value, 0, $maxLength);
     }
 }

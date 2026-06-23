@@ -93,6 +93,54 @@ final class TradeLifecycleLoggerLineageTest extends KernelTestCase
         self::assertSame('itd-logger-1', $event->getExtra()['internal_trade_id'] ?? null);
     }
 
+    public function testLineageColumnsAreTruncatedBeforePersistence(): void
+    {
+        $logger = new TradeLifecycleLogger($this->em, $this->fixedClock());
+        $long96 = str_repeat('r', 140);
+        $long128 = str_repeat('c', 160);
+
+        $logger->logOrderSubmitted(
+            symbol: 'ETHUSDT',
+            orderId: 'ex-2',
+            clientOrderId: 'cid-2',
+            side: 'BUY',
+            qty: '1',
+            price: '100',
+            runId: 'run-2',
+            exchange: 'bitmart',
+            extra: [
+                'internal_trade_id' => str_repeat('i', 140),
+                'internal_position_id' => str_repeat('p', 140),
+                'correlation_run_id' => $long96,
+                'orchestration_run_id' => $long96,
+                'orchestration_set_id' => $long96,
+                'orchestration_dashboard_id' => $long96,
+                'origin' => str_repeat('o', 40),
+                'replay_of_run_id' => $long96,
+                'replay_of_correlation_id' => $long96,
+                'config_hash' => $long128,
+            ],
+            marketType: 'perpetual',
+        );
+
+        /** @var TradeLifecycleEvent $event */
+        $event = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'clientOrderId' => 'CID-2',
+        ]);
+
+        self::assertNotNull($event);
+        self::assertSame(96, strlen($event->getInternalTradeId() ?? ''));
+        self::assertSame(96, strlen($event->getInternalPositionId() ?? ''));
+        self::assertSame(96, strlen($event->getCorrelationRunId() ?? ''));
+        self::assertSame(96, strlen($event->getOrchestrationRunId() ?? ''));
+        self::assertSame(96, strlen($event->getOrchestrationSetId() ?? ''));
+        self::assertSame(96, strlen($event->getOrchestrationDashboardId() ?? ''));
+        self::assertSame(24, strlen($event->getOrigin()));
+        self::assertSame(96, strlen($event->getReplayOfRunId() ?? ''));
+        self::assertSame(96, strlen($event->getReplayOfCorrelationId() ?? ''));
+        self::assertSame(128, strlen($event->getConfigHash() ?? ''));
+    }
+
     private function fixedClock(): ClockInterface
     {
         return new class implements ClockInterface {

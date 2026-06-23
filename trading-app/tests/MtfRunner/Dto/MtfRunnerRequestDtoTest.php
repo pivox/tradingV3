@@ -189,6 +189,29 @@ final class MtfRunnerRequestDtoTest extends TestCase
         self::assertSame('s', $array['set_id']);
     }
 
+    public function testToArrayRoundTripsReplayLineageContext(): void
+    {
+        $array = MtfRunnerRequestDto::fromArray([
+            'symbols' => ['BTCUSDT'],
+            'run_id' => 'run-replay',
+            'set_id' => 'set-a',
+            'dashboard_id' => 'dash-a',
+            'origin' => 'replay',
+            'replay_of_run_id' => 'run-source',
+            'replay_of_correlation_id' => 'corr-source',
+            'attempt_number' => 2,
+            'config_hash' => 'cfg-replay',
+        ])->toArray();
+
+        $roundTrip = MtfRunnerRequestDto::fromArray($array);
+
+        self::assertSame('replay', $roundTrip->lineageContext->origin);
+        self::assertSame('run-source', $roundTrip->lineageContext->replayOfRunId);
+        self::assertSame('corr-source', $roundTrip->lineageContext->replayOfCorrelationId);
+        self::assertSame(2, $roundTrip->lineageContext->attemptNumber);
+        self::assertSame('cfg-replay', $roundTrip->lineageContext->configHash);
+    }
+
     public function testCreatesTypedLineageContextForOrchestratorAndLegacy(): void
     {
         $orchestrated = MtfRunnerRequestDto::fromArray([
