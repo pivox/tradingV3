@@ -14,7 +14,9 @@ use App\Logging\TradeLifecycleLogger;
 use App\Repository\TradeLifecycleEventRepository;
 use App\Repository\TradeLineageRepository;
 use App\Trading\Dto\PositionHistoryEntryDto;
+use App\Trading\Dto\PositionDto;
 use App\Trading\Event\PositionClosedEvent;
+use App\Trading\Event\PositionOpenedEvent;
 use App\Trading\Lineage\TradeLineageManager;
 use App\Trading\Listener\TradeLifecycleLoggerListener;
 use Brick\Math\BigDecimal;
@@ -69,12 +71,9 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         $this->persistOrderSubmitted('run-other', '1', new \DateTimeImmutable('2026-06-23 10:02:00 UTC'));
         $this->persistOrderSubmitted($lineage->getRunId(), '50', new \DateTimeImmutable('2026-06-23 10:01:00 UTC'));
 
-        /** @var TradeLifecycleEventRepository $tradeLifecycleRepository */
-        $tradeLifecycleRepository = $this->em->getRepository(TradeLifecycleEvent::class);
-
         $listener = new TradeLifecycleLoggerListener(
             new TradeLifecycleLogger($this->em, $this->fixedClock()),
-            $tradeLifecycleRepository,
+            $this->tradeLifecycleRepository(),
             null,
             $this->tradeLineageManager(),
         );
@@ -106,6 +105,45 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         self::assertNotNull($closed);
         self::assertSame('run-real', $closed->getRunId());
         self::assertSame(2.0, $closed->getExtra()['pnl_R'] ?? null);
+    }
+
+    public function testOpenedPositionLifecycleIsLoggedWhenLineageTableIsMissing(): void
+    {
+        (new SchemaTool($this->em))->dropSchema([
+            $this->em->getClassMetadata(TradeLineage::class),
+        ]);
+
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            null,
+            $this->tradeLineageManager(),
+        );
+
+        $listener->onPositionOpened(new PositionOpenedEvent(
+            position: new PositionDto(
+                symbol: 'ETHUSDT',
+                side: PositionSide::LONG,
+                size: BigDecimal::of('2'),
+                entryPrice: BigDecimal::of('1000'),
+                markPrice: BigDecimal::of('1001'),
+                unrealizedPnl: BigDecimal::of('0'),
+                leverage: BigDecimal::of('5'),
+                openedAt: new \DateTimeImmutable('2026-06-23 11:00:00 UTC'),
+                raw: ['position_id' => 'pos-missing-lineage'],
+            ),
+            exchange: Exchange::BITMART->value,
+            extra: ['market_type' => MarketType::PERPETUAL->value],
+        ));
+
+        /** @var TradeLifecycleEvent|null $opened */
+        $opened = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'position_opened',
+            'positionId' => 'pos-missing-lineage',
+        ]);
+
+        self::assertNotNull($opened);
+        self::assertSame('ETHUSDT', $opened->getSymbol());
     }
 
     private function persistLineageWithPosition(): TradeLineage
@@ -153,6 +191,14 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         $repository = $this->em->getRepository(TradeLineage::class);
 
         return new TradeLineageManager($repository, $this->em, new NullLogger());
+    }
+
+    private function tradeLifecycleRepository(): TradeLifecycleEventRepository
+    {
+        /** @var TradeLifecycleEventRepository $repository */
+        $repository = $this->em->getRepository(TradeLifecycleEvent::class);
+
+        return $repository;
     }
 
     private function fixedClock(): ClockInterface

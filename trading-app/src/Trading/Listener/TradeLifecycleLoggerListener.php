@@ -38,10 +38,8 @@ final class TradeLifecycleLoggerListener
             ?? null;
         $positionId = $rawPositionId
             ?? sprintf('%s:%s:%s', $position->symbol, strtolower($position->side->value), $position->openedAt->format('U'));
-        $lineage = $this->resolveLineageFromPositionPayload($position->raw, $event->extra, $marketType, $rawPositionId);
-        if ($lineage !== null && $rawPositionId !== null) {
-            $this->tradeLineageManager?->attachPositionId($lineage, (string) $rawPositionId);
-        }
+        $lineage = $this->safeResolveLineageFromPositionPayload($position->raw, $event->extra, $marketType, $rawPositionId);
+        $this->safeAttachPositionId($lineage, $rawPositionId);
         $extra = array_merge(
             $lineage !== null ? $this->tradeLineageManager?->lifecycleExtra($lineage) ?? [] : [],
             [
@@ -78,10 +76,8 @@ final class TradeLifecycleLoggerListener
             ?? null;
         $positionId = $rawPositionId
             ?? sprintf('%s:%s:%s', $history->symbol, strtolower($history->side->value), $history->closedAt->format('U'));
-        $lineage = $this->resolveLineageFromPositionPayload($history->raw, $event->extra, $marketType, $rawPositionId);
-        if ($lineage !== null && $rawPositionId !== null) {
-            $this->tradeLineageManager?->attachPositionId($lineage, (string) $rawPositionId);
-        }
+        $lineage = $this->safeResolveLineageFromPositionPayload($history->raw, $event->extra, $marketType, $rawPositionId);
+        $this->safeAttachPositionId($lineage, $rawPositionId);
 
         // Déterminer le reasonCode si non fourni
         $reasonCode = $event->reasonCode;
@@ -328,6 +324,37 @@ final class TradeLifecycleLoggerListener
             ),
             positionId: $this->stringValue($positionId),
         );
+    }
+
+    /**
+     * @param array<string,mixed> $raw
+     * @param array<string,mixed> $extra
+     */
+    private function safeResolveLineageFromPositionPayload(
+        array $raw,
+        array $extra,
+        ?string $marketType,
+        mixed $positionId,
+    ): ?\App\Entity\TradeLineage {
+        try {
+            return $this->resolveLineageFromPositionPayload($raw, $extra, $marketType, $positionId);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function safeAttachPositionId(?\App\Entity\TradeLineage $lineage, mixed $positionId): void
+    {
+        $positionId = $this->stringValue($positionId);
+        if ($lineage === null || $positionId === null) {
+            return;
+        }
+
+        try {
+            $this->tradeLineageManager?->attachPositionId($lineage, $positionId);
+        } catch (\Throwable) {
+            // Le lifecycle reste prioritaire; le lineage sera récupéré par un identifiant exact ultérieur.
+        }
     }
 
     private function stringValue(mixed $value): ?string

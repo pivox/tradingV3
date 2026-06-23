@@ -222,17 +222,7 @@ final class LimitFillWatchMessageHandler
                 'source' => 'limit_watch',
             ]);
             $context = $this->contextFromLifecycle($extra);
-            $lineage = $this->tradeLineageManager?->resolve(
-                $context,
-                internalTradeId: $this->stringValue($extra['internal_trade_id'] ?? null),
-                clientOrderId: $message->clientOrderId,
-                exchangeOrderId: $order->orderId,
-            );
-            if ($lineage !== null) {
-                $positionId = $this->stringValue($order->metadata['position_id'] ?? null);
-                $this->tradeLineageManager?->attachPositionId($lineage, $positionId);
-                $extra = array_merge($this->tradeLineageManager->lifecycleExtra($lineage), $extra);
-            }
+            $extra = $this->withBestEffortLineage($context, $message, $order, $extra);
 
             $this->tradeLifecycleLogger->logPositionOpened(
                 symbol: $order->symbol,
@@ -252,6 +242,47 @@ final class LimitFillWatchMessageHandler
                 'exchange_order_id' => $message->exchangeOrderId,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $extra
+     * @return array<string,mixed>
+     */
+    private function withBestEffortLineage(
+        ExchangeContext $context,
+        LimitFillWatchMessage $message,
+        OrderDto $order,
+        array $extra,
+    ): array {
+        if ($this->tradeLineageManager === null) {
+            return $extra;
+        }
+
+        try {
+            $lineage = $this->tradeLineageManager->resolve(
+                $context,
+                internalTradeId: $this->stringValue($extra['internal_trade_id'] ?? null),
+                clientOrderId: $message->clientOrderId,
+                exchangeOrderId: $order->orderId,
+            );
+            if ($lineage === null) {
+                return $extra;
+            }
+
+            $positionId = $this->stringValue($order->metadata['position_id'] ?? null);
+            $this->tradeLineageManager->attachPositionId($lineage, $positionId);
+
+            return array_merge($this->tradeLineageManager->lifecycleExtra($lineage), $extra);
+        } catch (\Throwable $e) {
+            $this->positionsLogger->warning('limit_watch.lineage_sync_failed', [
+                'symbol' => $message->symbol,
+                'exchange_order_id' => $order->orderId,
+                'client_order_id' => $message->clientOrderId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $extra;
         }
     }
 
