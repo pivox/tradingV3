@@ -7,6 +7,14 @@ namespace App\Trading\Entity;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
+/**
+ * Vue HISTORIQUE `position_trade_analysis` (v1, cf. Version20251129000000).
+ *
+ * OBS-003 v2 ne modifie PAS cette vue : la nouvelle logique de rapprochement et le
+ * contrat PnL fiable vivent dans `position_trade_analysis_v2` ({@see PositionTradeAnalysisV2})
+ * afin de permettre la comparaison v1/v2, le rollback et de ne pas casser les
+ * consommateurs existants (reporting Twig). Migration de bascule documentée (issue #190).
+ */
 #[ORM\Entity(readOnly: true)]
 #[ORM\Table(name: 'position_trade_analysis')]
 class PositionTradeAnalysis

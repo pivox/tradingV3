@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 
 from app.schemas import MAX_WORKERS_PER_SET, OrchestratorSet
+from app.services.correlation import canonical_correlation_id
 
 # Clé de cache d'un snapshot : (exchange, market_type).
 SnapshotKey = Tuple[str, str]
@@ -37,6 +38,15 @@ class ContractsUnavailableError(RuntimeError):
 
     Levée par ``fetch_selected_contracts`` ; le refresh est *fail-closed* : un
     groupe dont le fetch échoue interdit toute écriture partielle des sets.
+    """
+
+
+class OutcomeUnavailableError(RuntimeError):
+    """L'outcome d'un run n'a pas pu être récupéré côté Symfony (OBS-003).
+
+    Levée par ``fetch_run_trade_outcome`` quand la source est indisponible (erreur
+    HTTP, 503/5xx, JSON invalide, ``source_available=false``). Une indisponibilité
+    ne doit JAMAIS être présentée comme « 0 trade » : l'appelant la traduit en 503.
     """
 
 
@@ -381,20 +391,35 @@ async def _dispatch_mtf_run(
     payload: Dict[str, Any],
     *,
     run_id: Optional[str] = None,
+    dashboard_id: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """POST ``/api/mtf/run`` et normalise le résultat (succès métier + corps brut).
 
     Source unique de l'envoi : partagée entre ``run_mtf_set`` (set pydantic) et
     ``run_persisted_set`` (set ORM persisté) pour éviter toute dérive.
 
-    OBS-001 : quand un ``run_id`` est fourni, il est propagé en **en-tête de
-    corrélation** ``X-Run-Id`` sur l'appel Symfony (trace-id), pour relier les
-    logs Symfony au run d'orchestration. L'en-tête n'est ajouté que s'il est
-    présent (aucun changement de payload, contrat ``/api/mtf/run`` inchangé).
+    OBS-001/OBS-003 : quand un ``run_id`` est fourni, le lineage d'orchestration est
+    propagé en **en-têtes de corrélation** sur l'appel Symfony (aucun changement de
+    payload, contrat ``/api/mtf/run`` inchangé) :
+
+    - ``X-Run-Id`` : run_id ORIGINAL du run d'orchestration (trace-id, OBS-001) ;
+    - ``X-Run-Correlation-Id`` : identifiant canonique (≤64, jamais tronqué) dérivé
+      du run_id par l'algorithme PARTAGÉ avec Symfony (``canonical_correlation_id``) ;
+    - ``X-Orchestration-Set-Id`` : set réellement dispatché ;
+    - ``X-Orchestration-Dashboard-Id`` : dashboard réellement exécuté (si connu).
+
+    Sans ``run_id`` (appel non orchestré / legacy), aucun en-tête n'est ajouté.
     """
     url = f"{base_url.rstrip('/')}/api/mtf/run"
+    headers: Dict[str, str] = {}
     if run_id is not None:
-        response = await client.post(url, json=payload, headers={"X-Run-Id": run_id})
+        headers["X-Run-Id"] = run_id
+        headers["X-Run-Correlation-Id"] = canonical_correlation_id(run_id)
+        headers["X-Orchestration-Set-Id"] = set_id
+        if dashboard_id is not None:
+            headers["X-Orchestration-Dashboard-Id"] = str(dashboard_id)
+    if headers:
+        response = await client.post(url, json=payload, headers=headers)
     else:
         response = await client.post(url, json=payload)
     try:
@@ -476,6 +501,67 @@ async def run_persisted_set(
         payload["dry_run"] = dry_run
     if snapshot is not None:
         payload["open_state_snapshot"] = snapshot
-    result = await _dispatch_mtf_run(client, base_url, orm_set.set_id, payload, run_id=run_id)
+    result = await _dispatch_mtf_run(
+        client,
+        base_url,
+        orm_set.set_id,
+        payload,
+        run_id=run_id,
+        dashboard_id=getattr(orm_set, "dashboard_id", None),
+    )
     result["payload_sent"] = payload
     return result
+
+
+async def fetch_run_trade_outcome(
+    client: httpx.AsyncClient,
+    base_url: str,
+    run_id: str,
+    set_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Récupère l'outcome (trades résultants) d'un run via Symfony (OBS-003).
+
+    Appelle ``GET /api/positions/analysis?run_id=…[&set_id=…]`` (lecture seule). Le
+    ``run_id`` ORIGINAL est transmis tel quel : Symfony dérive le même identifiant de
+    corrélation canonique. Le PnL n'est jamais recalculé ici — on relaie l'agrégat.
+
+    Lève ``OutcomeUnavailableError`` si l'appel échoue (erreur réseau, HTTP 5xx/503,
+    JSON invalide, ``source_available=false``) afin que l'indisponibilité ne soit
+    JAMAIS confondue avec « 0 trade ». Un run sans trade (HTTP 200,
+    ``trade_count=0``) est un succès et renvoie l'agrégat vide tel quel.
+    """
+    url = f"{base_url.rstrip('/')}/api/positions/analysis"
+    params = {"run_id": run_id}
+    if set_id is not None and set_id != "":
+        params["set_id"] = set_id
+
+    try:
+        response = await client.get(url, params=params)
+    except httpx.HTTPError as exc:  # noqa: BLE001 - on remonte une erreur métier claire
+        raise OutcomeUnavailableError(f"outcome fetch failed for {run_id}: {exc}") from exc
+
+    # Toute réponse non-2xx est une indisponibilité de la source : la route peut être
+    # absente (déploiement échelonné), ou un proxy/une couche d'auth renvoyer 401/403/404.
+    # L'orchestrateur a déjà vérifié que le run existe localement, donc un non-succès ici
+    # n'est jamais « 0 trade » — on lève (l'appelant répondra 503), jamais un agrégat vide.
+    if not response.is_success:
+        raise OutcomeUnavailableError(
+            f"outcome fetch returned HTTP {response.status_code} for {run_id}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise OutcomeUnavailableError(
+            f"outcome response is not valid JSON for {run_id}"
+        ) from exc
+
+    if not isinstance(body, dict):
+        raise OutcomeUnavailableError(f"outcome response has unexpected shape for {run_id}")
+
+    # Symfony signale explicitement une source indisponible (503 + flag) : on relaie
+    # l'indisponibilité plutôt que de la masquer derrière un agrégat vide.
+    if body.get("source_available") is False:
+        raise OutcomeUnavailableError(f"outcome source unavailable for {run_id}")
+
+    return body

@@ -23,6 +23,7 @@ use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\Provider\Context\ExchangeContext;
+use App\Trading\Service\RunCorrelationId;
 use App\Config\TradeEntryConfigProvider;
 use App\Config\TradeEntryModeContext;
 use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
@@ -90,7 +91,13 @@ final class MtfRunnerService
     public function run(RunnerRequestDto $request): array
     {
         $profiler = new PerformanceProfiler();
-        $runId = Uuid::uuid4()->toString();
+        // OBS-003 : si l'orchestrateur a fourni un run_id (X-Run-Id), on l'utilise comme
+        // identifiant de corrélation canonique (≤64, jamais tronqué) du run — il finit sur
+        // `trade_lifecycle_event.run_id` et permet le rapprochement run ↔ trades. Sans
+        // en-tête (CLI / appel direct), on retombe sur l'UUID historique (inchangé).
+        $runId = RunCorrelationId::canonicalOrNull($request->originalRunId)
+            ?? RunCorrelationId::canonicalOrNull($request->correlationRunId)
+            ?? Uuid::uuid4()->toString();
         $startTime = microtime(true);
         $openPositions = null;
         $openOrders = null;
@@ -192,7 +199,7 @@ final class MtfRunnerService
 
             $result = $request->workers > 1
                 ? $this->runParallel($symbols, $request, $context, $runId)
-                : $this->runSequential($symbols, $request, $context);
+                : $this->runSequential($symbols, $request, $context, $runId);
             $profiler->increment('runner', 'mtf_execution', microtime(true) - $execStart);
 
             $this->postRunProjectionDispatcher->dispatch($result['results'] ?? [], $request, $runId);
@@ -391,7 +398,8 @@ final class MtfRunnerService
     private function runSequential(
         array $symbols,
         RunnerRequestDto $request,
-        ExchangeContext $context
+        ExchangeContext $context,
+        string $runId
     ): array {
         $mtfRequest = new MtfRunRequestDto(
             symbols: $symbols,
@@ -408,10 +416,25 @@ final class MtfRunnerService
             marketType: $context->marketType,
             profile: $request->profile,
             mode: $request->validationMode,
+            // OBS-003 : propage le run_id de corrélation + lineage jusqu'au dispatcher,
+            // afin que `order_submitted` porte ce run_id et le lineage d'orchestration.
+            requestId: $runId,
+            orchestrationRunId: $request->originalRunId,
+            dashboardId: $request->dashboardId,
+            setId: $request->setId,
         );
 
         $response = $this->mtfValidator->run($mtfRequest);
         $this->tradeDecisionDispatcher->dispatchFromResponse($mtfRequest, $response);
+
+        // OBS-003 : le validateur génère son propre UUID, mais les décisions/lifecycle
+        // events utilisent le run_id de corrélation propagé (`requestId`, prioritaire dans
+        // le dispatcher). On aligne donc le `run_id` du résumé séquentiel sur `$runId`
+        // (comme le fait déjà le chemin parallèle), sinon `/api/mtf/run` et
+        // `RunSet.response_json.summary.run_id` pointeraient un UUID absent des lignes
+        // d'outcome/lifecycle.
+        $summary = $response->toArray();
+        $summary['run_id'] = $runId;
 
         $resultsMap = [];
         foreach ($response->results as $entry) {
@@ -439,7 +462,7 @@ final class MtfRunnerService
         }
 
         return [
-            'summary' => $response->toArray(),
+            'summary' => $summary,
             'results' => $resultsMap,
             'errors' => $response->errors,
         ];
@@ -484,6 +507,11 @@ final class MtfRunnerService
             'market_type' => $context->marketType->value,
             'profile' => $request->profile,
             'validation_mode' => $request->validationMode,
+            // OBS-003 : lineage propagé au worker (puis au dispatcher → order_submitted).
+            'request_id' => $runId,
+            'orchestration_run_id' => $request->originalRunId,
+            'dashboard_id' => $request->dashboardId,
+            'set_id' => $request->setId,
         ];
 
         $this->mtfLogger->info('[MTF Runner] Starting parallel execution', [
@@ -733,6 +761,19 @@ final class MtfRunnerService
         }
         if (!empty($options['validation_mode'])) {
             $command[] = '--validation-mode=' . $options['validation_mode'];
+        }
+        // OBS-003 : lineage d'orchestration transmis au worker.
+        if (!empty($options['request_id'])) {
+            $command[] = '--request-id=' . $options['request_id'];
+        }
+        if (!empty($options['orchestration_run_id'])) {
+            $command[] = '--orchestration-run-id=' . $options['orchestration_run_id'];
+        }
+        if (!empty($options['dashboard_id'])) {
+            $command[] = '--dashboard-id=' . $options['dashboard_id'];
+        }
+        if (!empty($options['set_id'])) {
+            $command[] = '--set-id=' . $options['set_id'];
         }
 
         return $command;

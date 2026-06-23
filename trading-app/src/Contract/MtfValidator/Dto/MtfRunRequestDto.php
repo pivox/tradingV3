@@ -26,6 +26,18 @@ final class MtfRunRequestDto
         public readonly ?MarketType $marketType = null,
         public readonly ?string $profile = null,
         public readonly ?string $mode = null,
+        /**
+         * OBS-003 — identifiant de corrélation (≤64) à utiliser comme `run_id` du run
+         * (et donc des `trade_lifecycle_event`). Null → l'identifiant historique
+         * (UUID généré en aval) reste en place (CLI / appel direct inchangé).
+         */
+        public readonly ?string $requestId = null,
+        /** OBS-003 — identifiant ORIGINAL du run d'orchestration (peut dépasser 64). */
+        public readonly ?string $orchestrationRunId = null,
+        /** OBS-003 — dashboard d'orchestration réellement exécuté. */
+        public readonly ?string $dashboardId = null,
+        /** OBS-003 — set d'orchestration réellement dispatché. */
+        public readonly ?string $setId = null,
     ) {}
 
     /**
@@ -72,6 +84,11 @@ final class MtfRunRequestDto
             $marketType = MarketType::tryFrom(strtolower($marketTypeRaw)) ?? null;
         }
 
+        $requestId = self::nonEmptyString($data['request_id'] ?? $data['requestId'] ?? null);
+        $orchestrationRunId = self::nonEmptyString($data['orchestration_run_id'] ?? null);
+        $dashboardId = self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null);
+        $setId = self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null);
+
         return new self(
             symbols: $symbols,
             dryRun: $dryRun,
@@ -87,7 +104,16 @@ final class MtfRunRequestDto
             marketType: $marketType,
             profile: $profile,
             mode: $validationMode,
+            requestId: $requestId,
+            orchestrationRunId: $orchestrationRunId,
+            dashboardId: $dashboardId,
+            setId: $setId,
         );
+    }
+
+    private static function nonEmptyString(mixed $value): ?string
+    {
+        return is_string($value) && trim($value) !== '' ? trim($value) : null;
     }
 
     private static function extractProfileAndMode(array $data): array

@@ -158,6 +158,38 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
         self::assertNotSame('rejected', $result['summary']['status'] ?? null);
     }
 
+    /**
+     * OBS-003 — en séquentiel (workers=1), le `run_id` du résumé doit être le run_id de
+     * corrélation propagé (et non l'UUID interne du validateur), pour rester cohérent avec
+     * `trade_lifecycle_event.run_id` / l'outcome et avec le chemin parallèle.
+     */
+    public function testSequentialSummaryUsesPropagatedCorrelationRunId(): void
+    {
+        $syncProvider = $this->createMock(MainProviderInterface::class);
+        $syncProvider->method('forContext')->willReturnSelf();
+        $syncProvider->method('getAccountProvider')->willReturn(null);
+        $syncProvider->method('getOrderProvider')->willReturn(null);
+
+        $service = $this->buildService($syncProvider);
+
+        $request = new MtfRunnerRequestDto(
+            symbols: ['BTCUSDT'],
+            dryRun: true,
+            skipOpenStateFilter: true,
+            exchange: Exchange::BITMART,
+            marketType: MarketType::PERPETUAL,
+            workers: 1,
+            syncTables: false,
+            processTpSl: false,
+            originalRunId: 'run_dashA_20260617', // court + sûr => identité (≤64)
+        );
+
+        $result = $service->run($request);
+
+        // Et surtout PAS le runId interne du validateur ('test-run').
+        self::assertSame('run_dashA_20260617', $result['summary']['run_id'] ?? null);
+    }
+
     private function request(bool $syncTables): MtfRunnerRequestDto
     {
         // Pas de profil : couvre aussi le chemin sans profil (cf. guard resolveTimeframes).

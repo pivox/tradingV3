@@ -8,6 +8,10 @@ use App\Trading\Entity\PositionTradeAnalysis;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
+/**
+ * Repository de la vue HISTORIQUE v1 (`position_trade_analysis`). Inchangé par OBS-003 v2
+ * — la lecture des outcomes passe par {@see PositionTradeAnalysisV2Repository}.
+ */
 final class PositionTradeAnalysisRepository extends ServiceEntityRepository
 {
     public function __construct(ManagerRegistry $registry)

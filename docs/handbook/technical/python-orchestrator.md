@@ -432,6 +432,7 @@ PY-006 ajoute la surface **en lecture seule** consommée par le cockpit :
 | `GET` | `/runs` | Liste des runs (vue allégée), filtrable par `dashboard_id`, paginée (`limit` ≤ 100, `offset`), du plus récent au plus ancien. |
 | `GET` | `/runs/{run_id}` | Détail complet : dernier JSON global (`last_json`) + détail par set (`sets[]`). |
 | `GET` | `/runs/{run_id}/sets/{set_id}` | Dernier JSON d'un set : `payload_sent`, `response_json` brute, `error`, `duration_ms`. |
+| `GET` | `/runs/{run_id}/outcome` | Outcome OBS-003 : trades résultants du run (vue Symfony `position_trade_analysis_v2`), agrégat (recorded vs estimated PnL, `cost_completeness`, compteurs matched/unmatched) + ventilation `by_set`/`by_profile`/`by_exchange`/`by_symbol`. `404` run inconnu, `503` source indisponible (`source_available=false`), `200` sinon (agrégat éventuellement vide). |
 | `GET` | `/dashboards/{id}/runs` | Runs d'un dashboard (vue allégée, paginée). |
 | `GET` | `/dashboards/{id}/runs/latest` | Dernier run d'un dashboard (détail complet) — le retour affiché par défaut au cockpit ; `404` si aucun run. |
 
@@ -666,6 +667,88 @@ pas de redéfinition de cause métier.
   idempotence, réponses HTTP et forme de `last_json`/`RunSet` inchangés ; OBS-001
   et SAFE-001/002/003 intacts.
 
+### Lineage run → trades + outcomes fiables (OBS-003)
+
+OBS-001/002 rendent visible l'**exécution** d'un run ; OBS-003 ajoute la couche
+**OUTCOME** : relier un run à ses **trades résultants** de façon fiable, en lecture
+seule, sans jamais recalculer le PnL. La priorité produit reste *données fiables →
+expectancy fiable* (jamais « plus de trades »).
+
+**Identifiant de corrélation déterministe (jamais tronqué).** Un run d'orchestration
+porte un `run_id` ORIGINAL (jusqu'à 255 caractères). La colonne
+`trade_lifecycle_event.run_id` est un `VARCHAR(64)`. Pour relier les deux **sans
+collision**, on dérive un identifiant canonique :
+
+1. *trim* des espaces de bord (miroir exact du `trim()` PHP ↔ `str.strip()` Python) ;
+2. chaîne vide (après trim) refusée ;
+3. si `run_id` respecte `^[A-Za-z0-9._:-]+$` **et** ≤ 64 → conservé tel quel ;
+4. sinon → `sha256(run_id)` hex minuscule (exactement 64).
+
+Aucune troncature `run_id[:64]` (deux longs `run_id` au même préfixe entreraient en
+collision), aucun UUID aléatoire pour un run orchestré. L'algorithme est **strictement
+identique** Python (`app/services/correlation.py`) ↔ PHP
+(`App\Trading\Service\RunCorrelationId`), y compris le *trim*, via les vecteurs communs
+`tests/fixtures/run_correlation_vectors.json` (cas d'espaces inclus).
+
+**Propagation + validation fail-closed du contexte.** À chaque dispatch d'un set,
+l'orchestrateur envoie à `POST /api/mtf/run` les en-têtes `X-Run-Id` (original),
+`X-Run-Correlation-Id` (canonique), `X-Orchestration-Set-Id`,
+`X-Orchestration-Dashboard-Id`. Symfony (`RunnerController` → `MtfRunnerService`)
+**consomme** le `run_id` comme run_id du run (avant OBS-003 : UUID généré, join vide) et
+inscrit le lineage dans l'`extra` de `order_submitted`. Avant tout traitement, un
+`OrchestrationContextValidator` **refuse fail-closed (HTTP 422, code stable)** toute
+contradiction VÉRIFIABLE dans la requête : `ORCHESTRATION_CORRELATION_MISMATCH` (la
+corrélation fournie ≠ canonique de `X-Run-Id`), `…_SET_MISMATCH` / `…_DASHBOARD_MISMATCH`
+(en-tête vs payload), `…_PROFILE_MISMATCH` (`profile` vs `mtf_profile`),
+`…_EXCHANGE_MISMATCH` (`exchange` vs `cex`), `…_MARKET_TYPE_MISMATCH` (`market_type` vs
+`type_contract`). **Limite documentée** : la relation set ⇄ dashboard exige les données
+de l'orchestrateur et n'est pas vérifiable côté Symfony (responsabilité orchestrateur).
+CLI `mtf:run` et appel HTTP legacy sans en-têtes : comportement historique inchangé.
+
+**Rapprochement entrée ↔ clôture par identifiants exacts.** La nouvelle vue VERSIONNÉE
+`position_trade_analysis_v2` (migration `Version20260622000000`) apparie une entrée à sa
+clôture **(1) par `trade_id` exact, (2) sinon par `position_id` exact — borné à la même
+venue (symbole + exchange + market_type) et à une clôture postérieure à l'entrée —, (3)
+sinon `unmatched`** — **jamais** par « première clôture ultérieure du même symbole ».
+Pont `trade_id → position_id` via `position_opened` (porte les deux). `ROW_NUMBER`
+garantit qu'une clôture ne sert qu'une entrée, sans multiplication de lignes. Colonnes
+`close_match_status`, `close_matched_by`, `analysis_status` (`matched_closed`/`unmatched`).
+**Bascule progressive (issue #190)** : la vue historique `position_trade_analysis` (v1)
+n'est PAS modifiée — comparaison v1/v2, rollback et consommateurs existants préservés ;
+le remplacement de la v1 est un jalon ultérieur.
+
+**Sémantique PnL — jamais d'estimé présenté comme certifié (issue #190).** La valeur
+enregistrée est `recorded_pnl_usdt` (**ni brute ni nette garanties**). On expose en plus
+`fees_usdt`/`funding_usdt`/`slippage_usdt` (NULL si absents, **jamais 0**),
+`estimated_net_pnl_usdt` (ESTIMATION best-effort `recorded - fees - funding - slippage`,
+seulement si les trois sont présents) et `cost_completeness`
+(`not_applicable`/`unknown`/`partial`/`complete`). `complete` est **réservé** au contrat
+#190 complet (brut + frais entrée/sortie séparés + spread + funding signé + borrow) et
+n'est **jamais** émis ici : il n'existe donc **pas** de `net_pnl_usdt` certifié dans v2.
+
+**États distincts (issue #190).** Les agrégats distinguent `matched_closed_count`
+(clôturé+rapproché, seule base certifiée), `unmatched_count` (état réel INCONNU),
+`confirmed_open_count` (= 0 : aucune preuve d'ouverture dans une vue read-only) et
+`unknown_state_count`. Une ligne `unmatched` n'est **jamais** comptée comme position
+ouverte confirmée. `data_complete` est faux dès qu'une ligne est unmatched ou à coûts
+incomplets ; le winrate ne porte que sur les `matched_closed` disposant d'un PnL.
+
+**Surfaces.** Symfony lecture seule `GET /api/positions/analysis?run_id=…[&set_id=…]`
+(`PositionAnalysisApiController` → `RunTradeOutcomeService`, dérive lui-même le même
+identifiant canonique). Orchestrateur `GET /runs/{run_id}/outcome`
+(`symfony_client.fetch_run_trade_outcome`) : agrégat par run + ventilation
+`by_set`/`by_profile`/`by_exchange`/`by_symbol`.
+
+```bash
+curl -s 'http://localhost:8099/runs/run_dashA_20260617T083000Z/outcome' | jq .
+```
+
+**Fail-safe (jamais masquer une indisponibilité).** Run inconnu → **404** ; run connu
+sans trade → **200** `trade_count=0`, `source_available=true` ; source Symfony
+indisponible → **503** `source_available=false` + `error_code`, **jamais** un agrégat
+vide silencieux. Lecture seule : aucune écriture sur la vue, aucune décision métier
+modifiée, OBS-001/002 et SAFE-001/002/003 intacts.
+
 ## Garde-fous fonctionnels
 
 Avant tout run :
@@ -736,6 +819,7 @@ Avant tout run :
 | SAFE-003 ✅ | Centraliser et durcir les garde-fous live | Livré : module unique `app/services/live_guard.py` (`assess_live -> LiveDecision`) consommé par `assert_set_persistable`, `assert_live_allowed` et le runner `_dispatch_set` (plus de logique live dupliquée schemas ↔ runner). Hiérarchie fail-closed : bannissements permanents OKX/Hyperliquid (jamais relâchés) > interrupteur `ORCHESTRATION_LIVE_ENABLED` (défaut OFF) > allow-list `ORCHESTRATION_LIVE_EXCHANGES` (défaut vide) > snapshot d'état ouvert présent. `reason`/`code` stables par cause. Persistance ↔ runtime cohérents. **Le live reste désactivé par défaut** : aucune réactivation effective, seule l'activation devient possible/auditable/testée. Pas de migration. |
 | OBS-001 ✅ | Audit des runs d'orchestration | Livré : couche d'audit structurée, fail-safe et corrélée par `run_id` (`app/services/run_audit.py`, `emit`) sur le logger `orchestrator.audit`, format **JSON line** sur stdout (`app/logging_config.py`), niveau piloté par `ORCHESTRATION_LOG_LEVEL` (défaut INFO, validé au démarrage). Points d'audit : `run_started`, `run_short_circuit` (replay/in_flight/resume/reclaim), `snapshot_fetch`, `set_skipped` (codes live_guard / locked / conflicting_live / open_state_unavailable), `set_dispatched`, `set_result`, `run_finished`. `code`/`reason` identiques à `RunSet.error` (source unique SAFE-003). Trace-id `X-Run-Id` propagé à Symfony. **Aucun changement de comportement** (SAFE-001/002/003 intacts, réponses HTTP inchangées). Pas de migration. |
 | OBS-002 ✅ | Métriques d'exécution par set | Livré : registre de métriques in-process (`app/services/run_metrics.py`) branché aux **mêmes points** qu'OBS-001 (`set_dispatched`/`set_result`/`set_skipped`/`snapshot_fetch`/`run_finished`). Compteurs (runs par status ; sets dispatched/results ok+`business_status`/skipped par `code` ; snapshots ok/indispo) + **histogramme** de durée de dispatch (`set_result.duration_ms`, bornes « le »). Sink = **endpoint JSON dérivé** `GET /metrics` (`app/routers/metrics.py`), aucune migration ni écriture DB. Labels **faible cardinalité** (`exchange`/`market_type`/`mtf_profile` + `code`/`business_status`/`status`), ni `set_id` ni `dashboard_id`. Activation `ORCHESTRATION_METRICS_ENABLED` (défaut ON, validé au démarrage). Réconcilie avec `summary`. **Fail-safe**, **aucun changement de comportement** (OBS-001 et SAFE-001/002/003 intacts, réponses HTTP inchangées). Pas de migration. |
+| OBS-003 ✅ | Lineage run → trades + outcomes fiables | Livré : **couche OUTCOME** read-only reliant un run d'orchestration à ses trades résultants, sans jamais recalculer le PnL. **Corrélation déterministe SANS troncature** : `run_id` ORIGINAL conservé s'il respecte `^[A-Za-z0-9._:-]+$` ET ≤64, sinon `sha256` hex (64) — algorithme PARTAGÉ Python (`app/services/correlation.py`) ↔ PHP (`App\Trading\Service\RunCorrelationId`) avec vecteurs communs `tests/fixtures/run_correlation_vectors.json` (collisions de préfixe couvertes). **Propagation du contexte** : en-têtes `X-Run-Id` / `X-Run-Correlation-Id` / `X-Orchestration-Set-Id` / `X-Orchestration-Dashboard-Id` consommés par `RunnerController`/`MtfRunnerService` (le run_id de corrélation devient le `run_id` du run ; avant : UUID, join vide) puis inscrits dans l'`extra` de `order_submitted` via le dispatcher → `TradingDecisionHandler`. **Validation fail-closed** du contexte (en-têtes vs payload) en 422 à codes stables (`ORCHESTRATION_*_MISMATCH`). **Rapprochement entrée/clôture par identifiants EXACTS** (`trade_id` puis `position_id` borné à la venue, jamais par symbole) via la **vue versionnée** `position_trade_analysis_v2` (`Version20260622000000`, v1 conservée pour bascule progressive #190) avec `ROW_NUMBER` 1-pour-1 (aucune clôture réutilisée), colonnes `close_match_status`/`close_matched_by`/`analysis_status`. **Sémantique PnL explicite (jamais d'estimé certifié)** : `recorded_pnl_usdt` (ni brut ni net garantis), `estimated_net_pnl_usdt` (estimation best-effort) + `cost_completeness` (`complete` réservé au contrat #190, jamais émis) — pas de `net_pnl_usdt` certifié. **États distincts** : `matched_closed`/`unmatched`/`confirmed_open=0`/`unknown_state` (unmatched n'est jamais « open confirmé »). **Surfaces** : Symfony `GET /api/positions/analysis?run_id=…[&set_id=…]` ; orchestrateur `GET /runs/{run_id}/outcome`. **Fail-safe** : source indisponible → 503 `source_available=false` (jamais « 0 trade »), run inconnu → 404, run sans trade → 200 agrégat vide. **Aucun changement de stratégie/EntryZone/Risk/SL-TP/live** ; CLI `mtf:run` et HTTP legacy inchangés. **Part of #189 / #190** (lineage + PnL partiels, voir issues). |
 | QA-001 ✅ | Instrumentation de couverture des tests unitaires + gate CI | Livré : mesure `pytest-cov` (config `pyproject.toml` : `source=["app"]`, `branch=true`, `show_missing`/`skip_covered`/`fail_under=95`), rapport `term-missing` + XML archivé en CI. **Baseline mesurée : 95.15 %** (1460/1517 lignes, branches activées). **Seuil de gate retenu : `--cov-fail-under=95`** (baseline arrondie à l'entier inférieur — décision produit) câblé dans `.github/workflows/python-orchestrator.yml`, fait échouer la CI sous le seuil. Tests dédiés ajoutés pour les modules non couverts directement : `app/db/engine.py` (lazy/singleton/`get_session`/`reset_engine` → 100 %), `app/logging_config.py` (formatter audit/non-audit/exc_info, idempotence handler unique, pas de double émission → 100 %), `app/main.py` (CORS + include routers + configure audit/metrics au démarrage → 100 %), `app/routers/metrics.py` (snapshot activé/désactivé). `pytest-cov` en `requirements-dev.txt` uniquement (dev-only, épinglé). **Aucun fichier `app/` modifié** : diff = `tests/` + `pyproject.toml` + `requirements-dev.txt` + workflow CI. |
 | QA-002 ✅ | Tests d'intégration Symfony ↔ orchestrateur (contrat HTTP) | Livré : couche de tests d'**intégration** validant le contrat HTTP réel des appels sortants vers Symfony, **sans socket ni backend Symfony/PostgreSQL applicatif** (persistance SQLite in-memory, comme QA-001). **Frontière de simulation retenue : `httpx.MockTransport` scénarisé** (décision produit, zéro dépendance de test en plus) — `FakeSymfony` (dans `tests/conftest.py`) rejoue les **3 endpoints** (`GET /api/mtf/contracts`, `POST /api/mtf/run`, `GET /api/exchange/open-state`) via un **vrai** `httpx.AsyncClient` (sérialisation/parsing JSON, en-têtes, codes HTTP réels) ; fixture `symfony` qui câble le stub sur le runner. Périmètre : contrat **exact** des requêtes sortantes (méthode/chemin/params/corps JSON/`X-Run-Id`), payload `/api/mtf/run` (`sync_tables`/`process_tp_sl=false`, override `dry_run`, snapshot, allow-list de clés), réponses dégradées (`502`, timeout/connexion `httpx.HTTPError`, JSON malformé, `ok=false` → `Run.ok=false`), fail-closed live 502 **sans écriture partielle**, **parallélisme borné** (`MAX_CONCURRENCY`, rendu déterministe via `asyncio.sleep(0)`), idempotence (SAFE-002), audit (OBS-001) et métriques (OBS-002). Couvre les branches d'erreur de `symfony_client.py` (`symfony_client.py` → 100 %) ; couverture globale au-dessus de la baseline QA-001, **gate `--cov-fail-under=95` inchangé** (décision produit). **Aucun fichier `app/` modifié** : diff = `tests/` + doc. Hors-scope : Temporal (QA-003), vrai Symfony/PostgreSQL de prod, modifs comportementales. |
 | QA-003 ✅ | Couverture unitaire + gate CI du cron Temporal (`OrchestratorCronWorkflow`) | Livré : même filet que QA-001 porté au cron `cron_symfony_mtf_workers/`, **sans serveur Temporal ni dépendance réseau** (primitives `workflow.*` patchées, fakes `httpx`, pattern `asyncio.run`). **Forme CI retenue : workflow dédié `.github/workflows/temporal-cron.yml`** (path-filtré `cron_symfony_mtf_workers/**`, miroir de `python-orchestrator.yml`, aucun service Temporal/PostgreSQL). **Périmètre de couverture (décision produit) : fichiers du cron orchestrateur UNIQUEMENT** — `activities/orchestrator_http.py`, `workflows/orchestrator_cron.py`, `scripts/manage_orchestrator_schedule.py` (config `pyproject.toml` : `source` sur les paquets `activities`/`workflows`/`scripts` + `omit` du legacy MTF — pour que coverage découvre les fichiers cibles même non importés et compte un cible non testé comme 0 % au lieu de le sortir du dénominateur ; `branch=true`, `show_missing`/`skip_covered`) ; le code legacy MTF est exclu pour ne pas écraser la baseline. **Baseline mesurée : 99.12 %** (branches activées ; seule la ligne `if __name__ == "__main__": main()` reste non couverte). **Seuil de gate : `--cov-fail-under=99`** (entier inférieur de la baseline — décision produit, cohérent QA-001). Tests complétés (sans réécriture) : activity (timeout explicite), script de schedule (import réel des classes Temporal, `get_client`, routage `async_main` create/pause/resume/delete/status, `delete`/`describe`, re-levée d'erreur inattendue, `main()`). `pytest`/`pytest-cov` en `requirements-dev.txt` uniquement (dev-only, épinglés, jamais dans l'image). **Aucun fichier applicatif modifié** : diff = `tests/` + `requirements-dev.txt` + `pyproject.toml` + `.github/workflows/temporal-cron.yml` + `.gitignore` + doc. |

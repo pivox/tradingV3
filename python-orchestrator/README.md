@@ -70,6 +70,7 @@ Hors-scope (PR suivantes) :
 | `GET` | `/runs` | Liste les runs (`?dashboard_id=&limit=&offset=`) (PY-006). |
 | `GET` | `/runs/{run_id}` | Dernier JSON global d'un run + détail par set (PY-006). |
 | `GET` | `/runs/{run_id}/sets/{set_id}` | Dernier JSON d'un set (payload + réponse brute) (PY-006). |
+| `GET` | `/runs/{run_id}/outcome` | Outcome du run : trades résultants (vue `position_trade_analysis_v2`), agrégat (recorded vs estimated PnL, `cost_completeness`) + ventilation `by_set`/`by_profile`/`by_exchange`/`by_symbol`. `404` inconnu, `503` source indispo, `200` sinon (OBS-003). |
 | `GET` | `/metrics` | Métriques d'exécution agrégées (compteurs + histogramme de durée), JSON dérivé du registre (OBS-002). |
 | `GET` | `/docs` | Swagger UI (OpenAPI). |
 
@@ -442,6 +443,36 @@ curl -s http://localhost:8099/metrics | jq .
 via `ORCHESTRATION_METRICS_ENABLED=false`. **Aucun changement de comportement** :
 dispatch, décisions live/lock/idempotence, réponses HTTP et forme de
 `last_json`/`RunSet` inchangés ; OBS-001 et SAFE-001/002/003 intacts.
+
+## Lineage run → trades + outcomes (OBS-003)
+
+OBS-001/002 rendent visible l'**exécution** d'un run ; OBS-003 ajoute la couche
+**OUTCOME** : relier un run à ses **trades résultants** de façon fiable, en lecture
+seule, sans jamais recalculer le PnL.
+
+- **Corrélation déterministe sans troncature** : *trim* puis — si `^[A-Za-z0-9._:-]+$`
+  et ≤ 64 — conservé, sinon `sha256` hex (64). Algorithme **strictement identique**
+  Python (`app/services/correlation.py`) ↔ PHP (`RunCorrelationId`), *trim* compris, via
+  `tests/fixtures/run_correlation_vectors.json` (préfixes + espaces couverts).
+- **Propagation + validation fail-closed** : en-têtes `X-Run-Id` / `X-Run-Correlation-Id`
+  / `X-Orchestration-Set-Id` / `X-Orchestration-Dashboard-Id` ajoutés à chaque
+  `POST /api/mtf/run`. Symfony consomme le run_id de corrélation (avant : join vide),
+  inscrit le lineage dans l'`extra` de `order_submitted`, et **refuse en 422** toute
+  contradiction vérifiable en-têtes/payload (codes `ORCHESTRATION_*_MISMATCH`).
+- **Rapprochement entrée/clôture EXACT** (`trade_id` puis `position_id` borné à la venue,
+  jamais par symbole) via la vue **versionnée** `position_trade_analysis_v2` (v1 conservée,
+  bascule progressive #190). PnL **jamais certifié net** : `recorded_pnl_usdt` (ni brut ni
+  net garantis), `estimated_net_pnl_usdt` (estimation) + `cost_completeness` ; pas de
+  `net_pnl_usdt` certifié.
+- **Surface** : `GET /runs/{run_id}/outcome` (source =
+  `GET /api/positions/analysis` côté Symfony). `404` run inconnu, `503`
+  `source_available=false` si la source est indisponible (jamais confondue avec
+  « 0 trade »), `200` sinon — agrégat (compteurs `matched_closed`/`unmatched`/
+  `confirmed_open=0`) + ventilation `by_set`/`by_profile`/`by_exchange`/`by_symbol`.
+
+```bash
+curl -s http://localhost:8099/runs/run_dashA_20260617T083000Z/outcome | jq .
+```
 
 ## Persistance (DB-001)
 

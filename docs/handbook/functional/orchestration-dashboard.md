@@ -178,3 +178,31 @@ Les runs doivent ensuite pouvoir être rapprochés de :
 - trades évités ou bloqués.
 
 L'objectif reste la qualité des setups et l'expectancy nette, pas le nombre brut d'appels ou de trades.
+
+### Rapprochement run → trades (OBS-003)
+
+Le rapprochement run → trades est exposé en lecture seule par
+`GET /runs/{run_id}/outcome` (orchestrateur) qui interroge Symfony
+(`GET /api/positions/analysis`). Pour un run donné, on obtient les trades produits,
+leur **set / profil / exchange** d'origine, le **mode de rapprochement** entrée ↔
+clôture, le PnL **enregistré** et — quand tous les coûts sont disponibles — le PnL
+**net**, plus la ventilation par set / profil / exchange / symbole.
+
+Trois garanties de fiabilité, alignées sur « moins de mauvais trades → données
+fiables » :
+
+- **Attribution certaine** : chaque trade est relié au run par un identifiant de
+  corrélation déterministe (jamais une troncature qui pourrait confondre deux runs),
+  et porte son `set_id` / `dashboard_id` / `exchange` / `profil`.
+- **Rapprochement honnête** : l'entrée est appariée à sa clôture par identifiants
+  exacts (`trade_id` puis `position_id`), jamais « la première clôture du même
+  symbole ». Un trade non rapprochable reste visible (`unmatched`), pas masqué.
+- **PnL jamais maquillé** : la valeur enregistrée (`recorded_pnl_usdt`) n'est jamais
+  présentée comme « nette ». Seule une **estimation** best-effort
+  (`estimated_net_pnl_usdt`) est exposée, accompagnée de `cost_completeness` ; le PnL net
+  **certifié** est réservé au contrat de coûts complet (issue #190, non livré ici) et
+  n'est donc jamais affiché. Une source indisponible est signalée explicitement (jamais
+  affichée comme « 0 trade »).
+- **États distincts** : `matched_closed` (clôturé+rapproché), `unmatched` (état réel
+  inconnu — jamais compté comme position ouverte confirmée), `confirmed_open` et
+  `unknown_state` ; le winrate ne porte que sur les trades clôturés rapprochés avec PnL.

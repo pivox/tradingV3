@@ -1,0 +1,250 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Trading\Orchestration;
+
+use App\Trading\Orchestration\OrchestrationContextException;
+use App\Trading\Orchestration\OrchestrationContextValidator;
+use App\Trading\Service\RunCorrelationId;
+use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * OBS-003 — Validation fail-closed du contexte d'orchestration : contradictions
+ * vérifiables dans la requête refusées avec un code stable ; chemin legacy intact.
+ */
+#[CoversClass(OrchestrationContextValidator::class)]
+final class OrchestrationContextValidatorTest extends TestCase
+{
+    private OrchestrationContextValidator $validator;
+
+    protected function setUp(): void
+    {
+        $this->validator = new OrchestrationContextValidator();
+    }
+
+    public function testLegacyRequestWithoutHeadersPasses(): void
+    {
+        $this->expectNotToPerformAssertions();
+        $this->validator->validate(null, null, null, null, ['symbols' => ['BTCUSDT']]);
+    }
+
+    public function testConsistentContextPasses(): void
+    {
+        $this->expectNotToPerformAssertions();
+        $runId = 'run_dashA_20260617';
+        $this->validator->validate(
+            $runId,
+            RunCorrelationId::canonical($runId),
+            's1',
+            'dashA',
+            ['set_id' => 's1', 'dashboard_id' => 'dashA', 'profile' => 'scalper', 'exchange' => 'bitmart'],
+        );
+    }
+
+    public function testCorrelationMismatchIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_CORRELATION_MISMATCH', function (): void {
+            $this->validator->validate('run_dashA_20260617', 'not-the-canonical', null, null, []);
+        });
+    }
+
+    public function testCorrelationMatchesCanonicalOfLongRunId(): void
+    {
+        $this->expectNotToPerformAssertions();
+        $long = 'run_' . str_repeat('b', 64); // > 64 => haché
+        $this->validator->validate($long, RunCorrelationId::canonical($long), null, null, []);
+    }
+
+    public function testBodyOnlyCorrelationMismatchIsRejected(): void
+    {
+        // Aucun en-tête : run_id + correlation_run_id du payload (chemin body-only) doivent
+        // tout de même être cohérents, sinon fail-closed.
+        $this->assertCode('ORCHESTRATION_CORRELATION_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, [
+                'run_id' => 'runA',
+                'correlation_run_id' => 'runB',
+            ]);
+        });
+    }
+
+    public function testBodyOnlyCorrelationMatchingCanonicalPasses(): void
+    {
+        $this->expectNotToPerformAssertions();
+        $runId = 'run_dashA_20260617';
+        $this->validator->validate(null, null, null, null, [
+            'run_id' => $runId,
+            'correlation_run_id' => RunCorrelationId::canonical($runId),
+        ]);
+    }
+
+    public function testBodyRunIdAndOriginalRunIdContradictionIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_CORRELATION_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, [
+                'run_id' => 'runA',
+                'original_run_id' => 'runB',
+            ]);
+        });
+    }
+
+    public function testHeaderCorrelationContradictingBodyCorrelationIsRejected(): void
+    {
+        $runId = 'run_dashA_20260617';
+        $this->assertCode('ORCHESTRATION_CORRELATION_MISMATCH', function () use ($runId): void {
+            $this->validator->validate($runId, RunCorrelationId::canonical($runId), null, null, [
+                'correlation_run_id' => 'not-the-canonical',
+            ]);
+        });
+    }
+
+    public function testHeaderRunIdVsBodyRunIdMismatchIsRejected(): void
+    {
+        // X-Run-Id=runA + run_id=runB (sans correlation) : contradiction vérifiable du
+        // run_id en-tête vs payload, à fail-closer AVANT le coalescing sur l'en-tête.
+        $this->assertCode('ORCHESTRATION_CORRELATION_MISMATCH', function (): void {
+            $this->validator->validate('runA', null, null, null, ['run_id' => 'runB']);
+        });
+    }
+
+    public function testHeaderRunIdVsBodyOriginalRunIdMismatchIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_CORRELATION_MISMATCH', function (): void {
+            $this->validator->validate('runA', null, null, null, ['original_run_id' => 'runB']);
+        });
+    }
+
+    public function testHeaderRunIdEqualBodyRunIdAliasesPasses(): void
+    {
+        // En-tête et alias du corps identiques : aucune contradiction.
+        $this->expectNotToPerformAssertions();
+        $this->validator->validate('runA', null, null, null, [
+            'run_id' => 'runA', 'original_run_id' => 'runA',
+        ]);
+    }
+
+    public function testSetMismatchIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_SET_MISMATCH', function (): void {
+            $this->validator->validate(null, null, 's1', null, ['set_id' => 's2']);
+        });
+    }
+
+    public function testDashboardMismatchIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_DASHBOARD_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, 'dashA', ['dashboard_id' => 'dashB']);
+        });
+    }
+
+    public function testContradictorySetAliasesInBodyAreRejected(): void
+    {
+        // Body-only : set_id et orchestration_set_id différents => fail-closed.
+        $this->assertCode('ORCHESTRATION_SET_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, ['set_id' => 's1', 'orchestration_set_id' => 's2']);
+        });
+    }
+
+    public function testContradictoryDashboardAliasesInBodyAreRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_DASHBOARD_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, [
+                'dashboard_id' => 'dashA',
+                'orchestration_dashboard_id' => 'dashB',
+            ]);
+        });
+    }
+
+    public function testEqualSetAndDashboardAliasesPass(): void
+    {
+        $this->expectNotToPerformAssertions();
+        $this->validator->validate(null, null, null, null, [
+            'set_id' => 's1', 'orchestration_set_id' => 's1',
+            'dashboard_id' => 'dashA', 'orchestration_dashboard_id' => 'dashA',
+        ]);
+    }
+
+    public function testProfileMismatchIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_PROFILE_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, ['profile' => 'scalper', 'mtf_profile' => 'regular']);
+        });
+    }
+
+    public function testProfileCaseInsensitiveEqualPasses(): void
+    {
+        $this->expectNotToPerformAssertions();
+        $this->validator->validate(null, null, null, null, ['profile' => 'Scalper', 'mtf_profile' => 'scalper']);
+    }
+
+    public function testExchangeMismatchIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_EXCHANGE_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, ['exchange' => 'bitmart', 'cex' => 'okx']);
+        });
+    }
+
+    public function testMarketTypeMismatchIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_MARKET_TYPE_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, ['market_type' => 'perpetual', 'type_contract' => 'spot']);
+        });
+    }
+
+    /**
+     * @return iterable<string,array{0:string,1:string}>
+     */
+    public static function equivalentMarketAliasProvider(): iterable
+    {
+        // Tous équivalents à MarketType::PERPETUAL côté ExchangeContextResolver.
+        yield 'perpetual + perp'   => ['perpetual', 'perp'];
+        yield 'futures + perpetual' => ['futures', 'perpetual'];
+        yield 'future + perp'      => ['future', 'perp'];
+        yield 'casse/espaces'      => [' Perpetual ', 'PERP'];
+    }
+
+    #[DataProvider('equivalentMarketAliasProvider')]
+    public function testEquivalentMarketAliasesAreAccepted(string $marketType, string $typeContract): void
+    {
+        // Alias équivalents : aucune contradiction (compat clients legacy).
+        $this->expectNotToPerformAssertions();
+        $this->validator->validate(null, null, null, null, [
+            'market_type' => $marketType,
+            'type_contract' => $typeContract,
+        ]);
+    }
+
+    public function testRealMarketTypeMismatchPerpVsSpotIsRejected(): void
+    {
+        $this->assertCode('ORCHESTRATION_MARKET_TYPE_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, ['market_type' => 'perp', 'type_contract' => 'spot']);
+        });
+    }
+
+    public function testInvalidMarketTypeIsRejectedFailClosed(): void
+    {
+        // Valeur invalide quand les deux champs sont fournis : refus structuré fail-closed.
+        $this->assertCode('ORCHESTRATION_MARKET_TYPE_MISMATCH', function (): void {
+            $this->validator->validate(null, null, null, null, ['market_type' => 'perpetual', 'type_contract' => 'bogus']);
+        });
+    }
+
+    public function testHeaderTakesPriorityWhenBodyAbsent(): void
+    {
+        // En-tête présent mais pas de doublon dans le payload : aucune contradiction.
+        $this->expectNotToPerformAssertions();
+        $this->validator->validate(null, null, 's1', 'dashA', ['symbols' => ['BTCUSDT']]);
+    }
+
+    private function assertCode(string $expectedCode, callable $fn): void
+    {
+        try {
+            $fn();
+            self::fail("Expected OrchestrationContextException with code {$expectedCode}");
+        } catch (OrchestrationContextException $e) {
+            self::assertSame($expectedCode, $e->errorCode);
+        }
+    }
+}

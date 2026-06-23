@@ -7,6 +7,8 @@ namespace App\Controller;
 use App\Config\TradeEntryModeContext;
 use App\MtfRunner\Application\RunMtfCycleUseCase;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
+use App\Trading\Orchestration\OrchestrationContextException;
+use App\Trading\Orchestration\OrchestrationContextValidator;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -19,6 +21,7 @@ class RunnerController extends AbstractController
     public function __construct(
         private readonly LoggerInterface $logger,
         private readonly TradeEntryModeContext $modeContext,
+        private readonly OrchestrationContextValidator $orchestrationContextValidator,
     ) {
     }
 
@@ -67,6 +70,27 @@ class RunnerController extends AbstractController
             }
             $symbols = array_values(array_unique($symbols));
 
+            // OBS-003 : lineage d'orchestration porté par les en-têtes HTTP. L'en-tête a
+            // priorité sur le corps ; absence d'en-tête = comportement historique (run_id
+            // UUID généré en aval). Le run_id ORIGINAL (X-Run-Id) est la source de vérité ;
+            // l'identifiant de corrélation canonique est (re)dérivé côté Symfony, jamais
+            // tronqué. X-Run-Correlation-Id n'est qu'un repli/indication.
+            $headerRunId = $request->headers->get('X-Run-Id');
+            $headerCorrelationId = $request->headers->get('X-Run-Correlation-Id');
+            $headerSetId = $request->headers->get('X-Orchestration-Set-Id');
+            $headerDashboardId = $request->headers->get('X-Orchestration-Dashboard-Id');
+
+            // OBS-003 : refuser fail-closed un contexte d'orchestration contradictoire
+            // (en-têtes vs payload, ou doublons contradictoires du payload). Le chemin
+            // legacy (sans en-tête ni doublon) ne déclenche aucun contrôle.
+            $this->orchestrationContextValidator->validate(
+                $headerRunId,
+                $headerCorrelationId,
+                $headerSetId,
+                $headerDashboardId,
+                $data,
+            );
+
             // Injection automatique du profile depuis la configuration si non fourni
             // ROLLBACK: Si besoin de revenir en arrière, supprimer cette logique et remettre:
             // 'profile' => $data['profile'] ?? $data['mtf_profile'] ?? null,
@@ -105,6 +129,15 @@ class RunnerController extends AbstractController
                 'context_mode' => $data['context_mode'] ?? null,
                 'mode' => $data['mode'] ?? null,
                 'open_state_snapshot' => $openStateSnapshot,
+                'run_id' => $headerRunId ?? ($data['run_id'] ?? $data['original_run_id'] ?? null),
+                'correlation_run_id' => $headerCorrelationId ?? ($data['correlation_run_id'] ?? null),
+                // On accepte les deux formes d'alias dans le corps (`dashboard_id` court ET
+                // `orchestration_dashboard_id` long) pour ne pas perdre le lineage sur le
+                // chemin body-only sans en-têtes (cohérent avec le validateur et le DTO).
+                'orchestration_dashboard_id' => $headerDashboardId
+                    ?? ($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null),
+                'orchestration_set_id' => $headerSetId
+                    ?? ($data['set_id'] ?? $data['orchestration_set_id'] ?? null),
             ]);
             $result = $runMtfCycle->run($runnerRequest);
 
@@ -153,6 +186,18 @@ class RunnerController extends AbstractController
                 ],
             ]);
 
+        } catch (OrchestrationContextException $e) {
+            // Incohérence de contexte vérifiable dans la requête : 422 avec code stable.
+            $this->logger->warning('[Runner Controller] Orchestration context mismatch', [
+                'error_code' => $e->errorCode,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $this->json([
+                'status' => 'error',
+                'error_code' => $e->errorCode,
+                'message' => $e->getMessage(),
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (\Throwable $e) {
             $this->logger->error('[Runner Controller] Failed to run MTF cycle', [
                 'error' => $e->getMessage(),
