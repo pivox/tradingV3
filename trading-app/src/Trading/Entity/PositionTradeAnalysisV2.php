@@ -10,8 +10,8 @@ use Doctrine\ORM\Mapping as ORM;
 /**
  * Vue VERSIONNÉE en lecture seule `position_trade_analysis_v2` (OBS-003 v2,
  * cf. Version20260622000000). Coexiste avec la vue historique v1 (issue #190, bascule
- * progressive) : rapprochement entrée/clôture par identifiants EXACTS (trade_id puis
- * position_id, jamais par symbole), lineage d'orchestration, statut de qualité et
+ * progressive) : rapprochement entrée/clôture par identifiants EXACTS (internal_trade_id,
+ * trade_id puis position_id, jamais par symbole), lineage d'orchestration, statut de qualité et
  * contrat PnL EXPLICITE.
  *
  * Contrat PnL (issue #190) — on ne présente JAMAIS une valeur estimée comme certifiée :
@@ -67,6 +67,9 @@ class PositionTradeAnalysisV2
 
     #[ORM\Column(type: Types::STRING, length: 64, nullable: true, name: 'mtf_profile')]
     private ?string $mtfProfile = null;
+
+    #[ORM\Column(type: Types::STRING, length: 96, nullable: true, name: 'internal_trade_id')]
+    private ?string $internalTradeId = null;
 
     #[ORM\Column(type: Types::STRING, length: 128, nullable: true, name: 'trade_id')]
     private ?string $tradeId = null;
@@ -226,6 +229,11 @@ class PositionTradeAnalysisV2
     public function getMtfProfile(): ?string
     {
         return $this->mtfProfile;
+    }
+
+    public function getInternalTradeId(): ?string
+    {
+        return $this->internalTradeId;
     }
 
     public function getTradeId(): ?string
