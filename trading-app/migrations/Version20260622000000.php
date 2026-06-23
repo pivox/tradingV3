@@ -44,6 +44,21 @@ use Doctrine\Migrations\AbstractMigration;
  * surface d'analyse fiable + le contrat PnL explicite). Le pont reste en place pour le
  * jour où `position_opened` portera le `trade_id`, et est couvert par les tests de la vue.
  *
+ * LIMITE D'ORDONNANCEMENT CONNUE (rapprochement FIFO par rang — suivi #200) : le
+ * rapprochement 1-pour-1 repose sur `ROW_NUMBER()` (rang d'entrée vs rang de clôture par
+ * clé+venue) plus un garde temporel `effective_close_time >= happened_at`. Si une clôture
+ * SUPPLÉMENTAIRE/DOUBLON existe pour la même clé+venue ENTRE deux entrées, elle consomme un
+ * rang et décale la vraie clôture postérieure au rang suivant : l'entrée concernée est
+ * alors laissée `unmatched`. C'est un échec SÛR (état honnête « inconnu », jamais une
+ * mauvaise attribution de PnL) tant qu'il n'existe pas de clôture doublon. Une mauvaise
+ * attribution exigerait un VRAI doublon de clôture pour la même clé+venue, ce que le chemin
+ * live ne produit pas (`TradingStateSyncRunner` n'émet qu'une `position_closed` par
+ * disparition de position suivie, et les clôtures live ne portent pas de `trade_id` —
+ * `close_tid` est donc vide en prod). Un rapprochement correct pour TOUTES les imbrications
+ * (y compris doublons) demanderait un appariement FIFO récursif (pile open/close) dans la
+ * vue ; ce durcissement est suivi par #200 et non requis tant que les données live restent
+ * bien formées.
+ *
  * Contrat PnL EXPLICITE (issue #190) — aucune valeur estimée présentée comme certifiée :
  *   - `recorded_pnl_usdt` : valeur enregistrée telle quelle (ni brute ni nette garanties) ;
  *   - `fees_usdt` / `funding_usdt` / `slippage_usdt` : composantes brutes si présentes
@@ -180,6 +195,9 @@ snapshot_values AS (
 -- par (exchange, market_type, trade_id) côté table : sans le périmètre venue, deux
 -- exchanges/marchés émettant le même trade_id échangeraient leurs outcomes (cross-venue
 -- swap). On applique le même garde temporel que le passage position_id.
+-- NB (suivi #200) : le rang FIFO est sûr tant qu'il n'existe pas de clôture DOUBLON pour la
+-- même clé+venue entre deux entrées (sinon l'entrée concernée reste `unmatched` — échec sûr,
+-- jamais une mauvaise attribution). Voir la « LIMITE D'ORDONNANCEMENT CONNUE » du docblock.
 entry_tid AS (
   SELECT id, match_trade_id, symbol, exchange, market_type, happened_at,
          ROW_NUMBER() OVER (
