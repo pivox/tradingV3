@@ -6,7 +6,9 @@ namespace App\Repository;
 
 use App\Entity\OrderIntent;
 use App\Provider\Context\ExchangeContext;
+use App\Trading\Lineage\ReadModel\LineageReadCriteria;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\ORM\QueryBuilder;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
@@ -14,6 +16,17 @@ use Doctrine\Persistence\ManagerRegistry;
  */
 final class OrderIntentRepository extends ServiceEntityRepository
 {
+    private const CRITERIA_FIELD_MAP = [
+        'orchestration_run_id' => 'orchestrationRunId',
+        'correlation_run_id' => 'correlationRunId',
+        'orchestration_set_id' => 'orchestrationSetId',
+        'orchestration_dashboard_id' => 'orchestrationDashboardId',
+        'internal_trade_id' => 'internalTradeId',
+        'internal_position_id' => 'internalPositionId',
+        'client_order_id' => 'clientOrderId',
+        'exchange_order_id' => 'exchangeOrderId',
+    ];
+
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, OrderIntent::class);
@@ -54,6 +67,47 @@ final class OrderIntentRepository extends ServiceEntityRepository
     public function findOneById(int $id): ?OrderIntent
     {
         return $this->find($id);
+    }
+
+    /**
+     * @return OrderIntent[]
+     */
+    public function findPageByReadCriteria(LineageReadCriteria $criteria): array
+    {
+        if ($criteria->kind === 'order_intent_id') {
+            $intent = $this->find((int) $criteria->value);
+
+            return $intent instanceof OrderIntent ? [$intent] : [];
+        }
+
+        return $this->createCriteriaQueryBuilder($criteria)
+            ->orderBy('intent.createdAt', 'ASC')
+            ->addOrderBy('intent.id', 'ASC')
+            ->setFirstResult($criteria->offset)
+            ->setMaxResults($criteria->limit)
+            ->getQuery()
+            ->getResult();
+    }
+
+    private function createCriteriaQueryBuilder(LineageReadCriteria $criteria): QueryBuilder
+    {
+        $field = self::CRITERIA_FIELD_MAP[$criteria->kind] ?? null;
+        if ($field === null) {
+            throw new \InvalidArgumentException(sprintf('Unsupported order intent read criteria "%s".', $criteria->kind));
+        }
+
+        $qb = $this->createQueryBuilder('intent')
+            ->andWhere(sprintf('intent.%s = :value', $field))
+            ->setParameter('value', $criteria->value);
+
+        if ($criteria->requiresVenue()) {
+            $qb->andWhere('intent.exchange = :exchange')
+                ->andWhere('intent.marketType = :marketType')
+                ->setParameter('exchange', $criteria->exchange)
+                ->setParameter('marketType', $criteria->marketType);
+        }
+
+        return $qb;
     }
 
     /**

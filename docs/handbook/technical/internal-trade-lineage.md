@@ -39,6 +39,8 @@ Ordre autorisé :
 La venue est toujours `exchange + market_type`. Les résolutions par symbole seul, symbole + side, timestamp, ou première clôture suivante sont interdites.
 Si un identifiant exact non unique produit plusieurs mappings dans la même venue, la résolution reste `unmatched` : le système ne choisit jamais silencieusement un candidat.
 
+L'API read-only `GET /api/lineage/v1/search` expose ce comportement aux clients : une ambiguite persistante dans une meme venue retourne `identifier_conflict`, tandis que deux venues differentes peuvent reutiliser le meme identifiant si `exchange + market_type` sont fournis explicitement. Voir [API read-only de lineage](lineage-read-api.md).
+
 ## Couverture actuelle
 
 - `order_submitted` reçoit `internal_trade_id`, `trade_id`, `run_id`, set/dashboard/profil et venue.

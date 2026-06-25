@@ -6,7 +6,9 @@ namespace App\Repository;
 
 use App\Entity\TradeLifecycleEvent;
 use App\Provider\Context\ExchangeContext;
+use App\Trading\Lineage\ReadModel\LineageReadCriteria;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\ORM\QueryBuilder;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
@@ -14,6 +16,18 @@ use Doctrine\Persistence\ManagerRegistry;
  */
 final class TradeLifecycleEventRepository extends ServiceEntityRepository
 {
+    private const CRITERIA_FIELD_MAP = [
+        'orchestration_run_id' => 'orchestrationRunId',
+        'correlation_run_id' => 'correlationRunId',
+        'orchestration_set_id' => 'orchestrationSetId',
+        'orchestration_dashboard_id' => 'orchestrationDashboardId',
+        'internal_trade_id' => 'internalTradeId',
+        'internal_position_id' => 'internalPositionId',
+        'client_order_id' => 'clientOrderId',
+        'exchange_order_id' => 'orderId',
+        'position_id' => 'positionId',
+    ];
+
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, TradeLifecycleEvent::class);
@@ -41,6 +55,126 @@ final class TradeLifecycleEventRepository extends ServiceEntityRepository
         }
 
         return $qb->getQuery()->getResult();
+    }
+
+    /**
+     * @return TradeLifecycleEvent[]
+     */
+    public function findUnmatchedByReadCriteria(LineageReadCriteria $criteria): array
+    {
+        if (!in_array($criteria->kind, ['client_order_id', 'exchange_order_id', 'position_id'], true)) {
+            return [];
+        }
+
+        return $this->createCriteriaQueryBuilder($criteria)
+            ->andWhere('event.internalTradeId IS NULL')
+            ->orderBy('event.happenedAt', 'ASC')
+            ->addOrderBy('event.id', 'ASC')
+            ->setFirstResult($criteria->offset)
+            ->setMaxResults($criteria->limit)
+            ->getQuery()
+            ->getResult();
+    }
+
+    /**
+     * @return TradeLifecycleEvent[]
+     */
+    public function findForLineageIdentifiers(
+        string $internalTradeId,
+        string $clientOrderId,
+        ?string $exchangeOrderId,
+        ?string $positionId,
+        string $exchange,
+        string $marketType,
+        int $limit,
+    ): array {
+        $or = [
+            'event.internalTradeId = :internalTradeId',
+            'event.clientOrderId = :clientOrderId',
+        ];
+
+        $qb = $this->createQueryBuilder('event')
+            ->andWhere('event.exchange = :exchange')
+            ->andWhere('event.marketType = :marketType')
+            ->setParameter('exchange', $exchange)
+            ->setParameter('marketType', $marketType)
+            ->setParameter('internalTradeId', $internalTradeId)
+            ->setParameter('clientOrderId', $clientOrderId)
+            ->orderBy('event.happenedAt', 'ASC')
+            ->addOrderBy('event.id', 'ASC')
+            ->setMaxResults(max(1, $limit));
+
+        if ($exchangeOrderId !== null && $exchangeOrderId !== '') {
+            $or[] = 'event.orderId = :exchangeOrderId';
+            $qb->setParameter('exchangeOrderId', $exchangeOrderId);
+        }
+
+        if ($positionId !== null && $positionId !== '') {
+            $or[] = 'event.positionId = :positionId';
+            $qb->setParameter('positionId', $positionId);
+        }
+
+        $qb->andWhere($qb->expr()->orX(...$or));
+
+        return $qb->getQuery()->getResult();
+    }
+
+    public function countForLineageIdentifiers(
+        string $internalTradeId,
+        string $clientOrderId,
+        ?string $exchangeOrderId,
+        ?string $positionId,
+        string $exchange,
+        string $marketType,
+    ): int {
+        $or = [
+            'event.internalTradeId = :internalTradeId',
+            'event.clientOrderId = :clientOrderId',
+        ];
+
+        $qb = $this->createQueryBuilder('event')
+            ->select('COUNT(event.id)')
+            ->andWhere('event.exchange = :exchange')
+            ->andWhere('event.marketType = :marketType')
+            ->setParameter('exchange', $exchange)
+            ->setParameter('marketType', $marketType)
+            ->setParameter('internalTradeId', $internalTradeId)
+            ->setParameter('clientOrderId', $clientOrderId);
+
+        if ($exchangeOrderId !== null && $exchangeOrderId !== '') {
+            $or[] = 'event.orderId = :exchangeOrderId';
+            $qb->setParameter('exchangeOrderId', $exchangeOrderId);
+        }
+
+        if ($positionId !== null && $positionId !== '') {
+            $or[] = 'event.positionId = :positionId';
+            $qb->setParameter('positionId', $positionId);
+        }
+
+        $qb->andWhere($qb->expr()->orX(...$or));
+
+        return (int) $qb->getQuery()->getSingleScalarResult();
+    }
+
+    private function createCriteriaQueryBuilder(LineageReadCriteria $criteria): QueryBuilder
+    {
+        $field = self::CRITERIA_FIELD_MAP[$criteria->kind] ?? null;
+        if ($field === null) {
+            throw new \InvalidArgumentException(sprintf('Unsupported lifecycle read criteria "%s".', $criteria->kind));
+        }
+
+        $qb = $this->createQueryBuilder('event')
+            ->andWhere(sprintf('event.%s = :value', $field))
+            ->setParameter('value', $criteria->value);
+
+        if ($criteria->requiresVenue()) {
+            $qb->andWhere('event.exchange = :exchange')
+                ->andWhere('event.marketType = :marketType')
+                ->setParameter('exchange', $criteria->exchange)
+                ->setParameter('marketType', $criteria->marketType);
+        }
+
+        return $qb;
     }
 
     /**
