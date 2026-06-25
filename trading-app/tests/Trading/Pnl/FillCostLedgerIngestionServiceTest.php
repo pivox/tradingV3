@@ -488,6 +488,26 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
         self::assertContains('fee_conversion_missing', $entry->getQualityFlags());
     }
 
+    public function testInvalidNonUsdtFeeConversionRateIsRejected(): void
+    {
+        $this->persistLineage('itd-ledger-invalid-fee-rate', 'cid-invalid-fee-rate', 'EX-INVALID-FEE-RATE', null);
+
+        $this->service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-INVALID-FEE-RATE',
+            clientOrderId: 'cid-invalid-fee-rate',
+            fillId: 'fill-invalid-fee-rate',
+            fee: 0.01,
+            feeCurrency: 'BNB',
+            metadata: ['fee_conversion' => ['currency' => 'BNB', 'usdt_rate' => 0.0]],
+        )));
+
+        $entry = $this->ledger->findByInternalTradeId('itd-ledger-invalid-fee-rate')[0];
+        self::assertSame('0.010000000000', $entry->getFeeAmount());
+        self::assertSame('BNB', $entry->getFeeCurrency());
+        self::assertNull($entry->getFeeUsdt());
+        self::assertContains('fee_conversion_invalid', $entry->getQualityFlags());
+    }
+
     public function testAbsentFeeRemainsNullAndIsFlagged(): void
     {
         $this->persistLineage('itd-ledger-no-fee', 'cid-no-fee', 'EX-NO-FEE', null);

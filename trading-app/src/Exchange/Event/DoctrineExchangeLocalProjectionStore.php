@@ -79,8 +79,8 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
         }
 
         if ($event instanceof ExchangeFillReceived) {
-            $this->orderSync->syncTradeFromApi($this->fillPayload($event->fill(), $event));
             $this->fillCostLedger->ingestExchangeFill($event);
+            $this->orderSync->syncTradeFromApi($this->fillPayload($event->fill(), $event));
             return;
         }
 

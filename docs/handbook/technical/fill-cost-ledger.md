@@ -86,7 +86,7 @@ A non-USDT fee is converted only when the event metadata or payload includes an 
 {"fee_conversion": {"currency": "BNB", "usdt_rate": 600.0}}
 ```
 
-If the conversion is missing, `fee_usdt` remains `NULL` and `fee_conversion_missing` is added to `quality_flags`.
+The conversion rate must be finite and strictly positive. If the conversion is missing, `fee_usdt` remains `NULL` and `fee_conversion_missing` is added to `quality_flags`. If the conversion rate is invalid, `fee_usdt` remains `NULL` and `fee_conversion_invalid` is added.
 
 ## Raw Reference Redaction
 
