@@ -164,6 +164,63 @@ final class NetPnlCertificationServiceTest extends TestCase
         self::assertNull($result->netPnlUsdt);
     }
 
+    public function testRefusesNegativeNonFundingCostComponents(): void
+    {
+        $service = new NetPnlCertificationService();
+
+        $result = $service->certify(
+            entryFills: [
+                new TradeFill('entry-1', 'BUY', 1.0, 100.0, 0.01, 'USDT', 'maker', new \DateTimeImmutable('2026-06-25 10:00:00 UTC')),
+            ],
+            exitFills: [
+                new TradeFill('exit-1', 'SELL', 1.0, 110.0, 0.01, 'USDT', 'taker', new \DateTimeImmutable('2026-06-25 10:10:00 UTC')),
+            ],
+            costs: new TradeCosts(
+                otherTradingFeesUsdt: 0.0,
+                fundingUsdt: 0.0,
+                spreadCostUsdt: 0.0,
+                slippageCostUsdt: -0.10,
+                borrowCostUsdt: 0.0,
+                liquidationFeeUsdt: 0.0,
+            ),
+            side: 'LONG',
+            positionFullyClosed: true,
+            lineageSufficient: true,
+            identifierConflict: false,
+            riskUsdtAtEntry: 5.0,
+        );
+
+        self::assertFalse($result->certified);
+        self::assertNull($result->netPnlUsdt);
+        self::assertSame('partial', $result->costCompleteness);
+        self::assertContains('negative_cost_component', $result->qualityFlags);
+    }
+
+    public function testRefusesFillsContradictingPositionSide(): void
+    {
+        $service = new NetPnlCertificationService();
+
+        $result = $service->certify(
+            entryFills: [
+                new TradeFill('entry-1', 'SELL', 1.0, 100.0, 0.01, 'USDT', 'maker', new \DateTimeImmutable('2026-06-25 10:00:00 UTC')),
+            ],
+            exitFills: [
+                new TradeFill('exit-1', 'BUY', 1.0, 110.0, 0.01, 'USDT', 'taker', new \DateTimeImmutable('2026-06-25 10:10:00 UTC')),
+            ],
+            costs: TradeCosts::zeroKnown(),
+            side: 'LONG',
+            positionFullyClosed: true,
+            lineageSufficient: true,
+            identifierConflict: false,
+            riskUsdtAtEntry: 5.0,
+        );
+
+        self::assertFalse($result->certified);
+        self::assertNull($result->netPnlUsdt);
+        self::assertSame('partial', $result->costCompleteness);
+        self::assertContains('invalid_fill_side', $result->qualityFlags);
+    }
+
     public function testRefusesExchangeOrderSideInsteadOfPositionSide(): void
     {
         $service = new NetPnlCertificationService();

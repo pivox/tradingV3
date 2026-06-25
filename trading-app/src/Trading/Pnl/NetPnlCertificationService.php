@@ -58,7 +58,14 @@ final class NetPnlCertificationService
         foreach ($costs->components() as $name => $value) {
             if ($value === null) {
                 $flags[] = 'missing_' . str_replace('_usdt', '', $name);
+                continue;
             }
+            if ($name !== 'funding_usdt' && $value < 0.0) {
+                $flags[] = 'negative_cost_component';
+            }
+        }
+        if (!$this->fillSidesMatchPosition($entryFills, $exitFills, $normalizedSide)) {
+            $flags[] = 'invalid_fill_side';
         }
 
         $gross = $this->grossRealizedPnl($entryFills, $exitFills, $normalizedSide);
@@ -150,6 +157,35 @@ final class NetPnlCertificationService
         return $side === 'SHORT'
             ? $entryNotional - $exitNotional
             : ($side === 'LONG' ? $exitNotional - $entryNotional : null);
+    }
+
+    /**
+     * @param list<TradeFill> $entryFills
+     * @param list<TradeFill> $exitFills
+     */
+    private function fillSidesMatchPosition(array $entryFills, array $exitFills, string $side): bool
+    {
+        $expected = match ($side) {
+            'LONG' => ['entry' => 'BUY', 'exit' => 'SELL'],
+            'SHORT' => ['entry' => 'SELL', 'exit' => 'BUY'],
+            default => null,
+        };
+        if ($expected === null) {
+            return true;
+        }
+
+        foreach ($entryFills as $fill) {
+            if (strtoupper($fill->side) !== $expected['entry']) {
+                return false;
+            }
+        }
+        foreach ($exitFills as $fill) {
+            if (strtoupper($fill->side) !== $expected['exit']) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
