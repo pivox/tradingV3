@@ -63,7 +63,7 @@ If no exchange fill ID exists, the fallback is:
 
 The deterministic fill ID is derived from venue, market type, symbol, order ID, client order ID, fill timestamp, quantity, price, order side, and position side. It never uses symbol and timestamp alone.
 
-Replays with the same payload hash are ignored. A different payload for the same idempotency key raises a conflict and does not update the existing row.
+Replays with the same canonical fill/cost payload hash are ignored. Mutable projection source and late lineage enrichment do not change that canonical hash. If both the existing row and the replay provide non-null lineage identifiers and they differ, ingestion raises a conflict instead of silently moving the fill to another trade. A different payload for the same idempotency key raises a conflict and does not update the existing row.
 
 ## Lineage Resolution
 
@@ -90,4 +90,4 @@ The conversion rate must be finite and strictly positive. If the conversion is m
 
 ## Raw Reference Redaction
 
-`raw_reference` is a compact reference, not a raw provider payload. It may include IDs such as `exchange_fill_id`, `exchange_order_id`, `client_order_id`, or a fixture event ID. Sensitive keys such as `api_key`, `secret`, `token`, `password`, `memo`, and `credentials` are removed.
+`raw_reference` is a compact reference, not a raw provider payload. It may include IDs such as `exchange_fill_id`, `exchange_order_id`, `client_order_id`, or a fixture event ID. Sensitive key variants containing markers such as `apikey`, `secret`, `token`, `password`, `memo`, or `credential` are removed recursively.

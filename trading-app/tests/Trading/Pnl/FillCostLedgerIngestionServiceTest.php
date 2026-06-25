@@ -170,6 +170,27 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
         self::assertContains('missing_lineage', $entry->getQualityFlags());
     }
 
+    public function testReplayWithDifferentResolvedLineageIsRejectedAsConflict(): void
+    {
+        $this->persistLineage('itd-ledger-lineage-a', 'cid-lineage-a', 'EX-LINEAGE-CONFLICT', null);
+        $this->persistLineage('itd-ledger-lineage-b', 'cid-lineage-b', 'EX-LINEAGE-OTHER', null);
+
+        $this->service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-LINEAGE-CONFLICT',
+            clientOrderId: 'cid-lineage-a',
+            fillId: 'fill-lineage-conflict',
+        )));
+
+        $this->expectException(FillCostLedgerIngestionConflict::class);
+
+        $this->service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-LINEAGE-CONFLICT',
+            clientOrderId: 'cid-lineage-a',
+            fillId: 'fill-lineage-conflict',
+            metadata: ['internal_trade_id' => 'itd-ledger-lineage-b'],
+        )));
+    }
+
     public function testConcurrentDuplicateInsertIsReturnedAsReplayWhenStoredPayloadMatches(): void
     {
         $existing = null;
@@ -587,6 +608,38 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
         self::assertStringNotContainsString('SECRET', $encoded);
         self::assertArrayNotHasKey('api_key', $entry->getRawReference());
         self::assertArrayNotHasKey('token', $entry->getRawReference());
+    }
+
+    public function testFundingRawReferenceRedactsCommonSecretKeyVariants(): void
+    {
+        $this->persistLineage('itd-ledger-funding-redacted', 'cid-funding-redacted', 'EX-FUNDING-REDACTED', null);
+
+        $this->service->ingestFundingAdjustment(
+            internalTradeId: 'itd-ledger-funding-redacted',
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            fundingUsdt: 0.25,
+            occurredAt: new \DateTimeImmutable('2026-01-01 00:12:00 UTC'),
+            source: 'fake_fixture',
+            sourceVersion: 'v1',
+            rawReference: [
+                'funding_event_id' => 'funding-redacted',
+                'access_token' => 'SECRET',
+                'secret_key' => 'SECRET',
+                'nested' => [
+                    'refreshToken' => 'SECRET',
+                    'public_reference' => 'visible',
+                ],
+            ],
+        );
+
+        $entry = $this->ledger->findByInternalTradeId('itd-ledger-funding-redacted')[0];
+        $encoded = json_encode($entry->getRawReference(), JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString('SECRET', $encoded);
+        self::assertSame('visible', $entry->getRawReference()['nested']['public_reference'] ?? null);
+        self::assertArrayNotHasKey('access_token', $entry->getRawReference());
+        self::assertArrayNotHasKey('secret_key', $entry->getRawReference());
     }
 
     private function persistLineage(

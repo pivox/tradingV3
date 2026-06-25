@@ -20,7 +20,7 @@ use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 final readonly class FillCostLedgerIngestionService
 {
     private const SOURCE_VERSION = 'fill_cost_ledger_v1';
-    private const SENSITIVE_KEYS = ['api_key', 'apikey', 'secret', 'token', 'password', 'memo', 'credentials'];
+    private const SENSITIVE_KEY_MARKERS = ['apikey', 'secret', 'token', 'password', 'memo', 'credential'];
 
     public function __construct(
         private FillCostLedgerEntryRepository $ledger,
@@ -165,6 +165,13 @@ final readonly class FillCostLedgerIngestionService
         $existing = $this->ledger->findOneByIdempotencyKey($idempotencyKey);
         if ($existing instanceof FillCostLedgerEntry) {
             if ($existing->getPayloadHash() === $payloadHash) {
+                if ($this->lineageConflicts($existing, $snapshot)) {
+                    throw new FillCostLedgerIngestionConflict(sprintf(
+                        'Conflicting fill-cost ledger lineage for idempotency key "%s".',
+                        $idempotencyKey,
+                    ));
+                }
+
                 return new FillCostLedgerIngestionResult($existing, inserted: false, replayed: true);
             }
 
@@ -214,6 +221,13 @@ final readonly class FillCostLedgerIngestionService
         } catch (UniqueConstraintViolationException) {
             $concurrent = $this->ledger->resetManagerAndFindOneByIdempotencyKey($idempotencyKey);
             if ($concurrent instanceof FillCostLedgerEntry && $concurrent->getPayloadHash() === $payloadHash) {
+                if ($this->lineageConflicts($concurrent, $snapshot)) {
+                    throw new FillCostLedgerIngestionConflict(sprintf(
+                        'Conflicting fill-cost ledger lineage for idempotency key "%s".',
+                        $idempotencyKey,
+                    ));
+                }
+
                 return new FillCostLedgerIngestionResult($concurrent, inserted: false, replayed: true);
             }
 
@@ -343,8 +357,7 @@ final readonly class FillCostLedgerIngestionService
     {
         $redacted = [];
         foreach ($reference as $key => $value) {
-            $normalized = strtolower((string) $key);
-            if (\in_array($normalized, self::SENSITIVE_KEYS, true)) {
+            if ($this->isSensitiveReferenceKey((string) $key)) {
                 continue;
             }
             if (\is_array($value)) {
@@ -355,6 +368,44 @@ final readonly class FillCostLedgerIngestionService
         }
 
         return $redacted;
+    }
+
+    private function isSensitiveReferenceKey(string $key): bool
+    {
+        $normalized = strtolower((string) preg_replace('/[^a-zA-Z0-9]+/', '', $key));
+        foreach (self::SENSITIVE_KEY_MARKERS as $marker) {
+            if (str_contains($normalized, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $snapshot
+     */
+    private function lineageConflicts(FillCostLedgerEntry $existing, array $snapshot): bool
+    {
+        $pairs = [
+            [$existing->getInternalTradeId(), $this->string($snapshot['internal_trade_id'] ?? null)],
+            [$existing->getInternalPositionId(), $this->string($snapshot['internal_position_id'] ?? null)],
+            [$existing->getPositionId(), $this->string($snapshot['position_id'] ?? null)],
+            [
+                $existing->getOrderIntentId() !== null ? (string) $existing->getOrderIntentId() : null,
+                isset($snapshot['order_intent_id']) && \is_scalar($snapshot['order_intent_id'])
+                    ? $this->string($snapshot['order_intent_id'])
+                    : null,
+            ],
+        ];
+
+        foreach ($pairs as [$existingValue, $incomingValue]) {
+            if ($existingValue !== null && $incomingValue !== null && $existingValue !== $incomingValue) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
