@@ -508,13 +508,12 @@ LEFT JOIN LATERAL (
     CASE WHEN m.close_event_id IS NOT NULL AND COALESCE((ce.extra->> 'lineage_sufficient') = 'true', false) IS NOT TRUE THEN 'lineage_insufficient' END,
     CASE WHEN m.close_event_id IS NOT NULL AND COALESCE((ce.extra->> 'identifier_conflict') = 'true', false) IS TRUE THEN 'identifier_conflict' END,
     CASE WHEN m.close_event_id IS NOT NULL AND NOT (
-      COALESCE((ce.extra->> 'quantity_coherent') = 'true', false)
-      OR (
-        money.entry_qty IS NOT NULL
-        AND money.exit_qty IS NOT NULL
-        AND abs(money.entry_qty - money.exit_qty) <= 0.00000001
-        AND COALESCE(money.remaining_qty, 0) <= 0.00000001
-      )
+      money.entry_qty IS NOT NULL
+      AND money.exit_qty IS NOT NULL
+      AND money.remaining_qty IS NOT NULL
+      AND abs(money.entry_qty - money.exit_qty) <= 0.00000001
+      AND abs(money.remaining_qty) <= 0.00000001
+      AND COALESCE((ce.extra->> 'quantity_coherent') = 'true', true) IS TRUE
     ) THEN 'quantity_mismatch' END
   ], NULL)::text[] AS flags
 ) quality ON true;

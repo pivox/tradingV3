@@ -232,6 +232,28 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'pnl_source' => 'mixed_legacy_payload',
         ], null, '2026-06-25 12:10:00+00', 2121, 'fake', 'perpetual');
 
+        $this->entry('XRPUSDT', $run, 's1', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-net-missing-quantities',
+        ], '2026-06-25 13:00:00+00', 2130);
+        $this->close('XRPUSDT', $run, [
+            'internal_trade_id' => 'itd-net-missing-quantities',
+            'gross_realized_pnl_usdt' => 3.0,
+            'entry_fee_usdt' => 0.01,
+            'exit_fee_usdt' => 0.01,
+            'other_trading_fees_usdt' => 0.0,
+            'funding_usdt' => 0.0,
+            'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0,
+            'borrow_cost_usdt' => 0.0,
+            'liquidation_fee_usdt' => 0.0,
+            'position_fully_closed' => true,
+            'fills_complete' => true,
+            'quantity_coherent' => true,
+            'lineage_sufficient' => true,
+            'identifier_conflict' => false,
+            'pnl_source' => 'fake_paper_fill_ledger_v1',
+        ], null, '2026-06-25 13:10:00+00', 2131, 'fake', 'perpetual');
+
         $rows = $this->conn->fetchAllAssociative(
             'SELECT symbol, gross_realized_pnl_usdt, entry_fee_usdt, exit_fee_usdt,
                     other_trading_fees_usdt, funding_usdt, spread_cost_usdt,
@@ -243,7 +265,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
             [$run],
         );
 
-        self::assertCount(3, $rows);
+        self::assertCount(4, $rows);
         $bySymbol = [];
         foreach ($rows as $row) {
             $bySymbol[$row['symbol']] = $row;
@@ -270,6 +292,10 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertNull($bySymbol['SOLUSDT']['net_pnl_usdt']);
         self::assertStringContainsString('missing_funding', (string) $bySymbol['SOLUSDT']['pnl_quality_flags']);
         self::assertStringContainsString('missing_slippage_cost', (string) $bySymbol['SOLUSDT']['pnl_quality_flags']);
+
+        self::assertSame('partial', $bySymbol['XRPUSDT']['cost_completeness']);
+        self::assertNull($bySymbol['XRPUSDT']['net_pnl_usdt']);
+        self::assertStringContainsString('quantity_mismatch', (string) $bySymbol['XRPUSDT']['pnl_quality_flags']);
     }
 
     public function testCloseIsNotReusedAcrossEntriesSharingAPositionId(): void
