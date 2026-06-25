@@ -206,6 +206,32 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'pnl_source' => 'fake_paper_fill_ledger_v1',
         ], null, '2026-06-25 11:10:00+00', 2111, 'fake', 'perpetual');
 
+        $this->entry('SOLUSDT', $run, 's1', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-net-legacy-costs',
+        ], '2026-06-25 12:00:00+00', 2120);
+        $this->close('SOLUSDT', $run, [
+            'internal_trade_id' => 'itd-net-legacy-costs',
+            'pnl' => 4.70,
+            'gross_realized_pnl_usdt' => 5.0,
+            'entry_fee_usdt' => 0.10,
+            'exit_fee_usdt' => 0.10,
+            'other_trading_fees_usdt' => 0.0,
+            'funding' => 0.05,
+            'spread_cost_usdt' => 0.0,
+            'slippage' => 0.10,
+            'borrow_cost_usdt' => 0.0,
+            'liquidation_fee_usdt' => 0.0,
+            'entry_qty' => 1.0,
+            'exit_qty' => 1.0,
+            'remaining_qty' => 0.0,
+            'position_fully_closed' => true,
+            'fills_complete' => true,
+            'quantity_coherent' => true,
+            'lineage_sufficient' => true,
+            'identifier_conflict' => false,
+            'pnl_source' => 'mixed_legacy_payload',
+        ], null, '2026-06-25 12:10:00+00', 2121, 'fake', 'perpetual');
+
         $rows = $this->conn->fetchAllAssociative(
             'SELECT symbol, gross_realized_pnl_usdt, entry_fee_usdt, exit_fee_usdt,
                     other_trading_fees_usdt, funding_usdt, spread_cost_usdt,
@@ -217,7 +243,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
             [$run],
         );
 
-        self::assertCount(2, $rows);
+        self::assertCount(3, $rows);
         $bySymbol = [];
         foreach ($rows as $row) {
             $bySymbol[$row['symbol']] = $row;
@@ -237,6 +263,13 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('partial', $bySymbol['ETHUSDT']['cost_completeness']);
         self::assertNull($bySymbol['ETHUSDT']['net_pnl_usdt']);
         self::assertStringContainsString('missing_entry_fee', (string) $bySymbol['ETHUSDT']['pnl_quality_flags']);
+
+        self::assertSame('partial', $bySymbol['SOLUSDT']['cost_completeness']);
+        self::assertNull($bySymbol['SOLUSDT']['funding_usdt']);
+        self::assertNull($bySymbol['SOLUSDT']['slippage_cost_usdt']);
+        self::assertNull($bySymbol['SOLUSDT']['net_pnl_usdt']);
+        self::assertStringContainsString('missing_funding', (string) $bySymbol['SOLUSDT']['pnl_quality_flags']);
+        self::assertStringContainsString('missing_slippage_cost', (string) $bySymbol['SOLUSDT']['pnl_quality_flags']);
     }
 
     public function testCloseIsNotReusedAcrossEntriesSharingAPositionId(): void
