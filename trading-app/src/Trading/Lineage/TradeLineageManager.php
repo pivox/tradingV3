@@ -126,22 +126,34 @@ final class TradeLineageManager
 
         $internalTradeId = $this->normalize($internalTradeId);
         if ($internalTradeId !== null) {
-            return $this->repository->findOneByInternalTradeId($internalTradeId);
+            $lineage = $this->repository->findOneByInternalTradeId($internalTradeId);
+            if ($lineage instanceof TradeLineage) {
+                return $lineage;
+            }
         }
 
         $clientOrderId = $this->normalize($clientOrderId);
         if ($clientOrderId !== null) {
-            return $this->repository->findOneByClientOrderId($clientOrderId, $context);
+            $lineage = $this->repository->findOneByClientOrderId($clientOrderId, $context);
+            if ($lineage instanceof TradeLineage) {
+                return $lineage;
+            }
         }
 
         $exchangeOrderId = $this->normalize($exchangeOrderId);
         if ($exchangeOrderId !== null) {
-            return $this->repository->findOneByExchangeOrderId($exchangeOrderId, $context);
+            $lineage = $this->repository->findOneByExchangeOrderId($exchangeOrderId, $context);
+            if ($lineage instanceof TradeLineage) {
+                return $lineage;
+            }
         }
 
         $positionId = $this->normalize($positionId);
         if ($positionId !== null) {
-            return $this->repository->findOneByPositionId($positionId, $context);
+            $lineage = $this->repository->findOneByPositionId($positionId, $context);
+            if ($lineage instanceof TradeLineage) {
+                return $lineage;
+            }
         }
 
         return null;

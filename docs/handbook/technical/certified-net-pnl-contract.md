@@ -59,6 +59,14 @@ Les valeurs numeriques legacy ou provider qui ne sont pas parseables sont traite
 
 Conclusion : seul Fake/Paper peut servir de reference complete dans ce lot. Les providers reels restent `partial` ou `unknown` tant qu'un ledger fill/cout persistant et relie au trade logique n'est pas livre.
 
+## Ledger fills/couts
+
+Le ledger persistant v1 est documente dans `docs/handbook/technical/fill-cost-ledger.md`.
+
+Il introduit la table `fill_cost_ledger`, reliee au trade logique par `internal_trade_id` lorsque le lineage exact est disponible. L'idempotence est portee par `exchange + market_type + exchange_fill_id` quand l'exchange fournit un identifiant de fill, sinon par un identifiant interne deterministe documente.
+
+Les couts absents restent `NULL`. Les rows sans lineage exact restent visibles avec `quality_flags=["missing_lineage"]` et ne doivent pas etre considerees comme net PnL certifie.
+
 ## MFE / MAE
 
 La vue conserve les champs historiques `mfe_pct` et `mae_pct` provenant du listener lifecycle. Leur source actuelle est best-effort via klines 1m (`high/low`) entre ouverture et cloture. Cette source n'est pas une certification microstructure : gaps, donnees manquantes, mark/mid/last et scale-in restent a versionner separement.
