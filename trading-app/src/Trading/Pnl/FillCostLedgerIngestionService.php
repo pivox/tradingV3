@@ -212,7 +212,7 @@ final readonly class FillCostLedgerIngestionService
         try {
             $this->ledger->save($entry);
         } catch (UniqueConstraintViolationException) {
-            $concurrent = $this->ledger->findOneByIdempotencyKey($idempotencyKey);
+            $concurrent = $this->ledger->resetManagerAndFindOneByIdempotencyKey($idempotencyKey);
             if ($concurrent instanceof FillCostLedgerEntry && $concurrent->getPayloadHash() === $payloadHash) {
                 return new FillCostLedgerIngestionResult($concurrent, inserted: false, replayed: true);
             }

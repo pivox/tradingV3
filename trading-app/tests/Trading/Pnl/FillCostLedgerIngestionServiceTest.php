@@ -173,17 +173,12 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
     public function testConcurrentDuplicateInsertIsReturnedAsReplayWhenStoredPayloadMatches(): void
     {
         $existing = null;
-        $findCalls = 0;
 
         $repository = $this->createMock(FillCostLedgerEntryRepository::class);
-        $repository->expects(self::exactly(2))
+        $repository->expects(self::once())
             ->method('findOneByIdempotencyKey')
             ->with('fake:perpetual:exchange_fill:fill-concurrent')
-            ->willReturnCallback(static function () use (&$findCalls, &$existing): ?FillCostLedgerEntry {
-                ++$findCalls;
-
-                return $findCalls === 1 ? null : $existing;
-            });
+            ->willReturn(null);
         $repository->expects(self::once())
             ->method('save')
             ->willReturnCallback(static function (FillCostLedgerEntry $entry) use (&$existing): void {
@@ -206,6 +201,12 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
                         return '23505';
                     }
                 }, null);
+            });
+        $repository->expects(self::once())
+            ->method('resetManagerAndFindOneByIdempotencyKey')
+            ->with('fake:perpetual:exchange_fill:fill-concurrent')
+            ->willReturnCallback(static function () use (&$existing): ?FillCostLedgerEntry {
+                return $existing;
             });
 
         /** @var TradeLineageRepository $lineages */
