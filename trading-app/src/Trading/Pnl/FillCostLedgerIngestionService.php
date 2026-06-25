@@ -15,6 +15,7 @@ use App\Exchange\Event\ExchangeFillReceived;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\FillCostLedgerEntryRepository;
 use App\Trading\Lineage\TradeLineageManager;
+use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 
 final readonly class FillCostLedgerIngestionService
 {
@@ -160,7 +161,7 @@ final readonly class FillCostLedgerIngestionService
      */
     private function persistSnapshot(string $idempotencyKey, array $snapshot): FillCostLedgerIngestionResult
     {
-        $payloadHash = $this->payloadHash($snapshot);
+        $payloadHash = $this->conflictHash($snapshot);
         $existing = $this->ledger->findOneByIdempotencyKey($idempotencyKey);
         if ($existing instanceof FillCostLedgerEntry) {
             if ($existing->getPayloadHash() === $payloadHash) {
@@ -208,7 +209,19 @@ final readonly class FillCostLedgerIngestionService
             ->setQualityFlags(\is_array($snapshot['quality_flags']) ? $snapshot['quality_flags'] : [])
             ->setRawReference(\is_array($snapshot['raw_reference']) ? $snapshot['raw_reference'] : []);
 
-        $this->ledger->save($entry);
+        try {
+            $this->ledger->save($entry);
+        } catch (UniqueConstraintViolationException) {
+            $concurrent = $this->ledger->findOneByIdempotencyKey($idempotencyKey);
+            if ($concurrent instanceof FillCostLedgerEntry && $concurrent->getPayloadHash() === $payloadHash) {
+                return new FillCostLedgerIngestionResult($concurrent, inserted: false, replayed: true);
+            }
+
+            throw new FillCostLedgerIngestionConflict(sprintf(
+                'Conflicting fill-cost ledger payload for idempotency key "%s".',
+                $idempotencyKey,
+            ));
+        }
 
         return new FillCostLedgerIngestionResult($entry, inserted: true, replayed: false);
     }
@@ -260,6 +273,9 @@ final readonly class FillCostLedgerIngestionService
         if ($fill->fee === null) {
             $qualityFlags[] = 'fee_missing';
             return null;
+        }
+        if (abs($fill->fee) <= 0.000000000001) {
+            return $this->decimal(0.0);
         }
 
         $currency = $this->string($fill->feeCurrency);
@@ -338,11 +354,37 @@ final readonly class FillCostLedgerIngestionService
     /**
      * @param array<string,mixed> $snapshot
      */
-    private function payloadHash(array $snapshot): string
+    private function conflictHash(array $snapshot): string
     {
-        ksort($snapshot);
+        $canonical = [];
+        foreach ([
+            'exchange',
+            'market_type',
+            'symbol',
+            'side',
+            'fill_id',
+            'exchange_fill_id',
+            'exchange_order_id',
+            'client_order_id',
+            'fill_role',
+            'liquidity_role',
+            'price',
+            'quantity',
+            'notional',
+            'fee_amount',
+            'fee_currency',
+            'fee_usdt',
+            'funding_usdt',
+            'spread_cost_usdt',
+            'slippage_cost_usdt',
+            'borrow_cost_usdt',
+            'liquidation_fee_usdt',
+            'occurred_at',
+        ] as $key) {
+            $canonical[$key] = $snapshot[$key] ?? null;
+        }
 
-        return hash('sha256', json_encode($snapshot, JSON_THROW_ON_ERROR));
+        return hash('sha256', json_encode($canonical, JSON_THROW_ON_ERROR));
     }
 
     private function deterministicFillId(ExchangeFillDto $fill): string

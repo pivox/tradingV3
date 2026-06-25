@@ -17,7 +17,9 @@ use App\Repository\FillCostLedgerEntryRepository;
 use App\Repository\TradeLineageRepository;
 use App\Trading\Lineage\TradeLineageManager;
 use App\Trading\Pnl\FillCostLedgerIngestionConflict;
+use App\Trading\Pnl\FillCostLedgerIngestionResult;
 use App\Trading\Pnl\FillCostLedgerIngestionService;
+use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -139,6 +141,86 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
         self::assertTrue($second->replayed);
         self::assertFalse($second->inserted);
         self::assertSame(1, $this->ledger->count([]));
+    }
+
+    public function testReplayIgnoresMutableProjectionSourceAndLateLineageEnrichment(): void
+    {
+        $event = new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-LATE-LINEAGE',
+            clientOrderId: 'cid-late-lineage',
+            fillId: 'fake-fill-late-lineage',
+            metadata: ['source' => 'rest_reconciliation'],
+        ));
+        $this->service->ingestExchangeFill($event);
+
+        $this->persistLineage('itd-late-lineage', 'cid-late-lineage', 'EX-LATE-LINEAGE', null);
+        $replay = $this->service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-LATE-LINEAGE',
+            clientOrderId: 'cid-late-lineage',
+            fillId: 'fake-fill-late-lineage',
+            metadata: ['source' => 'fake_exchange_ws'],
+        )));
+
+        self::assertTrue($replay->replayed);
+        self::assertFalse($replay->inserted);
+        self::assertSame(1, $this->ledger->count([]));
+        $entry = $this->ledger->findOneByIdempotencyKey('fake:perpetual:exchange_fill:fake-fill-late-lineage');
+        self::assertInstanceOf(FillCostLedgerEntry::class, $entry);
+        self::assertNull($entry->getInternalTradeId());
+        self::assertContains('missing_lineage', $entry->getQualityFlags());
+    }
+
+    public function testConcurrentDuplicateInsertIsReturnedAsReplayWhenStoredPayloadMatches(): void
+    {
+        $existing = null;
+        $findCalls = 0;
+
+        $repository = $this->createMock(FillCostLedgerEntryRepository::class);
+        $repository->expects(self::exactly(2))
+            ->method('findOneByIdempotencyKey')
+            ->with('fake:perpetual:exchange_fill:fill-concurrent')
+            ->willReturnCallback(static function () use (&$findCalls, &$existing): ?FillCostLedgerEntry {
+                ++$findCalls;
+
+                return $findCalls === 1 ? null : $existing;
+            });
+        $repository->expects(self::once())
+            ->method('save')
+            ->willReturnCallback(static function (FillCostLedgerEntry $entry) use (&$existing): void {
+                $existing = new FillCostLedgerEntry(
+                    idempotencyKey: $entry->getIdempotencyKey(),
+                    payloadHash: $entry->getPayloadHash(),
+                    exchange: $entry->getExchange(),
+                    marketType: $entry->getMarketType(),
+                    symbol: $entry->getSymbol(),
+                    fillId: $entry->getFillId(),
+                    fillRole: $entry->getFillRole(),
+                    occurredAt: $entry->getOccurredAt(),
+                    source: $entry->getSource(),
+                    sourceVersion: $entry->getSourceVersion(),
+                );
+
+                throw new UniqueConstraintViolationException(new class('duplicate') extends \Exception implements \Doctrine\DBAL\Driver\Exception {
+                    public function getSQLState(): ?string
+                    {
+                        return '23505';
+                    }
+                }, null);
+            });
+
+        /** @var TradeLineageRepository $lineages */
+        $lineages = $this->em->getRepository(TradeLineage::class);
+        $service = new FillCostLedgerIngestionService(
+            $repository,
+            new TradeLineageManager($lineages, $this->em, new NullLogger()),
+        );
+
+        $event = new ExchangeFillReceived($this->fill(fillId: 'fill-concurrent'));
+        $expected = $service->ingestExchangeFill($event);
+
+        self::assertInstanceOf(FillCostLedgerIngestionResult::class, $expected);
+        self::assertTrue($expected->replayed);
+        self::assertFalse($expected->inserted);
     }
 
     public function testSameExchangeFillIdWithDifferentPayloadIsRejectedAsConflict(): void
@@ -325,6 +407,25 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
         $entry = $this->ledger->findByInternalTradeId('itd-ledger-bnb-fee')[0];
         self::assertSame('BNB', $entry->getFeeCurrency());
         self::assertSame('6.000000000000', $entry->getFeeUsdt());
+        self::assertSame([], $entry->getQualityFlags());
+    }
+
+    public function testExplicitZeroFeeIsKnownEvenWhenCurrencyIsMissing(): void
+    {
+        $this->persistLineage('itd-ledger-zero-fee', 'cid-zero-fee', 'EX-ZERO-FEE', null);
+
+        $this->service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-ZERO-FEE',
+            clientOrderId: 'cid-zero-fee',
+            fillId: 'fill-zero-fee',
+            fee: 0.0,
+            feeCurrency: null,
+        )));
+
+        $entry = $this->ledger->findByInternalTradeId('itd-ledger-zero-fee')[0];
+        self::assertSame('0.000000000000', $entry->getFeeAmount());
+        self::assertNull($entry->getFeeCurrency());
+        self::assertSame('0.000000000000', $entry->getFeeUsdt());
         self::assertSame([], $entry->getQualityFlags());
     }
 

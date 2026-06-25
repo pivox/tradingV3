@@ -11,7 +11,7 @@ use Doctrine\Persistence\ManagerRegistry;
 /**
  * @extends ServiceEntityRepository<FillCostLedgerEntry>
  */
-final class FillCostLedgerEntryRepository extends ServiceEntityRepository
+class FillCostLedgerEntryRepository extends ServiceEntityRepository
 {
     public function __construct(ManagerRegistry $registry)
     {
