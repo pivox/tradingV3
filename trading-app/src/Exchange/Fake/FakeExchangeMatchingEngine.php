@@ -594,9 +594,13 @@ final readonly class FakeExchangeMatchingEngine
      */
     private function appendEntryLedger(array $metadata, string $orderId, float $quantity, float $price, float $fee): array
     {
+        $entryOrderIds = $this->entryOrderIds($metadata, $orderId);
+
         return array_replace($metadata, [
             'source' => 'fake_exchange',
             'last_order_id' => $orderId,
+            'entry_order_ids' => $entryOrderIds,
+            'entry_order_count' => \count($entryOrderIds),
             'entry_qty' => $this->metadataFloat($metadata, 'entry_qty') + $quantity,
             'entry_notional_usdt' => $this->metadataFloat($metadata, 'entry_notional_usdt') + ($quantity * $price),
             'entry_fee_usdt' => $this->metadataFloat($metadata, 'entry_fee_usdt') + $fee,
@@ -630,6 +634,8 @@ final readonly class FakeExchangeMatchingEngine
         $exitNotional = $this->metadataFloat($closeLedger, 'exit_notional_usdt');
         $entryFee = $this->metadataFloat($closeLedger, 'entry_fee_usdt');
         $exitFee = $this->metadataFloat($closeLedger, 'exit_fee_usdt');
+        $entryOrderCount = max(1, (int) round($this->metadataFloat($closeLedger, 'entry_order_count')));
+        $lineageSufficient = $entryOrderCount <= 1;
         $gross = $position->side === ExchangePositionSide::SHORT
             ? $entryNotional - $exitNotional
             : $exitNotional - $entryNotional;
@@ -651,11 +657,37 @@ final readonly class FakeExchangeMatchingEngine
             'position_fully_closed' => true,
             'fills_complete' => true,
             'quantity_coherent' => abs($entryQty - $exitQty) <= 0.00000001,
-            'lineage_sufficient' => true,
+            'lineage_sufficient' => $lineageSufficient,
             'identifier_conflict' => false,
             'pnl_source' => 'fake_paper_fill_ledger_v1',
-            'cost_completeness' => 'complete',
+            'cost_completeness' => $lineageSufficient ? 'complete' : 'partial',
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return list<string>
+     */
+    private function entryOrderIds(array $metadata, string $orderId): array
+    {
+        $ids = [];
+        $existing = $metadata['entry_order_ids'] ?? [];
+        if (\is_array($existing)) {
+            foreach ($existing as $existingId) {
+                if (\is_scalar($existingId) && trim((string) $existingId) !== '') {
+                    $ids[] = (string) $existingId;
+                }
+            }
+        }
+
+        $lastOrderId = $this->stringMetadata($metadata, 'last_order_id');
+        if ($lastOrderId !== null) {
+            $ids[] = $lastOrderId;
+        }
+
+        $ids[] = $orderId;
+
+        return array_values(array_unique($ids));
     }
 
     /**

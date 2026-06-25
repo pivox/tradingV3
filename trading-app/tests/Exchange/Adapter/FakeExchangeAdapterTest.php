@@ -243,6 +243,40 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
     }
 
+    public function testScaledInPositionCloseIsNotCertifiedAsSingleLogicalTrade(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+            metadata: ['internal_trade_id' => 'itd-first-entry'],
+        ));
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-scale-in',
+            postOnly: false,
+            metadata: ['internal_trade_id' => 'itd-second-entry'],
+        ));
+
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'reduce-scaled',
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+            quantity: 2.0,
+        ));
+
+        $closedEvents = $this->scenario->events('position.closed');
+        self::assertCount(1, $closedEvents);
+        self::assertSame(false, $closedEvents[0]->payload['lineage_sufficient'] ?? null);
+        self::assertSame('partial', $closedEvents[0]->payload['cost_completeness'] ?? null);
+        self::assertEqualsWithDelta(2.0, (float) $closedEvents[0]->payload['entry_qty'], 0.000001);
+        self::assertEqualsWithDelta(2.0, (float) $closedEvents[0]->payload['exit_qty'], 0.000001);
+    }
+
     public function testReduceOnlyProtectionFillIsCappedToRemainingPositionSize(): void
     {
         $this->adapter->placeOrder($this->request(
