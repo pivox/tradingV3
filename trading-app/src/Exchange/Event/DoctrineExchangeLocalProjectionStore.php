@@ -16,6 +16,7 @@ use App\MtfRunner\Service\FuturesOrderSyncService;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\FuturesOrderRepository;
 use App\Repository\PositionRepository;
+use App\Trading\Pnl\FillCostLedgerIngestionService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 
@@ -27,6 +28,7 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
         private FuturesOrderRepository $orders,
         private PositionRepository $positions,
         private EntityManagerInterface $entityManager,
+        private FillCostLedgerIngestionService $fillCostLedger,
     ) {
     }
 
@@ -78,6 +80,7 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
 
         if ($event instanceof ExchangeFillReceived) {
             $this->orderSync->syncTradeFromApi($this->fillPayload($event->fill(), $event));
+            $this->fillCostLedger->ingestExchangeFill($event);
             return;
         }
 
