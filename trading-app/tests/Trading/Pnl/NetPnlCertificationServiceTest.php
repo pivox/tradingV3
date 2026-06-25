@@ -245,4 +245,51 @@ final class NetPnlCertificationServiceTest extends TestCase
         self::assertNull($result->netPnlUsdt);
         self::assertContains('invalid_side', $result->qualityFlags);
     }
+
+    public function testQuantityAggregationConflictBlocksCertificationEvenWithBalancedFillQuantities(): void
+    {
+        $service = new NetPnlCertificationService();
+
+        $result = $service->certifyWithQuantityAggregation(
+            entryFills: [
+                new TradeFill('entry-1', 'BUY', 1.0, 100.0, 0.01, 'USDT', 'maker', new \DateTimeImmutable('2026-06-25 10:00:00 UTC')),
+            ],
+            exitFills: [
+                new TradeFill('exit-1', 'SELL', 1.0, 110.0, 0.01, 'USDT', 'taker', new \DateTimeImmutable('2026-06-25 10:10:00 UTC')),
+            ],
+            costs: TradeCosts::zeroKnown(),
+            side: 'LONG',
+            quantityAggregation: new \App\Trading\Pnl\FillQuantityAggregationResult(
+                internalTradeId: 'trade-conflict',
+                exchange: 'fake',
+                marketType: 'paper',
+                entryFirstFillAt: new \DateTimeImmutable('2026-06-25 10:00:00 UTC'),
+                entryLastFillAt: new \DateTimeImmutable('2026-06-25 10:00:00 UTC'),
+                entryQty: 1.0,
+                entryVwap: 100.0,
+                exitFirstFillAt: new \DateTimeImmutable('2026-06-25 10:10:00 UTC'),
+                exitLastFillAt: new \DateTimeImmutable('2026-06-25 10:10:00 UTC'),
+                exitQty: 1.0,
+                exitVwap: 110.0,
+                remainingQty: 0.0,
+                positionFullyClosed: false,
+                quantityStatus: 'fill_conflict',
+                quantityQualityFlags: ['fill_conflict'],
+                feeUsdt: 0.02,
+                fundingUsdt: 0.0,
+                spreadCostUsdt: 0.0,
+                slippageCostUsdt: 0.0,
+                borrowCostUsdt: 0.0,
+                liquidationFeeUsdt: 0.0,
+            ),
+            lineageSufficient: true,
+            identifierConflict: false,
+            riskUsdtAtEntry: 5.0,
+        );
+
+        self::assertFalse($result->certified);
+        self::assertNull($result->netPnlUsdt);
+        self::assertContains('fill_conflict', $result->qualityFlags);
+        self::assertContains('position_not_fully_closed', $result->qualityFlags);
+    }
 }

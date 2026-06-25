@@ -57,6 +57,24 @@ class FillCostLedgerEntryRepository extends ServiceEntityRepository
             ->getResult();
     }
 
+    /**
+     * @return FillCostLedgerEntry[]
+     */
+    public function findByInternalTradeIdAndVenue(string $internalTradeId, string $exchange, string $marketType): array
+    {
+        return $this->createQueryBuilder('entry')
+            ->andWhere('entry.internalTradeId = :internalTradeId')
+            ->andWhere('entry.exchange = :exchange')
+            ->andWhere('entry.marketType = :marketType')
+            ->setParameter('internalTradeId', $internalTradeId)
+            ->setParameter('exchange', strtolower(trim($exchange)))
+            ->setParameter('marketType', strtolower(trim($marketType)))
+            ->orderBy('entry.occurredAt', 'ASC')
+            ->addOrderBy('entry.id', 'ASC')
+            ->getQuery()
+            ->getResult();
+    }
+
     public function save(FillCostLedgerEntry $entry): void
     {
         $this->getEntityManager()->persist($entry);
