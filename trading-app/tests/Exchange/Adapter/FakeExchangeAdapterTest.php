@@ -53,7 +53,7 @@ final class FakeExchangeAdapterTest extends TestCase
 
         self::assertTrue($result->accepted);
         self::assertSame(ExchangeOrderStatus::OPEN, $result->status);
-        self::assertSame('cid-1', $result->order?->clientOrderId);
+        self::assertSame('cid-1', $result->order->clientOrderId);
         self::assertCount(1, $this->adapter->getOpenOrders('BTCUSDT'));
     }
 
@@ -98,8 +98,26 @@ final class FakeExchangeAdapterTest extends TestCase
 
         self::assertTrue($result->accepted);
         self::assertSame(ExchangeOrderStatus::FILLED, $result->status);
-        self::assertSame(1.0, $result->order?->filledQuantity);
+        self::assertSame(1.0, $result->order->filledQuantity);
         self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+    }
+
+    public function testFakeFillsExposeDeterministicUsdtFeesForCertificationFixtures(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+        ));
+
+        $fills = $this->adapter->getFillsSnapshot('BTCUSDT');
+
+        self::assertCount(1, $fills);
+        self::assertSame('USDT', $fills[0]->feeCurrency);
+        self::assertNotNull($fills[0]->fee);
+        self::assertGreaterThan(0.0, $fills[0]->fee);
+        self::assertSame('fake_paper_fill_ledger_v1', $fills[0]->metadata['pnl_source'] ?? null);
+        self::assertSame('complete', $fills[0]->metadata['cost_completeness'] ?? null);
     }
 
     public function testNonCrossingIocLimitExpiresWithoutResting(): void
@@ -114,7 +132,7 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertTrue($result->accepted);
         self::assertSame(ExchangeOrderStatus::EXPIRED, $result->status);
         self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
-        self::assertSame('immediate_execution_not_available', $result->order?->metadata['reason'] ?? null);
+        self::assertSame('immediate_execution_not_available', $result->order->metadata['reason'] ?? null);
     }
 
     public function testCanPartiallyFillThenCompleteOrder(): void
@@ -122,13 +140,13 @@ final class FakeExchangeAdapterTest extends TestCase
         $placed = $this->adapter->placeOrder($this->request(price: 24950.0, postOnly: true));
 
         $partial = $this->scenario->fillOrder((string) $placed->exchangeOrderId, 0.4, 24950.0);
-        self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $partial?->status);
-        self::assertEqualsWithDelta(0.4, $partial?->filledQuantity, 0.000001);
-        self::assertEqualsWithDelta(0.6, $partial?->remainingQuantity, 0.000001);
+        self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $partial->status);
+        self::assertEqualsWithDelta(0.4, $partial->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.6, $partial->remainingQuantity, 0.000001);
 
         $complete = $this->scenario->fillOrder((string) $placed->exchangeOrderId);
-        self::assertSame(ExchangeOrderStatus::FILLED, $complete?->status);
-        self::assertEqualsWithDelta(1.0, $complete?->filledQuantity, 0.000001);
+        self::assertSame(ExchangeOrderStatus::FILLED, $complete->status);
+        self::assertEqualsWithDelta(1.0, $complete->filledQuantity, 0.000001);
         self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
     }
 
@@ -144,7 +162,7 @@ final class FakeExchangeAdapterTest extends TestCase
         $openOrders = $this->adapter->getOpenOrders('BTCUSDT');
 
         self::assertSame(ExchangeOrderStatus::FILLED, $result->status);
-        self::assertSame('accepted', $result->order?->metadata['protection_status'] ?? null);
+        self::assertSame('accepted', $result->order->metadata['protection_status'] ?? null);
         self::assertCount(1, $openOrders);
         self::assertSame(ExchangeOrderType::STOP_LOSS, $openOrders[0]->orderType);
         self::assertTrue($openOrders[0]->reduceOnly);
@@ -164,7 +182,7 @@ final class FakeExchangeAdapterTest extends TestCase
 
         self::assertTrue($result->accepted);
         self::assertSame(ExchangeOrderStatus::FILLED, $result->status);
-        self::assertSame('rejected', $result->order?->metadata['protection_status'] ?? null);
+        self::assertSame('rejected', $result->order->metadata['protection_status'] ?? null);
         self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
         self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
         self::assertCount(1, $this->scenario->events('protection_order.rejected'));
@@ -177,6 +195,11 @@ final class FakeExchangeAdapterTest extends TestCase
             price: null,
             postOnly: false,
             attachedStopLossPrice: 24800.0,
+            metadata: [
+                'internal_trade_id' => 'itd-fake-sl',
+                'position_id' => 'fake-pos-sl',
+                'order_intent_id' => '123',
+            ],
         ));
 
         $result = $this->scenario->movePrice('BTCUSDT', 24790.0, 0.0);
@@ -186,7 +209,21 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame(ExchangeOrderStatus::FILLED, $result['matched_orders'][0]->status);
         self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
         self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
-        self::assertCount(1, $this->scenario->events('position.closed'));
+        $closedEvents = $this->scenario->events('position.closed');
+        self::assertCount(1, $closedEvents);
+        self::assertSame('fake_paper_fill_ledger_v1', $closedEvents[0]->payload['pnl_source'] ?? null);
+        self::assertSame('complete', $closedEvents[0]->payload['cost_completeness'] ?? null);
+        self::assertSame(true, $closedEvents[0]->payload['position_fully_closed'] ?? null);
+        self::assertSame(true, $closedEvents[0]->payload['fills_complete'] ?? null);
+        self::assertSame('itd-fake-sl', $closedEvents[0]->payload['internal_trade_id'] ?? null);
+        self::assertSame('fake-pos-sl', $closedEvents[0]->payload['position_id'] ?? null);
+        self::assertSame('123', $closedEvents[0]->payload['order_intent_id'] ?? null);
+        self::assertArrayHasKey('gross_realized_pnl_usdt', $closedEvents[0]->payload);
+        self::assertArrayHasKey('entry_fee_usdt', $closedEvents[0]->payload);
+        self::assertArrayHasKey('exit_fee_usdt', $closedEvents[0]->payload);
+        self::assertEqualsWithDelta(1.0, (float) $closedEvents[0]->payload['entry_qty'], 0.000001);
+        self::assertEqualsWithDelta(1.0, (float) $closedEvents[0]->payload['exit_qty'], 0.000001);
+        self::assertEqualsWithDelta(0.0, (float) $closedEvents[0]->payload['remaining_qty'], 0.000001);
     }
 
     public function testMovePriceTriggersAttachedTakeProfitAndClosesPosition(): void
@@ -204,6 +241,91 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame(ExchangeOrderType::TAKE_PROFIT, $result['matched_orders'][0]->orderType);
         self::assertSame(ExchangeOrderStatus::FILLED, $result['matched_orders'][0]->status);
         self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
+    }
+
+    public function testScaledInPositionCloseIsNotCertifiedAsSingleLogicalTrade(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            postOnly: false,
+            metadata: ['internal_trade_id' => 'itd-first-entry'],
+        ));
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-scale-in',
+            postOnly: false,
+            metadata: ['internal_trade_id' => 'itd-second-entry'],
+        ));
+
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'reduce-scaled',
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+            quantity: 2.0,
+        ));
+
+        $closedEvents = $this->scenario->events('position.closed');
+        self::assertCount(1, $closedEvents);
+        self::assertSame(false, $closedEvents[0]->payload['lineage_sufficient'] ?? null);
+        self::assertSame('partial', $closedEvents[0]->payload['cost_completeness'] ?? null);
+        self::assertEqualsWithDelta(2.0, (float) $closedEvents[0]->payload['entry_qty'], 0.000001);
+        self::assertEqualsWithDelta(2.0, (float) $closedEvents[0]->payload['exit_qty'], 0.000001);
+    }
+
+    public function testClosePayloadKeepsEntryClientOrderIdWhenEntryMetadataHasOnlyOrderIntent(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'entry-cid-from-execution',
+            postOnly: false,
+            metadata: ['order_intent_id' => '456'],
+        ));
+
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'reduce-cid-from-execution',
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+        ));
+
+        $closedEvents = $this->scenario->events('position.closed');
+        self::assertCount(1, $closedEvents);
+        self::assertSame('entry-cid-from-execution', $closedEvents[0]->payload['client_order_id'] ?? null);
+        self::assertSame('456', $closedEvents[0]->payload['order_intent_id'] ?? null);
+        self::assertSame('complete', $closedEvents[0]->payload['cost_completeness'] ?? null);
+    }
+
+    public function testClosePayloadKeepsLegacyTradeIdWhenEntryMetadataOnlyHasTradeId(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'entry-cid-legacy-trade',
+            postOnly: false,
+            metadata: ['trade_id' => 'legacy-trade-123'],
+        ));
+
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'reduce-cid-legacy-trade',
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+        ));
+
+        $closedEvents = $this->scenario->events('position.closed');
+        self::assertCount(1, $closedEvents);
+        self::assertSame('legacy-trade-123', $closedEvents[0]->payload['trade_id'] ?? null);
+        self::assertSame('complete', $closedEvents[0]->payload['cost_completeness'] ?? null);
     }
 
     public function testReduceOnlyProtectionFillIsCappedToRemainingPositionSize(): void
@@ -291,8 +413,8 @@ final class FakeExchangeAdapterTest extends TestCase
 
         self::assertTrue($result->accepted);
         self::assertSame(ExchangeOrderStatus::OPEN, $result->status);
-        self::assertTrue($result->order?->reduceOnly);
-        self::assertSame(ExchangeOrderType::STOP_LOSS, $result->order?->orderType);
+        self::assertTrue($result->order->reduceOnly);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $result->order->orderType);
         self::assertCount(1, $this->scenario->events('protection_order.created'));
     }
 
@@ -466,8 +588,8 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertTrue($second->accepted);
         self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
         self::assertSame(ExchangeOrderStatus::CANCELLED, $second->status);
-        self::assertSame(ExchangeOrderStatus::CANCELLED, $second->order?->status);
-        self::assertEqualsWithDelta(0.4, $second->order?->filledQuantity, 0.000001);
+        self::assertSame(ExchangeOrderStatus::CANCELLED, $second->order->status);
+        self::assertEqualsWithDelta(0.4, $second->order->filledQuantity, 0.000001);
         self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
         self::assertEqualsWithDelta(0.4, $this->adapter->getOpenPositions('BTCUSDT')[0]->size, 0.000001);
     }
@@ -482,7 +604,7 @@ final class FakeExchangeAdapterTest extends TestCase
         $position = $this->adapter->getOpenPositions('BTCUSDT')[0] ?? null;
 
         self::assertSame(ExchangeOrderStatus::FILLED, $result->status);
-        self::assertEqualsWithDelta(25000.5, $result->order?->averagePrice, 0.000001);
+        self::assertEqualsWithDelta(25000.5, $result->order->averagePrice, 0.000001);
         self::assertEqualsWithDelta(25000.5, $position?->entryPrice, 0.000001);
     }
 
@@ -578,6 +700,9 @@ final class FakeExchangeAdapterTest extends TestCase
         }
     }
 
+    /**
+     * @param array<string,mixed> $metadata
+     */
     private function request(
         string $symbol = 'BTCUSDT',
         ExchangeOrderType $orderType = ExchangeOrderType::LIMIT,
@@ -592,6 +717,7 @@ final class FakeExchangeAdapterTest extends TestCase
         ?float $stopPrice = null,
         ?float $attachedStopLossPrice = null,
         ?float $attachedTakeProfitPrice = null,
+        array $metadata = [],
     ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
@@ -611,6 +737,7 @@ final class FakeExchangeAdapterTest extends TestCase
             clientOrderId: $clientOrderId,
             attachedStopLossPrice: $attachedStopLossPrice,
             attachedTakeProfitPrice: $attachedTakeProfitPrice,
+            metadata: $metadata,
         );
     }
 

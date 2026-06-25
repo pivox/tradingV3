@@ -18,6 +18,55 @@ use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 
 final class TradeLifecycleLoggerListener
 {
+    /**
+     * @var string[]
+     */
+    private const CERTIFIED_PNL_EXTRA_KEYS = [
+        'gross_realized_pnl_usdt',
+        'recorded_pnl_usdt',
+        'entry_fee_usdt',
+        'exit_fee_usdt',
+        'other_trading_fees_usdt',
+        'funding_usdt',
+        'spread_cost_usdt',
+        'slippage_cost_usdt',
+        'borrow_cost_usdt',
+        'liquidation_fee_usdt',
+        'entry_qty',
+        'exit_qty',
+        'remaining_qty',
+        'position_fully_closed',
+        'fills_complete',
+        'quantity_coherent',
+        'lineage_sufficient',
+        'identifier_conflict',
+        'pnl_source',
+        'cost_completeness',
+    ];
+
+    /**
+     * @var string[]
+     */
+    private const LINEAGE_PAYLOAD_EXTRA_KEYS = [
+        'internal_trade_id',
+        'trade_id',
+        'internal_position_id',
+        'position_id',
+        'exchange_position_id',
+        'client_order_id',
+        'exchange_order_id',
+        'order_intent_id',
+        'run_id',
+        'correlation_run_id',
+        'orchestration_run_id',
+        'orchestration_set_id',
+        'orchestration_dashboard_id',
+        'mtf_profile',
+        'profile',
+        'origin',
+        'attempt_number',
+    ];
+
     public function __construct(
         private readonly TradeLifecycleLogger $tradeLifecycleLogger,
         private readonly TradeLifecycleEventRepository $tradeLifecycleRepository,
@@ -93,6 +142,7 @@ final class TradeLifecycleLoggerListener
         $pnlPct = $notional !== null && $notional > 0.0 ? $pnlFloat / $notional : null;
         $holdingTimeSec = $history->closedAt->getTimestamp() - $history->openedAt->getTimestamp();
         $effectiveRunId = $event->runId ?? $lineage?->getRunId();
+        $certifiedPnlExtra = $this->certifiedPnlExtraFromRaw($history->raw);
 
         // Approximate initial risk in USDT from the most recent ORDER_SUBMITTED lifecycle event
         $pnlR = null;
@@ -219,6 +269,7 @@ final class TradeLifecycleLoggerListener
                     'fees' => $history->fees?->__toString(),
                     'raw'  => $history->raw,
                 ],
+                $certifiedPnlExtra,
                 $event->extra,
             ),
             marketType: $marketType,
@@ -305,20 +356,24 @@ final class TradeLifecycleLoggerListener
             return null;
         }
 
+        $payload = $this->positionPayloadFromRaw($raw);
         $context = ExchangeContext::fromValues(
-            $this->stringValue($raw['exchange'] ?? $extra['exchange'] ?? null),
-            $marketType ?? $this->stringValue($raw['market_type'] ?? $extra['market_type'] ?? null),
+            $this->stringValue($raw['exchange'] ?? $payload['exchange'] ?? $extra['exchange'] ?? null),
+            $marketType ?? $this->stringValue($raw['market_type'] ?? $payload['market_type'] ?? $extra['market_type'] ?? null),
         );
 
         return $this->tradeLineageManager->resolve(
             $context,
-            internalTradeId: $this->stringValue($extra['internal_trade_id'] ?? $raw['internal_trade_id'] ?? null),
-            clientOrderId: $this->stringValue($extra['client_order_id'] ?? $raw['client_order_id'] ?? null),
+            internalTradeId: $this->stringValue($extra['internal_trade_id'] ?? $raw['internal_trade_id'] ?? $payload['internal_trade_id'] ?? $payload['trade_id'] ?? null),
+            clientOrderId: $this->stringValue($extra['client_order_id'] ?? $raw['client_order_id'] ?? $payload['client_order_id'] ?? null),
             exchangeOrderId: $this->stringValue(
                 $extra['exchange_order_id']
                     ?? $raw['exchange_order_id']
+                    ?? $payload['exchange_order_id']
                     ?? $raw['order_id']
+                    ?? $payload['order_id']
                     ?? $raw['last_order_id']
+                    ?? $payload['last_order_id']
                     ?? null
             ),
             positionId: $this->stringValue($positionId),
@@ -365,6 +420,7 @@ final class TradeLifecycleLoggerListener
             ?? $raw['positionId']
             ?? $this->positionIdFromNestedRaw($raw['raw_history'] ?? null)
             ?? $this->positionIdFromNestedRaw($raw['raw_snapshot'] ?? null)
+            ?? $this->positionIdFromNestedRaw($raw['payload'] ?? null)
             ?? null;
     }
 
@@ -376,7 +432,54 @@ final class TradeLifecycleLoggerListener
 
         return $raw['position_id']
             ?? $raw['positionId']
+            ?? $raw['exchange_position_id']
+            ?? $raw['exchangePositionId']
             ?? null;
+    }
+
+    /**
+     * @param array<string,mixed> $raw
+     * @return array<string,mixed>
+     */
+    private function certifiedPnlExtraFromRaw(array $raw): array
+    {
+        $payload = $this->positionPayloadFromRaw($raw);
+        if ($payload === []) {
+            return [];
+        }
+
+        $extra = [];
+        foreach ([...self::CERTIFIED_PNL_EXTRA_KEYS, ...self::LINEAGE_PAYLOAD_EXTRA_KEYS] as $key) {
+            if (!\array_key_exists($key, $payload)) {
+                continue;
+            }
+
+            $value = $payload[$key];
+            if ($value === null || \is_scalar($value)) {
+                $extra[$key] = $value;
+            }
+        }
+
+        return $extra;
+    }
+
+    /**
+     * @param array<string,mixed> $raw
+     * @return array<string,mixed>
+     */
+    private function positionPayloadFromRaw(array $raw): array
+    {
+        foreach ([
+            $raw,
+            $raw['raw_history'] ?? null,
+            $raw['raw_snapshot'] ?? null,
+        ] as $candidate) {
+            if (\is_array($candidate) && \is_array($candidate['payload'] ?? null)) {
+                return $candidate['payload'];
+            }
+        }
+
+        return [];
     }
 
     private function stringValue(mixed $value): ?string

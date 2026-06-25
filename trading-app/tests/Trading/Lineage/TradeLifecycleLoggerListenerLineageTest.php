@@ -148,6 +148,132 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         self::assertSame(2.0, $closed->getExtra()['pnl_R'] ?? null);
     }
 
+    public function testClosedPositionPromotesCertifiedFakePnlPayloadToLifecycleExtra(): void
+    {
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            null,
+            null,
+        );
+
+        $listener->onPositionClosed(new PositionClosedEvent(
+            positionHistory: new PositionHistoryEntryDto(
+                symbol: 'BTCUSDT',
+                side: PositionSide::LONG,
+                size: BigDecimal::of('1'),
+                entryPrice: BigDecimal::of('100'),
+                exitPrice: BigDecimal::of('110'),
+                realizedPnl: BigDecimal::of('10'),
+                fees: BigDecimal::of('0.105'),
+                openedAt: new \DateTimeImmutable('2026-06-23 10:00:00 UTC'),
+                closedAt: new \DateTimeImmutable('2026-06-23 10:05:00 UTC'),
+                raw: [
+                    'position_id' => 'fake-pos-1',
+                    'payload' => [
+                        'gross_realized_pnl_usdt' => 10.0,
+                        'recorded_pnl_usdt' => 9.895,
+                        'entry_fee_usdt' => 0.05,
+                        'exit_fee_usdt' => 0.055,
+                        'other_trading_fees_usdt' => 0.0,
+                        'funding_usdt' => 0.0,
+                        'spread_cost_usdt' => 0.0,
+                        'slippage_cost_usdt' => 0.0,
+                        'borrow_cost_usdt' => 0.0,
+                        'liquidation_fee_usdt' => 0.0,
+                        'entry_qty' => 1.0,
+                        'exit_qty' => 1.0,
+                        'remaining_qty' => 0.0,
+                        'position_fully_closed' => true,
+                        'fills_complete' => true,
+                        'quantity_coherent' => true,
+                        'lineage_sufficient' => true,
+                        'identifier_conflict' => false,
+                        'pnl_source' => 'fake_paper_fill_ledger_v1',
+                        'cost_completeness' => 'complete',
+                    ],
+                ],
+            ),
+            exchange: Exchange::FAKE->value,
+            extra: ['market_type' => MarketType::PERPETUAL->value],
+        ));
+
+        /** @var TradeLifecycleEvent|null $closed */
+        $closed = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'position_closed',
+            'positionId' => 'fake-pos-1',
+        ]);
+
+        self::assertNotNull($closed);
+        $extra = $closed->getExtra();
+        self::assertSame('fake_paper_fill_ledger_v1', $extra['pnl_source'] ?? null);
+        self::assertSame(10.0, $extra['gross_realized_pnl_usdt'] ?? null);
+        self::assertSame(0.05, $extra['entry_fee_usdt'] ?? null);
+        self::assertSame(0.055, $extra['exit_fee_usdt'] ?? null);
+        self::assertSame(true, $extra['fills_complete'] ?? null);
+        self::assertSame(true, $extra['position_fully_closed'] ?? null);
+        self::assertSame('complete', $extra['cost_completeness'] ?? null);
+        self::assertArrayHasKey('raw', $extra);
+    }
+
+    public function testClosedPositionPromotesFakePayloadLineageToLifecycleExtra(): void
+    {
+        $this->persistLineageWithPosition();
+
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            null,
+            $this->tradeLineageManager(),
+        );
+
+        $listener->onPositionClosed(new PositionClosedEvent(
+            positionHistory: new PositionHistoryEntryDto(
+                symbol: 'BTCUSDT',
+                side: PositionSide::LONG,
+                size: BigDecimal::of('1'),
+                entryPrice: BigDecimal::of('100'),
+                exitPrice: BigDecimal::of('110'),
+                realizedPnl: BigDecimal::of('10'),
+                fees: BigDecimal::of('0.105'),
+                openedAt: new \DateTimeImmutable('2026-06-23 10:00:00 UTC'),
+                closedAt: new \DateTimeImmutable('2026-06-23 10:05:00 UTC'),
+                raw: [
+                    'payload' => [
+                        'internal_trade_id' => 'itd-real',
+                        'position_id' => 'pos-real',
+                        'entry_qty' => 1.0,
+                        'exit_qty' => 1.0,
+                        'remaining_qty' => 0.0,
+                        'position_fully_closed' => true,
+                        'fills_complete' => true,
+                        'quantity_coherent' => true,
+                        'lineage_sufficient' => true,
+                        'identifier_conflict' => false,
+                        'pnl_source' => 'fake_paper_fill_ledger_v1',
+                        'cost_completeness' => 'complete',
+                    ],
+                ],
+            ),
+            runId: null,
+            exchange: Exchange::FAKE->value,
+            extra: ['market_type' => MarketType::PERPETUAL->value],
+        ));
+
+        /** @var TradeLifecycleEvent|null $closed */
+        $closed = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'position_closed',
+            'internalTradeId' => 'itd-real',
+        ]);
+
+        self::assertNotNull($closed);
+        self::assertSame('pos-real', $closed->getPositionId());
+        self::assertSame('itd-real', $closed->getExtra()['internal_trade_id'] ?? null);
+        self::assertSame('pos-real', $closed->getExtra()['position_id'] ?? null);
+        self::assertSame('run-real', $closed->getRunId());
+        self::assertSame('complete', $closed->getExtra()['cost_completeness'] ?? null);
+    }
+
     public function testOpenedPositionLifecycleIsLoggedWhenLineageTableIsMissing(): void
     {
         (new SchemaTool($this->em))->dropSchema([

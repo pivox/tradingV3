@@ -21,6 +21,28 @@ use Psr\Clock\ClockInterface;
 
 final readonly class FakeExchangeMatchingEngine
 {
+    private const FEE_RATE = 0.0005;
+    /**
+     * @var string[]
+     */
+    private const LINEAGE_METADATA_KEYS = [
+        'internal_trade_id',
+        'trade_id',
+        'internal_position_id',
+        'position_id',
+        'exchange_position_id',
+        'order_intent_id',
+        'client_order_id',
+        'run_id',
+        'correlation_run_id',
+        'orchestration_run_id',
+        'orchestration_set_id',
+        'orchestration_dashboard_id',
+        'mtf_profile',
+        'origin',
+        'attempt_number',
+    ];
+
     public function __construct(
         private FakeExchangeStateStore $stateStore,
         private FakeExchangeOrderBook $orderBook,
@@ -192,7 +214,14 @@ final readonly class FakeExchangeMatchingEngine
         $this->appendEvent(
             $status === ExchangeOrderStatus::FILLED ? 'order.filled' : 'order.partially_filled',
             $updated,
-            ['fill_quantity' => $fillQuantity, 'fill_price' => $executionPrice],
+            [
+                'fill_quantity' => $fillQuantity,
+                'fill_price' => $executionPrice,
+                'fill_fee' => $this->fillFee($fillQuantity, $executionPrice),
+                'fee_currency' => 'USDT',
+                'pnl_source' => 'fake_paper_fill_ledger_v1',
+                'cost_completeness' => 'complete',
+            ],
         );
 
         if ($cancelReduceRemainder) {
@@ -268,6 +297,7 @@ final readonly class FakeExchangeMatchingEngine
             'source' => 'fake_exchange',
             'leverage' => $request->leverage,
             'margin_mode' => $request->marginMode,
+            'client_order_id' => $request->clientOrderId,
             'attached_stop_loss_price' => $request->attachedStopLossPrice,
             'attached_take_profit_price' => $request->attachedTakeProfitPrice,
         ], static fn (mixed $value): bool => $value !== null) + $request->metadata;
@@ -369,9 +399,10 @@ final readonly class FakeExchangeMatchingEngine
             postOnly: false,
             timeInForce: null,
             createdAt: $this->clock->now(),
-            metadata: [
+            metadata: $this->lineageMetadata($entryOrder->metadata) + [
                 'source' => 'fake_exchange',
                 'parent_order_id' => $entryOrder->exchangeOrderId,
+                'parent_client_order_id' => $entryOrder->clientOrderId,
                 'protection_kind' => $suffix,
             ],
         );
@@ -381,6 +412,9 @@ final readonly class FakeExchangeMatchingEngine
         return $order;
     }
 
+    /**
+     * @param array<string,mixed> $metadata
+     */
     private function withOrderStatus(ExchangeOrderDto $order, ExchangeOrderStatus $status, array $metadata): ExchangeOrderDto
     {
         return new ExchangeOrderDto(
@@ -439,12 +473,14 @@ final readonly class FakeExchangeMatchingEngine
             return;
         }
 
+        $fillFee = $this->fillFee($fillQuantity, $executionPrice);
         $existing = $this->stateStore->getPosition($order->symbol, $order->positionSide);
         if ($order->reduceOnly) {
             if (!$existing instanceof ExchangePositionDto) {
                 return;
             }
 
+            $exitLedger = $this->appendExitLedger($existing->metadata, $fillQuantity, $executionPrice, $fillFee);
             $remainingSize = max(0.0, $existing->size - $fillQuantity);
             if ($remainingSize <= 0.00000001) {
                 $this->stateStore->removePosition($order->symbol, $order->positionSide);
@@ -452,14 +488,14 @@ final readonly class FakeExchangeMatchingEngine
                     'position.closed',
                     $order->symbol,
                     $this->clock->now(),
-                    ['order_id' => $order->exchangeOrderId],
+                    ['order_id' => $order->exchangeOrderId] + $this->certifiedClosePayload($existing, $exitLedger),
                 ));
                 $this->cancelSiblingProtectionOrders($order);
 
                 return;
             }
 
-            $this->stateStore->savePosition($this->positionWithSize($existing, $remainingSize));
+            $this->stateStore->savePosition($this->positionWithSize($existing, $remainingSize, $exitLedger));
             $this->stateStore->appendEvent(new FakeExchangeEvent(
                 'position.updated',
                 $order->symbol,
@@ -494,7 +530,13 @@ final readonly class FakeExchangeMatchingEngine
             leverage: $leverage,
             openedAt: $existing?->openedAt ?? $this->clock->now(),
             updatedAt: $this->clock->now(),
-            metadata: ['source' => 'fake_exchange', 'last_order_id' => $order->exchangeOrderId],
+            metadata: $this->appendEntryLedger(
+                array_replace($this->lineageMetadata($order->metadata), $existing?->metadata ?? ['source' => 'fake_exchange']),
+                $order->exchangeOrderId,
+                $fillQuantity,
+                $executionPrice,
+                $fillFee,
+            ),
         );
         $this->stateStore->savePosition($position);
         $this->stateStore->appendEvent(new FakeExchangeEvent(
@@ -525,7 +567,10 @@ final readonly class FakeExchangeMatchingEngine
         }
     }
 
-    private function positionWithSize(ExchangePositionDto $position, float $size): ExchangePositionDto
+    /**
+     * @param array<string,mixed>|null $metadata
+     */
+    private function positionWithSize(ExchangePositionDto $position, float $size, ?array $metadata = null): ExchangePositionDto
     {
         return new ExchangePositionDto(
             exchange: $position->exchange,
@@ -541,8 +586,141 @@ final readonly class FakeExchangeMatchingEngine
             leverage: $position->leverage,
             openedAt: $position->openedAt,
             updatedAt: $this->clock->now(),
-            metadata: $position->metadata,
+            metadata: $metadata ?? $position->metadata,
         );
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return array<string,mixed>
+     */
+    private function appendEntryLedger(array $metadata, string $orderId, float $quantity, float $price, float $fee): array
+    {
+        $entryOrderIds = $this->entryOrderIds($metadata, $orderId);
+
+        return array_replace($metadata, [
+            'source' => 'fake_exchange',
+            'last_order_id' => $orderId,
+            'entry_order_ids' => $entryOrderIds,
+            'entry_order_count' => \count($entryOrderIds),
+            'entry_qty' => $this->metadataFloat($metadata, 'entry_qty') + $quantity,
+            'entry_notional_usdt' => $this->metadataFloat($metadata, 'entry_notional_usdt') + ($quantity * $price),
+            'entry_fee_usdt' => $this->metadataFloat($metadata, 'entry_fee_usdt') + $fee,
+            'pnl_source' => 'fake_paper_fill_ledger_v1',
+        ]);
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return array<string,mixed>
+     */
+    private function appendExitLedger(array $metadata, float $quantity, float $price, float $fee): array
+    {
+        return array_replace($metadata, [
+            'exit_qty' => $this->metadataFloat($metadata, 'exit_qty') + $quantity,
+            'exit_notional_usdt' => $this->metadataFloat($metadata, 'exit_notional_usdt') + ($quantity * $price),
+            'exit_fee_usdt' => $this->metadataFloat($metadata, 'exit_fee_usdt') + $fee,
+            'pnl_source' => 'fake_paper_fill_ledger_v1',
+        ]);
+    }
+
+    /**
+     * @param array<string,mixed> $closeLedger
+     * @return array<string,mixed>
+     */
+    private function certifiedClosePayload(ExchangePositionDto $position, array $closeLedger): array
+    {
+        $entryQty = $this->metadataFloat($closeLedger, 'entry_qty');
+        $exitQty = $this->metadataFloat($closeLedger, 'exit_qty');
+        $entryNotional = $this->metadataFloat($closeLedger, 'entry_notional_usdt');
+        $exitNotional = $this->metadataFloat($closeLedger, 'exit_notional_usdt');
+        $entryFee = $this->metadataFloat($closeLedger, 'entry_fee_usdt');
+        $exitFee = $this->metadataFloat($closeLedger, 'exit_fee_usdt');
+        $entryOrderCount = max(1, (int) round($this->metadataFloat($closeLedger, 'entry_order_count')));
+        $lineageSufficient = $entryOrderCount <= 1;
+        $gross = $position->side === ExchangePositionSide::SHORT
+            ? $entryNotional - $exitNotional
+            : $exitNotional - $entryNotional;
+
+        return $this->lineageMetadata($closeLedger) + [
+            'gross_realized_pnl_usdt' => round($gross, 12),
+            'recorded_pnl_usdt' => round($gross - $entryFee - $exitFee, 12),
+            'entry_fee_usdt' => round($entryFee, 12),
+            'exit_fee_usdt' => round($exitFee, 12),
+            'other_trading_fees_usdt' => 0.0,
+            'funding_usdt' => 0.0,
+            'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0,
+            'borrow_cost_usdt' => 0.0,
+            'liquidation_fee_usdt' => 0.0,
+            'entry_qty' => round($entryQty, 12),
+            'exit_qty' => round($exitQty, 12),
+            'remaining_qty' => 0.0,
+            'position_fully_closed' => true,
+            'fills_complete' => true,
+            'quantity_coherent' => abs($entryQty - $exitQty) <= 0.00000001,
+            'lineage_sufficient' => $lineageSufficient,
+            'identifier_conflict' => false,
+            'pnl_source' => 'fake_paper_fill_ledger_v1',
+            'cost_completeness' => $lineageSufficient ? 'complete' : 'partial',
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return list<string>
+     */
+    private function entryOrderIds(array $metadata, string $orderId): array
+    {
+        $ids = [];
+        $existing = $metadata['entry_order_ids'] ?? [];
+        if (\is_array($existing)) {
+            foreach ($existing as $existingId) {
+                if (\is_scalar($existingId) && trim((string) $existingId) !== '') {
+                    $ids[] = (string) $existingId;
+                }
+            }
+        }
+
+        $lastOrderId = $this->stringMetadata($metadata, 'last_order_id');
+        if ($lastOrderId !== null) {
+            $ids[] = $lastOrderId;
+        }
+
+        $ids[] = $orderId;
+
+        return array_values(array_unique($ids));
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return array<string,mixed>
+     */
+    private function lineageMetadata(array $metadata): array
+    {
+        $lineage = [];
+        foreach (self::LINEAGE_METADATA_KEYS as $key) {
+            if (!\array_key_exists($key, $metadata)) {
+                continue;
+            }
+
+            $value = $metadata[$key];
+            if ($value === null || \is_scalar($value)) {
+                $lineage[$key] = $value;
+            }
+        }
+
+        return $lineage;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function metadataFloat(array $metadata, string $key): float
+    {
+        $value = $metadata[$key] ?? 0.0;
+
+        return is_numeric($value) ? (float) $value : 0.0;
     }
 
     private function placeResult(bool $accepted, PlaceOrderRequest $request, ExchangeOrderDto $order): PlaceOrderResult
@@ -559,6 +737,9 @@ final readonly class FakeExchangeMatchingEngine
         );
     }
 
+    /**
+     * @param array<string,mixed> $payload
+     */
     private function appendEvent(string $type, ExchangeOrderDto $order, array $payload = []): void
     {
         $this->stateStore->appendEvent(new FakeExchangeEvent(
@@ -567,6 +748,11 @@ final readonly class FakeExchangeMatchingEngine
             $this->clock->now(),
             ['order_id' => $order->exchangeOrderId] + $payload,
         ));
+    }
+
+    private function fillFee(float $quantity, float $price): float
+    {
+        return round($quantity * $price * self::FEE_RATE, 12);
     }
 
     private function assertRequestContext(PlaceOrderRequest $request): void

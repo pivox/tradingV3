@@ -15,6 +15,7 @@ use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeOrderCreated;
 use App\Exchange\Event\ExchangeOrderPartiallyFilled;
+use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionOpened;
 use App\Exchange\Event\ExchangeProtectionOrderRejected;
 use App\Exchange\Fake\FakeExchangeEvent;
@@ -36,6 +37,7 @@ use Psr\Clock\ClockInterface;
 #[CoversClass(ExchangeOrderPartiallyFilled::class)]
 #[CoversClass(ExchangeOrderCreated::class)]
 #[CoversClass(ExchangeFillReceived::class)]
+#[CoversClass(ExchangePositionClosed::class)]
 #[CoversClass(ExchangePositionOpened::class)]
 #[CoversClass(ExchangeProtectionOrderRejected::class)]
 final class FakeExchangeEventNormalizerTest extends TestCase
@@ -50,7 +52,7 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         $book = new FakeExchangeOrderBook($this->state);
         $engine = new FakeExchangeMatchingEngine($this->state, $book, $this->fixedClock());
         $this->scenario = new FakeExchangeScenarioService($this->state, $book, $engine);
-        $this->normalizer = new FakeExchangeEventNormalizer($this->state);
+        $this->normalizer = new FakeExchangeEventNormalizer();
     }
 
     public function testNormalizesPartialFillIntoOrderAndFillEvents(): void
@@ -66,6 +68,9 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         self::assertInstanceOf(ExchangeFillReceived::class, $normalized[1]);
         self::assertSame('exchange.order.partially_filled', $normalized[0]->eventType());
         self::assertEqualsWithDelta(4.0, $normalized[1]->fill()->quantity, 0.000001);
+        self::assertSame('USDT', $normalized[1]->fill()->feeCurrency);
+        self::assertNotNull($normalized[1]->fill()->fee);
+        self::assertSame('fake_paper_fill_ledger_v1', $normalized[1]->fill()->metadata['pnl_source'] ?? null);
         self::assertSame('BTCUSDT', $normalized[1]->symbol());
         self::assertSame(
             $normalized[1]->fill()->fillId,
@@ -89,6 +94,36 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         self::assertInstanceOf(ExchangePositionOpened::class, $normalized[0]);
         self::assertSame('exchange.position.opened', $normalized[0]->eventType());
         self::assertEqualsWithDelta(10.0, $normalized[0]->size(), 0.000001);
+    }
+
+    public function testNormalizesPositionClosedWithCertifiedFakePnlEvidence(): void
+    {
+        $this->scenarioAdapter()->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            quantity: 10.0,
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+            metadata: [
+                'internal_trade_id' => 'itd-normalized-close',
+                'position_id' => 'fake-normalized-pos',
+            ],
+        ));
+        $this->scenario->movePrice('BTCUSDT', 24790.0, 0.0);
+
+        $events = $this->scenario->events('position.closed');
+        $normalized = $this->normalizer->normalize($events[0]);
+
+        self::assertCount(1, $normalized);
+        self::assertInstanceOf(ExchangePositionClosed::class, $normalized[0]);
+        self::assertSame('exchange.position.closed', $normalized[0]->eventType());
+        self::assertSame('fake_paper_fill_ledger_v1', $normalized[0]->payload()['pnl_source'] ?? null);
+        self::assertSame(true, $normalized[0]->payload()['position_fully_closed'] ?? null);
+        self::assertSame('itd-normalized-close', $normalized[0]->payload()['internal_trade_id'] ?? null);
+        self::assertSame('fake-normalized-pos', $normalized[0]->payload()['position_id'] ?? null);
+        self::assertArrayHasKey('gross_realized_pnl_usdt', $normalized[0]->payload());
+        self::assertArrayHasKey('entry_fee_usdt', $normalized[0]->payload());
+        self::assertArrayHasKey('exit_fee_usdt', $normalized[0]->payload());
     }
 
     public function testNormalizesHistoricalOrderCreatedWithOriginalSnapshot(): void
@@ -136,12 +171,16 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         return new \App\Exchange\Adapter\FakeExchangeAdapter($this->state, $book, $engine, $this->fixedClock());
     }
 
+    /**
+     * @param array<string,mixed> $metadata
+     */
     private function request(
         ExchangeOrderType $orderType = ExchangeOrderType::LIMIT,
         ?float $price = 24950.0,
         float $quantity = 1.0,
         bool $postOnly = false,
         ?float $attachedStopLossPrice = null,
+        array $metadata = [],
     ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
@@ -160,6 +199,7 @@ final class FakeExchangeEventNormalizerTest extends TestCase
             marginMode: 'isolated',
             clientOrderId: 'cid-1',
             attachedStopLossPrice: $attachedStopLossPrice,
+            metadata: $metadata,
         );
     }
 
