@@ -78,7 +78,7 @@ There is no fallback by symbol alone and no timestamp-window matching. If no lin
 
 ## Fee Conversion
 
-USDT fees are copied to `fee_usdt`.
+`fee_amount` preserves the provider-reported amount for audit, including provider sign conventions. `fee_usdt` stores the normalized USDT cost used by certification and is non-negative; provider-signed charged fees such as `-0.02 USDT` are stored as `fee_amount=-0.020000000000` and `fee_usdt=0.020000000000`.
 
 A non-USDT fee is converted only when the event metadata or payload includes an explicit conversion:
 

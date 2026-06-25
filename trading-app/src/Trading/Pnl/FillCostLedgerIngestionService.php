@@ -285,14 +285,14 @@ final readonly class FillCostLedgerIngestionService
         }
 
         if (strtoupper($currency) === 'USDT') {
-            return $this->decimal($fill->fee);
+            return $this->decimal(abs($fill->fee));
         }
 
         $conversion = $metadata['fee_conversion'] ?? $payload['fee_conversion'] ?? null;
         if (\is_array($conversion) && isset($conversion['usdt_rate']) && is_numeric($conversion['usdt_rate'])) {
             $conversionCurrency = $this->string($conversion['currency'] ?? null);
             if ($conversionCurrency === null || strtoupper($conversionCurrency) === strtoupper($currency)) {
-                return $this->decimal($fill->fee * (float) $conversion['usdt_rate']);
+                return $this->decimal(abs($fill->fee) * (float) $conversion['usdt_rate']);
             }
         }
 

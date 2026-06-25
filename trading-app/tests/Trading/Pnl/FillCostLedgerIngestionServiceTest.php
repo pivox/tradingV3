@@ -411,6 +411,45 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
         self::assertSame([], $entry->getQualityFlags());
     }
 
+    public function testProviderSignedUsdtFeeIsNormalizedAsPositiveCost(): void
+    {
+        $this->persistLineage('itd-ledger-negative-usdt-fee', 'cid-negative-usdt-fee', 'EX-NEG-USDT-FEE', null);
+
+        $this->service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-NEG-USDT-FEE',
+            clientOrderId: 'cid-negative-usdt-fee',
+            fillId: 'fill-negative-usdt-fee',
+            fee: -0.02,
+            feeCurrency: 'USDT',
+        )));
+
+        $entry = $this->ledger->findByInternalTradeId('itd-ledger-negative-usdt-fee')[0];
+        self::assertSame('-0.020000000000', $entry->getFeeAmount());
+        self::assertSame('USDT', $entry->getFeeCurrency());
+        self::assertSame('0.020000000000', $entry->getFeeUsdt());
+        self::assertSame([], $entry->getQualityFlags());
+    }
+
+    public function testProviderSignedNonUsdtFeeIsNormalizedAfterExplicitConversion(): void
+    {
+        $this->persistLineage('itd-ledger-negative-bnb-fee', 'cid-negative-bnb-fee', 'EX-NEG-BNB-FEE', null);
+
+        $this->service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-NEG-BNB-FEE',
+            clientOrderId: 'cid-negative-bnb-fee',
+            fillId: 'fill-negative-bnb-fee',
+            fee: -0.01,
+            feeCurrency: 'BNB',
+            metadata: ['fee_conversion' => ['currency' => 'BNB', 'usdt_rate' => 600.0]],
+        )));
+
+        $entry = $this->ledger->findByInternalTradeId('itd-ledger-negative-bnb-fee')[0];
+        self::assertSame('-0.010000000000', $entry->getFeeAmount());
+        self::assertSame('BNB', $entry->getFeeCurrency());
+        self::assertSame('6.000000000000', $entry->getFeeUsdt());
+        self::assertSame([], $entry->getQualityFlags());
+    }
+
     public function testExplicitZeroFeeIsKnownEvenWhenCurrencyIsMissing(): void
     {
         $this->persistLineage('itd-ledger-zero-fee', 'cid-zero-fee', 'EX-ZERO-FEE', null);
