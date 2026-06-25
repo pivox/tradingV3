@@ -277,6 +277,32 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertEqualsWithDelta(2.0, (float) $closedEvents[0]->payload['exit_qty'], 0.000001);
     }
 
+    public function testClosePayloadKeepsEntryClientOrderIdWhenEntryMetadataHasOnlyOrderIntent(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'entry-cid-from-execution',
+            postOnly: false,
+            metadata: ['order_intent_id' => '456'],
+        ));
+
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'reduce-cid-from-execution',
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+        ));
+
+        $closedEvents = $this->scenario->events('position.closed');
+        self::assertCount(1, $closedEvents);
+        self::assertSame('entry-cid-from-execution', $closedEvents[0]->payload['client_order_id'] ?? null);
+        self::assertSame('456', $closedEvents[0]->payload['order_intent_id'] ?? null);
+        self::assertSame('complete', $closedEvents[0]->payload['cost_completeness'] ?? null);
+    }
+
     public function testReduceOnlyProtectionFillIsCappedToRemainingPositionSize(): void
     {
         $this->adapter->placeOrder($this->request(

@@ -296,6 +296,7 @@ final readonly class FakeExchangeMatchingEngine
             'source' => 'fake_exchange',
             'leverage' => $request->leverage,
             'margin_mode' => $request->marginMode,
+            'client_order_id' => $request->clientOrderId,
             'attached_stop_loss_price' => $request->attachedStopLossPrice,
             'attached_take_profit_price' => $request->attachedTakeProfitPrice,
         ], static fn (mixed $value): bool => $value !== null) + $request->metadata;
