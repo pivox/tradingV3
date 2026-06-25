@@ -195,6 +195,11 @@ final class FakeExchangeAdapterTest extends TestCase
             price: null,
             postOnly: false,
             attachedStopLossPrice: 24800.0,
+            metadata: [
+                'internal_trade_id' => 'itd-fake-sl',
+                'position_id' => 'fake-pos-sl',
+                'order_intent_id' => '123',
+            ],
         ));
 
         $result = $this->scenario->movePrice('BTCUSDT', 24790.0, 0.0);
@@ -210,6 +215,9 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame('complete', $closedEvents[0]->payload['cost_completeness'] ?? null);
         self::assertSame(true, $closedEvents[0]->payload['position_fully_closed'] ?? null);
         self::assertSame(true, $closedEvents[0]->payload['fills_complete'] ?? null);
+        self::assertSame('itd-fake-sl', $closedEvents[0]->payload['internal_trade_id'] ?? null);
+        self::assertSame('fake-pos-sl', $closedEvents[0]->payload['position_id'] ?? null);
+        self::assertSame('123', $closedEvents[0]->payload['order_intent_id'] ?? null);
         self::assertArrayHasKey('gross_realized_pnl_usdt', $closedEvents[0]->payload);
         self::assertArrayHasKey('entry_fee_usdt', $closedEvents[0]->payload);
         self::assertArrayHasKey('exit_fee_usdt', $closedEvents[0]->payload);
@@ -607,6 +615,9 @@ final class FakeExchangeAdapterTest extends TestCase
         }
     }
 
+    /**
+     * @param array<string,mixed> $metadata
+     */
     private function request(
         string $symbol = 'BTCUSDT',
         ExchangeOrderType $orderType = ExchangeOrderType::LIMIT,
@@ -621,6 +632,7 @@ final class FakeExchangeAdapterTest extends TestCase
         ?float $stopPrice = null,
         ?float $attachedStopLossPrice = null,
         ?float $attachedTakeProfitPrice = null,
+        array $metadata = [],
     ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
@@ -640,6 +652,7 @@ final class FakeExchangeAdapterTest extends TestCase
             clientOrderId: $clientOrderId,
             attachedStopLossPrice: $attachedStopLossPrice,
             attachedTakeProfitPrice: $attachedTakeProfitPrice,
+            metadata: $metadata,
         );
     }
 

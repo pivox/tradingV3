@@ -104,6 +104,10 @@ final class FakeExchangeEventNormalizerTest extends TestCase
             quantity: 10.0,
             postOnly: false,
             attachedStopLossPrice: 24800.0,
+            metadata: [
+                'internal_trade_id' => 'itd-normalized-close',
+                'position_id' => 'fake-normalized-pos',
+            ],
         ));
         $this->scenario->movePrice('BTCUSDT', 24790.0, 0.0);
 
@@ -115,6 +119,8 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         self::assertSame('exchange.position.closed', $normalized[0]->eventType());
         self::assertSame('fake_paper_fill_ledger_v1', $normalized[0]->payload()['pnl_source'] ?? null);
         self::assertSame(true, $normalized[0]->payload()['position_fully_closed'] ?? null);
+        self::assertSame('itd-normalized-close', $normalized[0]->payload()['internal_trade_id'] ?? null);
+        self::assertSame('fake-normalized-pos', $normalized[0]->payload()['position_id'] ?? null);
         self::assertArrayHasKey('gross_realized_pnl_usdt', $normalized[0]->payload());
         self::assertArrayHasKey('entry_fee_usdt', $normalized[0]->payload());
         self::assertArrayHasKey('exit_fee_usdt', $normalized[0]->payload());
@@ -165,12 +171,16 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         return new \App\Exchange\Adapter\FakeExchangeAdapter($this->state, $book, $engine, $this->fixedClock());
     }
 
+    /**
+     * @param array<string,mixed> $metadata
+     */
     private function request(
         ExchangeOrderType $orderType = ExchangeOrderType::LIMIT,
         ?float $price = 24950.0,
         float $quantity = 1.0,
         bool $postOnly = false,
         ?float $attachedStopLossPrice = null,
+        array $metadata = [],
     ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
@@ -189,6 +199,7 @@ final class FakeExchangeEventNormalizerTest extends TestCase
             marginMode: 'isolated',
             clientOrderId: 'cid-1',
             attachedStopLossPrice: $attachedStopLossPrice,
+            metadata: $metadata,
         );
     }
 

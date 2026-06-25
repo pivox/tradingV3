@@ -22,6 +22,25 @@ use Psr\Clock\ClockInterface;
 final readonly class FakeExchangeMatchingEngine
 {
     private const FEE_RATE = 0.0005;
+    /**
+     * @var string[]
+     */
+    private const LINEAGE_METADATA_KEYS = [
+        'internal_trade_id',
+        'internal_position_id',
+        'position_id',
+        'exchange_position_id',
+        'order_intent_id',
+        'client_order_id',
+        'run_id',
+        'correlation_run_id',
+        'orchestration_run_id',
+        'orchestration_set_id',
+        'orchestration_dashboard_id',
+        'mtf_profile',
+        'origin',
+        'attempt_number',
+    ];
 
     public function __construct(
         private FakeExchangeStateStore $stateStore,
@@ -378,9 +397,10 @@ final readonly class FakeExchangeMatchingEngine
             postOnly: false,
             timeInForce: null,
             createdAt: $this->clock->now(),
-            metadata: [
+            metadata: $this->lineageMetadata($entryOrder->metadata) + [
                 'source' => 'fake_exchange',
                 'parent_order_id' => $entryOrder->exchangeOrderId,
+                'parent_client_order_id' => $entryOrder->clientOrderId,
                 'protection_kind' => $suffix,
             ],
         );
@@ -509,7 +529,7 @@ final readonly class FakeExchangeMatchingEngine
             openedAt: $existing?->openedAt ?? $this->clock->now(),
             updatedAt: $this->clock->now(),
             metadata: $this->appendEntryLedger(
-                $existing?->metadata ?? ['source' => 'fake_exchange'],
+                array_replace($this->lineageMetadata($order->metadata), $existing?->metadata ?? ['source' => 'fake_exchange']),
                 $order->exchangeOrderId,
                 $fillQuantity,
                 $executionPrice,
@@ -614,7 +634,7 @@ final readonly class FakeExchangeMatchingEngine
             ? $entryNotional - $exitNotional
             : $exitNotional - $entryNotional;
 
-        return [
+        return $this->lineageMetadata($closeLedger) + [
             'gross_realized_pnl_usdt' => round($gross, 12),
             'recorded_pnl_usdt' => round($gross - $entryFee - $exitFee, 12),
             'entry_fee_usdt' => round($entryFee, 12),
@@ -636,6 +656,27 @@ final readonly class FakeExchangeMatchingEngine
             'pnl_source' => 'fake_paper_fill_ledger_v1',
             'cost_completeness' => 'complete',
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return array<string,mixed>
+     */
+    private function lineageMetadata(array $metadata): array
+    {
+        $lineage = [];
+        foreach (self::LINEAGE_METADATA_KEYS as $key) {
+            if (!\array_key_exists($key, $metadata)) {
+                continue;
+            }
+
+            $value = $metadata[$key];
+            if ($value === null || \is_scalar($value)) {
+                $lineage[$key] = $value;
+            }
+        }
+
+        return $lineage;
     }
 
     /**
