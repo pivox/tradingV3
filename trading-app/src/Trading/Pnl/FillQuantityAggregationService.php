@@ -170,13 +170,21 @@ final readonly class FillQuantityAggregationService
             return null;
         }
 
-        $fingerprint = implode('|', [
-            $entry->getFillRole(),
-            (string) $entry->getPrice(),
-            (string) $entry->getQuantity(),
-            (string) $entry->getFeeUsdt(),
-            $entry->getOccurredAt()->format(\DateTimeInterface::ATOM),
-        ]);
+        $fingerprint = json_encode([
+            'fill_role' => $entry->getFillRole(),
+            'price' => $entry->getPrice(),
+            'quantity' => $entry->getQuantity(),
+            'notional' => $entry->getNotional(),
+            'fee_amount' => $entry->getFeeAmount(),
+            'fee_currency' => $entry->getFeeCurrency(),
+            'fee_usdt' => $entry->getFeeUsdt(),
+            'funding_usdt' => $entry->getFundingUsdt(),
+            'spread_cost_usdt' => $entry->getSpreadCostUsdt(),
+            'slippage_cost_usdt' => $entry->getSlippageCostUsdt(),
+            'borrow_cost_usdt' => $entry->getBorrowCostUsdt(),
+            'liquidation_fee_usdt' => $entry->getLiquidationFeeUsdt(),
+            'occurred_at' => $entry->getOccurredAt()->format(\DateTimeInterface::ATOM),
+        ], \JSON_THROW_ON_ERROR);
         if (!isset($seenFillFingerprints[$identity])) {
             $seenFillFingerprints[$identity] = $fingerprint;
 

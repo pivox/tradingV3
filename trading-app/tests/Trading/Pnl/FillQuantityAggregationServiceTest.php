@@ -146,6 +146,22 @@ final class FillQuantityAggregationServiceTest extends TestCase
         self::assertFalse($conflictResult->netPnlCertificationAllowed());
     }
 
+    public function testDuplicateWithDifferentCostComponentIsAConflict(): void
+    {
+        $service = new FillQuantityAggregationService();
+
+        $result = $service->aggregateEntries([
+            self::fill('entry', 'entry', '2026-06-25 10:00:00 UTC', 100.0, 1.0, exchangeFillId: 'venue-fill-1', fundingUsdt: 0.10),
+            self::fill('entry-repriced-cost', 'entry', '2026-06-25 10:00:00 UTC', 100.0, 1.0, exchangeFillId: 'venue-fill-1', fundingUsdt: 0.12),
+            self::fill('exit', 'exit', '2026-06-25 10:05:00 UTC', 101.0, 1.0, exchangeFillId: 'venue-fill-2'),
+        ], internalTradeId: 'shared-trade-id', exchange: 'fake', marketType: 'paper');
+
+        self::assertSame('fill_conflict', $result->quantityStatus);
+        self::assertContains('fill_conflict', $result->quantityQualityFlags);
+        self::assertFalse($result->netPnlCertificationAllowed());
+        self::assertEqualsWithDelta(0.10, $result->fundingUsdt, 1e-12);
+    }
+
     public function testCancelledOrCorrectedFillIsIgnoredAuditably(): void
     {
         $service = new FillQuantityAggregationService();
@@ -226,6 +242,9 @@ final class FillQuantityAggregationServiceTest extends TestCase
         ?float $feeUsdt = null,
         ?float $fundingUsdt = null,
         ?float $spreadCostUsdt = null,
+        ?float $slippageCostUsdt = null,
+        ?float $borrowCostUsdt = null,
+        ?float $liquidationFeeUsdt = null,
         ?string $exchangeFillId = null,
         array $qualityFlags = [],
         ?string $side = null,
@@ -251,6 +270,9 @@ final class FillQuantityAggregationServiceTest extends TestCase
             ->setFeeUsdt($feeUsdt !== null ? sprintf('%.12F', $feeUsdt) : null)
             ->setFundingUsdt($fundingUsdt !== null ? sprintf('%.12F', $fundingUsdt) : null)
             ->setSpreadCostUsdt($spreadCostUsdt !== null ? sprintf('%.12F', $spreadCostUsdt) : null)
+            ->setSlippageCostUsdt($slippageCostUsdt !== null ? sprintf('%.12F', $slippageCostUsdt) : null)
+            ->setBorrowCostUsdt($borrowCostUsdt !== null ? sprintf('%.12F', $borrowCostUsdt) : null)
+            ->setLiquidationFeeUsdt($liquidationFeeUsdt !== null ? sprintf('%.12F', $liquidationFeeUsdt) : null)
             ->setExchangeFillId($exchangeFillId)
             ->setSide($side)
             ->setQualityFlags($qualityFlags);
