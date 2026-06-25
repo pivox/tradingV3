@@ -43,6 +43,12 @@ final class NetPnlCertificationService
 
         $entryQty = $this->quantity($entryFills);
         $exitQty = $this->quantity($exitFills);
+        if ($entryFills !== [] && $entryQty <= 0.0) {
+            $flags[] = 'quantity_mismatch';
+        }
+        if ($exitFills !== [] && $exitQty <= 0.0) {
+            $flags[] = 'quantity_mismatch';
+        }
         if ($entryQty > 0.0 && abs($entryQty - $exitQty) > 0.00000001) {
             $flags[] = 'quantity_mismatch';
         }

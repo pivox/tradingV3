@@ -102,6 +102,14 @@ final class NetPnlCertificationServiceTest extends TestCase
         self::assertContains('quantity_mismatch', $result->qualityFlags);
     }
 
+    public function testTradeFillRejectsZeroQuantityBeforeCertification(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('fill quantity must be positive');
+
+        new TradeFill('entry-1', 'BUY', 0.0, 100.0, 0.0, 'USDT', 'maker', new \DateTimeImmutable('2026-06-25 10:00:00 UTC'));
+    }
+
     public function testRefusesExchangeOrderSideInsteadOfPositionSide(): void
     {
         $service = new NetPnlCertificationService();

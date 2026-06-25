@@ -518,6 +518,8 @@ LEFT JOIN LATERAL (
       money.entry_qty IS NOT NULL
       AND money.exit_qty IS NOT NULL
       AND money.remaining_qty IS NOT NULL
+      AND money.entry_qty > 0
+      AND money.exit_qty > 0
       AND abs(money.entry_qty - money.exit_qty) <= 0.00000001
       AND abs(money.remaining_qty) <= 0.00000001
       AND COALESCE((ce.extra->> 'quantity_coherent') = 'true', true) IS TRUE
