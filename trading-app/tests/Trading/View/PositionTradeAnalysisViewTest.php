@@ -379,11 +379,11 @@ final class PositionTradeAnalysisViewTest extends TestCase
 
         $this->entry('BTCUSDT', $run, 's1', 'scalper', 'fake', 'perpetual', [
             'internal_trade_id' => 'itd-malformed-financials',
-            'risk_usdt' => 'not-a-number',
+            'risk_usdt' => '1e1000000',
         ], '2026-06-25 17:00:00+00', 2170);
         $this->close('BTCUSDT', $run, [
             'internal_trade_id' => 'itd-malformed-financials',
-            'gross_realized_pnl_usdt' => 'oops',
+            'gross_realized_pnl_usdt' => '9e999999',
             'entry_fee_usdt' => 'bad-fee',
             'exit_fee_usdt' => 0.01,
             'other_trading_fees_usdt' => 0.0,

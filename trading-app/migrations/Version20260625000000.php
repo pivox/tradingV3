@@ -29,15 +29,24 @@ final class Version20260625000000 extends AbstractMigration
         $this->addSql(<<<'SQL'
 CREATE OR REPLACE FUNCTION trading_v3_safe_numeric(value text)
 RETURNS numeric
-LANGUAGE sql
+LANGUAGE plpgsql
 IMMUTABLE
 STRICT
 AS $$
-    SELECT CASE
-        WHEN btrim(value) ~ '^[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$'
-        THEN btrim(value)::numeric
-        ELSE NULL
-    END;
+DECLARE
+    normalized text := btrim(value);
+BEGIN
+    IF length(normalized) > 128
+        OR normalized !~ '^[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$'
+    THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN normalized::numeric;
+EXCEPTION
+    WHEN numeric_value_out_of_range OR invalid_text_representation THEN
+        RETURN NULL;
+END;
 $$
 SQL);
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_tle_v2_fifo_internal ON trade_lifecycle_event (event_type, internal_trade_id, symbol, exchange, market_type, run_id, happened_at, id) WHERE internal_trade_id IS NOT NULL');
