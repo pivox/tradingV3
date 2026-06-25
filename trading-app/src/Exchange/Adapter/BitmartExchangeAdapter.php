@@ -21,6 +21,7 @@ use App\Exchange\Dto\CancelOrderRequest;
 use App\Exchange\Dto\CancelOrderResult;
 use App\Exchange\Dto\ExchangeBalanceDto;
 use App\Exchange\Dto\ExchangeCapabilities;
+use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Dto\ExchangeReconciliationResult;
@@ -32,11 +33,12 @@ use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Provider\Context\ExchangeContext;
+use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
 #[AutoconfigureTag('app.exchange_adapter')]
-final class BitmartExchangeAdapter implements ExchangeAdapterInterface
+final class BitmartExchangeAdapter implements ExchangeAdapterInterface, ExchangeRestSnapshotProviderInterface
 {
     private readonly ExchangeContext $context;
 
@@ -233,6 +235,157 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface
             completedAt: $now,
             metadata: ['reason' => 'legacy_bitmart_reconciliation_not_wired_yet'],
         );
+    }
+
+    public function getOrdersSnapshot(?string $symbol = null): array
+    {
+        return $this->getOpenOrders($symbol);
+    }
+
+    public function getFillsSnapshot(?string $symbol = null): array
+    {
+        $fills = [];
+        foreach ($this->bundle()->account()->getTrades($symbol, 200) as $row) {
+            if (!\is_array($row)) {
+                continue;
+            }
+
+            $fill = $this->mapTradeFill($row);
+            if ($fill instanceof ExchangeFillDto) {
+                $fills[] = $fill;
+            }
+        }
+
+        usort($fills, static function (ExchangeFillDto $left, ExchangeFillDto $right): int {
+            return [$left->filledAt->getTimestamp(), $left->fillId ?? '', $left->exchangeOrderId]
+                <=> [$right->filledAt->getTimestamp(), $right->fillId ?? '', $right->exchangeOrderId];
+        });
+
+        return $fills;
+    }
+
+    public function hasAuthoritativePositionSnapshot(?string $symbol = null): bool
+    {
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function mapTradeFill(array $row): ?ExchangeFillDto
+    {
+        $symbol = strtoupper((string) ($row['symbol'] ?? ''));
+        $exchangeOrderId = $this->stringValue($row['order_id'] ?? $row['orderId'] ?? null);
+        $quantity = $this->positiveFloat($row['vol'] ?? $row['size'] ?? $row['deal_size'] ?? $row['filled_size'] ?? $row['quantity'] ?? null);
+        $price = $this->positiveFloat($row['price'] ?? $row['deal_price'] ?? $row['exec_price'] ?? $row['execution_price'] ?? null);
+        if ($symbol === '' || $exchangeOrderId === null || $quantity === null || $price === null) {
+            return null;
+        }
+
+        [$side, $positionSide] = $this->tradeSide($row['side'] ?? null);
+        $metadata = $row + [
+            'source' => 'bitmart_rest_trades',
+            'source_version' => 'bitmart_ledger_ingestion_v1',
+            'pnl_source' => 'bitmart_rest_trades',
+            'liquidity_role' => $this->liquidityRoleFromTrade($row['exec_type'] ?? $row['liquidity_role'] ?? $row['liquidity'] ?? null),
+        ];
+        $positionId = $this->stringValue($row['position_id'] ?? $row['positionId'] ?? $row['exchange_position_id'] ?? null);
+        if ($positionId !== null) {
+            $metadata['position_id'] = $positionId;
+            $metadata['exchange_position_id'] = $positionId;
+        }
+
+        return new ExchangeFillDto(
+            exchange: $this->exchange(),
+            marketType: $this->marketType(),
+            symbol: $symbol,
+            exchangeOrderId: $exchangeOrderId,
+            clientOrderId: $this->stringValue($row['client_order_id'] ?? $row['clientOrderId'] ?? null),
+            fillId: $this->stringValue($row['trade_id'] ?? $row['tradeId'] ?? $row['id'] ?? null),
+            side: $side,
+            positionSide: $positionSide,
+            quantity: $quantity,
+            price: $price,
+            fee: $this->floatOrNull($row['fee'] ?? $row['fees'] ?? $row['commission'] ?? null),
+            feeCurrency: $this->stringValue($row['fee_currency'] ?? $row['feeCurrency'] ?? $row['fee_ccy'] ?? $row['feeCcy'] ?? null),
+            filledAt: $this->tradeTime($row['trade_time'] ?? $row['tradeTime'] ?? $row['create_time'] ?? $row['timestamp'] ?? $row['time'] ?? null),
+            metadata: $metadata,
+        );
+    }
+
+    /**
+     * @return array{0: ExchangeOrderSide, 1: ?ExchangePositionSide}
+     */
+    private function tradeSide(mixed $value): array
+    {
+        if (\is_numeric($value)) {
+            return match ((int) $value) {
+                1 => [ExchangeOrderSide::BUY, ExchangePositionSide::LONG],
+                2 => [ExchangeOrderSide::BUY, ExchangePositionSide::SHORT],
+                3 => [ExchangeOrderSide::SELL, ExchangePositionSide::LONG],
+                4 => [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT],
+                default => [ExchangeOrderSide::BUY, null],
+            };
+        }
+
+        $side = strtolower((string) $value);
+
+        return match ($side) {
+            'sell', 'ask' => [ExchangeOrderSide::SELL, null],
+            default => [ExchangeOrderSide::BUY, null],
+        };
+    }
+
+    private function tradeTime(mixed $value): \DateTimeImmutable
+    {
+        if (\is_numeric($value)) {
+            $timestamp = (float) $value;
+            if ($timestamp > 9999999999) {
+                $timestamp /= 1000;
+            }
+
+            return (new \DateTimeImmutable('@' . (int) floor($timestamp)))->setTimezone(new \DateTimeZone('UTC'));
+        }
+
+        if (\is_string($value) && trim($value) !== '') {
+            return new \DateTimeImmutable($value);
+        }
+
+        return $this->clock->now();
+    }
+
+    private function positiveFloat(mixed $value): ?float
+    {
+        if (!\is_numeric($value)) {
+            return null;
+        }
+
+        $float = (float) $value;
+
+        return $float > 0.0 ? $float : null;
+    }
+
+    private function floatOrNull(mixed $value): ?float
+    {
+        return \is_numeric($value) ? (float) $value : null;
+    }
+
+    private function stringValue(mixed $value): ?string
+    {
+        if (!\is_scalar($value)) {
+            return null;
+        }
+
+        $string = trim((string) $value);
+
+        return $string !== '' ? $string : null;
+    }
+
+    private function liquidityRoleFromTrade(mixed $value): string
+    {
+        $role = strtolower((string) $value);
+
+        return \in_array($role, ['maker', 'taker'], true) ? $role : 'unknown';
     }
 
     private function bundle(): \App\Provider\Registry\ExchangeProviderBundle

@@ -6,7 +6,7 @@ This document describes the first persistent ledger for exchange-neutral fills a
 
 The ledger persists normalized fill and cost facts in `fill_cost_ledger`. It is append-only for normal ingestion: a repeated event with the same idempotency key is treated as a replay, while the same key with a different payload is rejected as a conflict.
 
-This first version uses Fake/Paper as the deterministic reference source. Real exchanges may produce normalized `ExchangeFillReceived` events, but this PR does not certify Bitmart, OKX, or Hyperliquid net PnL.
+The first version uses Fake/Paper as the deterministic reference source. Bitmart can now project audited REST trade fills into the ledger; the Bitmart-specific coverage and remaining certification limits are documented in `docs/handbook/technical/bitmart-ledger-ingestion.md`. This does not certify Bitmart, OKX, or Hyperliquid net PnL.
 
 ## Stored Fields
 
