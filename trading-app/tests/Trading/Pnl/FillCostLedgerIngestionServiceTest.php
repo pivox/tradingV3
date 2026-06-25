@@ -170,6 +170,22 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
         self::assertContains('missing_lineage', $entry->getQualityFlags());
     }
 
+    public function testLineageFallsBackToExchangeOrderIdWhenClientOrderIdIsUnknown(): void
+    {
+        $this->persistLineage('itd-ledger-fallback', 'cid-ledger-fallback-real', 'EX-FALLBACK-LINEAGE', null);
+
+        $this->service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-FALLBACK-LINEAGE',
+            clientOrderId: 'stale-client-id',
+            fillId: 'fill-fallback-lineage',
+        )));
+
+        $entry = $this->ledger->findOneByIdempotencyKey('fake:perpetual:exchange_fill:fill-fallback-lineage');
+        self::assertInstanceOf(FillCostLedgerEntry::class, $entry);
+        self::assertSame('itd-ledger-fallback', $entry->getInternalTradeId());
+        self::assertSame([], $entry->getQualityFlags());
+    }
+
     public function testReplayWithDifferentResolvedLineageIsRejectedAsConflict(): void
     {
         $this->persistLineage('itd-ledger-lineage-a', 'cid-lineage-a', 'EX-LINEAGE-CONFLICT', null);

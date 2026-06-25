@@ -74,7 +74,7 @@ Replays with the same canonical fill/cost payload hash are ignored. Mutable proj
 3. exact `exchange_order_id` in the same `exchange + market_type`;
 4. exact `position_id` in the same `exchange + market_type` when present.
 
-There is no fallback by symbol alone and no timestamp-window matching. If no lineage is found, the row is still persisted with `quality_flags=["missing_lineage"]`.
+When a higher-priority identifier is present but unmatched, the resolver continues to the next exact identifier. There is no fallback by symbol alone and no timestamp-window matching. If no lineage is found, the row is still persisted with `quality_flags=["missing_lineage"]`.
 
 ## Fee Conversion
 

@@ -171,6 +171,21 @@ final class TradeLineageManagerTest extends KernelTestCase
         self::assertNull($resolved);
     }
 
+    public function testResolveFallsBackAfterUnmatchedHigherPriorityIdentifier(): void
+    {
+        $intent = $this->persistIntent('cid-real', 'BTCUSDT', Exchange::BITMART, MarketType::PERPETUAL);
+        $lineage = $this->manager->ensureForIntent($intent, ['internal_trade_id' => 'itd-fallback']);
+        $this->manager->attachExchangeOrderId($lineage, 'ex-fallback');
+
+        $resolved = $this->manager->resolve(
+            new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
+            clientOrderId: 'stale-client-id',
+            exchangeOrderId: 'ex-fallback',
+        );
+
+        self::assertSame('itd-fallback', $resolved?->getInternalTradeId());
+    }
+
     public function testAmbiguousExchangeOrPositionIdentifierStaysUnmatched(): void
     {
         $first = $this->persistIntent('cid-first', 'BTCUSDT', Exchange::BITMART, MarketType::PERPETUAL);
