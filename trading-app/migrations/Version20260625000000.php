@@ -467,7 +467,13 @@ SELECT
      AND (ce.extra->> 'slippage') IS NULL
      AND money.gross_realized_pnl_usdt IS NULL
      AND money.entry_fee_usdt IS NULL
-     AND money.exit_fee_usdt IS NULL THEN 'unknown'
+     AND money.exit_fee_usdt IS NULL
+     AND money.other_trading_fees_usdt IS NULL
+     AND money.certified_funding_usdt IS NULL
+     AND money.spread_cost_usdt IS NULL
+     AND money.slippage_cost_usdt IS NULL
+     AND money.borrow_cost_usdt IS NULL
+     AND money.liquidation_fee_usdt IS NULL THEN 'unknown'
     ELSE 'partial'
   END                                             AS cost_completeness
 FROM entry_resolved ee

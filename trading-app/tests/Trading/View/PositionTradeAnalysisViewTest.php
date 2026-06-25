@@ -255,6 +255,18 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'pnl_source' => 'fake_paper_fill_ledger_v1',
         ], null, '2026-06-25 13:10:00+00', 2131, 'fake', 'perpetual');
 
+        $this->entry('LTCUSDT', $run, 's1', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-net-cost-evidence-only',
+        ], '2026-06-25 14:00:00+00', 2140);
+        $this->close('LTCUSDT', $run, [
+            'internal_trade_id' => 'itd-net-cost-evidence-only',
+            'funding_usdt' => 0.0,
+            'position_fully_closed' => true,
+            'fills_complete' => true,
+            'lineage_sufficient' => true,
+            'identifier_conflict' => false,
+        ], null, '2026-06-25 14:10:00+00', 2141, 'fake', 'perpetual');
+
         $rows = $this->conn->fetchAllAssociative(
             'SELECT symbol, gross_realized_pnl_usdt, entry_fee_usdt, exit_fee_usdt,
                     other_trading_fees_usdt, funding_usdt, spread_cost_usdt,
@@ -266,7 +278,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
             [$run],
         );
 
-        self::assertCount(4, $rows);
+        self::assertCount(5, $rows);
         $bySymbol = [];
         foreach ($rows as $row) {
             $bySymbol[$row['symbol']] = $row;
@@ -297,6 +309,10 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('partial', $bySymbol['XRPUSDT']['cost_completeness']);
         self::assertNull($bySymbol['XRPUSDT']['net_pnl_usdt']);
         self::assertStringContainsString('quantity_mismatch', (string) $bySymbol['XRPUSDT']['pnl_quality_flags']);
+
+        self::assertSame('partial', $bySymbol['LTCUSDT']['cost_completeness']);
+        self::assertNull($bySymbol['LTCUSDT']['net_pnl_usdt']);
+        self::assertStringContainsString('missing_gross_pnl', (string) $bySymbol['LTCUSDT']['pnl_quality_flags']);
     }
 
     public function testCloseIsNotReusedAcrossEntriesSharingAPositionId(): void
