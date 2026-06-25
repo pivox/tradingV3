@@ -35,6 +35,8 @@ net_pnl_usdt =
 
 Sinon `cost_completeness` vaut `partial` ou `unknown`, `net_pnl_usdt` vaut `NULL`, et `pnl_quality_flags` liste les raisons (`missing_entry_fee`, `quantity_mismatch`, `position_not_fully_closed`, etc.).
 
+Les valeurs numeriques legacy ou provider qui ne sont pas parseables sont traitees comme inconnues. Elles ne doivent jamais faire echouer la lecture de `position_trade_analysis_v2` et ne peuvent pas produire un PnL net certifie.
+
 ## Audit des sources
 
 | Provider | champ financier | endpoint/source | brut ou net | signe | disponibilite | granularite | fiabilite | nullable | fixture | tests |

@@ -26,6 +26,20 @@ final class Version20260625000000 extends AbstractMigration
 
     public function up(Schema $schema): void
     {
+        $this->addSql(<<<'SQL'
+CREATE OR REPLACE FUNCTION trading_v3_safe_numeric(value text)
+RETURNS numeric
+LANGUAGE sql
+IMMUTABLE
+STRICT
+AS $$
+    SELECT CASE
+        WHEN btrim(value) ~ '^[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$'
+        THEN btrim(value)::numeric
+        ELSE NULL
+    END;
+$$
+SQL);
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_tle_v2_fifo_internal ON trade_lifecycle_event (event_type, internal_trade_id, symbol, exchange, market_type, run_id, happened_at, id) WHERE internal_trade_id IS NOT NULL');
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_tle_v2_fifo_position ON trade_lifecycle_event (event_type, position_id, symbol, exchange, market_type, run_id, happened_at, id) WHERE position_id IS NOT NULL');
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_tle_v2_fifo_extra_trade ON trade_lifecycle_event (event_type, (extra->>\'trade_id\'), symbol, exchange, market_type, run_id, happened_at, id) WHERE extra ? \'trade_id\'');
@@ -374,31 +388,31 @@ SELECT
   CASE WHEN m.close_event_id IS NOT NULL THEN 'matched' ELSE 'unmatched' END AS close_match_status,
   COALESCE(m.matched_by, 'unmatched')                   AS close_matched_by,
   CASE WHEN m.close_event_id IS NOT NULL THEN 'matched_closed' ELSE 'unmatched' END AS analysis_status,
-  (ee.extra->> 'r_multiple_final')::numeric       AS expected_r_multiple,
-  (ee.extra->> 'risk_usdt')::numeric              AS risk_usdt,
-  (ee.extra->> 'notional_usdt')::numeric          AS notional_usdt,
-  (ee.extra->> 'atr_pct_entry')::numeric          AS atr_pct_entry,
-  (ee.extra->> 'volume_ratio')::numeric           AS entry_volume_ratio,
+  trading_v3_safe_numeric(ee.extra->> 'r_multiple_final')       AS expected_r_multiple,
+  trading_v3_safe_numeric(ee.extra->> 'risk_usdt')              AS risk_usdt,
+  trading_v3_safe_numeric(ee.extra->> 'notional_usdt')          AS notional_usdt,
+  trading_v3_safe_numeric(ee.extra->> 'atr_pct_entry')          AS atr_pct_entry,
+  trading_v3_safe_numeric(ee.extra->> 'volume_ratio')           AS entry_volume_ratio,
   sv.snapshot_kline_time,
-  sv.entry_rsi::numeric                           AS entry_rsi,
-  sv.entry_atr::numeric                           AS entry_atr,
-  sv.entry_macd::numeric                          AS entry_macd,
-  sv.entry_ma9::numeric                           AS entry_ma9,
-  sv.entry_ma21::numeric                          AS entry_ma21,
-  sv.entry_vwap::numeric                          AS entry_vwap,
-  (ce.extra->> 'pnl_R')::numeric                  AS pnl_r,
-  COALESCE(money.recorded_pnl_usdt, (ce.extra->> 'pnl')::numeric) AS recorded_pnl_usdt,
+  trading_v3_safe_numeric(sv.entry_rsi)                           AS entry_rsi,
+  trading_v3_safe_numeric(sv.entry_atr)                           AS entry_atr,
+  trading_v3_safe_numeric(sv.entry_macd)                          AS entry_macd,
+  trading_v3_safe_numeric(sv.entry_ma9)                           AS entry_ma9,
+  trading_v3_safe_numeric(sv.entry_ma21)                          AS entry_ma21,
+  trading_v3_safe_numeric(sv.entry_vwap)                          AS entry_vwap,
+  trading_v3_safe_numeric(ce.extra->> 'pnl_R')                  AS pnl_r,
+  COALESCE(money.recorded_pnl_usdt, trading_v3_safe_numeric(ce.extra->> 'pnl')) AS recorded_pnl_usdt,
   money.gross_realized_pnl_usdt,
   money.entry_fee_usdt,
   money.exit_fee_usdt,
   money.other_trading_fees_usdt,
-  (ce.extra->> 'pnl_pct')::numeric                AS pnl_pct,
-  (ce.extra->> 'mfe_pct')::numeric                AS mfe_pct,
-  (ce.extra->> 'mae_pct')::numeric                AS mae_pct,
-  (ce.extra->> 'holding_time_sec')::numeric       AS holding_time_sec,
-  (ce.extra->> 'fees')::numeric                   AS fees_usdt,
+  trading_v3_safe_numeric(ce.extra->> 'pnl_pct')                AS pnl_pct,
+  trading_v3_safe_numeric(ce.extra->> 'mfe_pct')                AS mfe_pct,
+  trading_v3_safe_numeric(ce.extra->> 'mae_pct')                AS mae_pct,
+  trading_v3_safe_numeric(ce.extra->> 'holding_time_sec')       AS holding_time_sec,
+  trading_v3_safe_numeric(ce.extra->> 'fees')                   AS fees_usdt,
   money.funding_usdt                              AS funding_usdt,
-  (ce.extra->> 'slippage')::numeric               AS slippage_usdt,
+  trading_v3_safe_numeric(ce.extra->> 'slippage')               AS slippage_usdt,
   money.spread_cost_usdt,
   money.slippage_cost_usdt,
   money.borrow_cost_usdt,
@@ -424,10 +438,10 @@ SELECT
       - money.borrow_cost_usdt
       - money.liquidation_fee_usdt
   ELSE NULL END                                   AS net_pnl_usdt,
-  COALESCE((ee.extra->> 'risk_usdt_at_entry')::numeric, (ee.extra->> 'risk_usdt')::numeric) AS risk_usdt_at_entry,
+  COALESCE(trading_v3_safe_numeric(ee.extra->> 'risk_usdt_at_entry'), trading_v3_safe_numeric(ee.extra->> 'risk_usdt')) AS risk_usdt_at_entry,
   CASE WHEN quality.flags = ARRAY[]::text[]
     AND m.close_event_id IS NOT NULL
-    AND COALESCE((ee.extra->> 'risk_usdt_at_entry')::numeric, (ee.extra->> 'risk_usdt')::numeric) > 0
+    AND COALESCE(trading_v3_safe_numeric(ee.extra->> 'risk_usdt_at_entry'), trading_v3_safe_numeric(ee.extra->> 'risk_usdt')) > 0
   THEN
     (
       money.gross_realized_pnl_usdt
@@ -439,7 +453,7 @@ SELECT
         - money.slippage_cost_usdt
         - money.borrow_cost_usdt
         - money.liquidation_fee_usdt
-    ) / COALESCE((ee.extra->> 'risk_usdt_at_entry')::numeric, (ee.extra->> 'risk_usdt')::numeric)
+    ) / COALESCE(trading_v3_safe_numeric(ee.extra->> 'risk_usdt_at_entry'), trading_v3_safe_numeric(ee.extra->> 'risk_usdt'))
   ELSE NULL END                                   AS realized_net_pnl_r,
   CASE
     WHEN ce.extra IS NULL THEN NULL
@@ -454,10 +468,10 @@ SELECT
     (ce.extra->> 'funding')  IS NOT NULL AND
     (ce.extra->> 'slippage') IS NOT NULL
   THEN
-    (ce.extra->> 'pnl')::numeric
-      - (ce.extra->> 'fees')::numeric
-      - (ce.extra->> 'funding')::numeric
-      - (ce.extra->> 'slippage')::numeric
+    trading_v3_safe_numeric(ce.extra->> 'pnl')
+      - trading_v3_safe_numeric(ce.extra->> 'fees')
+      - trading_v3_safe_numeric(ce.extra->> 'funding')
+      - trading_v3_safe_numeric(ce.extra->> 'slippage')
   ELSE NULL END                                   AS estimated_net_pnl_usdt,
   CASE
     WHEN m.close_event_id IS NULL THEN 'not_applicable'
@@ -482,21 +496,21 @@ LEFT JOIN close_events ce  ON ce.id = m.close_event_id
 LEFT JOIN snapshot_values sv ON sv.event_id = ee.id
 LEFT JOIN LATERAL (
   SELECT
-    (ce.extra->> 'gross_realized_pnl_usdt')::numeric AS gross_realized_pnl_usdt,
-    (ce.extra->> 'recorded_pnl_usdt')::numeric AS recorded_pnl_usdt,
-    (ce.extra->> 'entry_fee_usdt')::numeric AS entry_fee_usdt,
-    (ce.extra->> 'exit_fee_usdt')::numeric AS exit_fee_usdt,
-    (ce.extra->> 'other_trading_fees_usdt')::numeric AS other_trading_fees_usdt,
-    (ce.extra->> 'funding_usdt')::numeric AS certified_funding_usdt,
-    COALESCE((ce.extra->> 'funding_usdt')::numeric, (ce.extra->> 'funding')::numeric) AS funding_usdt,
-    (ce.extra->> 'spread_cost_usdt')::numeric AS spread_cost_usdt,
-    (ce.extra->> 'slippage_cost_usdt')::numeric AS slippage_cost_usdt,
-    (ce.extra->> 'borrow_cost_usdt')::numeric AS borrow_cost_usdt,
-    (ce.extra->> 'liquidation_fee_usdt')::numeric AS liquidation_fee_usdt,
+    trading_v3_safe_numeric(ce.extra->> 'gross_realized_pnl_usdt') AS gross_realized_pnl_usdt,
+    trading_v3_safe_numeric(ce.extra->> 'recorded_pnl_usdt') AS recorded_pnl_usdt,
+    trading_v3_safe_numeric(ce.extra->> 'entry_fee_usdt') AS entry_fee_usdt,
+    trading_v3_safe_numeric(ce.extra->> 'exit_fee_usdt') AS exit_fee_usdt,
+    trading_v3_safe_numeric(ce.extra->> 'other_trading_fees_usdt') AS other_trading_fees_usdt,
+    trading_v3_safe_numeric(ce.extra->> 'funding_usdt') AS certified_funding_usdt,
+    COALESCE(trading_v3_safe_numeric(ce.extra->> 'funding_usdt'), trading_v3_safe_numeric(ce.extra->> 'funding')) AS funding_usdt,
+    trading_v3_safe_numeric(ce.extra->> 'spread_cost_usdt') AS spread_cost_usdt,
+    trading_v3_safe_numeric(ce.extra->> 'slippage_cost_usdt') AS slippage_cost_usdt,
+    trading_v3_safe_numeric(ce.extra->> 'borrow_cost_usdt') AS borrow_cost_usdt,
+    trading_v3_safe_numeric(ce.extra->> 'liquidation_fee_usdt') AS liquidation_fee_usdt,
     COALESCE(NULLIF(ce.extra->> 'pnl_source', ''), CASE WHEN ce.extra IS NOT NULL THEN 'provider_recorded' ELSE NULL END) AS pnl_source,
-    (ce.extra->> 'entry_qty')::numeric AS entry_qty,
-    (ce.extra->> 'exit_qty')::numeric AS exit_qty,
-    (ce.extra->> 'remaining_qty')::numeric AS remaining_qty
+    trading_v3_safe_numeric(ce.extra->> 'entry_qty') AS entry_qty,
+    trading_v3_safe_numeric(ce.extra->> 'exit_qty') AS exit_qty,
+    trading_v3_safe_numeric(ce.extra->> 'remaining_qty') AS remaining_qty
 ) money ON true
 LEFT JOIN LATERAL (
   SELECT ARRAY_REMOVE(ARRAY[
@@ -554,5 +568,6 @@ SQL);
         foreach ($previous->getSql() as $query) {
             $this->addSql($query->getStatement(), $query->getParameters(), $query->getTypes());
         }
+        $this->addSql('DROP FUNCTION IF EXISTS trading_v3_safe_numeric(text)');
     }
 }

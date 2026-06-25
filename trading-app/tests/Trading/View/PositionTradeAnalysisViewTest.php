@@ -373,6 +373,53 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertStringContainsString('missing_gross_pnl', (string) $bySymbol['LTCUSDT']['pnl_quality_flags']);
     }
 
+    public function testMalformedLegacyFinancialValuesDoNotBreakViewRead(): void
+    {
+        $run = 'run_malformed_financials';
+
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-malformed-financials',
+            'risk_usdt' => 'not-a-number',
+        ], '2026-06-25 17:00:00+00', 2170);
+        $this->close('BTCUSDT', $run, [
+            'internal_trade_id' => 'itd-malformed-financials',
+            'gross_realized_pnl_usdt' => 'oops',
+            'entry_fee_usdt' => 'bad-fee',
+            'exit_fee_usdt' => 0.01,
+            'other_trading_fees_usdt' => 0.0,
+            'funding_usdt' => 0.0,
+            'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0,
+            'borrow_cost_usdt' => 0.0,
+            'liquidation_fee_usdt' => 0.0,
+            'entry_qty' => 1.0,
+            'exit_qty' => 1.0,
+            'remaining_qty' => 0.0,
+            'position_fully_closed' => true,
+            'fills_complete' => true,
+            'quantity_coherent' => true,
+            'lineage_sufficient' => true,
+            'identifier_conflict' => false,
+            'pnl_source' => 'legacy_malformed_payload',
+        ], null, '2026-06-25 17:10:00+00', 2171, 'fake', 'perpetual');
+
+        $row = $this->conn->fetchAssociative(
+            'SELECT risk_usdt_at_entry, gross_realized_pnl_usdt, entry_fee_usdt,
+                    net_pnl_usdt, cost_completeness, pnl_quality_flags
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$run],
+        );
+
+        self::assertIsArray($row);
+        self::assertNull($row['risk_usdt_at_entry']);
+        self::assertNull($row['gross_realized_pnl_usdt']);
+        self::assertNull($row['entry_fee_usdt']);
+        self::assertNull($row['net_pnl_usdt']);
+        self::assertSame('partial', $row['cost_completeness']);
+        self::assertStringContainsString('missing_gross_pnl', (string) $row['pnl_quality_flags']);
+        self::assertStringContainsString('missing_entry_fee', (string) $row['pnl_quality_flags']);
+    }
+
     public function testCloseIsNotReusedAcrossEntriesSharingAPositionId(): void
     {
         $run = 'run_reuse';
