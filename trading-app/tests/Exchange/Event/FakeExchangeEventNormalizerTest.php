@@ -15,6 +15,7 @@ use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeOrderCreated;
 use App\Exchange\Event\ExchangeOrderPartiallyFilled;
+use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionOpened;
 use App\Exchange\Event\ExchangeProtectionOrderRejected;
 use App\Exchange\Fake\FakeExchangeEvent;
@@ -36,6 +37,7 @@ use Psr\Clock\ClockInterface;
 #[CoversClass(ExchangeOrderPartiallyFilled::class)]
 #[CoversClass(ExchangeOrderCreated::class)]
 #[CoversClass(ExchangeFillReceived::class)]
+#[CoversClass(ExchangePositionClosed::class)]
 #[CoversClass(ExchangePositionOpened::class)]
 #[CoversClass(ExchangeProtectionOrderRejected::class)]
 final class FakeExchangeEventNormalizerTest extends TestCase
@@ -92,6 +94,30 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         self::assertInstanceOf(ExchangePositionOpened::class, $normalized[0]);
         self::assertSame('exchange.position.opened', $normalized[0]->eventType());
         self::assertEqualsWithDelta(10.0, $normalized[0]->size(), 0.000001);
+    }
+
+    public function testNormalizesPositionClosedWithCertifiedFakePnlEvidence(): void
+    {
+        $this->scenarioAdapter()->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            quantity: 10.0,
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+        ));
+        $this->scenario->movePrice('BTCUSDT', 24790.0, 0.0);
+
+        $events = $this->scenario->events('position.closed');
+        $normalized = $this->normalizer->normalize($events[0]);
+
+        self::assertCount(1, $normalized);
+        self::assertInstanceOf(ExchangePositionClosed::class, $normalized[0]);
+        self::assertSame('exchange.position.closed', $normalized[0]->eventType());
+        self::assertSame('fake_paper_fill_ledger_v1', $normalized[0]->payload()['pnl_source'] ?? null);
+        self::assertSame(true, $normalized[0]->payload()['position_fully_closed'] ?? null);
+        self::assertArrayHasKey('gross_realized_pnl_usdt', $normalized[0]->payload());
+        self::assertArrayHasKey('entry_fee_usdt', $normalized[0]->payload());
+        self::assertArrayHasKey('exit_fee_usdt', $normalized[0]->payload());
     }
 
     public function testNormalizesHistoricalOrderCreatedWithOriginalSnapshot(): void

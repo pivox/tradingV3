@@ -204,7 +204,18 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame(ExchangeOrderStatus::FILLED, $result['matched_orders'][0]->status);
         self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
         self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
-        self::assertCount(1, $this->scenario->events('position.closed'));
+        $closedEvents = $this->scenario->events('position.closed');
+        self::assertCount(1, $closedEvents);
+        self::assertSame('fake_paper_fill_ledger_v1', $closedEvents[0]->payload['pnl_source'] ?? null);
+        self::assertSame('complete', $closedEvents[0]->payload['cost_completeness'] ?? null);
+        self::assertSame(true, $closedEvents[0]->payload['position_fully_closed'] ?? null);
+        self::assertSame(true, $closedEvents[0]->payload['fills_complete'] ?? null);
+        self::assertArrayHasKey('gross_realized_pnl_usdt', $closedEvents[0]->payload);
+        self::assertArrayHasKey('entry_fee_usdt', $closedEvents[0]->payload);
+        self::assertArrayHasKey('exit_fee_usdt', $closedEvents[0]->payload);
+        self::assertEqualsWithDelta(1.0, (float) $closedEvents[0]->payload['entry_qty'], 0.000001);
+        self::assertEqualsWithDelta(1.0, (float) $closedEvents[0]->payload['exit_qty'], 0.000001);
+        self::assertEqualsWithDelta(0.0, (float) $closedEvents[0]->payload['remaining_qty'], 0.000001);
     }
 
     public function testMovePriceTriggersAttachedTakeProfitAndClosesPosition(): void
