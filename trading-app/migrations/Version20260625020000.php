@@ -17,11 +17,11 @@ use Psr\Log\NullLogger;
  * complète, la cohérence de quantité et le lineage sont démontrés. Sinon `net_pnl_usdt` reste
  * NULL et les raisons sont exposées dans `pnl_quality_flags`.
  */
-final class Version20260625000000 extends AbstractMigration
+final class Version20260625020000 extends AbstractMigration
 {
     public function getDescription(): string
     {
-        return 'DATA-002: expose certified net PnL contract fields in position_trade_analysis_v2';
+        return 'DATA-002: gate certified net PnL on ledger quantity aggregate in position_trade_analysis_v2';
     }
 
     public function up(Schema $schema): void
@@ -524,6 +524,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
   SELECT ARRAY_REMOVE(ARRAY[
     CASE WHEN m.close_event_id IS NULL THEN 'unmatched' END,
+    CASE WHEN m.close_event_id IS NOT NULL THEN 'ledger_quantity_aggregate_missing' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.gross_realized_pnl_usdt IS NULL THEN 'missing_gross_pnl' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.entry_fee_usdt IS NULL THEN 'missing_entry_fee' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.exit_fee_usdt IS NULL THEN 'missing_exit_fee' END,
@@ -563,12 +564,12 @@ SQL);
 
     public function down(Schema $schema): void
     {
-        $previousMigrationClass = __NAMESPACE__ . '\\Version20260623010000';
+        $previousMigrationClass = __NAMESPACE__ . '\\Version20260625000000';
         if (!class_exists($previousMigrationClass, false)) {
             require_once __DIR__ . '/Version20260623010000.php';
         }
         if (!is_a($previousMigrationClass, AbstractMigration::class, true)) {
-            $this->throwIrreversibleMigrationException('Previous position_trade_analysis_v2 migration is not loadable.');
+            $this->throwIrreversibleMigrationException('Previous certified net PnL view migration is not loadable.');
         }
 
         /** @var class-string<AbstractMigration> $previousMigrationClass */
@@ -577,6 +578,5 @@ SQL);
         foreach ($previous->getSql() as $query) {
             $this->addSql($query->getStatement(), $query->getParameters(), $query->getTypes());
         }
-        $this->addSql('DROP FUNCTION IF EXISTS trading_v3_safe_numeric(text)');
     }
 }

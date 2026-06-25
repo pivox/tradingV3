@@ -10,6 +10,7 @@ use Doctrine\DBAL\Schema\Schema;
 use DoctrineMigrations\Version20260622000000;
 use DoctrineMigrations\Version20260623010000;
 use DoctrineMigrations\Version20260625000000;
+use DoctrineMigrations\Version20260625020000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -29,6 +30,7 @@ use Psr\Log\NullLogger;
 #[CoversClass(Version20260622000000::class)]
 #[CoversClass(Version20260623010000::class)]
 #[CoversClass(Version20260625000000::class)]
+#[CoversClass(Version20260625020000::class)]
 final class PositionTradeAnalysisViewTest extends TestCase
 {
     private Connection $conn;
@@ -870,8 +872,11 @@ SQL);
         if (!class_exists(Version20260625000000::class, false)) {
             require_once \dirname(__DIR__, 3) . '/migrations/Version20260625000000.php';
         }
+        if (!class_exists(Version20260625020000::class, false)) {
+            require_once \dirname(__DIR__, 3) . '/migrations/Version20260625020000.php';
+        }
 
-        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class] as $migrationClass) {
+        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class, Version20260625020000::class] as $migrationClass) {
             $migration = new $migrationClass($this->conn, new NullLogger());
             $migration->up(new Schema());
             foreach ($migration->getSql() as $query) {
