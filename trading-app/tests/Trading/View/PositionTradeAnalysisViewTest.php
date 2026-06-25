@@ -122,6 +122,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame($run, $t1['correlation_run_id']);
         self::assertSame('matched_closed', $t1['analysis_status']);
         self::assertEqualsWithDelta(12.0, (float) $t1['recorded_pnl_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.2, (float) $t1['funding_usdt'], 1e-9);
         // Coûts présents mais contrat #190 incomplet (ni spread ni brut) => 'partial',
         // JAMAIS 'complete'. estimated_net est une ESTIMATION best-effort, pas un net certifié.
         self::assertSame('partial', $t1['cost_completeness']);
@@ -287,7 +288,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertStringContainsString('missing_entry_fee', (string) $bySymbol['ETHUSDT']['pnl_quality_flags']);
 
         self::assertSame('partial', $bySymbol['SOLUSDT']['cost_completeness']);
-        self::assertNull($bySymbol['SOLUSDT']['funding_usdt']);
+        self::assertEqualsWithDelta(0.05, (float) $bySymbol['SOLUSDT']['funding_usdt'], 1e-9);
         self::assertNull($bySymbol['SOLUSDT']['slippage_cost_usdt']);
         self::assertNull($bySymbol['SOLUSDT']['net_pnl_usdt']);
         self::assertStringContainsString('missing_funding', (string) $bySymbol['SOLUSDT']['pnl_quality_flags']);

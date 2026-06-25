@@ -407,7 +407,7 @@ SELECT
     money.entry_fee_usdt
       + money.exit_fee_usdt
       + money.other_trading_fees_usdt
-      - money.funding_usdt
+      - money.certified_funding_usdt
       + money.spread_cost_usdt
       + money.slippage_cost_usdt
       + money.borrow_cost_usdt
@@ -418,7 +418,7 @@ SELECT
       - money.entry_fee_usdt
       - money.exit_fee_usdt
       - money.other_trading_fees_usdt
-      + money.funding_usdt
+      + money.certified_funding_usdt
       - money.spread_cost_usdt
       - money.slippage_cost_usdt
       - money.borrow_cost_usdt
@@ -434,7 +434,7 @@ SELECT
         - money.entry_fee_usdt
         - money.exit_fee_usdt
         - money.other_trading_fees_usdt
-        + money.funding_usdt
+        + money.certified_funding_usdt
         - money.spread_cost_usdt
         - money.slippage_cost_usdt
         - money.borrow_cost_usdt
@@ -481,7 +481,8 @@ LEFT JOIN LATERAL (
     (ce.extra->> 'entry_fee_usdt')::numeric AS entry_fee_usdt,
     (ce.extra->> 'exit_fee_usdt')::numeric AS exit_fee_usdt,
     (ce.extra->> 'other_trading_fees_usdt')::numeric AS other_trading_fees_usdt,
-    (ce.extra->> 'funding_usdt')::numeric AS funding_usdt,
+    (ce.extra->> 'funding_usdt')::numeric AS certified_funding_usdt,
+    COALESCE((ce.extra->> 'funding_usdt')::numeric, (ce.extra->> 'funding')::numeric) AS funding_usdt,
     (ce.extra->> 'spread_cost_usdt')::numeric AS spread_cost_usdt,
     (ce.extra->> 'slippage_cost_usdt')::numeric AS slippage_cost_usdt,
     (ce.extra->> 'borrow_cost_usdt')::numeric AS borrow_cost_usdt,
@@ -498,7 +499,7 @@ LEFT JOIN LATERAL (
     CASE WHEN m.close_event_id IS NOT NULL AND money.entry_fee_usdt IS NULL THEN 'missing_entry_fee' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.exit_fee_usdt IS NULL THEN 'missing_exit_fee' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.other_trading_fees_usdt IS NULL THEN 'missing_other_trading_fees' END,
-    CASE WHEN m.close_event_id IS NOT NULL AND money.funding_usdt IS NULL THEN 'missing_funding' END,
+    CASE WHEN m.close_event_id IS NOT NULL AND money.certified_funding_usdt IS NULL THEN 'missing_funding' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.spread_cost_usdt IS NULL THEN 'missing_spread_cost' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.slippage_cost_usdt IS NULL THEN 'missing_slippage_cost' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.borrow_cost_usdt IS NULL THEN 'missing_borrow_cost' END,
