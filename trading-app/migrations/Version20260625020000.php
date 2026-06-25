@@ -566,7 +566,7 @@ SQL);
     {
         $previousMigrationClass = __NAMESPACE__ . '\\Version20260625000000';
         if (!class_exists($previousMigrationClass, false)) {
-            require_once __DIR__ . '/Version20260623010000.php';
+            require_once __DIR__ . '/Version20260625000000.php';
         }
         if (!is_a($previousMigrationClass, AbstractMigration::class, true)) {
             $this->throwIrreversibleMigrationException('Previous certified net PnL view migration is not loadable.');
