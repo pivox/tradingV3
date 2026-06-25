@@ -30,12 +30,16 @@ net_pnl_usdt =
 - les montants sont normalises en USDT ;
 - les fills d'entree et de sortie sont complets ;
 - `entry_qty = exit_qty`, `remaining_qty = 0`, et `position_fully_closed=true` ;
+- `quantity_status=complete` dans l'agregat `FillQuantityAggregationService` ;
+- aucun `quantity_quality_flags` bloquant (`fill_conflict`, `exit_qty_exceeds_entry_qty`, `missing_entry_fill`, `missing_exit_fill`, `position_not_fully_closed`) ;
 - aucun `identifier_conflict` ;
 - le lineage est suffisant.
 
 Sinon `cost_completeness` vaut `partial` ou `unknown`, `net_pnl_usdt` vaut `NULL`, et `pnl_quality_flags` liste les raisons (`missing_entry_fee`, `quantity_mismatch`, `position_not_fully_closed`, etc.).
 
 Les valeurs numeriques legacy ou provider qui ne sont pas parseables sont traitees comme inconnues. Elles ne doivent jamais faire echouer la lecture de `position_trade_analysis_v2` et ne peuvent pas produire un PnL net certifie.
+
+Aucun flag provider du type `quantity_coherent=true` ne remplace cette preuve quantitative. Les TP1, trailing du reliquat, scale-out, partial stop et partial entry fills doivent etre reduits au meme triplet `entry_qty`, `exit_qty`, `remaining_qty` avant certification.
 
 ## Audit des sources
 
@@ -46,7 +50,7 @@ Les valeurs numeriques legacy ou provider qui ne sont pas parseables sont traite
 | Fake/Paper | fee par fill/devise | fee deterministe `notional * 0.0005`, `USDT` | cout explicite | positif | au fill | fill | complet | non | fill fee USDT | `testFakeFillsExpose...` |
 | Fake/Paper | funding/spread/slippage/borrow/liquidation | lifecycle `extra` explicite fixture | couts normalises | funding credit positif/debit negatif | a la cloture | trade | complet si fourni | non pour certification | `position_trade_analysis_v2` fixture | PostgreSQL view test |
 | Bitmart | order fill price/qty | `OrderDto` / `/contract/private/order*` (`deal_avg_price`, `deal_size`) | brut order | positif | apres fill/order history | ordre | partiel | oui | payload brut metadata | adapter tests existants |
-| Bitmart | fee par fill/devise | `/contract/private/trades` (`fee`, `fee_currency`) | cout fill | provider brut, non normalise garanti | apres REST sync | fill | partiel, pas relie au trade logique complet | oui | `FuturesOrderTrade` | projection tests partiels |
+| Bitmart | fee par fill/devise | `/contract/private/trades` (`paid_fees`, `fee_currency`) | cout fill | provider brut, non normalise garanti | apres REST sync | fill | partiel, pas relie au trade logique complet | oui | `FuturesOrderTrade` | projection tests partiels |
 | Bitmart | realized PnL provider | `/contract/private/transaction-history` flow_type=2 | inconnu brut/net | montant provider | apres cloture | transaction | non certifie | oui | transaction raw | sync tests existants |
 | Bitmart | funding | `/contract/private/transaction-history` flow_type=3, contract funding metadata | funding provider | non certifie ici | apres transaction | transaction | partiel | oui | raw transaction | aucun contrat net |
 | Bitmart | spread/slippage/borrow/liquidation | logs/config ou absent | absent | n/a | n/a | n/a | non disponible | oui | aucun | aucun |
@@ -66,6 +70,10 @@ Le ledger persistant v1 est documente dans `docs/handbook/technical/fill-cost-le
 Il introduit la table `fill_cost_ledger`, reliee au trade logique par `internal_trade_id` lorsque le lineage exact est disponible. L'idempotence est portee par `exchange + market_type + exchange_fill_id` quand l'exchange fournit un identifiant de fill, sinon par un identifiant interne deterministe documente.
 
 Les couts absents restent `NULL`. Les rows sans lineage exact restent visibles avec `quality_flags=["missing_lineage"]` et ne doivent pas etre considerees comme net PnL certifie.
+
+La quantite residuelle est calculee par `FillQuantityAggregationService` sur `internal_trade_id + exchange + market_type`. Le certificateur peut consommer le resultat via `certifyWithQuantityAggregation(...)`; si l'agregat n'autorise pas la certification, `net_pnl_usdt` et `realized_net_pnl_R` restent `NULL` meme lorsque les listes de fills passees au calcul semblent equilibrees.
+
+`position_trade_analysis_v2` ne certifie plus le net a partir des seuls extras `position_closed`. Tant que la vue SQL ne consomme pas directement l'agregat ledger persistant, elle ajoute `ledger_quantity_aggregate_missing`, garde `cost_completeness=partial` pour les lignes autrement completes et laisse `net_pnl_usdt`/`realized_net_pnl_R` a `NULL`.
 
 ## MFE / MAE
 

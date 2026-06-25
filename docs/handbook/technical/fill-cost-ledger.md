@@ -76,6 +76,47 @@ Replays with the same canonical fill/cost payload hash are ignored. Mutable proj
 
 When a higher-priority identifier is present but unmatched, the resolver continues to the next exact identifier. There is no fallback by symbol alone and no timestamp-window matching. If no lineage is found, the row is still persisted with `quality_flags=["missing_lineage"]`.
 
+## Quantity Aggregation
+
+`FillQuantityAggregationService` builds the deterministic quantity state for one logical trade and one venue. The input scope is exactly:
+
+```text
+internal_trade_id + exchange + market_type
+```
+
+It does not match by symbol, timestamp, profile, or "next close" ordering. The repository query orders by `occurred_at, id`, and the service recomputes quantities from persisted ledger facts.
+
+The aggregation exposes:
+
+- `entry_first_fill_at`
+- `entry_last_fill_at`
+- `entry_qty`
+- `entry_vwap`
+- `exit_first_fill_at`
+- `exit_last_fill_at`
+- `exit_qty`
+- `exit_vwap`
+- `remaining_qty`
+- `position_fully_closed`
+- `quantity_status`
+- `quantity_quality_flags`
+
+`entry_vwap` and `exit_vwap` are quantity-weighted from fill price and quantity. Funding and cost-only adjustment rows contribute to cost aggregates but not to entry or exit quantity.
+
+The default close tolerance is `0.00000001`. A position is fully closed only when `remaining_qty` is within that tolerance and no blocking quantity flag is present.
+
+Current statuses:
+
+- `complete`: entry and exit quantities are present and the residual quantity is zero within tolerance.
+- `open_position`: entry quantity exists but exit quantity is absent or smaller than entry quantity.
+- `missing_entry_fill`: no usable entry fill exists.
+- `quantity_mismatch`: exit quantity exceeds entry quantity.
+- `fill_conflict`: the same venue fill identifier appears with a different quantitative payload.
+
+Quality flags keep non-blocking audit details visible. Exact duplicate fills are ignored and flagged with `duplicate_fill_ignored`; cancelled/corrected/voided rows are ignored and flagged with `cancelled_fill_ignored`. A conflicting duplicate is never resolved arbitrarily and blocks net PnL certification.
+
+PostgreSQL fixture coverage for manual or CI-backed checks lives in `tests/fixtures/fill_quantity_aggregation_postgres.sql`. It seeds a complete partial-entry/TP1/trailing case, an open partial-exit case, and a conflicting duplicate venue fill case against the real `fill_cost_ledger` schema.
+
 ## Fee Conversion
 
 `fee_amount` preserves the provider-reported amount for audit, including provider sign conventions. `fee_usdt` stores the normalized USDT cost used by certification and is non-negative; provider-signed charged fees such as `-0.02 USDT` are stored as `fee_amount=-0.020000000000` and `fee_usdt=0.020000000000`.

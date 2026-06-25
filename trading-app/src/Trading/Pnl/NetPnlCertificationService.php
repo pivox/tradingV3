@@ -112,6 +112,48 @@ final class NetPnlCertificationService
     }
 
     /**
+     * @param list<TradeFill> $entryFills
+     * @param list<TradeFill> $exitFills
+     */
+    public function certifyWithQuantityAggregation(
+        array $entryFills,
+        array $exitFills,
+        TradeCosts $costs,
+        string $side,
+        FillQuantityAggregationResult $quantityAggregation,
+        bool $lineageSufficient,
+        bool $identifierConflict,
+        ?float $riskUsdtAtEntry = null,
+    ): NetPnlCertificationResult {
+        $quantityBlocksCertification = !$quantityAggregation->netPnlCertificationAllowed();
+        $result = $this->certify(
+            entryFills: $entryFills,
+            exitFills: $exitFills,
+            costs: $costs,
+            side: $side,
+            positionFullyClosed: $quantityAggregation->positionFullyClosed && !$quantityBlocksCertification,
+            lineageSufficient: $lineageSufficient,
+            identifierConflict: $identifierConflict || \in_array('fill_conflict', $quantityAggregation->quantityQualityFlags, true),
+            riskUsdtAtEntry: $riskUsdtAtEntry,
+        );
+        if (!$quantityBlocksCertification) {
+            return $result;
+        }
+
+        return new NetPnlCertificationResult(
+            certified: false,
+            costCompleteness: $result->costCompleteness,
+            grossRealizedPnlUsdt: $result->grossRealizedPnlUsdt,
+            entryFeeUsdt: $result->entryFeeUsdt,
+            exitFeeUsdt: $result->exitFeeUsdt,
+            totalKnownCostUsdt: null,
+            netPnlUsdt: null,
+            realizedNetPnlR: null,
+            qualityFlags: array_values(array_unique([...$result->qualityFlags, ...$quantityAggregation->quantityQualityFlags])),
+        );
+    }
+
+    /**
      * @param list<TradeFill> $fills
      * @param list<string> $flags
      */
