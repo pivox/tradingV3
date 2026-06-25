@@ -85,6 +85,35 @@ final class LineageReadApiControllerTest extends TestCase
         self::assertStringNotContainsString('SECRET', (string) $response->getContent());
     }
 
+    public function testEventsEndpointAppliesOffsetToLifecycleEventsNotLineageLookup(): void
+    {
+        $lineage = $this->lineage('trade-events')
+            ->setOrderIntent($this->intent(8, 'trade-events'))
+            ->setExchangeOrderId('EX-EVENTS')
+            ->setPositionId('POS-EVENTS');
+
+        $events = [];
+        for ($i = 0; $i < 100; ++$i) {
+            $events[] = $this->event('order_updated', 'trade-events')->setOrderId('EX-EVENTS');
+        }
+        $events[] = $this->event('position_closed', 'trade-events')->setOrderId('EX-EVENTS');
+
+        $response = $this->controller([$lineage], ['trade-events' => $events])->events(
+            'trade-events',
+            new Request(['limit' => '100', 'offset' => '100']),
+        );
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+        $body = $this->json($response);
+        self::assertSame(100, $body['pagination']['limit']);
+        self::assertSame(100, $body['pagination']['offset']);
+        self::assertSame(101, $body['pagination']['total']);
+        self::assertFalse($body['pagination']['has_more']);
+        self::assertCount(1, $body['data']);
+        self::assertSame('position_closed', $body['data'][0]['event_type']);
+        self::assertSame('complete', $body['completeness_status']);
+    }
+
     /**
      * @param TradeLineage[] $lineages
      * @param array<string, TradeLifecycleEvent[]> $eventsByTrade
@@ -102,10 +131,18 @@ final class LineageReadApiControllerTest extends TestCase
 
             public function count(LineageReadCriteria $criteria): int
             {
-                return count($this->find($criteria));
+                return count($this->matchingLineages($criteria));
             }
 
             public function find(LineageReadCriteria $criteria): array
+            {
+                return array_slice($this->matchingLineages($criteria), $criteria->offset, $criteria->limit);
+            }
+
+            /**
+             * @return TradeLineage[]
+             */
+            private function matchingLineages(LineageReadCriteria $criteria): array
             {
                 return array_values(array_filter($this->lineages, static function (TradeLineage $lineage) use ($criteria): bool {
                     return match ($criteria->kind) {
@@ -123,14 +160,25 @@ final class LineageReadApiControllerTest extends TestCase
                 return [];
             }
 
-            public function findEventsForLineage(TradeLineage $lineage, int $limit): array
+            public function findEventsForLineage(TradeLineage $lineage, int $limit, int $offset = 0): array
             {
-                return array_slice($this->eventsByTrade[$lineage->getInternalTradeId()] ?? [], 0, $limit);
+                return array_slice($this->eventsByTrade[$lineage->getInternalTradeId()] ?? [], $offset, $limit);
             }
 
             public function countEventsForLineage(TradeLineage $lineage): int
             {
                 return count($this->eventsByTrade[$lineage->getInternalTradeId()] ?? []);
+            }
+
+            public function hasCloseEventForLineage(TradeLineage $lineage): bool
+            {
+                foreach ($this->eventsByTrade[$lineage->getInternalTradeId()] ?? [] as $event) {
+                    if ($event->getEventType() === 'position_closed') {
+                        return true;
+                    }
+                }
+
+                return false;
             }
         }));
 

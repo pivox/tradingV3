@@ -87,12 +87,8 @@ final class TradeLifecycleEventRepository extends ServiceEntityRepository
         string $exchange,
         string $marketType,
         int $limit,
+        int $offset = 0,
     ): array {
-        $or = [
-            'event.internalTradeId = :internalTradeId',
-            'event.clientOrderId = :clientOrderId',
-        ];
-
         $qb = $this->createQueryBuilder('event')
             ->andWhere('event.exchange = :exchange')
             ->andWhere('event.marketType = :marketType')
@@ -102,19 +98,10 @@ final class TradeLifecycleEventRepository extends ServiceEntityRepository
             ->setParameter('clientOrderId', $clientOrderId)
             ->orderBy('event.happenedAt', 'ASC')
             ->addOrderBy('event.id', 'ASC')
+            ->setFirstResult(max(0, $offset))
             ->setMaxResults(max(1, $limit));
 
-        if ($exchangeOrderId !== null && $exchangeOrderId !== '') {
-            $or[] = 'event.orderId = :exchangeOrderId';
-            $qb->setParameter('exchangeOrderId', $exchangeOrderId);
-        }
-
-        if ($positionId !== null && $positionId !== '') {
-            $or[] = 'event.positionId = :positionId';
-            $qb->setParameter('positionId', $positionId);
-        }
-
-        $qb->andWhere($qb->expr()->orX(...$or));
+        $this->applyLineageIdentifierPredicate($qb, $internalTradeId, $clientOrderId, $exchangeOrderId, $positionId);
 
         return $qb->getQuery()->getResult();
     }
@@ -127,11 +114,6 @@ final class TradeLifecycleEventRepository extends ServiceEntityRepository
         string $exchange,
         string $marketType,
     ): int {
-        $or = [
-            'event.internalTradeId = :internalTradeId',
-            'event.clientOrderId = :clientOrderId',
-        ];
-
         $qb = $this->createQueryBuilder('event')
             ->select('COUNT(event.id)')
             ->andWhere('event.exchange = :exchange')
@@ -141,19 +123,85 @@ final class TradeLifecycleEventRepository extends ServiceEntityRepository
             ->setParameter('internalTradeId', $internalTradeId)
             ->setParameter('clientOrderId', $clientOrderId);
 
+        $this->applyLineageIdentifierPredicate($qb, $internalTradeId, $clientOrderId, $exchangeOrderId, $positionId);
+
+        return (int) $qb->getQuery()->getSingleScalarResult();
+    }
+
+    public function hasCloseEventForLineageIdentifiers(
+        string $internalTradeId,
+        string $clientOrderId,
+        ?string $exchangeOrderId,
+        ?string $positionId,
+        string $exchange,
+        string $marketType,
+    ): bool {
+        $qb = $this->createQueryBuilder('event')
+            ->select('1')
+            ->andWhere('event.exchange = :exchange')
+            ->andWhere('event.marketType = :marketType')
+            ->andWhere('event.eventType = :eventType')
+            ->setParameter('exchange', $exchange)
+            ->setParameter('marketType', $marketType)
+            ->setParameter('eventType', 'position_closed')
+            ->setParameter('internalTradeId', $internalTradeId)
+            ->setParameter('clientOrderId', $clientOrderId)
+            ->setMaxResults(1);
+
+        $this->applyLineageIdentifierPredicate($qb, $internalTradeId, $clientOrderId, $exchangeOrderId, $positionId);
+
+        return $qb->getQuery()->getOneOrNullResult() !== null;
+    }
+
+    private function applyLineageIdentifierPredicate(
+        QueryBuilder $qb,
+        string $internalTradeId,
+        string $clientOrderId,
+        ?string $exchangeOrderId,
+        ?string $positionId,
+    ): void {
+        $legacyBranches = [];
+        $orderNoConflict = null;
+        $positionNoConflict = null;
+
         if ($exchangeOrderId !== null && $exchangeOrderId !== '') {
-            $or[] = 'event.orderId = :exchangeOrderId';
+            $orderNoConflict = $qb->expr()->orX('event.orderId IS NULL', 'event.orderId = :exchangeOrderId');
             $qb->setParameter('exchangeOrderId', $exchangeOrderId);
         }
 
         if ($positionId !== null && $positionId !== '') {
-            $or[] = 'event.positionId = :positionId';
+            $legacyBranches[] = 'event.positionId = :positionId';
+            $positionNoConflict = $qb->expr()->orX('event.positionId IS NULL', 'event.positionId = :positionId');
             $qb->setParameter('positionId', $positionId);
         }
 
-        $qb->andWhere($qb->expr()->orX(...$or));
+        if ($exchangeOrderId !== null && $exchangeOrderId !== '') {
+            $orderBranch = [
+                'event.orderId = :exchangeOrderId',
+                $qb->expr()->orX('event.clientOrderId IS NULL', 'LOWER(event.clientOrderId) = LOWER(:clientOrderId)'),
+            ];
+            if ($positionNoConflict !== null) {
+                $orderBranch[] = $positionNoConflict;
+            }
+            $legacyBranches[] = $qb->expr()->andX(...$orderBranch);
+        }
 
-        return (int) $qb->getQuery()->getSingleScalarResult();
+        $clientOrderBranch = ['LOWER(event.clientOrderId) = LOWER(:clientOrderId)'];
+        if ($orderNoConflict !== null) {
+            $clientOrderBranch[] = $orderNoConflict;
+        }
+        if ($positionNoConflict !== null) {
+            $clientOrderBranch[] = $positionNoConflict;
+        }
+        $legacyBranches[] = $qb->expr()->andX(...$clientOrderBranch);
+
+        $qb->andWhere($qb->expr()->orX(
+            'event.internalTradeId = :internalTradeId',
+            $qb->expr()->andX(
+                'event.internalTradeId IS NULL',
+                $qb->expr()->orX(...$legacyBranches),
+            ),
+        ));
     }
 
     private function createCriteriaQueryBuilder(LineageReadCriteria $criteria): QueryBuilder

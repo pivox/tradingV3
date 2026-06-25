@@ -46,7 +46,7 @@ final readonly class DoctrineLineageReadStore implements LineageReadStoreInterfa
         return $this->events->findUnmatchedByReadCriteria($criteria);
     }
 
-    public function findEventsForLineage(TradeLineage $lineage, int $limit): array
+    public function findEventsForLineage(TradeLineage $lineage, int $limit, int $offset = 0): array
     {
         return $this->events->findForLineageIdentifiers(
             internalTradeId: $lineage->getInternalTradeId(),
@@ -56,12 +56,25 @@ final readonly class DoctrineLineageReadStore implements LineageReadStoreInterfa
             exchange: $lineage->getExchange(),
             marketType: $lineage->getMarketType(),
             limit: $limit,
+            offset: $offset,
         );
     }
 
     public function countEventsForLineage(TradeLineage $lineage): int
     {
         return $this->events->countForLineageIdentifiers(
+            internalTradeId: $lineage->getInternalTradeId(),
+            clientOrderId: $lineage->getClientOrderId(),
+            exchangeOrderId: $lineage->getExchangeOrderId(),
+            positionId: $lineage->getPositionId(),
+            exchange: $lineage->getExchange(),
+            marketType: $lineage->getMarketType(),
+        );
+    }
+
+    public function hasCloseEventForLineage(TradeLineage $lineage): bool
+    {
+        return $this->events->hasCloseEventForLineageIdentifiers(
             internalTradeId: $lineage->getInternalTradeId(),
             clientOrderId: $lineage->getClientOrderId(),
             exchangeOrderId: $lineage->getExchangeOrderId(),

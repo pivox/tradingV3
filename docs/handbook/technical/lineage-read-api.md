@@ -99,6 +99,7 @@ Reponse :
       ],
       "lifecycle_events_pagination": {
         "limit": 100,
+        "offset": 0,
         "total": 3,
         "has_more": false
       }
@@ -128,6 +129,9 @@ GET /api/lineage/v1/{internal_trade_id}/events
 ```
 
 Retourne uniquement les evenements lifecycle associes et conserve `completeness_status` + `quality_flags`.
+
+`limit` et `offset` s'appliquent a la page d'evenements lifecycle. La recherche du lineage par
+`internal_trade_id` reste une lookup exacte non paginee.
 
 ## Statuts de completude
 
