@@ -19,12 +19,14 @@ use App\Contract\Provider\OrderProviderInterface;
 use App\Contract\Provider\SystemProviderInterface;
 use App\Exchange\Adapter\BitmartExchangeAdapter;
 use App\Exchange\Dto\CancelOrderRequest;
+use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
+use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Registry\ExchangeProviderBundle;
 use Brick\Math\BigDecimal;
@@ -262,9 +264,9 @@ final class BitmartExchangeAdapterTest extends TestCase
 
         $result = $adapter->placeOrder($this->placeOrderRequest(ExchangePositionSide::SHORT, ExchangeOrderSide::SELL));
 
-        self::assertSame(ExchangeOrderSide::SELL, $result->order?->side);
-        self::assertSame(ExchangePositionSide::SHORT, $result->order?->positionSide);
-        self::assertFalse($result->order?->reduceOnly);
+        self::assertSame(ExchangeOrderSide::SELL, $result->order->side);
+        self::assertSame(ExchangePositionSide::SHORT, $result->order->positionSide);
+        self::assertFalse($result->order->reduceOnly);
     }
 
     public function testMapsReturnedLongExitFromRawBitmartSideCode(): void
@@ -286,10 +288,10 @@ final class BitmartExchangeAdapterTest extends TestCase
             postOnly: false,
         ));
 
-        self::assertSame(ExchangeOrderSide::SELL, $result->order?->side);
-        self::assertSame(ExchangePositionSide::LONG, $result->order?->positionSide);
-        self::assertTrue($result->order?->reduceOnly);
-        self::assertSame(ExchangeTimeInForce::IOC, $result->order?->timeInForce);
+        self::assertSame(ExchangeOrderSide::SELL, $result->order->side);
+        self::assertSame(ExchangePositionSide::LONG, $result->order->positionSide);
+        self::assertTrue($result->order->reduceOnly);
+        self::assertSame(ExchangeTimeInForce::IOC, $result->order->timeInForce);
     }
 
     public function testMapsReturnedGtcMode(): void
@@ -306,7 +308,7 @@ final class BitmartExchangeAdapterTest extends TestCase
 
         $result = $adapter->placeOrder($this->placeOrderRequest(ExchangePositionSide::LONG, ExchangeOrderSide::BUY));
 
-        self::assertSame(ExchangeTimeInForce::GTC, $result->order?->timeInForce);
+        self::assertSame(ExchangeTimeInForce::GTC, $result->order->timeInForce);
     }
 
     public function testMapsReturnedPostOnlyModeAsGtc(): void
@@ -323,8 +325,8 @@ final class BitmartExchangeAdapterTest extends TestCase
 
         $result = $adapter->placeOrder($this->placeOrderRequest(ExchangePositionSide::LONG, ExchangeOrderSide::BUY));
 
-        self::assertTrue($result->order?->postOnly);
-        self::assertSame(ExchangeTimeInForce::GTC, $result->order?->timeInForce);
+        self::assertTrue($result->order->postOnly);
+        self::assertSame(ExchangeTimeInForce::GTC, $result->order->timeInForce);
     }
 
     public function testFallbackSubmitOnlyOrderPreservesSubmittedIntent(): void
@@ -346,13 +348,13 @@ final class BitmartExchangeAdapterTest extends TestCase
             postOnly: false,
         ));
 
-        self::assertSame('cid-1', $result->order?->clientOrderId);
-        self::assertSame(ExchangeOrderSide::SELL, $result->order?->side);
-        self::assertSame(ExchangePositionSide::LONG, $result->order?->positionSide);
-        self::assertTrue($result->order?->reduceOnly);
-        self::assertSame(ExchangeTimeInForce::IOC, $result->order?->timeInForce);
-        self::assertSame(3, $result->order?->metadata['side'] ?? null);
-        self::assertTrue($result->order?->metadata['submit_only'] ?? false);
+        self::assertSame('cid-1', $result->order->clientOrderId);
+        self::assertSame(ExchangeOrderSide::SELL, $result->order->side);
+        self::assertSame(ExchangePositionSide::LONG, $result->order->positionSide);
+        self::assertTrue($result->order->reduceOnly);
+        self::assertSame(ExchangeTimeInForce::IOC, $result->order->timeInForce);
+        self::assertSame(3, $result->order->metadata['side'] ?? null);
+        self::assertTrue($result->order->metadata['submit_only'] ?? false);
     }
 
     public function testGetOpenOrdersIncludesBitmartPlanOrders(): void
@@ -404,6 +406,82 @@ final class BitmartExchangeAdapterTest extends TestCase
         self::assertSame('exchange_order_cancel_failed', $result->metadata['reason'] ?? null);
     }
 
+    public function testExposesBitmartRestFillSnapshotsWithoutAuthoritativePositionClosure(): void
+    {
+        $accountProvider = $this->createMock(AccountProviderInterface::class);
+        $accountProvider
+            ->expects($this->once())
+            ->method('getTrades')
+            ->with('BTCUSDT', 200, null, null)
+            ->willReturn([[
+                'symbol' => 'BTCUSDT',
+                'order_id' => 'ex-fill-1',
+                'client_order_id' => 'cid-fill-1',
+                'trade_id' => 'trade-1',
+                'side' => 1,
+                'price' => '25000.5',
+                'vol' => '0.25',
+                'paid_fees' => '-0.0123',
+                'fee_currency' => 'USDT',
+                'exec_type' => 'maker',
+                'create_time' => 1767225601123,
+                'position_id' => 'pos-1',
+            ]]);
+
+        $adapter = $this->createAdapterWithOrderProvider($this->createNoopOrderProvider(), $accountProvider);
+
+        self::assertInstanceOf(ExchangeRestSnapshotProviderInterface::class, $adapter);
+        self::assertFalse($adapter->hasAuthoritativePositionSnapshot('BTCUSDT'));
+
+        $fills = $adapter->getFillsSnapshot('BTCUSDT');
+
+        self::assertCount(1, $fills);
+        self::assertInstanceOf(ExchangeFillDto::class, $fills[0]);
+        self::assertSame('BTCUSDT', $fills[0]->symbol);
+        self::assertSame('ex-fill-1', $fills[0]->exchangeOrderId);
+        self::assertSame('cid-fill-1', $fills[0]->clientOrderId);
+        self::assertSame('trade-1', $fills[0]->fillId);
+        self::assertSame(ExchangeOrderSide::BUY, $fills[0]->side);
+        self::assertSame(ExchangePositionSide::LONG, $fills[0]->positionSide);
+        self::assertEqualsWithDelta(0.25, $fills[0]->quantity, 0.000001);
+        self::assertEqualsWithDelta(25000.5, $fills[0]->price, 0.000001);
+        self::assertEqualsWithDelta(-0.0123, $fills[0]->fee ?? 0.0, 0.000001);
+        self::assertSame('USDT', $fills[0]->feeCurrency);
+        self::assertSame('2026-01-01T00:00:01+00:00', $fills[0]->filledAt->format(\DateTimeInterface::ATOM));
+        self::assertSame('bitmart_rest_trades', $fills[0]->metadata['source'] ?? null);
+        self::assertSame('bitmart_ledger_ingestion_v1', $fills[0]->metadata['source_version'] ?? null);
+        self::assertSame('maker', $fills[0]->metadata['liquidity_role'] ?? null);
+        self::assertSame('pos-1', $fills[0]->metadata['position_id'] ?? null);
+    }
+
+    public function testBitmartRestFillSnapshotKeepsUnknownFeeCurrencyUncertified(): void
+    {
+        $accountProvider = $this->createMock(AccountProviderInterface::class);
+        $accountProvider
+            ->expects($this->once())
+            ->method('getTrades')
+            ->willReturn([[
+                'symbol' => 'BTCUSDT',
+                'order_id' => 'ex-fill-2',
+                'trade_id' => 'trade-2',
+                'side' => 2,
+                'price' => '24900',
+                'size' => '1',
+                'fee' => '0.01',
+                'create_time' => 1767225602000,
+            ]]);
+
+        $adapter = $this->createAdapterWithOrderProvider($this->createNoopOrderProvider(), $accountProvider);
+        $fills = $adapter->getFillsSnapshot('BTCUSDT');
+
+        self::assertCount(1, $fills);
+        self::assertSame(ExchangeOrderSide::BUY, $fills[0]->side);
+        self::assertSame(ExchangePositionSide::SHORT, $fills[0]->positionSide);
+        self::assertEqualsWithDelta(0.01, $fills[0]->fee ?? 0.0, 0.000001);
+        self::assertNull($fills[0]->feeCurrency);
+        self::assertSame('unknown', $fills[0]->metadata['liquidity_role'] ?? null);
+    }
+
     /**
      * @param callable(array<string,mixed>): void $captureOptions
      */
@@ -431,14 +509,17 @@ final class BitmartExchangeAdapterTest extends TestCase
         return $this->createAdapterWithOrderProvider($orderProvider);
     }
 
-    private function createAdapterWithOrderProvider(OrderProviderInterface $orderProvider): BitmartExchangeAdapter
+    private function createAdapterWithOrderProvider(
+        OrderProviderInterface $orderProvider,
+        ?AccountProviderInterface $accountProvider = null,
+    ): BitmartExchangeAdapter
     {
         $bundle = new ExchangeProviderBundle(
             new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
             $this->createMock(KlineProviderInterface::class),
             $this->createMock(ContractProviderInterface::class),
             $orderProvider,
-            $this->createMock(AccountProviderInterface::class),
+            $accountProvider ?? $this->createMock(AccountProviderInterface::class),
             $this->createMock(SystemProviderInterface::class),
         );
 
@@ -446,6 +527,14 @@ final class BitmartExchangeAdapterTest extends TestCase
         $registry->method('get')->willReturn($bundle);
 
         return new BitmartExchangeAdapter($registry, $this->fixedClock());
+    }
+
+    private function createNoopOrderProvider(): OrderProviderInterface
+    {
+        $orderProvider = $this->createMock(OrderProviderInterface::class);
+        $orderProvider->method('getOpenOrders')->willReturn([]);
+
+        return $orderProvider;
     }
 
     private function placeOrderRequest(
@@ -522,6 +611,9 @@ final readonly class PlanOrderProviderStub implements OrderProviderInterface
     {
     }
 
+    /**
+     * @param array<string,mixed> $options
+     */
     public function placeOrder(
         string $symbol,
         OrderSide $side,
@@ -544,6 +636,9 @@ final readonly class PlanOrderProviderStub implements OrderProviderInterface
         return null;
     }
 
+    /**
+     * @return OrderDto[]
+     */
     public function getOpenOrders(?string $symbol = null): array
     {
         return [];
@@ -554,6 +649,9 @@ final readonly class PlanOrderProviderStub implements OrderProviderInterface
         return [];
     }
 
+    /**
+     * @return OrderDto[]
+     */
     public function getOrderHistory(string $symbol, int $limit = 100): array
     {
         return [];
