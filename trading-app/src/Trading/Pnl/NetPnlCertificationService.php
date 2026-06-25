@@ -36,6 +36,10 @@ final class NetPnlCertificationService
         if ($identifierConflict) {
             $flags[] = 'identifier_conflict';
         }
+        $normalizedSide = strtoupper($side);
+        if (!\in_array($normalizedSide, ['LONG', 'SHORT'], true)) {
+            $flags[] = 'invalid_side';
+        }
 
         $entryQty = $this->quantity($entryFills);
         $exitQty = $this->quantity($exitFills);
@@ -51,7 +55,7 @@ final class NetPnlCertificationService
             }
         }
 
-        $gross = $this->grossRealizedPnl($entryFills, $exitFills, $side);
+        $gross = $this->grossRealizedPnl($entryFills, $exitFills, $normalizedSide);
         if ($gross === null) {
             $flags[] = 'missing_gross_pnl';
         }
@@ -137,9 +141,9 @@ final class NetPnlCertificationService
         $entryNotional = array_reduce($entryFills, static fn (float $sum, TradeFill $fill): float => $sum + $fill->notionalUsdt(), 0.0);
         $exitNotional = array_reduce($exitFills, static fn (float $sum, TradeFill $fill): float => $sum + $fill->notionalUsdt(), 0.0);
 
-        return strtoupper($side) === 'SHORT'
+        return $side === 'SHORT'
             ? $entryNotional - $exitNotional
-            : $exitNotional - $entryNotional;
+            : ($side === 'LONG' ? $exitNotional - $entryNotional : null);
     }
 
     /**

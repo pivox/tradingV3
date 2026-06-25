@@ -101,4 +101,29 @@ final class NetPnlCertificationServiceTest extends TestCase
         self::assertContains('position_not_fully_closed', $result->qualityFlags);
         self::assertContains('quantity_mismatch', $result->qualityFlags);
     }
+
+    public function testRefusesExchangeOrderSideInsteadOfPositionSide(): void
+    {
+        $service = new NetPnlCertificationService();
+
+        $result = $service->certify(
+            entryFills: [
+                new TradeFill('entry-1', 'BUY', 1.0, 100.0, 0.01, 'USDT', 'maker', new \DateTimeImmutable('2026-06-25 10:00:00 UTC')),
+            ],
+            exitFills: [
+                new TradeFill('exit-1', 'SELL', 1.0, 110.0, 0.01, 'USDT', 'taker', new \DateTimeImmutable('2026-06-25 10:10:00 UTC')),
+            ],
+            costs: TradeCosts::zeroKnown(),
+            side: 'SELL',
+            positionFullyClosed: true,
+            lineageSufficient: true,
+            identifierConflict: false,
+            riskUsdtAtEntry: 5.0,
+        );
+
+        self::assertFalse($result->certified);
+        self::assertNull($result->grossRealizedPnlUsdt);
+        self::assertNull($result->netPnlUsdt);
+        self::assertContains('invalid_side', $result->qualityFlags);
+    }
 }
