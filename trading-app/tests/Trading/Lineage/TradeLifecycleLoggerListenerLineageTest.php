@@ -216,6 +216,64 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         self::assertArrayHasKey('raw', $extra);
     }
 
+    public function testClosedPositionPromotesFakePayloadLineageToLifecycleExtra(): void
+    {
+        $this->persistLineageWithPosition();
+
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            null,
+            $this->tradeLineageManager(),
+        );
+
+        $listener->onPositionClosed(new PositionClosedEvent(
+            positionHistory: new PositionHistoryEntryDto(
+                symbol: 'BTCUSDT',
+                side: PositionSide::LONG,
+                size: BigDecimal::of('1'),
+                entryPrice: BigDecimal::of('100'),
+                exitPrice: BigDecimal::of('110'),
+                realizedPnl: BigDecimal::of('10'),
+                fees: BigDecimal::of('0.105'),
+                openedAt: new \DateTimeImmutable('2026-06-23 10:00:00 UTC'),
+                closedAt: new \DateTimeImmutable('2026-06-23 10:05:00 UTC'),
+                raw: [
+                    'payload' => [
+                        'internal_trade_id' => 'itd-real',
+                        'position_id' => 'pos-real',
+                        'entry_qty' => 1.0,
+                        'exit_qty' => 1.0,
+                        'remaining_qty' => 0.0,
+                        'position_fully_closed' => true,
+                        'fills_complete' => true,
+                        'quantity_coherent' => true,
+                        'lineage_sufficient' => true,
+                        'identifier_conflict' => false,
+                        'pnl_source' => 'fake_paper_fill_ledger_v1',
+                        'cost_completeness' => 'complete',
+                    ],
+                ],
+            ),
+            runId: null,
+            exchange: Exchange::FAKE->value,
+            extra: ['market_type' => MarketType::PERPETUAL->value],
+        ));
+
+        /** @var TradeLifecycleEvent|null $closed */
+        $closed = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'position_closed',
+            'internalTradeId' => 'itd-real',
+        ]);
+
+        self::assertNotNull($closed);
+        self::assertSame('pos-real', $closed->getPositionId());
+        self::assertSame('itd-real', $closed->getExtra()['internal_trade_id'] ?? null);
+        self::assertSame('pos-real', $closed->getExtra()['position_id'] ?? null);
+        self::assertSame('run-real', $closed->getRunId());
+        self::assertSame('complete', $closed->getExtra()['cost_completeness'] ?? null);
+    }
+
     public function testOpenedPositionLifecycleIsLoggedWhenLineageTableIsMissing(): void
     {
         (new SchemaTool($this->em))->dropSchema([
