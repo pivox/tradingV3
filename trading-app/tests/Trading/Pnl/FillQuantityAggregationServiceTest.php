@@ -162,6 +162,21 @@ final class FillQuantityAggregationServiceTest extends TestCase
         self::assertContains('cancelled_fill_ignored', $result->quantityQualityFlags);
     }
 
+    public function testInvalidQuantitativeFillBlocksCertificationEvenWhenRemainingRowsBalance(): void
+    {
+        $service = new FillQuantityAggregationService();
+
+        $result = $service->aggregateEntries([
+            self::fill('entry-missing-quantity', 'entry', '2026-06-25 09:59:00 UTC', 99.0, null),
+            self::fill('entry', 'entry', '2026-06-25 10:00:00 UTC', 100.0, 1.0),
+            self::fill('exit', 'exit', '2026-06-25 10:05:00 UTC', 101.0, 1.0),
+        ], internalTradeId: 'shared-trade-id', exchange: 'fake', marketType: 'paper');
+
+        self::assertSame('invalid_fill_quantity', $result->quantityStatus);
+        self::assertContains('invalid_quantitative_fill', $result->quantityQualityFlags);
+        self::assertFalse($result->netPnlCertificationAllowed());
+    }
+
     public function testSameInternalTradeIdOnDifferentVenuesStaysSeparated(): void
     {
         $service = new FillQuantityAggregationService();

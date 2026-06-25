@@ -73,6 +73,8 @@ Les couts absents restent `NULL`. Les rows sans lineage exact restent visibles a
 
 La quantite residuelle est calculee par `FillQuantityAggregationService` sur `internal_trade_id + exchange + market_type`. Le certificateur peut consommer le resultat via `certifyWithQuantityAggregation(...)`; si l'agregat n'autorise pas la certification, `net_pnl_usdt` et `realized_net_pnl_R` restent `NULL` meme lorsque les listes de fills passees au calcul semblent equilibrees.
 
+`position_trade_analysis_v2` ne certifie plus le net a partir des seuls extras `position_closed`. Tant que la vue SQL ne consomme pas directement l'agregat ledger persistant, elle ajoute `ledger_quantity_aggregate_missing`, garde `cost_completeness=partial` pour les lignes autrement completes et laisse `net_pnl_usdt`/`realized_net_pnl_R` a `NULL`.
+
 ## MFE / MAE
 
 La vue conserve les champs historiques `mfe_pct` et `mae_pct` provenant du listener lifecycle. Leur source actuelle est best-effort via klines 1m (`high/low`) entre ouverture et cloture. Cette source n'est pas une certification microstructure : gaps, donnees manquantes, mark/mid/last et scale-in restent a versionner separement.

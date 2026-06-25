@@ -103,6 +103,9 @@ final readonly class FillQuantityAggregationService
 
         $entryAggregate = $this->aggregateFillSide($entryFills);
         $exitAggregate = $this->aggregateFillSide($exitFills);
+        if ($entryAggregate['invalid'] === true || $exitAggregate['invalid'] === true) {
+            $flags[] = 'invalid_quantitative_fill';
+        }
         $remainingQty = null;
         if ($entryAggregate['qty'] !== null && $exitAggregate['qty'] !== null) {
             $remainingQty = $entryAggregate['qty'] - $exitAggregate['qty'];
@@ -207,7 +210,7 @@ final readonly class FillQuantityAggregationService
 
     /**
      * @param list<FillCostLedgerEntry> $fills
-     * @return array{firstAt:?\DateTimeImmutable,lastAt:?\DateTimeImmutable,qty:?float,vwap:?float}
+     * @return array{firstAt:?\DateTimeImmutable,lastAt:?\DateTimeImmutable,qty:?float,vwap:?float,invalid:bool}
      */
     private function aggregateFillSide(array $fills): array
     {
@@ -217,15 +220,18 @@ final readonly class FillQuantityAggregationService
                 'lastAt' => null,
                 'qty' => null,
                 'vwap' => null,
+                'invalid' => false,
             ];
         }
 
         $quantity = 0.0;
         $notional = 0.0;
+        $invalid = false;
         foreach ($fills as $fill) {
             $fillQuantity = $fill->getQuantity() !== null ? (float) $fill->getQuantity() : null;
             $fillPrice = $fill->getPrice() !== null ? (float) $fill->getPrice() : null;
             if ($fillQuantity === null || $fillPrice === null || $fillQuantity <= 0.0 || $fillPrice <= 0.0) {
+                $invalid = true;
                 continue;
             }
 
@@ -238,6 +244,7 @@ final readonly class FillQuantityAggregationService
             'lastAt' => $fills[\count($fills) - 1]->getOccurredAt(),
             'qty' => $quantity > 0.0 ? $quantity : null,
             'vwap' => $quantity > 0.0 ? $notional / $quantity : null,
+            'invalid' => $invalid,
         ];
     }
 
@@ -249,6 +256,9 @@ final readonly class FillQuantityAggregationService
     {
         if (\in_array('fill_conflict', $existingFlags, true)) {
             return ['fill_conflict', ['fill_conflict'], false];
+        }
+        if (\in_array('invalid_quantitative_fill', $existingFlags, true)) {
+            return ['invalid_fill_quantity', ['invalid_quantitative_fill'], false];
         }
         if ($entryQty === null) {
             return ['missing_entry_fill', ['missing_entry_fill'], false];

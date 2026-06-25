@@ -524,6 +524,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
   SELECT ARRAY_REMOVE(ARRAY[
     CASE WHEN m.close_event_id IS NULL THEN 'unmatched' END,
+    CASE WHEN m.close_event_id IS NOT NULL THEN 'ledger_quantity_aggregate_missing' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.gross_realized_pnl_usdt IS NULL THEN 'missing_gross_pnl' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.entry_fee_usdt IS NULL THEN 'missing_entry_fee' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.exit_fee_usdt IS NULL THEN 'missing_exit_fee' END,

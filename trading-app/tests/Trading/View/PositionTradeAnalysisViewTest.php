@@ -342,16 +342,16 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertNull($bySymbol['ADAUSDT']['net_pnl_usdt']);
         self::assertStringContainsString('quantity_mismatch', (string) $bySymbol['ADAUSDT']['pnl_quality_flags']);
 
-        self::assertSame('complete', $bySymbol['BTCUSDT']['cost_completeness']);
+        self::assertSame('partial', $bySymbol['BTCUSDT']['cost_completeness']);
         self::assertSame('fake_paper_fill_ledger_v1', $bySymbol['BTCUSDT']['pnl_source']);
         self::assertEqualsWithDelta(9.6, (float) $bySymbol['BTCUSDT']['gross_realized_pnl_usdt'], 1e-9);
         self::assertEqualsWithDelta(0.05, (float) $bySymbol['BTCUSDT']['entry_fee_usdt'], 1e-9);
         self::assertEqualsWithDelta(0.05, (float) $bySymbol['BTCUSDT']['exit_fee_usdt'], 1e-9);
-        self::assertEqualsWithDelta(0.16, (float) $bySymbol['BTCUSDT']['total_known_cost_usdt'], 1e-9);
-        self::assertEqualsWithDelta(9.44, (float) $bySymbol['BTCUSDT']['net_pnl_usdt'], 1e-9);
-        self::assertEqualsWithDelta(1.888, (float) $bySymbol['BTCUSDT']['realized_net_pnl_r'], 1e-9);
+        self::assertNull($bySymbol['BTCUSDT']['total_known_cost_usdt']);
+        self::assertNull($bySymbol['BTCUSDT']['net_pnl_usdt']);
+        self::assertNull($bySymbol['BTCUSDT']['realized_net_pnl_r']);
         self::assertTrue(filter_var($bySymbol['BTCUSDT']['position_fully_closed'], FILTER_VALIDATE_BOOLEAN));
-        self::assertSame('[]', (string) $bySymbol['BTCUSDT']['pnl_quality_flags']);
+        self::assertStringContainsString('ledger_quantity_aggregate_missing', (string) $bySymbol['BTCUSDT']['pnl_quality_flags']);
 
         self::assertSame('partial', $bySymbol['ETHUSDT']['cost_completeness']);
         self::assertNull($bySymbol['ETHUSDT']['net_pnl_usdt']);
