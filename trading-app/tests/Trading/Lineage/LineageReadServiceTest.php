@@ -91,6 +91,48 @@ final class LineageReadServiceTest extends TestCase
         self::assertCount(1, $page->items[0]['lifecycle_events']);
     }
 
+    public function testCompletenessUsesCloseEventBeyondFirstLifecyclePage(): void
+    {
+        $lineage = $this->lineage('trade-long-events')
+            ->setOrderIntent($this->intent(50, 'trade-long-events'))
+            ->setExchangeOrderId('EX-LONG')
+            ->setPositionId('POS-LONG');
+
+        $events = [];
+        for ($i = 0; $i < 100; ++$i) {
+            $events[] = $this->event('order_updated', 'trade-long-events');
+        }
+        $events[] = $this->event('position_closed', 'trade-long-events');
+
+        $page = $this->service([$lineage], ['trade-long-events' => $events])->search(
+            LineageReadCriteria::forIdentifier('internal_trade_id', 'trade-long-events', limit: 10, offset: 0),
+        );
+
+        self::assertSame('complete', $page->items[0]['completeness_status']);
+        self::assertSame([], $page->items[0]['quality_flags']);
+        self::assertCount(100, $page->items[0]['lifecycle_events']);
+        self::assertSame(101, $page->items[0]['lifecycle_events_pagination']['total']);
+        self::assertTrue($page->items[0]['lifecycle_events_pagination']['has_more']);
+    }
+
+    public function testEmptyLineagePageKeepsTotalWithoutFallingBackToUnmatched(): void
+    {
+        $lineage = $this->lineage('trade-paged')
+            ->setOrderIntent($this->intent(51, 'trade-paged'))
+            ->setExchangeOrderId('EX-PAGED')
+            ->setPositionId('POS-PAGED');
+
+        $page = $this->service([$lineage], ['trade-paged' => [$this->event('position_closed', 'trade-paged')]])->search(
+            LineageReadCriteria::forIdentifier('orchestration_run_id', 'orun-1', limit: 10, offset: 10),
+        );
+
+        self::assertSame(1, $page->total);
+        self::assertSame(10, $page->limit);
+        self::assertSame(10, $page->offset);
+        self::assertSame([], $page->items);
+        self::assertFalse($page->hasMore);
+    }
+
     public function testIdentifierConflictIsNeverResolvedSilently(): void
     {
         $lineageA = $this->lineage('trade-a')->setExchangeOrderId('EX-1');
@@ -133,10 +175,18 @@ final class LineageReadServiceTest extends TestCase
 
             public function count(LineageReadCriteria $criteria): int
             {
-                return count($this->find($criteria));
+                return count($this->matchingLineages($criteria));
             }
 
             public function find(LineageReadCriteria $criteria): array
+            {
+                return array_slice($this->matchingLineages($criteria), $criteria->offset, $criteria->limit);
+            }
+
+            /**
+             * @return TradeLineage[]
+             */
+            private function matchingLineages(LineageReadCriteria $criteria): array
             {
                 return array_values(array_filter(
                     $this->lineages,
@@ -170,14 +220,25 @@ final class LineageReadServiceTest extends TestCase
                 ));
             }
 
-            public function findEventsForLineage(TradeLineage $lineage, int $limit): array
+            public function findEventsForLineage(TradeLineage $lineage, int $limit, int $offset = 0): array
             {
-                return array_slice($this->eventsByTrade[$lineage->getInternalTradeId()] ?? [], 0, $limit);
+                return array_slice($this->eventsByTrade[$lineage->getInternalTradeId()] ?? [], $offset, $limit);
             }
 
             public function countEventsForLineage(TradeLineage $lineage): int
             {
                 return count($this->eventsByTrade[$lineage->getInternalTradeId()] ?? []);
+            }
+
+            public function hasCloseEventForLineage(TradeLineage $lineage): bool
+            {
+                foreach ($this->eventsByTrade[$lineage->getInternalTradeId()] ?? [] as $event) {
+                    if ($event->getEventType() === 'position_closed') {
+                        return true;
+                    }
+                }
+
+                return false;
             }
         });
     }

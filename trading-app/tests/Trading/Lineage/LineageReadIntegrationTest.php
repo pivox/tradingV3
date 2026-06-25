@@ -110,6 +110,96 @@ final class LineageReadIntegrationTest extends KernelTestCase
         );
     }
 
+    public function testLineageDetailDoesNotMixLifecycleEventsFromAmbiguousVenueIdentifiers(): void
+    {
+        $intentA = $this->persistIntent('trade-a');
+        $intentB = $this->persistIntent('trade-b');
+
+        $this->persistLineage('trade-a', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentA, withCloseEvent: false);
+        $this->persistLifecycleEvent('trade-a', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', 'order_submitted');
+
+        $this->persistLineage('trade-b', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentB, withCloseEvent: false);
+        $this->persistLifecycleEvent('trade-b', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', 'position_closed');
+
+        $page = $this->service->search(
+            LineageReadCriteria::forIdentifier('internal_trade_id', 'trade-a', 10, 0),
+        );
+
+        self::assertSame(1, $page->total);
+        self::assertSame('missing_close_event', $page->items[0]['completeness_status']);
+        self::assertSame(['order_submitted'], array_column($page->items[0]['lifecycle_events'], 'event_type'));
+        self::assertSame(['trade-a'], array_unique(array_column($page->items[0]['lifecycle_events'], 'internal_trade_id')));
+    }
+
+    public function testLineageDetailDoesNotImportConflictingLegacyLifecycleEvents(): void
+    {
+        $intentA = $this->persistIntent('trade-a');
+        $intentB = $this->persistIntent('trade-b');
+
+        $this->persistLineage('trade-a', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentA, withCloseEvent: false);
+        $this->persistLifecycleEvent('trade-a', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', 'order_submitted');
+
+        $this->persistLineage('trade-b', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentB, withCloseEvent: false);
+        $this->persistLegacyLifecycleEvent('client-trade-b', 'bitmart', 'perpetual', 'EX-SAME', 'POS-OTHER', 'position_closed');
+
+        $page = $this->service->search(
+            LineageReadCriteria::forIdentifier('internal_trade_id', 'trade-a', 10, 0),
+        );
+
+        self::assertSame(1, $page->total);
+        self::assertSame('missing_close_event', $page->items[0]['completeness_status']);
+        self::assertSame(['order_submitted'], array_column($page->items[0]['lifecycle_events'], 'event_type'));
+    }
+
+    public function testLineageDetailIncludesLegacyCloseMatchedByPositionWithDistinctClosingOrder(): void
+    {
+        $intent = $this->persistIntent('trade-position-close');
+
+        $this->persistLineage(
+            'trade-position-close',
+            'bitmart',
+            'perpetual',
+            'EX-ENTRY',
+            'POS-STABLE',
+            orderIntent: $intent,
+            withCloseEvent: false,
+        );
+        $this->persistLifecycleEvent('trade-position-close', 'bitmart', 'perpetual', 'EX-ENTRY', 'POS-STABLE', 'order_submitted');
+        $this->persistLegacyLifecycleEvent('client-close-order', 'bitmart', 'perpetual', 'EX-CLOSE', 'POS-STABLE', 'position_closed');
+
+        $page = $this->service->search(
+            LineageReadCriteria::forIdentifier('internal_trade_id', 'trade-position-close', 10, 0),
+        );
+
+        self::assertSame(1, $page->total);
+        self::assertSame('complete', $page->items[0]['completeness_status']);
+        self::assertSame(['order_submitted', 'position_closed'], array_column($page->items[0]['lifecycle_events'], 'event_type'));
+    }
+
+    public function testLineageDetailMatchesLegacyExchangeOrderWhenClientOrderCaseDiffers(): void
+    {
+        $intent = $this->persistIntent('trade-case');
+
+        $this->persistLineage(
+            'trade-case',
+            'bitmart',
+            'perpetual',
+            'EX-CASE',
+            'POS-CASE',
+            orderIntent: $intent,
+            withCloseEvent: false,
+        );
+        $this->persistLegacyLifecycleEvent('CLIENT-TRADE-CASE', 'bitmart', 'perpetual', 'EX-CASE', null, 'position_closed');
+
+        $page = $this->service->search(
+            LineageReadCriteria::forIdentifier('internal_trade_id', 'trade-case', 10, 0),
+        );
+
+        self::assertSame(1, $page->total);
+        self::assertSame('complete', $page->items[0]['completeness_status']);
+        self::assertSame(['position_closed'], array_column($page->items[0]['lifecycle_events'], 'event_type'));
+    }
+
     public function testRunSearchIsPaginatedAndDeterministicallyOrdered(): void
     {
         $this->persistLineage('trade-1', 'bitmart', 'perpetual', 'EX-1', 'POS-1', 'run-paged');
@@ -158,6 +248,7 @@ final class LineageReadIntegrationTest extends KernelTestCase
         string $orchestrationRunId = 'run-1',
         string $orchestrationSetId = 'set-1',
         ?OrderIntent $orderIntent = null,
+        bool $withCloseEvent = true,
     ): void {
         $lineage = (new TradeLineage($internalTradeId, 'client-' . $internalTradeId, 'BTCUSDT'))
             ->setOrderIntent($orderIntent)
@@ -172,7 +263,82 @@ final class LineageReadIntegrationTest extends KernelTestCase
             ->setOrchestrationSetId($orchestrationSetId)
             ->setOrchestrationDashboardId('dash-1');
 
-        $event = (new TradeLifecycleEvent('BTCUSDT', 'position_closed'))
+        $this->em->persist($lineage);
+        if ($withCloseEvent) {
+            $this->em->persist($this->lifecycleEvent(
+                $internalTradeId,
+                $exchange,
+                $marketType,
+                $exchangeOrderId,
+                $positionId,
+                'position_closed',
+                $orchestrationRunId,
+                $orchestrationSetId,
+            ));
+        }
+        $this->em->flush();
+    }
+
+    private function persistLifecycleEvent(
+        string $internalTradeId,
+        string $exchange,
+        string $marketType,
+        string $exchangeOrderId,
+        string $positionId,
+        string $eventType,
+        string $orchestrationRunId = 'run-1',
+        string $orchestrationSetId = 'set-1',
+    ): void {
+        $this->em->persist($this->lifecycleEvent(
+            $internalTradeId,
+            $exchange,
+            $marketType,
+            $exchangeOrderId,
+            $positionId,
+            $eventType,
+            $orchestrationRunId,
+            $orchestrationSetId,
+        ));
+        $this->em->flush();
+    }
+
+    private function persistLegacyLifecycleEvent(
+        string $clientOrderId,
+        string $exchange,
+        string $marketType,
+        string $exchangeOrderId,
+        ?string $positionId,
+        string $eventType,
+        string $orchestrationRunId = 'run-1',
+        string $orchestrationSetId = 'set-1',
+    ): void {
+        $event = $this->lifecycleEvent(
+            null,
+            $exchange,
+            $marketType,
+            $exchangeOrderId,
+            $positionId,
+            $eventType,
+            $orchestrationRunId,
+            $orchestrationSetId,
+        );
+        $event->setClientOrderId($clientOrderId);
+
+        $this->em->persist($event);
+        $this->em->flush();
+    }
+
+    private function lifecycleEvent(
+        ?string $internalTradeId,
+        string $exchange,
+        string $marketType,
+        string $exchangeOrderId,
+        ?string $positionId,
+        string $eventType,
+        string $orchestrationRunId,
+        string $orchestrationSetId,
+    ): TradeLifecycleEvent {
+        return (new TradeLifecycleEvent('BTCUSDT', $eventType))
             ->setExchange($exchange)
             ->setMarketType($marketType)
             ->setInternalTradeId($internalTradeId)
@@ -181,10 +347,6 @@ final class LineageReadIntegrationTest extends KernelTestCase
             ->setOrchestrationRunId($orchestrationRunId)
             ->setOrchestrationSetId($orchestrationSetId)
             ->setOrchestrationDashboardId('dash-1');
-
-        $this->em->persist($lineage);
-        $this->em->persist($event);
-        $this->em->flush();
     }
 
     private function persistIntent(string $internalTradeId): OrderIntent

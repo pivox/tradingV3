@@ -18,8 +18,10 @@ final readonly class LineageReadService
     ) {
     }
 
-    public function search(LineageReadCriteria $criteria): LineageReadPage
+    public function search(LineageReadCriteria $criteria, ?int $eventLimit = null, int $eventOffset = 0): LineageReadPage
     {
+        $eventLimit = $this->boundedEventLimit($eventLimit);
+        $eventOffset = max(0, $eventOffset);
         $total = $this->store->count($criteria);
         if ($criteria->isConflictSensitive() && $total > 1) {
             throw new LineageReadException(
@@ -31,6 +33,15 @@ final readonly class LineageReadService
 
         $lineages = $this->store->find($criteria);
         if ($lineages === []) {
+            if ($total > 0) {
+                return new LineageReadPage(
+                    items: [],
+                    total: $total,
+                    limit: $criteria->limit,
+                    offset: $criteria->offset,
+                );
+            }
+
             $unmatchedEvents = $this->store->findUnmatchedEvents($criteria);
             $items = array_map(fn (TradeLifecycleEvent $event): array => $this->serializeUnmatchedEvent($event), $unmatchedEvents);
 
@@ -44,8 +55,8 @@ final readonly class LineageReadService
 
         $items = [];
         foreach ($lineages as $lineage) {
-            $events = $this->store->findEventsForLineage($lineage, self::EVENT_LIMIT);
-            $items[] = $this->serializeLineage($lineage, $events);
+            $events = $this->store->findEventsForLineage($lineage, $eventLimit, $eventOffset);
+            $items[] = $this->serializeLineage($lineage, $events, $eventLimit, $eventOffset);
         }
 
         return new LineageReadPage(
@@ -60,9 +71,9 @@ final readonly class LineageReadService
      * @param TradeLifecycleEvent[] $events
      * @return array<string,mixed>
      */
-    private function serializeLineage(TradeLineage $lineage, array $events): array
+    private function serializeLineage(TradeLineage $lineage, array $events, int $eventLimit, int $eventOffset): array
     {
-        $qualityFlags = $this->qualityFlags($lineage, $events);
+        $qualityFlags = $this->qualityFlags($lineage);
         $status = $this->completenessStatus($qualityFlags);
 
         return [
@@ -71,7 +82,7 @@ final readonly class LineageReadService
             'lineage' => $this->lineagePayload($lineage),
             'order_intent' => $lineage->getOrderIntent() !== null ? $this->orderIntentPayload($lineage->getOrderIntent()) : null,
             'lifecycle_events' => array_map(fn (TradeLifecycleEvent $event): array => $this->eventPayload($event), $events),
-            'lifecycle_events_pagination' => $this->eventPagination($lineage, $events),
+            'lifecycle_events_pagination' => $this->eventPagination($lineage, $events, $eventLimit, $eventOffset),
         ];
     }
 
@@ -95,10 +106,9 @@ final readonly class LineageReadService
     }
 
     /**
-     * @param TradeLifecycleEvent[] $events
      * @return list<string>
      */
-    private function qualityFlags(TradeLineage $lineage, array $events): array
+    private function qualityFlags(TradeLineage $lineage): array
     {
         $flags = [];
 
@@ -118,7 +128,7 @@ final readonly class LineageReadService
             $flags[] = 'missing_position_id';
         }
 
-        if (!$this->hasCloseEvent($events)) {
+        if (!$this->store->hasCloseEventForLineage($lineage)) {
             $flags[] = 'missing_close_event';
         }
 
@@ -160,31 +170,27 @@ final readonly class LineageReadService
 
     /**
      * @param TradeLifecycleEvent[] $events
-     */
-    private function hasCloseEvent(array $events): bool
-    {
-        foreach ($events as $event) {
-            if ($event->getEventType() === 'position_closed') {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * @param TradeLifecycleEvent[] $events
      * @return array<string,mixed>
      */
-    private function eventPagination(TradeLineage $lineage, array $events): array
+    private function eventPagination(TradeLineage $lineage, array $events, int $eventLimit, int $eventOffset): array
     {
         $total = $this->store->countEventsForLineage($lineage);
 
         return [
-            'limit' => self::EVENT_LIMIT,
+            'limit' => $eventLimit,
+            'offset' => $eventOffset,
             'total' => $total,
-            'has_more' => $total > count($events),
+            'has_more' => $eventOffset + count($events) < $total,
         ];
+    }
+
+    private function boundedEventLimit(?int $limit): int
+    {
+        if ($limit === null) {
+            return self::EVENT_LIMIT;
+        }
+
+        return min(self::EVENT_LIMIT, max(1, $limit));
     }
 
     /**

@@ -24,7 +24,9 @@ interface LineageReadStoreInterface
     /**
      * @return TradeLifecycleEvent[]
      */
-    public function findEventsForLineage(TradeLineage $lineage, int $limit): array;
+    public function findEventsForLineage(TradeLineage $lineage, int $limit, int $offset = 0): array;
 
     public function countEventsForLineage(TradeLineage $lineage): int;
+
+    public function hasCloseEventForLineage(TradeLineage $lineage): bool;
 }

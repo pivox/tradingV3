@@ -65,12 +65,14 @@ final class LineageReadApiController extends AbstractController
         $criteria = LineageReadCriteria::forIdentifier(
             'internal_trade_id',
             $internalTradeId,
-            $this->intQuery($request, 'limit', LineageReadCriteria::MAX_LIMIT),
-            $this->intQuery($request, 'offset', 0),
+            1,
+            0,
         );
+        $eventLimit = $this->intQuery($request, 'limit', LineageReadCriteria::MAX_LIMIT);
+        $eventOffset = $this->intQuery($request, 'offset', 0);
 
         try {
-            $page = $this->lineageReadService->search($criteria);
+            $page = $this->lineageReadService->search($criteria, $eventLimit, $eventOffset);
         } catch (LineageReadException $e) {
             return $this->error($e->errorCode, $e->getMessage(), $e->getCode());
         }
@@ -96,8 +98,8 @@ final class LineageReadApiController extends AbstractController
         $criteria = LineageReadCriteria::forIdentifier(
             'internal_trade_id',
             $internalTradeId,
-            $this->intQuery($request, 'limit', LineageReadCriteria::MAX_LIMIT),
-            $this->intQuery($request, 'offset', 0),
+            1,
+            0,
         );
 
         try {
