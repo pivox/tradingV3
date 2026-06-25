@@ -9,6 +9,7 @@ use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Schema\Schema;
 use DoctrineMigrations\Version20260622000000;
 use DoctrineMigrations\Version20260623010000;
+use DoctrineMigrations\Version20260625000000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -27,6 +28,7 @@ use Psr\Log\NullLogger;
  */
 #[CoversClass(Version20260622000000::class)]
 #[CoversClass(Version20260623010000::class)]
+#[CoversClass(Version20260625000000::class)]
 final class PositionTradeAnalysisViewTest extends TestCase
 {
     private Connection $conn;
@@ -142,6 +144,99 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('not_applicable', $eth['cost_completeness']);
         self::assertNull($eth['close_event_id']);
         self::assertNull($eth['recorded_pnl_usdt']);
+    }
+
+    public function testCertifiedNetPnlRequiresExplicitCompleteFinancialContract(): void
+    {
+        $run = 'run_certified_net_contract';
+
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-net-win',
+            'risk_usdt' => 5.0,
+            'initial_stop_price' => 95.0,
+            'planned_r_multiple' => 1.5,
+        ], '2026-06-25 10:00:00+00', 2100);
+        $this->close('BTCUSDT', $run, [
+            'internal_trade_id' => 'itd-net-win',
+            'pnl' => 9.44,
+            'gross_realized_pnl_usdt' => 9.6,
+            'recorded_pnl_usdt' => 9.44,
+            'entry_fee_usdt' => 0.05,
+            'exit_fee_usdt' => 0.05,
+            'other_trading_fees_usdt' => 0.01,
+            'funding_usdt' => 0.20,
+            'spread_cost_usdt' => 0.10,
+            'slippage_cost_usdt' => 0.15,
+            'borrow_cost_usdt' => 0.0,
+            'liquidation_fee_usdt' => 0.0,
+            'entry_vwap' => 100.6,
+            'entry_qty' => 1.0,
+            'exit_vwap' => 110.2,
+            'exit_qty' => 1.0,
+            'remaining_qty' => 0.0,
+            'position_fully_closed' => true,
+            'fills_complete' => true,
+            'quantity_coherent' => true,
+            'lineage_sufficient' => true,
+            'identifier_conflict' => false,
+            'pnl_source' => 'fake_paper_fill_ledger_v1',
+        ], null, '2026-06-25 10:15:00+00', 2101, 'fake', 'perpetual');
+
+        $this->entry('ETHUSDT', $run, 's1', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-net-missing-fee',
+        ], '2026-06-25 11:00:00+00', 2110);
+        $this->close('ETHUSDT', $run, [
+            'internal_trade_id' => 'itd-net-missing-fee',
+            'gross_realized_pnl_usdt' => -4.0,
+            'exit_fee_usdt' => 0.02,
+            'other_trading_fees_usdt' => 0.0,
+            'funding_usdt' => -0.10,
+            'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0,
+            'borrow_cost_usdt' => 0.0,
+            'liquidation_fee_usdt' => 0.0,
+            'entry_qty' => 1.0,
+            'exit_qty' => 1.0,
+            'remaining_qty' => 0.0,
+            'position_fully_closed' => true,
+            'fills_complete' => true,
+            'quantity_coherent' => true,
+            'lineage_sufficient' => true,
+            'identifier_conflict' => false,
+            'pnl_source' => 'fake_paper_fill_ledger_v1',
+        ], null, '2026-06-25 11:10:00+00', 2111, 'fake', 'perpetual');
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT symbol, gross_realized_pnl_usdt, entry_fee_usdt, exit_fee_usdt,
+                    other_trading_fees_usdt, funding_usdt, spread_cost_usdt,
+                    slippage_cost_usdt, borrow_cost_usdt, liquidation_fee_usdt,
+                    total_known_cost_usdt, net_pnl_usdt, cost_completeness,
+                    pnl_source, pnl_quality_flags, risk_usdt_at_entry,
+                    realized_net_pnl_r, position_fully_closed
+             FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY symbol',
+            [$run],
+        );
+
+        self::assertCount(2, $rows);
+        $bySymbol = [];
+        foreach ($rows as $row) {
+            $bySymbol[$row['symbol']] = $row;
+        }
+
+        self::assertSame('complete', $bySymbol['BTCUSDT']['cost_completeness']);
+        self::assertSame('fake_paper_fill_ledger_v1', $bySymbol['BTCUSDT']['pnl_source']);
+        self::assertEqualsWithDelta(9.6, (float) $bySymbol['BTCUSDT']['gross_realized_pnl_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.05, (float) $bySymbol['BTCUSDT']['entry_fee_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.05, (float) $bySymbol['BTCUSDT']['exit_fee_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.16, (float) $bySymbol['BTCUSDT']['total_known_cost_usdt'], 1e-9);
+        self::assertEqualsWithDelta(9.44, (float) $bySymbol['BTCUSDT']['net_pnl_usdt'], 1e-9);
+        self::assertEqualsWithDelta(1.888, (float) $bySymbol['BTCUSDT']['realized_net_pnl_r'], 1e-9);
+        self::assertTrue(filter_var($bySymbol['BTCUSDT']['position_fully_closed'], FILTER_VALIDATE_BOOLEAN));
+        self::assertSame('[]', (string) $bySymbol['BTCUSDT']['pnl_quality_flags']);
+
+        self::assertSame('partial', $bySymbol['ETHUSDT']['cost_completeness']);
+        self::assertNull($bySymbol['ETHUSDT']['net_pnl_usdt']);
+        self::assertStringContainsString('missing_entry_fee', (string) $bySymbol['ETHUSDT']['pnl_quality_flags']);
     }
 
     public function testCloseIsNotReusedAcrossEntriesSharingAPositionId(): void
@@ -591,8 +686,11 @@ SQL);
         if (!class_exists(Version20260623010000::class, false)) {
             require_once \dirname(__DIR__, 3) . '/migrations/Version20260623010000.php';
         }
+        if (!class_exists(Version20260625000000::class, false)) {
+            require_once \dirname(__DIR__, 3) . '/migrations/Version20260625000000.php';
+        }
 
-        foreach ([Version20260622000000::class, Version20260623010000::class] as $migrationClass) {
+        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class] as $migrationClass) {
             $migration = new $migrationClass($this->conn, new NullLogger());
             $migration->up(new Schema());
             foreach ($migration->getSql() as $query) {

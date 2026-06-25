@@ -50,7 +50,7 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         $book = new FakeExchangeOrderBook($this->state);
         $engine = new FakeExchangeMatchingEngine($this->state, $book, $this->fixedClock());
         $this->scenario = new FakeExchangeScenarioService($this->state, $book, $engine);
-        $this->normalizer = new FakeExchangeEventNormalizer($this->state);
+        $this->normalizer = new FakeExchangeEventNormalizer();
     }
 
     public function testNormalizesPartialFillIntoOrderAndFillEvents(): void
@@ -66,6 +66,9 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         self::assertInstanceOf(ExchangeFillReceived::class, $normalized[1]);
         self::assertSame('exchange.order.partially_filled', $normalized[0]->eventType());
         self::assertEqualsWithDelta(4.0, $normalized[1]->fill()->quantity, 0.000001);
+        self::assertSame('USDT', $normalized[1]->fill()->feeCurrency);
+        self::assertNotNull($normalized[1]->fill()->fee);
+        self::assertSame('fake_paper_fill_ledger_v1', $normalized[1]->fill()->metadata['pnl_source'] ?? null);
         self::assertSame('BTCUSDT', $normalized[1]->symbol());
         self::assertSame(
             $normalized[1]->fill()->fillId,

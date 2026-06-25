@@ -29,6 +29,8 @@ use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 #[AutoconfigureTag('app.exchange_adapter')]
 final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, ExchangeRestSnapshotProviderInterface
 {
+    private const FEE_RATE = 0.0005;
+
     public function __construct(
         private FakeExchangeStateStore $stateStore,
         private FakeExchangeOrderBook $orderBook,
@@ -198,6 +200,9 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
         $fillPrice = isset($event->payload['fill_price']) && is_numeric($event->payload['fill_price'])
             ? (float)$event->payload['fill_price']
             : ($order->averagePrice ?? $order->price ?? 0.0);
+        $fee = isset($event->payload['fill_fee']) && is_numeric($event->payload['fill_fee'])
+            ? (float) $event->payload['fill_fee']
+            : $this->fillFee($fillQuantity, $fillPrice);
 
         return new ExchangeFillDto(
             exchange: Exchange::FAKE,
@@ -217,10 +222,19 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
             positionSide: $order->positionSide,
             quantity: $fillQuantity,
             price: $fillPrice,
-            fee: null,
-            feeCurrency: null,
+            fee: $fee,
+            feeCurrency: 'USDT',
             filledAt: $event->occurredAt,
-            metadata: ['source' => 'fake_exchange_rest_reconciliation'],
+            metadata: [
+                'source' => 'fake_exchange_rest_reconciliation',
+                'pnl_source' => 'fake_paper_fill_ledger_v1',
+                'cost_completeness' => 'complete',
+            ],
         );
+    }
+
+    private function fillFee(float $quantity, float $price): float
+    {
+        return round($quantity * $price * self::FEE_RATE, 12);
     }
 }

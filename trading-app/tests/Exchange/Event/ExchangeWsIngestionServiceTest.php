@@ -52,7 +52,7 @@ final class ExchangeWsIngestionServiceTest extends TestCase
 
         $store = new RecordingProjectionStore();
         $service = new ExchangeWsIngestionService(
-            new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer($state)]),
+            new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer()]),
             new ExchangeEventBus($store, new NullLogger()),
             new NullLogger(),
         );
@@ -86,7 +86,7 @@ final class ExchangeWsIngestionServiceTest extends TestCase
 
         $store = new RecordingProjectionStore();
         $service = new ExchangeWsIngestionService(
-            new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer($state)]),
+            new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer()]),
             new ExchangeEventBus($store, new NullLogger()),
             new NullLogger(),
         );

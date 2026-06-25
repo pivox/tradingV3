@@ -21,10 +21,11 @@ use Psr\Log\LoggerInterface;
  *  - `confirmed_open` : 0 ici (la vue read-only ne porte pas de preuve d'ouverture ; le
  *    confirmer exige l'état ouvert live, hors périmètre OBS-003).
  *
- * PnL — on n'expose JAMAIS un net certifié : `recorded_pnl_usdt` (enregistré) et
- * `estimated_net_pnl_usdt` (estimation best-effort, cf. `cost_completeness`) sont distincts.
+ * PnL — `recorded_pnl_usdt` (enregistré), `estimated_net_pnl_usdt` (best-effort) et
+ * `net_pnl_usdt` (certifié) restent séparés. Les agrégats winrate/expectancy nets ne
+ * consomment que les lignes matched_closed au contrat de coûts complet.
  * `data_complete` n'est vrai que si toutes les lignes pertinentes sont rapprochées ET au
- * contrat de coûts complet (jamais le cas tant que le contrat #190 n'est pas livré).
+ * contrat de coûts complet.
  *
  * Fail-safe : la source indisponible (exception du reader) est relancée pour que le
  * contrôleur HTTP réponde explicitement (jamais un agrégat vide silencieux).
@@ -165,6 +166,26 @@ final class RunTradeOutcomeService
         $pnlR = $this->sum($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getPnlR());
         // Somme d'ESTIMATIONS (best-effort), jamais présentée comme nette certifiée.
         $estimatedNet = $this->sum($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getEstimatedNetPnlUsdt());
+        $certifiedNetRows = array_values(array_filter(
+            $matchedClosed,
+            static fn (PositionTradeAnalysisV2 $r): bool => $r->hasCertifiedNetPnl()
+        ));
+        $netPnl = $this->sum($certifiedNetRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getNetPnlUsdt());
+        $netWinCount = 0;
+        $netLossCount = 0;
+        foreach ($certifiedNetRows as $row) {
+            $net = $row->getNetPnlUsdt();
+            if ($net === null) {
+                continue;
+            }
+            if ($net > 0.0) {
+                $netWinCount++;
+            } elseif ($net < 0.0) {
+                $netLossCount++;
+            }
+        }
+        $netDecided = $netWinCount + $netLossCount;
+        $netCertifiedCount = count($certifiedNetRows);
 
         $mfeValues = $this->values($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMfePct());
         $maeValues = $this->values($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMaePct());
@@ -183,6 +204,16 @@ final class RunTradeOutcomeService
             'recorded_pnl_usdt' => $recordedPnl,
             'pnl_r' => $pnlR,
             'estimated_net_pnl_usdt' => $estimatedNet,
+            'net_pnl_usdt' => $netPnl,
+            'net_certified_count' => $netCertifiedCount,
+            'excluded_count' => $tradeCount - $netCertifiedCount,
+            'incomplete_cost_count' => count(array_filter(
+                $matchedClosed,
+                static fn (PositionTradeAnalysisV2 $r): bool => !$r->isCostComplete()
+            )),
+            'win_rate_net_certified' => $netDecided > 0 ? round($netWinCount / $netDecided, 6) : null,
+            'expectancy_net_pnl_usdt' => $netCertifiedCount > 0 && $netPnl !== null ? round($netPnl / $netCertifiedCount, 8) : null,
+            'pnl_definition' => 'certified_net_v1',
             'cost_completeness' => $this->aggregateCostCompleteness($rows),
             'data_complete' => !$forceIncomplete && $this->isDataComplete($rows),
             'mfe_pct_avg' => $this->avg($mfeValues),
@@ -196,7 +227,7 @@ final class RunTradeOutcomeService
     /**
      * Complétude agrégée des coûts sur les lignes clôturées-rapprochées :
      * `not_applicable` (aucune), `complete`/`partial`/`unknown` sinon, `mixed` si plusieurs
-     * niveaux coexistent. Jamais `complete` tant que le contrat #190 n'est pas livré.
+     * niveaux coexistent.
      *
      * @param PositionTradeAnalysisV2[] $rows
      */
@@ -220,8 +251,7 @@ final class RunTradeOutcomeService
 
     /**
      * Données complètes ssi tout est exploitable comme KPI certifié : aucune ligne
-     * unmatched ET tous les trades clôturés au contrat de coûts complet (jamais le cas
-     * tant que les producteurs #190 ne fournissent pas brut + frais détaillés + spread).
+     * unmatched ET tous les trades clôturés au contrat de coûts complet.
      *
      * @param PositionTradeAnalysisV2[] $rows
      */

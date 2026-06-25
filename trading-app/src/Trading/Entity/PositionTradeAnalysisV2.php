@@ -18,12 +18,12 @@ use Doctrine\ORM\Mapping as ORM;
  *  - `recorded_pnl_usdt` : valeur enregistrée par la source (PAS garantie brute ni nette) ;
  *  - `estimated_net_pnl_usdt` : ESTIMATION best-effort (`recorded - fees - funding -
  *    slippage`) calculée uniquement quand ces composantes sont présentes ;
+ *  - `net_pnl_usdt` : PnL net CERTIFIÉ uniquement quand le brut, les frais entrée/sortie,
+ *    les coûts obligatoires, la fermeture complète, la cohérence de quantité et le lineage
+ *    sont tous démontrés ;
  *  - `cost_completeness` : `not_applicable` (pas de clôture) | `unknown` (clôturé sans
  *    aucune composante de coût) | `partial` (certaines composantes, mais le contrat #190
- *    complet — brut + frais entrée/sortie séparés + spread + funding signé + borrow —
- *    n'est pas atteignable avec les producteurs actuels) | `complete` (réservé au
- *    contrat #190 complet, jamais émis tant que les producteurs ne le fournissent pas).
- *  Il n'existe donc PAS de `net_pnl_usdt` certifié dans cette vue.
+ *    complet n'est pas atteint) | `complete` (net certifiable).
  */
 #[ORM\Entity(readOnly: true)]
 #[ORM\Table(name: 'position_trade_analysis_v2')]
@@ -31,12 +31,14 @@ class PositionTradeAnalysisV2
 {
     #[ORM\Id]
     #[ORM\Column(type: Types::BIGINT, name: 'entry_event_id')]
+    // @phpstan-ignore property.onlyRead
     private int $entryEventId;
 
     #[ORM\Column(type: Types::BIGINT, name: 'close_event_id', nullable: true)]
     private ?int $closeEventId = null;
 
     #[ORM\Column(type: Types::STRING, length: 50)]
+    // @phpstan-ignore property.onlyRead
     private string $symbol;
 
     #[ORM\Column(type: Types::STRING, length: 10, nullable: true)]
@@ -78,6 +80,7 @@ class PositionTradeAnalysisV2
     private ?string $positionId = null;
 
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, name: 'entry_time')]
+    // @phpstan-ignore property.onlyRead
     private \DateTimeImmutable $entryTime;
 
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, name: 'close_time')]
@@ -133,7 +136,7 @@ class PositionTradeAnalysisV2
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_vwap')]
     private ?float $entryVwap = null;
 
-    // --- Résultat / PnL (contrat explicite, jamais de net certifié) --------------
+    // --- Résultat / PnL (contrat explicite, net certifié seulement si complet) ---
 
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'pnl_r')]
     private ?float $pnlR = null;
@@ -141,6 +144,18 @@ class PositionTradeAnalysisV2
     /** Valeur ENREGISTRÉE telle quelle — ni brute ni nette garanties (issue #190). */
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'recorded_pnl_usdt')]
     private ?float $recordedPnlUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'gross_realized_pnl_usdt')]
+    private ?float $grossRealizedPnlUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_fee_usdt')]
+    private ?float $entryFeeUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'exit_fee_usdt')]
+    private ?float $exitFeeUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'other_trading_fees_usdt')]
+    private ?float $otherTradingFeesUsdt = null;
 
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'pnl_pct')]
     private ?float $pnlPct = null;
@@ -163,11 +178,45 @@ class PositionTradeAnalysisV2
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'slippage_usdt')]
     private ?float $slippageUsdt = null;
 
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'spread_cost_usdt')]
+    private ?float $spreadCostUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'slippage_cost_usdt')]
+    private ?float $slippageCostUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'borrow_cost_usdt')]
+    private ?float $borrowCostUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'liquidation_fee_usdt')]
+    private ?float $liquidationFeeUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'total_known_cost_usdt')]
+    private ?float $totalKnownCostUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'net_pnl_usdt')]
+    private ?float $netPnlUsdt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'risk_usdt_at_entry')]
+    private ?float $riskUsdtAtEntry = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'realized_net_pnl_r')]
+    private ?float $realizedNetPnlR = null;
+
+    #[ORM\Column(type: Types::BOOLEAN, nullable: true, name: 'position_fully_closed')]
+    private ?bool $positionFullyClosed = null;
+
+    #[ORM\Column(type: Types::STRING, length: 64, nullable: true, name: 'pnl_source')]
+    private ?string $pnlSource = null;
+
+    /** @var list<string>|null */
+    #[ORM\Column(type: Types::JSON, nullable: true, name: 'pnl_quality_flags')]
+    private ?array $pnlQualityFlags = null;
+
     /** ESTIMATION best-effort, jamais certifiée (cf. {@see getCostCompleteness()}). */
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'estimated_net_pnl_usdt')]
     private ?float $estimatedNetPnlUsdt = null;
 
-    /** `not_applicable` | `unknown` | `partial` | `complete` (jamais `complete` à ce stade). */
+    /** `not_applicable` | `unknown` | `partial` | `complete`. */
     #[ORM\Column(type: Types::STRING, length: 16, name: 'cost_completeness')]
     private string $costCompleteness = 'unknown';
 
@@ -352,6 +401,26 @@ class PositionTradeAnalysisV2
         return $this->recordedPnlUsdt;
     }
 
+    public function getGrossRealizedPnlUsdt(): ?float
+    {
+        return $this->grossRealizedPnlUsdt;
+    }
+
+    public function getEntryFeeUsdt(): ?float
+    {
+        return $this->entryFeeUsdt;
+    }
+
+    public function getExitFeeUsdt(): ?float
+    {
+        return $this->exitFeeUsdt;
+    }
+
+    public function getOtherTradingFeesUsdt(): ?float
+    {
+        return $this->otherTradingFeesUsdt;
+    }
+
     public function getPnlPct(): ?float
     {
         return $this->pnlPct;
@@ -387,6 +456,64 @@ class PositionTradeAnalysisV2
         return $this->slippageUsdt;
     }
 
+    public function getSpreadCostUsdt(): ?float
+    {
+        return $this->spreadCostUsdt;
+    }
+
+    public function getSlippageCostUsdt(): ?float
+    {
+        return $this->slippageCostUsdt;
+    }
+
+    public function getBorrowCostUsdt(): ?float
+    {
+        return $this->borrowCostUsdt;
+    }
+
+    public function getLiquidationFeeUsdt(): ?float
+    {
+        return $this->liquidationFeeUsdt;
+    }
+
+    public function getTotalKnownCostUsdt(): ?float
+    {
+        return $this->totalKnownCostUsdt;
+    }
+
+    public function getNetPnlUsdt(): ?float
+    {
+        return $this->netPnlUsdt;
+    }
+
+    public function getRiskUsdtAtEntry(): ?float
+    {
+        return $this->riskUsdtAtEntry;
+    }
+
+    public function getRealizedNetPnlR(): ?float
+    {
+        return $this->realizedNetPnlR;
+    }
+
+    public function isPositionFullyClosed(): ?bool
+    {
+        return $this->positionFullyClosed;
+    }
+
+    public function getPnlSource(): ?string
+    {
+        return $this->pnlSource;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function getPnlQualityFlags(): array
+    {
+        return $this->pnlQualityFlags ?? [];
+    }
+
     public function getEstimatedNetPnlUsdt(): ?float
     {
         return $this->estimatedNetPnlUsdt;
@@ -397,9 +524,14 @@ class PositionTradeAnalysisV2
         return $this->costCompleteness;
     }
 
-    /** Coûts au contrat #190 complet — jamais vrai tant que les producteurs ne le fournissent pas. */
+    /** Coûts au contrat #190 complet. */
     public function isCostComplete(): bool
     {
         return $this->costCompleteness === 'complete';
+    }
+
+    public function hasCertifiedNetPnl(): bool
+    {
+        return $this->isMatchedClosed() && $this->isCostComplete() && $this->netPnlUsdt !== null;
     }
 }

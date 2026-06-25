@@ -32,10 +32,7 @@ use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 #[AutoconfigureTag('app.exchange_event_normalizer')]
 final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormalizerInterface
 {
-    public function __construct(
-        private FakeExchangeStateStore $stateStore,
-    ) {
-    }
+    private const FEE_RATE = 0.0005;
 
     public function supports(mixed $event): bool
     {
@@ -145,6 +142,9 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
         $fillPrice = isset($event->payload['fill_price']) && is_numeric($event->payload['fill_price'])
             ? (float)$event->payload['fill_price']
             : ($order->averagePrice ?? $order->price ?? 0.0);
+        $fee = isset($event->payload['fill_fee']) && is_numeric($event->payload['fill_fee'])
+            ? (float) $event->payload['fill_fee']
+            : $this->fillFee($fillQuantity, $fillPrice);
 
         return new ExchangeFillDto(
             exchange: $order->exchange,
@@ -157,10 +157,15 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
             positionSide: $order->positionSide,
             quantity: $fillQuantity,
             price: $fillPrice,
-            fee: null,
-            feeCurrency: null,
+            fee: $fee,
+            feeCurrency: 'USDT',
             filledAt: $event->occurredAt,
-            metadata: ['source' => 'fake_exchange_ws', 'order_status' => $order->status->value],
+            metadata: [
+                'source' => 'fake_exchange_ws',
+                'order_status' => $order->status->value,
+                'pnl_source' => 'fake_paper_fill_ledger_v1',
+                'cost_completeness' => 'complete',
+            ],
         );
     }
 
@@ -231,5 +236,10 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
             (string)$quantity,
             (string)$price,
         ])), 0, 32);
+    }
+
+    private function fillFee(float $quantity, float $price): float
+    {
+        return round($quantity * $price * self::FEE_RATE, 12);
     }
 }

@@ -21,6 +21,8 @@ use Psr\Clock\ClockInterface;
 
 final readonly class FakeExchangeMatchingEngine
 {
+    private const FEE_RATE = 0.0005;
+
     public function __construct(
         private FakeExchangeStateStore $stateStore,
         private FakeExchangeOrderBook $orderBook,
@@ -192,7 +194,14 @@ final readonly class FakeExchangeMatchingEngine
         $this->appendEvent(
             $status === ExchangeOrderStatus::FILLED ? 'order.filled' : 'order.partially_filled',
             $updated,
-            ['fill_quantity' => $fillQuantity, 'fill_price' => $executionPrice],
+            [
+                'fill_quantity' => $fillQuantity,
+                'fill_price' => $executionPrice,
+                'fill_fee' => $this->fillFee($fillQuantity, $executionPrice),
+                'fee_currency' => 'USDT',
+                'pnl_source' => 'fake_paper_fill_ledger_v1',
+                'cost_completeness' => 'complete',
+            ],
         );
 
         if ($cancelReduceRemainder) {
@@ -381,6 +390,9 @@ final readonly class FakeExchangeMatchingEngine
         return $order;
     }
 
+    /**
+     * @param array<string,mixed> $metadata
+     */
     private function withOrderStatus(ExchangeOrderDto $order, ExchangeOrderStatus $status, array $metadata): ExchangeOrderDto
     {
         return new ExchangeOrderDto(
@@ -559,6 +571,9 @@ final readonly class FakeExchangeMatchingEngine
         );
     }
 
+    /**
+     * @param array<string,mixed> $payload
+     */
     private function appendEvent(string $type, ExchangeOrderDto $order, array $payload = []): void
     {
         $this->stateStore->appendEvent(new FakeExchangeEvent(
@@ -567,6 +582,11 @@ final readonly class FakeExchangeMatchingEngine
             $this->clock->now(),
             ['order_id' => $order->exchangeOrderId] + $payload,
         ));
+    }
+
+    private function fillFee(float $quantity, float $price): float
+    {
+        return round($quantity * $price * self::FEE_RATE, 12);
     }
 
     private function assertRequestContext(PlaceOrderRequest $request): void

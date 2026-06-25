@@ -92,6 +92,54 @@ final class RunTradeOutcomeServiceTest extends TestCase
         self::assertSame(3, $byExchange['bitmart']['trade_count']);
     }
 
+    public function testAggregatesCertifiedNetOnlyWithoutMixingIncompleteRows(): void
+    {
+        $rows = [
+            $this->row([
+                'symbol' => 'BTCUSDT',
+                'closeEventId' => 10,
+                'closeMatchStatus' => 'matched',
+                'closeMatchedBy' => 'matched_internal_trade_id',
+                'analysisStatus' => 'matched_closed',
+                'recordedPnlUsdt' => 10.0,
+                'costCompleteness' => 'complete',
+                'netPnlUsdt' => 8.5,
+            ]),
+            $this->row([
+                'symbol' => 'ETHUSDT',
+                'closeEventId' => 11,
+                'closeMatchStatus' => 'matched',
+                'closeMatchedBy' => 'matched_internal_trade_id',
+                'analysisStatus' => 'matched_closed',
+                'recordedPnlUsdt' => -3.0,
+                'costCompleteness' => 'partial',
+                'netPnlUsdt' => null,
+            ]),
+            $this->row([
+                'symbol' => 'SOLUSDT',
+                'closeEventId' => null,
+                'closeMatchStatus' => 'unmatched',
+                'closeMatchedBy' => 'unmatched',
+                'analysisStatus' => 'unmatched',
+                'recordedPnlUsdt' => null,
+                'costCompleteness' => 'not_applicable',
+                'netPnlUsdt' => null,
+            ]),
+        ];
+
+        $service = new RunTradeOutcomeService($this->reader($rows));
+        $summary = $service->buildOutcome('run-1')['summary'];
+
+        self::assertSame(1, $summary['net_certified_count']);
+        self::assertSame(2, $summary['excluded_count']);
+        self::assertSame(1, $summary['incomplete_cost_count']);
+        self::assertSame(1, $summary['unmatched_count']);
+        self::assertEqualsWithDelta(8.5, $summary['net_pnl_usdt'], 1e-9);
+        self::assertSame(1.0, $summary['win_rate_net_certified']);
+        self::assertEqualsWithDelta(8.5, $summary['expectancy_net_pnl_usdt'], 1e-9);
+        self::assertSame('certified_net_v1', $summary['pnl_definition']);
+    }
+
     public function testRunWithoutTradeReturnsExplicitEmptyAggregate(): void
     {
         $service = new RunTradeOutcomeService($this->reader([]));
@@ -235,6 +283,9 @@ final class RunTradeOutcomeServiceTest extends TestCase
         self::assertSame(0, $out['summary']['trade_count']);
     }
 
+    /**
+     * @param PositionTradeAnalysisV2[] $rows
+     */
     private function reader(array $rows): PositionTradeAnalysisReaderInterface
     {
         return new class($rows) implements PositionTradeAnalysisReaderInterface {
