@@ -110,6 +110,60 @@ final class NetPnlCertificationServiceTest extends TestCase
         new TradeFill('entry-1', 'BUY', 0.0, 100.0, 0.0, 'USDT', 'maker', new \DateTimeImmutable('2026-06-25 10:00:00 UTC'));
     }
 
+    public function testClassifiesCostOnlyEvidenceAsPartial(): void
+    {
+        $service = new NetPnlCertificationService();
+
+        $result = $service->certify(
+            entryFills: [],
+            exitFills: [],
+            costs: new TradeCosts(
+                otherTradingFeesUsdt: null,
+                fundingUsdt: 0.15,
+                spreadCostUsdt: null,
+                slippageCostUsdt: null,
+                borrowCostUsdt: null,
+                liquidationFeeUsdt: null,
+            ),
+            side: 'LONG',
+            positionFullyClosed: true,
+            lineageSufficient: true,
+            identifierConflict: false,
+        );
+
+        self::assertFalse($result->certified);
+        self::assertSame('partial', $result->costCompleteness);
+        self::assertNull($result->netPnlUsdt);
+        self::assertContains('missing_entry_fill', $result->qualityFlags);
+        self::assertContains('missing_gross_pnl', $result->qualityFlags);
+    }
+
+    public function testClassifiesNoFillsAndNoCostEvidenceAsUnknown(): void
+    {
+        $service = new NetPnlCertificationService();
+
+        $result = $service->certify(
+            entryFills: [],
+            exitFills: [],
+            costs: new TradeCosts(
+                otherTradingFeesUsdt: null,
+                fundingUsdt: null,
+                spreadCostUsdt: null,
+                slippageCostUsdt: null,
+                borrowCostUsdt: null,
+                liquidationFeeUsdt: null,
+            ),
+            side: 'LONG',
+            positionFullyClosed: true,
+            lineageSufficient: true,
+            identifierConflict: false,
+        );
+
+        self::assertFalse($result->certified);
+        self::assertSame('unknown', $result->costCompleteness);
+        self::assertNull($result->netPnlUsdt);
+    }
+
     public function testRefusesExchangeOrderSideInsteadOfPositionSide(): void
     {
         $service = new NetPnlCertificationService();

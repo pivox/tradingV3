@@ -70,7 +70,7 @@ final class NetPnlCertificationService
         if (!$certified || $gross === null || $entryFee === null || $exitFee === null) {
             return new NetPnlCertificationResult(
                 certified: false,
-                costCompleteness: $this->costCompleteness($entryFills, $exitFills, $flags),
+                costCompleteness: $this->costCompleteness($entryFills, $exitFills, $costs, $flags),
                 grossRealizedPnlUsdt: $gross,
                 entryFeeUsdt: $entryFee,
                 exitFeeUsdt: $exitFee,
@@ -157,12 +157,23 @@ final class NetPnlCertificationService
      * @param list<TradeFill> $exitFills
      * @param list<string> $flags
      */
-    private function costCompleteness(array $entryFills, array $exitFills, array $flags): string
+    private function costCompleteness(array $entryFills, array $exitFills, TradeCosts $costs, array $flags): string
     {
-        if ($entryFills === [] && $exitFills === []) {
+        if ($entryFills === [] && $exitFills === [] && !$this->hasCostEvidence($costs)) {
             return 'unknown';
         }
 
         return $flags === [] ? 'complete' : 'partial';
+    }
+
+    private function hasCostEvidence(TradeCosts $costs): bool
+    {
+        foreach ($costs->components() as $value) {
+            if ($value !== null) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
