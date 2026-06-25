@@ -510,6 +510,15 @@ LEFT JOIN LATERAL (
     CASE WHEN m.close_event_id IS NOT NULL AND money.slippage_cost_usdt IS NULL THEN 'missing_slippage_cost' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.borrow_cost_usdt IS NULL THEN 'missing_borrow_cost' END,
     CASE WHEN m.close_event_id IS NOT NULL AND money.liquidation_fee_usdt IS NULL THEN 'missing_liquidation_fee' END,
+    CASE WHEN m.close_event_id IS NOT NULL AND (
+      money.entry_fee_usdt < 0
+      OR money.exit_fee_usdt < 0
+      OR money.other_trading_fees_usdt < 0
+      OR money.spread_cost_usdt < 0
+      OR money.slippage_cost_usdt < 0
+      OR money.borrow_cost_usdt < 0
+      OR money.liquidation_fee_usdt < 0
+    ) THEN 'negative_cost_component' END,
     CASE WHEN m.close_event_id IS NOT NULL AND COALESCE((ce.extra->> 'fills_complete') = 'true', false) IS NOT TRUE THEN 'fills_incomplete' END,
     CASE WHEN m.close_event_id IS NOT NULL AND COALESCE((ce.extra->> 'position_fully_closed') = 'true', false) IS NOT TRUE THEN 'position_not_fully_closed' END,
     CASE WHEN m.close_event_id IS NOT NULL AND COALESCE((ce.extra->> 'lineage_sufficient') = 'true', false) IS NOT TRUE THEN 'lineage_insufficient' END,

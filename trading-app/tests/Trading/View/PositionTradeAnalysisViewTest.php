@@ -292,6 +292,31 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'pnl_source' => 'fake_paper_fill_ledger_v1',
         ], null, '2026-06-25 15:10:00+00', 2151, 'fake', 'perpetual');
 
+        $this->entry('DOGEUSDT', $run, 's1', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-net-negative-cost',
+        ], '2026-06-25 16:00:00+00', 2160);
+        $this->close('DOGEUSDT', $run, [
+            'internal_trade_id' => 'itd-net-negative-cost',
+            'gross_realized_pnl_usdt' => 2.0,
+            'entry_fee_usdt' => -0.01,
+            'exit_fee_usdt' => 0.01,
+            'other_trading_fees_usdt' => 0.0,
+            'funding_usdt' => 0.0,
+            'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0,
+            'borrow_cost_usdt' => 0.0,
+            'liquidation_fee_usdt' => 0.0,
+            'entry_qty' => 1.0,
+            'exit_qty' => 1.0,
+            'remaining_qty' => 0.0,
+            'position_fully_closed' => true,
+            'fills_complete' => true,
+            'quantity_coherent' => true,
+            'lineage_sufficient' => true,
+            'identifier_conflict' => false,
+            'pnl_source' => 'fake_paper_fill_ledger_v1',
+        ], null, '2026-06-25 16:10:00+00', 2161, 'fake', 'perpetual');
+
         $rows = $this->conn->fetchAllAssociative(
             'SELECT symbol, gross_realized_pnl_usdt, entry_fee_usdt, exit_fee_usdt,
                     other_trading_fees_usdt, funding_usdt, spread_cost_usdt,
@@ -303,11 +328,15 @@ final class PositionTradeAnalysisViewTest extends TestCase
             [$run],
         );
 
-        self::assertCount(6, $rows);
+        self::assertCount(7, $rows);
         $bySymbol = [];
         foreach ($rows as $row) {
             $bySymbol[$row['symbol']] = $row;
         }
+
+        self::assertSame('partial', $bySymbol['DOGEUSDT']['cost_completeness']);
+        self::assertNull($bySymbol['DOGEUSDT']['net_pnl_usdt']);
+        self::assertStringContainsString('negative_cost_component', (string) $bySymbol['DOGEUSDT']['pnl_quality_flags']);
 
         self::assertSame('partial', $bySymbol['ADAUSDT']['cost_completeness']);
         self::assertNull($bySymbol['ADAUSDT']['net_pnl_usdt']);
