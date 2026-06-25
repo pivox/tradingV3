@@ -37,6 +37,19 @@ Les champs utilisés pour filtrer, joindre ou auditer sont persistés en colonne
 
 Le contexte refuse les contradictions vérifiables entre alias (`set_id` vs `orchestration_set_id`, `profile` vs `mtf_profile`, etc.). Symfony ne valide pas la relation set/dashboard contre la base orchestrateur tant qu'elle n'est pas accessible localement.
 
-## Limites du lot
+## API de lecture
 
-Ce lot ne livre pas encore l'API complète de lecture par lineage. Les index et colonnes rendent possibles les lectures par `run_id`, `set_id`, `internal_trade_id`, `order_intent_id`, `position_id`, origin et replay sans reconstruire par symbole.
+La surface read-only `GET /api/lineage/v1/search` permet maintenant de lire le lineage par :
+
+- `orchestration_run_id`
+- `correlation_run_id`
+- `orchestration_set_id`
+- `orchestration_dashboard_id`
+- `internal_trade_id`
+- `internal_position_id`
+- `order_intent_id`
+- `client_order_id`
+- `exchange_order_id`
+- `position_id`
+
+Les identifiants de venue exigent `exchange + market_type`. Les reponses exposent `completeness_status` et `quality_flags`, sans payload brut. Voir [API read-only de lineage](lineage-read-api.md).

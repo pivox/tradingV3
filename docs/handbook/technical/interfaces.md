@@ -12,6 +12,9 @@
 | `GET /api/mtf/switches` | `MtfController` | Switches MTF. |
 | `GET /api/mtf-audits` | `MtfAuditController` | Audits MTF JSON. |
 | `GET /api/mtf-audits?runId={runId}` | `MtfAuditController` | Lecture des audits d'un run. |
+| `GET /api/lineage/v1/search` | `LineageReadApiController` | Lecture read-only du lineage persistant par identifiants exacts. |
+| `GET /api/lineage/v1/{internal_trade_id}` | `LineageReadApiController` | Detail complet d'un lineage. |
+| `GET /api/lineage/v1/{internal_trade_id}/events` | `LineageReadApiController` | Evenements lifecycle associes au lineage. |
 | `GET /api/indicators/available` | `IndicatorApiController` | Conditions/indicateurs disponibles. |
 | `GET /api/indicators/pivots` | `IndicatorApiController` | Pivots. |
 | `GET /api/indicators/values` | `IndicatorApiController` | Valeurs indicateurs. |
