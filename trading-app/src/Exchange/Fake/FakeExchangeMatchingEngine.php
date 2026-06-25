@@ -27,6 +27,7 @@ final readonly class FakeExchangeMatchingEngine
      */
     private const LINEAGE_METADATA_KEYS = [
         'internal_trade_id',
+        'trade_id',
         'internal_position_id',
         'position_id',
         'exchange_position_id',

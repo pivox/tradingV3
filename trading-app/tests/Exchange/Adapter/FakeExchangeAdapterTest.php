@@ -303,6 +303,31 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame('complete', $closedEvents[0]->payload['cost_completeness'] ?? null);
     }
 
+    public function testClosePayloadKeepsLegacyTradeIdWhenEntryMetadataOnlyHasTradeId(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'entry-cid-legacy-trade',
+            postOnly: false,
+            metadata: ['trade_id' => 'legacy-trade-123'],
+        ));
+
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'reduce-cid-legacy-trade',
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+        ));
+
+        $closedEvents = $this->scenario->events('position.closed');
+        self::assertCount(1, $closedEvents);
+        self::assertSame('legacy-trade-123', $closedEvents[0]->payload['trade_id'] ?? null);
+        self::assertSame('complete', $closedEvents[0]->payload['cost_completeness'] ?? null);
+    }
+
     public function testReduceOnlyProtectionFillIsCappedToRemainingPositionSize(): void
     {
         $this->adapter->placeOrder($this->request(
