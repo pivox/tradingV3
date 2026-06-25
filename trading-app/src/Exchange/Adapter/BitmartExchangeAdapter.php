@@ -306,7 +306,7 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface, Exchange
             positionSide: $positionSide,
             quantity: $quantity,
             price: $price,
-            fee: $this->floatOrNull($row['fee'] ?? $row['fees'] ?? $row['commission'] ?? null),
+            fee: $this->floatOrNull($row['paid_fees'] ?? $row['fee'] ?? $row['fees'] ?? $row['commission'] ?? null),
             feeCurrency: $this->stringValue($row['fee_currency'] ?? $row['feeCurrency'] ?? $row['fee_ccy'] ?? $row['feeCcy'] ?? null),
             filledAt: $this->tradeTime($row['trade_time'] ?? $row['tradeTime'] ?? $row['create_time'] ?? $row['timestamp'] ?? $row['time'] ?? null),
             metadata: $metadata,

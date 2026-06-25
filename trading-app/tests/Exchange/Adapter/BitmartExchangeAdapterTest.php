@@ -421,7 +421,7 @@ final class BitmartExchangeAdapterTest extends TestCase
                 'side' => 1,
                 'price' => '25000.5',
                 'vol' => '0.25',
-                'fee' => '-0.0123',
+                'paid_fees' => '-0.0123',
                 'fee_currency' => 'USDT',
                 'exec_type' => 'maker',
                 'create_time' => 1767225601123,
