@@ -18,6 +18,32 @@ use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 
 final class TradeLifecycleLoggerListener
 {
+    /**
+     * @var string[]
+     */
+    private const CERTIFIED_PNL_EXTRA_KEYS = [
+        'gross_realized_pnl_usdt',
+        'recorded_pnl_usdt',
+        'entry_fee_usdt',
+        'exit_fee_usdt',
+        'other_trading_fees_usdt',
+        'funding_usdt',
+        'spread_cost_usdt',
+        'slippage_cost_usdt',
+        'borrow_cost_usdt',
+        'liquidation_fee_usdt',
+        'entry_qty',
+        'exit_qty',
+        'remaining_qty',
+        'position_fully_closed',
+        'fills_complete',
+        'quantity_coherent',
+        'lineage_sufficient',
+        'identifier_conflict',
+        'pnl_source',
+        'cost_completeness',
+    ];
+
     public function __construct(
         private readonly TradeLifecycleLogger $tradeLifecycleLogger,
         private readonly TradeLifecycleEventRepository $tradeLifecycleRepository,
@@ -93,6 +119,7 @@ final class TradeLifecycleLoggerListener
         $pnlPct = $notional !== null && $notional > 0.0 ? $pnlFloat / $notional : null;
         $holdingTimeSec = $history->closedAt->getTimestamp() - $history->openedAt->getTimestamp();
         $effectiveRunId = $event->runId ?? $lineage?->getRunId();
+        $certifiedPnlExtra = $this->certifiedPnlExtraFromRaw($history->raw);
 
         // Approximate initial risk in USDT from the most recent ORDER_SUBMITTED lifecycle event
         $pnlR = null;
@@ -219,6 +246,7 @@ final class TradeLifecycleLoggerListener
                     'fees' => $history->fees?->__toString(),
                     'raw'  => $history->raw,
                 ],
+                $certifiedPnlExtra,
                 $event->extra,
             ),
             marketType: $marketType,
@@ -377,6 +405,51 @@ final class TradeLifecycleLoggerListener
         return $raw['position_id']
             ?? $raw['positionId']
             ?? null;
+    }
+
+    /**
+     * @param array<string,mixed> $raw
+     * @return array<string,mixed>
+     */
+    private function certifiedPnlExtraFromRaw(array $raw): array
+    {
+        $payload = $this->positionPayloadFromRaw($raw);
+        if ($payload === []) {
+            return [];
+        }
+
+        $extra = [];
+        foreach (self::CERTIFIED_PNL_EXTRA_KEYS as $key) {
+            if (!\array_key_exists($key, $payload)) {
+                continue;
+            }
+
+            $value = $payload[$key];
+            if ($value === null || \is_scalar($value)) {
+                $extra[$key] = $value;
+            }
+        }
+
+        return $extra;
+    }
+
+    /**
+     * @param array<string,mixed> $raw
+     * @return array<string,mixed>
+     */
+    private function positionPayloadFromRaw(array $raw): array
+    {
+        foreach ([
+            $raw,
+            $raw['raw_history'] ?? null,
+            $raw['raw_snapshot'] ?? null,
+        ] as $candidate) {
+            if (\is_array($candidate) && \is_array($candidate['payload'] ?? null)) {
+                return $candidate['payload'];
+            }
+        }
+
+        return [];
     }
 
     private function stringValue(mixed $value): ?string
