@@ -240,6 +240,25 @@ def test_sequence_fields_reject_scalar_strings_and_non_string_items() -> None:
             }
         )
 
+    with pytest.raises(ValidationError, match="must be an ordered sequence of strings"):
+        DatasetDescriptor(
+            **{
+                **_dataset().model_dump(),
+                "symbols": {"BTCUSDT", "ETHUSDT"},
+            }
+        )
+
+
+def test_effective_config_snapshot_rejects_non_json_collections() -> None:
+    with pytest.raises(ValidationError, match="effective_config must contain JSON-compatible values"):
+        EffectiveConfigSnapshot(
+            profile=Profile.SCALPER,
+            config_hash="sha256:" + "b" * 64,
+            config_version="effective-config-v1",
+            source_layers=("base", "mode/scalper"),
+            effective_config={"entry": {"modes": {"maker", "taker"}}},
+        )
+
 
 def test_trade_ledger_entry_requires_stop_and_net_cost_components() -> None:
     entry = _ledger_entry()

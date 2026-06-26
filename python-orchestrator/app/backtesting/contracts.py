@@ -28,6 +28,7 @@ from pydantic import (
 
 _SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _GIT_SHA_PATTERN = r"^[0-9a-f]{40}$"
+_JSON_SCALAR_TYPES = (str, int, float, bool, type(None))
 
 
 class Profile(str, Enum):
@@ -74,6 +75,8 @@ def _normalize_string_tuple(value: Any) -> tuple[str, ...]:
         raise ValueError("field must be a sequence of strings")
     if isinstance(value, MappingAbc):
         raise ValueError("field must be a sequence of strings")
+    if isinstance(value, set | frozenset):
+        raise ValueError("field must be an ordered sequence of strings")
     try:
         iterator = iter(value)
     except TypeError as exc:
@@ -123,7 +126,11 @@ def _deep_freeze(value: Any) -> Any:
         return FrozenDict(value)
     if isinstance(value, list | tuple):
         return tuple(_deep_freeze(item) for item in value)
-    return value
+    if isinstance(value, set | frozenset):
+        raise ValueError("effective_config must contain JSON-compatible values")
+    if isinstance(value, _JSON_SCALAR_TYPES):
+        return value
+    raise ValueError("effective_config must contain JSON-compatible values")
 
 
 def _deep_thaw(value: Any) -> Any:
