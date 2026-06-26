@@ -6,7 +6,9 @@ namespace App\Controller\Web;
 
 use App\MtfRunner\Service\MtfReportingService;
 use App\MtfRunner\Service\SymbolInvestigationService;
-use App\Repository\PositionTradeAnalysisRepository;
+use App\Trading\Reporting\PositionTradeAnalysisReportingService;
+use App\Trading\Reporting\PositionTradeAnalysisReportingSource;
+use App\Trading\Reporting\PositionTradeAnalysisReportingSourceException;
 use DateTimeImmutable;
 use DateTimeZone;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -19,7 +21,7 @@ class ReportingController extends AbstractController
     public function __construct(
         private readonly MtfReportingService $reportingService,
         private readonly SymbolInvestigationService $symbolInvestigationService,
-        private readonly PositionTradeAnalysisRepository $positionTradeAnalysisRepository,
+        private readonly PositionTradeAnalysisReportingService $positionTradeAnalysisReportingService,
     ) {
     }
 
@@ -100,6 +102,7 @@ class ReportingController extends AbstractController
         $to = $request->query->get('to', '');
         $sort = $request->query->get('sort', 'entryTime');
         $direction = $request->query->get('direction', 'DESC');
+        $source = $request->query->get('source');
 
         $filters = [
             'symbol' => $symbol ?: null,
@@ -108,16 +111,26 @@ class ReportingController extends AbstractController
             'to' => $to ?: null,
         ];
 
-        $trades = $this->positionTradeAnalysisRepository->search($filters, [
-            'sort' => $sort,
-            'direction' => $direction,
-        ]);
+        $error = null;
+        try {
+            $result = $this->positionTradeAnalysisReportingService->search($filters, [
+                'sort' => $sort,
+                'direction' => $direction,
+            ], source: is_string($source) ? $source : null);
+        } catch (PositionTradeAnalysisReportingSourceException $e) {
+            $error = $e->getMessage();
+            $result = null;
+        }
 
         return $this->render('reporting/position_trade_analysis.html.twig', [
             'filters' => $filters,
             'sort' => $sort,
             'direction' => $direction,
-            'trades' => $trades,
+            'source' => $source,
+            'source_options' => PositionTradeAnalysisReportingSource::all(),
+            'result' => $result,
+            'trades' => $result?->rows ?? [],
+            'error' => $error,
         ]);
     }
 

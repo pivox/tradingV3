@@ -58,6 +58,7 @@ parameters:
     env(OKX_DEMO_TRADING_ENABLED): '0'
     env(OKX_LIVE_ENABLED): '0'
     env(MTF_VALIDATION_FALLBACK_ALERT_THRESHOLD): '1'
+    env(POSITION_TRADE_ANALYSIS_REPORTING_SOURCE): 'v2'
     app.trade_entry_default_mode: 'scalper_micro'
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
@@ -105,6 +106,16 @@ services:
 
     App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReportServiceInterface:
         alias: App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReportService
+
+    App\Trading\Reporting\PositionTradeAnalysisLegacyReaderInterface:
+        alias: App\Repository\PositionTradeAnalysisRepository
+
+    App\Trading\Reporting\PositionTradeAnalysisCertifiedReaderInterface:
+        alias: App\Repository\PositionTradeAnalysisV2Repository
+
+    App\Trading\Reporting\PositionTradeAnalysisReportingService:
+        arguments:
+            $configuredSource: '%env(string:POSITION_TRADE_ANALYSIS_REPORTING_SOURCE)%'
 
 
 
