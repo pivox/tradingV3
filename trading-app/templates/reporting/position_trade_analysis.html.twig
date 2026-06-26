@@ -10,9 +10,26 @@
     </div>
 
     <div class="alert alert-info">
-        <p class="mb-1"><strong>Descriptif :</strong> vue SQL mixant entrées/sorties et snapshots indicateurs (position_trade_analysis).</p>
+        <p class="mb-1"><strong>Source :</strong> {{ result ? result.primarySource : 'indisponible' }}{% if result and result.dualRead %} (double lecture v1/v2 active){% endif %}.</p>
+        <p class="mb-1"><strong>PnL :</strong> {{ result ? result.summary.pnl_definition : 'non disponible' }}. Les lignes v2 incomplètes ne publient pas de net certifié.</p>
         <p class="mb-0"><strong>Exemple :</strong> filtrez par symbole (ex: <code>AIXBTUSDT</code>) et date d’entrée pour comparer le R attendu vs le PnL réel.</p>
     </div>
+
+    {% if error %}
+        <div class="alert alert-danger">
+            {{ error }}
+        </div>
+    {% endif %}
+
+    {% if result and result.dualRead %}
+        <div class="alert alert-warning">
+            Double lecture : {{ result.summary.common_rows }} lignes communes,
+            {{ result.summary.divergent_rows }} divergences,
+            {{ result.summary.v1_only_rows }} v1 seules,
+            {{ result.summary.v2_only_rows }} v2 seules
+            (comparaison {{ result.summary.comparison_sort }}, limite {{ result.summary.comparison_limit }}).
+        </div>
+    {% endif %}
 
     <form method="get" class="row g-3 mb-4">
         <div class="col-md-3">
@@ -30,6 +47,16 @@
         <div class="col-md-2">
             <label class="form-label">Au (UTC)</label>
             <input type="date" class="form-control" name="to" value="{{ filters.to ?? '' }}">
+        </div>
+        <div class="col-md-2">
+            <label for="source" class="form-label">Source</label>
+            <select id="source" name="source" class="form-select">
+                {% for option in source_options %}
+                    <option value="{{ option }}" {{ result and result.activeSource == option ? 'selected' : (not result and source == option ? 'selected' : '') }}>
+                        {{ option }}
+                    </option>
+                {% endfor %}
+            </select>
         </div>
         <div class="col-md-2 align-self-end">
             <button type="submit" class="btn btn-primary w-100">
@@ -53,6 +80,7 @@
                     <th>R attendu</th>
                     <th>R réalisé</th>
                     <th>PnL USDT</th>
+                    <th>Qualité</th>
                     <th>MFE/MAE (%)</th>
                     <th>RSI/ATR (entrée)</th>
                     <th>MA/VWAP</th>
@@ -74,7 +102,29 @@
                             {{ trade.pnlR ?? '—' }}
                         </td>
                         <td class="{{ trade.pnlUsdt is not null and trade.pnlUsdt < 0 ? 'text-danger' : 'text-success' }}">
-                            {{ trade.pnlUsdt ?? '—' }}
+                            <div>{{ trade.pnlUsdt ?? '—' }}</div>
+                            {% if trade.recordedPnlUsdt is not null and (not trade.netCertified or trade.sourceVersion == 'v1') %}
+                                <small class="text-muted">recorded {{ trade.recordedPnlUsdt }}</small>
+                            {% endif %}
+                            {% if trade.estimatedNetPnlUsdt is not null and not trade.netCertified %}
+                                <small class="d-block text-muted">estimé {{ trade.estimatedNetPnlUsdt }}</small>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div>
+                                <span class="badge {{ trade.netCertified ? 'bg-success' : 'bg-warning text-dark' }}">
+                                    {{ trade.costCompleteness }}
+                                </span>
+                                <span class="badge bg-secondary">{{ trade.sourceVersion }}</span>
+                            </div>
+                            <div class="small text-muted">{{ trade.analysisStatus }} / {{ trade.closeMatchStatus }}</div>
+                            {% if trade.qualityFlags %}
+                                <div class="small">
+                                    {% for flag in trade.qualityFlags %}
+                                        <span class="badge bg-light text-dark border">{{ flag }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
                         </td>
                         <td>
                             <div>MFE {{ trade.mfePct ?? '—' }}%</div>
@@ -92,7 +142,7 @@
                     </tr>
                 {% else %}
                     <tr>
-                        <td colspan="10" class="text-center text-muted">Aucun trade trouvé avec ces filtres.</td>
+                        <td colspan="11" class="text-center text-muted">Aucun trade trouvé avec ces filtres.</td>
                     </tr>
                 {% endfor %}
             </tbody>
