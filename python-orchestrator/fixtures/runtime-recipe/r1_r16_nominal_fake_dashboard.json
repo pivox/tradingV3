@@ -1,0 +1,92 @@
+{
+  "$schema": "https://pivox.local/schemas/orchestrator-runtime-recipe-fixture-v1.json",
+  "fixture_id": "runtime-recipe-r1-r16-nominal-fake-v1",
+  "version": 1,
+  "dry_run_only": true,
+  "purpose": "Dashboard Fake/Paper dry-run pour la recette nominale R1-R3 et le socle R8/R15/R16.",
+  "dashboard": {
+    "name": "recipe-r1-r16-nominal-fake",
+    "enabled": true,
+    "description": "Recette runtime R1-R16 - profils regular, scalper et scalper_micro en Fake/Paper dry-run."
+  },
+  "sets": [
+    {
+      "set_id": "recipe_fake_regular",
+      "enabled": true,
+      "action": "mtf_run",
+      "exchange": "fake",
+      "market_type": "perpetual",
+      "mtf_profile": "regular",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["BTCUSDT", "ETHUSDT"],
+      "contracts_limit": null,
+      "priority": 30,
+      "recipe_role": "r1_single_set"
+    },
+    {
+      "set_id": "recipe_fake_scalper",
+      "enabled": true,
+      "action": "mtf_run",
+      "exchange": "fake",
+      "market_type": "perpetual",
+      "mtf_profile": "scalper",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["SOLUSDT", "LINKUSDT"],
+      "contracts_limit": null,
+      "priority": 20,
+      "recipe_role": "r2_multi_set_scalper"
+    },
+    {
+      "set_id": "recipe_fake_scalper_micro",
+      "enabled": true,
+      "action": "mtf_run",
+      "exchange": "fake",
+      "market_type": "perpetual",
+      "mtf_profile": "scalper_micro",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["XRPUSDT", "ADAUSDT"],
+      "contracts_limit": null,
+      "priority": 10,
+      "recipe_role": "r2_multi_set_scalper_micro"
+    },
+    {
+      "set_id": "recipe_fake_disabled",
+      "enabled": false,
+      "action": "mtf_run",
+      "exchange": "fake",
+      "market_type": "perpetual",
+      "mtf_profile": "regular",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["DOGEUSDT"],
+      "contracts_limit": null,
+      "priority": 99,
+      "recipe_role": "r3_disabled_set"
+    }
+  ],
+  "scenario_mapping": {
+    "R1": ["recipe_fake_regular"],
+    "R2": ["recipe_fake_regular", "recipe_fake_scalper", "recipe_fake_scalper_micro"],
+    "R3": ["recipe_fake_disabled"],
+    "R8": ["recipe_fake_regular"],
+    "R15": ["recipe_fake_regular", "recipe_fake_scalper", "recipe_fake_scalper_micro"],
+    "R16": ["recipe_fake_regular", "recipe_fake_scalper", "recipe_fake_scalper_micro"]
+  },
+  "expected_invariants": {
+    "dry_run": true,
+    "mainnet": false,
+    "workers_per_set": 1,
+    "fixture_application": "upsert_by_dashboard_name_and_set_id"
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://pivox.local/schemas/orchestrator-runtime-recipe-fixture-v1.json",
+  "fixture_id": "runtime-recipe-r1-r16-degraded-fake-v1",
+  "version": 1,
+  "dry_run_only": true,
+  "purpose": "Dashboard Fake/Paper dry-run reserve aux scenarios degrades R4 a R13.",
+  "dashboard": {
+    "name": "recipe-r1-r16-degraded-fake",
+    "enabled": true,
+    "description": "Recette runtime R1-R16 - cas degrades Fake/Paper, dry-run uniquement."
+  },
+  "sets": [
+    {
+      "set_id": "recipe_fake_not_materialized",
+      "enabled": true,
+      "action": "mtf_run",
+      "exchange": "fake",
+      "market_type": "perpetual",
+      "mtf_profile": "regular",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": [],
+      "contracts_limit": 2,
+      "priority": 30,
+      "recipe_role": "r4_payload_missing_after_refresh_failure"
+    },
+    {
+      "set_id": "recipe_fake_error_regular",
+      "enabled": true,
+      "action": "mtf_run",
+      "exchange": "fake",
+      "market_type": "perpetual",
+      "mtf_profile": "regular",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["ERR400USDT"],
+      "contracts_limit": null,
+      "priority": 20,
+      "recipe_role": "r5_functional_error_target"
+    },
+    {
+      "set_id": "recipe_fake_overlap_scalper",
+      "enabled": true,
+      "action": "mtf_run",
+      "exchange": "fake",
+      "market_type": "perpetual",
+      "mtf_profile": "scalper",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["BTCUSDT"],
+      "contracts_limit": null,
+      "priority": 10,
+      "recipe_role": "r11_r12_overlap_probe"
+    }
+  ],
+  "scenario_mapping": {
+    "R4": ["recipe_fake_not_materialized"],
+    "R5": ["recipe_fake_error_regular"],
+    "R6": ["recipe_fake_error_regular"],
+    "R7": ["recipe_fake_not_materialized", "recipe_fake_error_regular", "recipe_fake_overlap_scalper"],
+    "R8": ["recipe_fake_overlap_scalper"],
+    "R9": ["recipe_fake_overlap_scalper"],
+    "R10": ["recipe_fake_overlap_scalper"],
+    "R11": ["recipe_fake_overlap_scalper"],
+    "R12": ["recipe_fake_overlap_scalper"],
+    "R13": ["recipe_fake_not_materialized"]
+  },
+  "expected_invariants": {
+    "dry_run": true,
+    "mainnet": false,
+    "workers_per_set": 1,
+    "fixture_application": "upsert_by_dashboard_name_and_set_id"
+  }
+}
