@@ -60,7 +60,14 @@ enriched AS (
     ledger_scope.maker_fill_count,
     ledger_scope.taker_fill_count,
     ledger_scope.unknown_liquidity_fill_count,
-    ledger_scope.ledger_quality_flag_count
+    ledger_scope.ledger_quality_flag_count,
+    ledger_scope.ledger_missing_cost_component_count,
+    ledger_scope.ledger_fee_usdt,
+    ledger_scope.ledger_funding_usdt,
+    ledger_scope.ledger_spread_cost_usdt,
+    ledger_scope.ledger_slippage_cost_usdt,
+    ledger_scope.ledger_borrow_cost_usdt,
+    ledger_scope.ledger_liquidation_fee_usdt
   FROM scoped pta
   LEFT JOIN LATERAL (
     SELECT
@@ -116,7 +123,21 @@ enriched AS (
       count(*) FILTER (WHERE f.liquidity_role = 'maker')::int AS maker_fill_count,
       count(*) FILTER (WHERE f.liquidity_role = 'taker')::int AS taker_fill_count,
       count(*) FILTER (WHERE f.liquidity_role = 'unknown')::int AS unknown_liquidity_fill_count,
-      COALESCE(sum(jsonb_array_length(COALESCE(f.quality_flags, '[]'::jsonb))), 0)::int AS ledger_quality_flag_count
+      COALESCE(sum(jsonb_array_length(COALESCE(f.quality_flags, '[]'::jsonb))), 0)::int AS ledger_quality_flag_count,
+      count(*) FILTER (
+        WHERE f.fee_usdt IS NULL
+           OR f.funding_usdt IS NULL
+           OR f.spread_cost_usdt IS NULL
+           OR f.slippage_cost_usdt IS NULL
+           OR f.borrow_cost_usdt IS NULL
+           OR f.liquidation_fee_usdt IS NULL
+      )::int AS ledger_missing_cost_component_count,
+      sum(f.fee_usdt) AS ledger_fee_usdt,
+      sum(f.funding_usdt) AS ledger_funding_usdt,
+      sum(f.spread_cost_usdt) AS ledger_spread_cost_usdt,
+      sum(f.slippage_cost_usdt) AS ledger_slippage_cost_usdt,
+      sum(f.borrow_cost_usdt) AS ledger_borrow_cost_usdt,
+      sum(f.liquidation_fee_usdt) AS ledger_liquidation_fee_usdt
     FROM fill_cost_ledger f
     WHERE pta.internal_trade_id IS NOT NULL
       AND f.internal_trade_id = pta.internal_trade_id
@@ -124,6 +145,89 @@ enriched AS (
       AND f.market_type IS NOT DISTINCT FROM pta.market_type
       AND f.symbol = pta.symbol
   ) ledger_scope ON true
+),
+ledger_certified AS (
+  SELECT
+    enriched.*,
+    CASE
+      WHEN COALESCE(ledger_fill_count, 0) = 0 THEN 'missing_ledger'
+      WHEN COALESCE(entry_fill_count, 0) = 0 THEN 'missing_entry_fill'
+      WHEN COALESCE(exit_fill_count, 0) = 0 THEN 'missing_exit_fill'
+      WHEN COALESCE(ledger_quality_flag_count, 0) > 0 THEN 'ledger_quality_flags'
+      WHEN COALESCE(ledger_missing_cost_component_count, 0) > 0 THEN 'missing_ledger_cost_component'
+      ELSE 'complete'
+    END AS ledger_certification_status
+  FROM enriched
+),
+finalized AS (
+  SELECT
+    ledger_certified.*,
+    (
+      analysis_status = 'matched_closed'
+      AND close_match_status = 'matched'
+      AND cost_completeness = 'complete'
+      AND pnl_quality_flag_count = 0
+      AND position_fully_closed IS TRUE
+      AND net_pnl_usdt IS NOT NULL
+      AND realized_net_pnl_r IS NOT NULL
+    ) AS v2_is_certified,
+    (
+      ledger_certification_status = 'complete'
+      AND analysis_status = 'matched_closed'
+      AND close_match_status = 'matched'
+      AND position_fully_closed IS TRUE
+      AND gross_realized_pnl_usdt IS NOT NULL
+      AND risk_usdt_at_entry > 0
+    ) AS ledger_is_certified,
+    (
+      ledger_fee_usdt
+        - ledger_funding_usdt
+        + ledger_spread_cost_usdt
+        + ledger_slippage_cost_usdt
+        + ledger_borrow_cost_usdt
+        + ledger_liquidation_fee_usdt
+    ) AS ledger_total_known_cost_usdt,
+    (
+      gross_realized_pnl_usdt
+        - ledger_fee_usdt
+        + ledger_funding_usdt
+        - ledger_spread_cost_usdt
+        - ledger_slippage_cost_usdt
+        - ledger_borrow_cost_usdt
+        - ledger_liquidation_fee_usdt
+    ) AS ledger_net_pnl_usdt,
+    (
+      gross_realized_pnl_usdt
+        - ledger_fee_usdt
+        + ledger_funding_usdt
+        - ledger_spread_cost_usdt
+        - ledger_slippage_cost_usdt
+        - ledger_borrow_cost_usdt
+        - ledger_liquidation_fee_usdt
+    ) / NULLIF(risk_usdt_at_entry, 0) AS ledger_realized_net_pnl_r
+  FROM ledger_certified
+),
+output_rows AS (
+  SELECT
+    finalized.*,
+    CASE
+      WHEN v2_is_certified THEN 'v2'
+      WHEN ledger_is_certified THEN 'ledger'
+      ELSE NULL
+    END AS certification_source,
+    CASE
+      WHEN v2_is_certified OR ledger_is_certified THEN 'complete'
+      ELSE cost_completeness
+    END AS effective_cost_completeness,
+    CASE
+      WHEN ledger_is_certified THEN (
+        SELECT COALESCE(jsonb_agg(flag), '[]'::jsonb)
+        FROM jsonb_array_elements_text(COALESCE(finalized.pnl_quality_flags, '[]'::jsonb)) AS flags(flag)
+        WHERE flag <> 'ledger_quantity_aggregate_missing'
+      )
+      ELSE COALESCE(pnl_quality_flags, '[]'::jsonb)
+    END AS effective_pnl_quality_flags
+  FROM finalized
 )
 SELECT
   entry_event_id,
@@ -162,26 +266,21 @@ SELECT
   taker_fill_count,
   unknown_liquidity_fill_count,
   ledger_quality_flag_count,
-  (
-    analysis_status = 'matched_closed'
-    AND close_match_status = 'matched'
-    AND cost_completeness = 'complete'
-    AND pnl_quality_flag_count = 0
-    AND position_fully_closed IS TRUE
-    AND net_pnl_usdt IS NOT NULL
-    AND realized_net_pnl_r IS NOT NULL
-  ) AS is_certified,
+  ledger_missing_cost_component_count,
+  ledger_certification_status,
+  certification_source,
+  (v2_is_certified OR ledger_is_certified) AS is_certified,
   analysis_status,
   close_match_status,
   close_matched_by,
-  cost_completeness,
-  pnl_quality_flags,
+  effective_cost_completeness AS cost_completeness,
+  effective_pnl_quality_flags AS pnl_quality_flags,
   position_fully_closed,
-  net_pnl_usdt,
+  COALESCE(net_pnl_usdt, ledger_net_pnl_usdt) AS net_pnl_usdt,
   gross_realized_pnl_usdt,
   recorded_pnl_usdt,
   estimated_net_pnl_usdt,
-  realized_net_pnl_r,
+  COALESCE(realized_net_pnl_r, ledger_realized_net_pnl_r) AS realized_net_pnl_r,
   realized_gross_pnl_r,
   pnl_r,
   risk_usdt_at_entry,
@@ -197,7 +296,7 @@ SELECT
   funding_usdt,
   borrow_cost_usdt,
   liquidation_fee_usdt,
-  total_known_cost_usdt,
+  COALESCE(total_known_cost_usdt, ledger_total_known_cost_usdt) AS total_known_cost_usdt,
   mfe_r,
   mae_r,
   mfe_pct,
@@ -221,6 +320,6 @@ SELECT
   stop_distance_pct,
   planned_r_multiple,
   expected_r_multiple
-FROM enriched
+FROM output_rows
 ORDER BY entry_time ASC, entry_event_id ASC
 ) TO :'output_file' CSV HEADER

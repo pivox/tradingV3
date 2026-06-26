@@ -6,11 +6,11 @@ Statut au 26 juin 2026 : l'extraction de production n'a pas pu etre executee loc
 
 ## Source canonique
 
-La population de base vient de `position_trade_analysis_v2`. Les metriques nettes utilisent uniquement les lignes certifiees :
+La population de base vient de `position_trade_analysis_v2`. Les metriques nettes utilisent uniquement les lignes certifiees par v2 ou rendues certifiables par le ledger lorsque la vue v2 est bloquee par `ledger_quantity_aggregate_missing` :
 
 - `analysis_status = matched_closed` ;
 - `close_match_status = matched` ;
-- `cost_completeness = complete` ;
+- `cost_completeness = complete` dans v2 ou certification ledger complete ;
 - `pnl_quality_flags = []` ;
 - `position_fully_closed = true` ;
 - `net_pnl_usdt` et `realized_net_pnl_r` non nuls.
@@ -49,6 +49,8 @@ L'export enrichit la vue v2 par :
 - `order_intent` via `internal_trade_id` et scope exact exchange/market/symbol, uniquement si unique ;
 - `trade_zone_events` via `decision_key` unique issu de `order_intent` ;
 - `fill_cost_ledger` via `internal_trade_id` et scope exact exchange/market/symbol.
+
+Quand le ledger est utilise comme source de certification effective, tous les composants de cout ledger doivent etre presents, le ledger ne doit pas porter de flags qualite, et les fills d'entree/sortie doivent exister. La colonne `certification_source` vaut alors `ledger`; sinon elle vaut `v2` ou reste vide.
 
 Aucun rapprochement par symbole seul ou fenetre temporelle n'est utilise. Les conflits d'identifiants restent visibles avec `identifier_conflict`.
 

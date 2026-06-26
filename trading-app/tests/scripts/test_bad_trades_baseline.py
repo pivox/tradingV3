@@ -23,12 +23,12 @@ def test_build_baseline_segments_certified_rows_and_computes_core_metrics() -> N
 
     result = module.build_baseline(FIXTURE, seed=132, monte_carlo_runs=20)
 
-    assert result["population"]["total_rows"] == 5
-    assert result["population"]["certified_rows"] == 4
+    assert result["population"]["total_rows"] == 6
+    assert result["population"]["certified_rows"] == 5
     assert result["population"]["excluded_rows"] == 1
     assert result["population"]["excluded_by_reason"]["cost_completeness:partial"] == 1
     assert result["population"]["profiles"]["regular"]["certified_rows"] == 2
-    assert result["population"]["profiles"]["scalper"]["certified_rows"] == 1
+    assert result["population"]["profiles"]["scalper"]["certified_rows"] == 2
     assert result["population"]["profiles"]["scalper_micro"]["certified_rows"] == 1
 
     regular = result["groups"]["profile"]["regular"]
@@ -43,11 +43,11 @@ def test_build_baseline_segments_certified_rows_and_computes_core_metrics() -> N
     assert regular["wilson_95"]["low"] < regular["winrate"] < regular["wilson_95"]["high"]
     assert regular["liquidity"]["maker_fills"] == 1
     assert regular["liquidity"]["taker_fills"] == 1
-    assert result["groups"]["direction"]["long"]["rows"] == 3
+    assert result["groups"]["direction"]["long"]["rows"] == 4
     assert result["groups"]["direction"]["short"]["rows"] == 1
 
     scalper = result["groups"]["profile"]["scalper"]
-    assert scalper["loss_causes"]["costs_destroy_edge"] == 1
+    assert scalper["loss_causes"]["costs_destroy_edge"] == 2
     assert scalper["loss_causes"]["entry_momentum_extreme_candidate"] == 1
 
     simulation = result["simulation"]["profile"]["regular"]
@@ -83,4 +83,4 @@ def test_cli_writes_markdown_and_json_outputs(tmp_path: Path) -> None:
     assert "## Metriques par direction" in rendered
     assert "costs_destroy_edge" in rendered
     payload = json.loads(output_json.read_text(encoding="utf-8"))
-    assert payload["population"]["certified_rows"] == 4
+    assert payload["population"]["certified_rows"] == 5

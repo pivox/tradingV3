@@ -144,11 +144,11 @@ def exclusion_reasons(row: dict[str, str]) -> list[str]:
 
 def loss_causes(row: dict[str, str]) -> list[str]:
     net = parse_float(row.get("net_pnl_usdt")) or 0.0
-    if net >= 0:
+    gross = parse_float(row.get("gross_realized_pnl_usdt"))
+    if net > 0 or (net == 0 and (gross is None or gross <= 0)):
         return []
 
     causes: list[str] = []
-    gross = parse_float(row.get("gross_realized_pnl_usdt"))
     mfe_r = parse_float(row.get("mfe_r"))
     realized_r = parse_float(row.get("realized_net_pnl_r"))
     entry_rsi = parse_float(row.get("entry_rsi"))
@@ -346,7 +346,7 @@ def build_baseline(input_csv: Path, seed: int = 132, monte_carlo_runs: int = 100
     return {
         "source": {
             "input_csv": str(input_csv),
-            "contract": "position_trade_analysis_v2 certified rows only",
+            "contract": "certified export rows only; source may be v2 or ledger when the SQL marks cost_completeness complete",
         },
         "population": summarize_population(rows, certified),
         "groups": groups,
