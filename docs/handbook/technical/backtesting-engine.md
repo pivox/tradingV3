@@ -118,6 +118,7 @@ Le mode optimiste `tp_first` n'existe pas dans le contrat v1.
 - un stop short au-dessus de l'entree ;
 - des couts nets explicites (`fee_usdt`, `spread_cost_usdt`, `slippage_cost_usdt`,
   `funding_usdt`, borrow/liquidation si applicables) ;
+- des valeurs numeriques finies uniquement, avec `net_pnl_usdt = gross_pnl_usdt - total_known_cost_usdt` ;
 - le commit Git, le dataset et le hash de config.
 
 Un trade simule sans SL est invalide. Les signaux non executes seront modelises

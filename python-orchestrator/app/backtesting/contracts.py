@@ -12,6 +12,7 @@ import json
 from collections.abc import Mapping as MappingAbc
 from datetime import datetime, timezone
 from enum import Enum
+from math import isclose
 from typing import Any, Iterator, Mapping
 
 from pydantic import (
@@ -265,7 +266,7 @@ class BacktestTradeLedgerEntry(BaseModel):
     This contract covers executed simulated trades and requires an immediate SL.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     backtest_run_id: str = Field(..., min_length=1)
     dataset_id: str = Field(..., min_length=1)
@@ -303,13 +304,16 @@ class BacktestTradeLedgerEntry(BaseModel):
         return _require_utc(value)
 
     @model_validator(mode="after")
-    def _validate_stop(self) -> "BacktestTradeLedgerEntry":
+    def _validate_ledger(self) -> "BacktestTradeLedgerEntry":
         if self.initial_stop is None or self.initial_stop <= 0:
             raise ValueError("initial_stop is required and must be positive")
         if self.direction is Direction.LONG and self.initial_stop >= self.entry_price:
             raise ValueError("long initial_stop must be below entry_price")
         if self.direction is Direction.SHORT and self.initial_stop <= self.entry_price:
             raise ValueError("short initial_stop must be above entry_price")
+        expected_net_pnl = self.gross_pnl_usdt - self.total_known_cost_usdt
+        if not isclose(self.net_pnl_usdt, expected_net_pnl, rel_tol=1e-9, abs_tol=1e-9):
+            raise ValueError("net_pnl_usdt must equal gross_pnl_usdt minus known costs")
         return self
 
     @computed_field
