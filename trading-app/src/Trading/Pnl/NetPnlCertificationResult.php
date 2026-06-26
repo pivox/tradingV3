@@ -17,6 +17,7 @@ final readonly class NetPnlCertificationResult
         public ?float $exitFeeUsdt,
         public ?float $totalKnownCostUsdt,
         public ?float $netPnlUsdt,
+        public ?float $realizedGrossPnlR,
         public ?float $realizedNetPnlR,
         public array $qualityFlags,
     ) {

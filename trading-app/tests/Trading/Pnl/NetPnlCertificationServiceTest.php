@@ -48,8 +48,34 @@ final class NetPnlCertificationServiceTest extends TestCase
         self::assertEqualsWithDelta(0.05, $result->entryFeeUsdt, 1e-9);
         self::assertEqualsWithDelta(0.05, $result->exitFeeUsdt, 1e-9);
         self::assertEqualsWithDelta(9.44, $result->netPnlUsdt, 1e-9);
+        self::assertEqualsWithDelta(1.92, $result->realizedGrossPnlR, 1e-9);
         self::assertEqualsWithDelta(1.888, $result->realizedNetPnlR, 1e-9);
         self::assertSame([], $result->qualityFlags);
+    }
+
+    public function testGrossAndNetPnlRStayNullWhenInitialRiskIsMissing(): void
+    {
+        $service = new NetPnlCertificationService();
+
+        $result = $service->certify(
+            entryFills: [
+                new TradeFill('entry-1', 'BUY', 1.0, 100.0, 0.01, 'USDT', 'maker', new \DateTimeImmutable('2026-06-25 10:00:00 UTC')),
+            ],
+            exitFills: [
+                new TradeFill('exit-1', 'SELL', 1.0, 110.0, 0.01, 'USDT', 'taker', new \DateTimeImmutable('2026-06-25 10:10:00 UTC')),
+            ],
+            costs: TradeCosts::zeroKnown(),
+            side: 'LONG',
+            positionFullyClosed: true,
+            lineageSufficient: true,
+            identifierConflict: false,
+        );
+
+        self::assertTrue($result->certified);
+        self::assertEqualsWithDelta(10.0, $result->grossRealizedPnlUsdt, 1e-9);
+        self::assertEqualsWithDelta(9.98, $result->netPnlUsdt, 1e-9);
+        self::assertNull($result->realizedGrossPnlR);
+        self::assertNull($result->realizedNetPnlR);
     }
 
     public function testRefusesCertificationWhenFeeCurrencyIsNotNormalized(): void

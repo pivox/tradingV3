@@ -7,10 +7,19 @@ namespace App\Tests\Trading\Lineage;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Common\Enum\PositionSide;
+use App\Common\Enum\Timeframe;
+use App\Contract\Provider\AccountProviderInterface;
+use App\Contract\Provider\ContractProviderInterface;
+use App\Contract\Provider\Dto\KlineDto;
+use App\Contract\Provider\KlineProviderInterface;
+use App\Contract\Provider\MainProviderInterface;
+use App\Contract\Provider\OrderProviderInterface;
+use App\Contract\Provider\SystemProviderInterface;
 use App\Entity\OrderIntent;
 use App\Entity\TradeLifecycleEvent;
 use App\Entity\TradeLineage;
 use App\Logging\TradeLifecycleLogger;
+use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeLifecycleEventRepository;
 use App\Repository\TradeLineageRepository;
 use App\Trading\Dto\PositionHistoryEntryDto;
@@ -216,6 +225,196 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         self::assertArrayHasKey('raw', $extra);
     }
 
+    public function testClosedPositionRecordsMfeMaeSourceWindowAndQuality(): void
+    {
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            $this->mainProviderWithKlines([
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:00:00 UTC'), BigDecimal::of('100'), BigDecimal::of('105'), BigDecimal::of('98'), BigDecimal::of('101'), BigDecimal::of('1')),
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:01:00 UTC'), BigDecimal::of('101'), BigDecimal::of('108'), BigDecimal::of('99'), BigDecimal::of('107'), BigDecimal::of('1')),
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:02:00 UTC'), BigDecimal::of('107'), BigDecimal::of('107'), BigDecimal::of('97'), BigDecimal::of('100'), BigDecimal::of('1')),
+            ]),
+            null,
+        );
+
+        $listener->onPositionClosed(new PositionClosedEvent(
+            positionHistory: new PositionHistoryEntryDto(
+                symbol: 'BTCUSDT',
+                side: PositionSide::LONG,
+                size: BigDecimal::of('1'),
+                entryPrice: BigDecimal::of('100'),
+                exitPrice: BigDecimal::of('104'),
+                realizedPnl: BigDecimal::of('4'),
+                fees: null,
+                openedAt: new \DateTimeImmutable('2026-06-23 10:00:00 UTC'),
+                closedAt: new \DateTimeImmutable('2026-06-23 10:03:00 UTC'),
+                raw: ['position_id' => 'pos-mfe-mae'],
+            ),
+            runId: 'run-mfe-mae',
+            exchange: Exchange::FAKE->value,
+            extra: ['market_type' => MarketType::PERPETUAL->value],
+        ));
+
+        /** @var TradeLifecycleEvent|null $closed */
+        $closed = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'position_closed',
+            'positionId' => 'pos-mfe-mae',
+        ]);
+
+        self::assertNotNull($closed);
+        $extra = $closed->getExtra();
+        self::assertSame('kline_1m_high_low', $extra['mfe_mae_source'] ?? null);
+        self::assertSame('1m', $extra['mfe_mae_timeframe'] ?? null);
+        self::assertSame('complete', $extra['mfe_mae_data_quality'] ?? null);
+        self::assertSame(3, $extra['mfe_mae_sample_count'] ?? null);
+        self::assertSame(3, $extra['mfe_mae_expected_sample_count'] ?? null);
+        self::assertSame('2026-06-23T10:00:00+00:00', $extra['mfe_mae_window_start'] ?? null);
+        self::assertSame('2026-06-23T10:03:00+00:00', $extra['mfe_mae_window_end'] ?? null);
+        self::assertSame('2026-06-23T10:01:00+00:00', $extra['mfe_at'] ?? null);
+        self::assertSame('2026-06-23T10:02:00+00:00', $extra['mae_at'] ?? null);
+        self::assertSame(108.0, $extra['max_favorable_price'] ?? null);
+        self::assertSame(97.0, $extra['max_adverse_price'] ?? null);
+    }
+
+    public function testClosedPositionMarksMfeMaePartialWhenWindowHasMissingKlines(): void
+    {
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            $this->mainProviderWithKlines([
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:00:00 UTC'), BigDecimal::of('100'), BigDecimal::of('105'), BigDecimal::of('98'), BigDecimal::of('101'), BigDecimal::of('1')),
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:01:00 UTC'), BigDecimal::of('101'), BigDecimal::of('108'), BigDecimal::of('99'), BigDecimal::of('107'), BigDecimal::of('1')),
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:02:00 UTC'), BigDecimal::of('107'), BigDecimal::of('107'), BigDecimal::of('97'), BigDecimal::of('100'), BigDecimal::of('1')),
+            ]),
+            null,
+        );
+
+        $listener->onPositionClosed(new PositionClosedEvent(
+            positionHistory: new PositionHistoryEntryDto(
+                symbol: 'BTCUSDT',
+                side: PositionSide::LONG,
+                size: BigDecimal::of('1'),
+                entryPrice: BigDecimal::of('100'),
+                exitPrice: BigDecimal::of('104'),
+                realizedPnl: BigDecimal::of('4'),
+                fees: null,
+                openedAt: new \DateTimeImmutable('2026-06-23 10:00:00 UTC'),
+                closedAt: new \DateTimeImmutable('2026-06-23 10:05:00 UTC'),
+                raw: ['position_id' => 'pos-mfe-mae-partial'],
+            ),
+            runId: 'run-mfe-mae-partial',
+            exchange: Exchange::FAKE->value,
+            extra: ['market_type' => MarketType::PERPETUAL->value],
+        ));
+
+        /** @var TradeLifecycleEvent|null $closed */
+        $closed = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'position_closed',
+            'positionId' => 'pos-mfe-mae-partial',
+        ]);
+
+        self::assertNotNull($closed);
+        $extra = $closed->getExtra();
+        self::assertSame('partial', $extra['mfe_mae_data_quality'] ?? null);
+        self::assertSame(3, $extra['mfe_mae_sample_count'] ?? null);
+        self::assertSame(5, $extra['mfe_mae_expected_sample_count'] ?? null);
+        self::assertSame(108.0, $extra['max_favorable_price'] ?? null);
+        self::assertSame(97.0, $extra['max_adverse_price'] ?? null);
+    }
+
+    public function testClosedPositionDoesNotUseCloseBoundaryCandleForMfeMae(): void
+    {
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            $this->mainProviderWithKlines([
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:00:00 UTC'), BigDecimal::of('100'), BigDecimal::of('105'), BigDecimal::of('98'), BigDecimal::of('101'), BigDecimal::of('1')),
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:01:00 UTC'), BigDecimal::of('101'), BigDecimal::of('103'), BigDecimal::of('99'), BigDecimal::of('102'), BigDecimal::of('1')),
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:02:00 UTC'), BigDecimal::of('102'), BigDecimal::of('120'), BigDecimal::of('80'), BigDecimal::of('110'), BigDecimal::of('1')),
+            ]),
+            null,
+        );
+
+        $listener->onPositionClosed(new PositionClosedEvent(
+            positionHistory: new PositionHistoryEntryDto(
+                symbol: 'BTCUSDT',
+                side: PositionSide::LONG,
+                size: BigDecimal::of('1'),
+                entryPrice: BigDecimal::of('100'),
+                exitPrice: BigDecimal::of('104'),
+                realizedPnl: BigDecimal::of('4'),
+                fees: null,
+                openedAt: new \DateTimeImmutable('2026-06-23 10:00:00 UTC'),
+                closedAt: new \DateTimeImmutable('2026-06-23 10:02:00 UTC'),
+                raw: ['position_id' => 'pos-mfe-mae-close-boundary'],
+            ),
+            runId: 'run-mfe-mae-close-boundary',
+            exchange: Exchange::FAKE->value,
+            extra: ['market_type' => MarketType::PERPETUAL->value],
+        ));
+
+        /** @var TradeLifecycleEvent|null $closed */
+        $closed = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'position_closed',
+            'positionId' => 'pos-mfe-mae-close-boundary',
+        ]);
+
+        self::assertNotNull($closed);
+        $extra = $closed->getExtra();
+        self::assertSame('complete', $extra['mfe_mae_data_quality'] ?? null);
+        self::assertSame(2, $extra['mfe_mae_sample_count'] ?? null);
+        self::assertSame(2, $extra['mfe_mae_expected_sample_count'] ?? null);
+        self::assertSame(105.0, $extra['max_favorable_price'] ?? null);
+        self::assertSame(98.0, $extra['max_adverse_price'] ?? null);
+        self::assertSame('2026-06-23T10:00:00+00:00', $extra['mfe_at'] ?? null);
+        self::assertSame('2026-06-23T10:00:00+00:00', $extra['mae_at'] ?? null);
+    }
+
+    public function testClosedPositionKeepsMfeMaePartialWhenWindowIsNotMinuteAligned(): void
+    {
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            $this->mainProviderWithKlines([
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:01:00 UTC'), BigDecimal::of('101'), BigDecimal::of('108'), BigDecimal::of('99'), BigDecimal::of('107'), BigDecimal::of('1')),
+            ]),
+            null,
+        );
+
+        $listener->onPositionClosed(new PositionClosedEvent(
+            positionHistory: new PositionHistoryEntryDto(
+                symbol: 'BTCUSDT',
+                side: PositionSide::LONG,
+                size: BigDecimal::of('1'),
+                entryPrice: BigDecimal::of('100'),
+                exitPrice: BigDecimal::of('104'),
+                realizedPnl: BigDecimal::of('4'),
+                fees: null,
+                openedAt: new \DateTimeImmutable('2026-06-23 10:00:30 UTC'),
+                closedAt: new \DateTimeImmutable('2026-06-23 10:01:29 UTC'),
+                raw: ['position_id' => 'pos-mfe-mae-mid-minute'],
+            ),
+            runId: 'run-mfe-mae-mid-minute',
+            exchange: Exchange::FAKE->value,
+            extra: ['market_type' => MarketType::PERPETUAL->value],
+        ));
+
+        /** @var TradeLifecycleEvent|null $closed */
+        $closed = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'position_closed',
+            'positionId' => 'pos-mfe-mae-mid-minute',
+        ]);
+
+        self::assertNotNull($closed);
+        $extra = $closed->getExtra();
+        self::assertSame('partial', $extra['mfe_mae_data_quality'] ?? null);
+        self::assertSame(1, $extra['mfe_mae_sample_count'] ?? null);
+        self::assertSame(1, $extra['mfe_mae_expected_sample_count'] ?? null);
+        self::assertSame('2026-06-23T10:00:30+00:00', $extra['mfe_mae_window_start'] ?? null);
+        self::assertSame('2026-06-23T10:01:29+00:00', $extra['mfe_mae_window_end'] ?? null);
+    }
+
     public function testClosedPositionPromotesFakePayloadLineageToLifecycleExtra(): void
     {
         $this->persistLineageWithPosition();
@@ -378,6 +577,102 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
             public function now(): \DateTimeImmutable
             {
                 return new \DateTimeImmutable('2026-06-23 10:06:00 UTC');
+            }
+        };
+    }
+
+    /**
+     * @param list<KlineDto> $klines
+     */
+    private function mainProviderWithKlines(array $klines): MainProviderInterface
+    {
+        $klineProvider = new class($klines) implements KlineProviderInterface {
+            /**
+             * @param list<KlineDto> $klines
+             */
+            public function __construct(private readonly array $klines)
+            {
+            }
+
+            /**
+             * @return list<KlineDto>
+             */
+            public function getKlines(string $symbol, Timeframe $timeframe, int $limit = 490, ?ExchangeContext $context = null): array
+            {
+                return array_slice($this->klines, 0, $limit);
+            }
+
+            /**
+             * @return list<KlineDto>
+             */
+            public function getKlinesInWindow(string $symbol, Timeframe $timeframe, \DateTimeImmutable $start, \DateTimeImmutable $end, int $limit = 500, ?ExchangeContext $context = null): array
+            {
+                return array_slice($this->klines, 0, $limit);
+            }
+
+            public function getLastKline(string $symbol, Timeframe $timeframe, ?ExchangeContext $context = null): ?KlineDto
+            {
+                return $this->klines[0] ?? null;
+            }
+
+            public function saveKline(KlineDto $kline, ?ExchangeContext $context = null): void
+            {
+            }
+
+            /**
+             * @param list<KlineDto> $klines
+             */
+            public function saveKlines(array $klines, string $symbol, Timeframe $timeframe, ?ExchangeContext $context = null): void
+            {
+            }
+
+            public function hasGaps(string $symbol, Timeframe $timeframe, ?ExchangeContext $context = null): bool
+            {
+                return false;
+            }
+
+            /**
+             * @return list<mixed>
+             */
+            public function getGaps(string $symbol, Timeframe $timeframe, ?ExchangeContext $context = null): array
+            {
+                return [];
+            }
+        };
+
+        return new class($klineProvider) implements MainProviderInterface {
+            public function __construct(private readonly KlineProviderInterface $klineProvider)
+            {
+            }
+
+            public function getKlineProvider(): KlineProviderInterface
+            {
+                return $this->klineProvider;
+            }
+
+            public function getContractProvider(): ContractProviderInterface
+            {
+                throw new \LogicException('Contract provider is not used by this test.');
+            }
+
+            public function getOrderProvider(): ?OrderProviderInterface
+            {
+                return null;
+            }
+
+            public function getAccountProvider(): ?AccountProviderInterface
+            {
+                return null;
+            }
+
+            public function getSystemProvider(): SystemProviderInterface
+            {
+                throw new \LogicException('System provider is not used by this test.');
+            }
+
+            public function forContext(?ExchangeContext $context = null): self
+            {
+                return $this;
             }
         };
     }
