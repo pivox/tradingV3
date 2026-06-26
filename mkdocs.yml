@@ -55,6 +55,7 @@ nav:
       - Recette orchestrateur R1-R16: runbooks/orchestrator-runtime-recipe-r1-r16.md
   - Rapports:
       - "Recette runtime orchestrateur #188": reports/orchestrator-runtime-final-report.md
+      - "Baseline bad trades #132": reports/bad-trades-baseline.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 

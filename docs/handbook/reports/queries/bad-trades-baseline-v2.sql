@@ -1,0 +1,370 @@
+-- #132 bad/loss trades baseline export.
+--
+-- Usage:
+--   psql "$DATABASE_URL" \
+--     -v from_ts='2026-01-01 00:00:00+00' \
+--     -v to_ts='2026-12-31 23:59:59+00' \
+--     -v output_file='/tmp/bad-trades-baseline-v2.csv' \
+--     -f docs/handbook/reports/queries/bad-trades-baseline-v2.sql
+--
+-- The export is intentionally conservative:
+-- - base population comes from position_trade_analysis_v2;
+-- - certified metrics require complete costs, full close, no quality flags, and net PnL/R;
+-- - order_intent is joined only through internal_trade_id and exact venue/symbol scope;
+-- - EntryZone is joined only through a unique order_intent decision_key;
+-- - fill ledger aggregates are joined only through internal_trade_id and exact venue/symbol scope;
+-- - no symbol-only or time-window reconciliation is performed.
+
+\set ON_ERROR_STOP on
+\if :{?from_ts}
+\else
+  \set from_ts '1970-01-01 00:00:00+00'
+\endif
+\if :{?to_ts}
+\else
+  \set to_ts '9999-12-31 23:59:59+00'
+\endif
+\if :{?output_file}
+\else
+  \set output_file 'bad-trades-baseline-v2.csv'
+\endif
+
+\copy (
+WITH scoped AS (
+  SELECT pta.*
+  FROM position_trade_analysis_v2 pta
+  WHERE pta.mtf_profile IN ('regular', 'scalper', 'scalper_micro')
+    AND pta.entry_time >= :'from_ts'::timestamptz
+    AND pta.entry_time < :'to_ts'::timestamptz
+),
+enriched AS (
+  SELECT
+    pta.*,
+    COALESCE(jsonb_array_length(COALESCE(pta.pnl_quality_flags, '[]'::jsonb)), 0) AS pnl_quality_flag_count,
+    (
+      SELECT count(*)::int
+      FROM jsonb_array_elements_text(COALESCE(pta.pnl_quality_flags, '[]'::jsonb)) AS flags(flag)
+      WHERE flag <> 'ledger_quantity_aggregate_missing'
+    ) AS pnl_blocking_quality_flag_count,
+    order_scope.order_intent_match_status,
+    order_scope.order_intent_id,
+    order_scope.client_order_id,
+    order_scope.exchange_order_id,
+    order_scope.decision_key,
+    order_scope.direction,
+    order_scope.order_intent_side,
+    zone_scope.zone_match_status,
+    zone_scope.zone_dev_pct,
+    zone_scope.zone_max_dev_pct,
+    zone_scope.entry_zone_width_pct,
+    zone_scope.zone_reason,
+    zone_scope.zone_category,
+    ledger_scope.ledger_fill_count,
+    ledger_scope.entry_fill_count,
+    ledger_scope.exit_fill_count,
+    ledger_scope.maker_fill_count,
+    ledger_scope.taker_fill_count,
+    ledger_scope.unknown_liquidity_fill_count,
+    ledger_scope.ledger_quality_flag_count,
+    ledger_scope.ledger_missing_quantity_count,
+    ledger_scope.ledger_missing_cost_component_count,
+    ledger_scope.ledger_missing_applicable_cost_count,
+    ledger_scope.ledger_entry_quantity,
+    ledger_scope.ledger_exit_quantity,
+    ledger_scope.ledger_remaining_quantity,
+    ledger_scope.ledger_fee_usdt,
+    ledger_scope.ledger_funding_usdt,
+    ledger_scope.ledger_spread_cost_usdt,
+    ledger_scope.ledger_slippage_cost_usdt,
+    ledger_scope.ledger_borrow_cost_usdt,
+    ledger_scope.ledger_liquidation_fee_usdt
+  FROM scoped pta
+  LEFT JOIN LATERAL (
+    SELECT
+      CASE
+        WHEN count(*) = 0 THEN 'missing_order_intent'
+        WHEN count(*) = 1 THEN 'unique'
+        ELSE 'identifier_conflict'
+      END AS order_intent_match_status,
+      CASE WHEN count(*) = 1 THEN min(oi.id) END AS order_intent_id,
+      CASE WHEN count(*) = 1 THEN min(oi.client_order_id) END AS client_order_id,
+      CASE WHEN count(*) = 1 THEN min(oi.exchange_order_id) END AS exchange_order_id,
+      CASE WHEN count(*) = 1 THEN min(oi.decision_key) END AS decision_key,
+      CASE
+        WHEN count(*) = 1 AND min(oi.side) = 1 THEN 'long'
+        WHEN count(*) = 1 AND min(oi.side) = 4 THEN 'short'
+        WHEN count(*) = 1 THEN 'non_entry_side'
+        ELSE 'unknown'
+      END AS direction,
+      CASE WHEN count(*) = 1 THEN min(oi.side) END AS order_intent_side
+    FROM order_intent oi
+    WHERE pta.internal_trade_id IS NOT NULL
+      AND oi.internal_trade_id = pta.internal_trade_id
+      AND oi.exchange IS NOT DISTINCT FROM pta.exchange
+      AND oi.market_type IS NOT DISTINCT FROM pta.market_type
+      AND oi.symbol = pta.symbol
+  ) order_scope ON true
+  LEFT JOIN LATERAL (
+    SELECT
+      CASE
+        WHEN order_scope.decision_key IS NULL THEN 'missing_decision_key'
+        WHEN count(*) = 0 THEN 'missing_entry_zone'
+        WHEN count(*) = 1 THEN 'unique'
+        ELSE 'identifier_conflict'
+      END AS zone_match_status,
+      CASE WHEN count(*) = 1 THEN min(tze.zone_dev_pct) END AS zone_dev_pct,
+      CASE WHEN count(*) = 1 THEN min(tze.zone_max_dev_pct) END AS zone_max_dev_pct,
+      CASE WHEN count(*) = 1 THEN min(tze.entry_zone_width_pct) END AS entry_zone_width_pct,
+      CASE WHEN count(*) = 1 THEN min(tze.reason) END AS zone_reason,
+      CASE WHEN count(*) = 1 THEN min(tze.category) END AS zone_category
+    FROM trade_zone_events tze
+    WHERE order_scope.decision_key IS NOT NULL
+      AND tze.decision_key = order_scope.decision_key
+      AND tze.exchange IS NOT DISTINCT FROM pta.exchange
+      AND tze.market_type IS NOT DISTINCT FROM pta.market_type
+      AND tze.symbol = pta.symbol
+      AND tze.timeframe IS NOT DISTINCT FROM pta.timeframe
+  ) zone_scope ON true
+  LEFT JOIN LATERAL (
+    SELECT
+      count(*)::int AS ledger_fill_count,
+      count(*) FILTER (WHERE f.fill_role = 'entry')::int AS entry_fill_count,
+      count(*) FILTER (WHERE f.fill_role = 'exit')::int AS exit_fill_count,
+      count(*) FILTER (WHERE f.liquidity_role = 'maker')::int AS maker_fill_count,
+      count(*) FILTER (WHERE f.liquidity_role = 'taker')::int AS taker_fill_count,
+      count(*) FILTER (WHERE f.liquidity_role = 'unknown')::int AS unknown_liquidity_fill_count,
+      COALESCE(sum(jsonb_array_length(COALESCE(f.quality_flags, '[]'::jsonb))), 0)::int AS ledger_quality_flag_count,
+      count(*) FILTER (
+        WHERE f.fill_role IN ('entry', 'exit')
+          AND f.quantity IS NULL
+      )::int AS ledger_missing_quantity_count,
+      (
+        count(*) FILTER (WHERE f.fill_role IN ('entry', 'exit') AND f.fee_usdt IS NULL)
+        + count(*) FILTER (WHERE f.fill_role = 'funding' AND f.funding_usdt IS NULL)
+        + count(*) FILTER (
+            WHERE f.fill_role = 'adjustment'
+              AND f.fee_usdt IS NULL
+              AND f.funding_usdt IS NULL
+              AND f.spread_cost_usdt IS NULL
+              AND f.slippage_cost_usdt IS NULL
+              AND f.borrow_cost_usdt IS NULL
+              AND f.liquidation_fee_usdt IS NULL
+          )
+      )::int AS ledger_missing_applicable_cost_count,
+      (
+        (sum(f.fee_usdt) IS NULL)::int
+        + (sum(f.funding_usdt) IS NULL)::int
+        + (sum(f.spread_cost_usdt) IS NULL)::int
+        + (sum(f.slippage_cost_usdt) IS NULL)::int
+        + (sum(f.borrow_cost_usdt) IS NULL)::int
+        + (sum(f.liquidation_fee_usdt) IS NULL)::int
+      ) AS ledger_missing_cost_component_count,
+      sum(f.quantity) FILTER (WHERE f.fill_role = 'entry') AS ledger_entry_quantity,
+      sum(f.quantity) FILTER (WHERE f.fill_role = 'exit') AS ledger_exit_quantity,
+      (
+        sum(f.quantity) FILTER (WHERE f.fill_role = 'entry')
+          - sum(f.quantity) FILTER (WHERE f.fill_role = 'exit')
+      ) AS ledger_remaining_quantity,
+      sum(f.fee_usdt) AS ledger_fee_usdt,
+      sum(f.funding_usdt) AS ledger_funding_usdt,
+      sum(f.spread_cost_usdt) AS ledger_spread_cost_usdt,
+      sum(f.slippage_cost_usdt) AS ledger_slippage_cost_usdt,
+      sum(f.borrow_cost_usdt) AS ledger_borrow_cost_usdt,
+      sum(f.liquidation_fee_usdt) AS ledger_liquidation_fee_usdt
+    FROM fill_cost_ledger f
+    WHERE pta.internal_trade_id IS NOT NULL
+      AND f.internal_trade_id = pta.internal_trade_id
+      AND f.exchange IS NOT DISTINCT FROM pta.exchange
+      AND f.market_type IS NOT DISTINCT FROM pta.market_type
+      AND f.symbol = pta.symbol
+  ) ledger_scope ON true
+),
+ledger_certified AS (
+  SELECT
+    enriched.*,
+    CASE
+      WHEN COALESCE(ledger_fill_count, 0) = 0 THEN 'missing_ledger'
+      WHEN COALESCE(entry_fill_count, 0) = 0 THEN 'missing_entry_fill'
+      WHEN COALESCE(exit_fill_count, 0) = 0 THEN 'missing_exit_fill'
+      WHEN COALESCE(ledger_quality_flag_count, 0) > 0 THEN 'ledger_quality_flags'
+      WHEN COALESCE(ledger_missing_quantity_count, 0) > 0 THEN 'missing_ledger_quantity'
+      WHEN ledger_entry_quantity <= 0 THEN 'quantity_mismatch'
+      WHEN ledger_exit_quantity <= 0 THEN 'quantity_mismatch'
+      WHEN ledger_remaining_quantity < -0.00000001 THEN 'exit_qty_exceeds_entry_qty'
+      WHEN abs(ledger_remaining_quantity) > 0.00000001 THEN 'position_not_fully_closed'
+      WHEN COALESCE(ledger_missing_applicable_cost_count, 0) > 0 THEN 'missing_applicable_ledger_cost'
+      WHEN COALESCE(ledger_missing_cost_component_count, 0) > 0 THEN 'missing_ledger_cost_component'
+      ELSE 'complete'
+    END AS ledger_certification_status
+  FROM enriched
+),
+finalized AS (
+  SELECT
+    ledger_certified.*,
+    (
+      analysis_status = 'matched_closed'
+      AND close_match_status = 'matched'
+      AND cost_completeness = 'complete'
+      AND pnl_quality_flag_count = 0
+      AND position_fully_closed IS TRUE
+      AND net_pnl_usdt IS NOT NULL
+      AND realized_net_pnl_r IS NOT NULL
+    ) AS v2_is_certified,
+    (
+      ledger_certification_status = 'complete'
+      AND analysis_status = 'matched_closed'
+      AND close_match_status = 'matched'
+      AND position_fully_closed IS TRUE
+      AND gross_realized_pnl_usdt IS NOT NULL
+      AND risk_usdt_at_entry > 0
+      AND pnl_blocking_quality_flag_count = 0
+    ) AS ledger_is_certified,
+    (
+      ledger_fee_usdt
+        - ledger_funding_usdt
+        + ledger_spread_cost_usdt
+        + ledger_slippage_cost_usdt
+        + ledger_borrow_cost_usdt
+        + ledger_liquidation_fee_usdt
+    ) AS ledger_total_known_cost_usdt,
+    (
+      gross_realized_pnl_usdt
+        - ledger_fee_usdt
+        + ledger_funding_usdt
+        - ledger_spread_cost_usdt
+        - ledger_slippage_cost_usdt
+        - ledger_borrow_cost_usdt
+        - ledger_liquidation_fee_usdt
+    ) AS ledger_net_pnl_usdt,
+    (
+      gross_realized_pnl_usdt
+        - ledger_fee_usdt
+        + ledger_funding_usdt
+        - ledger_spread_cost_usdt
+        - ledger_slippage_cost_usdt
+        - ledger_borrow_cost_usdt
+        - ledger_liquidation_fee_usdt
+    ) / NULLIF(risk_usdt_at_entry, 0) AS ledger_realized_net_pnl_r
+  FROM ledger_certified
+),
+output_rows AS (
+  SELECT
+    finalized.*,
+    CASE
+      WHEN v2_is_certified THEN 'v2'
+      WHEN ledger_is_certified THEN 'ledger'
+      ELSE NULL
+    END AS certification_source,
+    CASE
+      WHEN v2_is_certified OR ledger_is_certified THEN 'complete'
+      ELSE cost_completeness
+    END AS effective_cost_completeness,
+    CASE
+      WHEN ledger_is_certified THEN (
+        SELECT COALESCE(jsonb_agg(flag), '[]'::jsonb)
+        FROM jsonb_array_elements_text(COALESCE(finalized.pnl_quality_flags, '[]'::jsonb)) AS flags(flag)
+        WHERE flag <> 'ledger_quantity_aggregate_missing'
+      )
+      ELSE COALESCE(pnl_quality_flags, '[]'::jsonb)
+    END AS effective_pnl_quality_flags
+  FROM finalized
+)
+SELECT
+  entry_event_id,
+  close_event_id,
+  entry_time,
+  close_time,
+  mtf_profile,
+  symbol,
+  timeframe,
+  direction,
+  exchange,
+  market_type,
+  run_id,
+  correlation_run_id,
+  orchestration_run_id,
+  dashboard_id,
+  set_id,
+  internal_trade_id,
+  trade_id,
+  position_id,
+  order_intent_match_status,
+  order_intent_id,
+  client_order_id,
+  exchange_order_id,
+  decision_key,
+  zone_match_status,
+  zone_dev_pct,
+  zone_max_dev_pct,
+  entry_zone_width_pct,
+  zone_reason,
+  zone_category,
+  ledger_fill_count,
+  entry_fill_count,
+  exit_fill_count,
+  maker_fill_count,
+  taker_fill_count,
+  unknown_liquidity_fill_count,
+  ledger_quality_flag_count,
+  ledger_missing_quantity_count,
+  ledger_missing_cost_component_count,
+  ledger_missing_applicable_cost_count,
+  ledger_entry_quantity,
+  ledger_exit_quantity,
+  ledger_remaining_quantity,
+  ledger_certification_status,
+  certification_source,
+  (v2_is_certified OR ledger_is_certified) AS is_certified,
+  analysis_status,
+  close_match_status,
+  close_matched_by,
+  effective_cost_completeness AS cost_completeness,
+  effective_pnl_quality_flags AS pnl_quality_flags,
+  position_fully_closed,
+  COALESCE(net_pnl_usdt, ledger_net_pnl_usdt) AS net_pnl_usdt,
+  gross_realized_pnl_usdt,
+  recorded_pnl_usdt,
+  estimated_net_pnl_usdt,
+  COALESCE(realized_net_pnl_r, ledger_realized_net_pnl_r) AS realized_net_pnl_r,
+  realized_gross_pnl_r,
+  pnl_r,
+  risk_usdt_at_entry,
+  risk_usdt,
+  notional_usdt,
+  CASE WHEN ledger_is_certified THEN ledger_fee_usdt ELSE fees_usdt END AS fees_usdt,
+  entry_fee_usdt,
+  exit_fee_usdt,
+  other_trading_fees_usdt,
+  CASE WHEN ledger_is_certified THEN ledger_spread_cost_usdt ELSE spread_cost_usdt END AS spread_cost_usdt,
+  CASE WHEN ledger_is_certified THEN ledger_slippage_cost_usdt ELSE slippage_cost_usdt END AS slippage_cost_usdt,
+  slippage_usdt,
+  CASE WHEN ledger_is_certified THEN ledger_funding_usdt ELSE funding_usdt END AS funding_usdt,
+  CASE WHEN ledger_is_certified THEN ledger_borrow_cost_usdt ELSE borrow_cost_usdt END AS borrow_cost_usdt,
+  CASE WHEN ledger_is_certified THEN ledger_liquidation_fee_usdt ELSE liquidation_fee_usdt END AS liquidation_fee_usdt,
+  COALESCE(total_known_cost_usdt, ledger_total_known_cost_usdt) AS total_known_cost_usdt,
+  mfe_r,
+  mae_r,
+  mfe_pct,
+  mae_pct,
+  mfe_price,
+  mae_price,
+  mfe_at,
+  mae_at,
+  mfe_mae_data_quality,
+  holding_time_sec,
+  entry_rsi,
+  entry_atr,
+  atr_pct_entry,
+  entry_volume_ratio,
+  entry_macd,
+  entry_ma9,
+  entry_ma21,
+  entry_vwap,
+  snapshot_kline_time,
+  initial_stop_price,
+  stop_distance_pct,
+  planned_r_multiple,
+  expected_r_multiple
+FROM output_rows
+ORDER BY entry_time ASC, entry_event_id ASC
+) TO :'output_file' CSV HEADER
