@@ -183,10 +183,23 @@ final class TradeLifecycleLoggerListener
         // MFE / MAE (best-effort à partir des klines 1m)
         $mfePrice = null;
         $maePrice = null;
+        $mfeAt = null;
+        $maeAt = null;
         $mfePct = null;
         $maePct = null;
+        $mfeMaeSource = null;
+        $mfeMaeTimeframe = null;
+        $mfeMaeSampleCount = null;
+        $mfeMaeExpectedSampleCount = null;
+        $mfeMaeDataQuality = null;
+        $mfeMaeLimit = 500;
 
         if ($this->mainProvider !== null) {
+            $mfeMaeSource = 'kline_1m_high_low';
+            $mfeMaeTimeframe = Timeframe::TF_1M->value;
+            $mfeMaeSampleCount = 0;
+            $mfeMaeExpectedSampleCount = $this->expectedOneMinuteSampleCount($history->openedAt, $history->closedAt);
+            $klineOpenTimes = [];
             try {
                 $klineProvider = $this->mainProvider
                     ->forContext(ExchangeContext::fromValues($event->exchange, $marketType))
@@ -196,31 +209,43 @@ final class TradeLifecycleLoggerListener
                     Timeframe::TF_1M,
                     $history->openedAt,
                     $history->closedAt,
-                    500
+                    $mfeMaeLimit
                 );
 
                 foreach ($klines as $kline) {
-                    $high = isset($kline['high']) ? (float)$kline['high'] : null;
-                    $low = isset($kline['low']) ? (float)$kline['low'] : null;
+                    $high = $this->klineNumericValue($kline, 'high');
+                    $low = $this->klineNumericValue($kline, 'low');
                     if ($high === null || $low === null) {
                         continue;
+                    }
+                    $openedAt = $this->klineOpenedAt($kline);
+                    if ($openedAt !== null && $openedAt >= $history->closedAt) {
+                        continue;
+                    }
+                    ++$mfeMaeSampleCount;
+                    if ($openedAt !== null) {
+                        $klineOpenTimes[$openedAt->setTimezone(new \DateTimeZone('UTC'))->format(\DateTimeInterface::ATOM)] = true;
                     }
 
                     if (strtoupper($history->side->value) === 'LONG') {
                         // Favorable = plus haut, défavorable = plus bas
                         if ($mfePrice === null || $high > $mfePrice) {
                             $mfePrice = $high;
+                            $mfeAt = $openedAt;
                         }
                         if ($maePrice === null || $low < $maePrice) {
                             $maePrice = $low;
+                            $maeAt = $openedAt;
                         }
                     } else {
                         // SHORT: favorable = plus bas, défavorable = plus haut
                         if ($mfePrice === null || $low < $mfePrice) {
                             $mfePrice = $low;
+                            $mfeAt = $openedAt;
                         }
                         if ($maePrice === null || $high > $maePrice) {
                             $maePrice = $high;
+                            $maeAt = $openedAt;
                         }
                     }
                 }
@@ -237,8 +262,22 @@ final class TradeLifecycleLoggerListener
                             : ($maePrice - $entryPriceFloat) / $entryPriceFloat;
                     }
                 }
+                if ($mfeMaeSampleCount === 0 || $mfePrice === null || $maePrice === null) {
+                    $mfeMaeDataQuality = 'missing_price_data';
+                } elseif (
+                    $this->isOneMinuteBoundary($history->openedAt)
+                    && $this->isOneMinuteBoundary($history->closedAt)
+                    && $mfeMaeExpectedSampleCount !== null
+                    && $mfeMaeExpectedSampleCount <= $mfeMaeLimit
+                    && \count($klineOpenTimes) >= $mfeMaeExpectedSampleCount
+                ) {
+                    $mfeMaeDataQuality = 'complete';
+                } else {
+                    $mfeMaeDataQuality = 'partial';
+                }
             } catch (\Throwable) {
                 // best-effort: metrics restent null en cas d'échec
+                $mfeMaeDataQuality = 'provider_error';
             }
         }
 
@@ -266,6 +305,16 @@ final class TradeLifecycleLoggerListener
                     'max_adverse_price' => $maePrice,
                     'mfe_pct' => $mfePct,
                     'mae_pct' => $maePct,
+                    'mfe_at' => $mfeAt?->format(\DateTimeInterface::ATOM),
+                    'mae_at' => $maeAt?->format(\DateTimeInterface::ATOM),
+                    'mfe_mae_source' => $mfeMaeSource,
+                    'mfe_mae_timeframe' => $mfeMaeTimeframe,
+                    'mfe_mae_window_start' => $history->openedAt->format(\DateTimeInterface::ATOM),
+                    'mfe_mae_window_end' => $history->closedAt->format(\DateTimeInterface::ATOM),
+                    'mfe_mae_sample_count' => $mfeMaeSampleCount,
+                    'mfe_mae_expected_sample_count' => $mfeMaeExpectedSampleCount,
+                    'mfe_mae_limit' => $mfeMaeLimit,
+                    'mfe_mae_data_quality' => $mfeMaeDataQuality,
                     'fees' => $history->fees?->__toString(),
                     'raw'  => $history->raw,
                 ],
@@ -409,6 +458,75 @@ final class TradeLifecycleLoggerListener
         } catch (\Throwable) {
             // Le lifecycle reste prioritaire; le lineage sera récupéré par un identifiant exact ultérieur.
         }
+    }
+
+    private function expectedOneMinuteSampleCount(\DateTimeImmutable $start, \DateTimeImmutable $end): ?int
+    {
+        $startTimestamp = $start->getTimestamp();
+        $endTimestamp = $end->getTimestamp();
+        if ($endTimestamp <= $startTimestamp) {
+            return null;
+        }
+
+        return (int) ceil(($endTimestamp - $startTimestamp) / 60);
+    }
+
+    private function isOneMinuteBoundary(\DateTimeImmutable $time): bool
+    {
+        return $time->format('s.u') === '00.000000';
+    }
+
+    private function klineNumericValue(mixed $kline, string $field): ?float
+    {
+        $value = null;
+        if (\is_array($kline)) {
+            $value = $kline[$field]
+                ?? $kline[$field . '_price']
+                ?? $kline[$field . 'Price']
+                ?? null;
+        } elseif (\is_object($kline) && property_exists($kline, $field)) {
+            $value = $kline->{$field};
+        }
+
+        if ($value instanceof \Stringable) {
+            $value = (string) $value;
+        }
+
+        return \is_numeric($value) ? (float) $value : null;
+    }
+
+    private function klineOpenedAt(mixed $kline): ?\DateTimeImmutable
+    {
+        $value = null;
+        if (\is_array($kline)) {
+            $value = $kline['openTime'] ?? $kline['open_time'] ?? $kline['timestamp'] ?? null;
+        } elseif (\is_object($kline) && property_exists($kline, 'openTime')) {
+            $value = $kline->openTime;
+        }
+
+        if ($value instanceof \DateTimeImmutable) {
+            return $value;
+        }
+        if ($value instanceof \DateTimeInterface) {
+            return \DateTimeImmutable::createFromInterface($value);
+        }
+        if (\is_numeric($value)) {
+            $timestamp = (int) $value;
+            if ($timestamp > 9999999999) {
+                $timestamp = (int) round($timestamp / 1000);
+            }
+
+            return (new \DateTimeImmutable('@' . $timestamp))->setTimezone(new \DateTimeZone('UTC'));
+        }
+        if (\is_string($value) && trim($value) !== '') {
+            try {
+                return new \DateTimeImmutable($value, new \DateTimeZone('UTC'));
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -11,6 +11,7 @@ use DoctrineMigrations\Version20260622000000;
 use DoctrineMigrations\Version20260623010000;
 use DoctrineMigrations\Version20260625000000;
 use DoctrineMigrations\Version20260625020000;
+use DoctrineMigrations\Version20260626000000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -31,6 +32,7 @@ use Psr\Log\NullLogger;
 #[CoversClass(Version20260623010000::class)]
 #[CoversClass(Version20260625000000::class)]
 #[CoversClass(Version20260625020000::class)]
+#[CoversClass(Version20260626000000::class)]
 final class PositionTradeAnalysisViewTest extends TestCase
 {
     private Connection $conn;
@@ -403,11 +405,13 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'lineage_sufficient' => true,
             'identifier_conflict' => false,
             'pnl_source' => 'legacy_malformed_payload',
+            'mfe_at' => '2026-99-99T10:00:00+00:00',
+            'mae_at' => 'not-a-timestamp',
         ], null, '2026-06-25 17:10:00+00', 2171, 'fake', 'perpetual');
 
         $row = $this->conn->fetchAssociative(
             'SELECT risk_usdt_at_entry, gross_realized_pnl_usdt, entry_fee_usdt,
-                    net_pnl_usdt, cost_completeness, pnl_quality_flags
+                    mfe_at, mae_at, net_pnl_usdt, cost_completeness, pnl_quality_flags
              FROM position_trade_analysis_v2 WHERE run_id = ?',
             [$run],
         );
@@ -416,10 +420,123 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertNull($row['risk_usdt_at_entry']);
         self::assertNull($row['gross_realized_pnl_usdt']);
         self::assertNull($row['entry_fee_usdt']);
+        self::assertNull($row['mfe_at']);
+        self::assertNull($row['mae_at']);
         self::assertNull($row['net_pnl_usdt']);
         self::assertSame('partial', $row['cost_completeness']);
         self::assertStringContainsString('missing_gross_pnl', (string) $row['pnl_quality_flags']);
         self::assertStringContainsString('missing_entry_fee', (string) $row['pnl_quality_flags']);
+    }
+
+    public function testRiskGrossPnlRAndMfeMaeCertificationFieldsAreExposedConservatively(): void
+    {
+        $run = 'run_risk_mfe_mae_contract';
+
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-risk-mfe-mae',
+            'risk_usdt_at_entry' => 5.0,
+            'risk_usdt' => 99.0,
+            'initial_stop_price' => 95.0,
+            'stop_final_price' => 80.0,
+            'planned_r_multiple' => 1.8,
+            'r_multiple_final' => 2.5,
+            'entry_price' => 100.0,
+            'notional_usdt' => 100.0,
+        ], '2026-06-26 10:00:00+00', 2180);
+        $this->close('BTCUSDT', $run, [
+            'internal_trade_id' => 'itd-risk-mfe-mae',
+            'gross_realized_pnl_usdt' => 10.0,
+            'entry_fee_usdt' => 0.01,
+            'exit_fee_usdt' => 0.01,
+            'other_trading_fees_usdt' => 0.0,
+            'funding_usdt' => 0.0,
+            'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0,
+            'borrow_cost_usdt' => 0.0,
+            'liquidation_fee_usdt' => 0.0,
+            'entry_qty' => 1.0,
+            'exit_qty' => 1.0,
+            'remaining_qty' => 0.0,
+            'position_fully_closed' => true,
+            'fills_complete' => true,
+            'quantity_coherent' => true,
+            'lineage_sufficient' => true,
+            'identifier_conflict' => false,
+            'pnl_source' => 'fake_paper_fill_ledger_v1',
+            'max_favorable_price' => 108.0,
+            'max_adverse_price' => 97.0,
+            'mfe_pct' => 0.08,
+            'mae_pct' => 0.03,
+            'mfe_at' => '2026-06-26T10:03:00+00:00',
+            'mae_at' => '2026-06-26T10:01:00+00:00',
+            'mfe_mae_source' => 'kline_1m_high_low',
+            'mfe_mae_timeframe' => '1m',
+            'mfe_mae_window_start' => '2026-06-26T10:00:00+00:00',
+            'mfe_mae_window_end' => '2026-06-26T10:10:00+00:00',
+            'mfe_mae_data_quality' => 'complete',
+        ], null, '2026-06-26 10:10:00+00', 2181, 'fake', 'perpetual');
+
+        $row = $this->conn->fetchAssociative(
+            'SELECT risk_usdt_at_entry, initial_stop_price, stop_distance_pct,
+                    planned_r_multiple, realized_gross_pnl_r, realized_net_pnl_r,
+                    mfe_price, mae_price, mfe_at, mae_at, mfe_r, mae_r,
+                    mfe_mae_data_quality, pnl_quality_flags
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$run],
+        );
+
+        self::assertIsArray($row);
+        self::assertEqualsWithDelta(5.0, (float) $row['risk_usdt_at_entry'], 1e-9);
+        self::assertEqualsWithDelta(95.0, (float) $row['initial_stop_price'], 1e-9);
+        self::assertEqualsWithDelta(0.05, (float) $row['stop_distance_pct'], 1e-9);
+        self::assertEqualsWithDelta(1.8, (float) $row['planned_r_multiple'], 1e-9);
+        self::assertEqualsWithDelta(2.0, (float) $row['realized_gross_pnl_r'], 1e-9);
+        self::assertNull($row['realized_net_pnl_r'], 'net R reste nul tant que le net PnL n est pas certifie');
+        self::assertEqualsWithDelta(108.0, (float) $row['mfe_price'], 1e-9);
+        self::assertEqualsWithDelta(97.0, (float) $row['mae_price'], 1e-9);
+        self::assertSame(
+            '2026-06-26T10:03:00+00:00',
+            (new \DateTimeImmutable((string) $row['mfe_at']))->setTimezone(new \DateTimeZone('UTC'))->format(\DateTimeInterface::ATOM),
+        );
+        self::assertSame(
+            '2026-06-26T10:01:00+00:00',
+            (new \DateTimeImmutable((string) $row['mae_at']))->setTimezone(new \DateTimeZone('UTC'))->format(\DateTimeInterface::ATOM),
+        );
+        self::assertEqualsWithDelta(1.6, (float) $row['mfe_r'], 1e-9);
+        self::assertEqualsWithDelta(-0.6, (float) $row['mae_r'], 1e-9);
+        self::assertSame('complete', $row['mfe_mae_data_quality']);
+        self::assertStringContainsString('ledger_quantity_aggregate_missing', (string) $row['pnl_quality_flags']);
+    }
+
+    public function testNegativeRuntimeMfeDoesNotBecomePositiveR(): void
+    {
+        $run = 'run_negative_mfe_contract';
+
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-negative-mfe',
+            'risk_usdt_at_entry' => 5.0,
+            'entry_price' => 100.0,
+            'notional_usdt' => 100.0,
+        ], '2026-06-26 11:00:00+00', 2190);
+        $this->close('BTCUSDT', $run, [
+            'internal_trade_id' => 'itd-negative-mfe',
+            'gross_realized_pnl_usdt' => -2.0,
+            'max_favorable_price' => 99.0,
+            'max_adverse_price' => 101.0,
+            'mfe_pct' => -0.01,
+            'mae_pct' => -0.01,
+            'mfe_mae_source' => 'kline_1m_high_low',
+            'mfe_mae_data_quality' => 'complete',
+        ], null, '2026-06-26 11:10:00+00', 2191, 'fake', 'perpetual');
+
+        $row = $this->conn->fetchAssociative(
+            'SELECT mfe_r, mae_r FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$run],
+        );
+
+        self::assertIsArray($row);
+        self::assertEqualsWithDelta(0.0, (float) $row['mfe_r'], 1e-9);
+        self::assertEqualsWithDelta(0.0, (float) $row['mae_r'], 1e-9);
     }
 
     public function testCloseIsNotReusedAcrossEntriesSharingAPositionId(): void
@@ -875,8 +992,11 @@ SQL);
         if (!class_exists(Version20260625020000::class, false)) {
             require_once \dirname(__DIR__, 3) . '/migrations/Version20260625020000.php';
         }
+        if (!class_exists(Version20260626000000::class, false)) {
+            require_once \dirname(__DIR__, 3) . '/migrations/Version20260626000000.php';
+        }
 
-        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class, Version20260625020000::class] as $migrationClass) {
+        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class, Version20260625020000::class, Version20260626000000::class] as $migrationClass) {
             $migration = new $migrationClass($this->conn, new NullLogger());
             $migration->up(new Schema());
             foreach ($migration->getSql() as $query) {

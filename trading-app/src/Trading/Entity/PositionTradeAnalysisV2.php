@@ -166,6 +166,27 @@ class PositionTradeAnalysisV2
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'mae_pct')]
     private ?float $maePct = null;
 
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'mfe_price')]
+    private ?float $mfePrice = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'mae_price')]
+    private ?float $maePrice = null;
+
+    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, name: 'mfe_at')]
+    private ?\DateTimeImmutable $mfeAt = null;
+
+    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, name: 'mae_at')]
+    private ?\DateTimeImmutable $maeAt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'mfe_r')]
+    private ?float $mfeR = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'mae_r')]
+    private ?float $maeR = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'mfe_mae_data_quality')]
+    private ?string $mfeMaeDataQuality = null;
+
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'holding_time_sec')]
     private ?float $holdingTimeSec = null;
 
@@ -198,6 +219,18 @@ class PositionTradeAnalysisV2
 
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'risk_usdt_at_entry')]
     private ?float $riskUsdtAtEntry = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'initial_stop_price')]
+    private ?float $initialStopPrice = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'stop_distance_pct')]
+    private ?float $stopDistancePct = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'planned_r_multiple')]
+    private ?float $plannedRMultiple = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'realized_gross_pnl_r')]
+    private ?float $realizedGrossPnlR = null;
 
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'realized_net_pnl_r')]
     private ?float $realizedNetPnlR = null;
@@ -436,6 +469,41 @@ class PositionTradeAnalysisV2
         return $this->maePct;
     }
 
+    public function getMfePrice(): ?float
+    {
+        return $this->mfePrice;
+    }
+
+    public function getMaePrice(): ?float
+    {
+        return $this->maePrice;
+    }
+
+    public function getMfeAt(): ?\DateTimeImmutable
+    {
+        return $this->mfeAt;
+    }
+
+    public function getMaeAt(): ?\DateTimeImmutable
+    {
+        return $this->maeAt;
+    }
+
+    public function getMfeR(): ?float
+    {
+        return $this->mfeR;
+    }
+
+    public function getMaeR(): ?float
+    {
+        return $this->maeR;
+    }
+
+    public function getMfeMaeDataQuality(): ?string
+    {
+        return $this->mfeMaeDataQuality;
+    }
+
     public function getHoldingTimeSec(): ?float
     {
         return $this->holdingTimeSec;
@@ -489,6 +557,26 @@ class PositionTradeAnalysisV2
     public function getRiskUsdtAtEntry(): ?float
     {
         return $this->riskUsdtAtEntry;
+    }
+
+    public function getInitialStopPrice(): ?float
+    {
+        return $this->initialStopPrice;
+    }
+
+    public function getStopDistancePct(): ?float
+    {
+        return $this->stopDistancePct;
+    }
+
+    public function getPlannedRMultiple(): ?float
+    {
+        return $this->plannedRMultiple;
+    }
+
+    public function getRealizedGrossPnlR(): ?float
+    {
+        return $this->realizedGrossPnlR;
     }
 
     public function getRealizedNetPnlR(): ?float

@@ -75,9 +75,32 @@ La quantite residuelle est calculee par `FillQuantityAggregationService` sur `in
 
 `position_trade_analysis_v2` ne certifie plus le net a partir des seuls extras `position_closed`. Tant que la vue SQL ne consomme pas directement l'agregat ledger persistant, elle ajoute `ledger_quantity_aggregate_missing`, garde `cost_completeness=partial` pour les lignes autrement completes et laisse `net_pnl_usdt`/`realized_net_pnl_R` a `NULL`.
 
+## Risque initial et R
+
+Le risque utilise pour les ratios R provient uniquement de l'evenement d'entree. La vue expose :
+
+- `risk_usdt_at_entry`, depuis `risk_usdt_at_entry` puis `risk_usdt` dans `order_submitted` ;
+- `initial_stop_price`, depuis `initial_stop_price` puis `stop_final_price` de l'ordre initial ;
+- `stop_distance_pct`, depuis `stop_distance_pct` ou le calcul `abs(entry_price - initial_stop_price) / entry_price` ;
+- `planned_r_multiple`, depuis `planned_r_multiple` puis `r_multiple_final`.
+
+Un deplacement ulterieur du stop ne reecrit pas ce risque initial dans la vue. Si le risque est absent, nul, negatif ou non parseable, les ratios R restent `NULL`.
+
+`realized_gross_pnl_R` est calcule des que `gross_realized_pnl_usdt` et un risque initial positif sont disponibles. `realized_net_pnl_R` exige en plus un `net_pnl_usdt` certifie ; il reste donc `NULL` lorsque le net est bloque par une quantite incomplete, un cout manquant ou `ledger_quantity_aggregate_missing`.
+
 ## MFE / MAE
 
-La vue conserve les champs historiques `mfe_pct` et `mae_pct` provenant du listener lifecycle. Leur source actuelle est best-effort via klines 1m (`high/low`) entre ouverture et cloture. Cette source n'est pas une certification microstructure : gaps, donnees manquantes, mark/mid/last et scale-in restent a versionner separement.
+La vue conserve les champs historiques `mfe_pct` et `mae_pct` provenant du listener lifecycle. Leur source runtime actuelle est best-effort via klines 1m (`high/low`) entre ouverture et cloture. Cette source n'est pas une certification microstructure : gaps, donnees manquantes, mark/mid/last et scale-in restent a versionner separement.
+
+Les nouveaux champs explicitent la qualite :
+
+- `mfe_price` / `mae_price` : prix extreme favorable/defavorable ;
+- `mfe_at` / `mae_at` : ouverture de la kline 1m portant l'extreme lorsqu'elle est connue ;
+- `mfe_R` : impact favorable en R, positif ou zero si la meilleure excursion reste sous le prix d'entree ;
+- `mae_R` : impact adverse en R, negatif ou zero pour la source runtime lorsqu'aucune excursion adverse n'est observee ;
+- `mfe_mae_data_quality` : `complete`, `partial`, `missing_price_data`, `provider_error`, `legacy_best_effort`, `not_applicable` ou `unknown`.
+
+La source runtime ajoute `mfe_mae_source=kline_1m_high_low`, `mfe_mae_timeframe=1m`, la fenetre UTC, `mfe_mae_sample_count` et `mfe_mae_expected_sample_count`. La fenetre est semi-ouverte `[ouverture, cloture)` : une kline dont l'ouverture est egale a l'heure de cloture n'est pas utilisee. `complete` exige une fenetre alignee sur les bornes 1m, des klines horodatees couvrant toute la fenetre attendue et une lecture sous la limite ; sinon la qualite reste `partial` ou `missing_price_data`. Les anciennes valeurs sans source/fenetre restent visibles mais classees `legacy_best_effort`; elles ne doivent pas etre utilisees comme MFE/MAE certifie.
 
 ## Backfill
 

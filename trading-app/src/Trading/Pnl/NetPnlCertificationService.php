@@ -72,6 +72,9 @@ final class NetPnlCertificationService
         if ($gross === null) {
             $flags[] = 'missing_gross_pnl';
         }
+        $realizedGrossPnlR = $gross !== null && $riskUsdtAtEntry !== null && $riskUsdtAtEntry > 0.0
+            ? $gross / $riskUsdtAtEntry
+            : null;
 
         $certified = $flags === [];
         if (!$certified || $gross === null || $entryFee === null || $exitFee === null) {
@@ -83,6 +86,7 @@ final class NetPnlCertificationService
                 exitFeeUsdt: $exitFee,
                 totalKnownCostUsdt: null,
                 netPnlUsdt: null,
+                realizedGrossPnlR: $realizedGrossPnlR,
                 realizedNetPnlR: null,
                 qualityFlags: array_values(array_unique($flags)),
             );
@@ -106,6 +110,7 @@ final class NetPnlCertificationService
             exitFeeUsdt: $exitFee,
             totalKnownCostUsdt: $totalKnownCost,
             netPnlUsdt: $net,
+            realizedGrossPnlR: $realizedGrossPnlR,
             realizedNetPnlR: $riskUsdtAtEntry !== null && $riskUsdtAtEntry > 0.0 ? $net / $riskUsdtAtEntry : null,
             qualityFlags: [],
         );
@@ -148,6 +153,7 @@ final class NetPnlCertificationService
             exitFeeUsdt: $result->exitFeeUsdt,
             totalKnownCostUsdt: null,
             netPnlUsdt: null,
+            realizedGrossPnlR: $result->realizedGrossPnlR,
             realizedNetPnlR: null,
             qualityFlags: array_values(array_unique([...$result->qualityFlags, ...$quantityAggregation->quantityQualityFlags])),
         );
