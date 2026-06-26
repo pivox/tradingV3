@@ -1,0 +1,89 @@
+{
+  "decision": "blocked",
+  "generated_at": "2026-06-26T16:52:55Z",
+  "preflight": {
+    "docker_compose_ps": {
+      "command": "docker compose ps --format json",
+      "status": "BLOCKED",
+      "evidence": "failed to connect to the docker API: local docker socket unavailable"
+    },
+    "orchestrator_healthcheck": {
+      "command": "curl -sS --max-time 5 http://localhost:8099/healthcheck",
+      "status": "BLOCKED",
+      "evidence": "Failed to connect to localhost port 8099"
+    },
+    "symfony_contracts": {
+      "command": "curl -sS --max-time 5 http://localhost:8082/api/mtf/contracts",
+      "status": "BLOCKED",
+      "evidence": "Failed to connect to localhost port 8082"
+    },
+    "temporal_ui": {
+      "command": "curl -sS --max-time 5 http://localhost:8233",
+      "status": "BLOCKED",
+      "evidence": "Failed to connect to localhost port 8233"
+    }
+  },
+  "runner": {
+    "command": "cd python-orchestrator && python3 scripts/runtime_recipe_runner.py --orchestrator-url http://localhost:8099 --confirm DRY_RUN_ONLY --export-dir var/runtime-recipe/issue-188-final-report --keep-fixtures",
+    "dry_run_forced": true,
+    "confirmation_token": "REDACTED",
+    "orchestrator_url": "http://localhost:8099",
+    "fixtures_dir": "python-orchestrator/fixtures/runtime-recipe",
+    "ready_for_final_report": false,
+    "scenario_counts": {
+      "BLOCKED": 10
+    },
+    "results": [
+      {
+        "scenario": "R1",
+        "status": "BLOCKED",
+        "notes": "orchestrator unavailable: status=0, body={'detail': '[Errno 61] Connection refused'}"
+      },
+      {
+        "scenario": "R2",
+        "status": "BLOCKED",
+        "notes": "orchestrator unavailable: status=0, body={'detail': '[Errno 61] Connection refused'}"
+      },
+      {
+        "scenario": "R5",
+        "status": "BLOCKED",
+        "notes": "orchestrator unavailable: status=0, body={'detail': '[Errno 61] Connection refused'}"
+      },
+      {
+        "scenario": "R6",
+        "status": "BLOCKED",
+        "notes": "orchestrator unavailable: status=0, body={'detail': '[Errno 61] Connection refused'}"
+      },
+      {
+        "scenario": "R8",
+        "status": "BLOCKED",
+        "notes": "orchestrator unavailable: status=0, body={'detail': '[Errno 61] Connection refused'}"
+      },
+      {
+        "scenario": "R10",
+        "status": "BLOCKED",
+        "notes": "orchestrator unavailable: status=0, body={'detail': '[Errno 61] Connection refused'}"
+      },
+      {
+        "scenario": "R11",
+        "status": "BLOCKED",
+        "notes": "orchestrator unavailable: status=0, body={'detail': '[Errno 61] Connection refused'}"
+      },
+      {
+        "scenario": "R14",
+        "status": "BLOCKED",
+        "notes": "orchestrator unavailable: status=0, body={'detail': '[Errno 61] Connection refused'}"
+      },
+      {
+        "scenario": "R15",
+        "status": "BLOCKED",
+        "notes": "orchestrator unavailable: status=0, body={'detail': '[Errno 61] Connection refused'}"
+      },
+      {
+        "scenario": "R16",
+        "status": "BLOCKED",
+        "notes": "orchestrator unavailable: status=0, body={'detail': '[Errno 61] Connection refused'}"
+      }
+    ]
+  }
+}
