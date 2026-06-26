@@ -38,8 +38,8 @@ final class Version20260623010000 extends AbstractMigration
     {
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_tle_v2_fifo_internal ON trade_lifecycle_event (event_type, internal_trade_id, symbol, exchange, market_type, run_id, happened_at, id) WHERE internal_trade_id IS NOT NULL');
         $this->addSql('CREATE INDEX IF NOT EXISTS idx_tle_v2_fifo_position ON trade_lifecycle_event (event_type, position_id, symbol, exchange, market_type, run_id, happened_at, id) WHERE position_id IS NOT NULL');
-        $this->addSql('CREATE INDEX IF NOT EXISTS idx_tle_v2_fifo_extra_trade ON trade_lifecycle_event (event_type, (extra->>\'trade_id\'), symbol, exchange, market_type, run_id, happened_at, id) WHERE extra ? \'trade_id\'');
-        $this->addSql('CREATE INDEX IF NOT EXISTS idx_tle_v2_fifo_extra_position ON trade_lifecycle_event (event_type, (extra->>\'position_id\'), symbol, exchange, market_type, run_id, happened_at, id) WHERE extra ? \'position_id\'');
+        $this->addSql('CREATE INDEX IF NOT EXISTS idx_tle_v2_fifo_extra_trade ON trade_lifecycle_event (event_type, (extra->>\'trade_id\'), symbol, exchange, market_type, run_id, happened_at, id) WHERE extra ?? \'trade_id\'');
+        $this->addSql('CREATE INDEX IF NOT EXISTS idx_tle_v2_fifo_extra_position ON trade_lifecycle_event (event_type, (extra->>\'position_id\'), symbol, exchange, market_type, run_id, happened_at, id) WHERE extra ?? \'position_id\'');
         $this->addSql('DROP VIEW IF EXISTS position_trade_analysis_v2');
         $this->addSql(<<<'SQL'
 CREATE VIEW position_trade_analysis_v2 AS

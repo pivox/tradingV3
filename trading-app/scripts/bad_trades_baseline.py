@@ -360,9 +360,9 @@ def build_baseline(input_csv: Path, seed: int = 132, monte_carlo_runs: int = 100
             "all_certified": simulate_group(certified, seed, monte_carlo_runs),
         },
         "coverage_gaps": [
-            "direction/side is not exposed by position_trade_analysis_v2; direction segmentation is not computed by this export.",
-            "EntryZone distance and entry extension require trade_zone_events or lifecycle extra fields joined by decision_key; they are reported as a_valider unless exported separately.",
-            "maker/taker requires fill ledger aggregation; it is not present in position_trade_analysis_v2.",
+            "direction/side is certified only when a unique order_intent is matched by internal_trade_id and exact exchange/market/symbol scope.",
+            "EntryZone distance requires a unique trade_zone_events match through the order_intent decision_key and exact exchange/market/symbol/timeframe scope.",
+            "maker/taker is available only when fill_cost_ledger rows exist for the same internal_trade_id and exact exchange/market/symbol scope.",
             "TP/SL recalculation causes are not certified by v2 and must be joined from lifecycle events before causal claims.",
             "Compounding ON needs real account equity or risk fraction per trade; v2 only exposes risk_usdt_at_entry.",
         ],
@@ -410,7 +410,7 @@ def render_markdown(result: dict[str, Any]) -> str:
     lines = [
         "# Baseline bad trades certifiee v2",
         "",
-        "Ce rapport est genere uniquement depuis `position_trade_analysis_v2` avec lignes certifiees.",
+        "Ce rapport est genere depuis l'export `bad-trades-baseline-v2.sql`, base sur `position_trade_analysis_v2` et enrichi par `order_intent`, `trade_zone_events` et `fill_cost_ledger` lorsque les identifiants sont uniques.",
         "Les lignes partielles, inconnues, ambigues, legacy ou a couts incomplets sont segmentees et exclues des metriques nettes.",
         "",
         "## Population",
