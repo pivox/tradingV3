@@ -61,7 +61,11 @@ enriched AS (
     ledger_scope.taker_fill_count,
     ledger_scope.unknown_liquidity_fill_count,
     ledger_scope.ledger_quality_flag_count,
+    ledger_scope.ledger_missing_quantity_count,
     ledger_scope.ledger_missing_cost_component_count,
+    ledger_scope.ledger_entry_quantity,
+    ledger_scope.ledger_exit_quantity,
+    ledger_scope.ledger_remaining_quantity,
     ledger_scope.ledger_fee_usdt,
     ledger_scope.ledger_funding_usdt,
     ledger_scope.ledger_spread_cost_usdt,
@@ -125,6 +129,10 @@ enriched AS (
       count(*) FILTER (WHERE f.liquidity_role = 'unknown')::int AS unknown_liquidity_fill_count,
       COALESCE(sum(jsonb_array_length(COALESCE(f.quality_flags, '[]'::jsonb))), 0)::int AS ledger_quality_flag_count,
       count(*) FILTER (
+        WHERE f.fill_role IN ('entry', 'exit')
+          AND f.quantity IS NULL
+      )::int AS ledger_missing_quantity_count,
+      count(*) FILTER (
         WHERE f.fee_usdt IS NULL
            OR f.funding_usdt IS NULL
            OR f.spread_cost_usdt IS NULL
@@ -132,6 +140,12 @@ enriched AS (
            OR f.borrow_cost_usdt IS NULL
            OR f.liquidation_fee_usdt IS NULL
       )::int AS ledger_missing_cost_component_count,
+      sum(f.quantity) FILTER (WHERE f.fill_role = 'entry') AS ledger_entry_quantity,
+      sum(f.quantity) FILTER (WHERE f.fill_role = 'exit') AS ledger_exit_quantity,
+      (
+        sum(f.quantity) FILTER (WHERE f.fill_role = 'entry')
+          - sum(f.quantity) FILTER (WHERE f.fill_role = 'exit')
+      ) AS ledger_remaining_quantity,
       sum(f.fee_usdt) AS ledger_fee_usdt,
       sum(f.funding_usdt) AS ledger_funding_usdt,
       sum(f.spread_cost_usdt) AS ledger_spread_cost_usdt,
@@ -154,6 +168,9 @@ ledger_certified AS (
       WHEN COALESCE(entry_fill_count, 0) = 0 THEN 'missing_entry_fill'
       WHEN COALESCE(exit_fill_count, 0) = 0 THEN 'missing_exit_fill'
       WHEN COALESCE(ledger_quality_flag_count, 0) > 0 THEN 'ledger_quality_flags'
+      WHEN COALESCE(ledger_missing_quantity_count, 0) > 0 THEN 'missing_ledger_quantity'
+      WHEN ledger_remaining_quantity < -0.00000001 THEN 'exit_qty_exceeds_entry_qty'
+      WHEN abs(ledger_remaining_quantity) > 0.00000001 THEN 'position_not_fully_closed'
       WHEN COALESCE(ledger_missing_cost_component_count, 0) > 0 THEN 'missing_ledger_cost_component'
       ELSE 'complete'
     END AS ledger_certification_status
@@ -266,7 +283,11 @@ SELECT
   taker_fill_count,
   unknown_liquidity_fill_count,
   ledger_quality_flag_count,
+  ledger_missing_quantity_count,
   ledger_missing_cost_component_count,
+  ledger_entry_quantity,
+  ledger_exit_quantity,
+  ledger_remaining_quantity,
   ledger_certification_status,
   certification_source,
   (v2_is_certified OR ledger_is_certified) AS is_certified,

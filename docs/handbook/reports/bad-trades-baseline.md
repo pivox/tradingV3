@@ -50,7 +50,7 @@ L'export enrichit la vue v2 par :
 - `trade_zone_events` via `decision_key` unique issu de `order_intent` ;
 - `fill_cost_ledger` via `internal_trade_id` et scope exact exchange/market/symbol.
 
-Quand le ledger est utilise comme source de certification effective, tous les composants de cout ledger doivent etre presents, le ledger ne doit pas porter de flags qualite, et les fills d'entree/sortie doivent exister. La colonne `certification_source` vaut alors `ledger`; sinon elle vaut `v2` ou reste vide.
+Quand le ledger est utilise comme source de certification effective, tous les composants de cout ledger doivent etre presents, le ledger ne doit pas porter de flags qualite, les fills d'entree/sortie doivent exister, et l'agregat quantitatif doit fermer la position (`entry_qty = exit_qty`, `remaining_qty` dans la tolerance `0.00000001`). La colonne `certification_source` vaut alors `ledger`; sinon elle vaut `v2` ou reste vide.
 
 Aucun rapprochement par symbole seul ou fenetre temporelle n'est utilise. Les conflits d'identifiants restent visibles avec `identifier_conflict`.
 
