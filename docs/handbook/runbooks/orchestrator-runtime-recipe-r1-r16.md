@@ -1,8 +1,7 @@
 # Recette runtime orchestrateur R1-R16
 
-Cette recette documente le premier lot de #188 : documentation et fixtures
-reproductibles uniquement. Elle ne modifie aucun comportement de production et
-reste en dry-run par defaut.
+Cette recette documente les fixtures et le runner reproductible de #188. Elle ne
+modifie aucun comportement de production et reste en dry-run par defaut.
 
 ## Perimetre
 
@@ -157,6 +156,68 @@ un scenario non execute en `PASS`.
 | R14 - Garde-fous live | mutation negative | Tenter OKX/Hyperliquid `dry_run=false` ou live non allowliste. | Refus avant dispatch, 422/skip audit, aucun appel metier. |
 | R15 - Temporal Schedule | nominal | Creer un schedule dry-run vers le dashboard nominal. | Schedule visible, pause/reprise, `ok=false` echoue vraiment dans Temporal. |
 | R16 - Rollback | nominal | Pauser le schedule cible puis verifier le chemin legacy documente. | Nouveau schedule pause, legacy non concurrent, temps de rollback mesure. |
+
+## Runner reproductible
+
+Le runner unique est :
+
+```bash
+cd python-orchestrator
+python scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --export-dir var/runtime-recipe/latest \
+  --keep-fixtures
+```
+
+Garanties du runner :
+
+- refuse de demarrer sans `--confirm DRY_RUN_ONLY` ;
+- applique les fixtures par `dashboard.name` et `(dashboard_id, set_id)` ;
+- force `dry_run=true`, `workers=1` et `sync_tables=false` lors des mutations de sets ;
+- n'envoie jamais le champ `payload`, produit cote serveur ;
+- exporte `var/runtime-recipe/latest/runtime-recipe-report.json` ;
+- produit uniquement des statuts `PASS`, `FAIL` ou `BLOCKED` ;
+- redige `BLOCKED` lorsque la panne/crash/Temporal reel n'a pas ete injecte ou confirme ;
+- peut desactiver les dashboards a la fin avec `--cleanup` si `--keep-fixtures` n'est pas utilise.
+
+Scenarios lances par defaut :
+
+```text
+R1, R2, R5, R6, R8, R10, R11, R14, R15, R16
+```
+
+Pour cibler un sous-ensemble :
+
+```bash
+python scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --export-dir var/runtime-recipe/r1-r2 \
+  --scenario R1 \
+  --scenario R2 \
+  --keep-fixtures
+```
+
+R15 peut executer la previsualisation Temporal si Temporal est disponible :
+
+```bash
+python scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --temporal-available \
+  --temporal-dry-run-command \
+    python ../cron_symfony_mtf_workers/scripts/manage_orchestrator_schedule.py create \
+    --dry-run --dashboard-id '{dashboard_id}' \
+    --schedule-id recipe-orchestrator-r1-r16 \
+    --workflow-id recipe-orchestrator-r1-r16-runner \
+    --cron '*/5 * * * *'
+```
+
+Le runner ne tue pas de conteneur et ne pause pas un schedule reel sans action
+operateur. Les scenarios qui exigent ce type de controle, notamment R10 et le
+rollback effectif R16, restent `BLOCKED` jusqu'a execution sur une stack de
+recette dediee.
 
 ## Commandes de recette guidee
 
