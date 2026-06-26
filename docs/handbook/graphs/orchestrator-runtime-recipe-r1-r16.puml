@@ -1,0 +1,29 @@
+@startuml
+title TradingV3 runtime recipe R1-R16
+
+actor Operator
+participant "Temporal Schedule" as Temporal
+participant "Python Orchestrator" as Orchestrator
+database "orchestration schema" as Db
+participant "Symfony /api/mtf/run" as Symfony
+participant "Cockpit /orchestration" as Cockpit
+
+Operator -> Orchestrator: Apply recipe fixtures\nFake/Paper dry-run dashboards
+Orchestrator -> Db: Upsert dashboard + sets
+Operator -> Orchestrator: POST /orchestrator/run\nmanual R1-R14 probes
+Temporal -> Orchestrator: Scheduled POST /orchestrator/run\nR15 probes
+Orchestrator -> Db: Claim run + run_sets
+Orchestrator -> Symfony: POST /api/mtf/run\nsync_tables=false, dry_run=true
+Symfony --> Orchestrator: status / error payload
+Orchestrator -> Db: Persist summary, per-set result, audit
+Cockpit -> Orchestrator: Read latest run
+Operator -> Temporal: Pause/resume schedule\nrollback R16
+
+note right of Orchestrator
+No mainnet.
+No strategy changes.
+No live OKX/Hyperliquid.
+No raw sensitive payloads.
+end note
+
+@enduml
