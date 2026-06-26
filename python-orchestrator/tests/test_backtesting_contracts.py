@@ -121,6 +121,47 @@ def test_run_request_rejects_profile_mismatch_and_dataset_escape() -> None:
         )
 
 
+def test_effective_config_snapshot_deep_freezes_payload() -> None:
+    payload = {
+        "risk": {"risk_pct": 0.01},
+        "entry": {"modes": ["maker"]},
+    }
+
+    snapshot = EffectiveConfigSnapshot(
+        profile=Profile.SCALPER,
+        config_hash="sha256:" + "b" * 64,
+        config_version="effective-config-v1",
+        source_layers=("base", "mode/scalper"),
+        effective_config=payload,
+    )
+    payload["risk"]["risk_pct"] = 0.99
+    payload["entry"]["modes"].append("taker")
+
+    assert snapshot.effective_config["risk"]["risk_pct"] == 0.01
+    assert snapshot.effective_config["entry"]["modes"] == ("maker",)
+    with pytest.raises(TypeError):
+        snapshot.effective_config["risk"]["risk_pct"] = 0.02
+
+
+def test_run_request_rejects_non_utc_datetimes_cleanly() -> None:
+    naive_start = datetime.fromisoformat("2026-01-02T00:00:00")
+
+    with pytest.raises(ValidationError, match="datetime must be UTC-aware"):
+        BacktestRunRequest(
+            dataset=_dataset(),
+            config=_config(),
+            profile=Profile.SCALPER,
+            symbols=("BTCUSDT",),
+            timeframes=("1m",),
+            period_start=naive_start,
+            period_end=_dt("2026-01-03T00:00:00"),
+            git_commit_sha="12c9a9fbe369b49afd3d98e495991a21381e8b7b",
+            engine_version="backtest-contracts-v1",
+            random_seed=191,
+            cost_model_version="net-cost-v1",
+        )
+
+
 def test_trade_ledger_entry_requires_stop_and_net_cost_components() -> None:
     entry = BacktestTradeLedgerEntry(
         backtest_run_id="bt_191",

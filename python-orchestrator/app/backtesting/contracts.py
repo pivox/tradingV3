@@ -9,11 +9,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from collections.abc import Mapping as MappingAbc
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 
 _SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
@@ -49,12 +58,61 @@ class IntraBarPolicy(str, Enum):
 
 
 def _canonical_hash(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    encoded = json.dumps(_deep_thaw(payload), sort_keys=True, separators=(",", ":"), default=str)
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _tuple_subset(values: tuple[str, ...], allowed: tuple[str, ...]) -> bool:
     return set(values).issubset(set(allowed))
+
+
+def _require_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("datetime must be UTC-aware")
+    if value.utcoffset() != timezone.utc.utcoffset(value):
+        raise ValueError("datetime must be UTC-aware")
+    return value.astimezone(timezone.utc)
+
+
+class FrozenDict(MappingAbc):
+    """Recursive immutable mapping for config snapshots."""
+
+    def __init__(self, value: Mapping[str, Any]) -> None:
+        self._data = {str(key): _deep_freeze(item) for key, item in value.items()}
+
+    def __getitem__(self, key: str) -> Any:
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __repr__(self) -> str:
+        return repr(self._data)
+
+
+def _deep_freeze(value: Any) -> Any:
+    if isinstance(value, FrozenDict):
+        return value
+    if isinstance(value, MappingAbc):
+        return FrozenDict(value)
+    if isinstance(value, list | tuple):
+        return tuple(_deep_freeze(item) for item in value)
+    return value
+
+
+def _deep_thaw(value: Any) -> Any:
+    if isinstance(value, FrozenDict):
+        return {key: _deep_thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_deep_thaw(item) for item in value]
+    if isinstance(value, list):
+        return [_deep_thaw(item) for item in value]
+    if isinstance(value, MappingAbc):
+        return {str(key): _deep_thaw(item) for key, item in value.items()}
+    return value
 
 
 class DatasetDescriptor(BaseModel):
@@ -82,6 +140,11 @@ class DatasetDescriptor(BaseModel):
             return ()
         return tuple(str(item).strip() for item in value if str(item).strip())
 
+    @field_validator("start_at", "end_at")
+    @classmethod
+    def _validate_utc(cls, value: datetime) -> datetime:
+        return _require_utc(value)
+
     @model_validator(mode="after")
     def _validate_bounds(self) -> "DatasetDescriptor":
         if self.end_at <= self.start_at:
@@ -92,18 +155,29 @@ class DatasetDescriptor(BaseModel):
 class EffectiveConfigSnapshot(BaseModel):
     """Versioned effective config used by a backtest run."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     profile: Profile
     config_hash: str = Field(..., pattern=_SHA256_PATTERN)
     config_version: str = Field(..., min_length=1)
     source_layers: tuple[str, ...] = Field(..., min_length=1)
-    effective_config: Mapping[str, Any] = Field(..., min_length=1)
+    effective_config: FrozenDict = Field(...)
 
     @field_validator("source_layers", mode="before")
     @classmethod
     def _normalize_layers(cls, value: Any) -> tuple[str, ...]:
         return tuple(str(item).strip() for item in value if str(item).strip())
+
+    @field_validator("effective_config", mode="before")
+    @classmethod
+    def _freeze_config(cls, value: Any) -> FrozenDict:
+        if not isinstance(value, MappingAbc):
+            raise ValueError("effective_config must be a mapping")
+        return FrozenDict(value)
+
+    @field_serializer("effective_config")
+    def _serialize_config(self, value: FrozenDict) -> dict[str, Any]:
+        return _deep_thaw(value)
 
     @model_validator(mode="after")
     def _validate_config(self) -> "EffectiveConfigSnapshot":
@@ -136,6 +210,11 @@ class BacktestRunRequest(BaseModel):
     @classmethod
     def _normalize_tuple(cls, value: Any) -> tuple[str, ...]:
         return tuple(str(item).strip() for item in value if str(item).strip())
+
+    @field_validator("period_start", "period_end")
+    @classmethod
+    def _validate_utc(cls, value: datetime) -> datetime:
+        return _require_utc(value)
 
     @model_validator(mode="after")
     def _validate_scope(self) -> "BacktestRunRequest":
@@ -202,6 +281,11 @@ class BacktestTradeLedgerEntry(BaseModel):
             return ()
         return tuple(str(item).strip() for item in value if str(item).strip())
 
+    @field_validator("signal_at")
+    @classmethod
+    def _validate_utc(cls, value: datetime) -> datetime:
+        return _require_utc(value)
+
     @model_validator(mode="after")
     def _validate_stop(self) -> "BacktestTradeLedgerEntry":
         if self.initial_stop is None or self.initial_stop <= 0:
@@ -228,4 +312,3 @@ class BacktestTradeLedgerEntry(BaseModel):
     @property
     def result_is_live_proof(self) -> bool:
         return False
-

@@ -67,6 +67,10 @@ sortir des bornes du dataset.
 Un run backtest ne peut utiliser qu'une config dont le profil correspond au
 profil du run.
 
+La configuration effective est gelee recursivement a la creation du snapshot :
+un dictionnaire source mute apres coup ne peut pas modifier les parametres du
+run ni invalider silencieusement `config_hash`.
+
 ### Reproductibilite
 
 `BacktestRunRequest` porte :
@@ -84,6 +88,9 @@ profil du run.
 
 Le fingerprint de reproductibilite est un hash canonique des inputs. A inputs
 identiques, le fingerprint doit rester identique.
+
+Tous les timestamps des contrats sont UTC-aware. Une date naive ou dans un autre
+offset est rejetee par validation Pydantic avant toute comparaison de bornes.
 
 ### Politique intra-bougie
 
@@ -144,4 +151,3 @@ tests golden dedies.
 cd python-orchestrator
 python3 -m pytest tests/test_backtesting_contracts.py -q
 ```
-
