@@ -232,6 +232,14 @@ def test_sequence_fields_reject_scalar_strings_and_non_string_items() -> None:
             cost_model_version="net-cost-v1",
         )
 
+    with pytest.raises(ValidationError, match="must be a sequence of strings"):
+        DatasetDescriptor(
+            **{
+                **_dataset().model_dump(),
+                "symbols": {"BTCUSDT": False},
+            }
+        )
+
 
 def test_trade_ledger_entry_requires_stop_and_net_cost_components() -> None:
     entry = _ledger_entry()

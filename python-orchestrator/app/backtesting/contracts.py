@@ -72,6 +72,8 @@ def _normalize_string_tuple(value: Any) -> tuple[str, ...]:
         return ()
     if isinstance(value, str):
         raise ValueError("field must be a sequence of strings")
+    if isinstance(value, MappingAbc):
+        raise ValueError("field must be a sequence of strings")
     try:
         iterator = iter(value)
     except TypeError as exc:
