@@ -177,7 +177,12 @@ def max_drawdown(rows: list[dict[str, str]]) -> float | None:
     equity = 0.0
     peak = 0.0
     drawdown = 0.0
-    for row in sorted(rows, key=lambda item: parse_datetime(item["entry_time"])):
+    def realized_order_key(item: dict[str, str]) -> tuple[datetime, datetime, str]:
+        entry_time = parse_datetime(item["entry_time"])
+        close_time = parse_datetime(item.get("close_time") or item["entry_time"])
+        return close_time, entry_time, str(item.get("entry_event_id") or "")
+
+    for row in sorted(rows, key=realized_order_key):
         equity += parse_float(row.get("net_pnl_usdt")) or 0.0
         peak = max(peak, equity)
         drawdown = min(drawdown, equity - peak)

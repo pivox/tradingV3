@@ -84,3 +84,15 @@ def test_cli_writes_markdown_and_json_outputs(tmp_path: Path) -> None:
     assert "costs_destroy_edge" in rendered
     payload = json.loads(output_json.read_text(encoding="utf-8"))
     assert payload["population"]["certified_rows"] == 5
+
+
+def test_max_drawdown_uses_realized_close_order() -> None:
+    module = load_module()
+
+    rows = [
+        {"entry_event_id": "1", "entry_time": "2026-06-01T00:00:00+00:00", "close_time": "2026-06-01T02:00:00+00:00", "net_pnl_usdt": "10"},
+        {"entry_event_id": "2", "entry_time": "2026-06-01T01:00:00+00:00", "close_time": "2026-06-01T01:30:00+00:00", "net_pnl_usdt": "-5"},
+        {"entry_event_id": "3", "entry_time": "2026-06-01T03:00:00+00:00", "close_time": "2026-06-01T03:00:00+00:00", "net_pnl_usdt": "-5"},
+    ]
+
+    assert module.max_drawdown(rows) == -5.0

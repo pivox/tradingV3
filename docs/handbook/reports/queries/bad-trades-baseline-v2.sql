@@ -132,14 +132,14 @@ enriched AS (
         WHERE f.fill_role IN ('entry', 'exit')
           AND f.quantity IS NULL
       )::int AS ledger_missing_quantity_count,
-      count(*) FILTER (
-        WHERE f.fee_usdt IS NULL
-           OR f.funding_usdt IS NULL
-           OR f.spread_cost_usdt IS NULL
-           OR f.slippage_cost_usdt IS NULL
-           OR f.borrow_cost_usdt IS NULL
-           OR f.liquidation_fee_usdt IS NULL
-      )::int AS ledger_missing_cost_component_count,
+      (
+        (sum(f.fee_usdt) IS NULL)::int
+        + (sum(f.funding_usdt) IS NULL)::int
+        + (sum(f.spread_cost_usdt) IS NULL)::int
+        + (sum(f.slippage_cost_usdt) IS NULL)::int
+        + (sum(f.borrow_cost_usdt) IS NULL)::int
+        + (sum(f.liquidation_fee_usdt) IS NULL)::int
+      ) AS ledger_missing_cost_component_count,
       sum(f.quantity) FILTER (WHERE f.fill_role = 'entry') AS ledger_entry_quantity,
       sum(f.quantity) FILTER (WHERE f.fill_role = 'exit') AS ledger_exit_quantity,
       (
