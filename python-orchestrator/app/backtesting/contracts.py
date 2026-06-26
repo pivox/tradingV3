@@ -66,6 +66,26 @@ def _tuple_subset(values: tuple[str, ...], allowed: tuple[str, ...]) -> bool:
     return set(values).issubset(set(allowed))
 
 
+def _normalize_string_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        raise ValueError("field must be a sequence of strings")
+    try:
+        iterator = iter(value)
+    except TypeError as exc:
+        raise ValueError("field must be a sequence of strings") from exc
+
+    normalized: list[str] = []
+    for item in iterator:
+        if not isinstance(item, str):
+            raise ValueError("field must contain only strings")
+        stripped = item.strip()
+        if stripped:
+            normalized.append(stripped)
+    return tuple(normalized)
+
+
 def _require_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("datetime must be UTC-aware")
@@ -136,9 +156,7 @@ class DatasetDescriptor(BaseModel):
     @field_validator("symbols", "timeframes", "missing_ranges", "quality_flags", mode="before")
     @classmethod
     def _normalize_tuple(cls, value: Any) -> tuple[str, ...]:
-        if value is None:
-            return ()
-        return tuple(str(item).strip() for item in value if str(item).strip())
+        return _normalize_string_tuple(value)
 
     @field_validator("start_at", "end_at")
     @classmethod
@@ -166,7 +184,7 @@ class EffectiveConfigSnapshot(BaseModel):
     @field_validator("source_layers", mode="before")
     @classmethod
     def _normalize_layers(cls, value: Any) -> tuple[str, ...]:
-        return tuple(str(item).strip() for item in value if str(item).strip())
+        return _normalize_string_tuple(value)
 
     @field_validator("effective_config", mode="before")
     @classmethod
@@ -209,7 +227,7 @@ class BacktestRunRequest(BaseModel):
     @field_validator("symbols", "timeframes", mode="before")
     @classmethod
     def _normalize_tuple(cls, value: Any) -> tuple[str, ...]:
-        return tuple(str(item).strip() for item in value if str(item).strip())
+        return _normalize_string_tuple(value)
 
     @field_validator("period_start", "period_end")
     @classmethod
@@ -277,9 +295,7 @@ class BacktestTradeLedgerEntry(BaseModel):
     @field_validator("quality_flags", mode="before")
     @classmethod
     def _normalize_flags(cls, value: Any) -> tuple[str, ...]:
-        if value is None:
-            return ()
-        return tuple(str(item).strip() for item in value if str(item).strip())
+        return _normalize_string_tuple(value)
 
     @field_validator("signal_at")
     @classmethod

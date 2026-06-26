@@ -162,6 +162,47 @@ def test_run_request_rejects_non_utc_datetimes_cleanly() -> None:
         )
 
 
+def test_sequence_fields_reject_scalar_strings_and_non_string_items() -> None:
+    with pytest.raises(ValidationError, match="must be a sequence of strings"):
+        DatasetDescriptor(
+            **{
+                **_dataset().model_dump(),
+                "symbols": "BTCUSDT",
+            }
+        )
+
+    with pytest.raises(ValidationError, match="must contain only strings"):
+        DatasetDescriptor(
+            **{
+                **_dataset().model_dump(),
+                "timeframes": ("1m", None),
+            }
+        )
+
+    with pytest.raises(ValidationError, match="must be a sequence of strings"):
+        EffectiveConfigSnapshot(
+            **{
+                **_config().model_dump(),
+                "source_layers": "base",
+            }
+        )
+
+    with pytest.raises(ValidationError, match="must be a sequence of strings"):
+        BacktestRunRequest(
+            dataset=_dataset(),
+            config=_config(),
+            profile=Profile.SCALPER,
+            symbols="BTCUSDT",
+            timeframes=("1m",),
+            period_start=_dt("2026-01-02T00:00:00"),
+            period_end=_dt("2026-01-03T00:00:00"),
+            git_commit_sha="12c9a9fbe369b49afd3d98e495991a21381e8b7b",
+            engine_version="backtest-contracts-v1",
+            random_seed=191,
+            cost_model_version="net-cost-v1",
+        )
+
+
 def test_trade_ledger_entry_requires_stop_and_net_cost_components() -> None:
     entry = BacktestTradeLedgerEntry(
         backtest_run_id="bt_191",
