@@ -4,8 +4,8 @@
 --   psql "$DATABASE_URL" \
 --     -v from_ts='2026-01-01 00:00:00+00' \
 --     -v to_ts='2026-12-31 23:59:59+00' \
---     -v output_file='/tmp/bad-trades-baseline-v2.csv' \
---     -f docs/handbook/reports/queries/bad-trades-baseline-v2.sql
+--     -f docs/handbook/reports/queries/bad-trades-baseline-v2.sql \
+--     > /tmp/bad-trades-baseline-v2.csv
 --
 -- The export is intentionally conservative:
 -- - base population comes from position_trade_analysis_v2;
@@ -24,12 +24,7 @@
 \else
   \set to_ts '9999-12-31 23:59:59+00'
 \endif
-\if :{?output_file}
-\else
-  \set output_file 'bad-trades-baseline-v2.csv'
-\endif
-
-\copy (
+COPY (
 WITH scoped AS (
   SELECT pta.*
   FROM position_trade_analysis_v2 pta
@@ -367,4 +362,4 @@ SELECT
   expected_r_multiple
 FROM output_rows
 ORDER BY entry_time ASC, entry_event_id ASC
-) TO :'output_file' CSV HEADER
+) TO STDOUT WITH (FORMAT csv, HEADER true);

@@ -25,8 +25,8 @@ Exporter les donnees :
 psql "$DATABASE_URL" \
   -v from_ts='2026-01-01 00:00:00+00' \
   -v to_ts='2026-12-31 23:59:59+00' \
-  -v output_file='/tmp/bad-trades-baseline-v2.csv' \
-  -f docs/handbook/reports/queries/bad-trades-baseline-v2.sql
+  -f docs/handbook/reports/queries/bad-trades-baseline-v2.sql \
+  > /tmp/bad-trades-baseline-v2.csv
 ```
 
 Generer le rapport :
