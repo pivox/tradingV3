@@ -63,6 +63,7 @@ enriched AS (
     ledger_scope.ledger_quality_flag_count,
     ledger_scope.ledger_missing_quantity_count,
     ledger_scope.ledger_missing_cost_component_count,
+    ledger_scope.ledger_missing_applicable_cost_count,
     ledger_scope.ledger_entry_quantity,
     ledger_scope.ledger_exit_quantity,
     ledger_scope.ledger_remaining_quantity,
@@ -133,6 +134,19 @@ enriched AS (
           AND f.quantity IS NULL
       )::int AS ledger_missing_quantity_count,
       (
+        count(*) FILTER (WHERE f.fill_role IN ('entry', 'exit') AND f.fee_usdt IS NULL)
+        + count(*) FILTER (WHERE f.fill_role = 'funding' AND f.funding_usdt IS NULL)
+        + count(*) FILTER (
+            WHERE f.fill_role = 'adjustment'
+              AND f.fee_usdt IS NULL
+              AND f.funding_usdt IS NULL
+              AND f.spread_cost_usdt IS NULL
+              AND f.slippage_cost_usdt IS NULL
+              AND f.borrow_cost_usdt IS NULL
+              AND f.liquidation_fee_usdt IS NULL
+          )
+      )::int AS ledger_missing_applicable_cost_count,
+      (
         (sum(f.fee_usdt) IS NULL)::int
         + (sum(f.funding_usdt) IS NULL)::int
         + (sum(f.spread_cost_usdt) IS NULL)::int
@@ -171,6 +185,7 @@ ledger_certified AS (
       WHEN COALESCE(ledger_missing_quantity_count, 0) > 0 THEN 'missing_ledger_quantity'
       WHEN ledger_remaining_quantity < -0.00000001 THEN 'exit_qty_exceeds_entry_qty'
       WHEN abs(ledger_remaining_quantity) > 0.00000001 THEN 'position_not_fully_closed'
+      WHEN COALESCE(ledger_missing_applicable_cost_count, 0) > 0 THEN 'missing_applicable_ledger_cost'
       WHEN COALESCE(ledger_missing_cost_component_count, 0) > 0 THEN 'missing_ledger_cost_component'
       ELSE 'complete'
     END AS ledger_certification_status
@@ -285,6 +300,7 @@ SELECT
   ledger_quality_flag_count,
   ledger_missing_quantity_count,
   ledger_missing_cost_component_count,
+  ledger_missing_applicable_cost_count,
   ledger_entry_quantity,
   ledger_exit_quantity,
   ledger_remaining_quantity,
