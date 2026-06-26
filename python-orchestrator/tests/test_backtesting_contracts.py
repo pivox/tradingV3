@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from math import nan
+from math import inf, nan
 
 import pytest
 from pydantic import ValidationError
@@ -257,6 +257,18 @@ def test_effective_config_snapshot_rejects_non_json_collections() -> None:
             config_version="effective-config-v1",
             source_layers=("base", "mode/scalper"),
             effective_config={"entry": {"modes": {"maker", "taker"}}},
+        )
+
+
+@pytest.mark.parametrize("value", (nan, inf))
+def test_effective_config_snapshot_rejects_non_finite_floats(value: float) -> None:
+    with pytest.raises(ValidationError, match="effective_config must contain finite floats"):
+        EffectiveConfigSnapshot(
+            profile=Profile.SCALPER,
+            config_hash="sha256:" + "b" * 64,
+            config_version="effective-config-v1",
+            source_layers=("base", "mode/scalper"),
+            effective_config={"risk": {"risk_pct": value}},
         )
 
 

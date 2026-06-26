@@ -12,7 +12,7 @@ import json
 from collections.abc import Mapping as MappingAbc
 from datetime import datetime, timezone
 from enum import Enum
-from math import isclose
+from math import isclose, isfinite
 from typing import Any, Iterator, Mapping
 
 from pydantic import (
@@ -128,6 +128,10 @@ def _deep_freeze(value: Any) -> Any:
         return tuple(_deep_freeze(item) for item in value)
     if isinstance(value, set | frozenset):
         raise ValueError("effective_config must contain JSON-compatible values")
+    if isinstance(value, float):
+        if not isfinite(value):
+            raise ValueError("effective_config must contain finite floats")
+        return value
     if isinstance(value, _JSON_SCALAR_TYPES):
         return value
     raise ValueError("effective_config must contain JSON-compatible values")
