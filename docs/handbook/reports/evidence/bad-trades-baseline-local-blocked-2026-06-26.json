@@ -1,0 +1,27 @@
+{
+  "issue": 132,
+  "generated_at": "2026-06-26T19:17:56+02:00",
+  "local_database_status": "unavailable",
+  "docker_status": {
+    "command": "docker compose ps --format json",
+    "exit_code": 1,
+    "summary": "Docker daemon socket was not available at /Users/haythem.mabrouk/.docker/run/docker.sock."
+  },
+  "data_policy": {
+    "certified_source": "position_trade_analysis_v2",
+    "exclude_from_net_metrics": [
+      "partial",
+      "unknown",
+      "unmatched",
+      "ambiguous legacy",
+      "incomplete costs",
+      "rows with pnl_quality_flags",
+      "rows without realized_net_pnl_r"
+    ],
+    "forbidden_reconciliation": [
+      "symbol-only fallback",
+      "time-window fallback"
+    ]
+  },
+  "local_outcome": "No production baseline metrics were computed locally because the PostgreSQL schema/data were not reachable. The PR provides a reproducible export query and deterministic report generator."
+}
