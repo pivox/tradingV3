@@ -330,6 +330,33 @@ Ces tests visent notamment les branches d'erreur de `symfony_client.py` (transpo
 JSON malformé) ; la couverture globale monte au-dessus de la baseline QA-001 et le gate
 `--cov-fail-under=95` reste inchangé.
 
+### Runner de recette runtime R1-R16 (#188)
+
+Le script `scripts/runtime_recipe_runner.py` applique les fixtures
+`fixtures/runtime-recipe/*.json`, force le dry-run et exporte un rapport JSON
+`PASS` / `FAIL` / `BLOCKED`.
+
+```bash
+cd python-orchestrator
+python scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --export-dir var/runtime-recipe/latest \
+  --keep-fixtures
+```
+
+Par defaut, il cible les scenarios critiques `R1`, `R2`, `R5`, `R6`, `R8`,
+`R10`, `R11`, `R14`, `R15` et `R16`. Il ne coupe pas de service et ne pause pas de
+schedule reel : les scenarios qui exigent une panne/crash/Temporal reel sont
+marques `BLOCKED` si la condition n'est pas observable depuis le runner.
+
+Commandes de verification locale :
+
+```bash
+cd python-orchestrator
+python -m pytest tests/test_runtime_recipe_runner.py tests/test_runtime_recipe_fixtures.py
+```
+
 ## Dépendances
 
 - `requirements.txt` : runtime uniquement, versions **épinglées** (reproductibilité).
