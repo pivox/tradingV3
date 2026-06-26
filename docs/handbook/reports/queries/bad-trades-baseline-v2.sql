@@ -41,6 +41,11 @@ enriched AS (
   SELECT
     pta.*,
     COALESCE(jsonb_array_length(COALESCE(pta.pnl_quality_flags, '[]'::jsonb)), 0) AS pnl_quality_flag_count,
+    (
+      SELECT count(*)::int
+      FROM jsonb_array_elements_text(COALESCE(pta.pnl_quality_flags, '[]'::jsonb)) AS flags(flag)
+      WHERE flag <> 'ledger_quantity_aggregate_missing'
+    ) AS pnl_blocking_quality_flag_count,
     order_scope.order_intent_match_status,
     order_scope.order_intent_id,
     order_scope.client_order_id,
@@ -183,6 +188,8 @@ ledger_certified AS (
       WHEN COALESCE(exit_fill_count, 0) = 0 THEN 'missing_exit_fill'
       WHEN COALESCE(ledger_quality_flag_count, 0) > 0 THEN 'ledger_quality_flags'
       WHEN COALESCE(ledger_missing_quantity_count, 0) > 0 THEN 'missing_ledger_quantity'
+      WHEN ledger_entry_quantity <= 0 THEN 'quantity_mismatch'
+      WHEN ledger_exit_quantity <= 0 THEN 'quantity_mismatch'
       WHEN ledger_remaining_quantity < -0.00000001 THEN 'exit_qty_exceeds_entry_qty'
       WHEN abs(ledger_remaining_quantity) > 0.00000001 THEN 'position_not_fully_closed'
       WHEN COALESCE(ledger_missing_applicable_cost_count, 0) > 0 THEN 'missing_applicable_ledger_cost'
@@ -210,6 +217,7 @@ finalized AS (
       AND position_fully_closed IS TRUE
       AND gross_realized_pnl_usdt IS NOT NULL
       AND risk_usdt_at_entry > 0
+      AND pnl_blocking_quality_flag_count = 0
     ) AS ledger_is_certified,
     (
       ledger_fee_usdt
