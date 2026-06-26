@@ -362,4 +362,4 @@ SELECT
   expected_r_multiple
 FROM output_rows
 ORDER BY entry_time ASC, entry_event_id ASC
-) TO STDOUT WITH (FORMAT csv, HEADER true)
+) TO STDOUT WITH (FORMAT csv, HEADER true);
