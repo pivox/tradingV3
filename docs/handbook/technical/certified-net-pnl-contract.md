@@ -66,6 +66,8 @@ Conclusion : seul Fake/Paper peut servir de reference complete dans ce lot. Les 
 ## Ledger fills/couts
 
 Le ledger persistant v1 est documente dans `docs/handbook/technical/fill-cost-ledger.md`.
+Le dry-run de divergence v1/v2 pre-backfill est documente dans
+`docs/handbook/technical/position-trade-analysis-backfill-divergence.md`.
 
 Il introduit la table `fill_cost_ledger`, reliee au trade logique par `internal_trade_id` lorsque le lineage exact est disponible. L'idempotence est portee par `exchange + market_type + exchange_fill_id` quand l'exchange fournit un identifiant de fill, sinon par un identifiant interne deterministe documente.
 
