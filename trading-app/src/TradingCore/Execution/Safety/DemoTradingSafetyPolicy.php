@@ -14,6 +14,10 @@ final readonly class DemoTradingSafetyPolicy
     /** @var array<string,mixed> */
     public array $auditContext;
 
+    public ?string $requestedSymbol;
+
+    public ?string $requestedMarket;
+
     /**
      * @param list<string> $allowedSymbols
      * @param list<string> $allowedMarkets
@@ -29,14 +33,24 @@ final readonly class DemoTradingSafetyPolicy
         array $allowedSymbols = [],
         array $allowedMarkets = [],
         public ?float $maxNotional = null,
+        ?string $requestedSymbol = null,
+        ?string $requestedMarket = null,
+        public ?float $requestedNotional = null,
+        public ?bool $stopLossPresent = null,
         array $auditContext = [],
     ) {
         if ($maxNotional !== null && (!is_finite($maxNotional) || $maxNotional <= 0.0)) {
             throw new \InvalidArgumentException('maxNotional must be positive and finite when provided.');
         }
 
+        if ($requestedNotional !== null && (!is_finite($requestedNotional) || $requestedNotional <= 0.0)) {
+            throw new \InvalidArgumentException('requestedNotional must be positive and finite when provided.');
+        }
+
         $this->allowedSymbols = self::normalizeStringList($allowedSymbols, 'allowedSymbols');
         $this->allowedMarkets = self::normalizeStringList($allowedMarkets, 'allowedMarkets');
+        $this->requestedSymbol = self::normalizeNullableString($requestedSymbol);
+        $this->requestedMarket = self::normalizeNullableString($requestedMarket);
         $this->auditContext = $auditContext;
     }
 
@@ -60,6 +74,10 @@ final readonly class DemoTradingSafetyPolicy
             'allowed_symbols' => $this->allowedSymbols,
             'allowed_markets' => $this->allowedMarkets,
             'max_notional' => $this->maxNotional,
+            'requested_symbol' => $this->requestedSymbol,
+            'requested_market' => $this->requestedMarket,
+            'requested_notional' => $this->requestedNotional,
+            'stop_loss_present' => $this->stopLossPresent,
             'audit_context' => self::redact($this->auditContext),
         ];
     }
@@ -83,6 +101,17 @@ final readonly class DemoTradingSafetyPolicy
         }
 
         return array_values($normalized);
+    }
+
+    private static function normalizeNullableString(?string $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $trimmed = trim($value);
+
+        return $trimmed === '' ? null : $trimmed;
     }
 
     private static function isSensitiveKey(string $key): bool

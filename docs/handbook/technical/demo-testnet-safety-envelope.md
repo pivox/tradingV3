@@ -68,7 +68,14 @@ Guards obligatoires pour `demo|testnet` avec `dry_run=false` :
 - `kill_switch_enabled=false` ;
 - `require_stop_loss=true` ;
 - `allowed_symbols` ou `allowed_markets` non vide ;
-- `max_notional` positif et renseigne.
+- `max_notional` positif, fini et renseigne ;
+- `requested_symbol` ou `requested_market` present et autorise par la whitelist ;
+- `requested_notional` positif, fini et inferieur ou egal a `max_notional` ;
+- `stop_loss_present=true`.
+
+Une policy avec seulement une configuration globale ne suffit donc pas pour obtenir
+`demo_testnet_enabled`. Le niveau enabled prouve que la requete concrete comparee
+a la policy respecte aussi la whitelist, le plafond notionnel et la presence SL.
 
 Les erreurs sont explicites :
 
@@ -80,6 +87,12 @@ Les erreurs sont explicites :
 - `stop_loss_required`
 - `allowed_symbols_or_markets_required`
 - `max_notional_required`
+- `requested_notional_required`
+- `max_notional_exceeded`
+- `requested_symbol_or_market_required`
+- `requested_symbol_or_market_not_allowed`
+- `stop_loss_presence_required`
+- `stop_loss_missing`
 
 ## Redaction
 

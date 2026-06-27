@@ -94,8 +94,33 @@ final class DemoTradingSafetyPolicyEvaluator
 
         if ($policy->maxNotional === null) {
             $errors[] = 'max_notional_required';
+        } elseif ($policy->requestedNotional === null) {
+            $errors[] = 'requested_notional_required';
+        } elseif ($policy->requestedNotional > $policy->maxNotional) {
+            $errors[] = 'max_notional_exceeded';
+        }
+
+        if ($policy->requestedSymbol === null && $policy->requestedMarket === null) {
+            $errors[] = 'requested_symbol_or_market_required';
+        } elseif (!$this->matchesAllowedSymbolOrMarket($policy)) {
+            $errors[] = 'requested_symbol_or_market_not_allowed';
+        }
+
+        if ($policy->stopLossPresent === null) {
+            $errors[] = 'stop_loss_presence_required';
+        } elseif (!$policy->stopLossPresent) {
+            $errors[] = 'stop_loss_missing';
         }
 
         return $errors;
+    }
+
+    private function matchesAllowedSymbolOrMarket(DemoTradingSafetyPolicy $policy): bool
+    {
+        if ($policy->requestedSymbol !== null && in_array($policy->requestedSymbol, $policy->allowedSymbols, true)) {
+            return true;
+        }
+
+        return $policy->requestedMarket !== null && in_array($policy->requestedMarket, $policy->allowedMarkets, true);
     }
 }

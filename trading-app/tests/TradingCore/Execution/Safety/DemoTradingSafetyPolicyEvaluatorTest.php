@@ -163,6 +163,65 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
         self::assertSame([], $decision->blockingErrors);
     }
 
+    public function testDemoWriteBlocksRequestedSymbolOutsideWhitelist(): void
+    {
+        $decision = (new DemoTradingSafetyPolicyEvaluator())->evaluate(
+            $this->writePolicy(
+                killSwitchEnabled: false,
+                requestedSymbol: 'ETHUSDT',
+            ),
+        );
+
+        self::assertFalse($decision->allowed);
+        self::assertContains('requested_symbol_or_market_not_allowed', $decision->blockingErrors);
+    }
+
+    public function testDemoWriteBlocksRequestedNotionalAboveCap(): void
+    {
+        $decision = (new DemoTradingSafetyPolicyEvaluator())->evaluate(
+            $this->writePolicy(
+                killSwitchEnabled: false,
+                requestedNotional: 25.01,
+            ),
+        );
+
+        self::assertFalse($decision->allowed);
+        self::assertContains('max_notional_exceeded', $decision->blockingErrors);
+    }
+
+    public function testDemoWriteBlocksMissingConcreteStopLoss(): void
+    {
+        $decision = (new DemoTradingSafetyPolicyEvaluator())->evaluate(
+            $this->writePolicy(
+                killSwitchEnabled: false,
+                stopLossPresent: false,
+            ),
+        );
+
+        self::assertFalse($decision->allowed);
+        self::assertContains('stop_loss_missing', $decision->blockingErrors);
+    }
+
+    public function testDemoWriteRequiresConcreteOrderBeforeEnabled(): void
+    {
+        $decision = (new DemoTradingSafetyPolicyEvaluator())->evaluate(
+            new DemoTradingSafetyPolicy(
+                environment: ExchangeRuntimeEnvironment::DEMO,
+                dryRun: false,
+                demoTestnetWriteEnabled: true,
+                killSwitchEnabled: false,
+                allowedSymbols: ['BTCUSDT'],
+                maxNotional: 25.0,
+            ),
+        );
+
+        self::assertFalse($decision->allowed);
+        self::assertSame(DemoTradingSafetyLevel::Blocked, $decision->level);
+        self::assertContains('requested_symbol_or_market_required', $decision->blockingErrors);
+        self::assertContains('requested_notional_required', $decision->blockingErrors);
+        self::assertContains('stop_loss_presence_required', $decision->blockingErrors);
+    }
+
     public function testSensitiveAuditFieldsAreRedacted(): void
     {
         $policy = $this->writePolicy(
@@ -228,6 +287,10 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
         array $allowedSymbols = ['BTCUSDT'],
         array $allowedMarkets = [],
         ?float $maxNotional = 25.0,
+        ?string $requestedSymbol = 'BTCUSDT',
+        ?string $requestedMarket = null,
+        ?float $requestedNotional = 25.0,
+        ?bool $stopLossPresent = true,
         array $auditContext = [],
     ): DemoTradingSafetyPolicy {
         return new DemoTradingSafetyPolicy(
@@ -240,6 +303,10 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
             allowedSymbols: $allowedSymbols,
             allowedMarkets: $allowedMarkets,
             maxNotional: $maxNotional,
+            requestedSymbol: $requestedSymbol,
+            requestedMarket: $requestedMarket,
+            requestedNotional: $requestedNotional,
+            stopLossPresent: $stopLossPresent,
             auditContext: $auditContext,
         );
     }
