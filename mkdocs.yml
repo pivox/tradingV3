@@ -34,6 +34,7 @@ nav:
       - Fake / Paper gateway: technical/fake-paper-gateway.md
       - OKX dry-run: technical/okx-dry-run.md
       - Hyperliquid dry-run: technical/hyperliquid-dry-run.md
+      - Demo/Testnet safety envelope: technical/demo-testnet-safety-envelope.md
       - Exchange readiness consolidation: technical/exchange-readiness-consolidation.md
       - Exchange readiness matrix: technical/exchange-readiness-matrix.md
       - Exchange runtime gates: technical/exchange-runtime-gates.md

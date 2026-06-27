@@ -1,0 +1,115 @@
+# Demo/Testnet Safety Envelope
+
+## Objectif
+
+Le safety envelope `COMMON-001` ajoute un contrat commun avant toute execution
+mutative OKX demo ou Hyperliquid testnet.
+
+Il ne branche aucun runtime, ne place aucun ordre et ne lit aucun secret. Il fournit
+une decision pure et auditable pour verifier si une demande reste en simulation
+locale, devient candidate demo/testnet, ou peut etre autorisee en demo/testnet par
+une future PR dediee.
+
+## Terminologie
+
+| Terme | Sens |
+|---|---|
+| `local_dry_run` | Simulation locale. Aucun ordre exchange. |
+| `demo` | Environnement OKX demo uniquement. |
+| `testnet` | Environnement Hyperliquid testnet uniquement. |
+| `mainnet` | Interdit en ecriture dans cette serie. |
+| `dry_run=true` | Aucun ordre envoye a l'exchange. |
+| `dry_run=false` | Ecriture demandee, autorisable uniquement en `demo` ou `testnet` si tous les guards passent. |
+
+Le terme "live demo" ne signifie jamais mainnet. Dans TradingV3, il signifie
+uniquement `dry_run=false` sur `environment=demo|testnet`, avec activation explicite
+et guards complets.
+
+## Contrat PHP
+
+Le contrat est isole dans `App\TradingCore\Execution\Safety` :
+
+- `ExchangeRuntimeEnvironment`
+- `DemoTradingSafetyLevel`
+- `DemoTradingSafetyPolicy`
+- `DemoTradingSafetyDecision`
+- `DemoTradingSafetyPolicyEvaluator`
+
+`DemoTradingSafetyPolicyEvaluator` est pur :
+
+- aucun appel HTTP ;
+- aucun appel exchange ;
+- aucun acces a Symfony, Doctrine, Messenger ou Temporal ;
+- aucun secret requis ;
+- aucun effet de bord runtime.
+
+## Niveaux de decision
+
+| Niveau | Signification |
+|---|---|
+| `blocked` | La demande est refusee et expose `blocking_errors`. |
+| `local_dry_run` | Simulation locale autorisee, sans ordre exchange. |
+| `demo_testnet_candidate` | Environnement demo/testnet en dry-run, candidat a une future activation controlee. |
+| `demo_testnet_enabled` | Ecriture demo/testnet autorisee par la policy. |
+
+## Guards
+
+Une demande d'ecriture est toute policy avec `dry_run=false`.
+
+Guards invariants :
+
+- `mainnet_write_enabled=true` bloque toujours ;
+- `environment=mainnet` avec `dry_run=false` bloque toujours ;
+- `environment=local_dry_run` avec `dry_run=false` bloque toujours.
+
+Guards obligatoires pour `demo|testnet` avec `dry_run=false` :
+
+- `demo_testnet_write_enabled=true` ;
+- `kill_switch_enabled=false` ;
+- `require_stop_loss=true` ;
+- `allowed_symbols` ou `allowed_markets` non vide ;
+- `max_notional` positif et renseigne.
+
+Les erreurs sont explicites :
+
+- `mainnet_write_enabled_must_remain_false`
+- `mainnet_write_forbidden`
+- `local_dry_run_cannot_write`
+- `demo_testnet_write_not_enabled`
+- `kill_switch_enabled`
+- `stop_loss_required`
+- `allowed_symbols_or_markets_required`
+- `max_notional_required`
+
+## Redaction
+
+`DemoTradingSafetyDecision::toRedactedArray()` expose un payload d'audit sans secret.
+Les champs sensibles du `audit_context` sont remplaces par `[redacted]` si leur cle
+contient notamment :
+
+- `secret`
+- `token`
+- `api_key`
+- `private_key`
+- `passphrase`
+- `password`
+- `signature`
+
+Les exemples, tests et docs ne contiennent pas de secrets reels.
+
+## Hors scope
+
+Cette PR ne fait pas :
+
+- activation OKX demo ;
+- activation Hyperliquid testnet ;
+- branchement TradeEntry, MTF, Temporal ou Messenger ;
+- appel REST/WS ;
+- modification strategie, EntryZone, Risk/Leverage ou SL/TP metier ;
+- suppression ou modification Bitmart legacy.
+
+## Rollback
+
+Rollback applicatif : supprimer l'usage futur du service ou revenir au commit
+precedent. Comme `COMMON-001` n'est pas branche au runtime existant, son rollback
+n'affecte pas les flux MTF, TradeEntry, OKX dry-run ou Hyperliquid dry-run actuels.
