@@ -90,7 +90,7 @@ final readonly class DemoTradingSafetyPolicy
         $normalized = trim((string) preg_replace('/[^a-z0-9]+/', '_', strtolower($key)), '_');
         $compacted = str_replace('_', '', $normalized);
 
-        foreach (['secret', 'token', 'api_key', 'private_key', 'passphrase', 'password', 'signature', 'authorization', 'cookie'] as $needle) {
+        foreach (['secret', 'token', 'api_key', 'private_key', 'passphrase', 'password', 'signature', 'authorization', 'cookie', 'memo', 'credential'] as $needle) {
             if (str_contains($normalized, $needle) || str_contains($compacted, str_replace('_', '', $needle))) {
                 return true;
             }

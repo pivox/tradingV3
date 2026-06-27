@@ -174,6 +174,8 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
                 'Cookie' => 'session=demo-cookie',
                 'OK-ACCESS-SIGN' => 'okx-signature',
                 'X-BM-SIGN' => 'bitmart-signature',
+                'BITMART_API_MEMO' => 'bitmart-memo',
+                'credentials' => 'serialized-credentials',
                 'nested' => [
                     'private_key' => 'wallet-secret',
                     'apiKey' => 'camel-api-key',
@@ -192,6 +194,8 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['Cookie']);
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['OK-ACCESS-SIGN']);
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['X-BM-SIGN']);
+        self::assertSame('[redacted]', $redacted['policy']['audit_context']['BITMART_API_MEMO']);
+        self::assertSame('[redacted]', $redacted['policy']['audit_context']['credentials']);
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['nested']['private_key']);
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['nested']['apiKey']);
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['nested']['privateKey']);
@@ -206,6 +210,8 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
         self::assertStringNotContainsString('session=demo-cookie', $encoded);
         self::assertStringNotContainsString('okx-signature', $encoded);
         self::assertStringNotContainsString('bitmart-signature', $encoded);
+        self::assertStringNotContainsString('bitmart-memo', $encoded);
+        self::assertStringNotContainsString('serialized-credentials', $encoded);
     }
 
     /**
