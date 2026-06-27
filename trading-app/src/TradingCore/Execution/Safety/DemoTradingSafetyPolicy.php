@@ -87,15 +87,16 @@ final readonly class DemoTradingSafetyPolicy
 
     private static function isSensitiveKey(string $key): bool
     {
-        $normalized = strtolower($key);
+        $normalized = strtolower((string) preg_replace('/(?<!^)[A-Z]/', '_$0', $key));
+        $compacted = str_replace('_', '', $normalized);
 
         foreach (['secret', 'token', 'api_key', 'private_key', 'passphrase', 'password', 'signature'] as $needle) {
-            if (str_contains($normalized, $needle)) {
+            if (str_contains($normalized, $needle) || str_contains($compacted, str_replace('_', '', $needle))) {
                 return true;
             }
         }
 
-        return $normalized === 'key' || str_ends_with($normalized, '_key');
+        return $normalized === 'key' || str_ends_with($normalized, '_key') || str_ends_with($compacted, 'key');
     }
 
     private static function redact(mixed $value, ?string $key = null): mixed

@@ -150,6 +150,8 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
                 'passphrase' => 'demo-passphrase',
                 'nested' => [
                     'private_key' => 'wallet-secret',
+                    'apiKey' => 'camel-api-key',
+                    'privateKey' => 'camel-private-key',
                     'safe_value' => 'visible',
                 ],
             ],
@@ -161,11 +163,15 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['OKX_DEMO_API_KEY']);
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['passphrase']);
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['nested']['private_key']);
+        self::assertSame('[redacted]', $redacted['policy']['audit_context']['nested']['apiKey']);
+        self::assertSame('[redacted]', $redacted['policy']['audit_context']['nested']['privateKey']);
         self::assertSame('visible', $redacted['policy']['audit_context']['nested']['safe_value']);
 
         $encoded = json_encode($redacted, JSON_THROW_ON_ERROR);
         self::assertStringNotContainsString('demo-key', $encoded);
         self::assertStringNotContainsString('wallet-secret', $encoded);
+        self::assertStringNotContainsString('camel-api-key', $encoded);
+        self::assertStringNotContainsString('camel-private-key', $encoded);
     }
 
     /**
