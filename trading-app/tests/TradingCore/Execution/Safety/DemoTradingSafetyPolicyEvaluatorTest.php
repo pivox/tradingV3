@@ -84,6 +84,28 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
         self::assertContains('max_notional_required', $decision->blockingErrors);
     }
 
+    public function testMaxNotionalMustBeFinite(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('maxNotional must be positive and finite when provided.');
+
+        new DemoTradingSafetyPolicy(
+            environment: ExchangeRuntimeEnvironment::DEMO,
+            maxNotional: NAN,
+        );
+    }
+
+    public function testMaxNotionalCannotBeInfinite(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('maxNotional must be positive and finite when provided.');
+
+        new DemoTradingSafetyPolicy(
+            environment: ExchangeRuntimeEnvironment::DEMO,
+            maxNotional: INF,
+        );
+    }
+
     public function testDemoWriteRequiresStopLoss(): void
     {
         $decision = (new DemoTradingSafetyPolicyEvaluator())->evaluate(

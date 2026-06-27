@@ -31,8 +31,8 @@ final readonly class DemoTradingSafetyPolicy
         public ?float $maxNotional = null,
         array $auditContext = [],
     ) {
-        if ($maxNotional !== null && $maxNotional <= 0.0) {
-            throw new \InvalidArgumentException('maxNotional must be positive when provided.');
+        if ($maxNotional !== null && (!is_finite($maxNotional) || $maxNotional <= 0.0)) {
+            throw new \InvalidArgumentException('maxNotional must be positive and finite when provided.');
         }
 
         $this->allowedSymbols = self::normalizeStringList($allowedSymbols, 'allowedSymbols');
