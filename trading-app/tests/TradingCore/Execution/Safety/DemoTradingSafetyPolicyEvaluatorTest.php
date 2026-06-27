@@ -148,6 +148,10 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
             auditContext: [
                 'OKX_DEMO_API_KEY' => 'demo-key',
                 'passphrase' => 'demo-passphrase',
+                'Authorization' => 'Bearer demo-token',
+                'Cookie' => 'session=demo-cookie',
+                'OK-ACCESS-SIGN' => 'okx-signature',
+                'X-BM-SIGN' => 'bitmart-signature',
                 'nested' => [
                     'private_key' => 'wallet-secret',
                     'apiKey' => 'camel-api-key',
@@ -162,6 +166,10 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
 
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['OKX_DEMO_API_KEY']);
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['passphrase']);
+        self::assertSame('[redacted]', $redacted['policy']['audit_context']['Authorization']);
+        self::assertSame('[redacted]', $redacted['policy']['audit_context']['Cookie']);
+        self::assertSame('[redacted]', $redacted['policy']['audit_context']['OK-ACCESS-SIGN']);
+        self::assertSame('[redacted]', $redacted['policy']['audit_context']['X-BM-SIGN']);
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['nested']['private_key']);
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['nested']['apiKey']);
         self::assertSame('[redacted]', $redacted['policy']['audit_context']['nested']['privateKey']);
@@ -172,6 +180,10 @@ final class DemoTradingSafetyPolicyEvaluatorTest extends TestCase
         self::assertStringNotContainsString('wallet-secret', $encoded);
         self::assertStringNotContainsString('camel-api-key', $encoded);
         self::assertStringNotContainsString('camel-private-key', $encoded);
+        self::assertStringNotContainsString('Bearer demo-token', $encoded);
+        self::assertStringNotContainsString('session=demo-cookie', $encoded);
+        self::assertStringNotContainsString('okx-signature', $encoded);
+        self::assertStringNotContainsString('bitmart-signature', $encoded);
     }
 
     /**
