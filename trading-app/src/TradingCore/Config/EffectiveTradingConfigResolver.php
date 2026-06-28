@@ -102,10 +102,25 @@ final readonly class EffectiveTradingConfigResolver
             }
 
             $base[$key] = $value;
+            $this->clearProvenanceForPath($provenance, $path);
             $this->recordProvenance($provenance, $path, $value, $layerContext);
         }
 
         return $base;
+    }
+
+    /**
+     * @param array<string, array{type: string, name: string, path: string, required: bool}> $provenance
+     */
+    private function clearProvenanceForPath(array &$provenance, string $path): void
+    {
+        unset($provenance[$path]);
+        $prefix = $path . '.';
+        foreach (array_keys($provenance) as $existingPath) {
+            if (str_starts_with($existingPath, $prefix)) {
+                unset($provenance[$existingPath]);
+            }
+        }
     }
 
     /**

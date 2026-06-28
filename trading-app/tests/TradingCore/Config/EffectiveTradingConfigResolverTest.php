@@ -181,6 +181,28 @@ YAML);
         self::assertSame('base', $resolved['provenance']['trading.execution.mainnet_write_enabled']['type']);
     }
 
+    public function testReplacingSubtreeClearsStaleDescendantProvenance(): void
+    {
+        $this->writeYaml('base.yaml', <<<YAML
+trading:
+  execution:
+    dry_run: true
+    mainnet_write_enabled: false
+YAML);
+        $this->writeYaml('env/dev.yaml', <<<YAML
+trading:
+  execution: local_only
+YAML);
+
+        $resolved = $this->resolver()->resolve('missing-mode', 'missing-exchange', 'dev');
+
+        self::assertSame('local_only', $resolved['config']['trading']['execution']);
+        self::assertArrayHasKey('trading.execution', $resolved['provenance']);
+        self::assertSame('env', $resolved['provenance']['trading.execution']['type']);
+        self::assertArrayNotHasKey('trading.execution.dry_run', $resolved['provenance']);
+        self::assertArrayNotHasKey('trading.execution.mainnet_write_enabled', $resolved['provenance']);
+    }
+
     public function testThrowsClearErrorWhenBaseLayerIsMissing(): void
     {
         $this->expectException(TradingConfigException::class);
