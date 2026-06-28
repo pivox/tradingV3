@@ -129,7 +129,7 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
     private function hasGuardedReadiness(ExchangeReadinessInput $input): bool
     {
         return $input->demoTestnetWriteGuard
-            && ($input->allowedSymbols !== [] || $input->allowedMarkets !== [])
+            && ($this->normalizedList($input->allowedSymbols) !== [] || $this->normalizedList($input->allowedMarkets) !== [])
             && $input->maxNotional !== null;
     }
 
@@ -166,12 +166,35 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
             demoTestnetWriteGuard: $input->demoTestnetWriteGuard,
             stopLossCapability: $input->stopLossCapability,
             killSwitch: $input->killSwitch,
-            allowedSymbols: $input->allowedSymbols,
-            allowedMarkets: $input->allowedMarkets,
+            allowedSymbols: $this->normalizedList($input->allowedSymbols),
+            allowedMarkets: $this->normalizedList($input->allowedMarkets),
             maxNotional: $input->maxNotional,
             configHash: $input->configHash,
             blockingErrors: array_values(array_unique($blockingErrors)),
             warnings: array_values(array_unique($warnings)),
         );
+    }
+
+    /**
+     * @param array<mixed> $values
+     * @return list<string>
+     */
+    private function normalizedList(array $values): array
+    {
+        $normalized = [];
+        foreach ($values as $value) {
+            if (!is_string($value)) {
+                continue;
+            }
+
+            $value = trim($value);
+            if ($value === '') {
+                continue;
+            }
+
+            $normalized[] = $value;
+        }
+
+        return array_values(array_unique($normalized));
     }
 }

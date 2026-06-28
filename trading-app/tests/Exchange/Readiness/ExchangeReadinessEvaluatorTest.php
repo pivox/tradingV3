@@ -110,6 +110,24 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
         self::assertContains('demo_testnet_environment_required', $report->blockingErrors);
     }
 
+    public function testBlankWhitelistEntriesDoNotSatisfyGuardedReadiness(): void
+    {
+        $report = (new ExchangeReadinessEvaluator())->evaluate(
+            $this->readyInput(
+                dryRun: false,
+                demoTestnetWriteEnabled: true,
+                killSwitch: false,
+                allowedSymbols: ['', '   '],
+                allowedMarkets: [],
+            ),
+        );
+
+        self::assertSame(ExchangeReadinessLevel::PrivateReadOnly, $report->readyLevel);
+        self::assertContains('local_dry_run_prerequisites_missing', $report->warnings);
+        self::assertSame([], $report->allowedSymbols);
+        self::assertSame([], $report->toArray()['allowed_symbols']);
+    }
+
     public function testReadinessLevelsNeverExposeMainnetOrLiveReady(): void
     {
         $values = array_map(
@@ -151,6 +169,8 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
     }
 
     /**
+     * @param array<mixed> $allowedSymbols
+     * @param array<mixed> $allowedMarkets
      * @param list<string> $warnings
      */
     private function readyInput(
@@ -170,6 +190,8 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
         bool $stopLossCapability = true,
         bool $killSwitch = true,
         bool $dryRun = true,
+        array $allowedSymbols = ['BTCUSDT'],
+        array $allowedMarkets = ['perpetual'],
         array $warnings = [],
     ): ExchangeReadinessInput {
         return new ExchangeReadinessInput(
@@ -191,8 +213,8 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
             stopLossCapability: $stopLossCapability,
             killSwitch: $killSwitch,
             dryRun: $dryRun,
-            allowedSymbols: ['BTCUSDT'],
-            allowedMarkets: ['perpetual'],
+            allowedSymbols: $allowedSymbols,
+            allowedMarkets: $allowedMarkets,
             maxNotional: 25.0,
             configHash: str_repeat('a', 64),
             warnings: $warnings,

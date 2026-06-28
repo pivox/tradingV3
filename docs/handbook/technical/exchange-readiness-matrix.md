@@ -89,7 +89,9 @@ Regles fail-closed :
 - `demo_testnet_candidate` et `demo_testnet_enabled` exigent `environment=demo|testnet` ;
 - `demo_testnet_enabled` exige aussi `dry_run=false`,
   `demo_testnet_write_enabled=true`, `permissions_trade=true`, whitelist
-  symbole/marche et `max_notional`.
+  symbole/marche utilisable et `max_notional`.
+- les whitelists sont normalisees avant decision : les valeurs non string ou vides
+  apres trim ne satisfont pas le guard.
 
 Les configs effectives OKX demo et Hyperliquid testnet livrees par `COMMON-002`
 peuvent produire un rapport `demo_testnet_candidate` en fixture si les signaux
