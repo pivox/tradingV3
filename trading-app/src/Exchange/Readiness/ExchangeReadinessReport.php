@@ -1,0 +1,114 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Exchange\Readiness;
+
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
+
+final readonly class ExchangeReadinessReport
+{
+    private const SENSITIVE_PATTERN = '/(api[_-]?key|secret|private[_-]?key|passphrase|password|authorization|cookie|token|signature|sign|credentials?|memo)/i';
+
+    /**
+     * @param list<string> $allowedSymbols
+     * @param list<string> $allowedMarkets
+     * @param list<string> $blockingErrors
+     * @param list<string> $warnings
+     */
+    public function __construct(
+        public Exchange $exchange,
+        public MarketType $marketType,
+        public string $environment,
+        public ExchangeReadinessLevel $readyLevel,
+        public bool $publicConnectivity,
+        public bool $privateReadConnectivity,
+        public bool $privateObservability,
+        public bool $instrumentsLoaded,
+        public bool $metadataValid,
+        public bool $precisionValid,
+        public bool $accountReadable,
+        public bool $permissionsRead,
+        public bool $permissionsTrade,
+        public bool $mainnetWriteGuard,
+        public bool $demoTestnetWriteGuard,
+        public bool $stopLossCapability,
+        public bool $killSwitch,
+        public array $allowedSymbols,
+        public array $allowedMarkets,
+        public ?float $maxNotional,
+        public ?string $configHash,
+        public array $blockingErrors,
+        public array $warnings,
+    ) {
+    }
+
+    /**
+     * @return array{
+     *     exchange: string,
+     *     market_type: string,
+     *     environment: string,
+     *     ready_level: string,
+     *     public_connectivity: bool,
+     *     private_read_connectivity: bool,
+     *     private_observability: bool,
+     *     instruments_loaded: bool,
+     *     metadata_valid: bool,
+     *     precision_valid: bool,
+     *     account_readable: bool,
+     *     permissions_read: bool,
+     *     permissions_trade: bool,
+     *     mainnet_write_guard: bool,
+     *     demo_testnet_write_guard: bool,
+     *     stop_loss_capability: bool,
+     *     kill_switch: bool,
+     *     allowed_symbols: list<string>,
+     *     allowed_markets: list<string>,
+     *     max_notional: ?float,
+     *     config_hash: ?string,
+     *     blocking_errors: list<string>,
+     *     warnings: list<string>
+     * }
+     */
+    public function toArray(): array
+    {
+        return [
+            'exchange' => $this->exchange->value,
+            'market_type' => $this->marketType->value,
+            'environment' => $this->environment,
+            'ready_level' => $this->readyLevel->value,
+            'public_connectivity' => $this->publicConnectivity,
+            'private_read_connectivity' => $this->privateReadConnectivity,
+            'private_observability' => $this->privateObservability,
+            'instruments_loaded' => $this->instrumentsLoaded,
+            'metadata_valid' => $this->metadataValid,
+            'precision_valid' => $this->precisionValid,
+            'account_readable' => $this->accountReadable,
+            'permissions_read' => $this->permissionsRead,
+            'permissions_trade' => $this->permissionsTrade,
+            'mainnet_write_guard' => $this->mainnetWriteGuard,
+            'demo_testnet_write_guard' => $this->demoTestnetWriteGuard,
+            'stop_loss_capability' => $this->stopLossCapability,
+            'kill_switch' => $this->killSwitch,
+            'allowed_symbols' => $this->allowedSymbols,
+            'allowed_markets' => $this->allowedMarkets,
+            'max_notional' => $this->maxNotional,
+            'config_hash' => $this->configHash,
+            'blocking_errors' => $this->redactMessages($this->blockingErrors),
+            'warnings' => $this->redactMessages($this->warnings),
+        ];
+    }
+
+    /**
+     * @param list<string> $messages
+     * @return list<string>
+     */
+    private function redactMessages(array $messages): array
+    {
+        return array_map(
+            static fn (string $message): string => preg_match(self::SENSITIVE_PATTERN, $message) === 1 ? '[redacted]' : $message,
+            $messages,
+        );
+    }
+}
