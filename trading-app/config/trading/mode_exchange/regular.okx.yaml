@@ -1,7 +1,7 @@
-version: '0.1.0-effective-config-bootstrap'
+version: '0.1.0-effective-config-demo-testnet'
 
 trading:
-  profile: scalper
+  profile: regular
   exchange: okx
   execution:
     dry_run: true
@@ -11,14 +11,14 @@ trading:
     demo_testnet_write_enabled: false
     allowed_symbols:
       - BTCUSDT
-      - ETHUSDT
     allowed_markets:
       - perpetual
-    max_notional: 25.0
+    max_notional: 20.0
     kill_switch_enabled: true
     require_stop_loss: true
   risk:
-    max_leverage_cap: 3
+    max_leverage_cap: 2
 
 compatibility:
   reason: future_profile_exchange_override_placeholder
+

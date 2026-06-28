@@ -20,8 +20,10 @@ final readonly class EffectiveTradingConfigResolver
      *
      * @return array{
      *     config: array<string, mixed>,
+     *     config_hash: string,
      *     layers: list<array{type: string, name: string, path: string, required: bool}>,
-     *     missing_optional_layers: list<array{type: string, name: string, path: string, required: bool}>
+     *     missing_optional_layers: list<array{type: string, name: string, path: string, required: bool}>,
+     *     provenance: array<string, array{type: string, name: string, path: string, required: bool}>
      * }
      */
     public function resolve(string $mode, string $exchange, string $env): array
@@ -39,12 +41,14 @@ final readonly class EffectiveTradingConfigResolver
         $effectiveConfig = [];
         $usedLayers = [];
         $missingOptionalLayers = [];
+        $provenance = [];
 
         foreach ($candidates as $candidate) {
             $layer = $candidate['layer'];
             if ($layer instanceof TradingConfigLayer) {
-                $effectiveConfig = $this->mergeConfig($effectiveConfig, $layer->config);
-                $usedLayers[] = $layer->toLogContext();
+                $layerContext = $layer->toLogContext();
+                $effectiveConfig = $this->mergeConfig($effectiveConfig, $layer->config, $provenance, $layerContext);
+                $usedLayers[] = $layerContext;
                 continue;
             }
 
@@ -63,19 +67,25 @@ final readonly class EffectiveTradingConfigResolver
 
         return [
             'config' => $effectiveConfig,
+            'config_hash' => $this->hashConfig($effectiveConfig),
             'layers' => $usedLayers,
             'missing_optional_layers' => $missingOptionalLayers,
+            'provenance' => $provenance,
         ];
     }
 
     /**
      * @param array<string, mixed> $base
      * @param array<string, mixed> $override
+     * @param array<string, array{type: string, name: string, path: string, required: bool}> $provenance
+     * @param array{type: string, name: string, path: string, required: bool} $layerContext
      * @return array<string, mixed>
      */
-    private function mergeConfig(array $base, array $override): array
+    private function mergeConfig(array $base, array $override, array &$provenance, array $layerContext, string $prefix = ''): array
     {
         foreach ($override as $key => $value) {
+            $path = $prefix === '' ? $key : $prefix . '.' . $key;
+
             if (
                 array_key_exists($key, $base)
                 && is_array($base[$key])
@@ -87,14 +97,61 @@ final readonly class EffectiveTradingConfigResolver
                 $baseValue = $base[$key];
                 /** @var array<string, mixed> $overrideValue */
                 $overrideValue = $value;
-                $base[$key] = $this->mergeConfig($baseValue, $overrideValue);
+                $base[$key] = $this->mergeConfig($baseValue, $overrideValue, $provenance, $layerContext, $path);
                 continue;
             }
 
             $base[$key] = $value;
+            $this->recordProvenance($provenance, $path, $value, $layerContext);
         }
 
         return $base;
+    }
+
+    /**
+     * @param array<string, array{type: string, name: string, path: string, required: bool}> $provenance
+     * @param array{type: string, name: string, path: string, required: bool} $layerContext
+     */
+    private function recordProvenance(array &$provenance, string $path, mixed $value, array $layerContext): void
+    {
+        if (is_array($value) && $this->isAssociative($value)) {
+            /** @var array<string, mixed> $value */
+            foreach ($value as $childKey => $childValue) {
+                $this->recordProvenance($provenance, $path . '.' . $childKey, $childValue, $layerContext);
+            }
+
+            return;
+        }
+
+        $provenance[$path] = $layerContext;
+    }
+
+    /**
+     * @param array<string, mixed> $config
+     */
+    private function hashConfig(array $config): string
+    {
+        $normalized = $this->sortRecursively($config);
+
+        return hash('sha256', json_encode($normalized, JSON_THROW_ON_ERROR));
+    }
+
+    private function sortRecursively(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        if (!$this->isAssociative($value)) {
+            return array_map(fn (mixed $item): mixed => $this->sortRecursively($item), $value);
+        }
+
+        ksort($value);
+        foreach ($value as $key => $item) {
+            $value[$key] = $this->sortRecursively($item);
+        }
+
+        return $value;
     }
 
     /**

@@ -1,0 +1,41 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\TradingCore\Config;
+
+final readonly class EffectiveTradingConfigReadService
+{
+    public function __construct(
+        private EffectiveTradingConfigResolver $resolver,
+    ) {
+    }
+
+    /**
+     * @return array{
+     *     request: array{mode: string, exchange: string, env: string},
+     *     config: array<string, mixed>,
+     *     config_hash: string,
+     *     layers: list<array{type: string, name: string, path: string, required: bool}>,
+     *     missing_optional_layers: list<array{type: string, name: string, path: string, required: bool}>,
+     *     provenance: array<string, array{type: string, name: string, path: string, required: bool}>
+     * }
+     */
+    public function describe(string $mode, string $exchange, string $env): array
+    {
+        $resolved = $this->resolver->resolve($mode, $exchange, $env);
+
+        return [
+            'request' => [
+                'mode' => $mode,
+                'exchange' => $exchange,
+                'env' => $env,
+            ],
+            'config' => $resolved['config'],
+            'config_hash' => $resolved['config_hash'],
+            'layers' => $resolved['layers'],
+            'missing_optional_layers' => $resolved['missing_optional_layers'],
+            'provenance' => $resolved['provenance'],
+        ];
+    }
+}

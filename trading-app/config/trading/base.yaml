@@ -4,14 +4,30 @@ trading:
   config_schema: effective_trading_config.v1
   runtime_status: inactive_reference
   exchange: fake
+  environment: local_dry_run
   market_type: perpetual
+  account_mode: local
+  margin_mode: isolated
+  rate_limit_profile:
+    name: local_reference
+    max_requests_per_second: 0
+  retry_policy:
+    max_attempts: 1
+    backoff_ms: 0
   execution:
     dry_run: true
     live_enabled: false
     runtime_check_required: true
+    mainnet_write_enabled: false
+    demo_testnet_write_enabled: false
+    allowed_symbols: []
+    allowed_markets: []
+    max_notional: null
+    kill_switch_enabled: true
     require_stop_loss: true
   risk:
     source: legacy_runtime_config
+    max_leverage_cap: 1
   leverage:
     policy: derived_from_risk_and_stop
   entry_zone:

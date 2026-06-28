@@ -1,0 +1,13 @@
+version: '0.1.0-effective-config-demo-testnet'
+
+trading:
+  env: demo
+  environment: demo
+  execution:
+    dry_run: true
+    live_enabled: false
+    mainnet_write_enabled: false
+    demo_testnet_write_enabled: false
+    kill_switch_enabled: true
+    require_stop_loss: true
+

@@ -1,8 +1,8 @@
-version: '0.1.0-effective-config-bootstrap'
+version: '0.1.0-effective-config-demo-testnet'
 
 trading:
   profile: scalper
-  exchange: okx
+  exchange: hyperliquid
   execution:
     dry_run: true
     live_enabled: false
@@ -22,3 +22,4 @@ trading:
 
 compatibility:
   reason: future_profile_exchange_override_placeholder
+
