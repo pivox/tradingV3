@@ -110,6 +110,22 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
         self::assertContains('demo_testnet_environment_required', $report->blockingErrors);
     }
 
+    public function testMismatchedExchangeEnvironmentPairCannotReachDemoTestnetEnabled(): void
+    {
+        $report = (new ExchangeReadinessEvaluator())->evaluate(
+            $this->readyInput(
+                exchange: Exchange::HYPERLIQUID,
+                environment: 'demo',
+                dryRun: false,
+                demoTestnetWriteEnabled: true,
+                killSwitch: false,
+            ),
+        );
+
+        self::assertSame(ExchangeReadinessLevel::NotReady, $report->readyLevel);
+        self::assertContains('exchange_environment_pair_unsupported', $report->blockingErrors);
+    }
+
     public function testBlankWhitelistEntriesDoNotSatisfyGuardedReadiness(): void
     {
         $report = (new ExchangeReadinessEvaluator())->evaluate(
@@ -174,6 +190,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
      * @param list<string> $warnings
      */
     private function readyInput(
+        Exchange $exchange = Exchange::OKX,
         string $environment = 'demo',
         bool $publicConnectivity = true,
         bool $privateReadConnectivity = true,
@@ -195,7 +212,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
         array $warnings = [],
     ): ExchangeReadinessInput {
         return new ExchangeReadinessInput(
-            exchange: Exchange::OKX,
+            exchange: $exchange,
             marketType: MarketType::PERPETUAL,
             environment: $environment,
             publicConnectivity: $publicConnectivity,

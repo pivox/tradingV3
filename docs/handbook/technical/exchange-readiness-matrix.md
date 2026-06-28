@@ -86,7 +86,10 @@ Regles fail-closed :
 - absence de guard mainnet => `not_ready` avec `mainnet_write_guard_missing` ;
 - absence de `stop_loss_capability` => impossible d'atteindre `demo_testnet_candidate` ;
 - kill switch actif => impossible d'atteindre `demo_testnet_enabled` ;
-- `demo_testnet_candidate` et `demo_testnet_enabled` exigent `environment=demo|testnet` ;
+- `demo_testnet_candidate` et `demo_testnet_enabled` exigent une paire supportee :
+  OKX/demo ou Hyperliquid/testnet ;
+- les paires croisees comme OKX/testnet ou Hyperliquid/demo restent bloquees avec
+  `exchange_environment_pair_unsupported` ;
 - `demo_testnet_enabled` exige aussi `dry_run=false`,
   `demo_testnet_write_enabled=true`, `permissions_trade=true`, whitelist
   symbole/marche utilisable et `max_notional`.

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Exchange\Readiness;
 
+use App\Common\Enum\Exchange;
+
 final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
 {
     public function check(ExchangeReadinessInput $input): ExchangeReadinessReport
@@ -20,8 +22,11 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
             $blockingErrors[] = $error;
         }
 
-        if (!$input->dryRun && !$this->isDemoOrTestnet($input->environment)) {
+        if (!$input->dryRun && !$this->isSupportedDemoTestnetPair($input)) {
             $blockingErrors[] = 'demo_testnet_environment_required';
+            if ($this->isDemoOrTestnet($input->environment)) {
+                $blockingErrors[] = 'exchange_environment_pair_unsupported';
+            }
         }
 
         if ($blockingErrors !== []) {
@@ -46,8 +51,11 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
 
         $readyLevel = ExchangeReadinessLevel::LocalDryRunReady;
 
-        if (!$this->isDemoOrTestnet($input->environment)) {
+        if (!$this->isSupportedDemoTestnetPair($input)) {
             $warnings[] = 'demo_testnet_environment_required';
+            if ($this->isDemoOrTestnet($input->environment)) {
+                $warnings[] = 'exchange_environment_pair_unsupported';
+            }
 
             return $this->report($input, $readyLevel, [], $warnings);
         }
@@ -136,6 +144,14 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
     private function isDemoOrTestnet(string $environment): bool
     {
         return in_array(strtolower($environment), ['demo', 'testnet'], true);
+    }
+
+    private function isSupportedDemoTestnetPair(ExchangeReadinessInput $input): bool
+    {
+        $environment = strtolower($input->environment);
+
+        return ($input->exchange === Exchange::OKX && $environment === 'demo')
+            || ($input->exchange === Exchange::HYPERLIQUID && $environment === 'testnet');
     }
 
     /**
