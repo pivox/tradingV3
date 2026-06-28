@@ -104,7 +104,9 @@ Paires supportees par COMMON-002 :
 
 Les paires croisees comme `exchange=okx&env=testnet` ou
 `exchange=hyperliquid&env=demo` sont refusees avant resolution pour eviter une
-config effective incoherente.
+config effective incoherente. Les exchanges inconnus et Bitmart via cet endpoint
+sont egalement refuses : Bitmart reste legacy et n'est pas re-route par l'API
+COMMON-002.
 
 L'API ne modifie aucun etat et ne contacte aucun exchange.
 

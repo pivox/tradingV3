@@ -80,6 +80,41 @@ final class EffectiveTradingConfigApiControllerTest extends TestCase
         self::assertStringContainsString('Unsupported exchange/env pair', $body['error']['message']);
     }
 
+    public function testRejectsUnknownExchangeEvenWhenEnvironmentLayerExists(): void
+    {
+        $this->writeYaml('base.yaml', "trading:\n  exchange: fake\n  execution:\n    dry_run: true\n");
+        $this->writeYaml('env/testnet.yaml', "trading:\n  environment: testnet\n");
+
+        $response = $this->controller()->effective(new Request([
+            'mode' => 'scalper',
+            'exchange' => 'okxx',
+            'env' => 'testnet',
+        ]));
+
+        self::assertSame(Response::HTTP_BAD_REQUEST, $response->getStatusCode());
+        $body = $this->json($response);
+        self::assertSame('invalid_config_request', $body['error']['code']);
+        self::assertStringContainsString('Unsupported exchange/env pair', $body['error']['message']);
+    }
+
+    public function testRejectsBitmartDemoBecauseCommon002ApiIsOnlyForDemoTestnetTargets(): void
+    {
+        $this->writeYaml('base.yaml', "trading:\n  exchange: fake\n  execution:\n    dry_run: true\n");
+        $this->writeYaml('exchange/bitmart.yaml', "trading:\n  exchange: bitmart\n  exchange_status: legacy_runtime_only\n");
+        $this->writeYaml('env/demo.yaml', "trading:\n  environment: demo\n");
+
+        $response = $this->controller()->effective(new Request([
+            'mode' => 'scalper',
+            'exchange' => 'bitmart',
+            'env' => 'demo',
+        ]));
+
+        self::assertSame(Response::HTTP_BAD_REQUEST, $response->getStatusCode());
+        $body = $this->json($response);
+        self::assertSame('invalid_config_request', $body['error']['code']);
+        self::assertStringContainsString('Unsupported exchange/env pair', $body['error']['message']);
+    }
+
     public function testReturnsEffectiveConfigWithHashAndProvenance(): void
     {
         $this->writeYaml('base.yaml', <<<YAML

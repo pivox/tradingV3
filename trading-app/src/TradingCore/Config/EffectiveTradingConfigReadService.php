@@ -45,12 +45,10 @@ final readonly class EffectiveTradingConfigReadService
 
     private function assertSupportedExchangeEnvironment(string $exchange, string $env): void
     {
-        if ($exchange === 'okx' && $env !== 'demo') {
-            throw new TradingConfigException('Unsupported exchange/env pair: OKX is available only with env=demo in this series.');
+        if (($exchange === 'okx' && $env === 'demo') || ($exchange === 'hyperliquid' && $env === 'testnet')) {
+            return;
         }
 
-        if ($exchange === 'hyperliquid' && $env !== 'testnet') {
-            throw new TradingConfigException('Unsupported exchange/env pair: Hyperliquid is available only with env=testnet in this series.');
-        }
+        throw new TradingConfigException('Unsupported exchange/env pair: COMMON-002 supports only okx/demo and hyperliquid/testnet.');
     }
 }
