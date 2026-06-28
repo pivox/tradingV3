@@ -137,8 +137,17 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
     private function hasGuardedReadiness(ExchangeReadinessInput $input): bool
     {
         return $input->demoTestnetWriteGuard
-            && ($this->normalizedList($input->allowedSymbols) !== [] || $this->normalizedList($input->allowedMarkets) !== [])
+            && $this->hasUsableWhitelist($input)
             && $input->maxNotional !== null;
+    }
+
+    private function hasUsableWhitelist(ExchangeReadinessInput $input): bool
+    {
+        if ($this->normalizedList($input->allowedSymbols) !== []) {
+            return true;
+        }
+
+        return in_array($input->marketType->value, $this->normalizedList($input->allowedMarkets), true);
     }
 
     private function isDemoOrTestnet(string $environment): bool

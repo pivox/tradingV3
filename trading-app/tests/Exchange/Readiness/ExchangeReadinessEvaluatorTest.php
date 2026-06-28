@@ -144,6 +144,23 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
         self::assertSame([], $report->toArray()['allowed_symbols']);
     }
 
+    public function testAllowedMarketMustMatchCheckedMarketType(): void
+    {
+        $report = (new ExchangeReadinessEvaluator())->evaluate(
+            $this->readyInput(
+                marketType: MarketType::PERPETUAL,
+                dryRun: false,
+                demoTestnetWriteEnabled: true,
+                killSwitch: false,
+                allowedSymbols: [],
+                allowedMarkets: ['spot'],
+            ),
+        );
+
+        self::assertSame(ExchangeReadinessLevel::PrivateReadOnly, $report->readyLevel);
+        self::assertContains('local_dry_run_prerequisites_missing', $report->warnings);
+    }
+
     public function testReadinessLevelsNeverExposeMainnetOrLiveReady(): void
     {
         $values = array_map(
@@ -191,6 +208,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
      */
     private function readyInput(
         Exchange $exchange = Exchange::OKX,
+        MarketType $marketType = MarketType::PERPETUAL,
         string $environment = 'demo',
         bool $publicConnectivity = true,
         bool $privateReadConnectivity = true,
@@ -213,7 +231,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
     ): ExchangeReadinessInput {
         return new ExchangeReadinessInput(
             exchange: $exchange,
-            marketType: MarketType::PERPETUAL,
+            marketType: $marketType,
             environment: $environment,
             publicConnectivity: $publicConnectivity,
             privateReadConnectivity: $privateReadConnectivity,

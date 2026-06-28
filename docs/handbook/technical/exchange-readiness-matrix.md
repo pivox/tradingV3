@@ -95,6 +95,9 @@ Regles fail-closed :
   symbole/marche utilisable et `max_notional`.
 - les whitelists sont normalisees avant decision : les valeurs non string ou vides
   apres trim ne satisfont pas le guard.
+- une whitelist marche ne satisfait le guard que si elle contient le `market_type`
+  evalue ; par exemple `allowed_markets: [spot]` ne valide pas un rapport
+  `market_type=perpetual`.
 
 Les configs effectives OKX demo et Hyperliquid testnet livrees par `COMMON-002`
 peuvent produire un rapport `demo_testnet_candidate` en fixture si les signaux
