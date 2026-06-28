@@ -103,6 +103,7 @@ trading:
 | `hyperliquid_testnet_trading_disabled` | Gate Hyperliquid testnet ferme. |
 | `exchange_environment_pair_unsupported` | Paire hors scope : seules OKX/demo et Hyperliquid/testnet sont supportees. |
 | `effective_kill_switch_enabled` | Config effective encore en kill switch. |
+| `client_order_id_required` | Tentative sans client order id auditable/idempotent. |
 | `mainnet_write_forbidden` | Tentative mainnet mutative interdite. |
 | `audit_failed` | Audit non ecrit, mutation interdite. |
 

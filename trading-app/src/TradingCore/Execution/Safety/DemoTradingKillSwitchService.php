@@ -100,6 +100,10 @@ final readonly class DemoTradingKillSwitchService
             $reasons[] = 'effective_kill_switch_enabled';
         }
 
+        if ($attempt->clientOrderId === null) {
+            $reasons[] = 'client_order_id_required';
+        }
+
         return $reasons;
     }
 

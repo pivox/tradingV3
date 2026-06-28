@@ -157,6 +157,22 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
         self::assertSame('blocked', $sink->events[1]['outcome']);
     }
 
+    public function testClientOrderIdIsRequiredBeforeAllowingMutation(): void
+    {
+        $sink = new CapturingDemoTradingAuditSink();
+        $decision = $this->service($sink)->evaluate($this->attempt(
+            exchange: Exchange::OKX,
+            environment: ExchangeRuntimeEnvironment::DEMO,
+            symbol: 'BTCUSDT',
+            clientOrderId: '',
+        ));
+
+        self::assertFalse($decision->allowed);
+        self::assertContains('client_order_id_required', $decision->reasons);
+        self::assertSame('blocked', $sink->events[0]['outcome']);
+        self::assertNull($sink->events[0]['client_order_id']);
+    }
+
     public function testAllowedMutationAttemptIsAuditedBeforeCallerCanProceed(): void
     {
         $sink = new CapturingDemoTradingAuditSink();

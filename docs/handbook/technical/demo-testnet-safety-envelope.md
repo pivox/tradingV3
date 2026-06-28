@@ -105,6 +105,7 @@ Les erreurs sont explicites :
 - `hyperliquid_testnet_trading_disabled`
 - `exchange_environment_pair_unsupported`
 - `effective_kill_switch_enabled`
+- `client_order_id_required`
 - `mainnet_write_enabled_must_remain_false`
 - `mainnet_write_forbidden`
 - `local_dry_run_cannot_write`
