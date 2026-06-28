@@ -62,6 +62,24 @@ final class EffectiveTradingConfigApiControllerTest extends TestCase
         self::assertStringContainsString('Invalid trading config layer name', $body['error']['message']);
     }
 
+    public function testRejectsUnsupportedExchangeEnvironmentPair(): void
+    {
+        $this->writeYaml('base.yaml', "trading:\n  execution:\n    dry_run: true\n");
+        $this->writeYaml('exchange/okx.yaml', "trading:\n  exchange: okx\n  environment: demo\n");
+        $this->writeYaml('env/testnet.yaml', "trading:\n  environment: testnet\n");
+
+        $response = $this->controller()->effective(new Request([
+            'mode' => 'scalper',
+            'exchange' => 'okx',
+            'env' => 'testnet',
+        ]));
+
+        self::assertSame(Response::HTTP_BAD_REQUEST, $response->getStatusCode());
+        $body = $this->json($response);
+        self::assertSame('invalid_config_request', $body['error']['code']);
+        self::assertStringContainsString('Unsupported exchange/env pair', $body['error']['message']);
+    }
+
     public function testReturnsEffectiveConfigWithHashAndProvenance(): void
     {
         $this->writeYaml('base.yaml', <<<YAML

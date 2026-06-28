@@ -94,7 +94,17 @@ La reponse contient :
 Erreurs structurees :
 
 - `400 missing_query_parameter` si `mode`, `exchange` ou `env` manque ;
-- `400 invalid_config_request` si une couche est invalide ou non parseable.
+- `400 invalid_config_request` si une couche est invalide, non parseable ou si
+  la paire `exchange/env` est interdite.
+
+Paires supportees par COMMON-002 :
+
+- `exchange=okx&env=demo` ;
+- `exchange=hyperliquid&env=testnet`.
+
+Les paires croisees comme `exchange=okx&env=testnet` ou
+`exchange=hyperliquid&env=demo` sont refusees avant resolution pour eviter une
+config effective incoherente.
 
 L'API ne modifie aucun etat et ne contacte aucun exchange.
 
