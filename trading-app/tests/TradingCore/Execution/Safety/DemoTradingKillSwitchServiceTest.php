@@ -126,6 +126,37 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
         self::assertSame('blocked', $sink->events[0]['outcome']);
     }
 
+    public function testUnsupportedDemoTestnetPairsAreBlocked(): void
+    {
+        $sink = new CapturingDemoTradingAuditSink();
+        $service = $this->service(
+            sink: $sink,
+            globalDemoTradingEnabled: true,
+            okxDemoTradingEnabled: true,
+            hyperliquidTestnetTradingEnabled: true,
+        );
+
+        $bitmartDemo = $service->evaluate($this->attempt(
+            exchange: Exchange::BITMART,
+            environment: ExchangeRuntimeEnvironment::DEMO,
+            symbol: 'BTCUSDT',
+            clientOrderId: 'bitmart-cid-001',
+        ));
+        $okxTestnet = $service->evaluate($this->attempt(
+            exchange: Exchange::OKX,
+            environment: ExchangeRuntimeEnvironment::TESTNET,
+            symbol: 'BTCUSDT',
+            clientOrderId: 'okx-testnet-cid-001',
+        ));
+
+        self::assertFalse($bitmartDemo->allowed);
+        self::assertContains('exchange_environment_pair_unsupported', $bitmartDemo->reasons);
+        self::assertFalse($okxTestnet->allowed);
+        self::assertContains('exchange_environment_pair_unsupported', $okxTestnet->reasons);
+        self::assertSame('blocked', $sink->events[0]['outcome']);
+        self::assertSame('blocked', $sink->events[1]['outcome']);
+    }
+
     public function testAllowedMutationAttemptIsAuditedBeforeCallerCanProceed(): void
     {
         $sink = new CapturingDemoTradingAuditSink();
@@ -182,21 +213,40 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
 
     private function hyperliquidAttempt(): DemoTradingMutationAttempt
     {
-        return new DemoTradingMutationAttempt(
+        return $this->attempt(
             exchange: Exchange::HYPERLIQUID,
             environment: ExchangeRuntimeEnvironment::TESTNET,
+            symbol: 'BTC',
+            clientOrderId: 'hl-cid-001',
+            allowedSymbols: ['BTC'],
+        );
+    }
+
+    /**
+     * @param list<string> $allowedSymbols
+     */
+    private function attempt(
+        Exchange $exchange,
+        ExchangeRuntimeEnvironment $environment,
+        string $symbol,
+        string $clientOrderId,
+        array $allowedSymbols = ['BTCUSDT'],
+    ): DemoTradingMutationAttempt {
+        return new DemoTradingMutationAttempt(
+            exchange: $exchange,
+            environment: $environment,
             mode: 'scalper_micro',
             profile: 'scalper_micro',
             market: 'perpetual',
-            symbol: 'BTC',
+            symbol: $symbol,
             notional: 12.5,
-            clientOrderId: 'hl-cid-001',
+            clientOrderId: $clientOrderId,
             action: 'place_order',
             demoTestnetWriteEnabled: true,
             effectiveKillSwitchEnabled: false,
             requireStopLoss: true,
             stopLossPresent: true,
-            allowedSymbols: ['BTC'],
+            allowedSymbols: $allowedSymbols,
             allowedMarkets: ['perpetual'],
             maxNotional: 25.0,
         );

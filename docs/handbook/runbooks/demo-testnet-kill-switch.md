@@ -101,6 +101,7 @@ trading:
 | `demo_trading_disabled` | Gate global `DEMO_TRADING_ENABLED=0`. |
 | `okx_demo_trading_disabled` | Gate OKX demo ferme. |
 | `hyperliquid_testnet_trading_disabled` | Gate Hyperliquid testnet ferme. |
+| `exchange_environment_pair_unsupported` | Paire hors scope : seules OKX/demo et Hyperliquid/testnet sont supportees. |
 | `effective_kill_switch_enabled` | Config effective encore en kill switch. |
 | `mainnet_write_forbidden` | Tentative mainnet mutative interdite. |
 | `audit_failed` | Audit non ecrit, mutation interdite. |

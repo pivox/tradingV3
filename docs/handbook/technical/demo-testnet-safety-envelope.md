@@ -80,6 +80,8 @@ Guards invariants :
 
 Guards obligatoires pour `demo|testnet` avec `dry_run=false` :
 
+- la paire exchange/environnement doit etre supportee :
+  OKX/demo ou Hyperliquid/testnet ;
 - `DEMO_TRADING_ENABLED=true` ;
 - le switch exchange cible actif (`OKX_DEMO_TRADING_ENABLED=true` pour OKX demo
   ou `HYPERLIQUID_TESTNET_TRADING_ENABLED=true` pour Hyperliquid testnet) ;
@@ -101,6 +103,7 @@ Les erreurs sont explicites :
 - `demo_trading_disabled`
 - `okx_demo_trading_disabled`
 - `hyperliquid_testnet_trading_disabled`
+- `exchange_environment_pair_unsupported`
 - `effective_kill_switch_enabled`
 - `mainnet_write_enabled_must_remain_false`
 - `mainnet_write_forbidden`

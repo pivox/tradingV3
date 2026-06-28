@@ -78,6 +78,10 @@ final readonly class DemoTradingKillSwitchService
             $reasons[] = 'demo_trading_disabled';
         }
 
+        if ($attempt->environment->isDemoOrTestnet() && !$this->isSupportedDemoTestnetPair($attempt)) {
+            $reasons[] = 'exchange_environment_pair_unsupported';
+        }
+
         if ($attempt->exchange === Exchange::OKX
             && $attempt->environment === ExchangeRuntimeEnvironment::DEMO
             && !$this->okxDemoTradingEnabled
@@ -97,6 +101,12 @@ final readonly class DemoTradingKillSwitchService
         }
 
         return $reasons;
+    }
+
+    private function isSupportedDemoTestnetPair(DemoTradingMutationAttempt $attempt): bool
+    {
+        return ($attempt->exchange === Exchange::OKX && $attempt->environment === ExchangeRuntimeEnvironment::DEMO)
+            || ($attempt->exchange === Exchange::HYPERLIQUID && $attempt->environment === ExchangeRuntimeEnvironment::TESTNET);
     }
 
     /**
