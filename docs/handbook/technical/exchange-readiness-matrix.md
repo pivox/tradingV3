@@ -63,8 +63,8 @@ Le rapport expose une forme stable pour le cockpit :
 
 Les champs `blocking_errors` et `warnings` sont serialises avec redaction defensive
 des messages contenant des termes de secret (`api_key`, `secret`, `private_key`,
-`passphrase`, `authorization`, `cookie`, `token`, `signature`, `credentials`).
-Les implementations ne doivent pas y placer de payload brut.
+`passphrase`, `password`, `authorization`, `cookie`, `token`, `signature`, `sign`,
+`credentials`, `memo`). Les implementations ne doivent pas y placer de payload brut.
 
 ## Niveaux readiness COMMON-003
 
@@ -86,8 +86,10 @@ Regles fail-closed :
 - absence de guard mainnet => `not_ready` avec `mainnet_write_guard_missing` ;
 - absence de `stop_loss_capability` => impossible d'atteindre `demo_testnet_candidate` ;
 - kill switch actif => impossible d'atteindre `demo_testnet_enabled` ;
-- `demo_testnet_enabled` exige aussi `demo_testnet_write_enabled=true`,
-  `permissions_trade=true`, whitelist symbole/marche et `max_notional`.
+- `demo_testnet_candidate` et `demo_testnet_enabled` exigent `environment=demo|testnet` ;
+- `demo_testnet_enabled` exige aussi `dry_run=false`,
+  `demo_testnet_write_enabled=true`, `permissions_trade=true`, whitelist
+  symbole/marche et `max_notional`.
 
 Les configs effectives OKX demo et Hyperliquid testnet livrees par `COMMON-002`
 peuvent produire un rapport `demo_testnet_candidate` en fixture si les signaux

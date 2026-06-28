@@ -57,6 +57,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
     {
         $report = (new ExchangeReadinessEvaluator())->evaluate(
             $this->readyInput(
+                dryRun: false,
                 demoTestnetWriteEnabled: true,
                 killSwitch: true,
             ),
@@ -70,6 +71,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
     {
         $report = (new ExchangeReadinessEvaluator())->evaluate(
             $this->readyInput(
+                dryRun: false,
                 demoTestnetWriteEnabled: true,
                 killSwitch: false,
             ),
@@ -78,6 +80,34 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
         self::assertSame(ExchangeReadinessLevel::DemoTestnetEnabled, $report->readyLevel);
         self::assertSame([], $report->blockingErrors);
         self::assertSame('demo_testnet_enabled', $report->toArray()['ready_level']);
+    }
+
+    public function testDryRunTrueNeverReportsDemoTestnetEnabled(): void
+    {
+        $report = (new ExchangeReadinessEvaluator())->evaluate(
+            $this->readyInput(
+                dryRun: true,
+                demoTestnetWriteEnabled: true,
+                killSwitch: false,
+            ),
+        );
+
+        self::assertSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
+    }
+
+    public function testDemoTestnetEnabledIsRejectedOutsideDemoTestnetEnvironment(): void
+    {
+        $report = (new ExchangeReadinessEvaluator())->evaluate(
+            $this->readyInput(
+                environment: 'mainnet',
+                dryRun: false,
+                demoTestnetWriteEnabled: true,
+                killSwitch: false,
+            ),
+        );
+
+        self::assertSame(ExchangeReadinessLevel::NotReady, $report->readyLevel);
+        self::assertContains('demo_testnet_environment_required', $report->blockingErrors);
     }
 
     public function testReadinessLevelsNeverExposeMainnetOrLiveReady(): void
@@ -103,12 +133,18 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
     {
         $report = (new ExchangeReadinessEvaluator())->evaluate(
             $this->readyInput(warnings: [
+                'password=demo-password',
+                'BITMART_API_MEMO=demo-memo',
+                'OK-ACCESS-SIGN=demo-signature',
                 'private_key=wallet-secret',
                 'safe_fixture_warning',
             ]),
         );
 
         $encoded = json_encode($report->toArray(), JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString('demo-password', $encoded);
+        self::assertStringNotContainsString('demo-memo', $encoded);
+        self::assertStringNotContainsString('demo-signature', $encoded);
         self::assertStringNotContainsString('wallet-secret', $encoded);
         self::assertStringContainsString('[redacted]', $encoded);
         self::assertStringContainsString('safe_fixture_warning', $encoded);
@@ -118,6 +154,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
      * @param list<string> $warnings
      */
     private function readyInput(
+        string $environment = 'demo',
         bool $publicConnectivity = true,
         bool $privateReadConnectivity = true,
         bool $privateObservability = false,
@@ -132,12 +169,13 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
         bool $demoTestnetWriteEnabled = false,
         bool $stopLossCapability = true,
         bool $killSwitch = true,
+        bool $dryRun = true,
         array $warnings = [],
     ): ExchangeReadinessInput {
         return new ExchangeReadinessInput(
             exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
-            environment: 'demo',
+            environment: $environment,
             publicConnectivity: $publicConnectivity,
             privateReadConnectivity: $privateReadConnectivity,
             privateObservability: $privateObservability,
@@ -152,6 +190,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
             demoTestnetWriteEnabled: $demoTestnetWriteEnabled,
             stopLossCapability: $stopLossCapability,
             killSwitch: $killSwitch,
+            dryRun: $dryRun,
             allowedSymbols: ['BTCUSDT'],
             allowedMarkets: ['perpetual'],
             maxNotional: 25.0,

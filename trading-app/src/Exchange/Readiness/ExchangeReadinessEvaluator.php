@@ -20,6 +20,10 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
             $blockingErrors[] = $error;
         }
 
+        if (!$input->dryRun && !$this->isDemoOrTestnet($input->environment)) {
+            $blockingErrors[] = 'demo_testnet_environment_required';
+        }
+
         if ($blockingErrors !== []) {
             return $this->report($input, ExchangeReadinessLevel::NotReady, $blockingErrors, $warnings);
         }
@@ -34,13 +38,19 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
 
         $readyLevel = ExchangeReadinessLevel::PrivateReadOnly;
 
-        if (!$this->hasLocalDryRunReadiness($input)) {
+        if (!$this->hasGuardedReadiness($input)) {
             $warnings[] = 'local_dry_run_prerequisites_missing';
 
             return $this->report($input, $readyLevel, [], $warnings);
         }
 
         $readyLevel = ExchangeReadinessLevel::LocalDryRunReady;
+
+        if (!$this->isDemoOrTestnet($input->environment)) {
+            $warnings[] = 'demo_testnet_environment_required';
+
+            return $this->report($input, $readyLevel, [], $warnings);
+        }
 
         if (!$input->stopLossCapability) {
             $warnings[] = 'stop_loss_capability_required_for_demo_testnet_candidate';
@@ -49,6 +59,14 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
         }
 
         $readyLevel = ExchangeReadinessLevel::DemoTestnetCandidate;
+
+        if ($input->dryRun) {
+            if (!$input->demoTestnetWriteEnabled) {
+                $warnings[] = 'demo_testnet_write_not_enabled';
+            }
+
+            return $this->report($input, $readyLevel, [], $warnings);
+        }
 
         if (!$input->demoTestnetWriteEnabled) {
             $warnings[] = 'demo_testnet_write_not_enabled';
@@ -108,12 +126,16 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
             && $input->permissionsRead;
     }
 
-    private function hasLocalDryRunReadiness(ExchangeReadinessInput $input): bool
+    private function hasGuardedReadiness(ExchangeReadinessInput $input): bool
     {
-        return $input->dryRun
-            && $input->demoTestnetWriteGuard
+        return $input->demoTestnetWriteGuard
             && ($input->allowedSymbols !== [] || $input->allowedMarkets !== [])
             && $input->maxNotional !== null;
+    }
+
+    private function isDemoOrTestnet(string $environment): bool
+    {
+        return in_array(strtolower($environment), ['demo', 'testnet'], true);
     }
 
     /**

@@ -9,7 +9,7 @@ use App\Common\Enum\MarketType;
 
 final readonly class ExchangeReadinessReport
 {
-    private const SENSITIVE_PATTERN = '/(api[_-]?key|secret|private[_-]?key|passphrase|authorization|cookie|token|signature|credentials?)/i';
+    private const SENSITIVE_PATTERN = '/(api[_-]?key|secret|private[_-]?key|passphrase|password|authorization|cookie|token|signature|sign|credentials?|memo)/i';
 
     /**
      * @param list<string> $allowedSymbols
