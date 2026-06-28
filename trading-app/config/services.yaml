@@ -48,6 +48,7 @@ parameters:
     env(HYPERLIQUID_API_BASE_URI): ''
     env(HYPERLIQUID_WS_URI): ''
     env(HYPERLIQUID_MAINNET_ENABLED): '0'
+    env(HYPERLIQUID_TESTNET_TRADING_ENABLED): '0'
     env(OKX_ENV): 'demo'
     env(OKX_API_KEY): ''
     env(OKX_API_SECRET): ''
@@ -55,6 +56,7 @@ parameters:
     env(OKX_API_BASE_URI): ''
     env(OKX_WS_PUBLIC_URI): ''
     env(OKX_WS_PRIVATE_URI): ''
+    env(DEMO_TRADING_ENABLED): '0'
     env(OKX_DEMO_TRADING_ENABLED): '0'
     env(OKX_LIVE_ENABLED): '0'
     env(MTF_VALIDATION_FALLBACK_ALERT_THRESHOLD): '1'
@@ -116,6 +118,19 @@ services:
     App\Trading\Reporting\PositionTradeAnalysisReportingService:
         arguments:
             $configuredSource: '%env(string:POSITION_TRADE_ANALYSIS_REPORTING_SOURCE)%'
+
+    App\TradingCore\Execution\Safety\DemoTradingAuditSinkInterface:
+        alias: App\TradingCore\Execution\Safety\PsrDemoTradingAuditSink
+
+    App\TradingCore\Execution\Safety\PsrDemoTradingAuditSink:
+        arguments:
+            $logger: '@monolog.logger.demo_trading_audit'
+
+    App\TradingCore\Execution\Safety\DemoTradingKillSwitchService:
+        arguments:
+            $globalDemoTradingEnabled: '%env(bool:DEMO_TRADING_ENABLED)%'
+            $okxDemoTradingEnabled: '%env(bool:OKX_DEMO_TRADING_ENABLED)%'
+            $hyperliquidTestnetTradingEnabled: '%env(bool:HYPERLIQUID_TESTNET_TRADING_ENABLED)%'
 
 
 

@@ -34,6 +34,10 @@ Le contrat est isole dans `App\TradingCore\Execution\Safety` :
 - `DemoTradingSafetyPolicy`
 - `DemoTradingSafetyDecision`
 - `DemoTradingSafetyPolicyEvaluator`
+- `DemoTradingMutationAttempt`
+- `DemoTradingKillSwitchService`
+- `DemoTradingKillSwitchDecision`
+- `DemoTradingAuditSinkInterface`
 
 `DemoTradingSafetyPolicyEvaluator` est pur :
 
@@ -42,6 +46,18 @@ Le contrat est isole dans `App\TradingCore\Execution\Safety` :
 - aucun acces a Symfony, Doctrine, Messenger ou Temporal ;
 - aucun secret requis ;
 - aucun effet de bord runtime.
+
+`DemoTradingKillSwitchService` est la facade runtime commune ajoutee par
+COMMON-004. Elle combine :
+
+- les switches d'environnement `DEMO_TRADING_ENABLED`,
+  `OKX_DEMO_TRADING_ENABLED`, `HYPERLIQUID_TESTNET_TRADING_ENABLED` ;
+- le `kill_switch_enabled` de la config effective ;
+- la policy pure `DemoTradingSafetyPolicyEvaluator` ;
+- un audit standardise via `DemoTradingAuditSinkInterface`.
+
+Le service reste fail-closed : si l'audit ne peut pas etre ecrit, la decision
+retournee est bloquee avec `audit_failed`.
 
 ## Niveaux de decision
 
@@ -64,6 +80,11 @@ Guards invariants :
 
 Guards obligatoires pour `demo|testnet` avec `dry_run=false` :
 
+- la paire exchange/environnement doit etre supportee :
+  OKX/demo ou Hyperliquid/testnet ;
+- `DEMO_TRADING_ENABLED=true` ;
+- le switch exchange cible actif (`OKX_DEMO_TRADING_ENABLED=true` pour OKX demo
+  ou `HYPERLIQUID_TESTNET_TRADING_ENABLED=true` pour Hyperliquid testnet) ;
 - `demo_testnet_write_enabled=true` ;
 - `kill_switch_enabled=false` ;
 - `require_stop_loss=true` ;
@@ -79,6 +100,12 @@ a la policy respecte aussi la whitelist, le plafond notionnel et la presence SL.
 
 Les erreurs sont explicites :
 
+- `demo_trading_disabled`
+- `okx_demo_trading_disabled`
+- `hyperliquid_testnet_trading_disabled`
+- `exchange_environment_pair_unsupported`
+- `effective_kill_switch_enabled`
+- `client_order_id_required`
 - `mainnet_write_enabled_must_remain_false`
 - `mainnet_write_forbidden`
 - `local_dry_run_cannot_write`
@@ -93,6 +120,36 @@ Les erreurs sont explicites :
 - `requested_symbol_or_market_not_allowed`
 - `stop_loss_presence_required`
 - `stop_loss_missing`
+- `audit_failed`
+
+## Audit COMMON-004
+
+Toute tentative mutative controlee par `DemoTradingKillSwitchService` produit une
+entree d'audit avec :
+
+- `exchange`
+- `environment`
+- `mode`
+- `profile`
+- `symbol`
+- `market`
+- `notional`
+- `client_order_id`
+- `action`
+- `allowed`
+- `outcome`
+- `reasons`
+- `correlation_ids`
+- `safety`
+- `audit_context`
+
+Les relations ambiguës ou blocages restent visibles dans `reasons`. Le service ne
+resout pas arbitrairement une tentative bloquee.
+
+L'audit COMMON-004 utilise un canal Monolog dedie `demo_trading_audit` et un
+fichier `var/log/demo-trading-audit.log`. Il ne depend pas de `LOG_LEVEL_MAIN`.
+Les IDs de correlation non secrets comme `signal_id` et `signal_run_id` restent
+visibles ; les cles de signature reelles comme `OK-ACCESS-SIGN` restent redacted.
 
 ## Redaction
 
@@ -123,6 +180,14 @@ Cette PR ne fait pas :
 
 ## Rollback
 
+Rollback immediat demo/testnet : remettre `DEMO_TRADING_ENABLED=0`,
+`OKX_DEMO_TRADING_ENABLED=0`, `HYPERLIQUID_TESTNET_TRADING_ENABLED=0` et
+`trading.execution.kill_switch_enabled=true`, puis redemarrer les processus qui
+lisent l'environnement si necessaire.
+
 Rollback applicatif : supprimer l'usage futur du service ou revenir au commit
-precedent. Comme `COMMON-001` n'est pas branche au runtime existant, son rollback
-n'affecte pas les flux MTF, TradeEntry, OKX dry-run ou Hyperliquid dry-run actuels.
+precedent. Comme COMMON-004 ne branche pas encore de runtime mutatif reel, son
+rollback n'affecte pas les flux MTF, TradeEntry, OKX dry-run ou Hyperliquid
+dry-run actuels.
+
+Voir aussi : [Demo/Testnet Kill Switch Runbook](../runbooks/demo-testnet-kill-switch.md).

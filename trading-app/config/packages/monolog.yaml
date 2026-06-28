@@ -1,5 +1,5 @@
 monolog:
-  channels: ['mtf', 'signals', 'positions', 'provider', 'bitmart', 'indicators', 'runtime', 'pipeline_exec', 'deprecation', 'global-severity', 'ws_agent', 'conditionsLogger']
+  channels: ['mtf', 'signals', 'positions', 'provider', 'bitmart', 'indicators', 'runtime', 'pipeline_exec', 'deprecation', 'global-severity', 'ws_agent', 'conditionsLogger', 'demo_trading_audit']
   handlers:
     # =====================
     # --- Handler Temporal (Asynchrone) ---
@@ -62,6 +62,14 @@ monolog:
       max_files: 5
       level: info
       channels: ['conditionsLogger']
+      formatter: App\Logging\CustomLineFormatter
+
+    demo_trading_audit_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/demo-trading-audit.log'
+      max_files: 30
+      level: debug
+      channels: ['demo_trading_audit']
       formatter: App\Logging\CustomLineFormatter
 
     # Canal Bitmart - Traçage des appels API Bitmart (REST/Privé)
