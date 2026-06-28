@@ -20,6 +20,80 @@ Elle ne rend aucun exchange prêt au live. Elle sert à éviter les confusions e
 | `legacy_runtime_only` | Présent parce que le runtime historique en dépend encore, mais à retirer plus tard. |
 | `not_ready` | Ne doit pas être utilisé par le runtime. |
 
+## Contrat runtime COMMON-003
+
+`COMMON-003` ajoute un contrat PHP pur dans `App\Exchange\Readiness` :
+
+- `ExchangeReadinessLevel` ;
+- `ExchangeReadinessInput` ;
+- `ExchangeReadinessReport` ;
+- `ExchangeReadinessEvaluator` ;
+- `ExchangeRuntimeCheckInterface`.
+
+Ce contrat ne fait aucun appel REST, WebSocket, Doctrine, Messenger ou Temporal. Les
+implementations OKX et Hyperliquid futures devront alimenter `ExchangeReadinessInput`
+avec des preuves deja collectees ou des fixtures de test, puis retourner le meme
+`ExchangeReadinessReport`.
+
+Le rapport expose une forme stable pour le cockpit :
+
+- `exchange` ;
+- `market_type` ;
+- `environment` ;
+- `ready_level` ;
+- `public_connectivity` ;
+- `private_read_connectivity` ;
+- `private_observability` ;
+- `instruments_loaded` ;
+- `metadata_valid` ;
+- `precision_valid` ;
+- `account_readable` ;
+- `permissions_read` ;
+- `permissions_trade` ;
+- `mainnet_write_guard` ;
+- `demo_testnet_write_guard` ;
+- `stop_loss_capability` ;
+- `kill_switch` ;
+- `allowed_symbols` ;
+- `allowed_markets` ;
+- `max_notional` ;
+- `config_hash` ;
+- `blocking_errors` ;
+- `warnings`.
+
+Les champs `blocking_errors` et `warnings` sont serialises avec redaction defensive
+des messages contenant des termes de secret (`api_key`, `secret`, `private_key`,
+`passphrase`, `authorization`, `cookie`, `token`, `signature`, `credentials`).
+Les implementations ne doivent pas y placer de payload brut.
+
+## Niveaux readiness COMMON-003
+
+| Niveau | Sens | Ecriture exchange |
+|---|---|---|
+| `not_ready` | Un pre-requis bloquant manque. | Non |
+| `public_read_only` | Connectivite publique, instruments et metadata exploitables. | Non |
+| `private_read_only` | Lecture privee/account possible en plus du public. | Non |
+| `local_dry_run_ready` | Config et guards suffisants pour construire une simulation locale auditable. | Non |
+| `demo_testnet_candidate` | Candidat demo/testnet avec SL capability, mais ecriture non autorisee. | Non |
+| `demo_testnet_enabled` | Ecriture demo/testnet autorisee par guards explicites. | Demo/testnet uniquement |
+
+`mainnet_ready` et `live_ready` sont interdits dans cette serie et ne sont pas des
+valeurs de l'enum.
+
+Regles fail-closed :
+
+- absence d'instruments charges => `not_ready` avec `instruments_not_loaded` ;
+- absence de guard mainnet => `not_ready` avec `mainnet_write_guard_missing` ;
+- absence de `stop_loss_capability` => impossible d'atteindre `demo_testnet_candidate` ;
+- kill switch actif => impossible d'atteindre `demo_testnet_enabled` ;
+- `demo_testnet_enabled` exige aussi `demo_testnet_write_enabled=true`,
+  `permissions_trade=true`, whitelist symbole/marche et `max_notional`.
+
+Les configs effectives OKX demo et Hyperliquid testnet livrees par `COMMON-002`
+peuvent produire un rapport `demo_testnet_candidate` en fixture si les signaux
+public/private read sont verts. Elles restent non mutatives par defaut :
+`demo_testnet_write_enabled=false` et `kill_switch_enabled=true`.
+
 ## Matrice synthétique
 
 | Exchange | Statut cible | Runtime actuel | Dry-run autorisé | Live autorisé | Rôle |
