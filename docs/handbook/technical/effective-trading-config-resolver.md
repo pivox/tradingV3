@@ -27,12 +27,20 @@ config/trading/env/dev.yaml
 
 ## Statut runtime
 
-Cette PR ne branche pas encore le resolver sur `mtf:run`, `POST /api/mtf/run`, TradeEntry, Temporal ou les gateways exchange.
+COMMON-002 ne branche pas encore le resolver sur `mtf:run`, `POST /api/mtf/run`,
+TradeEntry, Temporal ou les gateways exchange.
 
-Les fichiers sous `trading-app/config/trading/` sont des references inactives. Ils documentent la cible et gardent les protections suivantes :
+Les fichiers sous `trading-app/config/trading/` sont des references inactives. Ils
+documentent la cible et gardent les protections suivantes :
 
 - `dry_run: true` ;
 - `live_enabled: false` ;
+- `mainnet_write_enabled: false` ;
+- `demo_testnet_write_enabled: false` par defaut ;
+- `kill_switch_enabled: true` ;
+- `require_stop_loss: true` ;
+- `allowed_symbols` ou `allowed_markets` renseigne pour OKX demo et Hyperliquid testnet ;
+- `max_notional` renseigne ;
 - `runtime_check_required: true` pour OKX et Hyperliquid ;
 - Bitmart reste marque legacy tant que le runtime actuel en depend.
 
@@ -45,6 +53,105 @@ Les fichiers sous `trading-app/config/trading/` sont des references inactives. I
 - `env/{env}.yaml` est optionnel.
 
 Une couche optionnelle absente est ignoree et exposee dans `missing_optional_layers`. Une couche obligatoire absente leve `TradingConfigException`.
+
+Les couches demo/testnet ajoutees par COMMON-002 sont :
+
+- `env/demo.yaml` ;
+- `env/testnet.yaml` ;
+- `exchange/okx.yaml` ;
+- `exchange/hyperliquid.yaml` ;
+- `mode_exchange/{regular,scalper,scalper_micro}.okx.yaml` ;
+- `mode_exchange/{regular,scalper,scalper_micro}.hyperliquid.yaml`.
+
+Les secrets ne sont pas stockes dans ces fichiers. Les credentials demo/testnet
+restent des variables d'environnement dediees et ne sont pas serialisees dans la
+config effective.
+
+## API read-only
+
+COMMON-002 expose une surface read-only pour inspecter la config effective :
+
+```bash
+curl 'http://localhost:8082/api/trading/config/effective?mode=scalper&exchange=okx&env=demo'
+```
+
+Exemple Hyperliquid testnet :
+
+```bash
+curl 'http://localhost:8082/api/trading/config/effective?mode=scalper&exchange=hyperliquid&env=testnet'
+```
+
+La reponse contient :
+
+- `request` : couple `mode`, `exchange`, `env` demande ;
+- `config` : configuration effective resolue ;
+- `config_hash` : hash SHA-256 stable de la config normalisee ;
+- `layers` : couches utilisees dans l'ordre ;
+- `missing_optional_layers` : couches optionnelles absentes ;
+- `provenance` : provenance par chemin de valeur, par exemple
+  `trading.execution.max_notional`.
+
+Erreurs structurees :
+
+- `400 missing_query_parameter` si `mode`, `exchange` ou `env` manque ;
+- `400 invalid_config_request` si une couche est invalide, non parseable ou si
+  la paire `exchange/env` est interdite.
+
+Paires supportees par COMMON-002 :
+
+- `exchange=okx&env=demo` ;
+- `exchange=hyperliquid&env=testnet`.
+
+Modes supportes par l'API COMMON-002 :
+
+- `regular` ;
+- `scalper` ;
+- `scalper_micro`.
+
+Les paires croisees comme `exchange=okx&env=testnet` ou
+`exchange=hyperliquid&env=demo` sont refusees avant resolution pour eviter une
+config effective incoherente. Les exchanges inconnus et Bitmart via cet endpoint
+sont egalement refuses : Bitmart reste legacy et n'est pas re-route par l'API
+COMMON-002.
+
+Les modes inconnus sont refuses avant resolution. Les couches `mode/*` restent
+optionnelles pour le resolver bas niveau, mais l'API ne doit pas transformer une
+typo comme `scalperr` en config effective valide.
+
+L'API ne modifie aucun etat et ne contacte aucun exchange.
+
+Le viewer Effective Config reste un follow-up separe : aucune integration runtime
+ou front n'est activee dans COMMON-002.
+
+## Exemples de resolution
+
+OKX demo scalper :
+
+```text
+base
+< mode/scalper
+< exchange/okx
+< mode_exchange/scalper.okx
+< env/demo
+= trading.environment: demo
+= trading.execution.mainnet_write_enabled: false
+= trading.execution.demo_testnet_write_enabled: false
+= trading.execution.kill_switch_enabled: true
+```
+
+Hyperliquid testnet scalper :
+
+```text
+base
+< mode/scalper
+< exchange/hyperliquid
+< mode_exchange/scalper.hyperliquid
+< env/testnet
+= trading.environment: testnet
+= trading.execution.mainnet_write_enabled: false
+= trading.execution.demo_testnet_write_enabled: false
+= trading.execution.kill_switch_enabled: true
+```
 
 ## YAML historiques actuellement utilises
 

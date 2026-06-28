@@ -2,17 +2,33 @@ version: '0.1.0-effective-config-bootstrap'
 
 trading:
   exchange: hyperliquid
+  environment: testnet
   exchange_status: dry_run_runtime_check_only
+  account_mode: testnet
+  margin_mode: cross
+  rate_limit_profile:
+    name: hyperliquid_testnet_conservative
+    max_requests_per_second: 5
+  retry_policy:
+    max_attempts: 2
+    backoff_ms: 250
   execution:
     dry_run: true
     live_enabled: false
     runtime_check_required: true
+    mainnet_write_enabled: false
+    demo_testnet_write_enabled: false
+    allowed_symbols:
+      - BTCUSDT
+      - ETHUSDT
+    allowed_markets:
+      - perpetual
+    max_notional: 25.0
+    kill_switch_enabled: true
+    require_stop_loss: true
+  risk:
+    max_leverage_cap: 3
 
 compatibility:
-  env_template_keys:
-    - HYPERLIQUID_ENV
-    - HYPERLIQUID_PRIVATE_KEY
-    - HYPERLIQUID_ACCOUNT_ADDRESS
-    - HYPERLIQUID_API_BASE_URI
-    - HYPERLIQUID_WS_URI
-    - HYPERLIQUID_MAINNET_ENABLED
+  credential_scope: testnet_agent_wallet_only
+  secrets_external_only: true

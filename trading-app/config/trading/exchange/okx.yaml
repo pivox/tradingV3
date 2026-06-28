@@ -2,20 +2,34 @@ version: '0.1.0-effective-config-bootstrap'
 
 trading:
   exchange: okx
+  environment: demo
   exchange_status: dry_run_runtime_check_only
+  account_mode: demo
+  margin_mode: cross
+  rate_limit_profile:
+    name: okx_demo_conservative
+    max_requests_per_second: 5
+  retry_policy:
+    max_attempts: 2
+    backoff_ms: 250
   execution:
     dry_run: true
     live_enabled: false
     runtime_check_required: true
+    mainnet_write_enabled: false
+    demo_testnet_write_enabled: false
+    allowed_symbols:
+      - BTCUSDT
+      - ETHUSDT
+    allowed_markets:
+      - perpetual
+    max_notional: 25.0
+    kill_switch_enabled: true
+    require_stop_loss: true
+  risk:
+    max_leverage_cap: 3
 
 compatibility:
-  env_template_keys:
-    - OKX_ENV
-    - OKX_API_KEY
-    - OKX_API_SECRET
-    - OKX_API_PASSPHRASE
-    - OKX_API_BASE_URI
-    - OKX_WS_PUBLIC_URI
-    - OKX_WS_PRIVATE_URI
-    - OKX_DEMO_TRADING_ENABLED
-    - OKX_LIVE_ENABLED
+  credential_scope: demo_only
+  required_header: x-simulated-trading
+  secrets_external_only: true

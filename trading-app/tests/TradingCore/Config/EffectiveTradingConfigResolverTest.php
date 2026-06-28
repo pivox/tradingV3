@@ -138,6 +138,71 @@ YAML);
         self::assertSame(['base', 'mode', 'exchange', 'mode_exchange', 'env'], array_column($resolved['layers'], 'type'));
     }
 
+    public function testExposesValueProvenanceAndStableConfigHash(): void
+    {
+        $this->writeYaml('base.yaml', <<<YAML
+trading:
+  exchange: fake
+  execution:
+    dry_run: true
+    mainnet_write_enabled: false
+  risk:
+    max_leverage_cap: 2
+YAML);
+        $this->writeYaml('mode/scalper.yaml', <<<YAML
+trading:
+  profile: scalper
+YAML);
+        $this->writeYaml('exchange/okx.yaml', <<<YAML
+trading:
+  exchange: okx
+  environment: demo
+  execution:
+    demo_testnet_write_enabled: false
+  risk:
+    max_leverage_cap: 5
+YAML);
+        $this->writeYaml('mode_exchange/scalper.okx.yaml', <<<YAML
+trading:
+  risk:
+    max_leverage_cap: 3
+YAML);
+
+        $resolved = $this->resolver()->resolve('scalper', 'okx', 'missing-env');
+
+        self::assertArrayHasKey('config_hash', $resolved);
+        self::assertIsString($resolved['config_hash']);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $resolved['config_hash']);
+        self::assertArrayHasKey('provenance', $resolved);
+        self::assertSame('mode', $resolved['provenance']['trading.profile']['type']);
+        self::assertSame('exchange', $resolved['provenance']['trading.exchange']['type']);
+        self::assertSame('exchange', $resolved['provenance']['trading.environment']['type']);
+        self::assertSame('mode_exchange', $resolved['provenance']['trading.risk.max_leverage_cap']['type']);
+        self::assertSame('base', $resolved['provenance']['trading.execution.mainnet_write_enabled']['type']);
+    }
+
+    public function testReplacingSubtreeClearsStaleDescendantProvenance(): void
+    {
+        $this->writeYaml('base.yaml', <<<YAML
+trading:
+  execution:
+    dry_run: true
+    mainnet_write_enabled: false
+YAML);
+        $this->writeYaml('env/dev.yaml', <<<YAML
+trading:
+  execution: local_only
+YAML);
+
+        $resolved = $this->resolver()->resolve('missing-mode', 'missing-exchange', 'dev');
+
+        self::assertSame('local_only', $resolved['config']['trading']['execution']);
+        self::assertArrayHasKey('trading.execution', $resolved['provenance']);
+        self::assertSame('env', $resolved['provenance']['trading.execution']['type']);
+        self::assertArrayNotHasKey('trading.execution.dry_run', $resolved['provenance']);
+        self::assertArrayNotHasKey('trading.execution.mainnet_write_enabled', $resolved['provenance']);
+    }
+
     public function testThrowsClearErrorWhenBaseLayerIsMissing(): void
     {
         $this->expectException(TradingConfigException::class);
