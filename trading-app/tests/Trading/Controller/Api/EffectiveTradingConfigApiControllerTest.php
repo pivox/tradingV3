@@ -115,6 +115,24 @@ final class EffectiveTradingConfigApiControllerTest extends TestCase
         self::assertStringContainsString('Unsupported exchange/env pair', $body['error']['message']);
     }
 
+    public function testRejectsUnsupportedModeBeforeOptionalLayersCanHideTypo(): void
+    {
+        $this->writeYaml('base.yaml', "trading:\n  exchange: fake\n  execution:\n    dry_run: true\n");
+        $this->writeYaml('exchange/okx.yaml', "trading:\n  exchange: okx\n  environment: demo\n");
+        $this->writeYaml('env/demo.yaml', "trading:\n  environment: demo\n");
+
+        $response = $this->controller()->effective(new Request([
+            'mode' => 'scalperr',
+            'exchange' => 'okx',
+            'env' => 'demo',
+        ]));
+
+        self::assertSame(Response::HTTP_BAD_REQUEST, $response->getStatusCode());
+        $body = $this->json($response);
+        self::assertSame('invalid_config_request', $body['error']['code']);
+        self::assertStringContainsString('Unsupported trading mode', $body['error']['message']);
+    }
+
     public function testReturnsEffectiveConfigWithHashAndProvenance(): void
     {
         $this->writeYaml('base.yaml', <<<YAML

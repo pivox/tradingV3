@@ -102,11 +102,21 @@ Paires supportees par COMMON-002 :
 - `exchange=okx&env=demo` ;
 - `exchange=hyperliquid&env=testnet`.
 
+Modes supportes par l'API COMMON-002 :
+
+- `regular` ;
+- `scalper` ;
+- `scalper_micro`.
+
 Les paires croisees comme `exchange=okx&env=testnet` ou
 `exchange=hyperliquid&env=demo` sont refusees avant resolution pour eviter une
 config effective incoherente. Les exchanges inconnus et Bitmart via cet endpoint
 sont egalement refuses : Bitmart reste legacy et n'est pas re-route par l'API
 COMMON-002.
+
+Les modes inconnus sont refuses avant resolution. Les couches `mode/*` restent
+optionnelles pour le resolver bas niveau, mais l'API ne doit pas transformer une
+typo comme `scalperr` en config effective valide.
 
 L'API ne modifie aucun etat et ne contacte aucun exchange.
 

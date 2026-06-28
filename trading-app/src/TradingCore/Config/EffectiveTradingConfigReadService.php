@@ -25,6 +25,10 @@ final readonly class EffectiveTradingConfigReadService
      */
     public function describe(string $mode, string $exchange, string $env): array
     {
+        $this->assertSafeLayerName('mode', $mode);
+        $this->assertSafeLayerName('exchange', $exchange);
+        $this->assertSafeLayerName('env', $env);
+        $this->assertSupportedMode($mode);
         $this->assertSupportedExchangeEnvironment($exchange, $env);
 
         $resolved = $this->resolver->resolve($mode, $exchange, $env);
@@ -43,6 +47,15 @@ final readonly class EffectiveTradingConfigReadService
         ];
     }
 
+    private function assertSupportedMode(string $mode): void
+    {
+        if (in_array($mode, ['regular', 'scalper', 'scalper_micro'], true)) {
+            return;
+        }
+
+        throw new TradingConfigException('Unsupported trading mode: COMMON-002 supports only regular, scalper and scalper_micro.');
+    }
+
     private function assertSupportedExchangeEnvironment(string $exchange, string $env): void
     {
         if (($exchange === 'okx' && $env === 'demo') || ($exchange === 'hyperliquid' && $env === 'testnet')) {
@@ -50,5 +63,18 @@ final readonly class EffectiveTradingConfigReadService
         }
 
         throw new TradingConfigException('Unsupported exchange/env pair: COMMON-002 supports only okx/demo and hyperliquid/testnet.');
+    }
+
+    private function assertSafeLayerName(string $type, string $name): void
+    {
+        if (preg_match('/^[a-z0-9][a-z0-9_-]*$/', $name) === 1) {
+            return;
+        }
+
+        throw new TradingConfigException(sprintf(
+            'Invalid trading config layer name for "%s": "%s"',
+            $type,
+            $name,
+        ));
     }
 }
