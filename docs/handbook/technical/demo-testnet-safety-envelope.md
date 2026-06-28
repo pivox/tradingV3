@@ -146,6 +146,11 @@ entree d'audit avec :
 Les relations ambiguës ou blocages restent visibles dans `reasons`. Le service ne
 resout pas arbitrairement une tentative bloquee.
 
+L'audit COMMON-004 utilise un canal Monolog dedie `demo_trading_audit` et un
+fichier `var/log/demo-trading-audit.log`. Il ne depend pas de `LOG_LEVEL_MAIN`.
+Les IDs de correlation non secrets comme `signal_id` et `signal_run_id` restent
+visibles ; les cles de signature reelles comme `OK-ACCESS-SIGN` restent redacted.
+
 ## Redaction
 
 `DemoTradingSafetyDecision::toRedactedArray()` expose un payload d'audit sans secret.

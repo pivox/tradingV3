@@ -68,6 +68,7 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
             auditContext: [
                 'OKX_DEMO_API_KEY' => 'demo-key',
                 'OK-ACCESS-SIGN' => 'raw-signature',
+                'signal_id' => 'signal-789',
                 'nested' => [
                     'private_key' => 'wallet-secret',
                     'safe_value' => 'visible',
@@ -76,6 +77,7 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
             correlationIds: [
                 'orchestration_run_id' => 'run-123',
                 'correlation_run_id' => 'corr-456',
+                'signal_run_id' => 'signal-run-123',
             ],
         ));
 
@@ -96,8 +98,10 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
         self::assertTrue($event['allowed']);
         self::assertSame([], $event['reasons']);
         self::assertSame('run-123', $event['correlation_ids']['orchestration_run_id']);
+        self::assertSame('signal-run-123', $event['correlation_ids']['signal_run_id']);
         self::assertSame('[redacted]', $event['audit_context']['OKX_DEMO_API_KEY']);
         self::assertSame('[redacted]', $event['audit_context']['OK-ACCESS-SIGN']);
+        self::assertSame('signal-789', $event['audit_context']['signal_id']);
         self::assertSame('[redacted]', $event['audit_context']['nested']['private_key']);
         self::assertSame('visible', $event['audit_context']['nested']['safe_value']);
 

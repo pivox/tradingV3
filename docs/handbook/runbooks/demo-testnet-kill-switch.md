@@ -64,6 +64,13 @@ auditable et stop loss present.
 
 Les champs sensibles de `audit_context` sont redacted. Ne jamais placer de payload
 REST brut, signature, private key, token, cookie ou secret dans l'audit.
+Les identifiants non secrets comme `signal_id`, `signal_run_id`,
+`orchestration_run_id` et `correlation_run_id` doivent rester visibles pour la
+correlation.
+
+L'audit est ecrit sur le canal Monolog dedie `demo_trading_audit`, dans
+`var/log/demo-trading-audit.log`, avec un handler propre non pilote par
+`LOG_LEVEL_MAIN`.
 
 Si l'audit ne peut pas etre ecrit, le service retourne une decision bloquee avec
 `audit_failed`. Une mutation ne doit jamais continuer sans audit ecrit.

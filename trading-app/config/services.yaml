@@ -122,6 +122,10 @@ services:
     App\TradingCore\Execution\Safety\DemoTradingAuditSinkInterface:
         alias: App\TradingCore\Execution\Safety\PsrDemoTradingAuditSink
 
+    App\TradingCore\Execution\Safety\PsrDemoTradingAuditSink:
+        arguments:
+            $logger: '@monolog.logger.demo_trading_audit'
+
     App\TradingCore\Execution\Safety\DemoTradingKillSwitchService:
         arguments:
             $globalDemoTradingEnabled: '%env(bool:DEMO_TRADING_ENABLED)%'
