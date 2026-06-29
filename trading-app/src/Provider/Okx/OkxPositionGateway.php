@@ -24,7 +24,11 @@ final class OkxPositionGateway
      */
     public function getOpenPositions(?string $symbol = null): array
     {
-        return $this->fetchOpenPositions($symbol, __METHOD__);
+        try {
+            return $this->fetchOpenPositions($symbol, __METHOD__);
+        } catch (\Throwable) {
+            return [];
+        }
     }
 
     /**

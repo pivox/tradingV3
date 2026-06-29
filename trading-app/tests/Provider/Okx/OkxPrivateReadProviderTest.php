@@ -35,6 +35,19 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame(100.5, $gateway->getAccountBalance('USDT'));
     }
 
+    public function testReadsAccountBalanceFromFallbackWhenPrimaryFieldIsEmpty(): void
+    {
+        $client = $this->client();
+        $client->emptyAvailableEquity = true;
+        $gateway = new OkxAccountGateway($client);
+
+        $account = $gateway->getAccountInfo();
+
+        self::assertNotNull($account);
+        self::assertSame('99.5', (string) $account->availableBalance);
+        self::assertSame(99.5, $gateway->getAccountBalance('USDT'));
+    }
+
     public function testReadsOpenPositions(): void
     {
         $gateway = new OkxPositionGateway($this->client());
@@ -49,6 +62,16 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame('25200', (string) $positions[0]->markPrice);
         self::assertSame('12.5', (string) $positions[0]->unrealizedPnl);
         self::assertSame('3', (string) $positions[0]->leverage);
+    }
+
+    public function testOpenPositionsIsTolerantAndOrFailPropagates(): void
+    {
+        $gateway = new OkxPositionGateway();
+
+        self::assertSame([], $gateway->getOpenPositions('BTCUSDT'));
+
+        $this->expectException(OkxProviderNotReadyException::class);
+        $gateway->getOpenPositionsOrFail('BTCUSDT');
     }
 
     public function testReadsOpenOrdersWithoutUsingWriteEndpoint(): void
@@ -70,6 +93,16 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame(OrderType::STOP, $orders[1]->type);
         self::assertSame('algo-client-1', $orders[1]->metadata['client_order_id'] ?? null);
         self::assertSame(0, $client->privatePostCalls);
+    }
+
+    public function testOpenOrdersIsTolerantAndOrFailPropagates(): void
+    {
+        $gateway = new OkxOrderGateway();
+
+        self::assertSame([], $gateway->getOpenOrders('BTCUSDT'));
+
+        $this->expectException(OkxProviderNotReadyException::class);
+        $gateway->getOpenOrdersOrFail('BTCUSDT');
     }
 
     public function testFindsOpenOrderByNormalizedClientOrderId(): void
@@ -157,6 +190,7 @@ final class OkxPrivateReadProviderTest extends TestCase
 final class FakeOkxPrivateReadClient implements OkxRestClientInterface
 {
     public bool $rateLimited = false;
+    public bool $emptyAvailableEquity = false;
     public int $privatePostCalls = 0;
     public string $lastPrivateGetPath = '';
 
@@ -202,10 +236,10 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     {
         return ['code' => '0', 'data' => [[
             'totalEq' => '120.75',
-            'details' => [[
-                'ccy' => 'USDT',
-                'availEq' => '100.5',
-                'availBal' => '99.5',
+                'details' => [[
+                    'ccy' => 'USDT',
+                    'availEq' => $this->emptyAvailableEquity ? '' : '100.5',
+                    'availBal' => '99.5',
                 'frozenBal' => '1.5',
                 'eq' => '120.75',
                 'upl' => '3.25',

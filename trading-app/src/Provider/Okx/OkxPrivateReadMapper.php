@@ -41,11 +41,11 @@ final readonly class OkxPrivateReadMapper
 
             return new AccountDto(
                 currency: $ccy,
-                availableBalance: BigDecimal::of($this->number($detail['availEq'] ?? $detail['availBal'] ?? '0')),
-                frozenBalance: BigDecimal::of($this->number($detail['frozenBal'] ?? $detail['ordFrozen'] ?? '0')),
-                unrealized: BigDecimal::of($this->number($detail['upl'] ?? '0')),
-                equity: BigDecimal::of($this->number($detail['eq'] ?? $account['totalEq'] ?? '0')),
-                positionDeposit: BigDecimal::of($this->number($detail['imr'] ?? $detail['margin'] ?? '0')),
+                availableBalance: BigDecimal::of($this->firstNumber($detail['availEq'] ?? null, $detail['availBal'] ?? null, '0')),
+                frozenBalance: BigDecimal::of($this->firstNumber($detail['frozenBal'] ?? null, $detail['ordFrozen'] ?? null, '0')),
+                unrealized: BigDecimal::of($this->firstNumber($detail['upl'] ?? null, '0')),
+                equity: BigDecimal::of($this->firstNumber($detail['eq'] ?? null, $account['totalEq'] ?? null, '0')),
+                positionDeposit: BigDecimal::of($this->firstNumber($detail['imr'] ?? null, $detail['margin'] ?? null, '0')),
                 metadata: $this->redacted($detail),
             );
         }
@@ -282,6 +282,17 @@ final readonly class OkxPrivateReadMapper
         }
 
         return $this->isUsableNumber($value) ? (string) $value : '0';
+    }
+
+    private function firstNumber(mixed ...$values): string
+    {
+        foreach ($values as $value) {
+            if (\is_float($value) || \is_int($value) || $this->isUsableNumber($value)) {
+                return (string) $value;
+            }
+        }
+
+        return '0';
     }
 
     private function isUsableNumber(mixed $value): bool

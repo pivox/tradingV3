@@ -61,7 +61,11 @@ final class OkxOrderGateway implements OrderProviderInterface
      */
     public function getOpenOrders(?string $symbol = null): array
     {
-        return $this->fetchOpenOrders($symbol, __METHOD__);
+        try {
+            return $this->fetchOpenOrders($symbol, __METHOD__);
+        } catch (\Throwable) {
+            return [];
+        }
     }
 
     /**
