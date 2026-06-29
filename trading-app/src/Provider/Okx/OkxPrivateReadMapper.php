@@ -135,6 +135,34 @@ final readonly class OkxPrivateReadMapper
     }
 
     /**
+     * @param array<string,mixed> $row
+     * @return array<string,mixed>
+     */
+    public function legacyTrade(array $row): array
+    {
+        $trade = [
+            'exchange' => 'okx',
+            'symbol' => $this->instruments->symbol($this->string($row['instId'] ?? '')),
+            'order_id' => $this->string($row['ordId'] ?? ''),
+            'client_order_id' => $this->stringOrNull($row['clOrdId'] ?? null),
+            'trade_id' => $this->string($row['tradeId'] ?? ''),
+            'side' => strtolower($this->string($row['side'] ?? '')),
+            'position_side' => strtolower($this->string($row['posSide'] ?? '')),
+            'open_type' => $this->legacyOpenType($row['side'] ?? null, $row['posSide'] ?? null),
+            'size' => $this->number($row['fillSz'] ?? $row['sz'] ?? '0'),
+            'price' => $this->number($row['fillPx'] ?? $row['px'] ?? '0'),
+            'fee_currency' => $this->stringOrNull($row['feeCcy'] ?? null),
+            'create_time' => is_numeric($row['ts'] ?? null) ? (int) $row['ts'] : null,
+            'raw_reference' => $this->redacted($row),
+        ];
+        if (array_key_exists('fee', $row)) {
+            $trade['fee'] = $this->number($row['fee']);
+        }
+
+        return $trade;
+    }
+
+    /**
      * @param array<string,mixed> $account
      * @return list<array<string,mixed>>
      */
@@ -172,6 +200,17 @@ final readonly class OkxPrivateReadMapper
         return match (strtolower((string) $side)) {
             'long' => ExchangePositionSide::LONG,
             'short' => ExchangePositionSide::SHORT,
+            default => null,
+        };
+    }
+
+    private function legacyOpenType(mixed $side, mixed $positionSide): ?int
+    {
+        return match (strtolower((string) $positionSide) . ':' . strtolower((string) $side)) {
+            'long:buy' => 1,
+            'long:sell' => 2,
+            'short:buy' => 3,
+            'short:sell' => 4,
             default => null,
         };
     }

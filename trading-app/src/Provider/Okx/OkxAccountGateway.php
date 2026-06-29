@@ -94,9 +94,13 @@ final class OkxAccountGateway implements AccountProviderInterface
             $query['end'] = (string) ($endTime * 1000);
         }
 
+        $path = $this->usesHistoricalFillsEndpoint($startTime, $endTime)
+            ? '/api/v5/trade/fills-history'
+            : '/api/v5/trade/fills';
+
         $fills = [];
-        foreach ($this->dataRows($this->privateGet('/api/v5/trade/fills', $query, __METHOD__), __METHOD__) as $row) {
-            $fills[] = $this->mapper->fill($row);
+        foreach ($this->dataRows($this->privateGet($path, $query, __METHOD__), __METHOD__) as $row) {
+            $fills[] = $this->mapper->legacyTrade($row);
         }
 
         return $fills;
@@ -136,7 +140,7 @@ final class OkxAccountGateway implements AccountProviderInterface
     {
         return $this->firstRow($this->privateGet('/api/v5/account/trade-fee', [
             'instType' => 'SWAP',
-            'instId' => $this->resolver()->instId($symbol),
+            'instFamily' => $this->swapInstFamily($symbol),
         ], __METHOD__), __METHOD__);
     }
 
@@ -209,6 +213,19 @@ final class OkxAccountGateway implements AccountProviderInterface
     private function resolver(): OkxInstrumentResolver
     {
         return $this->instruments ?? new OkxInstrumentResolver();
+    }
+
+    private function usesHistoricalFillsEndpoint(?int $startTime, ?int $endTime): bool
+    {
+        $threeDaysAgo = time() - (3 * 24 * 60 * 60);
+
+        return ($startTime !== null && $startTime < $threeDaysAgo)
+            || ($endTime !== null && $endTime < $threeDaysAgo);
+    }
+
+    private function swapInstFamily(string $symbol): string
+    {
+        return preg_replace('/-SWAP$/', '', $this->resolver()->instId($symbol)) ?? $this->resolver()->instId($symbol);
     }
 
     private function reason(\Throwable $exception): string

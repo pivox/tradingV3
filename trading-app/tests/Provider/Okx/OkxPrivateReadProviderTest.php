@@ -8,8 +8,6 @@ use App\Common\Enum\OrderSide;
 use App\Common\Enum\OrderStatus;
 use App\Common\Enum\OrderType;
 use App\Common\Enum\PositionSide;
-use App\Exchange\Dto\ExchangeFillDto;
-use App\Exchange\Okx\OkxFillId;
 use App\Exchange\Okx\OkxRestClientInterface;
 use App\Provider\Okx\OkxAccountGateway;
 use App\Provider\Okx\OkxOrderGateway;
@@ -89,17 +87,43 @@ final class OkxPrivateReadProviderTest extends TestCase
 
     public function testReadsHistoricalFills(): void
     {
-        $gateway = new OkxAccountGateway($this->client());
+        $client = $this->client();
+        $gateway = new OkxAccountGateway($client);
 
         $fills = $gateway->getTrades('BTCUSDT');
 
         self::assertCount(1, $fills);
-        self::assertInstanceOf(ExchangeFillDto::class, $fills[0]);
-        self::assertSame('BTCUSDT', $fills[0]->symbol);
-        self::assertSame(OkxFillId::fromTradeId('BTC-USDT-SWAP', 'trade-1'), $fills[0]->fillId);
-        self::assertSame(0.4, $fills[0]->quantity);
-        self::assertSame(-0.01, $fills[0]->fee);
-        self::assertSame('USDT', $fills[0]->feeCurrency);
+        self::assertSame('/api/v5/trade/fills', $client->lastPrivateGetPath);
+        self::assertSame('BTCUSDT', $fills[0]['symbol'] ?? null);
+        self::assertSame('trade-1', $fills[0]['trade_id'] ?? null);
+        self::assertSame(2, $fills[0]['open_type'] ?? null);
+        self::assertSame('0.4', $fills[0]['size'] ?? null);
+        self::assertSame('24990', $fills[0]['price'] ?? null);
+        self::assertSame('-0.01', $fills[0]['fee'] ?? null);
+        self::assertSame('USDT', $fills[0]['fee_currency'] ?? null);
+    }
+
+    public function testUsesHistoricalFillsEndpointForOlderWindows(): void
+    {
+        $client = $this->client();
+        $gateway = new OkxAccountGateway($client);
+
+        $gateway->getTrades('BTCUSDT', 100, time() - (7 * 24 * 60 * 60), time());
+
+        self::assertSame('/api/v5/trade/fills-history', $client->lastPrivateGetPath);
+    }
+
+    public function testReadsSwapTradingFeesWithInstrumentFamily(): void
+    {
+        $client = $this->client();
+        $gateway = new OkxAccountGateway($client);
+
+        $fees = $gateway->getTradingFees('BTCUSDT');
+
+        self::assertSame('/api/v5/account/trade-fee', $client->lastPrivateGetPath);
+        self::assertSame('BTC-USDT', $client->lastPrivateGetQuery['instFamily'] ?? null);
+        self::assertArrayNotHasKey('instId', $client->lastPrivateGetQuery);
+        self::assertSame('-0.0002', $fees['maker'] ?? null);
     }
 
     public function testWriteMethodsRemainBlocked(): void
@@ -134,6 +158,10 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
 {
     public bool $rateLimited = false;
     public int $privatePostCalls = 0;
+    public string $lastPrivateGetPath = '';
+
+    /** @var array<string,mixed> */
+    public array $lastPrivateGetQuery = [];
 
     public function publicGet(string $path, array $query = []): array
     {
@@ -142,6 +170,8 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
 
     public function privateGet(string $path, array $query = []): array
     {
+        $this->lastPrivateGetPath = $path;
+        $this->lastPrivateGetQuery = $query;
         if ($this->rateLimited) {
             return ['code' => '50011', 'msg' => 'Too Many Requests', 'data' => []];
         }
@@ -152,6 +182,8 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
             '/api/v5/trade/orders-pending' => $this->orders($query),
             '/api/v5/trade/orders-algo-pending' => $this->algoOrders($query),
             '/api/v5/trade/fills' => $this->fills($query),
+            '/api/v5/trade/fills-history' => $this->fills($query),
+            '/api/v5/account/trade-fee' => $this->tradingFees($query),
             default => ['code' => '404', 'msg' => 'unexpected path ' . $path, 'data' => []],
         };
     }
@@ -274,13 +306,33 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
             'ordId' => 'ord-1',
             'clOrdId' => 'client-1',
             'tradeId' => 'trade-1',
-            'side' => 'buy',
+            'side' => 'sell',
             'posSide' => 'long',
             'fillSz' => '0.4',
             'fillPx' => '24990',
             'fee' => '-0.01',
             'feeCcy' => 'USDT',
             'ts' => '1767225660000',
+        ]]];
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     * @return array<string,mixed>
+     */
+    private function tradingFees(array $query): array
+    {
+        $this->assertQueryValue($query, 'instType', 'SWAP');
+        $this->assertQueryValue($query, 'instFamily', 'BTC-USDT');
+        if (array_key_exists('instId', $query)) {
+            throw new \RuntimeException('OKX SWAP fee query must use instFamily, not instId.');
+        }
+
+        return ['code' => '0', 'data' => [[
+            'instType' => 'SWAP',
+            'instFamily' => 'BTC-USDT',
+            'maker' => '-0.0002',
+            'taker' => '-0.0005',
         ]]];
     }
 
