@@ -87,6 +87,8 @@ Guards obligatoires pour `demo|testnet` avec `dry_run=false` :
   ou `HYPERLIQUID_TESTNET_TRADING_ENABLED=true` pour Hyperliquid testnet) ;
 - `demo_testnet_write_enabled=true` ;
 - `kill_switch_enabled=false` ;
+- `private_observability_status` present et autorise par
+  `ExchangePrivateObservabilityPolicy` ;
 - `require_stop_loss=true` ;
 - `allowed_symbols` ou `allowed_markets` non vide ;
 - `max_notional` positif, fini et renseigne ;
@@ -106,6 +108,18 @@ Les erreurs sont explicites :
 - `exchange_environment_pair_unsupported`
 - `effective_kill_switch_enabled`
 - `client_order_id_required`
+- `private_observability_status_missing`
+- `private_observability_exchange_mismatch`
+- `private_observability_environment_mismatch`
+- `private_ws_not_supported`
+- `private_ws_not_connected`
+- `private_ws_not_authenticated`
+- `private_orders_stream_not_ready`
+- `private_fills_stream_not_ready`
+- `private_positions_stream_not_ready`
+- `private_observability_initial_snapshot_missing`
+- `private_observability_reconnecting`
+- `private_reconciliation_stale`
 - `mainnet_write_enabled_must_remain_false`
 - `mainnet_write_forbidden`
 - `local_dry_run_cannot_write`
@@ -141,6 +155,7 @@ entree d'audit avec :
 - `reasons`
 - `correlation_ids`
 - `safety`
+- `private_observability`
 - `audit_context`
 
 Les relations ambiguës ou blocages restent visibles dans `reasons`. Le service ne
@@ -191,3 +206,5 @@ rollback n'affecte pas les flux MTF, TradeEntry, OKX dry-run ou Hyperliquid
 dry-run actuels.
 
 Voir aussi : [Demo/Testnet Kill Switch Runbook](../runbooks/demo-testnet-kill-switch.md).
+
+Voir aussi : [Exchange private observability policy](exchange-private-observability-policy.md).

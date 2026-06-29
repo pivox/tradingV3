@@ -43,7 +43,10 @@ final class ExchangeReadinessEffectiveConfigTest extends TestCase
         self::assertTrue($report->mainnetWriteGuard);
         self::assertTrue($report->demoTestnetWriteGuard);
         self::assertTrue($report->killSwitch);
-        self::assertSame(['demo_testnet_write_not_enabled'], $report->warnings);
+        self::assertSame([
+            'private_observability_absent_for_dry_run',
+            'demo_testnet_write_not_enabled',
+        ], $report->warnings);
     }
 
     public function testHyperliquidTestnetEffectiveConfigCanProduceCandidateReadinessReport(): void
@@ -64,7 +67,10 @@ final class ExchangeReadinessEffectiveConfigTest extends TestCase
         self::assertTrue($report->mainnetWriteGuard);
         self::assertTrue($report->demoTestnetWriteGuard);
         self::assertTrue($report->killSwitch);
-        self::assertSame(['demo_testnet_write_not_enabled'], $report->warnings);
+        self::assertSame([
+            'private_observability_absent_for_dry_run',
+            'demo_testnet_write_not_enabled',
+        ], $report->warnings);
     }
 
     /**

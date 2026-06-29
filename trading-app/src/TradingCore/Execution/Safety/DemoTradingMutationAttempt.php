@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\TradingCore\Execution\Safety;
 
 use App\Common\Enum\Exchange;
+use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
 
 final readonly class DemoTradingMutationAttempt
 {
@@ -49,6 +50,7 @@ final readonly class DemoTradingMutationAttempt
         public ?float $maxNotional = null,
         array $correlationIds = [],
         array $auditContext = [],
+        public ?ExchangePrivateObservabilityStatus $privateObservabilityStatus = null,
     ) {
         $this->assertNonEmpty($mode, 'mode');
         $this->assertNonEmpty($profile, 'profile');

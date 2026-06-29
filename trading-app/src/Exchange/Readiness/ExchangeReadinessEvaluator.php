@@ -8,6 +8,11 @@ use App\Common\Enum\Exchange;
 
 final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
 {
+    public function __construct(
+        private readonly ExchangePrivateObservabilityPolicy $privateObservabilityPolicy = new ExchangePrivateObservabilityPolicy(),
+    ) {
+    }
+
     public function check(ExchangeReadinessInput $input): ExchangeReadinessReport
     {
         return $this->evaluate($input);
@@ -67,14 +72,24 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
         }
 
         $readyLevel = ExchangeReadinessLevel::DemoTestnetCandidate;
+        $observabilityDecision = $this->privateObservabilityPolicy->evaluate(
+            $input->privateObservabilityStatus ?? ExchangePrivateObservabilityStatus::absent($input->exchange, $input->environment),
+            dryRun: $input->dryRun,
+            expectedExchange: $input->exchange,
+            expectedEnvironment: $input->environment,
+        );
 
         if ($input->dryRun) {
+            $warnings = array_merge($warnings, $observabilityDecision->warnings);
+
             if (!$input->demoTestnetWriteEnabled) {
                 $warnings[] = 'demo_testnet_write_not_enabled';
             }
 
             return $this->report($input, $readyLevel, [], $warnings);
         }
+
+        $warnings = array_merge($warnings, $observabilityDecision->warnings);
 
         if (!$input->demoTestnetWriteEnabled) {
             $warnings[] = 'demo_testnet_write_not_enabled';
@@ -90,6 +105,12 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
 
         if (!$input->permissionsTrade) {
             $warnings[] = 'trade_permission_required_for_demo_testnet_enabled';
+
+            return $this->report($input, $readyLevel, [], $warnings);
+        }
+
+        if (!$observabilityDecision->allowed) {
+            $warnings = array_merge($warnings, $observabilityDecision->blockingErrors);
 
             return $this->report($input, $readyLevel, [], $warnings);
         }
@@ -180,7 +201,15 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
             readyLevel: $readyLevel,
             publicConnectivity: $input->publicConnectivity,
             privateReadConnectivity: $input->privateReadConnectivity,
-            privateObservability: $input->privateObservability,
+            privateObservability: $input->privateObservabilityStatus !== null
+                ? $this->privateObservabilityPolicy->evaluate(
+                    $input->privateObservabilityStatus,
+                    dryRun: false,
+                    expectedExchange: $input->exchange,
+                    expectedEnvironment: $input->environment,
+                )->allowed
+                : $input->privateObservability,
+            privateObservabilityStatus: $input->privateObservabilityStatus,
             instrumentsLoaded: $input->instrumentsLoaded,
             metadataValid: $input->metadataValid,
             precisionValid: $input->precisionValid,

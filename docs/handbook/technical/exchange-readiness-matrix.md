@@ -92,7 +92,9 @@ Regles fail-closed :
   `exchange_environment_pair_unsupported` ;
 - `demo_testnet_enabled` exige aussi `dry_run=false`,
   `demo_testnet_write_enabled=true`, `permissions_trade=true`, whitelist
-  symbole/marche utilisable et `max_notional`.
+  symbole/marche utilisable, `max_notional` et un statut
+  `ExchangePrivateObservabilityStatus` autorise par
+  `ExchangePrivateObservabilityPolicy`.
 - les whitelists sont normalisees avant decision : les valeurs non string ou vides
   apres trim ne satisfont pas le guard.
 - une whitelist marche ne satisfait le guard que si elle contient le `market_type`
@@ -103,6 +105,10 @@ Les configs effectives OKX demo et Hyperliquid testnet livrees par `COMMON-002`
 peuvent produire un rapport `demo_testnet_candidate` en fixture si les signaux
 public/private read sont verts. Elles restent non mutatives par defaut :
 `demo_testnet_write_enabled=false` et `kill_switch_enabled=true`.
+Sans observabilite privee complete, elles ne peuvent pas produire
+`demo_testnet_enabled`.
+
+Voir aussi : [Exchange private observability policy](exchange-private-observability-policy.md).
 
 ## Matrice synthétique
 

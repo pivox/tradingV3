@@ -4,6 +4,9 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Execution\Safety;
 
 use App\Common\Enum\Exchange;
+use App\Exchange\Readiness\ExchangePrivateObservabilityDecision;
+use App\Exchange\Readiness\ExchangePrivateObservabilityPolicy;
+use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
 use App\TradingCore\Execution\Safety\DemoTradingAuditSinkInterface;
 use App\TradingCore\Execution\Safety\DemoTradingKillSwitchDecision;
 use App\TradingCore\Execution\Safety\DemoTradingKillSwitchService;
@@ -20,6 +23,9 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(DemoTradingMutationAttempt::class)]
 #[CoversClass(DemoTradingSafetyDecision::class)]
 #[CoversClass(DemoTradingSafetyPolicyEvaluator::class)]
+#[CoversClass(ExchangePrivateObservabilityDecision::class)]
+#[CoversClass(ExchangePrivateObservabilityPolicy::class)]
+#[CoversClass(ExchangePrivateObservabilityStatus::class)]
 final class DemoTradingKillSwitchServiceTest extends TestCase
 {
     public function testGlobalKillSwitchBlocksEveryDemoTestnetAttempt(): void
@@ -188,6 +194,61 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
         self::assertSame($sink->events[0], $decision->auditEvent);
     }
 
+    public function testMutationIsBlockedWhenPrivateObservabilityStatusIsMissing(): void
+    {
+        $sink = new CapturingDemoTradingAuditSink();
+        $decision = $this->service($sink)->evaluate(new DemoTradingMutationAttempt(
+            exchange: Exchange::OKX,
+            environment: ExchangeRuntimeEnvironment::DEMO,
+            mode: 'scalper_micro',
+            profile: 'scalper_micro',
+            market: 'perpetual',
+            symbol: 'BTCUSDT',
+            notional: 12.5,
+            clientOrderId: 'cid-001',
+            action: 'place_order',
+            demoTestnetWriteEnabled: true,
+            effectiveKillSwitchEnabled: false,
+            requireStopLoss: true,
+            stopLossPresent: true,
+            allowedSymbols: ['BTCUSDT'],
+            allowedMarkets: ['perpetual'],
+            maxNotional: 25.0,
+            privateObservabilityStatus: null,
+        ));
+
+        self::assertFalse($decision->allowed);
+        self::assertContains('private_observability_status_missing', $decision->reasons);
+        self::assertSame('blocked', $sink->events[0]['outcome']);
+        self::assertFalse($sink->events[0]['private_observability']['status_available']);
+        self::assertFalse($sink->events[0]['private_observability']['status']['private_ws_connected']);
+    }
+
+    public function testMutationIsBlockedDuringPrivateWebSocketReconnect(): void
+    {
+        $sink = new CapturingDemoTradingAuditSink();
+        $decision = $this->service($sink)->evaluate($this->okxAttempt(
+            privateObservabilityStatus: $this->privateObservabilityStatus(reconnecting: true),
+        ));
+
+        self::assertFalse($decision->allowed);
+        self::assertContains('private_observability_reconnecting', $decision->reasons);
+        self::assertTrue($sink->events[0]['private_observability']['status']['reconnecting']);
+    }
+
+    public function testMutationIsBlockedWhenPrivateObservabilityStatusDoesNotMatchAttemptTarget(): void
+    {
+        $sink = new CapturingDemoTradingAuditSink();
+        $decision = $this->service($sink)->evaluate($this->okxAttempt(
+            privateObservabilityStatus: $this->privateObservabilityStatus(Exchange::HYPERLIQUID, 'testnet'),
+        ));
+
+        self::assertFalse($decision->allowed);
+        self::assertContains('private_observability_exchange_mismatch', $decision->reasons);
+        self::assertContains('private_observability_environment_mismatch', $decision->reasons);
+        self::assertSame('hyperliquid', $sink->events[0]['private_observability']['status']['exchange']);
+    }
+
     public function testAuditFailureBlocksMutation(): void
     {
         $decision = $this->service(new FailingDemoTradingAuditSink())->evaluate($this->okxAttempt());
@@ -207,6 +268,7 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
         bool $mainnetWriteEnabled = false,
         array $auditContext = [],
         array $correlationIds = [],
+        ?ExchangePrivateObservabilityStatus $privateObservabilityStatus = null,
     ): DemoTradingMutationAttempt {
         return new DemoTradingMutationAttempt(
             exchange: Exchange::OKX,
@@ -228,6 +290,7 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
             maxNotional: 25.0,
             correlationIds: $correlationIds,
             auditContext: $auditContext,
+            privateObservabilityStatus: $privateObservabilityStatus ?? $this->privateObservabilityStatus(),
         );
     }
 
@@ -269,6 +332,28 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
             allowedSymbols: $allowedSymbols,
             allowedMarkets: ['perpetual'],
             maxNotional: 25.0,
+            privateObservabilityStatus: $this->privateObservabilityStatus($exchange, $environment->value),
+        );
+    }
+
+    private function privateObservabilityStatus(
+        Exchange $exchange = Exchange::OKX,
+        string $environment = 'demo',
+        bool $reconnecting = false,
+    ): ExchangePrivateObservabilityStatus {
+        return new ExchangePrivateObservabilityStatus(
+            exchange: $exchange,
+            environment: $environment,
+            privateWsSupported: true,
+            privateWsConnected: true,
+            privateWsAuthenticated: true,
+            ordersStreamReady: true,
+            fillsStreamReady: true,
+            positionsStreamReady: true,
+            initialSnapshotLoaded: true,
+            lastEventAt: new \DateTimeImmutable('2026-06-29T10:15:00+00:00'),
+            reconnecting: $reconnecting,
+            reconciliationFresh: true,
         );
     }
 
@@ -280,6 +365,7 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
     ): DemoTradingKillSwitchService {
         return new DemoTradingKillSwitchService(
             evaluator: new DemoTradingSafetyPolicyEvaluator(),
+            privateObservabilityPolicy: new ExchangePrivateObservabilityPolicy(),
             auditSink: $sink,
             globalDemoTradingEnabled: $globalDemoTradingEnabled,
             okxDemoTradingEnabled: $okxDemoTradingEnabled,
