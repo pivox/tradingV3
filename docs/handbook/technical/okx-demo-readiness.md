@@ -62,7 +62,7 @@ reutilisables.
 | Header demo | Documente dans le code OKX | `OkxRestClient` / README OKX documentent `x-simulated-trading: 1` pour demo. | Le prouver par tests de client/payload dans les PRs read/write dediees. |
 | Market type `perpetual` | Scope initial | `OkxDryRunExecutionPort` refuse tout market type different de `perpetual`. | Charger et valider les instruments OKX `SWAP`. |
 | Spot | Non supporte | Aucun contrat demo spot explicite dans ce perimetre. | PR separee si spot devient necessaire. |
-| Public REST read-only | Non pret | Aucun run de readiness public OKX n'est certifie par cette ADR. | Instruments, tickers, candles, order book et funding lisibles, normalises, testes. |
+| Public REST read-only | `public_read_only` partiel | OKX-003 lit instruments SWAP, ticker, candles et order book via REST public EEA demo, avec timestamps UTC et erreurs normalisees. | Funding courant/historique et validation runtime complete restent a traiter dans les PRs suivantes. |
 | Public WebSocket read-only | Non pret | URI public configurable. | Client public, subscriptions, reconnect, freshness et tests fixtures. |
 | Private REST read-only | Non pret | Credentials attendus et signature disponibles cote OKX adapter. | Balance, positions, open orders, order details et fills relus sans mutation. |
 | Private WebSocket read-only | Partiel | Normalizers ordres/fills/positions existent, mais pas de vrai client prive annonce. | Connexion demo, auth, snapshot initial, streams ordres/fills/positions et reconciliation fraiche. |
@@ -81,12 +81,26 @@ ne sont pas actives par OKX-001.
 
 | Donnee | Endpoint OKX attendu | Utilisation |
 |---|---|---|
-| Instruments SWAP | `GET /api/v5/public/instruments` | Liste des symboles, status, tick/lot, contract size, min size. |
-| Tickers | `GET /api/v5/market/tickers` ou ticker instrument | Prix dernier, bid/ask, volume et validation de freshness. |
-| Candles | `GET /api/v5/market/candles` | Donnees OHLCV pour indicateurs et verification de timeframes. |
-| Order book | `GET /api/v5/market/books` | Spread, best bid/ask et controles de prix d'entree. |
+| Instruments SWAP | `GET /api/v5/public/instruments` | Liste des symboles, status, tick/lot, contract size, min size. Implante dans OKX-003. |
+| Tickers | `GET /api/v5/market/ticker` par instrument | Prix dernier, volume et validation de freshness. Implante dans OKX-003. |
+| Candles | `GET /api/v5/market/candles` | Donnees OHLCV pour indicateurs et verification de timeframes. Implante dans OKX-003 avec tri ASC UTC. |
+| Order book | `GET /api/v5/market/books` | Spread, best bid/ask et controles de prix d'entree. Implante dans OKX-003. |
 | Funding rate | `GET /api/v5/public/funding-rate` | Funding courant et prochain timestamp. |
 | Funding history | Endpoint historique funding si disponible | Reconciliation des couts et analyse PnL. |
+
+Configuration demo public OKX-003 :
+
+```dotenv
+OKX_ENV=demo
+OKX_API_BASE_URI=https://eea.okx.com
+OKX_WS_PUBLIC_URI=wss://wseeapap.okx.com:8443/ws/v5/public
+OKX_DEMO_TRADING_ENABLED=0
+OKX_LIVE_ENABLED=0
+```
+
+Si `OKX_API_BASE_URI` ou `OKX_WS_PUBLIC_URI` sont vides, `OkxConfig` applique ces
+valeurs demo EEA par defaut. OKX-003 ne demarre pas de client WebSocket public :
+le fallback volontaire est le polling REST public.
 
 ### Private read-only
 

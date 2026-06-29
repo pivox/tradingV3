@@ -73,7 +73,7 @@ final class OkxProviderSkeletonTest extends TestCase
         );
     }
 
-    public function testRuntimeCheckReturnsNotReadyForSkeleton(): void
+    public function testRuntimeCheckReturnsNotReadyWithoutPublicReadInputs(): void
     {
         $report = (new OkxRuntimeCheck())->check(new ExchangeReadinessInput(
             exchange: Exchange::OKX,
@@ -84,9 +84,28 @@ final class OkxProviderSkeletonTest extends TestCase
         ));
 
         self::assertSame(ExchangeReadinessLevel::NotReady, $report->readyLevel);
-        self::assertContains('okx_provider_skeleton_not_ready', $report->blockingErrors);
+        self::assertContains('public_connectivity_unavailable', $report->blockingErrors);
         self::assertSame('okx', $report->toArray()['exchange']);
         self::assertSame('perpetual', $report->toArray()['market_type']);
+    }
+
+    public function testRuntimeCheckCanReachPublicReadOnlyForOkx003(): void
+    {
+        $report = (new OkxRuntimeCheck())->check(new ExchangeReadinessInput(
+            exchange: Exchange::OKX,
+            marketType: MarketType::PERPETUAL,
+            environment: 'demo',
+            publicConnectivity: true,
+            instrumentsLoaded: true,
+            metadataValid: true,
+            precisionValid: true,
+            mainnetWriteGuard: true,
+            dryRun: true,
+        ));
+
+        self::assertSame(ExchangeReadinessLevel::PublicReadOnly, $report->readyLevel);
+        self::assertSame([], $report->blockingErrors);
+        self::assertContains('private_read_not_ready', $report->warnings);
     }
 
     /**

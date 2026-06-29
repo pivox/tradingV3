@@ -141,12 +141,17 @@ OKX_ENV=demo
 OKX_API_KEY=
 OKX_API_SECRET=
 OKX_API_PASSPHRASE=
-OKX_API_BASE_URI=https://www.okx.com
-OKX_WS_PUBLIC_URI=wss://ws.okx.com:8443/ws/v5/public
+OKX_API_BASE_URI=https://eea.okx.com
+OKX_WS_PUBLIC_URI=wss://wseeapap.okx.com:8443/ws/v5/public
 OKX_WS_PRIVATE_URI=wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999
 OKX_DEMO_TRADING_ENABLED=0
 OKX_LIVE_ENABLED=0
 ```
+
+Si `OKX_API_BASE_URI` ou `OKX_WS_PUBLIC_URI` sont vides, le mode demo applique
+ces valeurs EEA par defaut. OKX-003 utilise le polling REST public pour
+instruments, ticker, candles et order book; aucun client WebSocket public runtime
+n'est demarre dans cette PR.
 
 Les requetes privees OKX sont signees avec `OK-ACCESS-*`; en demo le header
 `x-simulated-trading: 1` est ajoute. Les ordres demo restent bloques tant que
