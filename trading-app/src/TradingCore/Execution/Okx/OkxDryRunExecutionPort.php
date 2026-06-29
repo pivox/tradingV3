@@ -137,7 +137,7 @@ final class OkxDryRunExecutionPort implements ExecutionPortInterface
             );
         }
 
-        $safetyDecision = $this->safetyPolicyEvaluator->evaluate($this->safetyPolicy($plan, $environment, $request->metadata));
+        $safetyDecision = $this->safetyPolicyEvaluator->evaluate($this->safetyPolicy($plan, $environment, $incomingMetadata));
         $metadata['safety_decision'] = $safetyDecision->toRedactedArray();
         $dryRunGuardErrors = $this->dryRunGuardErrors($plan, $request->metadata);
         if ($dryRunGuardErrors !== []) {

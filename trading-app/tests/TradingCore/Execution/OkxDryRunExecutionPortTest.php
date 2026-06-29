@@ -259,6 +259,45 @@ final class OkxDryRunExecutionPortTest extends TestCase
         );
     }
 
+    public function testDryRunRedactsPrivateObservabilityStatusInsideSafetyAuditContext(): void
+    {
+        $status = new ExchangePrivateObservabilityStatus(
+            exchange: Exchange::OKX,
+            environment: 'demo',
+            privateWsSupported: true,
+            privateWsConnected: true,
+            privateWsAuthenticated: true,
+            ordersStreamReady: true,
+            fillsStreamReady: true,
+            positionsStreamReady: true,
+            initialSnapshotLoaded: true,
+            blockingErrors: ['secret=super-sensitive-value'],
+            warnings: ['api_key=super-sensitive-value'],
+        );
+        $request = ExecutionRequest::forPlan(
+            $this->executablePlan(),
+            ExecutionMode::DryRun,
+            [
+                'environment' => 'demo',
+                'private_observability_status' => $status,
+            ],
+        );
+
+        $result = (new OkxDryRunExecutionPort())->execute($request);
+
+        self::assertSame(
+            ['[redacted]'],
+            $result->metadata['safety_decision']['policy']['audit_context']['private_observability_status']['blocking_errors'],
+        );
+        self::assertSame(
+            ['[redacted]'],
+            $result->metadata['safety_decision']['policy']['audit_context']['private_observability_status']['warnings'],
+        );
+
+        $encoded = json_encode($result, JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString('super-sensitive-value', $encoded);
+    }
+
     public function testLiveModeIsRefused(): void
     {
         // forPlan() allows a live request only for an executable plan; the OKX dry-run
