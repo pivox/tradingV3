@@ -11,6 +11,7 @@ use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Okx\OkxActionFactory;
+use App\Exchange\Okx\OkxInstrumentResolver;
 use App\Exchange\Readiness\ExchangePrivateObservabilityPolicy;
 use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
 use App\TradingCore\Execution\Dto\ExecutionRequest;
@@ -51,6 +52,7 @@ final class OkxDryRunExecutionPort implements ExecutionPortInterface
     public function __construct(
         private readonly OrderPlanValidator $validator = new OrderPlanValidator(),
         private readonly OkxActionFactory $actionFactory = new OkxActionFactory(),
+        private readonly OkxInstrumentResolver $instrumentResolver = new OkxInstrumentResolver(),
         private readonly DemoTradingSafetyPolicyEvaluator $safetyPolicyEvaluator = new DemoTradingSafetyPolicyEvaluator(),
         private readonly ExchangePrivateObservabilityPolicy $privateObservabilityPolicy = new ExchangePrivateObservabilityPolicy(),
     ) {
@@ -387,7 +389,7 @@ final class OkxDryRunExecutionPort implements ExecutionPortInterface
     {
         $instrument = trim($plan->instrument);
 
-        return $instrument !== '' ? $instrument : $plan->symbol;
+        return $this->instrumentResolver->instId($instrument !== '' ? $instrument : $plan->symbol);
     }
 
     private function orderType(OrderPlan $plan): ExchangeOrderType
@@ -423,8 +425,13 @@ final class OkxDryRunExecutionPort implements ExecutionPortInterface
     {
         $candidate = preg_replace('/[^A-Za-z0-9]/', '', $clientOrderId) ?? '';
         $candidate = $candidate === '' ? 'OKXDRYRUN' : $candidate;
+        $suffix = preg_replace('/[^A-Za-z0-9]/', '', strtoupper($suffix)) ?? '';
 
-        return substr($candidate . $suffix, 0, 32);
+        if ($suffix === '') {
+            return substr($candidate, 0, 32);
+        }
+
+        return substr($candidate, 0, max(0, 32 - strlen($suffix))) . substr($suffix, 0, 32);
     }
 
     private function notional(OrderPlan $plan): float

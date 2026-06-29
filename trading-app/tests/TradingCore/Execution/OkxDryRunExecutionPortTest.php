@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Execution;
 
 use App\Common\Enum\Exchange;
+use App\Exchange\Okx\OkxInstrumentResolver;
 use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
 use App\TradingCore\Execution\Dto\ExecutionRequest;
 use App\TradingCore\Execution\Enum\ExecutionMode;
@@ -20,6 +21,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(OkxDryRunExecutionPort::class)]
+#[CoversClass(OkxInstrumentResolver::class)]
 final class OkxDryRunExecutionPortTest extends TestCase
 {
     public function testDryRunValidOkxPlanReturnsSimulatedDryRunResult(): void
@@ -109,6 +111,41 @@ final class OkxDryRunExecutionPortTest extends TestCase
         $encoded = json_encode([$result->metadata, $result->raw], JSON_THROW_ON_ERROR);
         self::assertStringNotContainsString('demo-secret-key', $encoded);
         self::assertStringContainsString('[redacted]', $encoded);
+    }
+
+    public function testDryRunNormalizesInternalSymbolToOkxSwapInstrumentId(): void
+    {
+        $request = ExecutionRequest::forPlan(
+            $this->executablePlan(clientOrderId: 'CIDOKX1'),
+            ExecutionMode::DryRun,
+            ['environment' => 'demo'],
+        );
+
+        $result = (new OkxDryRunExecutionPort())->execute($request);
+
+        self::assertSame(ExecutionStatus::DryRun, $result->status);
+        self::assertSame('BTC-USDT-SWAP', $result->raw['okx_dry_run']['requests'][2]['body']['instId']);
+        self::assertSame('BTC-USDT-SWAP', $result->raw['okx_dry_run']['requests'][3]['body']['instId']);
+    }
+
+    public function testDryRunPreservesSuffixRoomForLongProtectionClientOrderIds(): void
+    {
+        $parentClientOrderId = str_repeat('A', 32);
+        $request = ExecutionRequest::forPlan(
+            $this->executablePlan(instrument: 'BTC-USDT-SWAP', clientOrderId: $parentClientOrderId),
+            ExecutionMode::DryRun,
+            ['environment' => 'demo'],
+        );
+
+        $result = (new OkxDryRunExecutionPort())->execute($request);
+
+        self::assertSame($parentClientOrderId, $result->raw['okx_dry_run']['requests'][2]['body']['clOrdId']);
+        self::assertSame(str_repeat('A', 30) . 'SL', $result->raw['okx_dry_run']['requests'][3]['body']['algoClOrdId']);
+        self::assertSame(str_repeat('A', 30) . 'TP', $result->raw['okx_dry_run']['requests'][4]['body']['algoClOrdId']);
+        self::assertNotSame(
+            $result->raw['okx_dry_run']['requests'][3]['body']['algoClOrdId'],
+            $result->raw['okx_dry_run']['requests'][4]['body']['algoClOrdId'],
+        );
     }
 
     public function testDryRunRejectsMainnetEnvironmentBeforePayloadSerialization(): void
