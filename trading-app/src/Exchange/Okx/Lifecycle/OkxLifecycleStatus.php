@@ -10,6 +10,8 @@ enum OkxLifecycleStatus: string
     case ACCEPTED = 'accepted';
     case OPEN = 'open';
     case PARTIALLY_FILLED = 'partially_filled';
+    case PARTIALLY_EFFECTIVE = 'partially_effective';
+    case EFFECTIVE = 'effective';
     case FILLED = 'filled';
     case CANCEL_PENDING = 'cancel_pending';
     case CANCELED = 'canceled';

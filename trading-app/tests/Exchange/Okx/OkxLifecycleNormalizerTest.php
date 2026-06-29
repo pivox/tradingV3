@@ -452,6 +452,43 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertContains('unknown_order_state', $lifecycle->qualityFlags);
     }
 
+    public function testEffectiveAlgoStateDoesNotRequireResync(): void
+    {
+        $row = $this->orderRow(state: 'effective', filled: '0', updatedAt: '1767225601000');
+        $row['algoId'] = '90012';
+        $row['algoClOrdId'] = 'effective-algo-client';
+        $row['channel'] = 'orders-algo';
+        $row['clOrdId'] = '';
+        $row['ordId'] = 'effective-child-order';
+        $row['ordType'] = 'conditional';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame(OkxLifecycleStatus::EFFECTIVE, $lifecycle->status);
+        self::assertSame('algo:90012', $lifecycle->exchangeOrderId);
+        self::assertFalse($lifecycle->requiresResync);
+        self::assertNotContains('unknown_order_state', $lifecycle->qualityFlags);
+    }
+
+    public function testPartiallyEffectiveAlgoStateDoesNotRequireResync(): void
+    {
+        $row = $this->orderRow(state: 'partially_effective', filled: '0', updatedAt: '1767225601000');
+        $row['actualSz'] = '0.5';
+        $row['algoId'] = '90013';
+        $row['algoClOrdId'] = 'partial-effective-algo-client';
+        $row['channel'] = 'orders-algo';
+        $row['clOrdId'] = '';
+        $row['ordId'] = 'partial-effective-child-order';
+        $row['ordType'] = 'conditional';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame(OkxLifecycleStatus::PARTIALLY_EFFECTIVE, $lifecycle->status);
+        self::assertSame('algo:90013', $lifecycle->exchangeOrderId);
+        self::assertFalse($lifecycle->requiresResync);
+        self::assertNotContains('unknown_order_state', $lifecycle->qualityFlags);
+    }
+
     public function testNormalizesPositionSnapshot(): void
     {
         $positions = $this->normalizer->normalizePositions([[

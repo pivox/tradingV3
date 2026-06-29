@@ -306,6 +306,8 @@ final readonly class OkxLifecycleNormalizer
             'accepted' => OkxLifecycleStatus::ACCEPTED,
             'live' => OkxLifecycleStatus::OPEN,
             'partially_filled' => OkxLifecycleStatus::PARTIALLY_FILLED,
+            'partially_effective' => OkxLifecycleStatus::PARTIALLY_EFFECTIVE,
+            'effective' => OkxLifecycleStatus::EFFECTIVE,
             'filled' => OkxLifecycleStatus::FILLED,
             'canceling', 'cancelling' => OkxLifecycleStatus::CANCEL_PENDING,
             'canceled', 'cancelled', 'mmp_canceled' => OkxLifecycleStatus::CANCELED,
@@ -394,11 +396,13 @@ final readonly class OkxLifecycleNormalizer
             OkxLifecycleStatus::ACCEPTED => 20,
             OkxLifecycleStatus::OPEN => 30,
             OkxLifecycleStatus::PARTIALLY_FILLED => 40,
+            OkxLifecycleStatus::PARTIALLY_EFFECTIVE => 45,
             OkxLifecycleStatus::CANCEL_PENDING => 50,
             OkxLifecycleStatus::CANCELED,
             OkxLifecycleStatus::REJECTED,
             OkxLifecycleStatus::EXPIRED,
             OkxLifecycleStatus::FAILED => 60,
+            OkxLifecycleStatus::EFFECTIVE => 65,
             OkxLifecycleStatus::FILLED => 70,
         };
     }
