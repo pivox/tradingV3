@@ -20,7 +20,7 @@ final readonly class OkxNormalizedOrderLifecycleDto
         public string $symbol,
         public string $exchangeOrderId,
         public ?string $clientOrderId,
-        public ExchangeOrderSide $side,
+        public ?ExchangeOrderSide $side,
         public ?ExchangePositionSide $positionSide,
         public ExchangeOrderType $orderType,
         public float $quantity,

@@ -71,8 +71,13 @@ final readonly class OkxLifecycleNormalizer
             symbol: $this->symbol($latest),
             exchangeOrderId: $this->orderId($latest),
             clientOrderId: $this->clientOrderId($latest),
-            side: $this->orderSide($latest['side'] ?? null),
-            positionSide: $this->positionSide($latest['posSide'] ?? null),
+            side: $this->orderSideOrNull($latest['side'] ?? null),
+            positionSide: $this->positionSide(
+                $latest['posSide'] ?? null,
+                null,
+                $latest['side'] ?? null,
+                $this->bool($latest['reduceOnly'] ?? false),
+            ),
             orderType: $orderType,
             quantity: $quantity,
             filledQuantity: $filled,
@@ -216,7 +221,12 @@ final readonly class OkxLifecycleNormalizer
             clientOrderId: $this->clientOrderId($row),
             fillId: $fillId,
             side: $this->orderSide($row['side'] ?? null),
-            positionSide: $this->positionSide($row['posSide'] ?? null),
+            positionSide: $this->positionSide(
+                $row['posSide'] ?? null,
+                null,
+                $row['side'] ?? null,
+                $this->bool($row['reduceOnly'] ?? false),
+            ),
             quantity: $quantity,
             price: $price,
             fee: $this->floatOrNull($this->firstNonEmpty($row['fillFee'] ?? null, $row['fee'] ?? null)),
@@ -399,15 +409,40 @@ final readonly class OkxLifecycleNormalizer
         return strtolower((string) $side) === 'sell' ? ExchangeOrderSide::SELL : ExchangeOrderSide::BUY;
     }
 
-    private function positionSide(mixed $side, ?float $size = null): ?ExchangePositionSide
+    private function orderSideOrNull(mixed $side): ?ExchangeOrderSide
     {
-        return match (strtolower((string) $side)) {
-            'long' => ExchangePositionSide::LONG,
-            'short' => ExchangePositionSide::SHORT,
-            default => $size !== null && $size < -0.00000001
-                ? ExchangePositionSide::SHORT
-                : ($size !== null && $size > 0.00000001 ? ExchangePositionSide::LONG : null),
-        };
+        return $this->hasValue($side) ? $this->orderSide($side) : null;
+    }
+
+    private function positionSide(
+        mixed $side,
+        ?float $size = null,
+        mixed $orderSide = null,
+        bool $reduceOnly = false,
+    ): ?ExchangePositionSide
+    {
+        $positionSide = strtolower((string) $side);
+        if ($positionSide === 'long') {
+            return ExchangePositionSide::LONG;
+        }
+        if ($positionSide === 'short') {
+            return ExchangePositionSide::SHORT;
+        }
+        if ($positionSide === 'net' && $reduceOnly) {
+            return match (strtolower((string) $orderSide)) {
+                'sell' => ExchangePositionSide::LONG,
+                'buy' => ExchangePositionSide::SHORT,
+                default => null,
+            };
+        }
+        if ($size !== null && $size < -0.00000001) {
+            return ExchangePositionSide::SHORT;
+        }
+        if ($size !== null && $size > 0.00000001) {
+            return ExchangePositionSide::LONG;
+        }
+
+        return null;
     }
 
     /**
@@ -501,6 +536,11 @@ final readonly class OkxLifecycleNormalizer
     private function hasValue(mixed $value): bool
     {
         return $this->string($value) !== '';
+    }
+
+    private function bool(mixed $value): bool
+    {
+        return \in_array(strtolower((string) $value), ['1', 'true', 'yes'], true);
     }
 
     /**

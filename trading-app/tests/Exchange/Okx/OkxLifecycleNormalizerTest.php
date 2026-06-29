@@ -90,6 +90,7 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertSame(OkxLifecycleStatus::ACCEPTED, $lifecycle->status);
         self::assertSame('order-ack-1', $lifecycle->exchangeOrderId);
         self::assertSame('client-ack-1', $lifecycle->clientOrderId);
+        self::assertNull($lifecycle->side);
         self::assertFalse($lifecycle->requiresResync);
         self::assertSame([], $lifecycle->qualityFlags);
     }
@@ -136,6 +137,44 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(1.0, $fills[0]->quantity, 0.000001);
         self::assertEqualsWithDelta(25005.0, $fills[0]->price, 0.000001);
         self::assertEqualsWithDelta(-0.03, $fills[0]->fee ?? 0.0, 0.000001);
+    }
+
+    public function testInfersNetModeReduceOnlyPositionSideForCloseFills(): void
+    {
+        $closeLong = $this->orderRow(
+            state: 'filled',
+            filled: '0.1',
+            updatedAt: '1767225601000',
+            fillSz: '0.1',
+            fillPx: '25005',
+            tradeId: 'close-long-fill',
+        );
+        $closeLong['clOrdId'] = 'close-long-client';
+        $closeLong['ordId'] = 'close-long-order';
+        $closeLong['posSide'] = 'net';
+        $closeLong['reduceOnly'] = 'true';
+        $closeLong['side'] = 'sell';
+
+        $closeShort = $this->orderRow(
+            state: 'filled',
+            filled: '0.2',
+            updatedAt: '1767225602000',
+            fillSz: '0.2',
+            fillPx: '25010',
+            tradeId: 'close-short-fill',
+        );
+        $closeShort['clOrdId'] = 'close-short-client';
+        $closeShort['ordId'] = 'close-short-order';
+        $closeShort['posSide'] = 'net';
+        $closeShort['reduceOnly'] = 'true';
+        $closeShort['side'] = 'buy';
+
+        $fills = $this->normalizer->normalizeFills([$closeLong, $closeShort]);
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$closeLong]);
+
+        self::assertSame(ExchangePositionSide::LONG, $lifecycle->positionSide);
+        self::assertSame(ExchangePositionSide::LONG, $fills[0]->positionSide);
+        self::assertSame(ExchangePositionSide::SHORT, $fills[1]->positionSide);
     }
 
     public function testPreservesAlgoOrderIdNamespaceInLifecycleAndFills(): void
