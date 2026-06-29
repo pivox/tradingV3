@@ -134,7 +134,12 @@ final class OkxAccountGateway implements AccountProviderInterface
             ? '/api/v5/account/bills-archive'
             : '/api/v5/account/bills';
 
-        return $this->dataRows($this->privateGet($path, $query, __METHOD__), __METHOD__);
+        $transactions = [];
+        foreach ($this->dataRows($this->privateGet($path, $query, __METHOD__), __METHOD__) as $row) {
+            $transactions[] = $this->mapper->legacyTransaction($row, $flowType);
+        }
+
+        return $transactions;
     }
 
     /**

@@ -118,6 +118,20 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame('algo:algo-1', $algoOrder->orderId);
     }
 
+    public function testFindsTerminalOrderByDetailFallback(): void
+    {
+        $client = $this->client();
+        $client->hidePendingOrders = true;
+        $gateway = new OkxOrderGateway($client);
+
+        $order = $gateway->getOrder('BTCUSDT', 'ord-filled');
+
+        self::assertNotNull($order);
+        self::assertSame('ord-filled', $order->orderId);
+        self::assertSame(OrderStatus::FILLED, $order->status);
+        self::assertSame('/api/v5/trade/order', $client->lastPrivateGetPath);
+    }
+
     public function testReadsHistoricalFills(): void
     {
         $client = $this->client();
@@ -164,9 +178,11 @@ final class OkxPrivateReadProviderTest extends TestCase
         $client = $this->client();
         $gateway = new OkxAccountGateway($client);
 
-        $gateway->getTransactionHistory('BTCUSDT', 2, 100, time() - (14 * 24 * 60 * 60), time());
+        $transactions = $gateway->getTransactionHistory('BTCUSDT', 2, 100, time() - (14 * 24 * 60 * 60), time());
 
         self::assertSame('/api/v5/account/bills-archive', $client->lastPrivateGetPath);
+        self::assertSame(2, $transactions[0]['flow_type'] ?? null);
+        self::assertSame('1.23', $transactions[0]['amount'] ?? null);
     }
 
     public function testWriteMethodsRemainBlocked(): void
@@ -201,6 +217,7 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
 {
     public bool $rateLimited = false;
     public bool $emptyAvailableEquity = false;
+    public bool $hidePendingOrders = false;
     public int $privatePostCalls = 0;
     public string $lastPrivateGetPath = '';
 
@@ -225,6 +242,8 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
             '/api/v5/account/positions' => $this->positions($query),
             '/api/v5/trade/orders-pending' => $this->orders($query),
             '/api/v5/trade/orders-algo-pending' => $this->algoOrders($query),
+            '/api/v5/trade/order' => $this->orderDetail($query),
+            '/api/v5/trade/orders-history' => $this->orderDetail($query),
             '/api/v5/trade/fills' => $this->fills($query),
             '/api/v5/trade/fills-history' => $this->fills($query),
             '/api/v5/account/bills' => $this->bills($query),
@@ -248,10 +267,10 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     {
         return ['code' => '0', 'data' => [[
             'totalEq' => '120.75',
-                'details' => [[
-                    'ccy' => 'USDT',
-                    'availEq' => $this->emptyAvailableEquity ? '' : '100.5',
-                    'availBal' => '99.5',
+            'details' => [[
+                'ccy' => 'USDT',
+                'availEq' => $this->emptyAvailableEquity ? '' : '100.5',
+                'availBal' => '99.5',
                 'frozenBal' => '1.5',
                 'eq' => '120.75',
                 'upl' => '3.25',
@@ -292,6 +311,9 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     {
         $this->assertQueryValue($query, 'instType', 'SWAP');
         $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
+        if ($this->hidePendingOrders) {
+            return ['code' => '0', 'data' => []];
+        }
 
         return ['code' => '0', 'data' => [[
             'instId' => 'BTC-USDT-SWAP',
@@ -306,6 +328,34 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
             'px' => '25000',
             'avgPx' => '24990',
             'reduceOnly' => 'false',
+            'cTime' => '1767225600000',
+            'uTime' => '1767225660000',
+        ]]];
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     * @return array<string,mixed>
+     */
+    private function orderDetail(array $query): array
+    {
+        $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
+        if (($query['ordId'] ?? null) !== 'ord-filled') {
+            return ['code' => '0', 'data' => []];
+        }
+
+        return ['code' => '0', 'data' => [[
+            'instId' => 'BTC-USDT-SWAP',
+            'ordId' => 'ord-filled',
+            'clOrdId' => 'client-filled',
+            'side' => 'buy',
+            'posSide' => 'long',
+            'ordType' => 'limit',
+            'state' => 'filled',
+            'sz' => '1',
+            'accFillSz' => '1',
+            'px' => '25000',
+            'avgPx' => '24990',
             'cTime' => '1767225600000',
             'uTime' => '1767225660000',
         ]]];

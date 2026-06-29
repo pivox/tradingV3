@@ -53,6 +53,33 @@ final class OkxOrderGateway implements OrderProviderInterface
             }
         }
 
+        return $this->fetchOrderDetail($symbol, $orderId);
+    }
+
+    private function fetchOrderDetail(string $symbol, string $orderId): ?OrderDto
+    {
+        if (str_starts_with($orderId, 'algo:')) {
+            return null;
+        }
+
+        $baseQuery = ['instId' => $this->resolver()->instId($symbol)];
+        foreach (['ordId', 'clOrdId'] as $key) {
+            $row = $this->firstRow($this->privateGet('/api/v5/trade/order', $baseQuery + [$key => $orderId], __METHOD__), __METHOD__);
+            if ($row !== []) {
+                return $this->privateMapper->order($row, false);
+            }
+        }
+
+        foreach (['ordId', 'clOrdId'] as $key) {
+            $row = $this->firstRow($this->privateGet('/api/v5/trade/orders-history', $baseQuery + [
+                'instType' => 'SWAP',
+                $key => $orderId,
+            ], __METHOD__), __METHOD__);
+            if ($row !== []) {
+                return $this->privateMapper->order($row, false);
+            }
+        }
+
         return null;
     }
 

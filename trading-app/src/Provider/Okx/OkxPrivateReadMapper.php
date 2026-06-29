@@ -163,6 +163,28 @@ final readonly class OkxPrivateReadMapper
     }
 
     /**
+     * @param array<string,mixed> $row
+     * @return array<string,mixed>
+     */
+    public function legacyTransaction(array $row, ?int $requestedFlowType): array
+    {
+        $transaction = [
+            'exchange' => 'okx',
+            'symbol' => $this->instruments->symbol($this->string($row['instId'] ?? '')),
+            'flow_type' => $requestedFlowType ?? $this->intOrNull($row['type'] ?? $row['subType'] ?? null),
+            'amount' => $this->firstNumber($row['pnl'] ?? null, $row['balChg'] ?? null, $row['amt'] ?? null, '0'),
+            'currency' => $this->stringOrNull($row['ccy'] ?? null),
+            'create_time' => is_numeric($row['ts'] ?? null) ? (int) $row['ts'] : null,
+            'raw_reference' => $this->redacted($row),
+        ];
+        if (array_key_exists('fee', $row)) {
+            $transaction['fee'] = $this->number($row['fee']);
+        }
+
+        return $transaction;
+    }
+
+    /**
      * @param array<string,mixed> $account
      * @return list<array<string,mixed>>
      */
@@ -308,6 +330,11 @@ final readonly class OkxPrivateReadMapper
     private function floatOrNull(mixed $value): ?float
     {
         return $this->isUsableNumber($value) ? (float) $value : null;
+    }
+
+    private function intOrNull(mixed $value): ?int
+    {
+        return $this->isUsableNumber($value) ? (int) $value : null;
     }
 
     private function string(mixed $value): string
