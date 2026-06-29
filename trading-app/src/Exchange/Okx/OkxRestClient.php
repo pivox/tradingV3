@@ -20,10 +20,18 @@ final readonly class OkxRestClient implements OkxRestClientInterface
 
     public function publicGet(string $path, array $query = []): array
     {
+        $response = $this->httpClient
+            ->request('GET', $this->config->apiBaseUri() . $this->requestPath($path, $query));
+        $status = $response->getStatusCode();
+        if ($status === 429) {
+            throw new \RuntimeException('okx_public_rate_limited');
+        }
+        if ($status >= 400) {
+            throw new \RuntimeException(sprintf('okx_public_http_error_%d', $status));
+        }
+
         /** @var array<string,mixed> $data */
-        $data = $this->httpClient
-            ->request('GET', $this->config->apiBaseUri() . $this->requestPath($path, $query))
-            ->toArray(false);
+        $data = $response->toArray(false);
 
         return $data;
     }

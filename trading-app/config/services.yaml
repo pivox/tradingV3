@@ -319,9 +319,9 @@ services:
         public: false
 
     # --- OKX provider bundle ---
-    # Skeleton-only provider bundle for OKX demo readiness. The bundle is
-    # intentionally registered for perpetual/SWAP only and every provider method
-    # fails explicitly until the read-only OKX PRs implement the actual gateways.
+    # OKX demo readiness provider bundle for perpetual/SWAP only. Public
+    # read-only market data is implemented; private reads and writes still fail
+    # explicitly until their dedicated OKX PRs.
     App\Provider\Registry\ExchangeProviderBundle.okx_perpetual:
         class: App\Provider\Registry\ExchangeProviderBundle
         arguments:

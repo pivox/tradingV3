@@ -18,7 +18,7 @@ Provider/
     ├── Registry/ExchangeProviderRegistry + ExchangeProviderBundle
     ├── MainProvider (#[AsAlias(MainProviderInterface::class)])
     ├── Bitmart/ (implémentation concrète)
-    ├── Okx/ (skeleton explicite, perpetual uniquement)
+    ├── Okx/ (public read-only explicite, perpetual uniquement)
     └── CleanupProvider + services utilitaires
 ```
 
@@ -90,7 +90,7 @@ Chaque provider implémente son interface avec un accent sur :
 - `sync*()` (contrats, ordres, positions),
 - `Mapper`s internes pour convertir les structures Bitmart.
 
-## 4 bis. Bundle OKX skeleton
+## 4 bis. Bundle OKX public read-only
 
 OKX est enregistré explicitement dans la registry pour `exchange=okx` et
 `market_type=perpetual` :
@@ -103,10 +103,34 @@ OKX est enregistré explicitement dans la registry pour `exchange=okx` et
 - `OkxMetadataProvider`
 - `OkxRuntimeCheck`
 
-Ce bundle est un skeleton OKX-002. Il ne fait aucun appel REST/WebSocket et
-n'expose aucun endpoint write. Les méthodes de lecture ou d'écriture non encore
-implémentées lèvent `OkxProviderNotReadyException` avec un reason explicite
-(`okx_market_data_not_implemented`, `okx_order_write_not_implemented`, etc.).
+Depuis OKX-003, le bundle fournit des lectures publiques REST pour les données
+nécessaires au dry-run MTF :
+
+- instruments SWAP via `/api/v5/public/instruments` ;
+- ticker instrument via `/api/v5/market/ticker` ;
+- klines via `/api/v5/market/candles`, normalisées en UTC et triées ASC ;
+- carnet via `/api/v5/market/books` ;
+- best bid/ask via `OkxOrderGateway::getOrderBookTop()`.
+
+Les méthodes privées et toutes les méthodes mutatives restent hors périmètre et
+lèvent explicitement `OkxProviderNotReadyException` (`okx_order_write_not_implemented`,
+`okx_account_not_implemented`, etc.). Les erreurs publiques REST sont normalisées
+en `OkxProviderUnavailableException`, avec notamment `okx_public_rate_limited`
+pour les 429.
+
+`OkxMetadataProvider::syncContracts()` ne persiste volontairement rien en
+OKX-003. Il retourne `upserted=0` et l'erreur
+`okx_contract_sync_read_only_not_persisted` afin que `/api/mtf/sync-contracts`
+ne puisse pas annoncer une synchronisation OKX réussie tant que l'upsert des
+contrats n'est pas implémenté.
+
+En environnement demo, `OkxConfig` utilise par défaut :
+
+- REST : `https://eea.okx.com`
+- WebSocket public documenté : `wss://wseeapap.okx.com:8443/ws/v5/public`
+
+OKX-003 ne branche pas de client WebSocket public runtime. Le fallback assumé est
+le polling REST public ci-dessus.
 
 Seul `okx/perpetual` est enregistré. `okx/spot` doit échouer avec
 `ProviderNotFoundException` et ne doit jamais retomber silencieusement sur
@@ -355,6 +379,7 @@ php bin/console mtf:run \
 mtf:run
   ├── Synchronisation des contrats (via ContractProvider)
   │   └── syncContracts() → fetch + upsert en base
+  │       (sauf OKX-003 public read-only : erreur explicite sans persistance)
   │
   ├── Pour chaque symbole :
   │   ├── Récupération des klines (via KlineProvider)

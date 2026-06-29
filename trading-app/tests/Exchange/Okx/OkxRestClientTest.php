@@ -16,6 +16,47 @@ use Symfony\Component\HttpClient\Response\MockResponse;
 #[CoversClass(OkxConfig::class)]
 final class OkxRestClientTest extends TestCase
 {
+    public function testDemoPublicGetUsesEeaDemoBaseUriByDefault(): void
+    {
+        $captured = null;
+        $http = new MockHttpClient(function (string $method, string $url, array $options) use (&$captured): MockResponse {
+            $captured = ['method' => $method, 'url' => $url, 'options' => $options];
+
+            return new MockResponse('{"code":"0","data":[]}');
+        });
+        $client = new OkxRestClient(
+            $http,
+            new OkxConfig(environment: 'demo'),
+            $this->fixedClock(),
+        );
+
+        $client->publicGet('/api/v5/public/instruments', ['instType' => 'SWAP']);
+
+        self::assertIsArray($captured);
+        self::assertSame('GET', $captured['method']);
+        self::assertSame('https://eea.okx.com/api/v5/public/instruments?instType=SWAP', $captured['url']);
+        self::assertNull($this->header($captured['options'], 'OK-ACCESS-KEY'));
+        self::assertNull($this->header($captured['options'], 'x-simulated-trading'));
+    }
+
+    public function testPublicGetRaisesExplicitRateLimitException(): void
+    {
+        $http = new MockHttpClient(static fn (): MockResponse => new MockResponse(
+            '{"code":"50011","msg":"Too Many Requests","data":[]}',
+            ['http_code' => 429],
+        ));
+        $client = new OkxRestClient(
+            $http,
+            new OkxConfig(environment: 'demo'),
+            $this->fixedClock(),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('okx_public_rate_limited');
+
+        $client->publicGet('/api/v5/market/ticker', ['instId' => 'BTC-USDT-SWAP']);
+    }
+
     public function testDemoPrivateGetSignsRequestAndAddsSimulatedTradingHeader(): void
     {
         $captured = null;
@@ -39,7 +80,7 @@ final class OkxRestClientTest extends TestCase
 
         self::assertIsArray($captured);
         self::assertSame('GET', $captured['method']);
-        self::assertSame('https://www.okx.com/api/v5/account/balance?ccy=USDT', $captured['url']);
+        self::assertSame('https://eea.okx.com/api/v5/account/balance?ccy=USDT', $captured['url']);
         self::assertSame('test-key', $this->header($captured['options'], 'OK-ACCESS-KEY'));
         self::assertSame('test-passphrase', $this->header($captured['options'], 'OK-ACCESS-PASSPHRASE'));
         self::assertSame('2026-01-01T00:00:00.000Z', $this->header($captured['options'], 'OK-ACCESS-TIMESTAMP'));
@@ -109,7 +150,7 @@ final class OkxRestClientTest extends TestCase
 
         self::assertIsArray($captured);
         self::assertSame('POST', $captured['method']);
-        self::assertSame('https://www.okx.com/api/v5/trade/order', $captured['url']);
+        self::assertSame('https://eea.okx.com/api/v5/trade/order', $captured['url']);
         self::assertSame('{"instId":"BTC-USDT-SWAP","side":"buy"}', $captured['options']['body'] ?? null);
         self::assertSame('1', $this->header($captured['options'], 'x-simulated-trading'));
         self::assertSame(

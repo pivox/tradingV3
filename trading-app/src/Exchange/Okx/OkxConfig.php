@@ -38,7 +38,7 @@ final readonly class OkxConfig
             return $configured;
         }
 
-        return 'https://www.okx.com';
+        return $this->isDemo() ? 'https://eea.okx.com' : 'https://www.okx.com';
     }
 
     public function wsPublicUri(): string
@@ -48,7 +48,9 @@ final readonly class OkxConfig
             return $configured;
         }
 
-        return 'wss://ws.okx.com:8443/ws/v5/public';
+        return $this->isDemo()
+            ? 'wss://wseeapap.okx.com:8443/ws/v5/public'
+            : 'wss://ws.okx.com:8443/ws/v5/public';
     }
 
     public function wsPrivateUri(): string
