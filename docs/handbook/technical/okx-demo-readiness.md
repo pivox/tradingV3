@@ -95,7 +95,9 @@ ne sont pas actives par OKX-001.
 | Balance/account | `GET /api/v5/account/balance` | Equity, marge disponible, devise de compte. |
 | Positions | `GET /api/v5/account/positions` | Positions ouvertes, taille, marge, liquidation, PnL provider. |
 | Open orders | `GET /api/v5/trade/orders-pending` | Reconciliation des ordres encore actifs. |
+| Open algo orders | `GET /api/v5/trade/orders-algo-pending` | Reconciliation des protections conditionnelles SL/TP. |
 | Order details | `GET /api/v5/trade/order` | Etat d'un ordre par `ordId` ou `clOrdId`. |
+| Algo order details | Endpoint detail algo si retenu | Etat d'une protection conditionnelle par identifiant exchange. |
 | Fills | `GET /api/v5/trade/fills` | Prix, quantite, fee, devise fee et id fill. |
 | Bills / ledger account | Endpoint account bills si retenu | Frais/funding non presents dans les fills. |
 
@@ -119,6 +121,7 @@ Une readiness demo OKX ne doit pas etre consideree complete sans ces donnees :
 - balance, equity, marge disponible et devise ;
 - positions avec taille, side, prix entree, liquidation si expose, PnL provider ;
 - open orders, details ordre, `client_order_id`, `exchange_order_id` ;
+- protections conditionnelles relues via les surfaces algo-order ;
 - fills avec id exchange, prix, quantite, fee amount, fee currency et timestamp ;
 - statut observabilite privee avec snapshot initial et streams ordres/fills/positions.
 
@@ -134,11 +137,14 @@ OKX peut progresser vers `demo_testnet_candidate` seulement si :
 3. Les metadata et precisions sont coherentes avec le plan d'ordre.
 4. La lecture publique est fraiche et bornee.
 5. La lecture privee account/positions/orders/fills est authentifiee et redacted.
-6. L'observabilite privee est complete ou explicitement acceptee par une policy
+6. Les protections SL/TP conditionnelles sont visibles par la lecture algo-order.
+7. `stopLossCapability=true` est prouve pour que `demo_testnet_candidate` soit
+   atteignable par `ExchangeReadinessEvaluator`.
+8. L'observabilite privee est complete ou explicitement acceptee par une policy
    future documentee.
-7. Fake/Paper reste disponible pour rejouer les scenarios protection et duplicate
+9. Fake/Paper reste disponible pour rejouer les scenarios protection et duplicate
    `client_order_id`.
-8. Le dry-run local produit une trace deterministe sans HTTP.
+10. Le dry-run local produit une trace deterministe sans HTTP.
 
 OKX ne peut atteindre `demo_testnet_enabled` que si, en plus :
 
