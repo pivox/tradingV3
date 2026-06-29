@@ -1,0 +1,216 @@
+# OKX demo readiness
+
+## Statut
+
+ADR documentaire OKX-001, accepte le 2026-06-29.
+
+OKX reste `target_dry_run_only`. Cette page ne rend pas OKX utilisable en
+ecriture demo et ne rend jamais OKX utilisable en mainnet. Elle documente ce qui
+existe, ce qui manque pour une demo controlee et les gates qui doivent rester
+fermees jusqu'aux PRs suivantes.
+
+Voir aussi :
+
+- [OKX dry-run](okx-dry-run.md)
+- [Exchange readiness matrix](exchange-readiness-matrix.md)
+- [Exchange runtime gates](exchange-runtime-gates.md)
+- [Demo/Testnet Safety Envelope](demo-testnet-safety-envelope.md)
+- [Exchange private observability policy](exchange-private-observability-policy.md)
+
+## Decision
+
+Le perimetre initial OKX est :
+
+| Axe | Decision |
+|---|---|
+| Exchange | `okx` uniquement. |
+| Environnement | `demo` uniquement pour toute future ecriture controlee. |
+| Market type | `perpetual` / OKX `SWAP` d'abord. |
+| Spot | Hors perimetre initial tant qu'un support explicite n'est pas ajoute. |
+| Public read-only | Requis avant toute readiness demo. |
+| Private read-only | Requis avant toute readiness demo. |
+| Local dry-run | Autorise uniquement sans appel HTTP ni `privatePost`. |
+| Demo trading | Plus tard, par PR dediee, avec activation explicite et SL obligatoire. |
+| Mainnet | Hors perimetre et bloque. |
+
+`dry_run=false` ne signifie jamais mainnet dans cette serie. Il signifie seulement
+qu'une future tentative mutative demande une ecriture `demo`, sous guards
+explicites. Par defaut, `DEMO_TRADING_ENABLED=0`,
+`OKX_DEMO_TRADING_ENABLED=0`, `mainnet_write_enabled=false`,
+`demo_testnet_write_enabled=false` et `kill_switch_enabled=true` doivent maintenir
+la voie mutative fermee.
+
+## Definitions operationnelles
+
+| Terme | Sens dans TradingV3 |
+|---|---|
+| Local dry-run | Simulation locale, sans HTTP, sans socket prive, sans ordre exchange. |
+| OKX demo | Environnement demo OKX, avec cles demo dediees et header `x-simulated-trading: 1`. |
+| Controlled demo trading | Future ecriture OKX demo, jamais activee par cette ADR. |
+| Mainnet | Environnement reel OKX. Interdit en ecriture dans cette serie. |
+
+Les logs, fixtures et docs ne doivent contenir aucun secret. Les exemples ne
+doivent utiliser que des noms de variables ou des identifiants factices non
+reutilisables.
+
+## Capability matrix
+
+| Capability | Etat OKX-001 | Preuve actuelle | Manque pour demo controlee |
+|---|---|---|---|
+| Config OKX demo | Partiel | `OkxConfig` normalise `demo` par defaut, separe demo et live. | Verifier les valeurs effectives via runtime-check et config effective. |
+| Guard mainnet | Present | `OKX_LIVE_ENABLED` est separe et le runtime-check annonce `Live allowed: no`. | Conserver le blocage dans toutes les PRs OKX. |
+| Header demo | Documente dans le code OKX | `OkxRestClient` / README OKX documentent `x-simulated-trading: 1` pour demo. | Le prouver par tests de client/payload dans les PRs read/write dediees. |
+| Market type `perpetual` | Scope initial | `OkxDryRunExecutionPort` refuse tout market type different de `perpetual`. | Charger et valider les instruments OKX `SWAP`. |
+| Spot | Non supporte | Aucun contrat demo spot explicite dans ce perimetre. | PR separee si spot devient necessaire. |
+| Public REST read-only | Non pret | Aucun run de readiness public OKX n'est certifie par cette ADR. | Instruments, tickers, candles, order book et funding lisibles, normalises, testes. |
+| Public WebSocket read-only | Non pret | URI public configurable. | Client public, subscriptions, reconnect, freshness et tests fixtures. |
+| Private REST read-only | Non pret | Credentials attendus et signature disponibles cote OKX adapter. | Balance, positions, open orders, order details et fills relus sans mutation. |
+| Private WebSocket read-only | Partiel | Normalizers ordres/fills/positions existent, mais pas de vrai client prive annonce. | Connexion demo, auth, snapshot initial, streams ordres/fills/positions et reconciliation fraiche. |
+| Metadata / precision | Non pret | Conversion symbole SWAP documentee dans README OKX. | Tick size, lot size, contract value, min size, precision, status instrument et caps. |
+| Fees / funding / costs | Non pret | Le contrat PnL net classe OKX comme partiel tant que les couts ne sont pas persistants. | Frais par fill, devise, funding et couts normalises sans transformer l'absence en zero. |
+| Local dry-run execution | Present pour preview | `OkxDryRunExecutionPort` ne fait aucun HTTP et retourne `OKX-DRYRUN-{client_order_id}`. | Serializer de payload OKX exact, toujours sans envoi, dans OKX-007. |
+| Controlled demo write | Non supporte | Les guards communs existent, mais OKX reste dry-run only. | PR dediee avec readiness complete, SL immediat, compensation fail-safe et rollback. |
+| Mainnet write | Interdit | Runtime-check OKX garde `Live allowed: no`. | Aucun manque a combler dans cette serie. |
+
+## Endpoints requis
+
+Les endpoints ci-dessous sont les surfaces attendues pour les PRs suivantes. Ils
+ne sont pas actives par OKX-001.
+
+### Public read-only
+
+| Donnee | Endpoint OKX attendu | Utilisation |
+|---|---|---|
+| Instruments SWAP | `GET /api/v5/public/instruments` | Liste des symboles, status, tick/lot, contract size, min size. |
+| Tickers | `GET /api/v5/market/tickers` ou ticker instrument | Prix dernier, bid/ask, volume et validation de freshness. |
+| Candles | `GET /api/v5/market/candles` | Donnees OHLCV pour indicateurs et verification de timeframes. |
+| Order book | `GET /api/v5/market/books` | Spread, best bid/ask et controles de prix d'entree. |
+| Funding rate | `GET /api/v5/public/funding-rate` | Funding courant et prochain timestamp. |
+| Funding history | Endpoint historique funding si disponible | Reconciliation des couts et analyse PnL. |
+
+### Private read-only
+
+| Donnee | Endpoint OKX attendu | Utilisation |
+|---|---|---|
+| Balance/account | `GET /api/v5/account/balance` | Equity, marge disponible, devise de compte. |
+| Positions | `GET /api/v5/account/positions` | Positions ouvertes, taille, marge, liquidation, PnL provider. |
+| Open orders | `GET /api/v5/trade/orders-pending` | Reconciliation des ordres encore actifs. |
+| Order details | `GET /api/v5/trade/order` | Etat d'un ordre par `ordId` ou `clOrdId`. |
+| Fills | `GET /api/v5/trade/fills` | Prix, quantite, fee, devise fee et id fill. |
+| Bills / ledger account | Endpoint account bills si retenu | Frais/funding non presents dans les fills. |
+
+### Demo write future
+
+Les endpoints mutatifs, par exemple placement/cancel d'ordre et protection
+conditionnelle, sont hors perimetre OKX-001. Ils ne pourront etre utilises qu'en
+OKX demo, avec cles demo dediees, `x-simulated-trading: 1`, whitelists, plafond
+notionnel, SL immediat, audit redacted et rollback teste.
+
+## Donnees attendues
+
+Une readiness demo OKX ne doit pas etre consideree complete sans ces donnees :
+
+- instrument OKX normalise vers le symbole interne ;
+- `market_type=perpetual` et type OKX `SWAP` confirmes ;
+- precision prix, precision quantite, tick size, lot size, contract size, min size ;
+- statut de trading instrument et devise de reglement ;
+- best bid/ask, last/mark si disponible, timestamps de freshness ;
+- funding courant et historique exploitable ;
+- balance, equity, marge disponible et devise ;
+- positions avec taille, side, prix entree, liquidation si expose, PnL provider ;
+- open orders, details ordre, `client_order_id`, `exchange_order_id` ;
+- fills avec id exchange, prix, quantite, fee amount, fee currency et timestamp ;
+- statut observabilite privee avec snapshot initial et streams ordres/fills/positions.
+
+Les donnees manquantes restent manquantes. Elles ne doivent jamais etre converties
+en zero pour obtenir une certification PnL ou une readiness mutative.
+
+## Gates avant demo controlee
+
+OKX peut progresser vers `demo_testnet_candidate` seulement si :
+
+1. `exchange=okx`, `environment=demo`, `market_type=perpetual`.
+2. Les instruments publics OKX `SWAP` sont charges et valides.
+3. Les metadata et precisions sont coherentes avec le plan d'ordre.
+4. La lecture publique est fraiche et bornee.
+5. La lecture privee account/positions/orders/fills est authentifiee et redacted.
+6. L'observabilite privee est complete ou explicitement acceptee par une policy
+   future documentee.
+7. Fake/Paper reste disponible pour rejouer les scenarios protection et duplicate
+   `client_order_id`.
+8. Le dry-run local produit une trace deterministe sans HTTP.
+
+OKX ne peut atteindre `demo_testnet_enabled` que si, en plus :
+
+1. `DEMO_TRADING_ENABLED=1` et `OKX_DEMO_TRADING_ENABLED=1`.
+2. `demo_testnet_write_enabled=true`, `mainnet_write_enabled=false` et
+   `kill_switch_enabled=false`.
+3. La requete concrete contient `client_order_id`, symbole/marche whitelist,
+   notional positif sous plafond et stop-loss present.
+4. La private observability policy autorise le statut OKX demo.
+5. Le header `x-simulated-trading: 1` est garanti sur toute requete demo.
+6. Une compensation fail-safe est documentee si le SL ne peut pas etre attache.
+7. L'audit demo trading est ecrit avant de considerer la mutation autorisee.
+
+## Non supporte
+
+Les elements suivants restent explicitement non supportes :
+
+- ordre mainnet OKX ;
+- activation OKX live par presence de credentials ;
+- utilisation de cles mainnet dans l'application ;
+- spot, margin, options ou tout autre marche hors `perpetual` ;
+- retrait, transfert, sub-account management ou mutation account ;
+- fallback silencieux vers Bitmart quand `exchange=okx` ;
+- ordre demo sans SL immediat ou compensation fail-safe ;
+- certification PnL nette OKX tant que les fills/couts ne sont pas complets ;
+- logs de payloads bruts sensibles, signatures, cookies, tokens ou secrets ;
+- changement de strategie, EntryZone, Risk/Leverage ou SL/TP metier dans cette
+  serie de readiness.
+
+## Risques et mitigations
+
+| Risque | Mitigation |
+|---|---|
+| Confusion demo/mainnet | Pairing strict `okx/demo`, `mainnet_write_enabled=false`, `Live allowed: no`, header demo obligatoire. |
+| Metadata incomplete | Fail closed : pas de sizing, pas d'ordre, readiness non complete. |
+| Frais/funding absents | Flags de qualite et PnL non certifie, jamais zero implicite. |
+| Private stream indisponible | `demo_testnet_enabled` bloque par private observability policy. |
+| Partial fill ou SL attach failure | Scenario Fake/Paper d'abord, compensation fail-safe avant toute ecriture demo. |
+| Rate limits ou donnees stale | Bornes de timeout/retry read-only, freshness explicite, pas de mutation si donnees obsoletes. |
+| Secret dans logs/docs | Redaction defensive, exemples sans valeurs, audit sans payload brut. |
+
+## Rollback
+
+OKX-001 est docs-only. Le rollback applicatif est le revert de cette page.
+
+Le rollback operationnel a conserver pour les PRs suivantes reste :
+
+```bash
+DEMO_TRADING_ENABLED=0
+OKX_DEMO_TRADING_ENABLED=0
+```
+
+et cote config effective :
+
+```yaml
+trading:
+  execution:
+    mainnet_write_enabled: false
+    demo_testnet_write_enabled: false
+    kill_switch_enabled: true
+```
+
+Apres changement d'environnement ou de config, redemarrer les processus qui les
+lisent avant toute nouvelle tentative.
+
+## Consequences ADR
+
+Cette ADR rend explicite que la prochaine etape OKX doit combler les lectures et
+normalisations avant toute ecriture. Elle autorise les PRs de skeleton, public
+read-only, private read-only, metadata, normalizers et dry-run serialization.
+
+Elle interdit de traiter `OkxDryRunExecutionPort` comme une readiness demo
+mutative : ce port est une preview locale sans HTTP. Elle interdit aussi de
+considerer OKX mainnet comme une cible de cette serie, meme si des credentials ou
+un adapter existent.
