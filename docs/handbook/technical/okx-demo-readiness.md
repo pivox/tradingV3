@@ -66,8 +66,8 @@ reutilisables.
 | Public WebSocket read-only | Non pret | URI public configurable. | Client public, subscriptions, reconnect, freshness et tests fixtures. |
 | Private REST read-only | `private_read_only` partiel | OKX-004 signe les requetes privees demo, lit balance, positions, ordres ouverts, algo-orders ouverts et fills recents sans mutation. | Details d'ordre historiques et enrichissements frais/funding restent pour les PRs metadata/ledger. |
 | Private WebSocket read-only | Partiel | Normalizers ordres/fills/positions existent, mais pas de vrai client prive annonce. | Connexion demo, auth, snapshot initial, streams ordres/fills/positions et reconciliation fraiche. |
-| Metadata / precision | Non pret | Conversion symbole SWAP documentee dans README OKX. | Tick size, lot size, contract value, min size, precision, status instrument et caps. |
-| Fees / funding / costs | Non pret | Le contrat PnL net classe OKX comme partiel tant que les couts ne sont pas persistants. | Frais par fill, devise, funding et couts normalises sans transformer l'absence en zero. |
+| Metadata / precision | Partiel OKX-005 | `OkxMetadataProvider::getInstrumentMetadata()` expose `instId`, tick, step, min/max size, contract value, settle currency et max leverage. Les champs requis invalides bloquent avec `okx_metadata_incomplete`. | Brancher cette metadata dans tous les chemins de sizing demo avant ordre. |
+| Fees / funding / costs | Partiel OKX-005 | Fees maker/taker lues via `trade-fee` avec `instFamily`; funding courant lu via `/public/funding-rate`. Valeur absente => `null` + quality flag, jamais zero. | Ledger/certification OKX restent a traiter dans une PR separee. |
 | Local dry-run execution | Present pour preview | `OkxDryRunExecutionPort` ne fait aucun HTTP et retourne `OKX-DRYRUN-{client_order_id}`. | Serializer de payload OKX exact, toujours sans envoi, dans OKX-007. |
 | Controlled demo write | Non supporte | Les guards communs existent, mais OKX reste dry-run only. | PR dediee avec readiness complete, SL immediat, compensation fail-safe et rollback. |
 | Mainnet write | Interdit | Runtime-check OKX garde `Live allowed: no`. | Aucun manque a combler dans cette serie. |
@@ -85,7 +85,7 @@ ne sont pas actives par OKX-001.
 | Tickers | `GET /api/v5/market/ticker` par instrument | Prix dernier, volume et validation de freshness. Implante dans OKX-003. |
 | Candles | `GET /api/v5/market/candles` | Donnees OHLCV pour indicateurs et verification de timeframes. Implante dans OKX-003 avec tri ASC UTC. |
 | Order book | `GET /api/v5/market/books` | Spread, best bid/ask et controles de prix d'entree. Implante dans OKX-003. |
-| Funding rate | `GET /api/v5/public/funding-rate` | Funding courant et prochain timestamp. |
+| Funding rate | `GET /api/v5/public/funding-rate` | Funding courant et prochain timestamp. Implante dans OKX-005 pour metadata courante. |
 | Funding history | Endpoint historique funding si disponible | Reconciliation des couts et analyse PnL. |
 
 Configuration demo public OKX-003 :
@@ -117,6 +117,7 @@ le fallback volontaire est le polling REST public.
 | Order details | `GET /api/v5/trade/order` | Etat d'un ordre par `ordId` ou `clOrdId`. |
 | Algo order details | Endpoint detail algo si retenu | Etat d'une protection conditionnelle par identifiant exchange. |
 | Fills | `GET /api/v5/trade/fills` | Prix, quantite, fee, devise fee et id fill. |
+| Trade fee | `GET /api/v5/account/trade-fee` | Maker/taker courants par `instFamily`. Implante dans OKX-005 pour metadata couts. |
 | Bills / ledger account | Endpoint account bills si retenu | Frais/funding non presents dans les fills. |
 
 Configuration demo private OKX-004 :

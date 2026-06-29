@@ -50,6 +50,113 @@ final class OkxPublicReadProviderTest extends TestCase
         self::assertSame('251234', (string) $contract->turnover24h);
     }
 
+    public function testLoadsNormalizedMetadataWithFeesAndFunding(): void
+    {
+        $client = $this->client();
+        $provider = new OkxMetadataProvider($client, account: new \App\Provider\Okx\OkxAccountGateway($client));
+
+        $metadata = $provider->getInstrumentMetadata('BTCUSDT');
+
+        self::assertNotNull($metadata);
+        self::assertSame('BTCUSDT', $metadata->symbol);
+        self::assertSame('BTC-USDT-SWAP', $metadata->instrumentId);
+        self::assertSame('0.1', $metadata->priceTick);
+        self::assertSame('0.01', $metadata->quantityStep);
+        self::assertSame('0.01', $metadata->minSize);
+        self::assertSame('100', $metadata->maxSize);
+        self::assertSame('0.01', $metadata->contractValue);
+        self::assertSame('USDT', $metadata->settleCurrency);
+        self::assertSame('100', $metadata->maxLeverage);
+        self::assertSame('-0.0002', $metadata->makerFeeRate);
+        self::assertSame('-0.0005', $metadata->takerFeeRate);
+        self::assertSame('0.0001', $metadata->fundingRate);
+        self::assertTrue($metadata->isCompleteForSizing());
+        self::assertSame([], $metadata->qualityFlags);
+        self::assertSame('/api/v5/account/trade-fee', $client->lastPrivateGetPath);
+        self::assertSame('BTC-USDT', $client->lastPrivateGetQuery['instFamily'] ?? null);
+    }
+
+    public function testQuantizationValidationRejectsPriceAndFlagsQuantityRiskChange(): void
+    {
+        $provider = new OkxMetadataProvider($this->client());
+
+        $metadata = $provider->getInstrumentMetadata('BTCUSDT');
+        self::assertNotNull($metadata);
+        $report = $metadata->validateOrderShape('25123.45', '0.015');
+
+        self::assertFalse($report['price_valid']);
+        self::assertFalse($report['quantity_valid']);
+        self::assertSame('25123.4', $report['price_quantized']);
+        self::assertSame('0.01', $report['quantity_quantized']);
+        self::assertContains('price_precision_mismatch', $report['quality_flags']);
+        self::assertContains('quantity_rounding_changes_risk', $report['quality_flags']);
+    }
+
+    public function testFundingAbsentIsUnknownNotZero(): void
+    {
+        $client = $this->client();
+        $client->hideFunding = true;
+        $provider = new OkxMetadataProvider($client);
+
+        $metadata = $provider->getInstrumentMetadata('BTCUSDT');
+
+        self::assertNotNull($metadata);
+        self::assertNull($metadata->fundingRate);
+        self::assertContains('funding_rate_unknown', $metadata->qualityFlags);
+        self::assertTrue($metadata->isCompleteForSizing());
+    }
+
+    public function testFeesAbsentAreUnknownNotZero(): void
+    {
+        $client = $this->client();
+        $client->hideFees = true;
+        $provider = new OkxMetadataProvider($client, account: new \App\Provider\Okx\OkxAccountGateway($client));
+
+        $metadata = $provider->getInstrumentMetadata('BTCUSDT');
+
+        self::assertNotNull($metadata);
+        self::assertNull($metadata->makerFeeRate);
+        self::assertNull($metadata->takerFeeRate);
+        self::assertContains('maker_fee_unknown', $metadata->qualityFlags);
+        self::assertContains('taker_fee_unknown', $metadata->qualityFlags);
+        self::assertTrue($metadata->isCompleteForSizing());
+    }
+
+    public function testRejectsIncoherentInstrumentMetadata(): void
+    {
+        $client = $this->client();
+        $client->brokenInstrument = true;
+        $provider = new OkxMetadataProvider($client);
+
+        $this->expectException(OkxProviderUnavailableException::class);
+        $this->expectExceptionMessage('okx_metadata_incomplete');
+
+        $provider->getContractDetails('BTCUSDT');
+    }
+
+    public function testLeverageBracketUsesInstrumentCap(): void
+    {
+        $provider = new OkxMetadataProvider($this->client());
+
+        self::assertSame([
+            [
+                'symbol' => 'BTCUSDT',
+                'instrument_id' => 'BTC-USDT-SWAP',
+                'min_leverage' => '1',
+                'max_leverage' => '100',
+                'source' => 'okx_public_instruments',
+            ],
+        ], $provider->getLeverageBrackets('BTCUSDT'));
+    }
+
+    public function testUnknownSymbolMetadataReturnsNull(): void
+    {
+        $provider = new OkxMetadataProvider($this->client());
+
+        self::assertNull($provider->getInstrumentMetadata('DOGEUSDT'));
+        self::assertSame([], $provider->getLeverageBrackets('DOGEUSDT'));
+    }
+
     public function testNormalizesOrderBookAndBestBidAsk(): void
     {
         $metadata = new OkxMetadataProvider($this->client());
@@ -154,9 +261,16 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
     public bool $rateLimited = false;
     public bool $klineRateLimited = false;
     public bool $paginatedCandles = false;
+    public bool $hideFunding = false;
+    public bool $hideFees = false;
+    public bool $brokenInstrument = false;
+    public string $lastPrivateGetPath = '';
 
     /** @var list<array{limit: string, after: string|null}> */
     public array $candleQueries = [];
+
+    /** @var array<string,mixed> */
+    public array $lastPrivateGetQuery = [];
 
     /**
      * @param array<string,mixed> $query
@@ -170,6 +284,7 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
 
         return match ($path) {
             '/api/v5/public/instruments' => $this->instruments(),
+            '/api/v5/public/funding-rate' => $this->fundingRate($query),
             '/api/v5/market/ticker' => $this->ticker($query),
             '/api/v5/market/books' => $this->books($query),
             '/api/v5/market/candles' => $this->candles($query),
@@ -179,7 +294,13 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
 
     public function privateGet(string $path, array $query = []): array
     {
-        throw new \LogicException('Private OKX read must not be used by public providers.');
+        $this->lastPrivateGetPath = $path;
+        $this->lastPrivateGetQuery = $query;
+
+        return match ($path) {
+            '/api/v5/account/trade-fee' => $this->tradingFees($query),
+            default => throw new \LogicException('Unexpected private OKX read path for metadata fixture.'),
+        };
     }
 
     public function privatePost(string $path, array $body = []): array
@@ -199,8 +320,8 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
                 'baseCcy' => 'BTC',
                 'quoteCcy' => 'USDT',
                 'settleCcy' => 'USDT',
-                'ctVal' => '0.01',
-                'tickSz' => '0.1',
+                'ctVal' => $this->brokenInstrument ? '' : '0.01',
+                'tickSz' => $this->brokenInstrument ? '0' : '0.1',
                 'lotSz' => '0.01',
                 'minSz' => '0.01',
                 'maxMktSz' => '100',
@@ -227,6 +348,49 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
                 'expTime' => '',
             ],
         ]];
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     * @return array<string,mixed>
+     */
+    private function fundingRate(array $query): array
+    {
+        $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
+
+        if ($this->hideFunding) {
+            return ['code' => '0', 'data' => []];
+        }
+
+        return ['code' => '0', 'data' => [[
+            'instId' => 'BTC-USDT-SWAP',
+            'fundingRate' => '0.0001',
+            'nextFundingTime' => '1767254400000',
+        ]]];
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     * @return array<string,mixed>
+     */
+    private function tradingFees(array $query): array
+    {
+        $this->assertQueryValue($query, 'instType', 'SWAP');
+        $this->assertQueryValue($query, 'instFamily', 'BTC-USDT');
+        if (array_key_exists('instId', $query)) {
+            throw new \RuntimeException('OKX SWAP fee query must use instFamily, not instId.');
+        }
+
+        if ($this->hideFees) {
+            return ['code' => '0', 'data' => []];
+        }
+
+        return ['code' => '0', 'data' => [[
+            'instType' => 'SWAP',
+            'instFamily' => 'BTC-USDT',
+            'maker' => '-0.0002',
+            'taker' => '-0.0005',
+        ]]];
     }
 
     /**

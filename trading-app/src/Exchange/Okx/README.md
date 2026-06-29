@@ -19,8 +19,30 @@ API-first OKX demo integration slice for SWAP instruments.
 - Internal symbols are normalized as SWAP instruments, for example `BTCUSDT` to `BTC-USDT-SWAP`.
 - Provider public read-only coverage is implemented for instruments, ticker, candles and order book.
 - Provider private read-only coverage is implemented for account balance, positions, open orders, algo open orders and recent fills.
+- Metadata normalization exposes OKX native tick/step/min/max/contract/leverage,
+  public funding, and private fee rates without submitting orders.
 - Entry orders use `/api/v5/trade/order`; standalone stop-loss/take-profit protection uses `/api/v5/trade/order-algo` conditional orders.
 - WebSocket public demo is documented as `wss://wseeapap.okx.com:8443/ws/v5/public`, but OKX-003 keeps runtime market data on REST polling. WebSocket private payload normalization is available for `orders`, `fills`, and `positions` messages. A real OKX private WS client is not implemented yet, so the adapter still does not advertise private WS support.
+
+Metadata mapping:
+
+| TradingV3 | OKX |
+|---|---|
+| `instrumentId` | `instId` |
+| `priceTick` | `tickSz` |
+| `quantityStep` | `lotSz` |
+| `minSize` | `minSz` |
+| `maxSize` | `maxMktSz` then `maxLmtSz` |
+| `contractValue` | `ctVal` |
+| `settleCurrency` | `settleCcy` |
+| `maxLeverage` | `lever` |
+| `makerFeeRate`, `takerFeeRate` | `/api/v5/account/trade-fee` queried with `instFamily` |
+| `fundingRate`, `nextFundingTime` | `/api/v5/public/funding-rate` |
+
+Sizing metadata is fail-closed: missing or non-positive required fields raise
+`okx_metadata_incomplete`. Missing fee or funding values remain `null` with
+quality flags; they are not treated as zero. Quantization checks flag
+`price_precision_mismatch` and `quantity_rounding_changes_risk`.
 
 Environment:
 
