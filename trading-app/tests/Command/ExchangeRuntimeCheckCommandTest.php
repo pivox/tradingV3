@@ -61,10 +61,10 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Schedule ready: no', $output);
     }
 
-    public function testOkxStaysDryRunOnlyEvenWithCredentialsProviderAndDemoFlag(): void
+    public function testOkxSkeletonStaysUnscheduledEvenWithCredentialsProviderAndDemoFlag(): void
     {
-        // PR11 hardening: a fully "ready" OKX runtime with demo trading enabled must still
-        // report live as forbidden and recommend dry-run. Demo capability != live trading.
+        // OKX-002 exposes an explicit provider bundle, but the provider read paths are still
+        // skeleton-only. Presence in the registry must not make the schedule preflight green.
         $command = new ExchangeRuntimeCheckCommand(
             $this->adapterRegistry($this->adapter(Exchange::OKX, MarketType::PERPETUAL, supportsPrivateWs: true)),
             $this->providerRegistry($this->providerBundle(Exchange::OKX, MarketType::PERPETUAL)),
@@ -98,7 +98,7 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Live allowed: no', $output);
         self::assertStringContainsString('Demo trading enabled: yes', $output);
         self::assertStringContainsString('Recommended dry_run: true', $output);
-        self::assertStringContainsString('Schedule ready: yes', $output);
+        self::assertStringContainsString('Schedule ready: no', $output);
         // The Hyperliquid-specific lines must never leak into OKX output.
         self::assertStringNotContainsString('Network:', $output);
         self::assertStringNotContainsString('Mainnet enabled:', $output);

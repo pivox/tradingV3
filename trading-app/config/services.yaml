@@ -287,6 +287,13 @@ services:
             $marketType: !php/const App\Common\Enum\MarketType::SPOT
         public: false
 
+    App\Provider\Context\ExchangeContext.okx_perpetual:
+        class: App\Provider\Context\ExchangeContext
+        arguments:
+            $exchange: !php/const App\Common\Enum\Exchange::OKX
+            $marketType: !php/const App\Common\Enum\MarketType::PERPETUAL
+        public: false
+
     # The fake provider classes themselves are autowired by the App\Provider\
     # resource block above; only the contexts and bundles need explicit wiring.
     App\Provider\Registry\ExchangeProviderBundle.fake_perpetual:
@@ -311,6 +318,21 @@ services:
             $systemProvider: '@App\Provider\Fake\FakeSystemProvider'
         public: false
 
+    # --- OKX provider bundle ---
+    # Skeleton-only provider bundle for OKX demo readiness. The bundle is
+    # intentionally registered for perpetual/SWAP only and every provider method
+    # fails explicitly until the read-only OKX PRs implement the actual gateways.
+    App\Provider\Registry\ExchangeProviderBundle.okx_perpetual:
+        class: App\Provider\Registry\ExchangeProviderBundle
+        arguments:
+            $context: '@App\Provider\Context\ExchangeContext.okx_perpetual'
+            $klineProvider: '@App\Provider\Okx\OkxMarketDataGateway'
+            $contractProvider: '@App\Provider\Okx\OkxMetadataProvider'
+            $orderProvider: '@App\Provider\Okx\OkxOrderGateway'
+            $accountProvider: '@App\Provider\Okx\OkxAccountGateway'
+            $systemProvider: '@App\Provider\Okx\OkxSystemProvider'
+        public: false
+
     App\Provider\Registry\ExchangeProviderRegistry:
         arguments:
             $bundles:
@@ -318,6 +340,7 @@ services:
                 - '@App\Provider\Registry\ExchangeProviderBundle.bitmart_spot'
                 - '@App\Provider\Registry\ExchangeProviderBundle.fake_perpetual'
                 - '@App\Provider\Registry\ExchangeProviderBundle.fake_spot'
+                - '@App\Provider\Registry\ExchangeProviderBundle.okx_perpetual'
             $defaultExchange: !php/const App\Common\Enum\Exchange::BITMART
             $defaultMarketType: !php/const App\Common\Enum\MarketType::PERPETUAL
 

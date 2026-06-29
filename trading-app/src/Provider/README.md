@@ -18,6 +18,7 @@ Provider/
     ├── Registry/ExchangeProviderRegistry + ExchangeProviderBundle
     ├── MainProvider (#[AsAlias(MainProviderInterface::class)])
     ├── Bitmart/ (implémentation concrète)
+    ├── Okx/ (skeleton explicite, perpetual uniquement)
     └── CleanupProvider + services utilitaires
 ```
 
@@ -88,6 +89,29 @@ Chaque provider implémente son interface avec un accent sur :
 - `healthCheck()` (utilisé pour `/provider/health`),
 - `sync*()` (contrats, ordres, positions),
 - `Mapper`s internes pour convertir les structures Bitmart.
+
+## 4 bis. Bundle OKX skeleton
+
+OKX est enregistré explicitement dans la registry pour `exchange=okx` et
+`market_type=perpetual` :
+
+- `App\Provider\Registry\ExchangeProviderBundle.okx_perpetual`
+- `OkxMarketDataGateway`
+- `OkxAccountGateway`
+- `OkxOrderGateway`
+- `OkxPositionGateway`
+- `OkxMetadataProvider`
+- `OkxRuntimeCheck`
+
+Ce bundle est un skeleton OKX-002. Il ne fait aucun appel REST/WebSocket et
+n'expose aucun endpoint write. Les méthodes de lecture ou d'écriture non encore
+implémentées lèvent `OkxProviderNotReadyException` avec un reason explicite
+(`okx_market_data_not_implemented`, `okx_order_write_not_implemented`, etc.).
+
+Seul `okx/perpetual` est enregistré. `okx/spot` doit échouer avec
+`ProviderNotFoundException` et ne doit jamais retomber silencieusement sur
+Bitmart. Le contexte par défaut reste `bitmart/perpetual` tant que le runtime
+legacy en dépend.
 
 ---
 
