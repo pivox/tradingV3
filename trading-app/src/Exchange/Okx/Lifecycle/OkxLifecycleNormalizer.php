@@ -39,11 +39,7 @@ final readonly class OkxLifecycleNormalizer
      */
     public function normalizeOrderLifecycle(array $rows): OkxNormalizedOrderLifecycleDto
     {
-        $deduplicated = $this->deduplicate($rows);
-        usort(
-            $deduplicated,
-            fn (array $a, array $b): int => $this->rowTimeMillis($a) <=> $this->rowTimeMillis($b),
-        );
+        $deduplicated = $this->sortLifecycleRows($this->deduplicate($rows));
 
         $latest = $deduplicated[array_key_last($deduplicated)] ?? [];
         $status = $this->statusFromRow($latest);
@@ -306,6 +302,60 @@ final readonly class OkxLifecycleNormalizer
             'expired' => OkxLifecycleStatus::EXPIRED,
             'order_failed', 'partially_failed', 'failed' => OkxLifecycleStatus::FAILED,
             default => OkxLifecycleStatus::UNKNOWN_REQUIRES_RESYNC,
+        };
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rows
+     * @return list<array<string,mixed>>
+     */
+    private function sortLifecycleRows(array $rows): array
+    {
+        $indexed = [];
+        foreach ($rows as $index => $row) {
+            $indexed[] = ['index' => $index, 'row' => $row];
+        }
+
+        usort(
+            $indexed,
+            function (array $a, array $b): int {
+                /** @var array<string,mixed> $left */
+                $left = $a['row'];
+                /** @var array<string,mixed> $right */
+                $right = $b['row'];
+
+                return [$this->rowTimeMillis($left), $this->stateRank($left), $a['index']]
+                    <=> [$this->rowTimeMillis($right), $this->stateRank($right), $b['index']];
+            },
+        );
+
+        $sorted = [];
+        foreach ($indexed as $entry) {
+            /** @var array<string,mixed> $row */
+            $row = $entry['row'];
+            $sorted[] = $row;
+        }
+
+        return $sorted;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function stateRank(array $row): int
+    {
+        return match ($this->statusFromRow($row)) {
+            OkxLifecycleStatus::UNKNOWN_REQUIRES_RESYNC => 0,
+            OkxLifecycleStatus::PENDING => 10,
+            OkxLifecycleStatus::ACCEPTED => 20,
+            OkxLifecycleStatus::OPEN => 30,
+            OkxLifecycleStatus::PARTIALLY_FILLED => 40,
+            OkxLifecycleStatus::CANCEL_PENDING => 50,
+            OkxLifecycleStatus::CANCELED,
+            OkxLifecycleStatus::REJECTED,
+            OkxLifecycleStatus::EXPIRED,
+            OkxLifecycleStatus::FAILED => 60,
+            OkxLifecycleStatus::FILLED => 70,
         };
     }
 

@@ -369,6 +369,20 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(1.0, $lifecycle->filledQuantity, 0.000001);
     }
 
+    public function testEqualTimestampTerminalStateWinsOverOpenState(): void
+    {
+        $timestamp = '1767225603000';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([
+            $this->orderRow(state: 'filled', filled: '1', updatedAt: $timestamp),
+            $this->orderRow(state: 'live', filled: '0', updatedAt: $timestamp),
+        ]);
+
+        self::assertSame(OkxLifecycleStatus::FILLED, $lifecycle->status);
+        self::assertEqualsWithDelta(1.0, $lifecycle->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.0, $lifecycle->remainingQuantity, 0.000001);
+    }
+
     public function testUnknownOrderRequiresResync(): void
     {
         $lifecycle = $this->normalizer->normalizeOrderLifecycle([
