@@ -195,6 +195,22 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertSame([], $fills);
     }
 
+    public function testRejectsNonSwapOrderLifecycleRows(): void
+    {
+        $spotOrder = $this->orderRow(state: 'filled', filled: '1', updatedAt: '1767225601000');
+        $spotOrder['instId'] = 'BTC-USDT';
+        $spotOrder['instType'] = 'SPOT';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$spotOrder]);
+
+        self::assertSame(OkxLifecycleStatus::UNKNOWN_REQUIRES_RESYNC, $lifecycle->status);
+        self::assertTrue($lifecycle->requiresResync);
+        self::assertSame('', $lifecycle->symbol);
+        self::assertSame('', $lifecycle->exchangeOrderId);
+        self::assertSame(0, $lifecycle->deduplicatedEventCount);
+        self::assertContains('non_swap_order_ignored', $lifecycle->qualityFlags);
+    }
+
     public function testPreservesAlgoOrderIdNamespaceInLifecycleAndFills(): void
     {
         $row = $this->orderRow(

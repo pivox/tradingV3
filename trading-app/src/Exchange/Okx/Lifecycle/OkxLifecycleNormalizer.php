@@ -39,7 +39,8 @@ final readonly class OkxLifecycleNormalizer
      */
     public function normalizeOrderLifecycle(array $rows): OkxNormalizedOrderLifecycleDto
     {
-        $deduplicated = $this->sortLifecycleRows($this->deduplicate($rows));
+        $supportedRows = array_values(array_filter($rows, fn (array $row): bool => $this->isSupportedLifecycleRow($row)));
+        $deduplicated = $this->sortLifecycleRows($this->deduplicate($supportedRows));
 
         $latest = $deduplicated[array_key_last($deduplicated)] ?? [];
         $status = $this->statusFromRow($latest);
@@ -58,7 +59,10 @@ final readonly class OkxLifecycleNormalizer
         if ($status === OkxLifecycleStatus::CANCELED && $filled > 0.0) {
             $qualityFlags[] = 'terminal_cancel_with_fill';
         }
-        if (count($deduplicated) < count($rows)) {
+        if (count($supportedRows) < count($rows)) {
+            $qualityFlags[] = 'non_swap_order_ignored';
+        }
+        if (count($deduplicated) < count($supportedRows)) {
             $qualityFlags[] = 'duplicate_event';
         }
 
@@ -536,6 +540,23 @@ final readonly class OkxLifecycleNormalizer
     {
         return strtoupper($this->string($row['instType'] ?? 'SWAP')) === 'SWAP'
             && str_ends_with(strtoupper($this->string($row['instId'] ?? '')), '-SWAP');
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function isSupportedLifecycleRow(array $row): bool
+    {
+        if ($this->hasValue($row['instType'] ?? null) && strtoupper($this->string($row['instType'])) !== 'SWAP') {
+            return false;
+        }
+        if ($this->hasValue($row['instId'] ?? null)
+            && !str_ends_with(strtoupper($this->string($row['instId'])), '-SWAP')
+        ) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
