@@ -10,7 +10,7 @@ Cette page complète :
 
 - `technical/exchange-runtime-gates.md` (gates obligatoires avant tout live) ;
 - `technical/exchange-readiness-matrix.md` (statut par exchange) ;
-- `technical/okx-demo-readiness.md` (capability matrix OKX et ADR de readiness demo) ;
+- [OKX demo readiness](okx-demo-readiness.md) (capability matrix OKX et ADR de readiness demo) ;
 - `technical/fake-paper-gateway.md` (le filet de sécurité Fake / Paper).
 
 ## OkxDryRunExecutionPort
