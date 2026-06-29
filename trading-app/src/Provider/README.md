@@ -118,6 +118,12 @@ lèvent explicitement `OkxProviderNotReadyException` (`okx_order_write_not_imple
 en `OkxProviderUnavailableException`, avec notamment `okx_public_rate_limited`
 pour les 429.
 
+`OkxMetadataProvider::syncContracts()` ne persiste volontairement rien en
+OKX-003. Il retourne `upserted=0` et l'erreur
+`okx_contract_sync_read_only_not_persisted` afin que `/api/mtf/sync-contracts`
+ne puisse pas annoncer une synchronisation OKX réussie tant que l'upsert des
+contrats n'est pas implémenté.
+
 En environnement demo, `OkxConfig` utilise par défaut :
 
 - REST : `https://eea.okx.com`
@@ -373,6 +379,7 @@ php bin/console mtf:run \
 mtf:run
   ├── Synchronisation des contrats (via ContractProvider)
   │   └── syncContracts() → fetch + upsert en base
+  │       (sauf OKX-003 public read-only : erreur explicite sans persistance)
   │
   ├── Pour chaque symbole :
   │   ├── Récupération des klines (via KlineProvider)

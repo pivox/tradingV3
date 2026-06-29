@@ -103,6 +103,29 @@ final class OkxPublicReadProviderTest extends TestCase
         $provider->getLastPrice('BTCUSDT');
     }
 
+    public function testSyncContractsReportsReadOnlyNotPersisted(): void
+    {
+        $provider = new OkxMetadataProvider($this->client());
+
+        $result = $provider->syncContracts(['BTCUSDT']);
+
+        self::assertSame(0, $result['upserted']);
+        self::assertSame(2, $result['total_fetched']);
+        self::assertSame(['okx_contract_sync_read_only_not_persisted'], $result['errors']);
+    }
+
+    public function testKlineApiBodyRateLimitIsPreserved(): void
+    {
+        $client = $this->client();
+        $client->klineRateLimited = true;
+        $gateway = new OkxMarketDataGateway($client);
+
+        $this->expectException(OkxProviderUnavailableException::class);
+        $this->expectExceptionMessage('okx_public_rate_limited');
+
+        $gateway->getKlines('BTCUSDT', Timeframe::TF_1M, 2);
+    }
+
     private function client(): FakeOkxPublicReadClient
     {
         return new FakeOkxPublicReadClient();
@@ -112,6 +135,7 @@ final class OkxPublicReadProviderTest extends TestCase
 final class FakeOkxPublicReadClient implements OkxRestClientInterface
 {
     public bool $rateLimited = false;
+    public bool $klineRateLimited = false;
 
     /**
      * @param array<string,mixed> $query
@@ -229,6 +253,10 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
         $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
         $this->assertQueryValue($query, 'bar', '1m');
         $this->assertQueryValue($query, 'limit', '2');
+
+        if ($this->klineRateLimited) {
+            return ['code' => '50011', 'msg' => 'Too Many Requests', 'data' => []];
+        }
 
         return ['code' => '0', 'data' => [
             ['1767225660000', '25120', '25130', '25110', '25125', '9.0', '0', '0', '0'],

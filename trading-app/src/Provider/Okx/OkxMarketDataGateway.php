@@ -189,7 +189,9 @@ final class OkxMarketDataGateway implements KlineProviderInterface
     {
         $code = (string) ($payload['code'] ?? '');
         if ($code !== '0') {
-            throw new OkxProviderUnavailableException('okx_public_api_error', $operation);
+            $reason = $code === '50011' ? 'okx_public_rate_limited' : 'okx_public_api_error';
+
+            throw new OkxProviderUnavailableException($reason, $operation);
         }
 
         $data = $payload['data'] ?? [];

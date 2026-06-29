@@ -137,7 +137,7 @@ final class OkxMetadataProvider implements ContractProviderInterface
     {
         $contracts = $this->getContracts();
         $requested = array_map(static fn (string $symbol): string => strtoupper($symbol), $symbols ?? []);
-        $errors = [];
+        $errors = ['okx_contract_sync_read_only_not_persisted'];
         $totalFetched = count($contracts);
 
         if ($requested !== []) {
