@@ -159,6 +159,16 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame('-0.0002', $fees['maker'] ?? null);
     }
 
+    public function testUsesBillsArchiveEndpointForOlderWindows(): void
+    {
+        $client = $this->client();
+        $gateway = new OkxAccountGateway($client);
+
+        $gateway->getTransactionHistory('BTCUSDT', 2, 100, time() - (14 * 24 * 60 * 60), time());
+
+        self::assertSame('/api/v5/account/bills-archive', $client->lastPrivateGetPath);
+    }
+
     public function testWriteMethodsRemainBlocked(): void
     {
         $gateway = new OkxOrderGateway($this->client());
@@ -217,6 +227,8 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
             '/api/v5/trade/orders-algo-pending' => $this->algoOrders($query),
             '/api/v5/trade/fills' => $this->fills($query),
             '/api/v5/trade/fills-history' => $this->fills($query),
+            '/api/v5/account/bills' => $this->bills($query),
+            '/api/v5/account/bills-archive' => $this->bills($query),
             '/api/v5/account/trade-fee' => $this->tradingFees($query),
             default => ['code' => '404', 'msg' => 'unexpected path ' . $path, 'data' => []],
         };
@@ -367,6 +379,22 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
             'instFamily' => 'BTC-USDT',
             'maker' => '-0.0002',
             'taker' => '-0.0005',
+        ]]];
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     * @return array<string,mixed>
+     */
+    private function bills(array $query): array
+    {
+        $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
+
+        return ['code' => '0', 'data' => [[
+            'instId' => 'BTC-USDT-SWAP',
+            'type' => (string) ($query['type'] ?? ''),
+            'balChg' => '1.23',
+            'ts' => '1767225660000',
         ]]];
     }
 

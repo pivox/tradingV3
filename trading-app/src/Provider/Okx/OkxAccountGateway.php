@@ -130,7 +130,11 @@ final class OkxAccountGateway implements AccountProviderInterface
             $query['end'] = (string) ($endTime * 1000);
         }
 
-        return $this->dataRows($this->privateGet('/api/v5/account/bills', $query, __METHOD__), __METHOD__);
+        $path = $this->usesArchivedBillsEndpoint($startTime, $endTime)
+            ? '/api/v5/account/bills-archive'
+            : '/api/v5/account/bills';
+
+        return $this->dataRows($this->privateGet($path, $query, __METHOD__), __METHOD__);
     }
 
     /**
@@ -221,6 +225,14 @@ final class OkxAccountGateway implements AccountProviderInterface
 
         return ($startTime !== null && $startTime < $threeDaysAgo)
             || ($endTime !== null && $endTime < $threeDaysAgo);
+    }
+
+    private function usesArchivedBillsEndpoint(?int $startTime, ?int $endTime): bool
+    {
+        $sevenDaysAgo = time() - (7 * 24 * 60 * 60);
+
+        return ($startTime !== null && $startTime < $sevenDaysAgo)
+            || ($endTime !== null && $endTime < $sevenDaysAgo);
     }
 
     private function swapInstFamily(string $symbol): string
