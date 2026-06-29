@@ -148,6 +148,20 @@ final class OkxDryRunExecutionPortTest extends TestCase
         );
     }
 
+    public function testDryRunTrimsPostOnlyTimeInForceBeforeSerialization(): void
+    {
+        $request = ExecutionRequest::forPlan(
+            $this->executablePlan(instrument: 'BTC-USDT-SWAP', clientOrderId: 'CIDOKX1', timeInForce: 'post_only '),
+            ExecutionMode::DryRun,
+            ['environment' => 'demo'],
+        );
+
+        $result = (new OkxDryRunExecutionPort())->execute($request);
+
+        self::assertSame(ExecutionStatus::DryRun, $result->status);
+        self::assertSame('post_only', $result->raw['okx_dry_run']['requests'][2]['body']['ordType']);
+    }
+
     public function testDryRunRejectsMainnetEnvironmentBeforePayloadSerialization(): void
     {
         $request = ExecutionRequest::forPlan(
@@ -355,6 +369,7 @@ final class OkxDryRunExecutionPortTest extends TestCase
         string $marketType = 'perpetual',
         string $instrument = 'BTCUSDT',
         string $clientOrderId = 'CID-OKX-1',
+        string $timeInForce = 'gtc',
     ): OrderPlan
     {
         $plan = new OrderPlan(
@@ -365,7 +380,7 @@ final class OkxDryRunExecutionPortTest extends TestCase
             side: 'long',
             orderType: 'limit',
             marginMode: 'isolated',
-            timeInForce: 'gtc',
+            timeInForce: $timeInForce,
             entryPrice: 100.0,
             quantity: 12.0,
             leverage: 5,

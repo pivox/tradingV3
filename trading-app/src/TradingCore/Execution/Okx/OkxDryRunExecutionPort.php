@@ -335,7 +335,7 @@ final class OkxDryRunExecutionPort implements ExecutionPortInterface
             price: strtolower($plan->orderType) === 'market' ? null : $plan->entryPrice,
             stopPrice: null,
             reduceOnly: false,
-            postOnly: strtolower($plan->timeInForce) === 'post_only',
+            postOnly: strtolower(trim($plan->timeInForce)) === 'post_only',
             leverage: $plan->leverage,
             marginMode: $plan->marginMode,
             clientOrderId: (string) $plan->clientOrderId,
