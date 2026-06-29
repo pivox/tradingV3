@@ -419,6 +419,9 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
         );
     }
 
+    /**
+     * @param array<string,mixed> $row
+     */
     private function orderType(array $row, bool $algo): ExchangeOrderType
     {
         if ($algo) {
@@ -432,6 +435,9 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
             : ExchangeOrderType::LIMIT;
     }
 
+    /**
+     * @param array<string,mixed> $row
+     */
     private function stopPrice(array $row, ExchangeOrderType $orderType): ?float
     {
         if ($orderType === ExchangeOrderType::TAKE_PROFIT) {
@@ -494,6 +500,9 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
         };
     }
 
+    /**
+     * @param array<string,mixed> $response
+     */
     private function responseStatus(array $response): ExchangeOrderStatus
     {
         if ((string)($response['code'] ?? '') !== '0') {
@@ -507,6 +516,9 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
         return ExchangeOrderStatus::PENDING;
     }
 
+    /**
+     * @param array<string,mixed> $response
+     */
     private function responseOrderId(array $response, bool $algo): ?string
     {
         $row = $this->firstDataRow($response);
@@ -521,6 +533,7 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
     }
 
     /**
+     * @param array<string,mixed> $response
      * @return array<int,array<string,mixed>>
      */
     private function dataRows(array $response): array
@@ -534,6 +547,7 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
     }
 
     /**
+     * @param array<string,mixed> $response
      * @return array<string,mixed>
      */
     private function firstDataRow(array $response): array

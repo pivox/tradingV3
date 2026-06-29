@@ -14,6 +14,7 @@ final readonly class OkxConfig
         public string $apiBaseUri = '',
         public string $wsPublicUri = '',
         public string $wsPrivateUri = '',
+        public bool $simulatedTrading = false,
         public bool $demoTradingEnabled = false,
         public bool $liveEnabled = false,
     ) {
@@ -76,14 +77,26 @@ final readonly class OkxConfig
     {
         $this->assertLiveAllowed();
 
+        if ($this->isDemo()) {
+            if (!$this->simulatedTrading) {
+                throw new \RuntimeException('OKX_SIMULATED_TRADING=1 is required for OKX demo private requests.');
+            }
+            if (str_contains(strtolower($this->apiBaseUri()), 'www.okx.com')) {
+                throw new \RuntimeException('OKX demo private requests must not use production OKX REST URL.');
+            }
+            if ($this->liveEnabled) {
+                throw new \RuntimeException('OKX_LIVE_ENABLED must remain disabled when OKX_ENV=demo.');
+            }
+        }
+
         if (trim($this->apiKey) === '') {
-            throw new \RuntimeException('OKX_API_KEY is required for OKX private requests.');
+            throw new \RuntimeException('OKX_DEMO_API_KEY is required for OKX demo private requests.');
         }
         if (trim($this->apiSecret) === '') {
-            throw new \RuntimeException('OKX_API_SECRET is required for OKX private requests.');
+            throw new \RuntimeException('OKX_DEMO_API_SECRET is required for OKX demo private requests.');
         }
         if (trim($this->apiPassphrase) === '') {
-            throw new \RuntimeException('OKX_API_PASSPHRASE is required for OKX private requests.');
+            throw new \RuntimeException('OKX_DEMO_API_PASSPHRASE is required for OKX demo private requests.');
         }
     }
 

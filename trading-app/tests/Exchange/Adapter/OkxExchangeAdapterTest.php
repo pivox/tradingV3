@@ -100,8 +100,8 @@ final class OkxExchangeAdapterTest extends TestCase
         self::assertFalse($result->accepted);
         self::assertSame(ExchangeOrderStatus::REJECTED, $result->status);
         self::assertNull($result->exchangeOrderId);
-        self::assertSame(ExchangeOrderStatus::REJECTED, $result->order?->status);
-        self::assertSame('cid-okx-sl', $result->order?->exchangeOrderId);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $result->order->status);
+        self::assertSame('cid-okx-sl', $result->order->exchangeOrderId);
         self::assertSame('/api/v5/trade/order-algo', $client->lastPostPath);
         self::assertSame('true', $client->lastPostBody['reduceOnly'] ?? null);
         self::assertSame('51008', $result->metadata['data'][0]['sCode'] ?? null);
@@ -213,6 +213,7 @@ final class OkxExchangeAdapterTest extends TestCase
             apiKey: 'test-key',
             apiSecret: 'test-secret',
             apiPassphrase: 'test-passphrase',
+            simulatedTrading: true,
         );
 
         $this->expectException(\RuntimeException::class);
@@ -233,6 +234,7 @@ final class OkxExchangeAdapterTest extends TestCase
                 apiKey: 'test-key',
                 apiSecret: 'test-secret',
                 apiPassphrase: 'test-passphrase',
+                simulatedTrading: true,
                 demoTradingEnabled: true,
             ),
             $this->fixedClock(),

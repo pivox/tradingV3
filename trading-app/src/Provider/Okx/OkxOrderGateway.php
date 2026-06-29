@@ -14,13 +14,17 @@ use App\Exchange\Okx\OkxRestClientInterface;
 
 final class OkxOrderGateway implements OrderProviderInterface
 {
+    private const TERMINAL_ALGO_HISTORY_STATES = ['effective', 'canceled', 'order_failed'];
+
     private OkxPublicReadMapper $mapper;
+    private OkxPrivateReadMapper $privateMapper;
 
     public function __construct(
         private readonly ?OkxRestClientInterface $client = null,
         private readonly ?OkxInstrumentResolver $instruments = null,
     ) {
         $this->mapper = new OkxPublicReadMapper($this->resolver());
+        $this->privateMapper = new OkxPrivateReadMapper($this->resolver());
     }
 
     /**
@@ -45,7 +49,155 @@ final class OkxOrderGateway implements OrderProviderInterface
 
     public function getOrder(string $symbol, string $orderId): ?OrderDto
     {
-        throw $this->readNotImplemented(__METHOD__);
+        foreach ($this->getOpenOrdersOrFail($symbol) as $order) {
+            if ($order->orderId === $orderId || (string) ($order->metadata['client_order_id'] ?? '') === $orderId) {
+                return $order;
+            }
+        }
+
+        return $this->fetchOrderDetail($symbol, $orderId);
+    }
+
+    private function fetchOrderDetail(string $symbol, string $orderId): ?OrderDto
+    {
+        if (str_starts_with($orderId, 'algo:')) {
+            return $this->fetchAlgoOrderDetail($symbol, ['algoId' => substr($orderId, 5)]);
+        }
+
+        $baseQuery = ['instId' => $this->resolver()->instId($symbol)];
+        foreach (['ordId', 'clOrdId'] as $key) {
+            $row = $this->firstOrderDetailRow($this->privateGet('/api/v5/trade/order', $baseQuery + [$key => $orderId], __METHOD__), __METHOD__);
+            if ($row !== []) {
+                return $this->privateMapper->order($row, false);
+            }
+        }
+
+        $order = $this->fetchStandardOrderHistory($symbol, $orderId);
+        if ($order instanceof OrderDto) {
+            return $order;
+        }
+
+        return $this->fetchAlgoOrderDetail($symbol, ['algoClOrdId' => $orderId]);
+    }
+
+    private function fetchStandardOrderHistory(string $symbol, string $orderId): ?OrderDto
+    {
+        foreach (['/api/v5/trade/orders-history', '/api/v5/trade/orders-history-archive'] as $path) {
+            $order = $this->fetchStandardOrderHistoryFromPath($path, $symbol, $orderId);
+            if ($order instanceof OrderDto) {
+                return $order;
+            }
+        }
+
+        return null;
+    }
+
+    private function fetchStandardOrderHistoryFromPath(string $path, string $symbol, string $orderId): ?OrderDto
+    {
+        $baseQuery = [
+            'instType' => 'SWAP',
+            'instId' => $this->resolver()->instId($symbol),
+            'limit' => 100,
+        ];
+        $after = null;
+
+        do {
+            $query = $after === null ? $baseQuery : $baseQuery + ['after' => $after];
+            $rows = $this->dataRows($this->privateGet($path, $query, __METHOD__), __METHOD__);
+            if ($rows === []) {
+                return null;
+            }
+
+            foreach ($rows as $row) {
+                if ((string) ($row['ordId'] ?? '') === $orderId || (string) ($row['clOrdId'] ?? '') === $orderId) {
+                    return $this->privateMapper->order($row, false);
+                }
+            }
+
+            $lastRow = $rows[\count($rows) - 1];
+            $nextAfter = (string) ($lastRow['ordId'] ?? '');
+            if ($nextAfter === '' || $nextAfter === $after) {
+                return null;
+            }
+
+            $after = $nextAfter;
+        } while (true);
+    }
+
+    /**
+     * @param array{algoId?: string, algoClOrdId?: string} $identifier
+     */
+    private function fetchAlgoOrderDetail(string $symbol, array $identifier): ?OrderDto
+    {
+        $identifier = array_filter($identifier, static fn (string $value): bool => $value !== '');
+        if ($identifier === []) {
+            return null;
+        }
+
+        $baseQuery = $identifier + [
+            'instId' => $this->resolver()->instId($symbol),
+        ];
+
+        $row = $this->firstOrderDetailRow($this->privateGet('/api/v5/trade/order-algo', $baseQuery, __METHOD__), __METHOD__);
+        if ($row !== []) {
+            return $this->privateMapper->order($row, true);
+        }
+
+        if (isset($identifier['algoId'])) {
+            $row = $this->firstRow($this->privateGet(
+                '/api/v5/trade/orders-algo-history',
+                $baseQuery + ['ordType' => 'conditional'],
+                __METHOD__,
+            ), __METHOD__);
+            if ($row !== []) {
+                return $this->privateMapper->order($row, true);
+            }
+        }
+
+        if (isset($identifier['algoClOrdId'])) {
+            return $this->fetchAlgoHistoryByClientOrderId((string) $baseQuery['instId'], $identifier['algoClOrdId']);
+        }
+
+        return null;
+    }
+
+    private function fetchAlgoHistoryByClientOrderId(string $instId, string $clientOrderId): ?OrderDto
+    {
+        foreach (self::TERMINAL_ALGO_HISTORY_STATES as $state) {
+            $after = null;
+            do {
+                $query = [
+                    'instId' => $instId,
+                    'ordType' => 'conditional',
+                    'state' => $state,
+                    'limit' => 100,
+                ];
+                if ($after !== null) {
+                    $query['after'] = $after;
+                }
+
+                $rows = $this->dataRows($this->privateGet('/api/v5/trade/orders-algo-history', $query, __METHOD__), __METHOD__);
+                if ($rows === []) {
+                    break;
+                }
+
+                foreach ($rows as $row) {
+                    if ((string) ($row['algoClOrdId'] ?? '') === $clientOrderId) {
+                        return $this->privateMapper->order($row, true);
+                    }
+                }
+
+                $lastRow = $rows[\count($rows) - 1];
+                $nextAfter = (string) ($lastRow['algoId'] ?? '');
+                if ($nextAfter === '' || $nextAfter === $after) {
+                    break;
+                }
+
+                $after = $nextAfter;
+            } while (true);
+        }
+
+        return null;
     }
 
     /**
@@ -53,7 +205,11 @@ final class OkxOrderGateway implements OrderProviderInterface
      */
     public function getOpenOrders(?string $symbol = null): array
     {
-        throw $this->readNotImplemented(__METHOD__);
+        try {
+            return $this->fetchOpenOrders($symbol, __METHOD__);
+        } catch (\Throwable) {
+            return [];
+        }
     }
 
     /**
@@ -61,7 +217,7 @@ final class OkxOrderGateway implements OrderProviderInterface
      */
     public function getOpenOrdersOrFail(?string $symbol = null): array
     {
-        throw $this->readNotImplemented(__METHOD__);
+        return $this->fetchOpenOrders($symbol, __METHOD__);
     }
 
     /**
@@ -69,7 +225,13 @@ final class OkxOrderGateway implements OrderProviderInterface
      */
     public function getOrderHistory(string $symbol, int $limit = 100): array
     {
-        throw $this->readNotImplemented(__METHOD__);
+        $query = [
+            'instType' => 'SWAP',
+            'instId' => $this->resolver()->instId($symbol),
+            'limit' => max(1, min($limit, 100)),
+        ];
+
+        return $this->dataRows($this->privateGet('/api/v5/trade/orders-history', $query, __METHOD__), __METHOD__);
     }
 
     public function cancelAllOrders(string $symbol): bool
@@ -129,14 +291,77 @@ final class OkxOrderGateway implements OrderProviderInterface
     }
 
     /**
+     * @return OrderDto[]
+     */
+    private function fetchOpenOrders(?string $symbol, string $operation): array
+    {
+        $query = ['instType' => 'SWAP'];
+        if ($symbol !== null) {
+            $query['instId'] = $this->resolver()->instId($symbol);
+        }
+
+        $orders = [];
+        foreach ($this->dataRows($this->privateGet('/api/v5/trade/orders-pending', $query, $operation), $operation) as $row) {
+            $orders[] = $this->privateMapper->order($row, false);
+        }
+
+        $algoQuery = $query + ['ordType' => 'conditional'];
+        foreach ($this->dataRows($this->privateGet('/api/v5/trade/orders-algo-pending', $algoQuery, $operation), $operation) as $row) {
+            $orders[] = $this->privateMapper->order($row, true);
+        }
+
+        return $orders;
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     * @return array<string,mixed>
+     */
+    private function privateGet(string $path, array $query, string $operation): array
+    {
+        if (!$this->client instanceof OkxRestClientInterface) {
+            throw $this->readNotImplemented($operation);
+        }
+
+        try {
+            return $this->client->privateGet($path, $query);
+        } catch (\Throwable $exception) {
+            throw new OkxProviderUnavailableException($this->reason($exception, private: true), $operation, $exception);
+        }
+    }
+
+    /**
      * @param array<string,mixed> $payload
      * @return array<string,mixed>
      */
     private function firstRow(array $payload, string $operation): array
     {
+        return $this->dataRows($payload, $operation)[0] ?? [];
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function firstOrderDetailRow(array $payload, string $operation): array
+    {
+        if ((string) ($payload['code'] ?? '') === '51603') {
+            return [];
+        }
+
+        return $this->firstRow($payload, $operation);
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return list<array<string,mixed>>
+     */
+    private function dataRows(array $payload, string $operation): array
+    {
         $code = (string) ($payload['code'] ?? '');
         if ($code !== '0') {
-            $reason = $code === '50011' ? 'okx_public_rate_limited' : 'okx_public_api_error';
+            $prefix = str_starts_with($operation, __CLASS__) && str_contains($operation, 'getOrderBookTop') ? 'public' : 'private';
+            $reason = $code === '50011' ? sprintf('okx_%s_rate_limited', $prefix) : sprintf('okx_%s_api_error', $prefix);
 
             throw new OkxProviderUnavailableException($reason, $operation);
         }
@@ -146,9 +371,7 @@ final class OkxOrderGateway implements OrderProviderInterface
             return [];
         }
 
-        $row = array_values($data)[0] ?? [];
-
-        return \is_array($row) ? $row : [];
+        return array_values(array_filter($data, \is_array(...)));
     }
 
     private function resolver(): OkxInstrumentResolver
@@ -156,11 +379,13 @@ final class OkxOrderGateway implements OrderProviderInterface
         return $this->instruments ?? new OkxInstrumentResolver();
     }
 
-    private function reason(\Throwable $exception): string
+    private function reason(\Throwable $exception, bool $private = false): string
     {
+        $prefix = $private ? 'private' : 'public';
+
         return str_contains($exception->getMessage(), '429')
             || str_contains(strtolower($exception->getMessage()), 'rate')
-            ? 'okx_public_rate_limited'
-            : 'okx_public_network_error';
+            ? sprintf('okx_%s_rate_limited', $prefix)
+            : sprintf('okx_%s_network_error', $prefix);
     }
 }

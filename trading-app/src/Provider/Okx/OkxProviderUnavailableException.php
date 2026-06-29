@@ -11,7 +11,7 @@ final class OkxProviderUnavailableException extends \RuntimeException
         string $operation,
         ?\Throwable $previous = null,
     ) {
-        parent::__construct(sprintf('OKX provider public read failed for "%s": %s', $operation, $reason), 0, $previous);
+        parent::__construct(sprintf('OKX provider read failed for "%s": %s', $operation, $reason), 0, $previous);
     }
 
     public function reason(): string

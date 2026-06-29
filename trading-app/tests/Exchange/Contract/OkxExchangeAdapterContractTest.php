@@ -34,6 +34,7 @@ final class OkxExchangeAdapterContractTest extends ExchangeAdapterContractTestCa
                 apiKey: 'test-key',
                 apiSecret: 'test-secret',
                 apiPassphrase: 'test-passphrase',
+                simulatedTrading: true,
                 demoTradingEnabled: true,
             ),
             $this->fixedClock(),
@@ -120,13 +121,17 @@ final class ContractOkxClient implements OkxRestClientInterface
         };
     }
 
+    /**
+     * @param array<mixed> $body
+     * @return array<string,mixed>
+     */
     public function privatePost(string $path, array $body = []): array
     {
         return match ($path) {
             '/api/v5/trade/order' => $this->placeOrder($body),
             '/api/v5/trade/order-algo' => $this->placeAlgoOrder($body),
             '/api/v5/trade/cancel-order' => $this->cancelOrder($body),
-            '/api/v5/trade/cancel-algos' => $this->cancelAlgoOrder($body),
+            '/api/v5/trade/cancel-algos' => $this->cancelAlgoOrder($this->cancelAlgoBody($body)),
             '/api/v5/account/set-leverage' => $this->okResponse(),
             default => ['code' => '1', 'data' => [['sCode' => '1', 'sMsg' => 'unsupported path']]],
         };
@@ -246,6 +251,17 @@ final class ContractOkxClient implements OkxRestClientInterface
     }
 
     /**
+     * @param array<mixed> $body
+     * @return array<int,array<string,mixed>>
+     */
+    private function cancelAlgoBody(array $body): array
+    {
+        $first = $body[0] ?? null;
+
+        return \is_array($first) ? [$first] : [];
+    }
+
+    /**
      * @return array<string,mixed>
      */
     private function orderResponse(string $orderId, string $clientOrderId): array
@@ -279,6 +295,7 @@ final class ContractOkxClient implements OkxRestClientInterface
 
     /**
      * @param array<string,array<string,mixed>> $rows
+     * @param array<string,mixed> $query
      * @return array<int,array<string,mixed>>
      */
     private function filterByInstId(array $rows, array $query): array

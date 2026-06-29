@@ -138,12 +138,13 @@ Variables:
 
 ```dotenv
 OKX_ENV=demo
-OKX_API_KEY=
-OKX_API_SECRET=
-OKX_API_PASSPHRASE=
+OKX_DEMO_API_KEY=
+OKX_DEMO_API_SECRET=
+OKX_DEMO_API_PASSPHRASE=
 OKX_API_BASE_URI=https://eea.okx.com
 OKX_WS_PUBLIC_URI=wss://wseeapap.okx.com:8443/ws/v5/public
 OKX_WS_PRIVATE_URI=wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999
+OKX_SIMULATED_TRADING=1
 OKX_DEMO_TRADING_ENABLED=0
 OKX_LIVE_ENABLED=0
 ```
@@ -154,7 +155,8 @@ instruments, ticker, candles et order book; aucun client WebSocket public runtim
 n'est demarre dans cette PR.
 
 Les requetes privees OKX sont signees avec `OK-ACCESS-*`; en demo le header
-`x-simulated-trading: 1` est ajoute. Les ordres demo restent bloques tant que
+`x-simulated-trading: 1` est ajoute pour les requetes privees demo lorsque
+`OKX_SIMULATED_TRADING=1` est explicite. Les ordres demo restent bloques tant que
 `OKX_DEMO_TRADING_ENABLED=1` n'est pas explicite. Le live reste bloque tant que
 `OKX_ENV=live` et `OKX_LIVE_ENABLED=1` ne sont pas tous les deux presents.
 
