@@ -545,6 +545,34 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertArrayNotHasKey('apiKey', $error->redactedPayload);
     }
 
+    public function testNormalizesBatchErrorFromFirstRejectedDataRow(): void
+    {
+        $error = $this->normalizer->normalizeError([
+            'code' => '2',
+            'msg' => 'Batch partially failed',
+            'data' => [
+                [
+                    'clOrdId' => 'accepted-client',
+                    'ordId' => 'accepted-order',
+                    'sCode' => '0',
+                    'sMsg' => 'Order placed',
+                ],
+                [
+                    'clOrdId' => 'rejected-client',
+                    'ordId' => 'rejected-order',
+                    'sCode' => '51008',
+                    'sMsg' => 'Insufficient balance',
+                ],
+            ],
+        ]);
+
+        self::assertSame(OkxLifecycleStatus::FAILED, $error->status);
+        self::assertSame('51008', $error->code);
+        self::assertSame('Insufficient balance', $error->message);
+        self::assertSame('rejected-order', $error->exchangeOrderId);
+        self::assertSame('rejected-client', $error->clientOrderId);
+    }
+
     public function testRedactsCredentialKeyVariantsRecursively(): void
     {
         $row = $this->orderRow(state: 'live', filled: '0', updatedAt: '1767225601000');

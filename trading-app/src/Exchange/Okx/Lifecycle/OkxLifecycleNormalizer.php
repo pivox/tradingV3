@@ -139,8 +139,11 @@ final readonly class OkxLifecycleNormalizer
      */
     public function normalizeError(array $payload): OkxNormalizedErrorDto
     {
-        $first = $this->firstDataRow($payload);
-        $code = $this->firstNonEmpty($first['sCode'] ?? null, $payload['code'] ?? null);
+        $first = $this->errorDataRow($payload);
+        $rowCode = $this->firstNonEmpty($first['sCode'] ?? null);
+        $code = $rowCode !== '' && $rowCode !== '0'
+            ? $rowCode
+            : $this->firstNonEmpty($payload['code'] ?? null, $rowCode);
 
         return new OkxNormalizedErrorDto(
             status: OkxLifecycleStatus::FAILED,
@@ -703,11 +706,22 @@ final readonly class OkxLifecycleNormalizer
      * @param array<string,mixed> $payload
      * @return array<string,mixed>
      */
-    private function firstDataRow(array $payload): array
+    private function errorDataRow(array $payload): array
     {
         $data = $payload['data'] ?? [];
         if (!\is_array($data) || !\is_array($data[0] ?? null)) {
             return [];
+        }
+
+        foreach ($data as $row) {
+            if (!\is_array($row)) {
+                continue;
+            }
+            $code = $this->firstNonEmpty($row['sCode'] ?? null);
+            if ($code !== '' && $code !== '0') {
+                /** @var array<string,mixed> $row */
+                return $row;
+            }
         }
 
         /** @var array<string,mixed> $row */
