@@ -75,6 +75,25 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertSame([], $lifecycle->qualityFlags);
     }
 
+    public function testTreatsSuccessfulPlacementAcknowledgementAsAccepted(): void
+    {
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([[
+            'clOrdId' => 'client-ack-1',
+            'cTime' => '1767225600000',
+            'instId' => 'BTC-USDT-SWAP',
+            'instType' => 'SWAP',
+            'ordId' => 'order-ack-1',
+            'sCode' => '0',
+            'sMsg' => 'Order placed',
+        ]]);
+
+        self::assertSame(OkxLifecycleStatus::ACCEPTED, $lifecycle->status);
+        self::assertSame('order-ack-1', $lifecycle->exchangeOrderId);
+        self::assertSame('client-ack-1', $lifecycle->clientOrderId);
+        self::assertFalse($lifecycle->requiresResync);
+        self::assertSame([], $lifecycle->qualityFlags);
+    }
+
     public function testNormalizesPartialFillAndFeePerFill(): void
     {
         $lifecycle = $this->normalizer->normalizeOrderLifecycle([
@@ -149,6 +168,38 @@ final class OkxLifecycleNormalizerTest extends TestCase
         $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
 
         self::assertSame(ExchangeOrderType::MARKET, $lifecycle->orderType);
+    }
+
+    public function testPreservesTakeProfitAlgoLimitPrice(): void
+    {
+        $row = $this->orderRow(state: 'live', filled: '0', updatedAt: '1767225601000');
+        unset($row['ordId'], $row['clOrdId'], $row['px']);
+        $row['algoId'] = '90002';
+        $row['algoClOrdId'] = 'tp-client-1';
+        $row['ordType'] = 'conditional';
+        $row['tpOrdPx'] = '25550';
+        $row['tpTriggerPx'] = '25500';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame(ExchangeOrderType::TAKE_PROFIT, $lifecycle->orderType);
+        self::assertEqualsWithDelta(25550.0, $lifecycle->price ?? 0.0, 0.000001);
+    }
+
+    public function testPreservesStopLossAlgoLimitPrice(): void
+    {
+        $row = $this->orderRow(state: 'live', filled: '0', updatedAt: '1767225601000');
+        unset($row['ordId'], $row['clOrdId'], $row['px']);
+        $row['algoId'] = '90003';
+        $row['algoClOrdId'] = 'sl-client-1';
+        $row['ordType'] = 'conditional';
+        $row['slOrdPx'] = '24825';
+        $row['slTriggerPx'] = '24800';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $lifecycle->orderType);
+        self::assertEqualsWithDelta(24825.0, $lifecycle->price ?? 0.0, 0.000001);
     }
 
     public function testCancelFillRaceKeepsKnownFillAndCanceledStatus(): void

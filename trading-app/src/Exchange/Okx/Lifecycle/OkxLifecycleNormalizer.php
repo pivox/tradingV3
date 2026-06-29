@@ -44,7 +44,8 @@ final readonly class OkxLifecycleNormalizer
         );
 
         $latest = $deduplicated[array_key_last($deduplicated)] ?? [];
-        $status = $this->status($latest['state'] ?? null);
+        $status = $this->statusFromRow($latest);
+        $orderType = $this->orderType($latest);
         $quantity = $this->float($latest['sz'] ?? null);
         $filled = max($this->float($latest['accFillSz'] ?? null), $this->sumFillQuantity($deduplicated));
         if ($status === OkxLifecycleStatus::FILLED && $filled <= 0.00000001) {
@@ -70,11 +71,11 @@ final readonly class OkxLifecycleNormalizer
             clientOrderId: $this->stringOrNull($latest['clOrdId'] ?? $latest['algoClOrdId'] ?? null),
             side: $this->orderSide($latest['side'] ?? null),
             positionSide: $this->positionSide($latest['posSide'] ?? null),
-            orderType: $this->orderType($latest),
+            orderType: $orderType,
             quantity: $quantity,
             filledQuantity: $filled,
             remainingQuantity: max(0.0, $quantity - $filled),
-            price: $this->floatOrNull($latest['px'] ?? $latest['ordPx'] ?? null),
+            price: $this->orderPrice($latest, $orderType),
             averageFillPrice: $this->averageFillPrice($latest, $fills),
             createdAt: $this->time($latest['cTime'] ?? null),
             updatedAt: $this->time($latest['uTime'] ?? $latest['fillTime'] ?? null),
@@ -245,6 +246,29 @@ final readonly class OkxLifecycleNormalizer
     }
 
     /**
+     * @param array<string,mixed> $row
+     */
+    private function statusFromRow(array $row): OkxLifecycleStatus
+    {
+        if ($this->hasValue($row['state'] ?? null)) {
+            return $this->status($row['state']);
+        }
+
+        $code = $this->firstNonEmpty($row['sCode'] ?? null, $row['code'] ?? null);
+        if ($code === '0' && ($this->orderId($row) !== ''
+            || $this->hasValue($row['clOrdId'] ?? null)
+            || $this->hasValue($row['algoClOrdId'] ?? null)
+        )) {
+            return OkxLifecycleStatus::ACCEPTED;
+        }
+        if ($code !== '') {
+            return OkxLifecycleStatus::FAILED;
+        }
+
+        return $this->status(null);
+    }
+
+    /**
      * @param list<array<string,mixed>> $rows
      */
     private function sumFillQuantity(array $rows): float
@@ -292,6 +316,26 @@ final readonly class OkxLifecycleNormalizer
         return \in_array(strtolower($this->string($row['ordType'] ?? '')), ['market', 'optimal_limit_ioc'], true)
             ? ExchangeOrderType::MARKET
             : ExchangeOrderType::LIMIT;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function orderPrice(array $row, ExchangeOrderType $orderType): ?float
+    {
+        $candidate = match ($orderType) {
+            ExchangeOrderType::TAKE_PROFIT => $row['tpOrdPx'] ?? null,
+            ExchangeOrderType::STOP_LOSS => $row['slOrdPx'] ?? null,
+            ExchangeOrderType::TRIGGER => $row['ordPx'] ?? null,
+            default => $row['px'] ?? null,
+        };
+
+        $price = $this->floatOrNull($candidate);
+        if ($price !== null && $price > 0.0) {
+            return $price;
+        }
+
+        return $this->floatOrNull($this->firstNonEmpty($row['px'] ?? null, $row['ordPx'] ?? null));
     }
 
     /**
