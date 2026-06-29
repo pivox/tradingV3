@@ -114,23 +114,18 @@ final readonly class OkxLifecycleNormalizer
             if (!$this->isSwapRow($row)) {
                 continue;
             }
+            if ($this->isNetModeZeroPosition($row)) {
+                $positions[] = $this->positionFromRow($row, ExchangePositionSide::LONG, 0.0);
+                $positions[] = $this->positionFromRow($row, ExchangePositionSide::SHORT, 0.0);
+                continue;
+            }
 
             $side = $this->positionSide($row['posSide'] ?? null, $this->float($row['pos'] ?? null));
             if (!$side instanceof ExchangePositionSide) {
                 continue;
             }
 
-            $positions[] = new OkxNormalizedPositionDto(
-                symbol: $this->symbol($row),
-                side: $side,
-                size: abs($this->float($row['pos'] ?? null)),
-                entryPrice: $this->float($row['avgPx'] ?? null),
-                markPrice: $this->floatOrNull($row['markPx'] ?? null),
-                unrealizedPnl: $this->floatOrNull($row['upl'] ?? null),
-                leverage: $this->floatOrNull($row['lever'] ?? null),
-                updatedAt: $this->timeOrNull($row['uTime'] ?? null),
-                redactedPayload: $this->redacted($row),
-            );
+            $positions[] = $this->positionFromRow($row, $side, abs($this->float($row['pos'] ?? null)));
         }
 
         return $positions;
@@ -447,6 +442,33 @@ final readonly class OkxLifecycleNormalizer
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function positionFromRow(array $row, ExchangePositionSide $side, float $size): OkxNormalizedPositionDto
+    {
+        return new OkxNormalizedPositionDto(
+            symbol: $this->symbol($row),
+            side: $side,
+            size: $size,
+            entryPrice: $this->float($row['avgPx'] ?? null),
+            markPrice: $this->floatOrNull($row['markPx'] ?? null),
+            unrealizedPnl: $this->floatOrNull($row['upl'] ?? null),
+            leverage: $this->floatOrNull($row['lever'] ?? null),
+            updatedAt: $this->timeOrNull($row['uTime'] ?? null),
+            redactedPayload: $this->redacted($row),
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function isNetModeZeroPosition(array $row): bool
+    {
+        return strtolower($this->string($row['posSide'] ?? null)) === 'net'
+            && abs($this->float($row['pos'] ?? null)) <= 0.00000001;
     }
 
     /**

@@ -401,6 +401,27 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(25000.0, $positions[0]->entryPrice, 0.000001);
     }
 
+    public function testNormalizesNetModeZeroPositionAsBothSideClosures(): void
+    {
+        $positions = $this->normalizer->normalizePositions([[
+            'instId' => 'BTC-USDT-SWAP',
+            'instType' => 'SWAP',
+            'posSide' => 'net',
+            'pos' => '0',
+            'avgPx' => '0',
+            'markPx' => '25100',
+            'upl' => '0',
+            'lever' => '3',
+            'uTime' => '1767225600000',
+        ]]);
+
+        self::assertCount(2, $positions);
+        self::assertSame(ExchangePositionSide::LONG, $positions[0]->side);
+        self::assertSame(ExchangePositionSide::SHORT, $positions[1]->side);
+        self::assertEqualsWithDelta(0.0, $positions[0]->size, 0.000001);
+        self::assertEqualsWithDelta(0.0, $positions[1]->size, 0.000001);
+    }
+
     public function testNormalizesErrorToStableFailedStatus(): void
     {
         $error = $this->normalizer->normalizeError([
