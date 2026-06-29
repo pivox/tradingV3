@@ -91,6 +91,23 @@ final class OkxPublicReadProviderTest extends TestCase
         self::assertSame('2026-01-01T00:01:00+00:00', $klines[1]->openTime->format('c'));
     }
 
+    public function testPaginatesKlinesUntilRequestedLimit(): void
+    {
+        $client = $this->client();
+        $client->paginatedCandles = true;
+        $gateway = new OkxMarketDataGateway($client);
+
+        $klines = $gateway->getKlines('BTCUSDT', Timeframe::TF_1M, 302);
+
+        self::assertCount(302, $klines);
+        self::assertSame('2025-12-31T19:00:00+00:00', $klines[0]->openTime->format('c'));
+        self::assertSame('2026-01-01T00:01:00+00:00', $klines[301]->openTime->format('c'));
+        self::assertSame([
+            ['limit' => '300', 'after' => null],
+            ['limit' => '2', 'after' => '1767207720000'],
+        ], $client->candleQueries);
+    }
+
     public function testNormalizesPublicRateLimitError(): void
     {
         $client = $this->client();
@@ -136,6 +153,10 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
 {
     public bool $rateLimited = false;
     public bool $klineRateLimited = false;
+    public bool $paginatedCandles = false;
+
+    /** @var list<array{limit: string, after: string|null}> */
+    public array $candleQueries = [];
 
     /**
      * @param array<string,mixed> $query
@@ -252,6 +273,15 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
     {
         $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
         $this->assertQueryValue($query, 'bar', '1m');
+
+        if ($this->paginatedCandles) {
+            $limit = (string) ($query['limit'] ?? '');
+            $after = isset($query['after']) ? (string) $query['after'] : null;
+            $this->candleQueries[] = ['limit' => $limit, 'after' => $after];
+
+            return ['code' => '0', 'data' => $this->paginatedCandlesPage($limit, $after)];
+        }
+
         $this->assertQueryValue($query, 'limit', '2');
 
         if ($this->klineRateLimited) {
@@ -262,6 +292,51 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
             ['1767225660000', '25120', '25130', '25110', '25125', '9.0', '0', '0', '0'],
             ['1767225600000', '25100', '25125', '25090', '25120', '12.5', '0', '0', '1'],
         ]];
+    }
+
+    /**
+     * @return list<list<string>>
+     */
+    private function paginatedCandlesPage(string $limit, ?string $after): array
+    {
+        if ($after === null) {
+            if ($limit !== '300') {
+                throw new \RuntimeException(sprintf('Expected first OKX candle page limit=300, got %s.', $limit));
+            }
+
+            return $this->candleRows(1767225660000, 300);
+        }
+
+        if ($after !== '1767207720000' || $limit !== '2') {
+            throw new \RuntimeException(sprintf('Unexpected second OKX candle page after=%s limit=%s.', $after, $limit));
+        }
+
+        return $this->candleRows(1767207660000, 2);
+    }
+
+    /**
+     * @return list<list<string>>
+     */
+    private function candleRows(int $newestOpenMs, int $count): array
+    {
+        $rows = [];
+        for ($i = 0; $i < $count; ++$i) {
+            $openMs = $newestOpenMs - ($i * 60_000);
+            $open = (string) (25000 + $i);
+            $rows[] = [
+                (string) $openMs,
+                $open,
+                (string) ((int) $open + 10),
+                (string) ((int) $open - 10),
+                (string) ((int) $open + 5),
+                '1',
+                '0',
+                '0',
+                '1',
+            ];
+        }
+
+        return $rows;
     }
 
     /**

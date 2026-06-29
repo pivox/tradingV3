@@ -13,6 +13,9 @@ use App\Provider\Context\ExchangeContext;
 
 final class OkxMarketDataGateway implements KlineProviderInterface
 {
+    private const int MAX_CANDLE_PAGE_SIZE = 300;
+    private const int MAX_CANDLE_LIMIT = 1500;
+
     private OkxPublicReadMapper $mapper;
 
     public function __construct(
@@ -31,28 +34,11 @@ final class OkxMarketDataGateway implements KlineProviderInterface
         int $limit = 490,
         ?ExchangeContext $context = null,
     ): array {
-        $instId = $this->resolver()->instId($symbol);
-        $payload = $this->publicGet('/api/v5/market/candles', [
-            'instId' => $instId,
-            'bar' => $this->mapper->bar($timeframe),
-            'limit' => max(1, min($limit, 300)),
-        ], __METHOD__);
-
-        $klines = [];
-        foreach ($this->dataRows($payload, __METHOD__) as $row) {
-            if (!\is_array($row)) {
-                continue;
-            }
-
-            $klines[] = $this->mapper->kline(array_values($row), strtoupper($symbol), $timeframe);
-        }
-
-        usort(
-            $klines,
-            static fn (KlineDto $a, KlineDto $b): int => $a->openTime <=> $b->openTime,
+        return $this->rowsToKlines(
+            $this->fetchCandleRows($symbol, $timeframe, $limit, __METHOD__),
+            $symbol,
+            $timeframe,
         );
-
-        return $klines;
     }
 
     /**
@@ -66,33 +52,13 @@ final class OkxMarketDataGateway implements KlineProviderInterface
         int $limit = 500,
         ?ExchangeContext $context = null,
     ): array {
-        $query = [
-            'instId' => $this->resolver()->instId($symbol),
-            'bar' => $this->mapper->bar($timeframe),
-            'after' => (string) ($end->getTimestamp() * 1000),
-            'before' => (string) ($start->getTimestamp() * 1000),
-            'limit' => max(1, min($limit, 300)),
-        ];
-
-        $payload = $this->publicGet('/api/v5/market/candles', $query, __METHOD__);
-        $klines = [];
-        foreach ($this->dataRows($payload, __METHOD__) as $row) {
-            if (!\is_array($row)) {
-                continue;
-            }
-
-            $kline = $this->mapper->kline(array_values($row), strtoupper($symbol), $timeframe);
-            if ($kline->openTime >= $start && $kline->openTime <= $end) {
-                $klines[] = $kline;
-            }
-        }
-
-        usort(
-            $klines,
-            static fn (KlineDto $a, KlineDto $b): int => $a->openTime <=> $b->openTime,
+        return $this->rowsToKlines(
+            $this->fetchCandleRows($symbol, $timeframe, $limit, __METHOD__, $start, $end),
+            $symbol,
+            $timeframe,
+            $start,
+            $end,
         );
-
-        return $klines;
     }
 
     public function getLastKline(
@@ -197,6 +163,132 @@ final class OkxMarketDataGateway implements KlineProviderInterface
         $data = $payload['data'] ?? [];
 
         return \is_array($data) ? array_values($data) : [];
+    }
+
+    /**
+     * @return list<array<int,mixed>>
+     */
+    private function fetchCandleRows(
+        string $symbol,
+        Timeframe $timeframe,
+        int $limit,
+        string $operation,
+        ?\DateTimeImmutable $start = null,
+        ?\DateTimeImmutable $end = null,
+    ): array {
+        $requested = $this->requestedLimit($limit);
+        $instId = $this->resolver()->instId($symbol);
+        $before = $start instanceof \DateTimeImmutable ? (string) ($start->getTimestamp() * 1000) : null;
+        $after = $end instanceof \DateTimeImmutable ? (string) ($end->getTimestamp() * 1000) : null;
+        $startMs = $start instanceof \DateTimeImmutable ? $start->getTimestamp() * 1000 : null;
+        $rowsByOpenTime = [];
+
+        while (\count($rowsByOpenTime) < $requested) {
+            $pageLimit = min(self::MAX_CANDLE_PAGE_SIZE, $requested - \count($rowsByOpenTime));
+            $query = [
+                'instId' => $instId,
+                'bar' => $this->mapper->bar($timeframe),
+                'limit' => $pageLimit,
+            ];
+            if ($after !== null) {
+                $query['after'] = $after;
+            }
+            if ($before !== null) {
+                $query['before'] = $before;
+            }
+
+            $pageRows = $this->dataRows($this->publicGet('/api/v5/market/candles', $query, $operation), $operation);
+            if ($pageRows === []) {
+                break;
+            }
+
+            $oldestOpenMs = null;
+            foreach ($pageRows as $row) {
+                if (!\is_array($row)) {
+                    continue;
+                }
+
+                $normalized = array_values($row);
+                $openMs = $this->rowOpenMilliseconds($normalized);
+                if ($openMs === null) {
+                    continue;
+                }
+
+                $rowsByOpenTime[(string) $openMs] = $normalized;
+                $oldestOpenMs = $oldestOpenMs === null ? $openMs : min($oldestOpenMs, $openMs);
+            }
+
+            if ($oldestOpenMs === null || $after === (string) $oldestOpenMs) {
+                break;
+            }
+
+            $after = (string) $oldestOpenMs;
+            if ($startMs !== null && $oldestOpenMs <= $startMs) {
+                break;
+            }
+            if (\count($pageRows) < $pageLimit) {
+                break;
+            }
+        }
+
+        return array_values($rowsByOpenTime);
+    }
+
+    /**
+     * @param list<array<int,mixed>> $rows
+     * @return KlineDto[]
+     */
+    private function rowsToKlines(
+        array $rows,
+        string $symbol,
+        Timeframe $timeframe,
+        ?\DateTimeImmutable $start = null,
+        ?\DateTimeImmutable $end = null,
+    ): array {
+        $klines = [];
+        foreach ($rows as $row) {
+            $kline = $this->mapper->kline($row, strtoupper($symbol), $timeframe);
+            if ($start instanceof \DateTimeImmutable && $kline->openTime < $start) {
+                continue;
+            }
+            if ($end instanceof \DateTimeImmutable && $kline->openTime > $end) {
+                continue;
+            }
+
+            $klines[] = $kline;
+        }
+
+        usort(
+            $klines,
+            static fn (KlineDto $a, KlineDto $b): int => $a->openTime <=> $b->openTime,
+        );
+
+        return $klines;
+    }
+
+    private function requestedLimit(int $limit): int
+    {
+        if ($limit < 1) {
+            return 1;
+        }
+        if ($limit > self::MAX_CANDLE_LIMIT) {
+            throw new \InvalidArgumentException(sprintf('OKX candle limit must be <= %d, got %d.', self::MAX_CANDLE_LIMIT, $limit));
+        }
+
+        return $limit;
+    }
+
+    /**
+     * @param array<int,mixed> $row
+     */
+    private function rowOpenMilliseconds(array $row): ?int
+    {
+        $value = $row[0] ?? null;
+        if (!\is_scalar($value) || !is_numeric((string) $value)) {
+            return null;
+        }
+
+        return (int) $value;
     }
 
     private function resolver(): OkxInstrumentResolver
