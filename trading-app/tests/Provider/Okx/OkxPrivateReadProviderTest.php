@@ -146,6 +146,35 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame('/api/v5/trade/order-algo', $client->lastPrivateGetPath);
     }
 
+    public function testFindsTerminalAlgoOrderByClientOrderIdFallback(): void
+    {
+        $client = $this->client();
+        $client->hidePendingOrders = true;
+        $gateway = new OkxOrderGateway($client);
+
+        $order = $gateway->getOrder('BTCUSDT', 'algo-client-triggered');
+
+        self::assertNotNull($order);
+        self::assertSame('algo:algo-triggered', $order->orderId);
+        self::assertSame(OrderStatus::CANCELLED, $order->status);
+        self::assertSame('/api/v5/trade/order-algo', $client->lastPrivateGetPath);
+    }
+
+    public function testFindsTerminalAlgoOrderByHistoryFallback(): void
+    {
+        $client = $this->client();
+        $client->hidePendingOrders = true;
+        $client->hideAlgoDetail = true;
+        $gateway = new OkxOrderGateway($client);
+
+        $order = $gateway->getOrder('BTCUSDT', 'algo:algo-triggered');
+
+        self::assertNotNull($order);
+        self::assertSame('algo:algo-triggered', $order->orderId);
+        self::assertSame('/api/v5/trade/orders-algo-history', $client->lastPrivateGetPath);
+        self::assertSame('conditional', $client->lastPrivateGetQuery['ordType'] ?? null);
+    }
+
     public function testReadsHistoricalFills(): void
     {
         $client = $this->client();
@@ -232,6 +261,7 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     public bool $rateLimited = false;
     public bool $emptyAvailableEquity = false;
     public bool $hidePendingOrders = false;
+    public bool $hideAlgoDetail = false;
     public int $privatePostCalls = 0;
     public string $lastPrivateGetPath = '';
 
@@ -259,7 +289,7 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
             '/api/v5/trade/order' => $this->orderDetail($query),
             '/api/v5/trade/orders-history' => $this->orderDetail($query),
             '/api/v5/trade/order-algo' => $this->algoOrderDetail($query),
-            '/api/v5/trade/orders-algo-history' => $this->algoOrderDetail($query),
+            '/api/v5/trade/orders-algo-history' => $this->algoOrderHistory($query),
             '/api/v5/trade/fills' => $this->fills($query),
             '/api/v5/trade/fills-history' => $this->fills($query),
             '/api/v5/account/bills' => $this->bills($query),
@@ -411,10 +441,42 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     private function algoOrderDetail(array $query): array
     {
         $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
-        if (($query['algoId'] ?? null) !== 'algo-triggered') {
+        if ($this->hideAlgoDetail || !$this->matchesTriggeredAlgo($query)) {
             return ['code' => '0', 'data' => []];
         }
 
+        return $this->triggeredAlgoOrder();
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     * @return array<string,mixed>
+     */
+    private function algoOrderHistory(array $query): array
+    {
+        $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
+        $this->assertQueryValue($query, 'ordType', 'conditional');
+        if (!$this->matchesTriggeredAlgo($query)) {
+            return ['code' => '0', 'data' => []];
+        }
+
+        return $this->triggeredAlgoOrder();
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     */
+    private function matchesTriggeredAlgo(array $query): bool
+    {
+        return ($query['algoId'] ?? null) === 'algo-triggered'
+            || ($query['algoClOrdId'] ?? null) === 'algo-client-triggered';
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function triggeredAlgoOrder(): array
+    {
         return ['code' => '0', 'data' => [[
             'instId' => 'BTC-USDT-SWAP',
             'algoId' => 'algo-triggered',

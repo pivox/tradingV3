@@ -59,7 +59,7 @@ final class OkxOrderGateway implements OrderProviderInterface
     private function fetchOrderDetail(string $symbol, string $orderId): ?OrderDto
     {
         if (str_starts_with($orderId, 'algo:')) {
-            return $this->fetchAlgoOrderDetail($symbol, substr($orderId, 5));
+            return $this->fetchAlgoOrderDetail($symbol, ['algoId' => substr($orderId, 5)]);
         }
 
         $baseQuery = ['instId' => $this->resolver()->instId($symbol)];
@@ -80,21 +80,27 @@ final class OkxOrderGateway implements OrderProviderInterface
             }
         }
 
-        return null;
+        return $this->fetchAlgoOrderDetail($symbol, ['algoClOrdId' => $orderId]);
     }
 
-    private function fetchAlgoOrderDetail(string $symbol, string $algoId): ?OrderDto
+    /**
+     * @param array{algoId?: string, algoClOrdId?: string} $identifier
+     */
+    private function fetchAlgoOrderDetail(string $symbol, array $identifier): ?OrderDto
     {
-        if ($algoId === '') {
+        $identifier = array_filter($identifier, static fn (string $value): bool => $value !== '');
+        if ($identifier === []) {
             return null;
         }
 
-        $baseQuery = [
+        $baseQuery = $identifier + [
             'instId' => $this->resolver()->instId($symbol),
-            'algoId' => $algoId,
         ];
         foreach (['/api/v5/trade/order-algo', '/api/v5/trade/orders-algo-history'] as $path) {
-            $row = $this->firstRow($this->privateGet($path, $baseQuery, __METHOD__), __METHOD__);
+            $query = $path === '/api/v5/trade/orders-algo-history'
+                ? $baseQuery + ['ordType' => 'conditional']
+                : $baseQuery;
+            $row = $this->firstRow($this->privateGet($path, $query, __METHOD__), __METHOD__);
             if ($row !== []) {
                 return $this->privateMapper->order($row, true);
             }
