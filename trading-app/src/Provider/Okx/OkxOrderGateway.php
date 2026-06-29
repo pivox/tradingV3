@@ -14,6 +14,8 @@ use App\Exchange\Okx\OkxRestClientInterface;
 
 final class OkxOrderGateway implements OrderProviderInterface
 {
+    private const TERMINAL_ALGO_HISTORY_STATES = ['effective', 'canceled', 'order_failed'];
+
     private OkxPublicReadMapper $mapper;
     private OkxPrivateReadMapper $privateMapper;
 
@@ -96,13 +98,35 @@ final class OkxOrderGateway implements OrderProviderInterface
         $baseQuery = $identifier + [
             'instId' => $this->resolver()->instId($symbol),
         ];
-        foreach (['/api/v5/trade/order-algo', '/api/v5/trade/orders-algo-history'] as $path) {
-            $query = $path === '/api/v5/trade/orders-algo-history'
-                ? $baseQuery + ['ordType' => 'conditional']
-                : $baseQuery;
-            $row = $this->firstRow($this->privateGet($path, $query, __METHOD__), __METHOD__);
+
+        $row = $this->firstRow($this->privateGet('/api/v5/trade/order-algo', $baseQuery, __METHOD__), __METHOD__);
+        if ($row !== []) {
+            return $this->privateMapper->order($row, true);
+        }
+
+        if (isset($identifier['algoId'])) {
+            $row = $this->firstRow($this->privateGet(
+                '/api/v5/trade/orders-algo-history',
+                $baseQuery + ['ordType' => 'conditional'],
+                __METHOD__,
+            ), __METHOD__);
             if ($row !== []) {
                 return $this->privateMapper->order($row, true);
+            }
+        }
+
+        if (isset($identifier['algoClOrdId'])) {
+            foreach (self::TERMINAL_ALGO_HISTORY_STATES as $state) {
+                $rows = $this->dataRows($this->privateGet('/api/v5/trade/orders-algo-history', [
+                    'instId' => $baseQuery['instId'],
+                    'ordType' => 'conditional',
+                    'state' => $state,
+                ], __METHOD__), __METHOD__);
+                foreach ($rows as $row) {
+                    if ((string) ($row['algoClOrdId'] ?? '') === $identifier['algoClOrdId']) {
+                        return $this->privateMapper->order($row, true);
+                    }
+                }
             }
         }
 

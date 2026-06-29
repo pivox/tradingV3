@@ -175,6 +175,23 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame('conditional', $client->lastPrivateGetQuery['ordType'] ?? null);
     }
 
+    public function testFindsTerminalAlgoClientOrderByHistoryStateScan(): void
+    {
+        $client = $this->client();
+        $client->hidePendingOrders = true;
+        $client->hideAlgoDetail = true;
+        $gateway = new OkxOrderGateway($client);
+
+        $order = $gateway->getOrder('BTCUSDT', 'algo-client-triggered');
+
+        self::assertNotNull($order);
+        self::assertSame('algo:algo-triggered', $order->orderId);
+        self::assertSame('/api/v5/trade/orders-algo-history', $client->lastPrivateGetPath);
+        self::assertSame('conditional', $client->lastPrivateGetQuery['ordType'] ?? null);
+        self::assertSame('canceled', $client->lastPrivateGetQuery['state'] ?? null);
+        self::assertArrayNotHasKey('algoClOrdId', $client->lastPrivateGetQuery);
+    }
+
     public function testReadsHistoricalFills(): void
     {
         $client = $this->client();
@@ -441,7 +458,7 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     private function algoOrderDetail(array $query): array
     {
         $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
-        if ($this->hideAlgoDetail || !$this->matchesTriggeredAlgo($query)) {
+        if ($this->hideAlgoDetail || !$this->matchesTriggeredAlgoDetail($query)) {
             return ['code' => '0', 'data' => []];
         }
 
@@ -456,7 +473,10 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     {
         $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
         $this->assertQueryValue($query, 'ordType', 'conditional');
-        if (!$this->matchesTriggeredAlgo($query)) {
+        if (array_key_exists('algoClOrdId', $query)) {
+            throw new \RuntimeException('OKX algo history query must not use unsupported algoClOrdId filter.');
+        }
+        if (!$this->matchesTriggeredAlgoHistory($query)) {
             return ['code' => '0', 'data' => []];
         }
 
@@ -466,10 +486,19 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     /**
      * @param array<string,mixed> $query
      */
-    private function matchesTriggeredAlgo(array $query): bool
+    private function matchesTriggeredAlgoDetail(array $query): bool
     {
         return ($query['algoId'] ?? null) === 'algo-triggered'
             || ($query['algoClOrdId'] ?? null) === 'algo-client-triggered';
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     */
+    private function matchesTriggeredAlgoHistory(array $query): bool
+    {
+        return ($query['algoId'] ?? null) === 'algo-triggered'
+            || (($query['state'] ?? null) === 'canceled' && !array_key_exists('algoId', $query));
     }
 
     /**
