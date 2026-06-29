@@ -150,6 +150,25 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertArrayNotHasKey('clOrdId', $client->lastPrivateGetQuery);
     }
 
+    public function testOrderDetailNotFoundCodeFallsBackToHistory(): void
+    {
+        $client = $this->client();
+        $client->hidePendingOrders = true;
+        $client->orderDetailReturnsNotFoundCode = true;
+        $client->paginateOrderHistory = true;
+        $gateway = new OkxOrderGateway($client);
+
+        try {
+            $order = $gateway->getOrder('BTCUSDT', 'ord-historical');
+        } catch (OkxProviderUnavailableException $exception) {
+            self::fail('Order detail not-found code should fall back to history, got: ' . $exception->getMessage());
+        }
+
+        self::assertNotNull($order);
+        self::assertSame('ord-historical', $order->orderId);
+        self::assertSame('/api/v5/trade/orders-history', $client->lastPrivateGetPath);
+    }
+
     public function testFindsArchivedTerminalOrderAfterRecentHistoryMiss(): void
     {
         $client = $this->client();
@@ -331,6 +350,7 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     public bool $emptyAvailableEquity = false;
     public bool $hidePendingOrders = false;
     public bool $hideOrderDetail = false;
+    public bool $orderDetailReturnsNotFoundCode = false;
     public bool $hideAlgoDetail = false;
     public bool $paginateOrderHistory = false;
     public bool $useOrderHistoryArchive = false;
@@ -460,6 +480,10 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     private function orderDetail(array $query): array
     {
         $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
+        if ($this->orderDetailReturnsNotFoundCode) {
+            return ['code' => '51603', 'msg' => 'Order does not exist', 'data' => []];
+        }
+
         if ($this->hideOrderDetail || ($query['ordId'] ?? null) !== 'ord-filled') {
             return ['code' => '0', 'data' => []];
         }

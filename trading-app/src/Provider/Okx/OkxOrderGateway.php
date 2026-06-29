@@ -66,7 +66,7 @@ final class OkxOrderGateway implements OrderProviderInterface
 
         $baseQuery = ['instId' => $this->resolver()->instId($symbol)];
         foreach (['ordId', 'clOrdId'] as $key) {
-            $row = $this->firstRow($this->privateGet('/api/v5/trade/order', $baseQuery + [$key => $orderId], __METHOD__), __METHOD__);
+            $row = $this->firstOrderDetailRow($this->privateGet('/api/v5/trade/order', $baseQuery + [$key => $orderId], __METHOD__), __METHOD__);
             if ($row !== []) {
                 return $this->privateMapper->order($row, false);
             }
@@ -337,6 +337,19 @@ final class OkxOrderGateway implements OrderProviderInterface
     private function firstRow(array $payload, string $operation): array
     {
         return $this->dataRows($payload, $operation)[0] ?? [];
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function firstOrderDetailRow(array $payload, string $operation): array
+    {
+        if ((string) ($payload['code'] ?? '') === '51603') {
+            return [];
+        }
+
+        return $this->firstRow($payload, $operation);
     }
 
     /**
