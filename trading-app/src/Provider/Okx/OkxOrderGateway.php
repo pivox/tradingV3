@@ -138,7 +138,7 @@ final class OkxOrderGateway implements OrderProviderInterface
             'instId' => $this->resolver()->instId($symbol),
         ];
 
-        $row = $this->firstRow($this->privateGet('/api/v5/trade/order-algo', $baseQuery, __METHOD__), __METHOD__);
+        $row = $this->firstOrderDetailRow($this->privateGet('/api/v5/trade/order-algo', $baseQuery, __METHOD__), __METHOD__);
         if ($row !== []) {
             return $this->privateMapper->order($row, true);
         }

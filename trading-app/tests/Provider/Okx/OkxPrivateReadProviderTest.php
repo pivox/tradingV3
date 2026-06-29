@@ -229,6 +229,24 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame('conditional', $client->lastPrivateGetQuery['ordType'] ?? null);
     }
 
+    public function testAlgoOrderDetailNotFoundCodeFallsBackToHistory(): void
+    {
+        $client = $this->client();
+        $client->hidePendingOrders = true;
+        $client->algoOrderDetailReturnsNotFoundCode = true;
+        $gateway = new OkxOrderGateway($client);
+
+        try {
+            $order = $gateway->getOrder('BTCUSDT', 'algo:algo-triggered');
+        } catch (OkxProviderUnavailableException $exception) {
+            self::fail('Algo order detail not-found code should fall back to history, got: ' . $exception->getMessage());
+        }
+
+        self::assertNotNull($order);
+        self::assertSame('algo:algo-triggered', $order->orderId);
+        self::assertSame('/api/v5/trade/orders-algo-history', $client->lastPrivateGetPath);
+    }
+
     public function testFindsTerminalAlgoClientOrderByHistoryStateScan(): void
     {
         $client = $this->client();
@@ -352,6 +370,7 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     public bool $hideOrderDetail = false;
     public bool $orderDetailReturnsNotFoundCode = false;
     public bool $hideAlgoDetail = false;
+    public bool $algoOrderDetailReturnsNotFoundCode = false;
     public bool $paginateOrderHistory = false;
     public bool $useOrderHistoryArchive = false;
     public bool $paginateAlgoHistory = false;
@@ -595,6 +614,10 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     private function algoOrderDetail(array $query): array
     {
         $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
+        if ($this->algoOrderDetailReturnsNotFoundCode) {
+            return ['code' => '51603', 'msg' => 'Order does not exist', 'data' => []];
+        }
+
         if ($this->hideAlgoDetail || !$this->matchesTriggeredAlgoDetail($query)) {
             return ['code' => '0', 'data' => []];
         }
