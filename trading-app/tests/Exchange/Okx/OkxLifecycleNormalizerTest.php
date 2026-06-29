@@ -119,6 +119,38 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(-0.03, $fills[0]->fee ?? 0.0, 0.000001);
     }
 
+    public function testPreservesAlgoOrderIdNamespaceInLifecycleAndFills(): void
+    {
+        $row = $this->orderRow(
+            state: 'filled',
+            filled: '1',
+            updatedAt: '1767225601000',
+            fillSz: '1',
+            fillPx: '25005',
+            tradeId: 'algo-fill',
+        );
+        unset($row['ordId'], $row['clOrdId']);
+        $row['algoId'] = '90001';
+        $row['algoClOrdId'] = 'algo-client-1';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame('algo:90001', $lifecycle->exchangeOrderId);
+        self::assertSame('algo-client-1', $lifecycle->clientOrderId);
+        self::assertCount(1, $lifecycle->fills);
+        self::assertSame('algo:90001', $lifecycle->fills[0]->exchangeOrderId);
+    }
+
+    public function testNormalizesOptimalLimitIocAsMarketOrder(): void
+    {
+        $row = $this->orderRow(state: 'live', filled: '0', updatedAt: '1767225601000');
+        $row['ordType'] = 'optimal_limit_ioc';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame(ExchangeOrderType::MARKET, $lifecycle->orderType);
+    }
+
     public function testCancelFillRaceKeepsKnownFillAndCanceledStatus(): void
     {
         $lifecycle = $this->normalizer->normalizeOrderLifecycle([

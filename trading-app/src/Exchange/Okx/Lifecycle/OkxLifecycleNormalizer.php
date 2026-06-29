@@ -66,7 +66,7 @@ final readonly class OkxLifecycleNormalizer
         return new OkxNormalizedOrderLifecycleDto(
             status: $status,
             symbol: $this->symbol($latest),
-            exchangeOrderId: $this->string($latest['ordId'] ?? $latest['algoId'] ?? ''),
+            exchangeOrderId: $this->orderId($latest),
             clientOrderId: $this->stringOrNull($latest['clOrdId'] ?? $latest['algoClOrdId'] ?? null),
             side: $this->orderSide($latest['side'] ?? null),
             positionSide: $this->positionSide($latest['posSide'] ?? null),
@@ -140,7 +140,7 @@ final readonly class OkxLifecycleNormalizer
             status: OkxLifecycleStatus::FAILED,
             code: $code,
             message: $this->firstNonEmpty($first['sMsg'] ?? null, $payload['msg'] ?? null),
-            exchangeOrderId: $this->stringOrNull($first['ordId'] ?? $first['algoId'] ?? null),
+            exchangeOrderId: $this->stringOrNull($this->orderId($first)),
             clientOrderId: $this->stringOrNull($first['clOrdId'] ?? $first['algoClOrdId'] ?? null),
             qualityFlags: $code === '' ? ['missing_error_code'] : [],
             redactedPayload: $this->redacted($payload),
@@ -157,7 +157,7 @@ final readonly class OkxLifecycleNormalizer
         $deduplicated = [];
         foreach ($rows as $row) {
             $key = implode('|', [
-                $this->string($row['ordId'] ?? $row['algoId'] ?? ''),
+                $this->orderId($row),
                 $this->string($row['state'] ?? ''),
                 $this->string($row['uTime'] ?? $row['fillTime'] ?? ''),
                 $this->string($row['accFillSz'] ?? ''),
@@ -209,7 +209,7 @@ final readonly class OkxLifecycleNormalizer
 
         return new OkxNormalizedFillDto(
             symbol: $this->symbol($row),
-            exchangeOrderId: $this->string($row['ordId'] ?? $row['algoId'] ?? ''),
+            exchangeOrderId: $this->orderId($row),
             clientOrderId: $this->stringOrNull($row['clOrdId'] ?? $row['algoClOrdId'] ?? null),
             fillId: $fillId,
             side: $this->orderSide($row['side'] ?? null),
@@ -289,9 +289,24 @@ final readonly class OkxLifecycleNormalizer
             return ExchangeOrderType::TRIGGER;
         }
 
-        return strtolower($this->string($row['ordType'] ?? '')) === 'market'
+        return \in_array(strtolower($this->string($row['ordType'] ?? '')), ['market', 'optimal_limit_ioc'], true)
             ? ExchangeOrderType::MARKET
             : ExchangeOrderType::LIMIT;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function orderId(array $row): string
+    {
+        if ($this->hasValue($row['ordId'] ?? null)) {
+            return $this->string($row['ordId']);
+        }
+        if ($this->hasValue($row['algoId'] ?? null)) {
+            return 'algo:' . $this->string($row['algoId']);
+        }
+
+        return '';
     }
 
     private function orderSide(mixed $side): ExchangeOrderSide
