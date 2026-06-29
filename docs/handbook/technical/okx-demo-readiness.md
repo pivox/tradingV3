@@ -187,9 +187,15 @@ OKX-001 est docs-only. Le rollback applicatif est le revert de cette page.
 Le rollback operationnel a conserver pour les PRs suivantes reste :
 
 ```bash
+OKX_ENV=demo
+OKX_LIVE_ENABLED=0
 DEMO_TRADING_ENABLED=0
 OKX_DEMO_TRADING_ENABLED=0
 ```
+
+`OKX_LIVE_ENABLED=0` est obligatoire dans un rollback OKX, meme si les gates
+demo sont fermees, afin de conserver le blocage mainnet dans les chemins qui
+consultent directement la configuration OKX.
 
 et cote config effective :
 
