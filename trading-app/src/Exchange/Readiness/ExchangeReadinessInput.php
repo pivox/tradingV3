@@ -22,6 +22,7 @@ final readonly class ExchangeReadinessInput
         public bool $publicConnectivity = false,
         public bool $privateReadConnectivity = false,
         public bool $privateObservability = false,
+        public ?ExchangePrivateObservabilityStatus $privateObservabilityStatus = null,
         public bool $instrumentsLoaded = false,
         public bool $metadataValid = false,
         public bool $precisionValid = false,

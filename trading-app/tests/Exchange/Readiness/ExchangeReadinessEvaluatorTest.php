@@ -9,6 +9,9 @@ use App\Common\Enum\MarketType;
 use App\Exchange\Readiness\ExchangeReadinessEvaluator;
 use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
+use App\Exchange\Readiness\ExchangePrivateObservabilityDecision;
+use App\Exchange\Readiness\ExchangePrivateObservabilityPolicy;
+use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Exchange\Readiness\ExchangeRuntimeCheckInterface;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -17,6 +20,9 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(ExchangeReadinessEvaluator::class)]
 #[CoversClass(ExchangeReadinessInput::class)]
 #[CoversClass(ExchangeReadinessLevel::class)]
+#[CoversClass(ExchangePrivateObservabilityDecision::class)]
+#[CoversClass(ExchangePrivateObservabilityPolicy::class)]
+#[CoversClass(ExchangePrivateObservabilityStatus::class)]
 #[CoversClass(ExchangeReadinessReport::class)]
 #[CoversClass(ExchangeRuntimeCheckInterface::class)]
 final class ExchangeReadinessEvaluatorTest extends TestCase
@@ -72,6 +78,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
         $report = (new ExchangeReadinessEvaluator())->evaluate(
             $this->readyInput(
                 dryRun: false,
+                privateObservabilityStatus: $this->privateObservabilityStatus(),
                 demoTestnetWriteEnabled: true,
                 killSwitch: false,
             ),
@@ -80,6 +87,124 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
         self::assertSame(ExchangeReadinessLevel::DemoTestnetEnabled, $report->readyLevel);
         self::assertSame([], $report->blockingErrors);
         self::assertSame('demo_testnet_enabled', $report->toArray()['ready_level']);
+    }
+
+    public function testDemoTestnetEnabledRequiresCompletePrivateObservabilityStatus(): void
+    {
+        $report = (new ExchangeReadinessEvaluator())->evaluate(
+            $this->readyInput(
+                dryRun: false,
+                demoTestnetWriteEnabled: true,
+                killSwitch: false,
+            ),
+        );
+
+        self::assertSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
+        self::assertContains('private_observability_status_missing', $report->warnings);
+        self::assertContains('private_ws_not_connected', $report->warnings);
+        self::assertContains('private_fills_stream_not_ready', $report->warnings);
+    }
+
+    public function testDemoTestnetEnabledRequiresPrivateObservabilityStatusForSameTarget(): void
+    {
+        $report = (new ExchangeReadinessEvaluator())->evaluate(
+            $this->readyInput(
+                dryRun: false,
+                privateObservabilityStatus: new ExchangePrivateObservabilityStatus(
+                    exchange: Exchange::HYPERLIQUID,
+                    environment: 'testnet',
+                    privateWsSupported: true,
+                    privateWsConnected: true,
+                    privateWsAuthenticated: true,
+                    ordersStreamReady: true,
+                    fillsStreamReady: true,
+                    positionsStreamReady: true,
+                    initialSnapshotLoaded: true,
+                    lastEventAt: new \DateTimeImmutable('2026-06-29T10:15:00+00:00'),
+                    reconnecting: false,
+                    reconciliationFresh: true,
+                ),
+                demoTestnetWriteEnabled: true,
+                killSwitch: false,
+            ),
+        );
+
+        self::assertSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
+        self::assertContains('private_observability_exchange_mismatch', $report->warnings);
+        self::assertContains('private_observability_environment_mismatch', $report->warnings);
+    }
+
+    public function testDemoTestnetEnabledPreservesPrivateObservabilityWarnings(): void
+    {
+        $report = (new ExchangeReadinessEvaluator())->evaluate(
+            $this->readyInput(
+                dryRun: false,
+                privateObservabilityStatus: new ExchangePrivateObservabilityStatus(
+                    exchange: Exchange::OKX,
+                    environment: 'demo',
+                    privateWsSupported: true,
+                    privateWsConnected: true,
+                    privateWsAuthenticated: true,
+                    ordersStreamReady: true,
+                    fillsStreamReady: true,
+                    positionsStreamReady: true,
+                    initialSnapshotLoaded: true,
+                    lastEventAt: new \DateTimeImmutable('2026-06-29T10:15:00+00:00'),
+                    reconnecting: false,
+                    reconciliationFresh: true,
+                    warnings: ['private_observability_collector_latency'],
+                ),
+                demoTestnetWriteEnabled: true,
+                killSwitch: false,
+            ),
+        );
+
+        self::assertSame(ExchangeReadinessLevel::DemoTestnetEnabled, $report->readyLevel);
+        self::assertContains('private_observability_collector_latency', $report->warnings);
+    }
+
+    public function testDryRunCanReachCandidateWithoutPrivateObservability(): void
+    {
+        $report = (new ExchangeReadinessEvaluator())->evaluate(
+            $this->readyInput(
+                dryRun: true,
+                demoTestnetWriteEnabled: true,
+                killSwitch: false,
+            ),
+        );
+
+        self::assertSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
+        self::assertContains('private_observability_absent_for_dry_run', $report->warnings);
+    }
+
+    public function testDryRunReportDoesNotMarkFailingPrivateObservabilityAsHealthy(): void
+    {
+        $report = (new ExchangeReadinessEvaluator())->evaluate(
+            $this->readyInput(
+                dryRun: true,
+                privateObservabilityStatus: new ExchangePrivateObservabilityStatus(
+                    exchange: Exchange::OKX,
+                    environment: 'demo',
+                    privateWsSupported: true,
+                    privateWsConnected: false,
+                    privateWsAuthenticated: false,
+                    ordersStreamReady: true,
+                    fillsStreamReady: false,
+                    positionsStreamReady: false,
+                    initialSnapshotLoaded: false,
+                    lastEventAt: null,
+                    reconnecting: true,
+                    reconciliationFresh: false,
+                ),
+                demoTestnetWriteEnabled: true,
+                killSwitch: false,
+            ),
+        );
+
+        self::assertSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
+        self::assertFalse($report->privateObservability);
+        self::assertFalse($report->toArray()['private_observability']);
+        self::assertContains('private_observability_absent_for_dry_run', $report->warnings);
     }
 
     public function testDryRunTrueNeverReportsDemoTestnetEnabled(): void
@@ -213,6 +338,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
         bool $publicConnectivity = true,
         bool $privateReadConnectivity = true,
         bool $privateObservability = false,
+        ?ExchangePrivateObservabilityStatus $privateObservabilityStatus = null,
         bool $instrumentsLoaded = true,
         bool $metadataValid = true,
         bool $precisionValid = true,
@@ -236,6 +362,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
             publicConnectivity: $publicConnectivity,
             privateReadConnectivity: $privateReadConnectivity,
             privateObservability: $privateObservability,
+            privateObservabilityStatus: $privateObservabilityStatus,
             instrumentsLoaded: $instrumentsLoaded,
             metadataValid: $metadataValid,
             precisionValid: $precisionValid,
@@ -253,6 +380,24 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
             maxNotional: 25.0,
             configHash: str_repeat('a', 64),
             warnings: $warnings,
+        );
+    }
+
+    private function privateObservabilityStatus(): ExchangePrivateObservabilityStatus
+    {
+        return new ExchangePrivateObservabilityStatus(
+            exchange: Exchange::OKX,
+            environment: 'demo',
+            privateWsSupported: true,
+            privateWsConnected: true,
+            privateWsAuthenticated: true,
+            ordersStreamReady: true,
+            fillsStreamReady: true,
+            positionsStreamReady: true,
+            initialSnapshotLoaded: true,
+            lastEventAt: new \DateTimeImmutable('2026-06-29T10:15:00+00:00'),
+            reconnecting: false,
+            reconciliationFresh: true,
         );
     }
 }

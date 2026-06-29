@@ -4,11 +4,14 @@ declare(strict_types=1);
 namespace App\TradingCore\Execution\Safety;
 
 use App\Common\Enum\Exchange;
+use App\Exchange\Readiness\ExchangePrivateObservabilityPolicy;
+use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
 
 final readonly class DemoTradingKillSwitchService
 {
     public function __construct(
         private DemoTradingSafetyPolicyEvaluator $evaluator,
+        private ExchangePrivateObservabilityPolicy $privateObservabilityPolicy,
         private DemoTradingAuditSinkInterface $auditSink,
         private bool $globalDemoTradingEnabled = false,
         private bool $okxDemoTradingEnabled = false,
@@ -37,9 +40,25 @@ final readonly class DemoTradingKillSwitchService
         );
 
         $safetyDecision = $this->evaluator->evaluate($policy);
-        $reasons = $this->mergeReasons($switchReasons, $safetyDecision->blockingErrors);
+        $privateObservabilityDecision = $this->privateObservabilityPolicy->evaluate(
+            $attempt->privateObservabilityStatus ?? ExchangePrivateObservabilityStatus::absent($attempt->exchange, $attempt->environment->value),
+            dryRun: false,
+            expectedExchange: $attempt->exchange,
+            expectedEnvironment: $attempt->environment->value,
+        );
+        $reasons = $this->mergeReasons(
+            $this->mergeReasons($switchReasons, $safetyDecision->blockingErrors),
+            $privateObservabilityDecision->blockingErrors,
+        );
         $allowed = $safetyDecision->allowed && $reasons === [];
-        $auditEvent = $this->auditEvent($attempt, $safetyDecision, $allowed, $reasons);
+        $auditEvent = $this->auditEvent(
+            $attempt,
+            $safetyDecision,
+            $privateObservabilityDecision->toArray(),
+            $attempt->privateObservabilityStatus === null,
+            $allowed,
+            $reasons,
+        );
 
         try {
             $this->auditSink->recordDemoTradingAttempt($auditEvent);
@@ -125,11 +144,14 @@ final readonly class DemoTradingKillSwitchService
 
     /**
      * @param list<string> $reasons
+     * @param array<string,mixed> $privateObservabilityDecision
      * @return array<string,mixed>
      */
     private function auditEvent(
         DemoTradingMutationAttempt $attempt,
         DemoTradingSafetyDecision $safetyDecision,
+        array $privateObservabilityDecision,
+        bool $privateObservabilityMissing,
         bool $allowed,
         array $reasons,
     ): array {
@@ -153,6 +175,9 @@ final readonly class DemoTradingKillSwitchService
                 'blocking_errors' => $safetyDecision->blockingErrors,
                 'warnings' => $safetyDecision->warnings,
             ],
+            'private_observability' => $privateObservabilityMissing
+                ? ['status_available' => false] + $privateObservabilityDecision
+                : $privateObservabilityDecision,
             'audit_context' => self::redact($attempt->auditContext),
         ];
     }
