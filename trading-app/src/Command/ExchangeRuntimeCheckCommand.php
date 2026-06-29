@@ -11,7 +11,10 @@ use App\Exchange\Contract\ExchangeAdapterInterface;
 use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Okx\OkxConfig;
+use App\Exchange\Readiness\ExchangeReadinessInput;
+use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Okx\OkxRuntimeCheck;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -24,6 +27,9 @@ use Symfony\Component\Console\Output\OutputInterface;
 )]
 final class ExchangeRuntimeCheckCommand extends Command
 {
+    /**
+     * @param array<string, string> $bitmartEnv
+     */
     public function __construct(
         private readonly ExchangeAdapterRegistryInterface $adapters,
         private readonly ExchangeProviderRegistryInterface $providers,
@@ -63,7 +69,7 @@ final class ExchangeRuntimeCheckCommand extends Command
         $credentials = $this->credentialsStatus($exchange);
         $liveTrading = $this->liveTradingStatus($exchange, $credentials);
         $privateWs = $this->privateWsStatus($adapter);
-        $scheduleReady = $adapterStatus === 'found' && $providerStatus === 'found';
+        $scheduleReady = $this->scheduleReady($exchange, $marketType, $adapterStatus, $providerStatus);
         $recommendedDryRun = !$scheduleReady || $credentials !== 'ok' || $liveTrading !== 'enabled';
 
         $output->writeln(sprintf('Exchange: %s', $exchange->value));
@@ -177,6 +183,29 @@ final class ExchangeRuntimeCheckCommand extends Command
         }
 
         return $adapter->capabilities()->supportsWebSocketPrivate ? 'enabled' : 'unsupported';
+    }
+
+    private function scheduleReady(
+        Exchange $exchange,
+        MarketType $marketType,
+        string $adapterStatus,
+        string $providerStatus,
+    ): bool {
+        if ($adapterStatus !== 'found' || $providerStatus !== 'found') {
+            return false;
+        }
+
+        if ($exchange === Exchange::OKX) {
+            $report = (new OkxRuntimeCheck())->check(new ExchangeReadinessInput(
+                exchange: $exchange,
+                marketType: $marketType,
+                environment: $this->okxConfig->normalizedEnvironment(),
+            ));
+
+            return $report->readyLevel !== ExchangeReadinessLevel::NotReady;
+        }
+
+        return true;
     }
 
     private function hasOkxCredentials(): bool
