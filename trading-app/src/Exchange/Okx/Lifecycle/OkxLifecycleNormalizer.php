@@ -56,6 +56,9 @@ final readonly class OkxLifecycleNormalizer
         if ($status === OkxLifecycleStatus::UNKNOWN_REQUIRES_RESYNC) {
             $qualityFlags[] = 'unknown_order_state';
         }
+        if ($this->isSuccessfulAckMissingLifecycleContext($latest)) {
+            $qualityFlags[] = 'missing_lifecycle_context';
+        }
         if ($status === OkxLifecycleStatus::CANCELED && $filled > 0.0) {
             $qualityFlags[] = 'terminal_cancel_with_fill';
         }
@@ -266,11 +269,15 @@ final readonly class OkxLifecycleNormalizer
         }
 
         $code = $this->firstNonEmpty($row['sCode'] ?? null, $row['code'] ?? null);
-        if ($code === '0' && ($this->orderId($row) !== ''
-            || $this->hasValue($row['clOrdId'] ?? null)
-            || $this->hasValue($row['algoClOrdId'] ?? null)
-        )) {
-            return OkxLifecycleStatus::ACCEPTED;
+        if ($code === '0') {
+            if (($this->orderId($row) !== ''
+                || $this->hasValue($row['clOrdId'] ?? null)
+                || $this->hasValue($row['algoClOrdId'] ?? null)
+            ) && $this->hasAcceptedAcknowledgementContext($row)) {
+                return OkxLifecycleStatus::ACCEPTED;
+            }
+
+            return OkxLifecycleStatus::UNKNOWN_REQUIRES_RESYNC;
         }
         if ($code !== '') {
             return OkxLifecycleStatus::FAILED;
@@ -307,6 +314,39 @@ final readonly class OkxLifecycleNormalizer
             'order_failed', 'partially_failed', 'failed' => OkxLifecycleStatus::FAILED,
             default => OkxLifecycleStatus::UNKNOWN_REQUIRES_RESYNC,
         };
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function hasAcceptedAcknowledgementContext(array $row): bool
+    {
+        return $this->hasValue($row['instId'] ?? null)
+            && is_numeric($row['sz'] ?? null)
+            && $this->hasLifecycleTimestamp($row);
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function isSuccessfulAckMissingLifecycleContext(array $row): bool
+    {
+        return $this->firstNonEmpty($row['sCode'] ?? null, $row['code'] ?? null) === '0'
+            && !$this->hasAcceptedAcknowledgementContext($row);
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function hasLifecycleTimestamp(array $row): bool
+    {
+        foreach (['uTime', 'fillTime', 'ts', 'cTime'] as $key) {
+            if (is_numeric($row[$key] ?? null)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -443,6 +483,10 @@ final readonly class OkxLifecycleNormalizer
      */
     private function preferAlgoId(array $row): bool
     {
+        if (!$this->hasValue($row['algoId'] ?? null)) {
+            return false;
+        }
+
         $arg = \is_array($row['arg'] ?? null) ? $row['arg'] : [];
         $context = strtolower($this->firstNonEmpty(
             $row['channel'] ?? null,
@@ -452,9 +496,20 @@ final readonly class OkxLifecycleNormalizer
             $row['endpoint'] ?? null,
         ));
 
-        return str_contains($context, 'orders-algo')
+        if (str_contains($context, 'orders-algo')
             || str_contains($context, 'algo-history')
-            || str_contains($context, 'algo-pending');
+            || str_contains($context, 'algo-pending')
+        ) {
+            return true;
+        }
+
+        $orderType = strtolower($this->string($row['ordType'] ?? null));
+
+        return $this->hasValue($row['algoClOrdId'] ?? null)
+            && (!$this->hasValue($row['clOrdId'] ?? null)
+                || \in_array($orderType, ['conditional', 'trigger', 'oco', 'move_order_stop'], true)
+                || $this->hasValue($row['tpTriggerPx'] ?? null)
+                || $this->hasValue($row['slTriggerPx'] ?? null));
     }
 
     private function orderSide(mixed $side): ExchangeOrderSide

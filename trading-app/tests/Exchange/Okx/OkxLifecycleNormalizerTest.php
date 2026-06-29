@@ -85,6 +85,7 @@ final class OkxLifecycleNormalizerTest extends TestCase
             'ordId' => 'order-ack-1',
             'sCode' => '0',
             'sMsg' => 'Order placed',
+            'sz' => '1',
         ]]);
 
         self::assertSame(OkxLifecycleStatus::ACCEPTED, $lifecycle->status);
@@ -93,6 +94,22 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertNull($lifecycle->side);
         self::assertFalse($lifecycle->requiresResync);
         self::assertSame([], $lifecycle->qualityFlags);
+    }
+
+    public function testRawPlacementAcknowledgementWithoutLifecycleContextRequiresResync(): void
+    {
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([[
+            'clOrdId' => 'client-raw-ack-1',
+            'ordId' => 'order-raw-ack-1',
+            'sCode' => '0',
+            'sMsg' => 'Order placed',
+        ]]);
+
+        self::assertSame(OkxLifecycleStatus::UNKNOWN_REQUIRES_RESYNC, $lifecycle->status);
+        self::assertSame('', $lifecycle->symbol);
+        self::assertSame('order-raw-ack-1', $lifecycle->exchangeOrderId);
+        self::assertTrue($lifecycle->requiresResync);
+        self::assertContains('missing_lifecycle_context', $lifecycle->qualityFlags);
     }
 
     public function testNormalizesPartialFillAndFeePerFill(): void
@@ -256,6 +273,31 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertCount(1, $lifecycle->fills);
         self::assertSame('algo:90009', $lifecycle->fills[0]->exchangeOrderId);
         self::assertSame('algo-client-blank-clord', $lifecycle->fills[0]->clientOrderId);
+    }
+
+    public function testPrefersAlgoIdentifiersForRawAlgoRowsWithoutSyntheticContext(): void
+    {
+        $row = $this->orderRow(
+            state: 'filled',
+            filled: '1',
+            updatedAt: '1767225601000',
+            fillSz: '1',
+            fillPx: '25005',
+            tradeId: 'raw-algo-child-fill',
+        );
+        $row['algoId'] = '90011';
+        $row['algoClOrdId'] = 'raw-algo-client';
+        $row['clOrdId'] = '';
+        $row['ordId'] = 'raw-child-order-1';
+        $row['ordType'] = 'conditional';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame('algo:90011', $lifecycle->exchangeOrderId);
+        self::assertSame('raw-algo-client', $lifecycle->clientOrderId);
+        self::assertCount(1, $lifecycle->fills);
+        self::assertSame('algo:90011', $lifecycle->fills[0]->exchangeOrderId);
+        self::assertSame('raw-algo-client', $lifecycle->fills[0]->clientOrderId);
     }
 
     public function testPrefersChildOrderIdentifiersForNormalRowsWithParentAlgoFields(): void
