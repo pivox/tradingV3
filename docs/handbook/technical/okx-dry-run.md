@@ -2,7 +2,7 @@
 
 ## Statut
 
-OKX est `target_dry_run_only`. PR11 prépare OKX en **dry-run / runtime-check uniquement** :
+OKX est `target_dry_run_only`. OKX-007 prépare OKX en **dry-run / runtime-check uniquement** :
 aucune exécution live, aucun branchement runtime, aucun ordre réel. La bascule live d'OKX
 reste interdite et exigera une **PR de readiness live dédiée**, séparément relue.
 
@@ -19,11 +19,12 @@ Cette page complète :
 `ExecutionPortInterface` (après `FakeExecutionPort`). Elle respecte strictement l'interface
 existante : `execute(ExecutionRequest): ExecutionResult`.
 
-C'est une **preview / simulation TradingCore**, pas une exécution exchange réelle :
+C'est une **sérialisation locale / simulation TradingCore**, pas une exécution exchange réelle :
 
 - **aucun appel HTTP**, jamais ;
 - **aucun `privatePost` OKX** : le port ne touche ni `OkxExchangeAdapter::placeOrder()`,
-  ni `OkxRestClient::privatePost()`, ni aucune classe `App\Exchange\Okx\*` ;
+  ni `OkxRestClient::privatePost()` ;
+- les bodies sont construits localement via `OkxActionFactory`, sans client REST ;
 - aucune dépendance Symfony, Doctrine, Messenger, Temporal ni provider runtime concret ;
 - le port est **pur** : même plan ⇒ même `exchange_order_id`, requête jamais mutée.
 
@@ -35,15 +36,110 @@ Comportement :
 | Plan d'un autre exchange (`exchange != okx`) | `Rejected` (`wrong_exchange_for_okx_dry_run`). |
 | Market type non supporté (≠ `perpetual`) | `Rejected` (`market_type_not_supported_by_okx_dry_run`). |
 | Plan non exécutable (revalidé via `OrderPlanValidator`) | `Rejected` (`order_plan_not_executable` + `invalid_reasons`). |
+| `environment=mainnet` ou `live` | `Rejected` (`mainnet_environment_forbidden_for_okx_dry_run`). |
+| Symbole hors `allowed_symbols` fourni | `Rejected` (`demo_trading_safety_blocked`). |
+| Notional au-dessus de `max_notional` fourni | `Rejected` (`demo_trading_safety_blocked`). |
+| Levier au-dessus de `max_leverage` fourni | `Rejected` (`leverage_cap_exceeded`). |
 | Plan OKX perpetual valide en dry-run | `ExecutionStatus::DryRun`, `exchange_order_id = OKX-DRYRUN-{client_order_id}`. |
 
 Metadata produite (success) : `gateway=okx`, `mode=dry_run`, `simulated=true`, `no_http=true`,
-`no_private_post=true`, `client_order_id`, `idempotency_key`, `requested_at`, `order_type`,
-`side`, `symbol`, `entry_price`, `quantity`, `leverage`, `protection_present`. Les descripteurs
+`no_private_post=true`, `environment`, `client_order_id`, `idempotency_key`, `requested_at`,
+`order_type`, `side`, `symbol`, `entry_price`, `quantity`, `leverage`, `notional`,
+`protection_present`, `safety_decision`, `private_observability_decision`,
+`local_dry_run_ready=true` et `readiness_level=local_dry_run_ready`. Les descripteurs
 gateway (`gateway`, `simulated`, `no_http`, `no_private_post`) et le `reject_reason` sont
 autoritaires : un appelant ne peut pas les usurper via la metadata entrante.
 
 `client_order_id` et `idempotency_key` sont conservés sur tous les chemins.
+
+## Payloads sérialisés OKX-007
+
+Sur un plan valide, `ExecutionResult::raw['okx_dry_run']` contient uniquement une trace
+redacted et non mutative :
+
+```json
+{
+  "okx_dry_run": {
+    "no_http": true,
+    "no_private_post": true,
+    "redacted": true,
+    "requests": [
+      {
+        "operation": "set_leverage",
+        "method": "POST",
+        "path": "/api/v5/account/set-leverage",
+        "body": {
+          "instId": "BTC-USDT-SWAP",
+          "lever": "5",
+          "mgnMode": "isolated",
+          "posSide": "long"
+        }
+      },
+      {
+        "operation": "submit_order",
+        "method": "POST",
+        "path": "/api/v5/trade/order",
+        "body": {
+          "instId": "BTC-USDT-SWAP",
+          "tdMode": "isolated",
+          "clOrdId": "CIDOKX1",
+          "side": "buy",
+          "posSide": "long",
+          "ordType": "limit",
+          "sz": "12",
+          "reduceOnly": "false",
+          "px": "100"
+        }
+      },
+      {
+        "operation": "stop_loss",
+        "method": "POST",
+        "path": "/api/v5/trade/order-algo",
+        "body": {
+          "instId": "BTC-USDT-SWAP",
+          "tdMode": "isolated",
+          "algoClOrdId": "CIDOKX1SL",
+          "side": "sell",
+          "posSide": "long",
+          "ordType": "conditional",
+          "sz": "12",
+          "reduceOnly": "true",
+          "slTriggerPx": "98",
+          "slOrdPx": "-1",
+          "slTriggerPxType": "mark"
+        }
+      }
+    ]
+  }
+}
+```
+
+Pour `marginMode=isolated`, deux payloads `set_leverage` sont produits (`long` et `short`)
+afin de rendre la preview explicite pour le mode hedge OKX. Le take-profit `tp1Price`, s'il
+est présent dans le `ProtectionPlan`, est sérialisé en `operation=take_profit` via
+`/api/v5/trade/order-algo`.
+
+Les secrets présents par erreur dans la metadata entrante (`OKX_DEMO_API_KEY`,
+`OK-ACCESS-SIGN`, `Authorization`, tokens, passphrases, cookies, signatures, credentials)
+sont redacted avant exposition dans `metadata` ou `raw`.
+
+## Exemple d'audit dry-run
+
+Metadata d'appel minimale pour exercer les guards sans envoyer d'ordre :
+
+```php
+ExecutionRequest::forPlan($orderPlan, ExecutionMode::DryRun, [
+    'environment' => 'demo',
+    'allowed_symbols' => ['BTCUSDT'],
+    'max_notional' => 2000.0,
+    'max_leverage' => 10,
+]);
+```
+
+La décision `DemoTradingSafetyPolicy` reste auditée dans `metadata.safety_decision`.
+`ExchangePrivateObservabilityPolicy` est appelée en mode dry-run informatif : une
+observabilité privée absente ajoute un warning, mais ne bloque pas la sérialisation locale.
+Elle bloquera seulement les futures PRs mutatives `dry_run=false`.
 
 ## Runtime-check : OKX reste dry-run only
 
@@ -89,4 +185,5 @@ de preview pour comparer les futurs payloads OKX avant toute PR d'activation liv
 
 ## Suite
 
-PR12 : Hyperliquid dry-run. La bascule live OKX restera une PR dédiée, testée et réversible.
+OKX-008 : runtime-check `demo_testnet_candidate`. La bascule live OKX restera une PR dédiée,
+testée et réversible.
