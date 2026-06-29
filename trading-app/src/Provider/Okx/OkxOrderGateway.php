@@ -72,17 +72,44 @@ final class OkxOrderGateway implements OrderProviderInterface
             }
         }
 
-        foreach (['ordId', 'clOrdId'] as $key) {
-            $row = $this->firstRow($this->privateGet('/api/v5/trade/orders-history', $baseQuery + [
-                'instType' => 'SWAP',
-                $key => $orderId,
-            ], __METHOD__), __METHOD__);
-            if ($row !== []) {
-                return $this->privateMapper->order($row, false);
-            }
+        $order = $this->fetchStandardOrderHistory($symbol, $orderId);
+        if ($order instanceof OrderDto) {
+            return $order;
         }
 
         return $this->fetchAlgoOrderDetail($symbol, ['algoClOrdId' => $orderId]);
+    }
+
+    private function fetchStandardOrderHistory(string $symbol, string $orderId): ?OrderDto
+    {
+        $baseQuery = [
+            'instType' => 'SWAP',
+            'instId' => $this->resolver()->instId($symbol),
+            'limit' => 100,
+        ];
+        $after = null;
+
+        do {
+            $query = $after === null ? $baseQuery : $baseQuery + ['after' => $after];
+            $rows = $this->dataRows($this->privateGet('/api/v5/trade/orders-history', $query, __METHOD__), __METHOD__);
+            if ($rows === []) {
+                return null;
+            }
+
+            foreach ($rows as $row) {
+                if ((string) ($row['ordId'] ?? '') === $orderId || (string) ($row['clOrdId'] ?? '') === $orderId) {
+                    return $this->privateMapper->order($row, false);
+                }
+            }
+
+            $lastRow = $rows[\count($rows) - 1];
+            $nextAfter = (string) ($lastRow['ordId'] ?? '');
+            if ($nextAfter === '' || $nextAfter === $after) {
+                return null;
+            }
+
+            $after = $nextAfter;
+        } while (true);
     }
 
     /**
@@ -116,18 +143,46 @@ final class OkxOrderGateway implements OrderProviderInterface
         }
 
         if (isset($identifier['algoClOrdId'])) {
-            foreach (self::TERMINAL_ALGO_HISTORY_STATES as $state) {
-                $rows = $this->dataRows($this->privateGet('/api/v5/trade/orders-algo-history', [
-                    'instId' => $baseQuery['instId'],
+            return $this->fetchAlgoHistoryByClientOrderId((string) $baseQuery['instId'], $identifier['algoClOrdId']);
+        }
+
+        return null;
+    }
+
+    private function fetchAlgoHistoryByClientOrderId(string $instId, string $clientOrderId): ?OrderDto
+    {
+        foreach (self::TERMINAL_ALGO_HISTORY_STATES as $state) {
+            $after = null;
+            do {
+                $query = [
+                    'instId' => $instId,
                     'ordType' => 'conditional',
                     'state' => $state,
-                ], __METHOD__), __METHOD__);
+                    'limit' => 100,
+                ];
+                if ($after !== null) {
+                    $query['after'] = $after;
+                }
+
+                $rows = $this->dataRows($this->privateGet('/api/v5/trade/orders-algo-history', $query, __METHOD__), __METHOD__);
+                if ($rows === []) {
+                    break;
+                }
+
                 foreach ($rows as $row) {
-                    if ((string) ($row['algoClOrdId'] ?? '') === $identifier['algoClOrdId']) {
+                    if ((string) ($row['algoClOrdId'] ?? '') === $clientOrderId) {
                         return $this->privateMapper->order($row, true);
                     }
                 }
-            }
+
+                $lastRow = $rows[\count($rows) - 1];
+                $nextAfter = (string) ($lastRow['algoId'] ?? '');
+                if ($nextAfter === '' || $nextAfter === $after) {
+                    break;
+                }
+
+                $after = $nextAfter;
+            } while (true);
         }
 
         return null;

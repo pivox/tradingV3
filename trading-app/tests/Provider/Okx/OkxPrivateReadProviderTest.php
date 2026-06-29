@@ -132,6 +132,24 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame('/api/v5/trade/order', $client->lastPrivateGetPath);
     }
 
+    public function testFindsTerminalOrderByHistoryScanWithoutUnsupportedIdFilters(): void
+    {
+        $client = $this->client();
+        $client->hidePendingOrders = true;
+        $client->hideOrderDetail = true;
+        $client->paginateOrderHistory = true;
+        $gateway = new OkxOrderGateway($client);
+
+        $order = $gateway->getOrder('BTCUSDT', 'ord-historical');
+
+        self::assertNotNull($order);
+        self::assertSame('ord-historical', $order->orderId);
+        self::assertSame('/api/v5/trade/orders-history', $client->lastPrivateGetPath);
+        self::assertSame('ord-old-1', $client->lastPrivateGetQuery['after'] ?? null);
+        self::assertArrayNotHasKey('ordId', $client->lastPrivateGetQuery);
+        self::assertArrayNotHasKey('clOrdId', $client->lastPrivateGetQuery);
+    }
+
     public function testFindsTerminalAlgoOrderByDetailFallback(): void
     {
         $client = $this->client();
@@ -189,6 +207,23 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame('/api/v5/trade/orders-algo-history', $client->lastPrivateGetPath);
         self::assertSame('conditional', $client->lastPrivateGetQuery['ordType'] ?? null);
         self::assertSame('canceled', $client->lastPrivateGetQuery['state'] ?? null);
+        self::assertArrayNotHasKey('algoClOrdId', $client->lastPrivateGetQuery);
+    }
+
+    public function testPaginatesTerminalAlgoClientHistoryStateScan(): void
+    {
+        $client = $this->client();
+        $client->hidePendingOrders = true;
+        $client->hideAlgoDetail = true;
+        $client->paginateAlgoHistory = true;
+        $gateway = new OkxOrderGateway($client);
+
+        $order = $gateway->getOrder('BTCUSDT', 'algo-client-triggered');
+
+        self::assertNotNull($order);
+        self::assertSame('algo:algo-triggered', $order->orderId);
+        self::assertSame('/api/v5/trade/orders-algo-history', $client->lastPrivateGetPath);
+        self::assertSame('algo-old-1', $client->lastPrivateGetQuery['after'] ?? null);
         self::assertArrayNotHasKey('algoClOrdId', $client->lastPrivateGetQuery);
     }
 
@@ -278,7 +313,10 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     public bool $rateLimited = false;
     public bool $emptyAvailableEquity = false;
     public bool $hidePendingOrders = false;
+    public bool $hideOrderDetail = false;
     public bool $hideAlgoDetail = false;
+    public bool $paginateOrderHistory = false;
+    public bool $paginateAlgoHistory = false;
     public int $privatePostCalls = 0;
     public string $lastPrivateGetPath = '';
 
@@ -304,7 +342,7 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
             '/api/v5/trade/orders-pending' => $this->orders($query),
             '/api/v5/trade/orders-algo-pending' => $this->algoOrders($query),
             '/api/v5/trade/order' => $this->orderDetail($query),
-            '/api/v5/trade/orders-history' => $this->orderDetail($query),
+            '/api/v5/trade/orders-history' => $this->orderHistory($query),
             '/api/v5/trade/order-algo' => $this->algoOrderDetail($query),
             '/api/v5/trade/orders-algo-history' => $this->algoOrderHistory($query),
             '/api/v5/trade/fills' => $this->fills($query),
@@ -403,14 +441,63 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     private function orderDetail(array $query): array
     {
         $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
-        if (($query['ordId'] ?? null) !== 'ord-filled') {
+        if ($this->hideOrderDetail || ($query['ordId'] ?? null) !== 'ord-filled') {
             return ['code' => '0', 'data' => []];
         }
 
+        return $this->filledOrder('ord-filled', 'client-filled');
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     * @return array<string,mixed>
+     */
+    private function orderHistory(array $query): array
+    {
+        $this->assertQueryValue($query, 'instType', 'SWAP');
+        $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
+        if (array_key_exists('ordId', $query) || array_key_exists('clOrdId', $query)) {
+            throw new \RuntimeException('OKX order history query must not use unsupported order id filters.');
+        }
+
+        if ($this->paginateOrderHistory && !isset($query['after'])) {
+            return ['code' => '0', 'data' => [[
+                'instId' => 'BTC-USDT-SWAP',
+                'ordId' => 'ord-old-1',
+                'clOrdId' => 'client-old-1',
+                'side' => 'buy',
+                'posSide' => 'long',
+                'ordType' => 'limit',
+                'state' => 'filled',
+                'sz' => '1',
+                'accFillSz' => '1',
+                'px' => '25000',
+                'avgPx' => '24990',
+                'cTime' => '1767225500000',
+                'uTime' => '1767225560000',
+            ]]];
+        }
+
+        if (($query['after'] ?? null) !== 'ord-old-1' && $this->paginateOrderHistory) {
+            return ['code' => '0', 'data' => []];
+        }
+
+        if ($this->paginateOrderHistory) {
+            return $this->filledOrder('ord-historical', 'client-historical');
+        }
+
+        return ['code' => '0', 'data' => []];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function filledOrder(string $orderId, string $clientOrderId): array
+    {
         return ['code' => '0', 'data' => [[
             'instId' => 'BTC-USDT-SWAP',
-            'ordId' => 'ord-filled',
-            'clOrdId' => 'client-filled',
+            'ordId' => $orderId,
+            'clOrdId' => $clientOrderId,
             'side' => 'buy',
             'posSide' => 'long',
             'ordType' => 'limit',
@@ -475,6 +562,23 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
         $this->assertQueryValue($query, 'ordType', 'conditional');
         if (array_key_exists('algoClOrdId', $query)) {
             throw new \RuntimeException('OKX algo history query must not use unsupported algoClOrdId filter.');
+        }
+        if ($this->paginateAlgoHistory && ($query['state'] ?? null) === 'canceled' && !isset($query['after'])) {
+            return ['code' => '0', 'data' => [[
+                'instId' => 'BTC-USDT-SWAP',
+                'algoId' => 'algo-old-1',
+                'algoClOrdId' => 'algo-client-old-1',
+                'side' => 'sell',
+                'posSide' => 'long',
+                'ordType' => 'conditional',
+                'state' => 'canceled',
+                'sz' => '1',
+                'accFillSz' => '0',
+                'slTriggerPx' => '24100',
+                'reduceOnly' => 'true',
+                'cTime' => '1767225500000',
+                'uTime' => '1767225560000',
+            ]]];
         }
         if (!$this->matchesTriggeredAlgoHistory($query)) {
             return ['code' => '0', 'data' => []];
