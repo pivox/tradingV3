@@ -352,11 +352,14 @@ final readonly class OkxLifecycleNormalizer
      */
     private function orderId(array $row): string
     {
-        if ($this->hasValue($row['algoId'] ?? null)) {
+        if ($this->preferAlgoId($row) && $this->hasValue($row['algoId'] ?? null)) {
             return 'algo:' . $this->string($row['algoId']);
         }
         if ($this->hasValue($row['ordId'] ?? null)) {
             return $this->string($row['ordId']);
+        }
+        if ($this->hasValue($row['algoId'] ?? null)) {
+            return 'algo:' . $this->string($row['algoId']);
         }
 
         return '';
@@ -367,7 +370,28 @@ final readonly class OkxLifecycleNormalizer
      */
     private function clientOrderId(array $row): ?string
     {
-        return $this->stringOrNull($this->firstNonEmpty($row['clOrdId'] ?? null, $row['algoClOrdId'] ?? null));
+        return $this->preferAlgoId($row)
+            ? $this->stringOrNull($this->firstNonEmpty($row['algoClOrdId'] ?? null, $row['clOrdId'] ?? null))
+            : $this->stringOrNull($this->firstNonEmpty($row['clOrdId'] ?? null, $row['algoClOrdId'] ?? null));
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function preferAlgoId(array $row): bool
+    {
+        $arg = \is_array($row['arg'] ?? null) ? $row['arg'] : [];
+        $context = strtolower($this->firstNonEmpty(
+            $row['channel'] ?? null,
+            $arg['channel'] ?? null,
+            $row['source_channel'] ?? null,
+            $row['source'] ?? null,
+            $row['endpoint'] ?? null,
+        ));
+
+        return str_contains($context, 'orders-algo')
+            || str_contains($context, 'algo-history')
+            || str_contains($context, 'algo-pending');
     }
 
     private function orderSide(mixed $side): ExchangeOrderSide

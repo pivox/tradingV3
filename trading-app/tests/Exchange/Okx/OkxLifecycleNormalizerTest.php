@@ -172,6 +172,7 @@ final class OkxLifecycleNormalizerTest extends TestCase
         );
         $row['algoId'] = '90009';
         $row['algoClOrdId'] = 'algo-client-blank-clord';
+        $row['channel'] = 'orders-algo';
         $row['clOrdId'] = '';
         $row['ordId'] = 'child-order-1';
 
@@ -182,6 +183,31 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertCount(1, $lifecycle->fills);
         self::assertSame('algo:90009', $lifecycle->fills[0]->exchangeOrderId);
         self::assertSame('algo-client-blank-clord', $lifecycle->fills[0]->clientOrderId);
+    }
+
+    public function testPrefersChildOrderIdentifiersForNormalRowsWithParentAlgoFields(): void
+    {
+        $row = $this->orderRow(
+            state: 'filled',
+            filled: '1',
+            updatedAt: '1767225601000',
+            fillSz: '1',
+            fillPx: '25005',
+            tradeId: 'child-fill',
+        );
+        $row['algoId'] = '90010';
+        $row['algoClOrdId'] = 'parent-algo-client';
+        $row['channel'] = 'orders';
+        $row['clOrdId'] = 'child-client-1';
+        $row['ordId'] = 'child-order-1';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame('child-order-1', $lifecycle->exchangeOrderId);
+        self::assertSame('child-client-1', $lifecycle->clientOrderId);
+        self::assertCount(1, $lifecycle->fills);
+        self::assertSame('child-order-1', $lifecycle->fills[0]->exchangeOrderId);
+        self::assertSame('child-client-1', $lifecycle->fills[0]->clientOrderId);
     }
 
     public function testNormalizesOptimalLimitIocAsMarketOrder(): void
