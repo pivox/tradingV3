@@ -150,6 +150,23 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertArrayNotHasKey('clOrdId', $client->lastPrivateGetQuery);
     }
 
+    public function testFindsArchivedTerminalOrderAfterRecentHistoryMiss(): void
+    {
+        $client = $this->client();
+        $client->hidePendingOrders = true;
+        $client->hideOrderDetail = true;
+        $client->useOrderHistoryArchive = true;
+        $gateway = new OkxOrderGateway($client);
+
+        $order = $gateway->getOrder('BTCUSDT', 'ord-archived');
+
+        self::assertNotNull($order);
+        self::assertSame('ord-archived', $order->orderId);
+        self::assertSame('/api/v5/trade/orders-history-archive', $client->lastPrivateGetPath);
+        self::assertArrayNotHasKey('ordId', $client->lastPrivateGetQuery);
+        self::assertArrayNotHasKey('clOrdId', $client->lastPrivateGetQuery);
+    }
+
     public function testFindsTerminalAlgoOrderByDetailFallback(): void
     {
         $client = $this->client();
@@ -316,6 +333,7 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     public bool $hideOrderDetail = false;
     public bool $hideAlgoDetail = false;
     public bool $paginateOrderHistory = false;
+    public bool $useOrderHistoryArchive = false;
     public bool $paginateAlgoHistory = false;
     public int $privatePostCalls = 0;
     public string $lastPrivateGetPath = '';
@@ -343,6 +361,7 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
             '/api/v5/trade/orders-algo-pending' => $this->algoOrders($query),
             '/api/v5/trade/order' => $this->orderDetail($query),
             '/api/v5/trade/orders-history' => $this->orderHistory($query),
+            '/api/v5/trade/orders-history-archive' => $this->orderHistory($query),
             '/api/v5/trade/order-algo' => $this->algoOrderDetail($query),
             '/api/v5/trade/orders-algo-history' => $this->algoOrderHistory($query),
             '/api/v5/trade/fills' => $this->fills($query),
@@ -458,6 +477,13 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
         $this->assertQueryValue($query, 'instId', 'BTC-USDT-SWAP');
         if (array_key_exists('ordId', $query) || array_key_exists('clOrdId', $query)) {
             throw new \RuntimeException('OKX order history query must not use unsupported order id filters.');
+        }
+        if ($this->useOrderHistoryArchive) {
+            if ($this->lastPrivateGetPath === '/api/v5/trade/orders-history-archive') {
+                return $this->filledOrder('ord-archived', 'client-archived');
+            }
+
+            return ['code' => '0', 'data' => []];
         }
 
         if ($this->paginateOrderHistory && !isset($query['after'])) {

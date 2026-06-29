@@ -82,6 +82,18 @@ final class OkxOrderGateway implements OrderProviderInterface
 
     private function fetchStandardOrderHistory(string $symbol, string $orderId): ?OrderDto
     {
+        foreach (['/api/v5/trade/orders-history', '/api/v5/trade/orders-history-archive'] as $path) {
+            $order = $this->fetchStandardOrderHistoryFromPath($path, $symbol, $orderId);
+            if ($order instanceof OrderDto) {
+                return $order;
+            }
+        }
+
+        return null;
+    }
+
+    private function fetchStandardOrderHistoryFromPath(string $path, string $symbol, string $orderId): ?OrderDto
+    {
         $baseQuery = [
             'instType' => 'SWAP',
             'instId' => $this->resolver()->instId($symbol),
@@ -91,7 +103,7 @@ final class OkxOrderGateway implements OrderProviderInterface
 
         do {
             $query = $after === null ? $baseQuery : $baseQuery + ['after' => $after];
-            $rows = $this->dataRows($this->privateGet('/api/v5/trade/orders-history', $query, __METHOD__), __METHOD__);
+            $rows = $this->dataRows($this->privateGet($path, $query, __METHOD__), __METHOD__);
             if ($rows === []) {
                 return null;
             }
