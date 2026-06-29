@@ -128,6 +128,20 @@ final class OkxDryRunExecutionPortTest extends TestCase
         self::assertSame('BTC-USDT-SWAP', $result->raw['okx_dry_run']['requests'][3]['body']['instId']);
     }
 
+    public function testDryRunNormalizesLegacySeparatedInstrumentIdsBeforeSerialization(): void
+    {
+        $request = ExecutionRequest::forPlan(
+            $this->executablePlan(instrument: 'BTC_USDT', clientOrderId: 'CIDOKX1'),
+            ExecutionMode::DryRun,
+            ['environment' => 'demo'],
+        );
+
+        $result = (new OkxDryRunExecutionPort())->execute($request);
+
+        self::assertSame(ExecutionStatus::DryRun, $result->status);
+        self::assertSame('BTC-USDT-SWAP', $result->raw['okx_dry_run']['requests'][2]['body']['instId']);
+    }
+
     public function testDryRunPreservesSuffixRoomForLongProtectionClientOrderIds(): void
     {
         $parentClientOrderId = str_repeat('A', 32);
