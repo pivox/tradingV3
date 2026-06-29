@@ -82,6 +82,8 @@ services:
             - '../src/Kernel.php'
             - '../src/*/LookAtit'
             - '../src/Provider/'
+            - '../src/TradingCore/Execution/Fake/FakeExecutionScenario.php'
+            - '../src/TradingCore/Execution/Fake/FakeExecutionScenarioFixtures.php'
 
     # Loggers dedicated to the provider module
     App\Provider\:

@@ -36,7 +36,7 @@ ou HTTP. Il ne passe aucun ordre.
 `FakeExecutionPort implements ExecutionPortInterface` est la gateway de test canonique.
 Elle respecte strictement l'interface existante : `execute(ExecutionRequest): ExecutionResult`.
 
-Comportement :
+Comportement par defaut, sans scenario explicite :
 
 | Cas | Résultat |
 | --- | --- |
@@ -56,6 +56,57 @@ Propriétés :
 
 Elle est distincte du fake exchange legacy `App\Exchange\Fake\*` (simulation au niveau
 adapter / websocket du provider) : la gateway PR10 vit dans le Core et reste pure.
+
+## Minimum COMMON-005 pour recette demo
+
+COMMON-005 ajoute un mode scenario optionnel au `FakeExecutionPort`. Ce mode reste
+local, en memoire et sans side effect exchange. Il sert uniquement a prouver les
+branches de protection avant une future recette demo/testnet OKX ou Hyperliquid.
+
+Le comportement historique ci-dessus reste inchange quand aucun scenario n'est
+passe au constructeur.
+
+Fixtures PHP :
+
+- `FakeExecutionScenarioFixtures::orderAccepted()`
+- `FakeExecutionScenarioFixtures::orderRejected()`
+- `FakeExecutionScenarioFixtures::fullFillStopAttachSuccess()`
+- `FakeExecutionScenarioFixtures::fullFillStopAttachFailure()`
+- `FakeExecutionScenarioFixtures::partialFillStopRejected()`
+- `FakeExecutionScenarioFixtures::cancelAcceptedOrder()`
+
+Fixture JSON de recette :
+
+```text
+trading-app/tests/fixtures/fake-paper/demo-recipe-scenarios.json
+```
+
+Scenarios couverts :
+
+| Scenario | Resultat attendu |
+| --- | --- |
+| `order_accepted` | Ordre accepte sans fill, aucune protection demandee. |
+| `order_rejected` | Refus structure avec `reject_reason=fake_exchange_rejected_order`. |
+| `full_fill_stop_attach_success` | Fill complet, stop attache full-size, aucun flag qualite. |
+| `full_fill_stop_attach_failure` | Fill complet, echec d'attache stop, `fail_safe.action=cancel_or_reduce_only_close_required`, resultat `failed`. |
+| `partial_fill_stop_rejected` | Fill partiel, stop partiel refuse explicitement, flags `partial_fill` et `partial_stop_rejected`, resultat `failed`. |
+| `cancel_accepted_order` | Annulation simulee sans fill, resultat `skipped`. |
+
+Pour les scenarios, `ExecutionResult::raw` expose `order`, `fills`,
+`protection` et, en cas d'echec de protection, `fail_safe`. Les flags qualite
+sont dans `ExecutionResult::metadata.quality_flags`. Un fill ou stop incomplet
+n'est jamais presente comme protege : `metadata.demo_recipe_protected=false`.
+
+Le port garde un etat memoire minimal par `client_order_id` en mode scenario :
+
+- rejoue le meme `client_order_id` => `duplicate_client_order_id`, aucun second fill ;
+- `snapshot()` exporte l'etat memoire ;
+- `FakeExecutionPort::fromSnapshot(..., scenario: ...)` recharge cet etat en
+  conservant le mode scenario necessaire aux gardes de replay ;
+- `resyncPosition(client_order_id)` reconstruit une position simulee depuis les fills.
+
+Cette resynchronisation est un outil de recette locale, pas une source de verite
+exchange.
 
 ## Pourquoi Fake / Paper avant OKX / Hyperliquid
 
@@ -83,9 +134,24 @@ reste legacy.
   « zone acceptée » n'est pas re-vérifié au build (le builder suppose la décision déjà prise en amont).
 - `entry_price = entryZone.center` simplifie le pricing legacy (carnet, hint, quantization) ;
   acceptable hors live, à rapprocher du legacy avant tout branchement.
-- Aucune persistance ni audit réel : la gateway est en mémoire.
+- Aucune persistance ni audit reel : la gateway est en memoire.
+- COMMON-005 ne couvre pas tout #196 : pas de carnet d'ordres, pas de latence,
+  pas de funding, pas de ledger persistant, pas de matching multi-ordres, pas de
+  websocket et pas de reconciliation exchange reelle.
+- Les scenarios Fake/Paper ne certifient ni OKX demo ni Hyperliquid testnet. Ils
+  prouvent seulement que les branches locales de protection sont visibles avant
+  toute tentative mutative.
+
+## Rollback
+
+Le rollback de COMMON-005 consiste a retirer le mode scenario et revenir au
+`FakeExecutionPort` par defaut. Aucun schema, aucun secret, aucune config runtime
+et aucun endpoint n'est modifie. Les tests de recette demo peuvent alors revenir
+au simple resultat `dry_run` deterministe.
 
 ## Suite
 
-PR11 : OKX dry-run + gate readiness live. PR12 : Hyperliquid dry-run. Le `FakeExecutionPort`
-servira de référence de comparaison pour ces adapters.
+Le Paper complet reste suivi par #196. OKX demo et Hyperliquid testnet doivent
+continuer a passer par leurs PR dediees avec activation explicite, sans mainnet
+et sans fallback silencieux vers Bitmart. Le `FakeExecutionPort` servira de
+reference de comparaison pour ces adapters.
