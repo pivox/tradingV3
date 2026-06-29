@@ -107,7 +107,7 @@ final readonly class OkxPrivateReadMapper
             averagePrice: $this->decimalOrNull($row['avgPx'] ?? null),
             createdAt: $this->time($row['cTime'] ?? $row['uTime'] ?? null),
             updatedAt: $this->hasTimestamp($row['uTime'] ?? null) ? $this->time($row['uTime']) : null,
-            metadata: $this->redacted($row),
+            metadata: $this->orderMetadata($row, $algo),
         );
     }
 
@@ -270,6 +270,21 @@ final readonly class OkxPrivateReadMapper
         $string = $this->string($value);
 
         return $string === '' ? null : $string;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @return array<string,mixed>
+     */
+    private function orderMetadata(array $row, bool $algo): array
+    {
+        $metadata = $this->redacted($row);
+        $clientOrderId = $this->stringOrNull($row[$algo ? 'algoClOrdId' : 'clOrdId'] ?? null);
+        if ($clientOrderId !== null) {
+            $metadata['client_order_id'] = $clientOrderId;
+        }
+
+        return $metadata;
     }
 
     /**

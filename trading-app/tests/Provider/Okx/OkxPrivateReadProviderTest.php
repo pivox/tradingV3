@@ -67,9 +67,24 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame(OrderStatus::PENDING, $orders[0]->status);
         self::assertSame('1', (string) $orders[0]->quantity);
         self::assertSame('0.4', (string) $orders[0]->filledQuantity);
+        self::assertSame('client-1', $orders[0]->metadata['client_order_id'] ?? null);
         self::assertSame('algo:algo-1', $orders[1]->orderId);
         self::assertSame(OrderType::STOP, $orders[1]->type);
+        self::assertSame('algo-client-1', $orders[1]->metadata['client_order_id'] ?? null);
         self::assertSame(0, $client->privatePostCalls);
+    }
+
+    public function testFindsOpenOrderByNormalizedClientOrderId(): void
+    {
+        $gateway = new OkxOrderGateway($this->client());
+
+        $order = $gateway->getOrder('BTCUSDT', 'client-1');
+        $algoOrder = $gateway->getOrder('BTCUSDT', 'algo-client-1');
+
+        self::assertNotNull($order);
+        self::assertSame('ord-1', $order->orderId);
+        self::assertNotNull($algoOrder);
+        self::assertSame('algo:algo-1', $algoOrder->orderId);
     }
 
     public function testReadsHistoricalFills(): void
