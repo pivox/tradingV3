@@ -72,6 +72,7 @@ final class OkxRestClientTest extends TestCase
                 apiKey: 'test-key',
                 apiSecret: 'test-secret',
                 apiPassphrase: 'test-passphrase',
+                simulatedTrading: true,
             ),
             $this->fixedClock(),
         );
@@ -96,6 +97,67 @@ final class OkxRestClientTest extends TestCase
         );
     }
 
+    public function testDemoPrivateGetRequiresSimulatedTradingFlagBeforeHttpCall(): void
+    {
+        $requests = 0;
+        $http = new MockHttpClient(function () use (&$requests): MockResponse {
+            ++$requests;
+
+            return new MockResponse('{"code":"0","data":[]}');
+        });
+        $client = new OkxRestClient(
+            $http,
+            new OkxConfig(
+                environment: 'demo',
+                apiKey: 'test-key',
+                apiSecret: 'test-secret',
+                apiPassphrase: 'test-passphrase',
+                simulatedTrading: false,
+            ),
+            $this->fixedClock(),
+        );
+
+        try {
+            $client->privateGet('/api/v5/account/balance', ['ccy' => 'USDT']);
+            self::fail('Expected demo simulated trading guard to reject the private GET.');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString('OKX_SIMULATED_TRADING=1 is required for OKX demo private requests.', $e->getMessage());
+        }
+
+        self::assertSame(0, $requests);
+    }
+
+    public function testDemoPrivateGetRejectsProductionBaseUriBeforeHttpCall(): void
+    {
+        $requests = 0;
+        $http = new MockHttpClient(function () use (&$requests): MockResponse {
+            ++$requests;
+
+            return new MockResponse('{"code":"0","data":[]}');
+        });
+        $client = new OkxRestClient(
+            $http,
+            new OkxConfig(
+                environment: 'demo',
+                apiKey: 'test-key',
+                apiSecret: 'test-secret',
+                apiPassphrase: 'test-passphrase',
+                apiBaseUri: 'https://www.okx.com',
+                simulatedTrading: true,
+            ),
+            $this->fixedClock(),
+        );
+
+        try {
+            $client->privateGet('/api/v5/account/balance', ['ccy' => 'USDT']);
+            self::fail('Expected demo production URL guard to reject the private GET.');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString('OKX demo private requests must not use production OKX REST URL.', $e->getMessage());
+        }
+
+        self::assertSame(0, $requests);
+    }
+
     public function testDemoPrivatePostRequiresExplicitTradingFlagBeforeHttpCall(): void
     {
         $requests = 0;
@@ -111,6 +173,7 @@ final class OkxRestClientTest extends TestCase
                 apiKey: 'test-key',
                 apiSecret: 'test-secret',
                 apiPassphrase: 'test-passphrase',
+                simulatedTrading: true,
             ),
             $this->fixedClock(),
         );
@@ -140,6 +203,7 @@ final class OkxRestClientTest extends TestCase
                 apiKey: 'test-key',
                 apiSecret: 'test-secret',
                 apiPassphrase: 'test-passphrase',
+                simulatedTrading: true,
                 demoTradingEnabled: true,
             ),
             $this->fixedClock(),

@@ -59,12 +59,12 @@ reutilisables.
 |---|---|---|---|
 | Config OKX demo | Partiel | `OkxConfig` normalise `demo` par defaut, separe demo et live. | Verifier les valeurs effectives via runtime-check et config effective. |
 | Guard mainnet | Present | `OKX_LIVE_ENABLED` est separe et le runtime-check annonce `Live allowed: no`. | Conserver le blocage dans toutes les PRs OKX. |
-| Header demo | Documente dans le code OKX | `OkxRestClient` / README OKX documentent `x-simulated-trading: 1` pour demo. | Le prouver par tests de client/payload dans les PRs read/write dediees. |
+| Header demo | Teste | `OkxRestClient` exige `OKX_SIMULATED_TRADING=1` pour les requetes privees demo et ajoute `x-simulated-trading: 1`. | Conserver ce blocage sur tous les chemins prives. |
 | Market type `perpetual` | Scope initial | `OkxDryRunExecutionPort` refuse tout market type different de `perpetual`. | Charger et valider les instruments OKX `SWAP`. |
 | Spot | Non supporte | Aucun contrat demo spot explicite dans ce perimetre. | PR separee si spot devient necessaire. |
 | Public REST read-only | `public_read_only` partiel | OKX-003 lit instruments SWAP, ticker, candles et order book via REST public EEA demo, avec timestamps UTC et erreurs normalisees. | Funding courant/historique et validation runtime complete restent a traiter dans les PRs suivantes. |
 | Public WebSocket read-only | Non pret | URI public configurable. | Client public, subscriptions, reconnect, freshness et tests fixtures. |
-| Private REST read-only | Non pret | Credentials attendus et signature disponibles cote OKX adapter. | Balance, positions, open orders, order details et fills relus sans mutation. |
+| Private REST read-only | `private_read_only` partiel | OKX-004 signe les requetes privees demo, lit balance, positions, ordres ouverts, algo-orders ouverts et fills recents sans mutation. | Details d'ordre historiques et enrichissements frais/funding restent pour les PRs metadata/ledger. |
 | Private WebSocket read-only | Partiel | Normalizers ordres/fills/positions existent, mais pas de vrai client prive annonce. | Connexion demo, auth, snapshot initial, streams ordres/fills/positions et reconciliation fraiche. |
 | Metadata / precision | Non pret | Conversion symbole SWAP documentee dans README OKX. | Tick size, lot size, contract value, min size, precision, status instrument et caps. |
 | Fees / funding / costs | Non pret | Le contrat PnL net classe OKX comme partiel tant que les couts ne sont pas persistants. | Frais par fill, devise, funding et couts normalises sans transformer l'absence en zero. |
@@ -92,8 +92,12 @@ Configuration demo public OKX-003 :
 
 ```dotenv
 OKX_ENV=demo
+OKX_DEMO_API_KEY=
+OKX_DEMO_API_SECRET=
+OKX_DEMO_API_PASSPHRASE=
 OKX_API_BASE_URI=https://eea.okx.com
 OKX_WS_PUBLIC_URI=wss://wseeapap.okx.com:8443/ws/v5/public
+OKX_SIMULATED_TRADING=1
 OKX_DEMO_TRADING_ENABLED=0
 OKX_LIVE_ENABLED=0
 ```
@@ -114,6 +118,25 @@ le fallback volontaire est le polling REST public.
 | Algo order details | Endpoint detail algo si retenu | Etat d'une protection conditionnelle par identifiant exchange. |
 | Fills | `GET /api/v5/trade/fills` | Prix, quantite, fee, devise fee et id fill. |
 | Bills / ledger account | Endpoint account bills si retenu | Frais/funding non presents dans les fills. |
+
+Configuration demo private OKX-004 :
+
+```dotenv
+OKX_ENV=demo
+OKX_DEMO_API_KEY=...
+OKX_DEMO_API_SECRET=...
+OKX_DEMO_API_PASSPHRASE=...
+OKX_API_BASE_URI=https://eea.okx.com
+OKX_SIMULATED_TRADING=1
+OKX_DEMO_TRADING_ENABLED=0
+OKX_LIVE_ENABLED=0
+```
+
+Les credentials doivent etre crees dans l'environnement demo OKX avec permissions
+read-only minimales. Le provider bloque les requetes privees demo si le flag
+`OKX_SIMULATED_TRADING=1` est absent, si l'URL REST pointe vers
+`https://www.okx.com`, ou si `OKX_LIVE_ENABLED=1` est combine avec
+`OKX_ENV=demo`. Les logs et DTOs ne doivent jamais contenir de secret.
 
 ### Demo write future
 

@@ -15,12 +15,14 @@ use App\Exchange\Okx\OkxRestClientInterface;
 final class OkxOrderGateway implements OrderProviderInterface
 {
     private OkxPublicReadMapper $mapper;
+    private OkxPrivateReadMapper $privateMapper;
 
     public function __construct(
         private readonly ?OkxRestClientInterface $client = null,
         private readonly ?OkxInstrumentResolver $instruments = null,
     ) {
         $this->mapper = new OkxPublicReadMapper($this->resolver());
+        $this->privateMapper = new OkxPrivateReadMapper($this->resolver());
     }
 
     /**
@@ -45,7 +47,13 @@ final class OkxOrderGateway implements OrderProviderInterface
 
     public function getOrder(string $symbol, string $orderId): ?OrderDto
     {
-        throw $this->readNotImplemented(__METHOD__);
+        foreach ($this->getOpenOrdersOrFail($symbol) as $order) {
+            if ($order->orderId === $orderId || (string) ($order->metadata['client_order_id'] ?? '') === $orderId) {
+                return $order;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -53,7 +61,7 @@ final class OkxOrderGateway implements OrderProviderInterface
      */
     public function getOpenOrders(?string $symbol = null): array
     {
-        throw $this->readNotImplemented(__METHOD__);
+        return $this->fetchOpenOrders($symbol, __METHOD__);
     }
 
     /**
@@ -61,7 +69,7 @@ final class OkxOrderGateway implements OrderProviderInterface
      */
     public function getOpenOrdersOrFail(?string $symbol = null): array
     {
-        throw $this->readNotImplemented(__METHOD__);
+        return $this->fetchOpenOrders($symbol, __METHOD__);
     }
 
     /**
@@ -69,7 +77,13 @@ final class OkxOrderGateway implements OrderProviderInterface
      */
     public function getOrderHistory(string $symbol, int $limit = 100): array
     {
-        throw $this->readNotImplemented(__METHOD__);
+        $query = [
+            'instType' => 'SWAP',
+            'instId' => $this->resolver()->instId($symbol),
+            'limit' => max(1, min($limit, 100)),
+        ];
+
+        return $this->dataRows($this->privateGet('/api/v5/trade/orders-history', $query, __METHOD__), __METHOD__);
     }
 
     public function cancelAllOrders(string $symbol): bool
@@ -129,14 +143,64 @@ final class OkxOrderGateway implements OrderProviderInterface
     }
 
     /**
+     * @return OrderDto[]
+     */
+    private function fetchOpenOrders(?string $symbol, string $operation): array
+    {
+        $query = ['instType' => 'SWAP'];
+        if ($symbol !== null) {
+            $query['instId'] = $this->resolver()->instId($symbol);
+        }
+
+        $orders = [];
+        foreach ($this->dataRows($this->privateGet('/api/v5/trade/orders-pending', $query, $operation), $operation) as $row) {
+            $orders[] = $this->privateMapper->order($row, false);
+        }
+
+        $algoQuery = $query + ['ordType' => 'conditional'];
+        foreach ($this->dataRows($this->privateGet('/api/v5/trade/orders-algo-pending', $algoQuery, $operation), $operation) as $row) {
+            $orders[] = $this->privateMapper->order($row, true);
+        }
+
+        return $orders;
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     * @return array<string,mixed>
+     */
+    private function privateGet(string $path, array $query, string $operation): array
+    {
+        if (!$this->client instanceof OkxRestClientInterface) {
+            throw $this->readNotImplemented($operation);
+        }
+
+        try {
+            return $this->client->privateGet($path, $query);
+        } catch (\Throwable $exception) {
+            throw new OkxProviderUnavailableException($this->reason($exception, private: true), $operation, $exception);
+        }
+    }
+
+    /**
      * @param array<string,mixed> $payload
      * @return array<string,mixed>
      */
     private function firstRow(array $payload, string $operation): array
     {
+        return $this->dataRows($payload, $operation)[0] ?? [];
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return list<array<string,mixed>>
+     */
+    private function dataRows(array $payload, string $operation): array
+    {
         $code = (string) ($payload['code'] ?? '');
         if ($code !== '0') {
-            $reason = $code === '50011' ? 'okx_public_rate_limited' : 'okx_public_api_error';
+            $prefix = str_starts_with($operation, __CLASS__) && str_contains($operation, 'getOrderBookTop') ? 'public' : 'private';
+            $reason = $code === '50011' ? sprintf('okx_%s_rate_limited', $prefix) : sprintf('okx_%s_api_error', $prefix);
 
             throw new OkxProviderUnavailableException($reason, $operation);
         }
@@ -146,9 +210,7 @@ final class OkxOrderGateway implements OrderProviderInterface
             return [];
         }
 
-        $row = array_values($data)[0] ?? [];
-
-        return \is_array($row) ? $row : [];
+        return array_values(array_filter($data, \is_array(...)));
     }
 
     private function resolver(): OkxInstrumentResolver
@@ -156,11 +218,13 @@ final class OkxOrderGateway implements OrderProviderInterface
         return $this->instruments ?? new OkxInstrumentResolver();
     }
 
-    private function reason(\Throwable $exception): string
+    private function reason(\Throwable $exception, bool $private = false): string
     {
+        $prefix = $private ? 'private' : 'public';
+
         return str_contains($exception->getMessage(), '429')
             || str_contains(strtolower($exception->getMessage()), 'rate')
-            ? 'okx_public_rate_limited'
-            : 'okx_public_network_error';
+            ? sprintf('okx_%s_rate_limited', $prefix)
+            : sprintf('okx_%s_network_error', $prefix);
     }
 }

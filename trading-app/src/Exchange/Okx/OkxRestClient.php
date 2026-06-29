@@ -15,6 +15,7 @@ final readonly class OkxRestClient implements OkxRestClientInterface
         private HttpClientInterface $httpClient,
         private OkxConfig $config,
         private ClockInterface $clock,
+        private OkxAuthSigner $signer = new OkxAuthSigner(),
     ) {
     }
 
@@ -51,6 +52,10 @@ final readonly class OkxRestClient implements OkxRestClientInterface
         return $data;
     }
 
+    /**
+     * @param array<mixed> $body
+     * @return array<string,mixed>
+     */
     public function privatePost(string $path, array $body = []): array
     {
         $this->config->assertTradingConfigured();
@@ -85,12 +90,11 @@ final readonly class OkxRestClient implements OkxRestClientInterface
     private function signedHeaders(string $method, string $requestPath, string $body = ''): array
     {
         $timestamp = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d\TH:i:s.v\Z');
-        $prehash = $timestamp . strtoupper($method) . $requestPath . $body;
 
         $headers = [
             'Content-Type' => 'application/json',
             'OK-ACCESS-KEY' => $this->config->apiKey,
-            'OK-ACCESS-SIGN' => base64_encode(hash_hmac('sha256', $prehash, $this->config->apiSecret, true)),
+            'OK-ACCESS-SIGN' => $this->signer->sign($timestamp, $method, $requestPath, $body, $this->config->apiSecret),
             'OK-ACCESS-TIMESTAMP' => $timestamp,
             'OK-ACCESS-PASSPHRASE' => $this->config->apiPassphrase,
         ];
@@ -103,7 +107,7 @@ final readonly class OkxRestClient implements OkxRestClientInterface
     }
 
     /**
-     * @param array<string,mixed> $body
+     * @param array<mixed> $body
      */
     private function json(array $body): string
     {

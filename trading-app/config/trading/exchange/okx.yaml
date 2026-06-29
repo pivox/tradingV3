@@ -31,5 +31,10 @@ trading:
 
 compatibility:
   credential_scope: demo_only
+  credential_env:
+    - OKX_DEMO_API_KEY
+    - OKX_DEMO_API_SECRET
+    - OKX_DEMO_API_PASSPHRASE
+    - OKX_SIMULATED_TRADING
   required_header: x-simulated-trading
   secrets_external_only: true

@@ -19,7 +19,7 @@ interface OkxRestClientInterface
     public function privateGet(string $path, array $query = []): array;
 
     /**
-     * @param array<string,mixed> $body
+     * @param array<mixed> $body
      * @return array<string,mixed>
      */
     public function privatePost(string $path, array $body = []): array;

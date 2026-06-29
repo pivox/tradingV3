@@ -108,6 +108,28 @@ final class OkxProviderSkeletonTest extends TestCase
         self::assertContains('private_read_not_ready', $report->warnings);
     }
 
+    public function testRuntimeCheckCanReachPrivateReadOnlyForOkx004(): void
+    {
+        $report = (new OkxRuntimeCheck())->check(new ExchangeReadinessInput(
+            exchange: Exchange::OKX,
+            marketType: MarketType::PERPETUAL,
+            environment: 'demo',
+            publicConnectivity: true,
+            privateReadConnectivity: true,
+            instrumentsLoaded: true,
+            metadataValid: true,
+            precisionValid: true,
+            accountReadable: true,
+            permissionsRead: true,
+            mainnetWriteGuard: true,
+            dryRun: true,
+        ));
+
+        self::assertSame(ExchangeReadinessLevel::PrivateReadOnly, $report->readyLevel);
+        self::assertSame([], $report->blockingErrors);
+        self::assertNotContains('private_read_not_ready', $report->warnings);
+    }
+
     /**
      * @param callable(): mixed $operation
      */

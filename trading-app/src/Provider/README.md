@@ -90,7 +90,7 @@ Chaque provider implémente son interface avec un accent sur :
 - `sync*()` (contrats, ordres, positions),
 - `Mapper`s internes pour convertir les structures Bitmart.
 
-## 4 bis. Bundle OKX public read-only
+## 4 bis. Bundle OKX public/private read-only
 
 OKX est enregistré explicitement dans la registry pour `exchange=okx` et
 `market_type=perpetual` :
@@ -112,11 +112,18 @@ nécessaires au dry-run MTF :
 - carnet via `/api/v5/market/books` ;
 - best bid/ask via `OkxOrderGateway::getOrderBookTop()`.
 
-Les méthodes privées et toutes les méthodes mutatives restent hors périmètre et
-lèvent explicitement `OkxProviderNotReadyException` (`okx_order_write_not_implemented`,
-`okx_account_not_implemented`, etc.). Les erreurs publiques REST sont normalisées
-en `OkxProviderUnavailableException`, avec notamment `okx_public_rate_limited`
-pour les 429.
+Depuis OKX-004, le bundle fournit aussi des lectures privées REST demo :
+
+- account/balance via `/api/v5/account/balance` ;
+- positions via `/api/v5/account/positions` ;
+- ordres ouverts via `/api/v5/trade/orders-pending` ;
+- algo-orders ouverts via `/api/v5/trade/orders-algo-pending` ;
+- fills récents via `/api/v5/trade/fills`.
+
+Les méthodes mutatives restent hors périmètre et lèvent explicitement
+`OkxProviderNotReadyException` (`okx_order_write_not_implemented`, etc.). Les
+erreurs REST sont normalisées en `OkxProviderUnavailableException`, avec
+notamment `okx_public_rate_limited` et `okx_private_rate_limited`.
 
 `OkxMetadataProvider::syncContracts()` ne persiste volontairement rien en
 OKX-003. Il retourne `upserted=0` et l'erreur
@@ -128,6 +135,13 @@ En environnement demo, `OkxConfig` utilise par défaut :
 
 - REST : `https://eea.okx.com`
 - WebSocket public documenté : `wss://wseeapap.okx.com:8443/ws/v5/public`
+
+Les lectures privées demo exigent des credentials dédiés hors Git :
+
+- `OKX_DEMO_API_KEY`
+- `OKX_DEMO_API_SECRET`
+- `OKX_DEMO_API_PASSPHRASE`
+- `OKX_SIMULATED_TRADING=1`
 
 OKX-003 ne branche pas de client WebSocket public runtime. Le fallback assumé est
 le polling REST public ci-dessus.

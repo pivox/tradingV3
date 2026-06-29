@@ -70,9 +70,10 @@ Règles :
 
 OKX reste `dry-run only` tant que les gates suivantes ne sont pas toutes validées :
 
-- `OKX_API_KEY` présent hors Git ;
-- `OKX_API_SECRET` présent hors Git ;
-- `OKX_API_PASSPHRASE` présent hors Git ;
+- `OKX_DEMO_API_KEY` présent hors Git ;
+- `OKX_DEMO_API_SECRET` présent hors Git ;
+- `OKX_DEMO_API_PASSPHRASE` présent hors Git ;
+- `OKX_SIMULATED_TRADING=1` explicite pour les requêtes privées demo ;
 - environnement demo/sandbox clarifié ;
 - API base URI validée ;
 - WebSocket public validé ;
