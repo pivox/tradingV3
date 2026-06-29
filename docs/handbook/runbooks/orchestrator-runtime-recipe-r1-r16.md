@@ -219,6 +219,35 @@ operateur. Les scenarios qui exigent ce type de controle, notamment R10 et le
 rollback effectif R16, restent `BLOCKED` jusqu'a execution sur une stack de
 recette dediee.
 
+## Preuve locale Fake/Paper COMMON-005
+
+Avant toute recette demo/testnet mutative OKX ou Hyperliquid, exercer le minimum
+Fake/Paper local :
+
+```bash
+cd trading-app
+php vendor/bin/phpunit tests/TradingCore/Execution/FakeExecutionPortTest.php
+```
+
+La fixture de scenarios est versionnee ici :
+
+```text
+trading-app/tests/fixtures/fake-paper/demo-recipe-scenarios.json
+```
+
+Les scenarios requis pour la protection sont :
+
+- fill complet + stop attache avec succes ;
+- fill complet + echec d'attache stop, avec fail-safe explicite ;
+- fill partiel + stop partiel refuse explicitement ;
+- duplicate `client_order_id`, sans creation d'un second fill ;
+- restart/resync simule via snapshot memoire ;
+- cancel et rejet d'ordre structures.
+
+Cette preuve reste locale : elle ne demarre pas OKX, Hyperliquid, Temporal ou un
+adapter exchange reel. Un resultat incomplet ou non protege doit rester `failed`
+ou `rejected`, jamais `PASS` pour une recette mutative.
+
 ## Commandes de recette guidee
 
 Run manuel :
