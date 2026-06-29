@@ -150,6 +150,21 @@ final class OkxPublicReadProviderTest extends TestCase
         $provider->getInstrumentMetadata('BTCUSD');
     }
 
+    public function testListsOnlySupportedLinearSwapContracts(): void
+    {
+        $client = $this->client();
+        $client->includeInverseInstrument = true;
+        $provider = new OkxMetadataProvider($client);
+
+        $contracts = $provider->getContracts();
+
+        self::assertCount(2, $contracts);
+        self::assertSame(['BTCUSDT', 'ETHUSDT'], array_map(
+            static fn (\App\Contract\Provider\Dto\ContractDto $contract): string => $contract->symbol,
+            $contracts,
+        ));
+    }
+
     public function testLeverageBracketUsesInstrumentCap(): void
     {
         $provider = new OkxMetadataProvider($this->client());

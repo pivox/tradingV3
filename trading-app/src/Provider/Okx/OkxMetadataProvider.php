@@ -29,6 +29,10 @@ final class OkxMetadataProvider implements ContractProviderInterface
     {
         $contracts = [];
         foreach ($this->instrumentRows(__METHOD__) as $row) {
+            if (!$this->isLinearSwapRow($row)) {
+                continue;
+            }
+
             $this->assertSizingMetadata($row, __METHOD__);
             $contracts[] = $this->mapper->contract($row);
         }
@@ -371,6 +375,14 @@ final class OkxMetadataProvider implements ContractProviderInterface
         }
 
         return $flags;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function isLinearSwapRow(array $row): bool
+    {
+        return strtolower($this->string($row['ctType'] ?? '')) === 'linear';
     }
 
     /**
