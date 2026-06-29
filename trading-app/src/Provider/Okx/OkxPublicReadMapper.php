@@ -163,10 +163,13 @@ final readonly class OkxPublicReadMapper
             return $quoteVolume;
         }
 
+        $currencyVolume = $this->string($ticker['volCcy24h'] ?? '');
         $last = (float) ($ticker['last'] ?? 0.0);
-        $volume = (float) ($ticker['vol24h'] ?? 0.0);
+        if ($currencyVolume !== '') {
+            return (string) ($last * (float) $currencyVolume);
+        }
 
-        return (string) ($last * $volume);
+        return '0';
     }
 
     private function string(mixed $value): string

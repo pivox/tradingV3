@@ -47,7 +47,7 @@ final class OkxPublicReadProviderTest extends TestCase
         self::assertSame('BTCUSDT', $contract->symbol);
         self::assertSame('25123.4', (string) $contract->lastPrice);
         self::assertSame('1000', (string) $contract->volume24h);
-        self::assertSame('25123400', (string) $contract->turnover24h);
+        self::assertSame('251234', (string) $contract->turnover24h);
     }
 
     public function testNormalizesOrderBookAndBestBidAsk(): void
