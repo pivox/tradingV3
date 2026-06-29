@@ -59,7 +59,7 @@ final class OkxOrderGateway implements OrderProviderInterface
     private function fetchOrderDetail(string $symbol, string $orderId): ?OrderDto
     {
         if (str_starts_with($orderId, 'algo:')) {
-            return null;
+            return $this->fetchAlgoOrderDetail($symbol, substr($orderId, 5));
         }
 
         $baseQuery = ['instId' => $this->resolver()->instId($symbol)];
@@ -77,6 +77,26 @@ final class OkxOrderGateway implements OrderProviderInterface
             ], __METHOD__), __METHOD__);
             if ($row !== []) {
                 return $this->privateMapper->order($row, false);
+            }
+        }
+
+        return null;
+    }
+
+    private function fetchAlgoOrderDetail(string $symbol, string $algoId): ?OrderDto
+    {
+        if ($algoId === '') {
+            return null;
+        }
+
+        $baseQuery = [
+            'instId' => $this->resolver()->instId($symbol),
+            'algoId' => $algoId,
+        ];
+        foreach (['/api/v5/trade/order-algo', '/api/v5/trade/orders-algo-history'] as $path) {
+            $row = $this->firstRow($this->privateGet($path, $baseQuery, __METHOD__), __METHOD__);
+            if ($row !== []) {
+                return $this->privateMapper->order($row, true);
             }
         }
 
