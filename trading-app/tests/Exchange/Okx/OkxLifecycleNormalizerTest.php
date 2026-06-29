@@ -177,6 +177,24 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertSame(ExchangePositionSide::SHORT, $fills[1]->positionSide);
     }
 
+    public function testIgnoresNonSwapFills(): void
+    {
+        $spotFill = $this->orderRow(
+            state: 'filled',
+            filled: '1',
+            updatedAt: '1767225601000',
+            fillSz: '1',
+            fillPx: '25005',
+            tradeId: 'spot-fill',
+        );
+        $spotFill['instId'] = 'BTC-USDT';
+        $spotFill['instType'] = 'SPOT';
+
+        $fills = $this->normalizer->normalizeFills([$spotFill]);
+
+        self::assertSame([], $fills);
+    }
+
     public function testPreservesAlgoOrderIdNamespaceInLifecycleAndFills(): void
     {
         $row = $this->orderRow(

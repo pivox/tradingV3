@@ -208,6 +208,10 @@ final readonly class OkxLifecycleNormalizer
      */
     private function fillFromRow(array $row): ?OkxNormalizedFillDto
     {
+        if (!$this->isSwapRow($row)) {
+            return null;
+        }
+
         $quantity = $this->float($row['fillSz'] ?? null);
         $price = $this->float($row['fillPx'] ?? null);
         $fillId = OkxFillId::fromTradeId($row['instId'] ?? '', $row['tradeId'] ?? null);
