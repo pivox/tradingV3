@@ -48,6 +48,30 @@ Missing fee or funding values remain `null` with quality flags; they are not
 taken as zero. Quantization checks flag `price_precision_mismatch` and
 `quantity_rounding_changes_risk`.
 
+Lifecycle mapping:
+
+| OKX source | TradingV3 lifecycle |
+|---|---|
+| order request built from `PlaceOrderRequest` | normalized OKX body only; no HTTP write |
+| `state=pending` | `pending` |
+| accepted placement response | `accepted` |
+| `state=live` | `open` |
+| `state=partially_filled` | `partially_filled` |
+| `state=filled` | `filled` |
+| `state=canceling` / `cancelling` | `cancel_pending` |
+| `state=canceled` / `cancelled` / `mmp_canceled` | `canceled` |
+| `state=rejected` | `rejected` |
+| `state=expired` | `expired` |
+| `state=order_failed` / `partially_failed` / API error payload | `failed` |
+| unknown state or ambiguous order payload | `unknown_requires_resync` |
+
+`OkxLifecycleNormalizer` keeps fills as separate normalized records with
+`tradeId`-based deterministic IDs, fee amount and fee currency per fill. Order
+rows are sorted by OKX timestamps, duplicate rows are ignored, and a terminal
+cancel that already contains fills is flagged with `terminal_cancel_with_fill`
+instead of discarding the fill. Unknown states are not guessed; they require REST
+resync before feeding ledger or position state.
+
 Environment:
 
 ```dotenv
