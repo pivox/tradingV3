@@ -34,15 +34,19 @@ Metadata mapping:
 | `minSize` | `minSz` |
 | `maxSize` | `maxMktSz` then `maxLmtSz` |
 | `contractValue` | `ctVal` |
+| `contractType` | `ctType` (`linear` required) |
+| `contractValueCurrency` | `ctValCcy` |
 | `settleCurrency` | `settleCcy` |
 | `maxLeverage` | `lever` |
-| `makerFeeRate`, `takerFeeRate` | `/api/v5/account/trade-fee` queried with `instFamily` |
+| `makerFeeRate`, `takerFeeRate` | `/api/v5/account/trade-fee` queried with `groupId` when present, otherwise `instFamily` |
 | `fundingRate`, `nextFundingTime` | `/api/v5/public/funding-rate` |
 
 Sizing metadata is fail-closed: missing or non-positive required fields raise
-`okx_metadata_incomplete`. Missing fee or funding values remain `null` with
-quality flags; they are not treated as zero. Quantization checks flag
-`price_precision_mismatch` and `quantity_rounding_changes_risk`.
+`okx_metadata_incomplete`. OKX-005 only accepts `linear` SWAP instruments; inverse
+contracts are blocked until their denomination-specific sizing is implemented.
+Missing fee or funding values remain `null` with quality flags; they are not
+taken as zero. Quantization checks flag `price_precision_mismatch` and
+`quantity_rounding_changes_risk`.
 
 Environment:
 

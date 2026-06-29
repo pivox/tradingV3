@@ -238,11 +238,13 @@ final class OkxMetadataProvider implements ContractProviderInterface
     private function metadataFromRow(array $row): OkxInstrumentMetadataDto
     {
         $instId = $this->string($row['instId'] ?? '');
+        $feeGroupId = $this->string($row['groupId'] ?? '');
         $funding = $this->optionalFundingRate($instId);
-        $fees = $this->tradingFees($this->resolver()->symbol($instId));
+        $fees = $this->tradingFees($this->resolver()->symbol($instId), $feeGroupId);
         $qualityFlags = [];
-        $makerFee = $this->nullableNumericString($fees['maker'] ?? null);
-        $takerFee = $this->nullableNumericString($fees['taker'] ?? null);
+        $selectedFees = $this->selectFeeGroup($fees, $feeGroupId);
+        $makerFee = $this->nullableNumericString($selectedFees['maker'] ?? null);
+        $takerFee = $this->nullableNumericString($selectedFees['taker'] ?? null);
         $fundingRate = $this->nullableNumericString($funding['fundingRate'] ?? null);
 
         if ($makerFee === null) {
@@ -263,8 +265,11 @@ final class OkxMetadataProvider implements ContractProviderInterface
             minSize: $this->string($row['minSz'] ?? ''),
             maxSize: $this->firstNonEmpty($row['maxMktSz'] ?? null, $row['maxLmtSz'] ?? null),
             contractValue: $this->string($row['ctVal'] ?? ''),
+            contractType: strtolower($this->string($row['ctType'] ?? '')),
+            contractValueCurrency: strtoupper($this->string($row['ctValCcy'] ?? '')),
             settleCurrency: strtoupper($this->string($row['settleCcy'] ?? '')),
             maxLeverage: $this->string($row['lever'] ?? ''),
+            feeGroupId: $feeGroupId === '' ? null : $feeGroupId,
             makerFeeRate: $makerFee,
             takerFeeRate: $takerFee,
             fundingRate: $fundingRate,
@@ -299,14 +304,14 @@ final class OkxMetadataProvider implements ContractProviderInterface
     /**
      * @return array<string,mixed>
      */
-    private function tradingFees(string $symbol): array
+    private function tradingFees(string $symbol, string $feeGroupId): array
     {
         if (!$this->account instanceof OkxAccountGateway) {
             return [];
         }
 
         try {
-            return $this->account->getTradingFees($symbol);
+            return $this->account->getTradingFees($symbol, $feeGroupId === '' ? null : $feeGroupId);
         } catch (\Throwable) {
             return [];
         }
@@ -338,6 +343,8 @@ final class OkxMetadataProvider implements ContractProviderInterface
             'min_size' => $this->string($row['minSz'] ?? ''),
             'max_size' => $this->firstNonEmpty($row['maxMktSz'] ?? null, $row['maxLmtSz'] ?? null),
             'contract_value' => $this->string($row['ctVal'] ?? ''),
+            'contract_type' => $this->string($row['ctType'] ?? ''),
+            'contract_value_currency' => $this->string($row['ctValCcy'] ?? ''),
             'settle_currency' => $this->string($row['settleCcy'] ?? ''),
             'max_leverage' => $this->string($row['lever'] ?? ''),
         ];
@@ -350,8 +357,17 @@ final class OkxMetadataProvider implements ContractProviderInterface
             }
 
             if ($field !== 'instrument_id' && $field !== 'settle_currency' && (!$this->isPositiveNumber($value))) {
+                if ($field === 'contract_type' || $field === 'contract_value_currency') {
+                    continue;
+                }
+
                 $flags[] = 'invalid_' . $field;
             }
+        }
+
+        $contractType = strtolower($this->string($row['ctType'] ?? ''));
+        if ($contractType !== 'linear') {
+            $flags[] = $contractType === 'inverse' ? 'unsupported_inverse_contract' : 'invalid_contract_type';
         }
 
         return $flags;
@@ -464,6 +480,32 @@ final class OkxMetadataProvider implements ContractProviderInterface
         }
 
         return '';
+    }
+
+    /**
+     * @param array<string,mixed> $fees
+     * @return array<string,mixed>
+     */
+    private function selectFeeGroup(array $fees, string $feeGroupId): array
+    {
+        if ($feeGroupId === '') {
+            return $fees;
+        }
+
+        $groups = $fees['feeGroup'] ?? null;
+        if (!\is_array($groups)) {
+            return [];
+        }
+
+        foreach ($groups as $group) {
+            if (!\is_array($group) || $this->string($group['groupId'] ?? '') !== $feeGroupId) {
+                continue;
+            }
+
+            return $group;
+        }
+
+        return [];
     }
 
     private function barFromStep(int $step): string

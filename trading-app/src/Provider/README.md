@@ -131,15 +131,19 @@ normalisee OKX pour le sizing demo et les couts :
 | `minSize` | `minSz` |
 | `maxSize` | `maxMktSz` puis `maxLmtSz` |
 | `contractValue` | `ctVal` |
+| `contractType` | `ctType` (`linear` requis) |
+| `contractValueCurrency` | `ctValCcy` |
 | `settleCurrency` | `settleCcy` |
 | `maxLeverage` | `lever` |
-| `makerFeeRate` / `takerFeeRate` | `/api/v5/account/trade-fee` avec `instFamily` |
+| `makerFeeRate` / `takerFeeRate` | `/api/v5/account/trade-fee` avec `groupId` si present, sinon `instFamily` |
 | `fundingRate` / `nextFundingTime` | `/api/v5/public/funding-rate` |
 
 Les champs requis pour le sizing (`instId`, tick, step, min/max size, contract
-value, settle currency, max leverage) sont valides ou la lecture echoue avec
-`okx_metadata_incomplete`. Les fees et funding absents restent `null` et sont
-signales par `maker_fee_unknown`, `taker_fee_unknown` ou
+value, type/denomination de contrat, settle currency, max leverage) sont valides
+ou la lecture echoue avec `okx_metadata_incomplete`. OKX-005 accepte seulement
+les SWAP `linear`; les contrats inverses restent bloques pour eviter un sizing
+notional incorrect. Les fees et funding absents restent `null` et sont signales
+par `maker_fee_unknown`, `taker_fee_unknown` ou
 `funding_rate_unknown`; ils ne sont jamais convertis en zero. La validation de
 quantization signale `price_precision_mismatch` et
 `quantity_rounding_changes_risk` lorsque l'arrondi change la taille reelle.

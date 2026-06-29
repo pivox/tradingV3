@@ -65,15 +65,19 @@ final class OkxPublicReadProviderTest extends TestCase
         self::assertSame('0.01', $metadata->minSize);
         self::assertSame('100', $metadata->maxSize);
         self::assertSame('0.01', $metadata->contractValue);
+        self::assertSame('linear', $metadata->contractType);
+        self::assertSame('BTC', $metadata->contractValueCurrency);
         self::assertSame('USDT', $metadata->settleCurrency);
         self::assertSame('100', $metadata->maxLeverage);
+        self::assertSame('1', $metadata->feeGroupId);
         self::assertSame('-0.0002', $metadata->makerFeeRate);
         self::assertSame('-0.0005', $metadata->takerFeeRate);
         self::assertSame('0.0001', $metadata->fundingRate);
         self::assertTrue($metadata->isCompleteForSizing());
         self::assertSame([], $metadata->qualityFlags);
         self::assertSame('/api/v5/account/trade-fee', $client->lastPrivateGetPath);
-        self::assertSame('BTC-USDT', $client->lastPrivateGetQuery['instFamily'] ?? null);
+        self::assertSame('1', $client->lastPrivateGetQuery['groupId'] ?? null);
+        self::assertArrayNotHasKey('instFamily', $client->lastPrivateGetQuery);
     }
 
     public function testQuantizationValidationRejectsPriceAndFlagsQuantityRiskChange(): void
@@ -132,6 +136,18 @@ final class OkxPublicReadProviderTest extends TestCase
         $this->expectExceptionMessage('okx_metadata_incomplete');
 
         $provider->getContractDetails('BTCUSDT');
+    }
+
+    public function testRejectsInverseSwapMetadataForSizing(): void
+    {
+        $client = $this->client();
+        $client->includeInverseInstrument = true;
+        $provider = new OkxMetadataProvider($client);
+
+        $this->expectException(OkxProviderUnavailableException::class);
+        $this->expectExceptionMessage('okx_metadata_incomplete');
+
+        $provider->getInstrumentMetadata('BTCUSD');
     }
 
     public function testLeverageBracketUsesInstrumentCap(): void
@@ -264,6 +280,7 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
     public bool $hideFunding = false;
     public bool $hideFees = false;
     public bool $brokenInstrument = false;
+    public bool $includeInverseInstrument = false;
     public string $lastPrivateGetPath = '';
 
     /** @var list<array{limit: string, after: string|null}> */
@@ -313,13 +330,16 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
      */
     private function instruments(): array
     {
-        return ['code' => '0', 'data' => [
+        $rows = [
             [
                 'instType' => 'SWAP',
                 'instId' => 'BTC-USDT-SWAP',
+                'ctType' => 'linear',
+                'ctValCcy' => 'BTC',
                 'baseCcy' => 'BTC',
                 'quoteCcy' => 'USDT',
                 'settleCcy' => 'USDT',
+                'groupId' => '1',
                 'ctVal' => $this->brokenInstrument ? '' : '0.01',
                 'tickSz' => $this->brokenInstrument ? '0' : '0.1',
                 'lotSz' => '0.01',
@@ -334,9 +354,12 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
             [
                 'instType' => 'SWAP',
                 'instId' => 'ETH-USDT-SWAP',
+                'ctType' => 'linear',
+                'ctValCcy' => 'ETH',
                 'baseCcy' => 'ETH',
                 'quoteCcy' => 'USDT',
                 'settleCcy' => 'USDT',
+                'groupId' => '1',
                 'ctVal' => '0.1',
                 'tickSz' => '0.01',
                 'lotSz' => '0.001',
@@ -347,7 +370,31 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
                 'listTime' => '1767225600000',
                 'expTime' => '',
             ],
-        ]];
+        ];
+
+        if ($this->includeInverseInstrument) {
+            $rows[] = [
+                'instType' => 'SWAP',
+                'instId' => 'BTC-USD-SWAP',
+                'ctType' => 'inverse',
+                'ctValCcy' => 'USD',
+                'baseCcy' => 'BTC',
+                'quoteCcy' => 'USD',
+                'settleCcy' => 'BTC',
+                'groupId' => '2',
+                'ctVal' => '100',
+                'tickSz' => '0.1',
+                'lotSz' => '1',
+                'minSz' => '1',
+                'maxMktSz' => '100',
+                'lever' => '50',
+                'state' => 'live',
+                'listTime' => '1767225600000',
+                'expTime' => '',
+            ];
+        }
+
+        return ['code' => '0', 'data' => $rows];
     }
 
     /**
@@ -376,9 +423,12 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
     private function tradingFees(array $query): array
     {
         $this->assertQueryValue($query, 'instType', 'SWAP');
-        $this->assertQueryValue($query, 'instFamily', 'BTC-USDT');
+        $this->assertQueryValue($query, 'groupId', '1');
         if (array_key_exists('instId', $query)) {
-            throw new \RuntimeException('OKX SWAP fee query must use instFamily, not instId.');
+            throw new \RuntimeException('OKX SWAP fee query must use groupId or instFamily, not instId.');
+        }
+        if (array_key_exists('instFamily', $query)) {
+            throw new \RuntimeException('OKX metadata fee query must preserve groupId when the instrument provides it.');
         }
 
         if ($this->hideFees) {
@@ -387,9 +437,10 @@ final class FakeOkxPublicReadClient implements OkxRestClientInterface
 
         return ['code' => '0', 'data' => [[
             'instType' => 'SWAP',
-            'instFamily' => 'BTC-USDT',
-            'maker' => '-0.0002',
-            'taker' => '-0.0005',
+            'feeGroup' => [
+                ['groupId' => 'default', 'maker' => '-0.0001', 'taker' => '-0.0004'],
+                ['groupId' => '1', 'maker' => '-0.0002', 'taker' => '-0.0005'],
+            ],
         ]]];
     }
 

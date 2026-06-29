@@ -145,12 +145,18 @@ final class OkxAccountGateway implements AccountProviderInterface
     /**
      * @return array<string, mixed>
      */
-    public function getTradingFees(string $symbol): array
+    public function getTradingFees(string $symbol, ?string $groupId = null): array
     {
-        return $this->firstRow($this->privateGet('/api/v5/account/trade-fee', [
+        $query = [
             'instType' => 'SWAP',
-            'instFamily' => $this->swapInstFamily($symbol),
-        ], __METHOD__), __METHOD__);
+        ];
+        if ($groupId !== null && trim($groupId) !== '') {
+            $query['groupId'] = trim($groupId);
+        } else {
+            $query['instFamily'] = $this->swapInstFamily($symbol);
+        }
+
+        return $this->firstRow($this->privateGet('/api/v5/account/trade-fee', $query, __METHOD__), __METHOD__);
     }
 
     public function healthCheck(): bool
