@@ -8,6 +8,7 @@ use App\Contract\Provider\ContractProviderInterface;
 use App\Contract\Provider\Dto\ContractDto;
 use App\Exchange\Okx\OkxInstrumentResolver;
 use App\Exchange\Okx\OkxRestClientInterface;
+use App\Provider\Okx\Dto\OkxInstrumentMetadataDto;
 
 final class OkxMetadataProvider implements ContractProviderInterface
 {
@@ -16,6 +17,7 @@ final class OkxMetadataProvider implements ContractProviderInterface
     public function __construct(
         private readonly ?OkxRestClientInterface $client = null,
         private readonly ?OkxInstrumentResolver $instruments = null,
+        private readonly ?OkxAccountGateway $account = null,
     ) {
         $this->mapper = new OkxPublicReadMapper($this->resolver());
     }
@@ -27,6 +29,11 @@ final class OkxMetadataProvider implements ContractProviderInterface
     {
         $contracts = [];
         foreach ($this->instrumentRows(__METHOD__) as $row) {
+            if (!$this->isLinearSwapRow($row)) {
+                continue;
+            }
+
+            $this->assertSizingMetadata($row, __METHOD__);
             $contracts[] = $this->mapper->contract($row);
         }
 
@@ -46,6 +53,8 @@ final class OkxMetadataProvider implements ContractProviderInterface
                 continue;
             }
 
+            $this->assertSizingMetadata($row, __METHOD__);
+
             return $this->mapper->contract($row, $this->ticker($instId, __METHOD__));
         }
 
@@ -58,6 +67,22 @@ final class OkxMetadataProvider implements ContractProviderInterface
         $last = $ticker['last'] ?? null;
 
         return \is_numeric($last) ? (float) $last : null;
+    }
+
+    public function getInstrumentMetadata(string $symbol): ?OkxInstrumentMetadataDto
+    {
+        $instId = $this->resolver()->instId($symbol);
+        foreach ($this->instrumentRows(__METHOD__) as $row) {
+            if ((string) ($row['instId'] ?? '') !== $instId) {
+                continue;
+            }
+
+            $this->assertSizingMetadata($row, __METHOD__);
+
+            return $this->metadataFromRow($row);
+        }
+
+        return null;
     }
 
     /**
@@ -126,6 +151,23 @@ final class OkxMetadataProvider implements ContractProviderInterface
      */
     public function getLeverageBrackets(string $symbol): array
     {
+        $instId = $this->resolver()->instId($symbol);
+        foreach ($this->instrumentRows(__METHOD__) as $row) {
+            if ((string) ($row['instId'] ?? '') !== $instId) {
+                continue;
+            }
+
+            $this->assertSizingMetadata($row, __METHOD__);
+
+            return [[
+                'symbol' => $this->resolver()->symbol($instId),
+                'instrument_id' => $instId,
+                'min_leverage' => '1',
+                'max_leverage' => $this->string($row['lever'] ?? ''),
+                'source' => 'okx_public_instruments',
+            ]];
+        }
+
         return [];
     }
 
@@ -192,6 +234,155 @@ final class OkxMetadataProvider implements ContractProviderInterface
             $this->dataRows($payload, $operation),
             static fn (mixed $row): bool => \is_array($row) && ($row['instType'] ?? 'SWAP') === 'SWAP',
         ));
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function metadataFromRow(array $row): OkxInstrumentMetadataDto
+    {
+        $instId = $this->string($row['instId'] ?? '');
+        $feeGroupId = $this->string($row['groupId'] ?? '');
+        $funding = $this->optionalFundingRate($instId);
+        $fees = $this->tradingFees($this->resolver()->symbol($instId), $feeGroupId);
+        $qualityFlags = [];
+        $selectedFees = $this->selectFeeGroup($fees, $feeGroupId);
+        $makerFee = $this->nullableNumericString($selectedFees['maker'] ?? null);
+        $takerFee = $this->nullableNumericString($selectedFees['taker'] ?? null);
+        $fundingRate = $this->nullableNumericString($funding['fundingRate'] ?? null);
+
+        if ($makerFee === null) {
+            $qualityFlags[] = 'maker_fee_unknown';
+        }
+        if ($takerFee === null) {
+            $qualityFlags[] = 'taker_fee_unknown';
+        }
+        if ($fundingRate === null) {
+            $qualityFlags[] = 'funding_rate_unknown';
+        }
+
+        return new OkxInstrumentMetadataDto(
+            symbol: $this->resolver()->symbol($instId),
+            instrumentId: $instId,
+            priceTick: $this->string($row['tickSz'] ?? ''),
+            quantityStep: $this->string($row['lotSz'] ?? $row['minSz'] ?? ''),
+            minSize: $this->string($row['minSz'] ?? ''),
+            maxSize: $this->firstNonEmpty($row['maxMktSz'] ?? null, $row['maxLmtSz'] ?? null),
+            contractValue: $this->string($row['ctVal'] ?? ''),
+            contractType: strtolower($this->string($row['ctType'] ?? '')),
+            contractValueCurrency: strtoupper($this->string($row['ctValCcy'] ?? '')),
+            settleCurrency: strtoupper($this->string($row['settleCcy'] ?? '')),
+            maxLeverage: $this->string($row['lever'] ?? ''),
+            feeGroupId: $feeGroupId === '' ? null : $feeGroupId,
+            makerFeeRate: $makerFee,
+            takerFeeRate: $takerFee,
+            fundingRate: $fundingRate,
+            nextFundingTime: $this->fundingTime($funding['nextFundingTime'] ?? null),
+            qualityFlags: array_values(array_unique($qualityFlags)),
+        );
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function fundingRate(string $instId): array
+    {
+        return $this->firstRow(
+            $this->publicGet('/api/v5/public/funding-rate', ['instId' => $instId], __METHOD__),
+            __METHOD__,
+        );
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function optionalFundingRate(string $instId): array
+    {
+        try {
+            return $this->fundingRate($instId);
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function tradingFees(string $symbol, string $feeGroupId): array
+    {
+        if (!$this->account instanceof OkxAccountGateway) {
+            return [];
+        }
+
+        try {
+            return $this->account->getTradingFees($symbol, $feeGroupId === '' ? null : $feeGroupId);
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function assertSizingMetadata(array $row, string $operation): void
+    {
+        $flags = $this->sizingMetadataFlags($row);
+        if ($flags === []) {
+            return;
+        }
+
+        throw new OkxProviderUnavailableException('okx_metadata_incomplete', $operation);
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @return list<string>
+     */
+    private function sizingMetadataFlags(array $row): array
+    {
+        $checks = [
+            'instrument_id' => $this->string($row['instId'] ?? ''),
+            'price_tick' => $this->string($row['tickSz'] ?? ''),
+            'quantity_step' => $this->string($row['lotSz'] ?? $row['minSz'] ?? ''),
+            'min_size' => $this->string($row['minSz'] ?? ''),
+            'max_size' => $this->firstNonEmpty($row['maxMktSz'] ?? null, $row['maxLmtSz'] ?? null),
+            'contract_value' => $this->string($row['ctVal'] ?? ''),
+            'contract_type' => $this->string($row['ctType'] ?? ''),
+            'contract_value_currency' => $this->string($row['ctValCcy'] ?? ''),
+            'settle_currency' => $this->string($row['settleCcy'] ?? ''),
+            'max_leverage' => $this->string($row['lever'] ?? ''),
+        ];
+
+        $flags = [];
+        foreach ($checks as $field => $value) {
+            if ($value === '') {
+                $flags[] = 'missing_' . $field;
+                continue;
+            }
+
+            if ($field !== 'instrument_id' && $field !== 'settle_currency' && (!$this->isPositiveNumber($value))) {
+                if ($field === 'contract_type' || $field === 'contract_value_currency') {
+                    continue;
+                }
+
+                $flags[] = 'invalid_' . $field;
+            }
+        }
+
+        $contractType = strtolower($this->string($row['ctType'] ?? ''));
+        if ($contractType !== 'linear') {
+            $flags[] = $contractType === 'inverse' ? 'unsupported_inverse_contract' : 'invalid_contract_type';
+        }
+
+        return $flags;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function isLinearSwapRow(array $row): bool
+    {
+        return strtolower($this->string($row['ctType'] ?? '')) === 'linear';
     }
 
     /**
@@ -262,6 +453,71 @@ final class OkxMetadataProvider implements ContractProviderInterface
             || str_contains(strtolower($exception->getMessage()), 'rate')
             ? 'okx_public_rate_limited'
             : 'okx_public_network_error';
+    }
+
+    private function fundingTime(mixed $value): ?\DateTimeImmutable
+    {
+        $raw = $this->string($value);
+        if ($raw === '' || !is_numeric($raw) || (int) $raw <= 0) {
+            return null;
+        }
+
+        return $this->mapper->time($raw);
+    }
+
+    private function nullableNumericString(mixed $value): ?string
+    {
+        $raw = $this->string($value);
+
+        return $raw !== '' && is_numeric($raw) ? $raw : null;
+    }
+
+    private function isPositiveNumber(string $value): bool
+    {
+        return is_numeric($value) && (float) $value > 0.0;
+    }
+
+    private function string(mixed $value): string
+    {
+        return \is_scalar($value) ? trim((string) $value) : '';
+    }
+
+    private function firstNonEmpty(mixed ...$values): string
+    {
+        foreach ($values as $value) {
+            $string = $this->string($value);
+            if ($string !== '') {
+                return $string;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * @param array<string,mixed> $fees
+     * @return array<string,mixed>
+     */
+    private function selectFeeGroup(array $fees, string $feeGroupId): array
+    {
+        if ($feeGroupId === '') {
+            return $fees;
+        }
+
+        $groups = $fees['feeGroup'] ?? null;
+        if (!\is_array($groups)) {
+            return [];
+        }
+
+        foreach ($groups as $group) {
+            if (!\is_array($group) || $this->string($group['groupId'] ?? '') !== $feeGroupId) {
+                continue;
+            }
+
+            return $group;
+        }
+
+        return [];
     }
 
     private function barFromStep(int $step): string

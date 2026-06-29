@@ -120,6 +120,34 @@ Depuis OKX-004, le bundle fournit aussi des lectures privées REST demo :
 - algo-orders ouverts via `/api/v5/trade/orders-algo-pending` ;
 - fills récents via `/api/v5/trade/fills`.
 
+Depuis OKX-005, `OkxMetadataProvider::getInstrumentMetadata()` expose une vue
+normalisee OKX pour le sizing demo et les couts :
+
+| TradingV3 | Source OKX |
+|---|---|
+| `instrumentId` | `instId` |
+| `priceTick` | `tickSz` |
+| `quantityStep` | `lotSz` |
+| `minSize` | `minSz` |
+| `maxSize` | `maxMktSz` puis `maxLmtSz` |
+| `contractValue` | `ctVal` |
+| `contractType` | `ctType` (`linear` requis) |
+| `contractValueCurrency` | `ctValCcy` |
+| `settleCurrency` | `settleCcy` |
+| `maxLeverage` | `lever` |
+| `makerFeeRate` / `takerFeeRate` | `/api/v5/account/trade-fee` avec `groupId` si present, sinon `instFamily` |
+| `fundingRate` / `nextFundingTime` | `/api/v5/public/funding-rate` |
+
+Les champs requis pour le sizing (`instId`, tick, step, min/max size, contract
+value, type/denomination de contrat, settle currency, max leverage) sont valides
+ou la lecture echoue avec `okx_metadata_incomplete`. OKX-005 accepte seulement
+les SWAP `linear`; les contrats inverses restent bloques pour eviter un sizing
+notional incorrect. Les fees et funding absents restent `null` et sont signales
+par `maker_fee_unknown`, `taker_fee_unknown` ou
+`funding_rate_unknown`; ils ne sont jamais convertis en zero. La validation de
+quantization signale `price_precision_mismatch` et
+`quantity_rounding_changes_risk` lorsque l'arrondi change la taille reelle.
+
 Les méthodes mutatives restent hors périmètre et lèvent explicitement
 `OkxProviderNotReadyException` (`okx_order_write_not_implemented`, etc.). Les
 erreurs REST sont normalisées en `OkxProviderUnavailableException`, avec
