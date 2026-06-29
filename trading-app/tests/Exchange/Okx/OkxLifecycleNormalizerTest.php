@@ -160,6 +160,30 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertSame('algo:90001', $lifecycle->fills[0]->exchangeOrderId);
     }
 
+    public function testPrefersAlgoIdentifiersWhenAlgoRowsAlsoContainOrderIdentifiers(): void
+    {
+        $row = $this->orderRow(
+            state: 'filled',
+            filled: '1',
+            updatedAt: '1767225601000',
+            fillSz: '1',
+            fillPx: '25005',
+            tradeId: 'algo-child-fill',
+        );
+        $row['algoId'] = '90009';
+        $row['algoClOrdId'] = 'algo-client-blank-clord';
+        $row['clOrdId'] = '';
+        $row['ordId'] = 'child-order-1';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame('algo:90009', $lifecycle->exchangeOrderId);
+        self::assertSame('algo-client-blank-clord', $lifecycle->clientOrderId);
+        self::assertCount(1, $lifecycle->fills);
+        self::assertSame('algo:90009', $lifecycle->fills[0]->exchangeOrderId);
+        self::assertSame('algo-client-blank-clord', $lifecycle->fills[0]->clientOrderId);
+    }
+
     public function testNormalizesOptimalLimitIocAsMarketOrder(): void
     {
         $row = $this->orderRow(state: 'live', filled: '0', updatedAt: '1767225601000');
@@ -200,6 +224,19 @@ final class OkxLifecycleNormalizerTest extends TestCase
 
         self::assertSame(ExchangeOrderType::STOP_LOSS, $lifecycle->orderType);
         self::assertEqualsWithDelta(24825.0, $lifecycle->price ?? 0.0, 0.000001);
+    }
+
+    public function testDoesNotEmitMarketSentinelAsLifecyclePrice(): void
+    {
+        $row = $this->orderRow(state: 'live', filled: '0', updatedAt: '1767225601000');
+        unset($row['px']);
+        $row['ordType'] = 'trigger';
+        $row['ordPx'] = '-1';
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame(ExchangeOrderType::TRIGGER, $lifecycle->orderType);
+        self::assertNull($lifecycle->price);
     }
 
     public function testCancelFillRaceKeepsKnownFillAndCanceledStatus(): void
@@ -293,6 +330,25 @@ final class OkxLifecycleNormalizerTest extends TestCase
         self::assertSame('51008', $error->code);
         self::assertSame('order-1', $error->exchangeOrderId);
         self::assertArrayNotHasKey('apiKey', $error->redactedPayload);
+    }
+
+    public function testRedactsCredentialKeyVariantsRecursively(): void
+    {
+        $row = $this->orderRow(state: 'live', filled: '0', updatedAt: '1767225601000');
+        $row['OK-ACCESS-KEY'] = 'key-secret';
+        $row['OK-ACCESS-SIGN'] = 'signature-secret';
+        $row['api_key'] = 'api-key-secret';
+        $row['Authorization'] = 'Bearer raw-token';
+        $row['nested'] = ['token' => 'nested-token', 'safe_value' => 'visible'];
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame('[REDACTED]', $lifecycle->redactedPayload['OK-ACCESS-KEY']);
+        self::assertSame('[REDACTED]', $lifecycle->redactedPayload['OK-ACCESS-SIGN']);
+        self::assertSame('[REDACTED]', $lifecycle->redactedPayload['api_key']);
+        self::assertSame('[REDACTED]', $lifecycle->redactedPayload['Authorization']);
+        self::assertSame('[REDACTED]', $lifecycle->redactedPayload['nested']['token']);
+        self::assertSame('visible', $lifecycle->redactedPayload['nested']['safe_value']);
     }
 
     /**

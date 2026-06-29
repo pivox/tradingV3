@@ -14,6 +14,8 @@ use App\Exchange\Okx\OkxInstrumentResolver;
 
 final readonly class OkxLifecycleNormalizer
 {
+    private const SENSITIVE_KEY_PATTERN = '/(api[_-]?key|access[_-]?key|secret|private[_-]?key|passphrase|password|authorization|cookie|token|signature|sign|credentials?|memo)/i';
+
     public function __construct(
         private OkxInstrumentResolver $instruments = new OkxInstrumentResolver(),
         private OkxActionFactory $actions = new OkxActionFactory(),
@@ -68,7 +70,7 @@ final readonly class OkxLifecycleNormalizer
             status: $status,
             symbol: $this->symbol($latest),
             exchangeOrderId: $this->orderId($latest),
-            clientOrderId: $this->stringOrNull($latest['clOrdId'] ?? $latest['algoClOrdId'] ?? null),
+            clientOrderId: $this->clientOrderId($latest),
             side: $this->orderSide($latest['side'] ?? null),
             positionSide: $this->positionSide($latest['posSide'] ?? null),
             orderType: $orderType,
@@ -142,7 +144,7 @@ final readonly class OkxLifecycleNormalizer
             code: $code,
             message: $this->firstNonEmpty($first['sMsg'] ?? null, $payload['msg'] ?? null),
             exchangeOrderId: $this->stringOrNull($this->orderId($first)),
-            clientOrderId: $this->stringOrNull($first['clOrdId'] ?? $first['algoClOrdId'] ?? null),
+            clientOrderId: $this->clientOrderId($first),
             qualityFlags: $code === '' ? ['missing_error_code'] : [],
             redactedPayload: $this->redacted($payload),
         );
@@ -211,7 +213,7 @@ final readonly class OkxLifecycleNormalizer
         return new OkxNormalizedFillDto(
             symbol: $this->symbol($row),
             exchangeOrderId: $this->orderId($row),
-            clientOrderId: $this->stringOrNull($row['clOrdId'] ?? $row['algoClOrdId'] ?? null),
+            clientOrderId: $this->clientOrderId($row),
             fillId: $fillId,
             side: $this->orderSide($row['side'] ?? null),
             positionSide: $this->positionSide($row['posSide'] ?? null),
@@ -335,7 +337,14 @@ final readonly class OkxLifecycleNormalizer
             return $price;
         }
 
-        return $this->floatOrNull($this->firstNonEmpty($row['px'] ?? null, $row['ordPx'] ?? null));
+        foreach ([$row['px'] ?? null, $row['ordPx'] ?? null] as $fallback) {
+            $price = $this->floatOrNull($fallback);
+            if ($price !== null && $price > 0.0) {
+                return $price;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -343,14 +352,22 @@ final readonly class OkxLifecycleNormalizer
      */
     private function orderId(array $row): string
     {
-        if ($this->hasValue($row['ordId'] ?? null)) {
-            return $this->string($row['ordId']);
-        }
         if ($this->hasValue($row['algoId'] ?? null)) {
             return 'algo:' . $this->string($row['algoId']);
         }
+        if ($this->hasValue($row['ordId'] ?? null)) {
+            return $this->string($row['ordId']);
+        }
 
         return '';
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function clientOrderId(array $row): ?string
+    {
+        return $this->stringOrNull($this->firstNonEmpty($row['clOrdId'] ?? null, $row['algoClOrdId'] ?? null));
     }
 
     private function orderSide(mixed $side): ExchangeOrderSide
@@ -487,8 +504,7 @@ final readonly class OkxLifecycleNormalizer
     {
         $redacted = [];
         foreach ($payload as $key => $value) {
-            $normalized = strtolower((string) $key);
-            if (str_contains($normalized, 'secret') || str_contains($normalized, 'apikey') || str_contains($normalized, 'passphrase')) {
+            if (preg_match(self::SENSITIVE_KEY_PATTERN, (string) $key) === 1) {
                 $redacted[$key] = '[REDACTED]';
                 continue;
             }
