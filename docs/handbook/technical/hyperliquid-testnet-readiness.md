@@ -2,7 +2,8 @@
 
 ## Statut
 
-ADR documentaire HL-001, accepte le 2026-06-30.
+ADR documentaire HL-001, accepte le 2026-06-30. HL-002 ajoute le bundle provider
+Hyperliquid skeleton, toujours `not_ready`.
 
 Hyperliquid reste `target_dry_run_only`. Cette page ne rend pas Hyperliquid
 utilisable en ecriture testnet et ne rend jamais Hyperliquid utilisable en
@@ -78,15 +79,16 @@ reutilisables.
 | Guard mainnet | Present | Les docs et gates existantes bloquent Hyperliquid live/mainnet. | Conserver le blocage dans toutes les PRs HL. |
 | Public read-only | A livrer | Endpoint `info` officiel couvre metadata, market data et candles. | Provider public read-only avec pagination, freshness, rate-limit et erreurs normalisees. |
 | Account read-only | A livrer | Endpoint `info` officiel couvre state utilisateur, fills et funding. | Client account read-only testnet, redaction et observabilite privee complete. |
+| Provider bundle | Skeleton HL-002 | `ExchangeProviderBundle.hyperliquid_perpetual` route `hyperliquid/perpetual` vers des gateways Hyperliquid explicites. | Implementer les lectures publiques/account reelles dans les PRs dediees. |
 | WebSocket public | A livrer | Endpoint WS testnet officiel disponible. | Client public, subscriptions, reconnect, freshness et fallback documente. |
 | WebSocket prive / equivalent | A livrer | State compte lisible via `info`, streams a valider. | Policy de snapshot initial + delta, ou justification equivalente avant mutation. |
-| Signer fake/local | A livrer | `HyperliquidDryRunExecutionPort` existant ne signe pas et ne broadcast pas. | Abstraction de signature testable sans private key reelle. |
+| Signer fake/local | Skeleton HL-002 | `HyperliquidSignerInterface` existe sans implementation concrete ; `HyperliquidDryRunExecutionPort` ne signe pas et ne broadcast pas. | Abstraction de signature testable sans private key reelle. |
 | Signer testnet | Non supporte | Hors perimetre HL-001. | API wallet testnet dedie, redaction, aucun secret mainnet, tests de payload signe sans broadcast. |
-| Nonce manager | Non supporte | Exigence documentaire HL-001. | Compteur persistant par signer, monotone, restart-safe et auditable. |
+| Nonce manager | Skeleton HL-002 | `HyperliquidNonceManagerInterface` existe sans implementation concrete. | Compteur persistant par signer, monotone, restart-safe et auditable. |
 | Metadata / precision | A livrer | Docs officielles definissent asset IDs, tick/lot, `szDecimals` et precision prix. | Mapping `symbol -> asset`, tick/lot, size decimals, precision prix Hyperliquid, min notional si disponible, flags si absent. |
 | Fees / funding / costs | A livrer | Funding et user funding sont exposes par `info`. | DTO couts avec valeurs absentes en `null` + quality flag, jamais zero implicite. |
 | Local dry-run no broadcast | Partiel | `HyperliquidDryRunExecutionPort` simule sans HTTP ni `/exchange`. | Serialization future des payloads HL sans broadcast ni secret. |
-| Runtime-check candidate | Partiel | `app:exchange:runtime-check hyperliquid perpetual` garde Hyperliquid dry-run only. | Niveaux `public_read_only`, `private_read_only`, `local_dry_run_ready`, puis `demo_testnet_candidate`. |
+| Runtime-check candidate | Fail-closed HL-002 | `app:exchange:runtime-check hyperliquid perpetual` retourne `Readiness level: not_ready`, `Schedule ready: no` et `hyperliquid_provider_bundle_skeleton_not_ready`. | Niveaux `public_read_only`, `private_read_only`, `local_dry_run_ready`, puis `demo_testnet_candidate`. |
 | SL/TP / protection | A valider | Aucun attachement runtime Hyperliquid n'est prouve par HL-001. | Modele ordre/protection testnet avec SL immediat ou compensation fail-safe. |
 | Controlled testnet write | Non supporte | Les guards communs existent, mais Hyperliquid reste dry-run only. | PR dediee apres readiness complete, SL obligatoire, reconciliation et rollback. |
 | Mainnet write | Interdit | `mainnet_write_enabled=false` reste requis. | Aucun manque a combler dans cette serie. |
@@ -95,6 +97,22 @@ reutilisables.
 
 Les surfaces ci-dessous servent a cadrer les PRs suivantes. Elles ne sont pas
 activees par HL-001.
+
+HL-002 ajoute seulement le chemin de registry :
+
+- `ExchangeProviderBundle.hyperliquid_perpetual` ;
+- `HyperliquidMarketGateway` ;
+- `HyperliquidAccountGateway` ;
+- `HyperliquidExecutionGateway` ;
+- `HyperliquidMetadataProvider` ;
+- `HyperliquidRuntimeCheck` ;
+- `HyperliquidSignerInterface` ;
+- `HyperliquidNonceManagerInterface`.
+
+Ces classes ne lisent pas l'exchange et ne broadcastent rien. Toute methode
+gateway non implementee leve `HyperliquidProviderNotReadyException` avec un
+reason `hyperliquid_*_not_ready`. Aucun contexte `hyperliquid/spot` n'est
+enregistre ; une resolution spot doit donc echouer au lieu de fallback Bitmart.
 
 ### Public read-only
 
@@ -249,8 +267,17 @@ Les elements suivants restent explicitement non supportes :
 
 ## Rollback
 
-HL-001 est docs-only. Le rollback applicatif est le revert de cette page et de
-son entree de navigation.
+HL-001 est docs-only. Le rollback applicatif HL-001 est le revert de cette page
+et de son entree de navigation.
+
+HL-002 ajoute du code/configuration applicative. Son rollback doit aussi retirer :
+
+- les services `App\Provider\Hyperliquid\*` et les interfaces signer/nonce ;
+- l'entree `ExchangeContext.hyperliquid_perpetual` dans `services.yaml` ;
+- le bundle `ExchangeProviderBundle.hyperliquid_perpetual` et son injection dans
+  `ExchangeProviderRegistry` ;
+- le branchement `HyperliquidRuntimeCheck` dans `ExchangeRuntimeCheckCommand` ;
+- les tests HL-002 associes.
 
 Le rollback operationnel a conserver pour les PRs suivantes reste :
 

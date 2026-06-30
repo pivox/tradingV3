@@ -334,8 +334,8 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
 
     public function testHyperliquidStaysDryRunOnlyEvenWithCredentialsProviderAndTestnet(): void
     {
-        // PR12 hardening: a fully "ready" Hyperliquid runtime on testnet with credentials must
-        // still report live as forbidden and recommend dry-run. Testnet capability != live trading.
+        // HL-002 exposes an explicit provider bundle, but every Hyperliquid runtime path
+        // remains skeleton-only. Presence in the registry must not make the schedule preflight green.
         $command = new ExchangeRuntimeCheckCommand(
             $this->adapterRegistry($this->adapter(Exchange::HYPERLIQUID, MarketType::PERPETUAL, supportsPrivateWs: true)),
             $this->providerRegistry($this->providerBundle(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),
@@ -365,8 +365,10 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Live allowed: no', $output);
         self::assertStringContainsString('Network: testnet', $output);
         self::assertStringContainsString('Mainnet enabled: no', $output);
+        self::assertStringContainsString('Readiness level: not_ready', $output);
+        self::assertStringContainsString('hyperliquid_provider_bundle_skeleton_not_ready', $output);
         self::assertStringContainsString('Recommended dry_run: true', $output);
-        self::assertStringContainsString('Schedule ready: yes', $output);
+        self::assertStringContainsString('Schedule ready: no', $output);
     }
 
     public function testHyperliquidMainnetEnabledStillForbidsLive(): void
@@ -400,6 +402,10 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Live allowed: no', $output);
         self::assertStringContainsString('Network: mainnet', $output);
         self::assertStringContainsString('Mainnet enabled: yes', $output);
+        self::assertStringContainsString('Readiness level: not_ready', $output);
+        self::assertStringContainsString('Readiness blocking errors: mainnet_write_guard_missing, hyperliquid_provider_bundle_skeleton_not_ready', $output);
+        self::assertStringContainsString('Mainnet write guard: no', $output);
+        self::assertStringContainsString('Demo/testnet write guard: no', $output);
         self::assertStringContainsString('Recommended dry_run: true', $output);
     }
 

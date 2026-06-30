@@ -296,6 +296,13 @@ services:
             $marketType: !php/const App\Common\Enum\MarketType::PERPETUAL
         public: false
 
+    App\Provider\Context\ExchangeContext.hyperliquid_perpetual:
+        class: App\Provider\Context\ExchangeContext
+        arguments:
+            $exchange: !php/const App\Common\Enum\Exchange::HYPERLIQUID
+            $marketType: !php/const App\Common\Enum\MarketType::PERPETUAL
+        public: false
+
     # The fake provider classes themselves are autowired by the App\Provider\
     # resource block above; only the contexts and bundles need explicit wiring.
     App\Provider\Registry\ExchangeProviderBundle.fake_perpetual:
@@ -335,6 +342,21 @@ services:
             $systemProvider: '@App\Provider\Okx\OkxSystemProvider'
         public: false
 
+    # --- Hyperliquid provider bundle ---
+    # Testnet readiness skeleton for perpetual only. Every gateway fails
+    # explicitly with not_ready reasons until the dedicated read/signing PRs
+    # implement real Hyperliquid surfaces. No Bitmart fallback, no broadcast.
+    App\Provider\Registry\ExchangeProviderBundle.hyperliquid_perpetual:
+        class: App\Provider\Registry\ExchangeProviderBundle
+        arguments:
+            $context: '@App\Provider\Context\ExchangeContext.hyperliquid_perpetual'
+            $klineProvider: '@App\Provider\Hyperliquid\HyperliquidMarketGateway'
+            $contractProvider: '@App\Provider\Hyperliquid\HyperliquidMetadataProvider'
+            $orderProvider: '@App\Provider\Hyperliquid\HyperliquidExecutionGateway'
+            $accountProvider: '@App\Provider\Hyperliquid\HyperliquidAccountGateway'
+            $systemProvider: '@App\Provider\Hyperliquid\HyperliquidSystemProvider'
+        public: false
+
     App\Provider\Registry\ExchangeProviderRegistry:
         arguments:
             $bundles:
@@ -343,6 +365,7 @@ services:
                 - '@App\Provider\Registry\ExchangeProviderBundle.fake_perpetual'
                 - '@App\Provider\Registry\ExchangeProviderBundle.fake_spot'
                 - '@App\Provider\Registry\ExchangeProviderBundle.okx_perpetual'
+                - '@App\Provider\Registry\ExchangeProviderBundle.hyperliquid_perpetual'
             $defaultExchange: !php/const App\Common\Enum\Exchange::BITMART
             $defaultMarketType: !php/const App\Common\Enum\MarketType::PERPETUAL
 

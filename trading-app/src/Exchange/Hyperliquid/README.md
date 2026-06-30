@@ -13,6 +13,11 @@ First API-first Hyperliquid integration slice.
 - Internal app client order IDs are deterministically mapped to Hyperliquid Cloid values (`0x` + 128-bit hex) before they reach `/exchange`.
 - Private WebSocket support is not advertised yet; keep reconciliation on REST snapshots until a Hyperliquid WS client and normalizer are added.
 - Live signing is intentionally not enabled by the default REST client. Inject a signed `HyperliquidRestClientInterface` implementation before sending real testnet orders.
+- HL-002 adds a separate `App\Provider\Hyperliquid\*` provider bundle skeleton for
+  `hyperliquid/perpetual`. Those provider gateways are deliberately fail-closed:
+  they throw `HyperliquidProviderNotReadyException`, do not call `/info`, do not
+  sign, do not broadcast `/exchange`, and keep `app:exchange:runtime-check
+  hyperliquid perpetual` at `Readiness level: not_ready` / `Schedule ready: no`.
 
 Environment:
 
