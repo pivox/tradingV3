@@ -413,7 +413,7 @@ final readonly class HyperliquidLifecycleNormalizer
     private function status(mixed $status): HyperliquidLifecycleStatus
     {
         $normalized = strtolower((string) preg_replace('/[^a-zA-Z0-9]+/', '', (string) $status));
-        if (str_contains($normalized, 'canceled') || str_contains($normalized, 'cancelled')) {
+        if (str_contains($normalized, 'cancel')) {
             return HyperliquidLifecycleStatus::CANCELED;
         }
         if (str_contains($normalized, 'rejected')) {
@@ -457,6 +457,22 @@ final readonly class HyperliquidLifecycleNormalizer
     private function orderType(array $row): ExchangeOrderType
     {
         $type = strtolower($this->string($row['orderType'] ?? $row['type'] ?? ''));
+        if ($this->bool($row['isTrigger'] ?? false) || $this->hasValue($row['triggerPx'] ?? null)) {
+            if (str_contains($type, 'take') || str_contains($type, 'profit') || str_contains($type, 'tp')) {
+                return ExchangeOrderType::TAKE_PROFIT;
+            }
+            if (str_contains($type, 'stop') || str_contains($type, 'sl')) {
+                return ExchangeOrderType::STOP_LOSS;
+            }
+
+            return ExchangeOrderType::TRIGGER;
+        }
+        if (str_contains($type, 'take') || str_contains($type, 'profit')) {
+            return ExchangeOrderType::TAKE_PROFIT;
+        }
+        if (str_contains($type, 'stop')) {
+            return ExchangeOrderType::STOP_LOSS;
+        }
         if (str_contains($type, 'market')) {
             return ExchangeOrderType::MARKET;
         }
@@ -629,7 +645,13 @@ final readonly class HyperliquidLifecycleNormalizer
         /** @var array<string,mixed> $details */
         $normalized = array_merge($details, [
             'status' => $this->firstNonEmpty($wrapper['status'] ?? null, $details['status'] ?? null, $row['status'] ?? null),
-            'uTime' => $this->firstNonEmpty($wrapper['statusTimestamp'] ?? null, $wrapper['uTime'] ?? null, $details['uTime'] ?? null, $row['uTime'] ?? null),
+            'uTime' => $this->firstNonEmpty(
+                $wrapper['statusTimestamp'] ?? null,
+                $row['statusTimestamp'] ?? null,
+                $wrapper['uTime'] ?? null,
+                $details['uTime'] ?? null,
+                $row['uTime'] ?? null,
+            ),
         ]);
 
         if ($normalized['status'] === 'order') {

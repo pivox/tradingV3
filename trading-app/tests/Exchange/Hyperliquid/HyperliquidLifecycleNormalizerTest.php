@@ -159,13 +159,49 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(0.7, $lifecycle->remainingQuantity, 0.000001);
     }
 
+    public function testPreservesTopLevelHistoricalOrderStatusTimestamp(): void
+    {
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([[
+            'status' => 'filled',
+            'statusTimestamp' => 1_767_225_700_000,
+            'order' => [
+                'coin' => 'BTC',
+                'oid' => 1004,
+                'side' => 'B',
+                'sz' => '0',
+                'origSz' => '1',
+                'limitPx' => '25020',
+                'orderType' => 'Limit',
+                'timestamp' => 1_767_225_600_000,
+            ],
+        ]]);
+
+        self::assertSame(HyperliquidLifecycleStatus::FILLED, $lifecycle->status);
+        self::assertSame(1_767_225_700, $lifecycle->updatedAt->getTimestamp());
+    }
+
     public function testNormalizesCamelCaseTerminalOrderStatuses(): void
     {
         $canceled = $this->orderRow(remaining: '1', original: '1', status: 'marginCanceled', updatedAt: 1_767_225_606_000);
         $rejected = $this->orderRow(remaining: '1', original: '1', status: 'badAloPxRejected', updatedAt: 1_767_225_607_000);
+        $scheduled = $this->orderRow(remaining: '1', original: '1', status: 'scheduledCancel', updatedAt: 1_767_225_608_000);
 
         self::assertSame(HyperliquidLifecycleStatus::CANCELED, $this->normalizer->normalizeOrderLifecycle([$canceled])->status);
         self::assertSame(HyperliquidLifecycleStatus::REJECTED, $this->normalizer->normalizeOrderLifecycle([$rejected])->status);
+        self::assertSame(HyperliquidLifecycleStatus::CANCELED, $this->normalizer->normalizeOrderLifecycle([$scheduled])->status);
+    }
+
+    public function testNormalizesStopOrdersAsTriggerProtectionTypes(): void
+    {
+        $stop = $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_609_000);
+        $stop['orderType'] = 'Stop Market';
+        $stop['triggerPx'] = '24900';
+        $takeProfit = $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_610_000);
+        $takeProfit['orderType'] = 'Take Profit Limit';
+        $takeProfit['triggerPx'] = '26000';
+
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $this->normalizer->normalizeOrderLifecycle([$stop])->orderType);
+        self::assertSame(ExchangeOrderType::TAKE_PROFIT, $this->normalizer->normalizeOrderLifecycle([$takeProfit])->orderType);
     }
 
     public function testNormalizesPositionSnapshotAndZeroClose(): void
