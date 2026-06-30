@@ -16,6 +16,7 @@ use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Hyperliquid\HyperliquidRuntimeCheck;
 use App\Provider\Okx\OkxRuntimeCheck;
 use App\Provider\Registry\ExchangeProviderBundle;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -75,7 +76,10 @@ final class ExchangeRuntimeCheckCommand extends Command
         $okxReadinessReport = $exchange === Exchange::OKX
             ? $this->okxReadinessReport($marketType, $adapterStatus, $providerStatus, $credentials, $adapter, $providerBundle)
             : null;
-        $scheduleReady = $this->scheduleReady($exchange, $adapterStatus, $providerStatus, $okxReadinessReport);
+        $hyperliquidReadinessReport = $exchange === Exchange::HYPERLIQUID
+            ? $this->hyperliquidReadinessReport($marketType)
+            : null;
+        $scheduleReady = $this->scheduleReady($exchange, $adapterStatus, $providerStatus, $okxReadinessReport, $hyperliquidReadinessReport);
         $recommendedDryRun = !$scheduleReady || $credentials !== 'ok' || $liveTrading !== 'enabled';
 
         $output->writeln(sprintf('Exchange: %s', $exchange->value));
@@ -111,6 +115,12 @@ final class ExchangeRuntimeCheckCommand extends Command
             $output->writeln('Live allowed: no');
             $output->writeln(sprintf('Network: %s', $this->hyperliquidConfig->normalizedEnvironment()));
             $output->writeln(sprintf('Mainnet enabled: %s', $this->hyperliquidConfig->mainnetEnabled ? 'yes' : 'no'));
+            if ($hyperliquidReadinessReport instanceof ExchangeReadinessReport) {
+                $hyperliquidReadiness = $hyperliquidReadinessReport->toArray();
+                $output->writeln(sprintf('Readiness level: %s', $hyperliquidReadinessReport->readyLevel->value));
+                $output->writeln(sprintf('Readiness blocking errors: %s', $this->formatReasons($this->stringReasons($hyperliquidReadiness['blocking_errors']))));
+                $output->writeln(sprintf('Readiness warnings: %s', $this->formatReasons($this->stringReasons($hyperliquidReadiness['warnings']))));
+            }
         }
         $output->writeln(sprintf('Recommended dry_run: %s', $recommendedDryRun ? 'true' : 'false'));
         $output->writeln(sprintf('Schedule ready: %s', $scheduleReady ? 'yes' : 'no'));
@@ -209,6 +219,7 @@ final class ExchangeRuntimeCheckCommand extends Command
         string $adapterStatus,
         string $providerStatus,
         ?ExchangeReadinessReport $okxReadinessReport = null,
+        ?ExchangeReadinessReport $hyperliquidReadinessReport = null,
     ): bool {
         if ($adapterStatus !== 'found' || $providerStatus !== 'found') {
             return false;
@@ -222,7 +233,30 @@ final class ExchangeRuntimeCheckCommand extends Command
                 ], true);
         }
 
+        if ($exchange === Exchange::HYPERLIQUID) {
+            return $hyperliquidReadinessReport instanceof ExchangeReadinessReport
+                && \in_array($hyperliquidReadinessReport->readyLevel, [
+                    ExchangeReadinessLevel::LocalDryRunReady,
+                    ExchangeReadinessLevel::DemoTestnetCandidate,
+                ], true);
+        }
+
         return true;
+    }
+
+    private function hyperliquidReadinessReport(MarketType $marketType): ExchangeReadinessReport
+    {
+        return (new HyperliquidRuntimeCheck())->check(new ExchangeReadinessInput(
+            exchange: Exchange::HYPERLIQUID,
+            marketType: $marketType,
+            environment: $this->hyperliquidConfig->normalizedEnvironment(),
+            mainnetWriteGuard: !$this->hyperliquidConfig->mainnetEnabled,
+            demoTestnetWriteGuard: false,
+            killSwitch: true,
+            dryRun: true,
+            allowedMarkets: [$marketType->value],
+            maxNotional: 25.0,
+        ));
     }
 
     private function okxReadinessReport(
