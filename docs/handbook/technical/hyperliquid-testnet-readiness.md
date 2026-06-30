@@ -267,8 +267,17 @@ Les elements suivants restent explicitement non supportes :
 
 ## Rollback
 
-HL-001 est docs-only. Le rollback applicatif est le revert de cette page et de
-son entree de navigation.
+HL-001 est docs-only. Le rollback applicatif HL-001 est le revert de cette page
+et de son entree de navigation.
+
+HL-002 ajoute du code/configuration applicative. Son rollback doit aussi retirer :
+
+- les services `App\Provider\Hyperliquid\*` et les interfaces signer/nonce ;
+- l'entree `ExchangeContext.hyperliquid_perpetual` dans `services.yaml` ;
+- le bundle `ExchangeProviderBundle.hyperliquid_perpetual` et son injection dans
+  `ExchangeProviderRegistry` ;
+- le branchement `HyperliquidRuntimeCheck` dans `ExchangeRuntimeCheckCommand` ;
+- les tests HL-002 associes.
 
 Le rollback operationnel a conserver pour les PRs suivantes reste :
 

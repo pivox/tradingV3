@@ -18,6 +18,11 @@ final readonly class HyperliquidRuntimeCheck implements ExchangeRuntimeCheckInte
             throw new \InvalidArgumentException('HyperliquidRuntimeCheck only accepts exchange=hyperliquid.');
         }
 
+        $blockingErrors = $input->blockingErrors;
+        if (!$input->mainnetWriteGuard) {
+            $blockingErrors[] = 'mainnet_write_guard_missing';
+        }
+
         return new ExchangeReadinessReport(
             exchange: $input->exchange,
             marketType: $input->marketType,
@@ -42,7 +47,7 @@ final readonly class HyperliquidRuntimeCheck implements ExchangeRuntimeCheckInte
             maxNotional: $input->maxNotional,
             configHash: $input->configHash,
             blockingErrors: array_values(array_unique([
-                ...$input->blockingErrors,
+                ...$blockingErrors,
                 'hyperliquid_provider_bundle_skeleton_not_ready',
             ])),
             warnings: array_values(array_unique([

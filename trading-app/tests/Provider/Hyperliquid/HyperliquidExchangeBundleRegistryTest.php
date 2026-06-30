@@ -159,6 +159,21 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
         self::assertTrue($report->killSwitch);
     }
 
+    public function testRuntimeCheckPreservesMainnetGuardFailure(): void
+    {
+        $report = (new HyperliquidRuntimeCheck())->check(new ExchangeReadinessInput(
+            exchange: Exchange::HYPERLIQUID,
+            marketType: MarketType::PERPETUAL,
+            environment: 'mainnet',
+            mainnetWriteGuard: false,
+            demoTestnetWriteGuard: true,
+            dryRun: false,
+        ));
+
+        self::assertContains('mainnet_write_guard_missing', $report->blockingErrors);
+        self::assertContains('hyperliquid_provider_bundle_skeleton_not_ready', $report->blockingErrors);
+    }
+
     public function testSignerAndNonceContractsArePresentButNotImplemented(): void
     {
         self::assertTrue(interface_exists(HyperliquidSignerInterface::class));
