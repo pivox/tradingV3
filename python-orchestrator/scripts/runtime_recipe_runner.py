@@ -55,7 +55,7 @@ SECRET_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 
-OKX_RUNTIME_CHECK_COMMAND = (
+RUNTIME_CHECK_COMMAND_PREFIX = (
     "docker",
     "compose",
     "exec",
@@ -64,9 +64,12 @@ OKX_RUNTIME_CHECK_COMMAND = (
     "php",
     "bin/console",
     "app:exchange:runtime-check",
-    "okx",
-    "perpetual",
 )
+
+TARGET_FIXTURE_FILES = {
+    "okx": "r1_r16_okx_dry_run_dashboard.json",
+    "hyperliquid": "r1_r16_hyperliquid_dry_run_dashboard.json",
+}
 
 
 class RecipeHttpClient(Protocol):
@@ -140,7 +143,7 @@ class RecipeRunner:
 
         if service_ok:
             dashboards = self._apply_all_fixtures(
-                include_target=self.config.target_exchange.strip().lower() != "okx"
+                include_target=not self._target_requires_preflight()
                 or preflight["status"] == "PASS"
             )
             for scenario in selected:
@@ -196,12 +199,12 @@ class RecipeRunner:
         target = self.config.target_exchange.strip().lower()
         if target == "fake":
             return {"status": "PASS", "notes": "runtime-check not required for Fake/Paper dry-run"}
-        if target != "okx":
+        if target not in TARGET_FIXTURE_FILES:
             return {
                 "status": "BLOCKED",
                 "notes": f"unsupported runtime recipe target_exchange: {self.config.target_exchange}",
             }
-        command = OKX_RUNTIME_CHECK_COMMAND
+        command = (*RUNTIME_CHECK_COMMAND_PREFIX, target, "perpetual")
         try:
             completed = subprocess.run(
                 command,
@@ -214,7 +217,7 @@ class RecipeRunner:
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {
                 "status": "BLOCKED",
-                "notes": "OKX runtime-check did not complete",
+                "notes": f"{target} runtime-check did not complete",
                 "command": list(command),
                 "error_type": exc.__class__.__name__,
                 "error": str(exc),
@@ -224,14 +227,14 @@ class RecipeRunner:
         if completed.returncode == 0 and schedule_ready == "yes":
             return {
                 "status": "PASS",
-                "notes": "OKX runtime-check schedule ready",
+                "notes": f"{target} runtime-check schedule ready",
                 "command": list(command),
                 "readiness_level": parsed.get("readiness_level"),
                 "schedule_ready": schedule_ready,
             }
         return {
             "status": "BLOCKED",
-            "notes": "OKX runtime-check is not schedule ready",
+            "notes": f"{target} runtime-check is not schedule ready",
             "command": list(command),
             "returncode": completed.returncode,
             "readiness_level": parsed.get("readiness_level"),
@@ -254,29 +257,37 @@ class RecipeRunner:
         nominal = self._read_fixture("r1_r16_nominal_fake_dashboard.json")
         degraded = self._read_fixture("r1_r16_degraded_fake_dashboard.json")
         fixtures = {"nominal": nominal, "degraded": degraded}
-        if self.config.target_exchange.strip().lower() != "okx":
+        target = self.config.target_exchange.strip().lower()
+        if target == "fake":
             return fixtures
-        okx_path = self.config.fixtures_dir / "r1_r16_okx_dry_run_dashboard.json"
-        if not okx_path.exists():
-            raise FileNotFoundError(f"missing OKX runtime recipe fixture: {okx_path}")
-        fixtures["okx"] = json.loads(okx_path.read_text(encoding="utf-8"))
+        fixture_file = TARGET_FIXTURE_FILES.get(target)
+        if fixture_file is None:
+            return fixtures
+        target_path = self.config.fixtures_dir / fixture_file
+        if not target_path.exists():
+            raise FileNotFoundError(f"missing {target} runtime recipe fixture: {target_path}")
+        fixtures[target] = json.loads(target_path.read_text(encoding="utf-8"))
         return fixtures
 
     def _read_fixture(self, filename: str) -> dict[str, Any]:
         return json.loads((self.config.fixtures_dir / filename).read_text(encoding="utf-8"))
 
     def _apply_all_fixtures(self, *, include_target: bool = True) -> dict[str, dict[str, Any]]:
+        target = self.config.target_exchange.strip().lower()
         return {
             name: self._apply_fixture(fixture)
             for name, fixture in self.fixtures.items()
-            if include_target or name != "okx"
+            if include_target or name != target
         }
 
     def _scenario_requires_target_preflight(self, scenario: str) -> bool:
         return (
-            self.config.target_exchange.strip().lower() == "okx"
+            self._target_requires_preflight()
             and scenario in TARGET_EXCHANGE_SCENARIOS
         )
+
+    def _target_requires_preflight(self) -> bool:
+        return self.config.target_exchange.strip().lower() in TARGET_FIXTURE_FILES
 
     def _apply_fixture(self, fixture: dict[str, Any]) -> dict[str, Any]:
         dashboard_id = self._upsert_dashboard(fixture["dashboard"])
@@ -532,18 +543,19 @@ class RecipeRunner:
         )
 
     def _scenario_r14(self, dashboards: dict[str, dict[str, Any]]) -> dict[str, Any]:
-        dashboard_id = dashboards[self._target_recipe()["dashboard"]]["id"]
+        target = self._target_recipe()
+        dashboard_id = dashboards[target["dashboard"]]["id"]
         status, body = self.http.request(
             "POST",
             f"/dashboards/{dashboard_id}/sets",
             json_body={
-                "set_id": "recipe_okx_live_forbidden_probe",
+                "set_id": target["live_probe_set"],
                 "enabled": False,
                 "action": "mtf_run",
-                "exchange": "okx",
+                "exchange": target["live_probe_exchange"],
                 "market_type": "perpetual",
                 "mtf_profile": "regular",
-                "environment": "demo",
+                "environment": target["live_probe_environment"],
                 "dry_run": False,
                 "workers": 1,
                 "sync_tables": False,
@@ -555,7 +567,7 @@ class RecipeRunner:
         )
         ok = self._is_expected_live_guard_refusal(status, body)
         if not ok:
-            self._delete_set_if_present(dashboard_id, "recipe_okx_live_forbidden_probe")
+            self._delete_set_if_present(dashboard_id, target["live_probe_set"])
         return self._result(
             "R14",
             "PASS" if ok else "FAIL",
@@ -571,6 +583,9 @@ class RecipeRunner:
                 "r1_set": "recipe_fake_regular",
                 "r2_sets": ("recipe_fake_regular", "recipe_fake_scalper", "recipe_fake_scalper_micro"),
                 "disabled_set": "recipe_fake_disabled",
+                "live_probe_set": "recipe_okx_live_forbidden_probe",
+                "live_probe_exchange": "okx",
+                "live_probe_environment": "demo",
             }
         if target == "okx":
             return {
@@ -578,6 +593,19 @@ class RecipeRunner:
                 "r1_set": "recipe_okx_regular",
                 "r2_sets": ("recipe_okx_regular", "recipe_okx_scalper_micro"),
                 "disabled_set": "recipe_okx_disabled",
+                "live_probe_set": "recipe_okx_live_forbidden_probe",
+                "live_probe_exchange": "okx",
+                "live_probe_environment": "demo",
+            }
+        if target == "hyperliquid":
+            return {
+                "dashboard": "hyperliquid",
+                "r1_set": "recipe_hyperliquid_regular",
+                "r2_sets": ("recipe_hyperliquid_regular", "recipe_hyperliquid_scalper_micro"),
+                "disabled_set": "recipe_hyperliquid_disabled",
+                "live_probe_set": "recipe_hyperliquid_live_forbidden_probe",
+                "live_probe_exchange": "hyperliquid",
+                "live_probe_environment": "testnet",
             }
         raise ValueError(f"unsupported runtime recipe target_exchange: {self.config.target_exchange}")
 
@@ -863,7 +891,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scenario", action="append", choices=ALL_SCENARIOS)
     parser.add_argument(
         "--target-exchange",
-        choices=("fake", "okx"),
+        choices=("fake", "okx", "hyperliquid"),
         default="fake",
         help="Recipe target for R1/R2/R14; fake remains the default R1-R16 baseline.",
     )

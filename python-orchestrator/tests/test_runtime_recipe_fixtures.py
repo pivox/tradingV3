@@ -146,6 +146,30 @@ def test_runtime_recipe_okx_dry_run_fixture_is_exchange_scoped():
             assert symbol.endswith("USDT")
 
 
+def test_runtime_recipe_hyperliquid_dry_run_fixture_is_exchange_scoped():
+    fixture = _load(FIXTURE_DIR / "r1_r16_hyperliquid_dry_run_dashboard.json")
+
+    assert fixture["fixture_id"] == "runtime-recipe-r1-r16-hyperliquid-dry-run-v1"
+    assert fixture["dry_run_only"] is True
+    assert fixture["dashboard"]["name"] == "recipe-r1-r16-hyperliquid-dry-run"
+    assert {item["set_id"] for item in fixture["sets"]} == {
+        "recipe_hyperliquid_regular",
+        "recipe_hyperliquid_scalper_micro",
+        "recipe_hyperliquid_disabled",
+    }
+    for item in fixture["sets"]:
+        assert item["exchange"] == "hyperliquid"
+        assert item["market_type"] == "perpetual"
+        assert item["environment"] == "testnet"
+        assert item["dry_run"] is True
+        assert item["workers"] == 1
+        assert item["sync_tables"] is False
+        assert item["symbols"]
+        for symbol in item["symbols"]:
+            assert symbol == symbol.strip().upper()
+            assert symbol.endswith("USDT")
+
+
 def test_runtime_recipe_fixtures_do_not_contain_secret_material():
     for path in _fixture_paths():
         fixture = _load(path)

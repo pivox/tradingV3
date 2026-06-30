@@ -419,6 +419,80 @@ def test_runner_can_target_okx_dry_run_recipe_without_bitmart_fallback(tmp_path:
     )
 
 
+def test_runner_can_target_hyperliquid_dry_run_recipe_without_bitmart_fallback(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api = FakeRecipeApi()
+    runtime_check_calls: list[tuple[Any, ...]] = []
+
+    def runtime_check(*args, **kwargs):
+        runtime_check_calls.append(args)
+
+        class Completed:
+            returncode = 0
+            stdout = "Readiness level: local_dry_run_ready\nSchedule ready: yes\n"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr(runner_module.subprocess, "run", runtime_check)
+
+    report = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            target_exchange="hyperliquid",
+        ),
+        http_client=api,
+    ).run(scenarios=("R1", "R2", "R14"), keep_fixtures=True)
+
+    statuses = {item["scenario"]: item["status"] for item in report["results"]}
+    assert statuses == {"R1": "PASS", "R2": "PASS", "R14": "PASS"}
+    assert report["dashboards"]["hyperliquid"]["name"] == "recipe-r1-r16-hyperliquid-dry-run"
+    assert report["metadata"]["runtime_check"]["status"] == "PASS"
+    assert report["metadata"]["runtime_check"]["schedule_ready"] == "yes"
+    assert runtime_check_calls
+    assert list(runtime_check_calls[0][0][-3:]) == [
+        "app:exchange:runtime-check",
+        "hyperliquid",
+        "perpetual",
+    ]
+
+    dashboard_id = report["dashboards"]["hyperliquid"]["id"]
+    sets = api.sets[dashboard_id]
+    assert {item["set_id"] for item in sets} == {
+        "recipe_hyperliquid_regular",
+        "recipe_hyperliquid_scalper_micro",
+        "recipe_hyperliquid_disabled",
+    }
+    assert {item["exchange"] for item in sets} == {"hyperliquid"}
+    assert all(item["dry_run"] is True for item in sets)
+    assert all(item["environment"] == "testnet" for item in sets)
+
+    run_requests = [request for request in api.requests if request["path"] == "/orchestrator/run"]
+    assert [request["json"]["idempotency_key"].split("-")[1] for request in run_requests] == [
+        "r1",
+        "r2",
+    ]
+    assert not any(
+        request["json"] and request["json"].get("exchange") == "bitmart"
+        for request in api.requests
+        if isinstance(request["json"], dict)
+    )
+    probe_requests = [
+        request
+        for request in api.requests
+        if request["method"] == "POST"
+        and request["path"].endswith("/sets")
+        and request["json"]["set_id"] == "recipe_hyperliquid_live_forbidden_probe"
+    ]
+    assert probe_requests
+    assert probe_requests[0]["json"]["exchange"] == "hyperliquid"
+    assert probe_requests[0]["json"]["environment"] == "testnet"
+    assert probe_requests[0]["json"]["dry_run"] is False
+
+
 def test_runner_blocks_okx_recipe_when_runtime_check_is_not_schedule_ready(
     tmp_path: Path,
     monkeypatch,
@@ -446,6 +520,42 @@ def test_runner_blocks_okx_recipe_when_runtime_check_is_not_schedule_ready(
 
     assert report["metadata"]["runtime_check"]["status"] == "BLOCKED"
     assert report["summary"]["scenario_counts"] == {"BLOCKED": 3}
+    assert not any(request["path"] == "/orchestrator/run" for request in api.requests)
+
+
+def test_runner_blocks_hyperliquid_recipe_when_runtime_check_is_not_schedule_ready(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api = FakeRecipeApi()
+
+    def runtime_check(*args, **kwargs):
+        class Completed:
+            returncode = 0
+            stdout = "Readiness level: public_read_only\nSchedule ready: no\n"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr(runner_module.subprocess, "run", runtime_check)
+
+    report = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            target_exchange="hyperliquid",
+        ),
+        http_client=api,
+    ).run(scenarios=("R1", "R2", "R14"), keep_fixtures=True)
+
+    assert report["metadata"]["runtime_check"]["status"] == "BLOCKED"
+    assert report["metadata"]["runtime_check"]["schedule_ready"] == "no"
+    assert report["summary"]["scenario_counts"] == {"BLOCKED": 3}
+    assert "hyperliquid" not in report["dashboards"]
+    assert not any(
+        dashboard["name"] == "recipe-r1-r16-hyperliquid-dry-run"
+        for dashboard in api.dashboards
+    )
     assert not any(request["path"] == "/orchestrator/run" for request in api.requests)
 
 
@@ -569,6 +679,22 @@ def test_temporal_command_parser_accepts_flagged_arguments():
         "--schedule-id",
         "recipe-orchestrator-r1-r16",
     ]
+
+
+def test_parser_accepts_hyperliquid_runtime_recipe_target():
+    args = runner_module._parse_args(
+        [
+            "--confirm",
+            "DRY_RUN_ONLY",
+            "--target-exchange",
+            "hyperliquid",
+            "--scenario",
+            "R1",
+        ]
+    )
+
+    assert args.target_exchange == "hyperliquid"
+    assert args.scenario == ["R1"]
 
 
 def test_r11_uses_distinct_anchors_for_schedule_overlap(tmp_path: Path):

@@ -62,6 +62,7 @@ Fixtures versionnees :
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_nominal_fake_dashboard.json`
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_degraded_fake_dashboard.json`
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_okx_dry_run_dashboard.json`
+- `python-orchestrator/fixtures/runtime-recipe/r1_r16_hyperliquid_dry_run_dashboard.json`
 
 Les fixtures Fake/Paper utilisent uniquement :
 
@@ -89,6 +90,25 @@ Si la sortie ne contient pas `Schedule ready: yes`, les scenarios OKX sont
 exportes en `BLOCKED` et aucun appel `/orchestrator/run` n'est envoye pour
 R1/R2/R14. Les autres scenarios restent sur les fixtures Fake/Paper et peuvent
 continuer a produire leur preuve baseline.
+
+La fixture Hyperliquid est limitee a la recette dry-run :
+
+- `exchange=hyperliquid` ;
+- `market_type=perpetual` ;
+- `environment=testnet` ;
+- `dry_run=true` ;
+- `workers=1` ;
+- symboles internes allow-listes `BTCUSDT` ;
+- profils `regular` et `scalper_micro`.
+
+Elle ne cree aucun set Bitmart et ne doit jamais servir a `dry_run=false`.
+Avant d'executer R1/R2/R14 avec `--target-exchange hyperliquid`, le runner
+lance `docker compose exec -T trading-app-php php bin/console app:exchange:runtime-check hyperliquid perpetual`.
+Si la sortie ne contient pas `Schedule ready: yes`, les scenarios Hyperliquid
+sont exportes en `BLOCKED` et aucun appel `/orchestrator/run` n'est envoye pour
+R1/R2/R14. Le probe R14 cree uniquement un set desactive `dry_run=false` pour
+verifier le refus de persistance avant dispatch ; aucun broadcast exchange n'est
+possible dans ce runner.
 
 Application idempotente attendue :
 
@@ -228,6 +248,30 @@ Preuves attendues dans `runtime-recipe-report.json` :
 - `metadata.runtime_check.status=PASS` et `schedule_ready=yes` ;
 - dashboard `recipe-r1-r16-okx-dry-run` applique ;
 - sets `recipe_okx_regular` et `recipe_okx_scalper_micro` dispatches en R2 ;
+- aucun set ou payload `exchange=bitmart` ;
+- R14 refuse le probe `dry_run=false` avant dispatch.
+
+Pour exercer Hyperliquid en dry-run uniquement sur R1, R2 et R14 :
+
+```bash
+cd python-orchestrator
+python scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --target-exchange hyperliquid \
+  --scenario R1 \
+  --scenario R2 \
+  --scenario R14 \
+  --export-dir var/runtime-recipe/hyperliquid-dry-run \
+  --keep-fixtures
+```
+
+Preuves attendues dans `runtime-recipe-report.json` :
+
+- `metadata.target_exchange=hyperliquid` ;
+- `metadata.runtime_check.status=PASS` et `schedule_ready=yes` ;
+- dashboard `recipe-r1-r16-hyperliquid-dry-run` applique ;
+- sets `recipe_hyperliquid_regular` et `recipe_hyperliquid_scalper_micro` dispatches en R2 ;
 - aucun set ou payload `exchange=bitmart` ;
 - R14 refuse le probe `dry_run=false` avant dispatch.
 

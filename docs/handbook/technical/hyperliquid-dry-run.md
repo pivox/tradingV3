@@ -132,12 +132,48 @@ Rollback HL-010 : remettre `HYPERLIQUID_TESTNET_TRADING_ENABLED=0` et/ou revert 
 runtime-check Hyperliquid. Le port dry-run local reste no-broadcast et les schedules Hyperliquid
 restent `dry_run=true`.
 
-## Hors-scope PR12
+## Recette orchestrateur Hyperliquid dry-run
+
+HL-011 ajoute une fixture orchestrateur reproductible :
+
+```text
+python-orchestrator/fixtures/runtime-recipe/r1_r16_hyperliquid_dry_run_dashboard.json
+```
+
+Elle cible uniquement `exchange=hyperliquid`, `market_type=perpetual`,
+`environment=testnet`, `dry_run=true`, `workers=1` et les scenarios `R1`, `R2`,
+`R14`. Le runner `python-orchestrator/scripts/runtime_recipe_runner.py` execute
+d'abord `app:exchange:runtime-check hyperliquid perpetual` via Docker Compose. Si
+la sortie ne contient pas `Schedule ready: yes`, les scenarios Hyperliquid sont
+exportes en `BLOCKED` et aucun appel `/orchestrator/run` n'est envoye pour ces
+scenarios.
+
+Commande de recette :
+
+```bash
+cd python-orchestrator
+python3 scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --target-exchange hyperliquid \
+  --scenario R1 \
+  --scenario R2 \
+  --scenario R14 \
+  --export-dir var/runtime-recipe/hyperliquid-dry-run \
+  --keep-fixtures
+```
+
+Preuves attendues : dashboard `recipe-r1-r16-hyperliquid-dry-run`, sets
+`recipe_hyperliquid_regular` et `recipe_hyperliquid_scalper_micro`, aucun set ou
+payload Bitmart, et refus R14 du probe `dry_run=false` avant dispatch. Cette
+recette ne change pas les strategies et ne diffuse aucun ordre.
+
+## Hors-scope activation live
 
 - aucune activation live Hyperliquid, aucun mainnet trading (PR de readiness live dédiée requise) ;
 - aucun signing réel, aucun appel HTTP, aucun broadcast `/exchange` ;
-- **aucun bundle provider Hyperliquid runtime MTF activé** : `mtf:run`, `POST /api/mtf/run` et le
-  Temporal scheduler ne sont pas branchés sur Hyperliquid par cette PR ;
+- aucune activation Temporal live Hyperliquid ; la recette orchestrateur HL-011 reste
+  `dry_run=true` et fail-closed avant tout dispatch si le runtime-check n'est pas schedule-ready ;
 - aucun branchement `TradeEntry` runtime ;
 - aucun changement de stratégie (`regular` / `scalper` / `scalper_micro`), EntryZone,
   Risk / Leverage / SL-TP ni YAML ;
