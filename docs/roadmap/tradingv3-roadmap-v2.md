@@ -119,6 +119,8 @@ Document : [`02-data-yaml-cockpit-profitability-foundation.md`](./02-data-yaml-c
 
 Objectif : construire la base data/config/ops nécessaire pour décider par données.
 
+Dépendance : la vague 2 complète démarre après stabilisation suffisante de la vague 1. Avant cela, seules les tâches préparatoires sans dépendance demo/testnet peuvent être traitées, par exemple inventaires, ADR, audits de données et docs.
+
 Axes principaux :
 
 - fiabiliser `position_trade_analysis` ;
@@ -133,6 +135,8 @@ Axes principaux :
 Document : [`03-mtf-backstaging-config-mining.md`](./03-mtf-backstaging-config-mining.md)
 
 Objectif : optimiser les configs par mode via backstaging chronologique, puis valider hors période.
+
+Dépendance : ne pas lancer les PR de moteur/scoring backstaging avant que la vague 2 fournisse une base fiable : `position_trade_analysis`, coûts nets, lineage et effective config.
 
 Axes principaux :
 
@@ -149,6 +153,8 @@ Axes principaux :
 Document : [`04-shadow-capital-protection-live-readiness.md`](./04-shadow-capital-protection-live-readiness.md)
 
 Objectif : vérifier que l’edge survit aux conditions de marché réelles sans capital réel, puis préparer la gouvernance de risque.
+
+Dépendance : ne pas lancer la vague 4 avant qu’au moins une config ait un verdict exploitable après vague 3.
 
 Axes principaux :
 
@@ -191,46 +197,55 @@ Les nouvelles vagues issues de #244 peuvent ensuite donner lieu à des issues fi
 
 ## 7. Ordre de priorité recommandé
 
-### P0 — Fiabiliser l’exécution et la donnée
+Cet ordre est séquentiel. Les vagues 2 et 3 ne doivent pas contourner les gates de la vague 1. Les seules tâches autorisées en parallèle sont les tâches préparatoires sans dépendance runtime : inventaires, ADR, docs, audits et lectures read-only.
+
+### P0 — Terminer l’exécution demo/testnet sûre — Vague 1
+
+1. Inventorier les dépendances Bitmart via [#195](https://github.com/pivox/tradingV3/issues/195), sans suppression brutale.
+2. Stabiliser Fake/Paper via [#196](https://github.com/pivox/tradingV3/issues/196) pour conserver un filet de sécurité représentatif.
+3. Finaliser Hyperliquid dry-run/testnet : `HL-008` à `HL-011`.
+4. Finaliser les fixtures et recettes double exchange : `DEMO-001` à `DEMO-005`.
+5. Valider OKX en dry-run puis OKX Demo Trading contrôlé via [#197](https://github.com/pivox/tradingV3/issues/197) et la vague 1.
+6. Valider Hyperliquid en dry-run puis testnet contrôlé via [#198](https://github.com/pivox/tradingV3/issues/198) et la vague 1.
+7. Produire `DEMO-006` : rapport final demo/testnet.
+8. Garder le mainnet impossible : aucun secret mainnet, aucun fallback, aucun write non explicitement demo/testnet.
+
+### P1 — Fiabiliser la donnée et la config — Vague 2 socle
 
 1. Finaliser le lineage complet via [#189](https://github.com/pivox/tradingV3/issues/189).
 2. Fiabiliser `position_trade_analysis` et le PnL net via [#190](https://github.com/pivox/tradingV3/issues/190).
 3. Exécuter la recette runtime via [#188](https://github.com/pivox/tradingV3/issues/188).
 4. Tester reprise, replay, idempotence et rollback dans #188.
-5. Ne basculer aucun legacy avant validation de ces trois issues.
+5. Brancher l’effective config progressivement via [#133](https://github.com/pivox/tradingV3/issues/133).
+6. Ajouter le viewer via [#192](https://github.com/pivox/tradingV3/issues/192).
+7. Ne basculer aucun legacy avant validation de ces fondations.
 
-### P1 — Comprendre les pertes
+### P2 — Comprendre les pertes et produire une baseline nette
 
 1. Produire la baseline par profil dans [#132](https://github.com/pivox/tradingV3/issues/132).
 2. Classer les causes de trades perdants.
-3. Vérifier l’impact réel des frais et du slippage à partir des données certifiées de #190.
+3. Vérifier l’impact réel des frais, spread, slippage et funding à partir des données certifiées de #190.
 4. Proposer des corrections atomiques, sans tuning de fréquence prématuré.
 
-### P2 — Backtesting net et fondations profitabilité
+### P3 — Backtesting net, Front Ops et fondations profitabilité
 
 1. Construire le moteur et le modèle de coûts dans [#191](https://github.com/pivox/tradingV3/issues/191).
 2. Rejouer chaque profil séparément.
 3. Comparer expectancy, drawdown et profit factor.
-4. Préparer un forward test ou shadow test lorsque les données le permettent.
-5. Exécuter la vague 2 pour fiabiliser les métriques, YAML et cockpit.
+4. Décider la surface Front Ops canonique via [#193](https://github.com/pivox/tradingV3/issues/193).
+5. Construire la roadmap d’investigation via [#194](https://github.com/pivox/tradingV3/issues/194).
+6. Exécuter la vague 2 complète pour fiabiliser les métriques, YAML et cockpit.
 
-### P3 — Config effective, Front Ops et backstaging
+### P4 — MTF Backstaging Config Mining — Vague 3
 
-1. Brancher l’Effective Config progressivement via [#133](https://github.com/pivox/tradingV3/issues/133).
-2. Ajouter le viewer via [#192](https://github.com/pivox/tradingV3/issues/192).
-3. Décider la surface canonique via [#193](https://github.com/pivox/tradingV3/issues/193).
-4. Construire la roadmap d’investigation via [#194](https://github.com/pivox/tradingV3/issues/194).
-5. Exécuter la vague 3 MTF Backstaging Config Mining.
+1. Construire le MTF Backstaging Config Mining sans look-ahead.
+2. Optimiser `regular`.
+3. Optimiser `scalper`.
+4. Valider ou rejeter `scalper_micro`.
+5. Valider hors période / walk-forward.
+6. Exporter les YAML avec statut `candidate`, `validated`, `rejected` ou `disabled`.
 
-### P4 — Exchanges demo/testnet puis shadow/readiness
-
-1. Inventorier Bitmart via [#195](https://github.com/pivox/tradingV3/issues/195).
-2. Stabiliser Fake/Paper via [#196](https://github.com/pivox/tradingV3/issues/196).
-3. Valider OKX en dry-run puis demo trading contrôlé via [#197](https://github.com/pivox/tradingV3/issues/197) et la vague 1.
-4. Valider Hyperliquid en dry-run puis testnet contrôlé via [#198](https://github.com/pivox/tradingV3/issues/198) et la vague 1.
-5. N’envisager le mainnet qu’après runtime-check, recette, rollback, shadow et go/no-go explicite.
-
-### P5 — Shadow, capital protection et décision business
+### P5 — Shadow, capital protection et décision business — Vague 4
 
 1. Exécuter la vague 4 Shadow Production.
 2. Ajouter le capital protection layer.
@@ -264,28 +279,29 @@ Construire un moteur de trading modulaire, observable et testable, piloté par l
 
 ## État global
 
+- Vague 1 — OKX/Hyperliquid demo-testnet : **priorité immédiate**.
 - Orchestrateur Python / Temporal : **en finalisation runtime**.
-- Lineage et analytics : **à fiabiliser**.
+- Lineage et analytics : **à fiabiliser après gates demo/testnet**.
 - TradingCore : **fondations présentes, branchement incomplet**.
 - Effective Config : **resolver présent, intégration runtime à poursuivre**.
 - Front Ops : **surface canonique à décider**.
 - Analytics « bad trades first » : **priorité produit**.
 - Backtesting net : **à compléter**.
+- Backstaging MTF : **nouveau chantier config mining après vague 2**.
+- Shadow / Capital Protection : **chantier pre-live après vague 3**.
 - OKX / Hyperliquid : **demo/testnet uniquement, jamais mainnet**.
-- Backstaging MTF : **nouveau chantier config mining**.
-- Shadow / Capital Protection : **nouveau chantier pre-live**.
 - Bitmart : **legacy encore nécessaire**.
 
 ## Priorités
 
-1. Fiabilité orchestration et données.
-2. Baseline des pertes par profil.
-3. Backtesting net et coûts réels.
-4. Effective Config et Front Ops.
-5. OKX/Hyperliquid demo-testnet.
-6. MTF Backstaging Config Mining.
-7. Shadow Production et Capital Protection.
-8. Décision go/no-go business.
+1. Terminer l’exécution OKX/Hyperliquid demo-testnet sûre.
+2. Fiabiliser orchestration, données, `position_trade_analysis` et config effective.
+3. Produire la baseline nette des pertes par profil.
+4. Construire le backtesting net et les coûts réels.
+5. Industrialiser Effective Config et Front Ops.
+6. Optimiser les configs par mode via MTF Backstaging Config Mining.
+7. Passer en Shadow Production avec Capital Protection.
+8. Décider : go/no-go business, pause, refonte ou projet R&D/portfolio.
 
 ## Suivi
 
@@ -311,6 +327,7 @@ La roadmap détaillée est maintenue dans :
 
 Cette issue sera clôturée lorsque :
 
+- l’exécution demo/testnet sera sûre et rollbackable ;
 - le pipeline cible sera validé de bout en bout ;
 - les données PnL seront fiables ;
 - une baseline nette sera disponible pour les trois profils ;
