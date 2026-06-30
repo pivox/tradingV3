@@ -88,6 +88,7 @@ reutilisables.
 | Nonce manager | Livre HL-005 | `PersistentHyperliquidNonceManager` persiste `hyperliquid_nonce_state` par `environment + network + signer_address`, garde `account_address` en audit, rejette la reutilisation d'un signer sur un autre compte, et detecte les replays. | L'utiliser seulement dans une PR mutative future, apres signer crypto officiel et garde `/exchange`. |
 | Metadata / precision | Renforce HL-007 | Mapping `symbol -> coin -> asset_id`, `szDecimals`, tick prix, step quantite, max leverage, status marche et flags de qualite sont exposes dans `HyperliquidInstrumentMetadataDto`. Les collisions d'asset et metadata requises manquantes ne sont pas resolues arbitrairement. | Min-notional si Hyperliquid l'expose dans une surface officielle future. |
 | Fees / funding / costs | Renforce HL-007 | Funding public absent reste `null` avec `funding_rate_unknown`. `getTradingFees()` lit `userFees` read-only et expose maker/taker `null` + flags si absents. User fills et funding history sont lisibles via account read-only, redacted et non certifies PnL. | Ledger/certification dans les PRs dediees. |
+| Lifecycle normalizers | Livre HL-008 | `HyperliquidLifecycleNormalizer` normalise les requetes d'ordre sans broadcast, statuts ordre, fills, positions, funding et erreurs en DTOs stables. Les fills sans ordre passent en `unknown_requires_resync` avec quality flag. | Branchement mutatif testnet, reconciliation privee continue et consommation ledger/position-state complete. |
 | Local dry-run no broadcast | Partiel | `HyperliquidDryRunExecutionPort` simule sans HTTP ni `/exchange`. | Serialization future des payloads HL sans broadcast ni secret. |
 | Runtime-check candidate | Private-read possible HL-006 | `HyperliquidRuntimeCheck` peut retourner `private_read_only` quand les probes publiques et account sont bonnes. La commande runtime reste `Schedule ready: no` tant que les guards local dry-run/protection ne sont pas complets. | Niveaux `local_dry_run_ready`, puis `demo_testnet_candidate`. |
 | SL/TP / protection | A valider | Aucun attachement runtime Hyperliquid n'est prouve par HL-001. | Modele ordre/protection testnet avec SL immediat ou compensation fail-safe. |
@@ -219,6 +220,28 @@ Regles HL-006 :
   `flowType=null` ou `flowType=3`; les flux non-funding restent hors HL-006.
 - Les champs sensibles usuels (`secret`, `apiKey`, `privateKey`, `signature`,
   `passphrase`) sont retires des metadata/raw_reference.
+
+Regles HL-008 :
+
+- `HyperliquidLifecycleNormalizer::normalizeOrderRequest()` retourne le payload
+  action `order` construit localement a partir d'un `PlaceOrderRequest` et d'un
+  `asset_id`. Il ne signe pas, ne reserve pas de nonce et ne poste jamais vers
+  `/exchange`.
+- Les statuts internes stables sont `accepted`, `open`, `partially_filled`,
+  `filled`, `canceled`, `rejected`, `failed` et `unknown_requires_resync`.
+- Les evenements sont dedupliques puis tries par timestamp et rang de statut
+  pour que les replays out-of-order donnent un resultat deterministe.
+- Un fill present sans ligne d'ordre reste exploitable comme fill, mais le
+  lifecycle global devient `unknown_requires_resync` avec
+  `order_absent_fill_present`; aucun fallback par symbole ou fenetre temporelle
+  n'est autorise.
+- Les erreurs connues sont normalisees au minimum en
+  `insufficient_collateral` et `market_unavailable`; les payloads retournes sont
+  redacted.
+- Les positions zero-size restent visibles avec `position_closed_zero_size` afin
+  que les consommateurs position-state puissent enregistrer la fermeture.
+- Les rows funding sont exposees comme role `funding`, devise `USDC`, montant
+  signe preserve. Elles ne certifient pas encore un PnL net.
 
 Exemple operateur :
 
