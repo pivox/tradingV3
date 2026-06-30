@@ -57,6 +57,7 @@ nav:
       - Exploitation: runbooks/operations.md
       - Investigation: runbooks/investigation.md
       - Demo/Testnet kill switch: runbooks/demo-testnet-kill-switch.md
+      - Demo/Testnet operations: runbooks/demo-testnet-operations.md
       - Recette orchestrateur R1-R16: runbooks/orchestrator-runtime-recipe-r1-r16.md
   - Rapports:
       - "Recette runtime orchestrateur #188": reports/orchestrator-runtime-final-report.md
