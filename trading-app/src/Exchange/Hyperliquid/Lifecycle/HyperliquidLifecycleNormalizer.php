@@ -50,7 +50,7 @@ final readonly class HyperliquidLifecycleNormalizer
         $filled = $this->isNonFilledTerminalStatus($baseStatus) ? $fillQuantity : max($fillQuantity, $snapshotFilled);
         if ($this->isNonFilledTerminalStatus($baseStatus)) {
             $remaining = 0.0;
-        } elseif ($latestOrder !== [] && $this->isFillRow($latest) && $this->rowTimeMillis($latest) > $this->rowTimeMillis($base)) {
+        } elseif ($latestOrder !== [] && $this->isFillRow($latest) && $this->rowTimeMillis($latest) >= $this->rowTimeMillis($base)) {
             $filled = min($quantity, max($filled, $snapshotFilled + $this->sumFillQuantityAfter($deduplicated, $base)));
             $remaining = max(0.0, $quantity - $filled);
         }
