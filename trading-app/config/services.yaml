@@ -350,9 +350,9 @@ services:
         public: false
 
     # --- Hyperliquid provider bundle ---
-    # Testnet readiness skeleton for perpetual only. Every gateway fails
-    # explicitly with not_ready reasons until the dedicated read/signing PRs
-    # implement real Hyperliquid surfaces. No Bitmart fallback, no broadcast.
+    # Testnet readiness for perpetual only. Public and account read-only surfaces
+    # use Hyperliquid /info; every mutative path remains fail-closed. No Bitmart
+    # fallback, no broadcast.
     App\Provider\Registry\ExchangeProviderBundle.hyperliquid_perpetual:
         class: App\Provider\Registry\ExchangeProviderBundle
         arguments:

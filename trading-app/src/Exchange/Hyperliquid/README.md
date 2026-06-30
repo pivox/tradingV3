@@ -6,7 +6,7 @@ First API-first Hyperliquid integration slice.
   - https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
   - https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint
 - Defaults to testnet. Mainnet requires `HYPERLIQUID_ENV=mainnet` and `HYPERLIQUID_MAINNET_ENABLED=1`.
-- REST public/account reads use the official `/info` endpoint (`meta`, `l2Book`, `clearinghouseState`, `frontendOpenOrders`, `userFills`).
+- REST public/account reads use the official `/info` endpoint (`meta`, `l2Book`, `clearinghouseState`, `frontendOpenOrders`, `userFills`, `userFillsByTime`, `userFunding`).
 - Open-order reconciliation uses `frontendOpenOrders` so standalone trigger protection orders expose `triggerPx`, `reduceOnly`, and frontend order type metadata.
 - Trading actions are built in official `/exchange` wire format (`order`, `cancel`, `cancelByCloid`, `updateLeverage`).
 - Market orders are sent as IOC limit orders with a 5% slippage cap derived from the current L2 top. Stop-loss/take-profit trigger market orders use the same 5% cap around `stopPrice`.
@@ -25,13 +25,20 @@ First API-first Hyperliquid integration slice.
   `hyperliquid_public_rate_limited`.
 - Public WebSocket is not wired in HL-003. The supported public fallback is
   bounded REST polling through `/info`.
-- Account and execution provider gateways remain fail-closed. They still throw
-  `HyperliquidProviderNotReadyException`, do not sign, and do not broadcast
+- HL-006 enables account read-only on the provider bundle:
+  `clearinghouseState` for collateral/equity/positions,
+  `frontendOpenOrders` for active orders, `userFills`/`userFillsByTime` for
+  fills, and `userFunding` for funding history. These reads use
+  `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS`, reject using the agent address as the
+  account address, redact sensitive metadata, do not sign, and do not broadcast
   `/exchange`.
-- `HyperliquidRuntimeCheck` may reach `public_read_only` when public probes are
-  supplied as good, but `app:exchange:runtime-check hyperliquid perpetual`
-  remains `Schedule ready: no` until account read, local dry-run, protection
-  readiness, and future controlled `/exchange` wiring are implemented.
+- Mutative execution provider methods remain fail-closed with
+  `HyperliquidProviderNotReadyException`.
+- `HyperliquidRuntimeCheck` may reach `private_read_only` when public and
+  account probes are supplied as good, but
+  `app:exchange:runtime-check hyperliquid perpetual` remains
+  `Schedule ready: no` until local dry-run, protection readiness, and future
+  controlled `/exchange` wiring are implemented.
 - `HyperliquidAgentSigner` only accepts `HYPERLIQUID_NETWORK=testnet` and
   `HYPERLIQUID_ENV=testnet`. The application never accepts the wallet principal
   private key; only a dedicated testnet agent key is allowed, and signer outputs
@@ -65,3 +72,8 @@ Rollback for HL-005: migrate down `hyperliquid_nonce_state`, remove the
 `PersistentHyperliquidNonceManager` DI alias, and keep
 `HYPERLIQUID_TESTNET_TRADING_ENABLED=0`. Signer boundaries remain available, but
 no `/exchange` broadcast path is enabled by this slice.
+
+Rollback for HL-006: unset `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS` or remove the
+account/execution provider read-only wiring to the Hyperliquid `/info` client.
+Public read-only HL-003 and nonce HL-005 remain available; mutative paths stay
+fail-closed and no `/exchange` broadcast path is enabled by this slice.
