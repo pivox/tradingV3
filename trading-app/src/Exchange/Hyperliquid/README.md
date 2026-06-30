@@ -5,8 +5,9 @@ First API-first Hyperliquid integration slice.
 - Official docs used:
   - https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
   - https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint
+  - https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size
 - Defaults to testnet. Mainnet requires `HYPERLIQUID_ENV=mainnet` and `HYPERLIQUID_MAINNET_ENABLED=1`.
-- REST public/account reads use the official `/info` endpoint (`meta`, `l2Book`, `clearinghouseState`, `frontendOpenOrders`, `userFills`, `userFillsByTime`, `userFunding`).
+- REST public/account reads use the official `/info` endpoint (`meta`, `l2Book`, `clearinghouseState`, `frontendOpenOrders`, `userFills`, `userFillsByTime`, `userFunding`, `userFees`).
 - Open-order reconciliation uses `frontendOpenOrders` so standalone trigger protection orders expose `triggerPx`, `reduceOnly`, and frontend order type metadata.
 - Trading actions are built in official `/exchange` wire format (`order`, `cancel`, `cancelByCloid`, `updateLeverage`).
 - Market orders are sent as IOC limit orders with a 5% slippage cap derived from the current L2 top. Stop-loss/take-profit trigger market orders use the same 5% cap around `stopPrice`.
@@ -32,6 +33,15 @@ First API-first Hyperliquid integration slice.
   `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS`, reject using the agent address as the
   account address, redact sensitive metadata, do not sign, and do not broadcast
   `/exchange`.
+- HL-007 strengthens market metadata and costs. `HyperliquidInstrumentMetadataDto`
+  exposes derived price tick, quantity step, max leverage, funding, status and
+  quality flags. Missing required sizing fields or suspended markets make
+  `isCompleteForSizing()` false. Duplicate asset names are rejected with
+  `hyperliquid_asset_collision` instead of resolving one arbitrarily.
+- HL-007 also reads user fee schedule through `/info` `userFees`:
+  maker=`userAddRate`, taker=`userCrossRate`, fee currency `USDC`. Missing fee
+  data remains `null` with `maker_fee_unknown`, `taker_fee_unknown` and/or
+  `fee_schedule_unknown`; no absent fee is converted to zero.
 - Mutative execution provider methods remain fail-closed with
   `HyperliquidProviderNotReadyException`.
 - `HyperliquidRuntimeCheck` may reach `private_read_only` when public and
@@ -77,3 +87,8 @@ Rollback for HL-006: unset `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS` or remove the
 account/execution provider read-only wiring to the Hyperliquid `/info` client.
 Public read-only HL-003 and nonce HL-005 remain available; mutative paths stay
 fail-closed and no `/exchange` broadcast path is enabled by this slice.
+
+Rollback for HL-007: revert the metadata strictness and `userFees` read-only
+mapping changes. Public/account reads from HL-003/HL-006 remain available, but
+cost model consumers must treat Hyperliquid fees and incomplete metadata as
+unknown until this slice is restored.

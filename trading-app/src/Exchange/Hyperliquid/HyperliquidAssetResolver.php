@@ -31,6 +31,10 @@ final class HyperliquidAssetResolver
                 continue;
             }
             $name = $this->normalizeSymbol((string) $asset['name']);
+            if (isset($this->assetIds[$name])) {
+                throw new \RuntimeException(sprintf('hyperliquid_asset_collision:%s', $name));
+            }
+
             $this->assetIds[$name] = (int) $index;
         }
 

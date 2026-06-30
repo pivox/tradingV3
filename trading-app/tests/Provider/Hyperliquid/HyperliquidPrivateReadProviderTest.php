@@ -236,6 +236,44 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         self::assertSame([], $client->requests);
     }
 
+    public function testReadsTradingFeesReadOnly(): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $gateway = $this->accountGateway($client);
+
+        $fees = $gateway->getTradingFees('BTCUSDT');
+
+        self::assertSame('hyperliquid', $fees['exchange']);
+        self::assertSame('BTCUSDT', $fees['symbol']);
+        self::assertSame('BTC', $fees['coin']);
+        self::assertSame('USDC', $fees['fee_currency']);
+        self::assertSame('0.0002', $fees['maker']);
+        self::assertSame('0.0005', $fees['taker']);
+        self::assertSame([], $fees['quality_flags']);
+        self::assertArrayNotHasKey('apiSecret', $fees['raw_reference']);
+
+        $request = $client->requests[array_key_last($client->requests)];
+        self::assertSame('userFees', $request['type']);
+        self::assertSame('0xaccount', $request['user']);
+        self::assertSame(0, $client->exchangeCalls);
+    }
+
+    public function testMissingTradingFeesAreUnknownNotZero(): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $client->hideFees = true;
+        $gateway = $this->accountGateway($client);
+
+        $fees = $gateway->getTradingFees('BTCUSDT');
+
+        self::assertNull($fees['maker']);
+        self::assertNull($fees['taker']);
+        self::assertContains('maker_fee_unknown', $fees['quality_flags']);
+        self::assertContains('taker_fee_unknown', $fees['quality_flags']);
+        self::assertContains('fee_schedule_unknown', $fees['quality_flags']);
+        self::assertSame(0, $client->exchangeCalls);
+    }
+
     private function accountGateway(
         FakeHyperliquidPrivateReadClient $client,
         ?HyperliquidConfig $config = null,
@@ -274,6 +312,7 @@ final class FakeHyperliquidPrivateReadClient implements HyperliquidRestClientInt
     public bool $unknownAccount = false;
     public bool $unavailable = false;
     public bool $noPositions = false;
+    public bool $hideFees = false;
     public int $exchangeCalls = 0;
 
     /** @var list<array<string,mixed>> */
@@ -302,6 +341,7 @@ final class FakeHyperliquidPrivateReadClient implements HyperliquidRestClientInt
             'frontendOpenOrders' => $this->openOrders(),
             'userFills', 'userFillsByTime' => $this->fills(),
             'userFunding' => $this->funding(),
+            'userFees' => $this->fees(),
             default => throw new \LogicException('Unexpected Hyperliquid info type: ' . (string) ($request['type'] ?? '')),
         };
     }
@@ -455,6 +495,30 @@ final class FakeHyperliquidPrivateReadClient implements HyperliquidRestClientInt
                     'usdc' => '0.11',
                 ],
             ],
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function fees(): array
+    {
+        if ($this->hideFees) {
+            return [
+                'dailyUserVlm' => [],
+                'apiSecret' => 'must-not-leak',
+            ];
+        }
+
+        return [
+            'userAddRate' => '0.0002',
+            'userCrossRate' => '0.0005',
+            'activeReferralDiscount' => '0.04',
+            'feeSchedule' => [
+                'cross' => '0.00045',
+                'add' => '0.00015',
+            ],
+            'apiSecret' => 'must-not-leak',
         ];
     }
 }

@@ -172,6 +172,38 @@ final readonly class HyperliquidPrivateReadMapper
         ];
     }
 
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    public function tradingFees(array $payload, string $symbol, string $coin): array
+    {
+        $maker = $this->numberOrNull($payload['userAddRate'] ?? null);
+        $taker = $this->numberOrNull($payload['userCrossRate'] ?? null);
+        $qualityFlags = [];
+
+        if ($maker === null) {
+            $qualityFlags[] = 'maker_fee_unknown';
+        }
+        if ($taker === null) {
+            $qualityFlags[] = 'taker_fee_unknown';
+        }
+        if (!\is_array($payload['feeSchedule'] ?? null)) {
+            $qualityFlags[] = 'fee_schedule_unknown';
+        }
+
+        return [
+            'exchange' => 'hyperliquid',
+            'symbol' => strtoupper($symbol),
+            'coin' => strtoupper($coin),
+            'fee_currency' => 'USDC',
+            'maker' => $maker,
+            'taker' => $taker,
+            'quality_flags' => array_values(array_unique($qualityFlags)),
+            'raw_reference' => $this->redacted($payload),
+        ];
+    }
+
     public function symbol(mixed $coin): string
     {
         $coin = strtoupper($this->string($coin));
@@ -282,6 +314,11 @@ final readonly class HyperliquidPrivateReadMapper
         }
 
         return '0';
+    }
+
+    private function numberOrNull(mixed $value): ?string
+    {
+        return $this->isUsableNumber($value) ? (string) $value : null;
     }
 
     private function isUsableNumber(mixed $value): bool

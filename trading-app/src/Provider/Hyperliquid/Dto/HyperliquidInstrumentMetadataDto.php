@@ -25,13 +25,14 @@ final readonly class HyperliquidInstrumentMetadataDto
         public ?string $fundingRate,
         public ?\DateTimeImmutable $fundingTime,
         public array $qualityFlags,
+        public string $status = 'live',
     ) {
     }
 
     public function isCompleteForSizing(): bool
     {
         foreach ($this->qualityFlags as $flag) {
-            if (str_starts_with($flag, 'missing_') || str_starts_with($flag, 'invalid_')) {
+            if (str_starts_with($flag, 'missing_') || str_starts_with($flag, 'invalid_') || $flag === 'market_suspended') {
                 return false;
             }
         }
@@ -72,7 +73,12 @@ final readonly class HyperliquidInstrumentMetadataDto
 
     private function isMultipleOf(string $value, string $step): bool
     {
-        return BigDecimal::of($value)->remainder(BigDecimal::of($step))->isZero();
+        $stepDecimal = BigDecimal::of($step);
+        if ($stepDecimal->isLessThanOrEqualTo(BigDecimal::zero())) {
+            return false;
+        }
+
+        return BigDecimal::of($value)->remainder($stepDecimal)->isZero();
     }
 
     private function isAllowedHyperliquidPrice(string $price): bool
@@ -105,6 +111,10 @@ final readonly class HyperliquidInstrumentMetadataDto
     private function quantizeDown(string $value, string $step): string
     {
         $stepDecimal = BigDecimal::of($step);
+        if ($stepDecimal->isLessThanOrEqualTo(BigDecimal::zero())) {
+            return $value;
+        }
+
         $units = BigDecimal::of($value)->dividedBy($stepDecimal, 0, RoundingMode::DOWN);
 
         return (string) $units
