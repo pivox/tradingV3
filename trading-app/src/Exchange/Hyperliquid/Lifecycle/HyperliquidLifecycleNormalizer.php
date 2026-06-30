@@ -42,9 +42,15 @@ final readonly class HyperliquidLifecycleNormalizer
 
         $quantity = $this->orderQuantity($base, $fills);
         $remaining = $this->remainingQuantity($base, $quantity);
+        $fillQuantity = $this->sumFillQuantity($fills);
+        $baseStatus = $this->hasValue($base['status'] ?? $base['state'] ?? null)
+            ? $this->status($base['status'] ?? $base['state'] ?? null)
+            : null;
         $snapshotFilled = max(0.0, $quantity - $remaining);
-        $filled = max($this->sumFillQuantity($fills), $snapshotFilled);
-        if ($latestOrder !== [] && $this->isFillRow($latest) && $this->rowTimeMillis($latest) > $this->rowTimeMillis($base)) {
+        $filled = $this->isNonFilledTerminalStatus($baseStatus) ? $fillQuantity : max($fillQuantity, $snapshotFilled);
+        if ($this->isNonFilledTerminalStatus($baseStatus)) {
+            $remaining = 0.0;
+        } elseif ($latestOrder !== [] && $this->isFillRow($latest) && $this->rowTimeMillis($latest) > $this->rowTimeMillis($base)) {
             $filled = min($quantity, max($filled, $snapshotFilled + $this->sumFillQuantityAfter($deduplicated, $base)));
             $remaining = max(0.0, $quantity - $filled);
         }
@@ -415,6 +421,9 @@ final readonly class HyperliquidLifecycleNormalizer
         }
 
         $status = $this->status($row['status'] ?? $row['state'] ?? null);
+        if ($this->isNonFilledTerminalStatus($status)) {
+            return $status;
+        }
         if ($status === HyperliquidLifecycleStatus::OPEN && $filled > 0.00000001 && $remaining > 0.00000001) {
             return HyperliquidLifecycleStatus::PARTIALLY_FILLED;
         }
@@ -443,6 +452,15 @@ final readonly class HyperliquidLifecycleNormalizer
             'failed', 'err', 'error' => HyperliquidLifecycleStatus::FAILED,
             default => HyperliquidLifecycleStatus::UNKNOWN_REQUIRES_RESYNC,
         };
+    }
+
+    private function isNonFilledTerminalStatus(?HyperliquidLifecycleStatus $status): bool
+    {
+        return \in_array($status, [
+            HyperliquidLifecycleStatus::CANCELED,
+            HyperliquidLifecycleStatus::REJECTED,
+            HyperliquidLifecycleStatus::FAILED,
+        ], true);
     }
 
     /**

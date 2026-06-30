@@ -264,6 +264,22 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertSame(HyperliquidLifecycleStatus::REJECTED, $this->normalizer->normalizeOrderLifecycle([$iocRejected])->status);
     }
 
+    public function testDoesNotTreatTerminalZeroSizeCancelOrRejectAsFill(): void
+    {
+        $canceled = $this->orderRow(remaining: '0', original: '1', status: 'marginCanceled', updatedAt: 1_767_225_610_000);
+        $rejected = $this->orderRow(remaining: '0', original: '1', status: 'badAloPxRejected', updatedAt: 1_767_225_611_000);
+
+        $canceledLifecycle = $this->normalizer->normalizeOrderLifecycle([$canceled]);
+        $rejectedLifecycle = $this->normalizer->normalizeOrderLifecycle([$rejected]);
+
+        self::assertSame(HyperliquidLifecycleStatus::CANCELED, $canceledLifecycle->status);
+        self::assertEqualsWithDelta(0.0, $canceledLifecycle->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.0, $canceledLifecycle->remainingQuantity, 0.000001);
+        self::assertSame(HyperliquidLifecycleStatus::REJECTED, $rejectedLifecycle->status);
+        self::assertEqualsWithDelta(0.0, $rejectedLifecycle->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.0, $rejectedLifecycle->remainingQuantity, 0.000001);
+    }
+
     public function testNormalizesStopOrdersAsTriggerProtectionTypes(): void
     {
         $stop = $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_609_000);
