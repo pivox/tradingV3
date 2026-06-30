@@ -1,20 +1,25 @@
-# TradingV3 — Relecture de l’issue #173 et découpage recommandé
+# TradingV3 — Roadmap V2 — Pilotage global et vagues de suite
 
-**Date de relecture : 22 juin 2026**  
-**Issue concernée :** [#173 — Roadmap globale TradingV3](https://github.com/pivox/tradingV3/issues/173)
+**Date de relecture initiale :** 22 juin 2026  
+**Mise à jour :** 30 juin 2026  
+**Issue parent :** [#173 — Roadmap globale TradingV3](https://github.com/pivox/tradingV3/issues/173)
+
+Ce document reste le **point d’entrée roadmap V2**. Il ne doit pas contenir tous les détails de chaque PR. Les détails opérationnels sont maintenant séparés en documents de vagues versionnés dans `docs/roadmap/`.
+
+---
 
 ## 1. Décision
 
-L’issue #173 contient trop de sujets pour rester une checklist technique détaillée.
+L’issue #173 doit rester une **issue parent de pilotage**, courte et stable.
 
-Elle doit devenir une **issue parent de pilotage**, courte et stable, qui contient uniquement :
+Elle doit contenir uniquement :
 
 - la vision du projet ;
 - les invariants à ne jamais casser ;
 - l’état synthétique des grands chantiers ;
 - l’ordre de priorité ;
-- les liens vers les issues filles ;
-- les critères permettant de clôturer la roadmap.
+- les liens vers les issues filles et les documents de vagues ;
+- les critères permettant de clôturer ou réorienter la roadmap.
 
 Les critères d’acceptation détaillés, plans de migration, historiques de PR et décisions d’architecture doivent vivre dans :
 
@@ -34,7 +39,8 @@ La priorité est :
 2. fiabiliser la donnée d’analyse ;
 3. obtenir une expectancy nette positive ;
 4. intégrer les frais, le spread, le slippage et le funding ;
-5. seulement ensuite ajuster la fréquence ou ouvrir de nouveaux exchanges.
+5. valider les configs par mode ;
+6. seulement ensuite ajuster la fréquence, ouvrir de nouveaux exchanges ou envisager un pilot réel contrôlé.
 
 La comparaison entre `regular`, `scalper` et `scalper_micro` doit reposer sur :
 
@@ -46,7 +52,8 @@ La comparaison entre `regular`, `scalper` et `scalper_micro` doit reposer sur :
 - le MFE et le MAE ;
 - la durée moyenne ;
 - les coûts d’exécution ;
-- un forward test suffisamment long.
+- la stabilité hors période d’optimisation ;
+- un shadow/forward test suffisamment long.
 
 ---
 
@@ -58,9 +65,11 @@ La comparaison entre `regular`, `scalper` et `scalper_micro` doit reposer sur :
 - Aucune EntryZone desserrée sans preuve PnL.
 - Toute PR doit rester atomique, testée et traçable.
 - Les analyses doivent partir de `position_trade_analysis`, après vérification de sa fiabilité.
-- Les résultats doivent inclure les frais, le spread et le slippage.
-- OKX et Hyperliquid restent en dry-run tant que leur branchement runtime complet n’est pas validé.
-- Bitmart ne doit pas être supprimé tant qu’une solution de remplacement n’est pas réellement opérationnelle.
+- Les résultats doivent inclure les frais, le spread, le slippage et le funding si applicable.
+- OKX et Hyperliquid ne doivent jamais être considérés prêts au mainnet par défaut.
+- OKX/Hyperliquid suivent désormais la logique : dry-run d’abord, puis exécution mutative uniquement sur OKX demo / Hyperliquid testnet après gates dédiés.
+- Aucun secret mainnet ne doit être demandé, stocké, loggé ou documenté.
+- Bitmart ne doit pas être supprimé tant qu’une solution de remplacement réellement opérationnelle n’est pas validée.
 
 ---
 
@@ -68,342 +77,168 @@ La comparaison entre `regular`, `scalper` et `scalper_micro` doit reposer sur :
 
 | Domaine | État synthétique | Décision |
 |---|---|---|
-| Orchestrateur Python | La majorité des lots d’orchestration ont été livrés | Terminer par une recette runtime réelle, pas uniquement des tests isolés |
-| Temporal | La cible est un cron simple appelant l’orchestrateur Python | Ne pas réintroduire l’orchestration multi-target dans Temporal |
-| Corrélation des données | `run_id` est traité, mais le lineage complet reste à fiabiliser | Propager `dashboard_id`, `set_id`, profil, exchange et marché jusqu’aux trades |
-| `position_trade_analysis` | Vue centrale pour l’analyse | Vérifier le rapprochement entrée/sortie et la définition exacte du PnL net |
-| TradingCore | Fondations présentes | Le branchement runtime complet reste à terminer |
-| Effective Config | Resolver en couches présent | Le connecter progressivement au runtime et rendre la config effective observable |
-| Front Ops | Symfony/Twig et React existent | Décider quelle surface devient canonique avant d’étendre les écrans |
+| Orchestrateur Python | Base avancée, recette runtime à conserver | Ne pas réintroduire d’orchestration multi-target dans Temporal |
+| Temporal | Cron simple vers orchestrateur | Garder Temporal comme déclencheur, pas comme moteur trading |
+| Corrélation des données | Lineage à fiabiliser jusqu’au trade | Propager `dashboard_id`, `set_id`, profil, exchange et symbol |
+| `position_trade_analysis` | Vue centrale d’analyse | La fiabiliser avant toute décision stratégique |
+| TradingCore | Fondations présentes | Continuer le branchement runtime sans casser legacy |
+| Effective Config | Resolver en couches présent | Le connecter au runtime et le rendre observable |
+| Front Ops | Symfony/Twig et React existent | Industrialiser un cockpit opérateur utile, pas décoratif |
 | Bitmart | Provider runtime historique | Le conserver temporairement et inventorier ses dépendances |
-| Fake/Paper | Filet de sécurité | Le rendre représentatif avant les migrations exchange |
-| OKX | Adapter/dry-run | Ne pas le considérer prêt au live |
-| Hyperliquid | Adapter/dry-run | Ne pas le considérer prêt au live |
+| Fake/Paper | Filet de sécurité | Le rendre représentatif avant migrations exchange |
+| OKX | Intégration demo-testnet en cours | Dry-run puis OKX demo mutatif contrôlé uniquement après gates |
+| Hyperliquid | Intégration testnet en cours | Dry-run puis testnet mutatif contrôlé uniquement après gates |
 | Analytics | Baseline complète non finalisée | Priorité « bad trades first » |
-| Backtesting net | À compléter | Intégrer frais, spread, slippage, funding et qualité des fills |
-
-### État de la série orchestration
-
-Lors de la dernière relecture :
-
-- les lots UI, Temporal, sécurité, audit, tests et nettoyage étaient majoritairement fusionnés ;
-- la PR [#181](https://github.com/pivox/tradingV3/pull/181) reste une référence historique, mais son périmètre incomplet est désormais repris par [#189](https://github.com/pivox/tradingV3/issues/189) et [#190](https://github.com/pivox/tradingV3/issues/190) ;
-- le lineage complet par `set_id`, profil, exchange et trade est suivi dans #189 ;
-- la fiabilité de `position_trade_analysis` et du PnL net est suivie dans #190 ;
-- la recette de bout en bout sur la stack réelle est suivie dans [#188](https://github.com/pivox/tradingV3/issues/188).
-
-L’état d’avancement doit désormais être maintenu dans les issues de suivi plutôt que dupliqué dans #173.
+| Backtesting / Backstaging | À structurer | Intégrer coûts, no-trades, out-of-sample et anti-look-ahead |
+| Shadow / Live-readiness | Non démarré | Préparer sans activation mainnet |
 
 ---
 
-## 5. Ce qui doit rester dans l’issue #173
+## 5. Vagues roadmap à suivre
 
-L’issue parent doit rester limitée aux blocs suivants :
+### Vague 1 — OKX / Hyperliquid demo-testnet
 
-### Vision
+Document : [`docs/roadmap/01-okx-hyperliquid-demo-testnet.md`](01-okx-hyperliquid-demo-testnet.md)
 
-Construire un moteur de trading modulaire, observable et testable, en séparant :
+Objectif : finaliser l’intégration OKX demo et Hyperliquid testnet sans aucune écriture mainnet.
 
-- stratégie ;
-- orchestration ;
-- runtime applicatif ;
-- providers exchange ;
-- analytics ;
-- backtesting ;
-- Front Ops.
+Statut : en cours avancé.
 
-### État global
+Déjà livré dans la série récente :
 
-Utiliser uniquement quatre statuts :
+- `COMMON-001` à `COMMON-006` ;
+- `OKX-001` à `OKX-009` ;
+- `HL-001` à `HL-007`.
 
-- `À faire` ;
-- `En cours` ;
-- `Bloqué` ;
-- `Terminé`.
+Restant principal :
 
-### Priorités
+- `HL-008` à `HL-011` ;
+- `DEMO-001` à `DEMO-006` ;
+- `OKX-010` ;
+- `HL-012`.
 
-Afficher seulement les priorités P0 à P4 décrites plus bas.
+Critère de sortie : OKX demo et Hyperliquid testnet sont sûrs, observables, rollbackables, et ne peuvent pas basculer en mainnet par erreur.
 
-### Liens
+### Vague 2 — Data, YAML, Cockpit & Profitability Foundation
 
-Chaque chantier doit pointer vers une issue fille et, si nécessaire, vers un document dans `docs/`.
+Document : [`docs/roadmap/02-data-yaml-cockpit-profitability-foundation.md`](02-data-yaml-cockpit-profitability-foundation.md)
+
+Objectif : construire la base de décision data/config/ops avant toute optimisation.
+
+Axes :
+
+- fiabiliser `position_trade_analysis` ;
+- intégrer frais, spread, slippage, funding ;
+- structurer le YAML layered resolver : `base + mode + exchange + mode_exchange + env` ;
+- afficher l’effective config ;
+- industrialiser le cockpit opérateur ;
+- tracer run/set/mode/exchange/symbol jusqu’au trade.
+
+Critère de sortie : TradingV3 sait dire quelle config a produit quelle décision et quel PnL net fiable.
+
+### Vague 3 — MTF Backstaging Config Mining
+
+Document : [`docs/roadmap/03-mtf-backstaging-config-mining.md`](03-mtf-backstaging-config-mining.md)
+
+Objectif : optimiser les configs par mode via backstaging chronologique, sans look-ahead.
+
+Axes :
+
+- générer des configs candidates par mode ;
+- rejouer l’historique chronologiquement ;
+- enregistrer signaux, échecs, no-trades ;
+- calculer MFE/MAE/pnl_R/coûts nets ;
+- valider hors période / walk-forward ;
+- exporter des YAML candidates ou rejeter le mode.
+
+Critère de sortie : chaque mode reçoit un statut `validated_candidate`, `candidate_needs_shadow`, `rejected` ou `disabled_until_new_evidence`.
+
+### Vague 4 — Shadow, Capital Protection & Live-readiness
+
+Document : [`docs/roadmap/04-shadow-capital-protection-live-readiness.md`](04-shadow-capital-protection-live-readiness.md)
+
+Objectif : vérifier que l’edge survit aux conditions réelles avant toute décision de capital réel.
+
+Axes :
+
+- shadow production ;
+- fills réalistes ;
+- spread/orderbook/slippage réels ou pessimistes ;
+- capital protection layer ;
+- mainnet-readiness sans activation ;
+- go/no-go pilot éventuel ;
+- production risk governance ;
+- scaling contrôlé uniquement si preuves suffisantes.
+
+Critère de sortie : TradingV3 produit une décision claire : go small pilot, continuer shadow, rejeter config/mode, ou refondre la stratégie.
 
 ---
 
-## 6. Ce qui doit sortir de l’issue #173
+## 6. Issues de suivi historiques créées ou réutilisées
 
-Les éléments suivants rendent l’issue illisible et doivent être déplacés :
+Ces issues restent utiles, mais elles sont maintenant regroupées dans les vagues ci-dessus.
 
-- l’historique complet des PR ;
-- les détails fichier par fichier ;
-- les payloads JSON complets ;
-- les scénarios détaillés de tests ;
-- les plans de migration exchange ;
-- les spécifications complètes des écrans ;
-- les détails des couches YAML ;
-- les règles complètes de backtesting ;
-- les longues checklists runtime ;
-- les décisions React contre Symfony/Twig ;
-- les investigations sur les trades perdants.
-
----
-
-## 7. Issues de suivi créées ou réutilisées
-
-Les lots ci-dessous possèdent désormais une issue GitHub dédiée. Les issues existantes #132 et #133 sont réutilisées afin d’éviter les doublons.
-
-| Domaine | Issue | Statut de création |
+| Domaine | Issue | Usage actuel |
 |---|---|---|
-| Recette runtime orchestrateur | [#188 — TV3-ORCH-001](https://github.com/pivox/tradingV3/issues/188) | Créée |
-| Lineage run → set → trade | [#189 — TV3-DATA-001](https://github.com/pivox/tradingV3/issues/189) | Créée |
-| Fiabilité `position_trade_analysis` | [#190 — TV3-DATA-002](https://github.com/pivox/tradingV3/issues/190) | Créée |
-| Baseline « bad trades first » | [#132 — Rapport PnL](https://github.com/pivox/tradingV3/issues/132) | Réutilisée |
-| Backtesting net | [#191 — TV3-BACKTEST-001](https://github.com/pivox/tradingV3/issues/191) | Créée |
-| Effective Config en couches | [#133 — Config YAML layered](https://github.com/pivox/tradingV3/issues/133) | Réutilisée |
-| Effective Config Viewer | [#192 — TV3-CONFIG-002](https://github.com/pivox/tradingV3/issues/192) | Créée |
-| Décision Front Ops | [#193 — TV3-FRONT-001](https://github.com/pivox/tradingV3/issues/193) | Créée |
-| Roadmap Front Ops investigation | [#194 — TV3-FRONT-002](https://github.com/pivox/tradingV3/issues/194) | Créée |
-| Inventaire Bitmart | [#195 — TV3-EXCHANGE-001](https://github.com/pivox/tradingV3/issues/195) | Créée |
-| Readiness Fake/Paper | [#196 — TV3-EXCHANGE-002](https://github.com/pivox/tradingV3/issues/196) | Créée |
-| Readiness OKX dry-run | [#197 — TV3-EXCHANGE-003](https://github.com/pivox/tradingV3/issues/197) | Créée |
-| Readiness Hyperliquid dry-run | [#198 — TV3-EXCHANGE-004](https://github.com/pivox/tradingV3/issues/198) | Créée |
-
-### Orchestration et observabilité
-
-#### [#188 — TV3-ORCH-001 : Recette runtime de l’orchestrateur Python](https://github.com/pivox/tradingV3/issues/188)
-
-Objectif : valider l’orchestrateur sur la stack réelle.
-
-Critères principaux :
-
-- migrations appliquées ;
-- dashboards et sets réels ;
-- appels dry-run vers Symfony ;
-- parallélisme borné ;
-- reprise après crash ;
-- redémarrage de container ;
-- replay ;
-- audit ;
-- métriques ;
-- rollback testé ;
-- vérification dans Temporal UI.
-
-#### [#189 — TV3-DATA-001 : Lineage complet run, set et trade](https://github.com/pivox/tradingV3/issues/189)
-
-Propager et persister :
-
-- `run_id` ;
-- `dashboard_id` ;
-- `set_id` ;
-- `mtf_profile` ;
-- `exchange` ;
-- `market_type` ;
-- `symbol` ;
-- identifiant du trade ou de la position.
-
-#### [#190 — TV3-DATA-002 : Fiabiliser `position_trade_analysis`](https://github.com/pivox/tradingV3/issues/190)
-
-Vérifier notamment :
-
-- le rapprochement entrée/clôture par `trade_id` ou `position_id` ;
-- l’absence de doublons ;
-- la cohérence des événements partiels ;
-- la définition contractuelle de `pnl_usdt` ;
-- la présence des frais, du spread, du slippage et du funding.
-
-### Analytics et stratégie
-
-#### [#132 — Baseline « bad trades first »](https://github.com/pivox/tradingV3/issues/132)
-
-Produire une baseline séparée pour :
-
-- `regular` ;
-- `scalper` ;
-- `scalper_micro`.
-
-Mesurer au minimum :
-
-- winrate ;
-- expectancy nette ;
-- profit factor ;
-- max drawdown ;
-- `pnl_R` ;
-- MFE/MAE ;
-- durée ;
-- coûts ;
-- causes récurrentes de pertes.
-
-#### [#191 — TV3-BACKTEST-001 : Backtesting net réaliste](https://github.com/pivox/tradingV3/issues/191)
-
-Inclure :
-
-- frais maker/taker ;
-- spread ;
-- slippage ;
-- funding ;
-- partial fills ;
-- rejet d’ordre ;
-- fallback maker/taker ;
-- time-stop ;
-- TP/SL ;
-- liquidation guard.
-
-Aucun résultat de backtest ne doit être inventé ou extrapolé sans données.
-
-### Effective Config
-
-#### [#133 — Effective Config en couches et branchement runtime](https://github.com/pivox/tradingV3/issues/133)
-
-Architecture cible :
-
-```text
-base
-+ mode
-+ exchange
-+ mode_exchange
-+ env
-= effective config
-```
-
-Le branchement doit être progressif, avec possibilité de comparer ancien et nouveau comportement.
-
-#### [#192 — TV3-CONFIG-002 : Effective Config Viewer](https://github.com/pivox/tradingV3/issues/192)
-
-Afficher :
-
-- les couches chargées ;
-- les valeurs surchargées ;
-- la provenance de chaque valeur ;
-- la config finale utilisée ;
-- les écarts avec la config attendue ;
-- le lien avec le run et le trade.
-
-### Front Ops
-
-#### [#193 — TV3-FRONT-001 : Décider la surface Front Ops canonique](https://github.com/pivox/tradingV3/issues/193)
-
-Décider explicitement entre :
-
-- Symfony/Twig comme front principal ;
-- React comme front principal ;
-- migration progressive ;
-- répartition fonctionnelle clairement définie.
-
-Aucun gros chantier d’écran ne doit démarrer avant cette décision.
-
-#### [#194 — TV3-FRONT-002 : Roadmap Front Ops orientée investigation](https://github.com/pivox/tradingV3/issues/194)
-
-Prioriser les parcours permettant de comprendre :
-
-- pourquoi un run a échoué ;
-- pourquoi un symbole a été ignoré ;
-- pourquoi un trade a été ouvert ;
-- pourquoi il a perdu ;
-- quelle config effective a été utilisée ;
-- quels coûts ont dégradé le résultat.
-
-### Exchanges
-
-#### [#195 — TV3-EXCHANGE-001 : Inventaire Bitmart](https://github.com/pivox/tradingV3/issues/195)
-
-Inventorier :
-
-- services ;
-- providers ;
-- commandes ;
-- workflows ;
-- paramètres ;
-- credentials ;
-- tests ;
-- comportements spécifiques ;
-- dépendances cachées.
-
-#### [#196 — TV3-EXCHANGE-002 : Readiness Fake/Paper](https://github.com/pivox/tradingV3/issues/196)
-
-Vérifier que Fake/Paper représente suffisamment :
-
-- les statuts d’ordre ;
-- les partial fills ;
-- les erreurs ;
-- les timeouts ;
-- les frais ;
-- le slippage ;
-- les positions ;
-- les SL/TP.
-
-#### [#197 — TV3-EXCHANGE-003 : Readiness OKX dry-run](https://github.com/pivox/tradingV3/issues/197)
-
-Le lot doit couvrir :
-
-- provider bundle ;
-- signature ;
-- permissions ;
-- précision ;
-- rate limits ;
-- runtime-check ;
-- dry-run de bout en bout ;
-- tests d’intégration ;
-- rollback.
-
-#### [#198 — TV3-EXCHANGE-004 : Readiness Hyperliquid dry-run](https://github.com/pivox/tradingV3/issues/198)
-
-Le lot doit couvrir :
-
-- wallet et signature ;
-- environnement d’exécution ;
-- précision ;
-- limites ;
-- risk guards ;
-- runtime-check ;
-- dry-run de bout en bout ;
-- tests d’intégration ;
-- rollback.
+| Recette runtime orchestrateur | [#188 — TV3-ORCH-001](https://github.com/pivox/tradingV3/issues/188) | Fondation vague 2 |
+| Lineage run → set → trade | [#189 — TV3-DATA-001](https://github.com/pivox/tradingV3/issues/189) | Fondation vague 2 |
+| Fiabilité `position_trade_analysis` | [#190 — TV3-DATA-002](https://github.com/pivox/tradingV3/issues/190) | Fondation vague 2 |
+| Baseline « bad trades first » | [#132 — Rapport PnL](https://github.com/pivox/tradingV3/issues/132) | Profitability foundation |
+| Backtesting net | [#191 — TV3-BACKTEST-001](https://github.com/pivox/tradingV3/issues/191) | Précurseur vague 3 |
+| Effective Config en couches | [#133 — Config YAML layered](https://github.com/pivox/tradingV3/issues/133) | Vague 2 |
+| Effective Config Viewer | [#192 — TV3-CONFIG-002](https://github.com/pivox/tradingV3/issues/192) | Vague 2 |
+| Décision Front Ops | [#193 — TV3-FRONT-001](https://github.com/pivox/tradingV3/issues/193) | Vague 2 |
+| Roadmap Front Ops investigation | [#194 — TV3-FRONT-002](https://github.com/pivox/tradingV3/issues/194) | Vague 2 |
+| Inventaire Bitmart | [#195 — TV3-EXCHANGE-001](https://github.com/pivox/tradingV3/issues/195) | Vague 1/2 |
+| Readiness Fake/Paper | [#196 — TV3-EXCHANGE-002](https://github.com/pivox/tradingV3/issues/196) | Vague 1 |
+| Readiness OKX dry-run | [#197 — TV3-EXCHANGE-003](https://github.com/pivox/tradingV3/issues/197) | Remplacée/étendue par vague 1 |
+| Readiness Hyperliquid dry-run | [#198 — TV3-EXCHANGE-004](https://github.com/pivox/tradingV3/issues/198) | Remplacée/étendue par vague 1 |
 
 ---
 
-## 8. Ordre de priorité recommandé
+## 7. Ordre de priorité recommandé
 
-### P0 — Fiabiliser l’exécution et la donnée
+### P0 — Terminer l’exécution demo/testnet sûre
 
-1. Finaliser le lineage complet via [#189](https://github.com/pivox/tradingV3/issues/189).
-2. Fiabiliser `position_trade_analysis` et le PnL net via [#190](https://github.com/pivox/tradingV3/issues/190).
-3. Exécuter la recette runtime via [#188](https://github.com/pivox/tradingV3/issues/188).
-4. Tester reprise, replay, idempotence et rollback dans #188.
-5. Ne basculer aucun legacy avant validation de ces trois issues.
+1. Finaliser les PR restantes Hyperliquid dry-run/testnet.
+2. Finaliser les fixtures et recettes double exchange.
+3. Produire le rapport final demo/testnet.
+4. Autoriser `dry_run=false` uniquement sur OKX demo / Hyperliquid testnet si les gates sont validés.
+5. Garder mainnet impossible.
 
-### P1 — Comprendre les pertes
+### P1 — Fiabiliser la donnée et la config
 
-1. Produire la baseline par profil dans [#132](https://github.com/pivox/tradingV3/issues/132).
+1. Fiabiliser `position_trade_analysis`.
+2. Assurer le lineage run/set/mode/exchange/symbol/trade.
+3. Brancher l’effective config progressivement.
+4. Exposer l’effective config et les runtime gates dans le cockpit.
+
+### P2 — Comprendre les pertes
+
+1. Produire la baseline par profil.
 2. Classer les causes de trades perdants.
-3. Vérifier l’impact réel des frais et du slippage à partir des données certifiées de #190.
+3. Vérifier l’impact réel des frais, spread, slippage et funding.
 4. Proposer des corrections atomiques, sans tuning de fréquence prématuré.
 
-### P2 — Backtesting net
+### P3 — Optimiser les configs par mode
 
-1. Construire le moteur et le modèle de coûts dans [#191](https://github.com/pivox/tradingV3/issues/191).
-2. Rejouer chaque profil séparément.
-3. Comparer expectancy, drawdown et profit factor.
-4. Préparer un forward test d’au moins 500 trades lorsque les données le permettent.
+1. Construire le MTF Backstaging Config Mining.
+2. Optimiser `regular`.
+3. Optimiser `scalper`.
+4. Valider ou rejeter `scalper_micro`.
+5. Valider hors période / walk-forward.
 
-### P3 — Config effective et Front Ops
+### P4 — Shadow et live-readiness sans activation
 
-1. Brancher l’Effective Config progressivement via [#133](https://github.com/pivox/tradingV3/issues/133).
-2. Ajouter le viewer via [#192](https://github.com/pivox/tradingV3/issues/192).
-3. Décider la surface canonique via [#193](https://github.com/pivox/tradingV3/issues/193).
-4. Construire la roadmap d’investigation via [#194](https://github.com/pivox/tradingV3/issues/194).
-
-### P4 — Nouveaux exchanges
-
-1. Inventorier Bitmart via [#195](https://github.com/pivox/tradingV3/issues/195).
-2. Stabiliser Fake/Paper via [#196](https://github.com/pivox/tradingV3/issues/196).
-3. Valider OKX en dry-run via [#197](https://github.com/pivox/tradingV3/issues/197).
-4. Valider Hyperliquid en dry-run via [#198](https://github.com/pivox/tradingV3/issues/198).
-5. N’envisager le live qu’après runtime-check, recette et rollback validés.
+1. Shadow production.
+2. Fills réalistes.
+3. Capital protection layer.
+4. Mainnet-readiness sans secrets mainnet.
+5. Go/no-go pilot éventuel.
 
 ---
 
-## 9. Corps court proposé pour l’issue #173
+## 8. Corps court proposé pour l’issue #173
 
 Le contenu suivant peut remplacer le corps trop détaillé de l’issue parent.
 
@@ -420,87 +255,64 @@ Construire un moteur de trading modulaire, observable et testable, piloté par l
 - Le levier est dérivé du risque et du stop.
 - Aucune activation live sans runtime-check.
 - Aucune EntryZone desserrée sans preuve PnL.
-- Les résultats incluent frais, spread et slippage.
+- Les résultats incluent frais, spread, slippage et funding si applicable.
 - Bitmart reste en place tant qu’un remplacement opérationnel n’est pas validé.
-- OKX et Hyperliquid restent en dry-run avant readiness complète.
+- OKX/Hyperliquid : dry-run d’abord, puis demo/testnet mutatif uniquement après gates dédiés.
+- Aucun secret mainnet dans l’application.
 
 ## État global
 
-- Orchestrateur Python / Temporal : **en finalisation runtime**.
-- Lineage et analytics : **à fiabiliser**.
-- TradingCore : **fondations présentes, branchement incomplet**.
-- Effective Config : **resolver présent, intégration runtime à poursuivre**.
-- Front Ops : **surface canonique à décider**.
-- Analytics « bad trades first » : **priorité produit**.
-- Backtesting net : **à compléter**.
-- OKX / Hyperliquid : **dry-run uniquement**.
-- Bitmart : **legacy encore nécessaire**.
+- Vague 1 — OKX/Hyperliquid demo-testnet : en cours avancé.
+- Vague 2 — Data/YAML/Cockpit/Profitability Foundation : à faire.
+- Vague 3 — MTF Backstaging Config Mining : à faire.
+- Vague 4 — Shadow/Capital Protection/Live-readiness : à faire.
 
 ## Priorités
 
-1. Fiabilité orchestration et données.
-2. Baseline des pertes par profil.
-3. Backtesting net.
-4. Effective Config et Front Ops.
-5. Readiness des nouveaux exchanges.
+1. Terminer l’exécution demo/testnet sûre.
+2. Fiabiliser la donnée et la config effective.
+3. Comprendre les pertes et produire une baseline nette.
+4. Optimiser les configs par mode via backstaging + out-of-sample.
+5. Passer en shadow production avant tout pilot réel.
 
-## Suivi
+## Documents de vagues
 
-Les critères détaillés sont suivis dans :
-
-- orchestration : #188 ;
-- lineage et données : #189, #190 ;
-- analytics : #132 ;
-- backtesting : #191 ;
-- configuration : #133, #192 ;
-- Front Ops : #193, #194 ;
-- exchanges : #195, #196, #197, #198.
-
-La roadmap détaillée est maintenue dans :
-
-`docs/roadmap/tradingv3-roadmap-v2.md`
+- Vague 1 : `docs/roadmap/01-okx-hyperliquid-demo-testnet.md`
+- Vague 2 : `docs/roadmap/02-data-yaml-cockpit-profitability-foundation.md`
+- Vague 3 : `docs/roadmap/03-mtf-backstaging-config-mining.md`
+- Vague 4 : `docs/roadmap/04-shadow-capital-protection-live-readiness.md`
 
 ## Critère de clôture
 
-Cette issue sera clôturée lorsque :
+Cette roadmap sera clôturée lorsque :
 
-- le pipeline cible sera validé de bout en bout ;
+- l’exécution demo/testnet sera sûre et rollbackable ;
 - les données PnL seront fiables ;
 - une baseline nette sera disponible pour les trois profils ;
-- le backtesting net sera opérationnel ;
-- la config effective sera observable ;
-- la stratégie Front Ops sera tranchée ;
-- au moins un chemin exchange cible sera validé hors live puis en live contrôlé.
+- les configs par mode auront un verdict validé/rejeté ;
+- le shadow test aura produit un go/no-go clair ;
+- toute décision de pilot réel sera séparée, manuelle et protégée.
 ```
 
 ---
 
-## 10. Sources projet et suivi
+## 9. Sources projet et suivi
 
 ### Pilotage
 
 - [Issue #173](https://github.com/pivox/tradingV3/issues/173)
 - [PR #187 — Documentation roadmap V2](https://github.com/pivox/tradingV3/pull/187)
+- [PR #244 — Roadmap waves](https://github.com/pivox/tradingV3/pull/244)
 
-### Issues de suivi
+### Documents de vagues
 
-- [#188 — Recette runtime orchestrateur](https://github.com/pivox/tradingV3/issues/188)
-- [#189 — Lineage run → set → trade](https://github.com/pivox/tradingV3/issues/189)
-- [#190 — Fiabilité position_trade_analysis](https://github.com/pivox/tradingV3/issues/190)
-- [#132 — Baseline PnL / bad trades first](https://github.com/pivox/tradingV3/issues/132)
-- [#191 — Backtesting net](https://github.com/pivox/tradingV3/issues/191)
-- [#133 — Effective Config en couches](https://github.com/pivox/tradingV3/issues/133)
-- [#192 — Effective Config Viewer](https://github.com/pivox/tradingV3/issues/192)
-- [#193 — Décision Front Ops](https://github.com/pivox/tradingV3/issues/193)
-- [#194 — Roadmap Front Ops investigation](https://github.com/pivox/tradingV3/issues/194)
-- [#195 — Inventaire Bitmart](https://github.com/pivox/tradingV3/issues/195)
-- [#196 — Readiness Fake/Paper](https://github.com/pivox/tradingV3/issues/196)
-- [#197 — Readiness OKX dry-run](https://github.com/pivox/tradingV3/issues/197)
-- [#198 — Readiness Hyperliquid dry-run](https://github.com/pivox/tradingV3/issues/198)
+- [`01-okx-hyperliquid-demo-testnet.md`](01-okx-hyperliquid-demo-testnet.md)
+- [`02-data-yaml-cockpit-profitability-foundation.md`](02-data-yaml-cockpit-profitability-foundation.md)
+- [`03-mtf-backstaging-config-mining.md`](03-mtf-backstaging-config-mining.md)
+- [`04-shadow-capital-protection-live-readiness.md`](04-shadow-capital-protection-live-readiness.md)
 
 ### PR et documents historiques
 
-- [Issue #173](https://github.com/pivox/tradingV3/issues/173)
 - [PR #141 — Architecture TradingCore](https://github.com/pivox/tradingV3/pull/141)
 - [PR #142 — Effective Config Resolver](https://github.com/pivox/tradingV3/pull/142)
 - [PR #155 — Orchestrateur Python / Temporal](https://github.com/pivox/tradingV3/pull/155)
@@ -509,9 +321,11 @@ Cette issue sera clôturée lorsque :
 - [PR #172 — Lecture du payload effectif](https://github.com/pivox/tradingV3/pull/172)
 - [PR #181 — Corrélation outcome/PnL](https://github.com/pivox/tradingV3/pull/181)
 
-## Conclusion
+---
 
-L’issue #173 doit devenir un **index de pilotage**, pas une documentation exhaustive.
+## 10. Conclusion
+
+`docs/roadmap/tradingv3-roadmap-v2.md` reste l’index de pilotage durable.
 
 La structure cible est :
 
@@ -519,12 +333,25 @@ La structure cible est :
 Issue parent #173
     -> vision, invariants, état global et priorités
 
-Documents dans docs/
-    -> décisions et descriptions durables
+Roadmap V2
+    -> index durable, ordre des vagues, liens de pilotage
 
-Issues de suivi #132, #133 et #188 à #198
+Documents de vagues
+    -> critères détaillés, PR proposées, prompts types
+
+Issues de suivi
     -> critères d’acceptation détaillés et découpage PR atomique
 
 PR
-    -> implémentation et tests
+    -> implémentation, docs, tests et preuves
+```
+
+Le cap final reste :
+
+```text
+moins de mauvais trades
++ expectancy nette positive
++ configs validées par mode
++ exécution sûre
++ capacité à dire no-go
 ```
