@@ -423,15 +423,23 @@ final class OkxDryRunExecutionPort implements ExecutionPortInterface
 
     private function childClientOrderId(string $clientOrderId, string $suffix): string
     {
-        $candidate = preg_replace('/[^A-Za-z0-9]/', '', $clientOrderId) ?? '';
-        $candidate = $candidate === '' ? 'OKXDRYRUN' : $candidate;
         $suffix = preg_replace('/[^A-Za-z0-9]/', '', strtoupper($suffix)) ?? '';
 
         if ($suffix === '') {
-            return substr($candidate, 0, 32);
+            return $this->actionFactory->clientOrderId($clientOrderId);
         }
 
-        return substr($candidate, 0, max(0, 32 - strlen($suffix))) . substr($suffix, 0, 32);
+        $suffix = substr($suffix, 0, 32);
+        $prefixLength = max(0, 32 - strlen($suffix));
+        $normalizedParent = $this->actionFactory->clientOrderId($clientOrderId);
+        if (strlen($normalizedParent) <= $prefixLength) {
+            return $normalizedParent . $suffix;
+        }
+
+        $hashPrefixLength = max(0, $prefixLength - 3);
+        $hashPrefix = 'OKX' . substr(strtoupper(hash('sha256', trim($clientOrderId))), 0, $hashPrefixLength);
+
+        return substr($hashPrefix, 0, $prefixLength) . $suffix;
     }
 
     private function notional(OrderPlan $plan): float
@@ -495,13 +503,14 @@ final class OkxDryRunExecutionPort implements ExecutionPortInterface
         $normalized = trim((string) preg_replace('/[^a-z0-9]+/', '_', strtolower($key)), '_');
         $compacted = str_replace('_', '', $normalized);
 
-        foreach (['secret', 'token', 'api_key', 'private_key', 'passphrase', 'password', 'signature', 'authorization', 'cookie', 'memo', 'credential'] as $needle) {
+        foreach (['secret', 'token', 'api_key', 'private_key', 'passphrase', 'password', 'signature', 'authorization', 'cookie', 'memo', 'credential', 'sign'] as $needle) {
             if (str_contains($normalized, $needle) || str_contains($compacted, str_replace('_', '', $needle))) {
                 return true;
             }
         }
 
         return $normalized === 'key'
+            || $normalized === 'sign'
             || str_ends_with($normalized, '_key')
             || str_ends_with($normalized, '_sign')
             || str_ends_with($compacted, 'key');

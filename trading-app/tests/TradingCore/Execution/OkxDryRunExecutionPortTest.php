@@ -67,6 +67,7 @@ final class OkxDryRunExecutionPortTest extends TestCase
                 'max_notional' => 2000.0,
                 'max_leverage' => 10,
                 'OKX_DEMO_API_KEY' => 'demo-secret-key',
+                'sign' => 'raw-okx-signature',
             ],
             new \DateTimeImmutable('2026-06-30T01:15:00+00:00'),
         );
@@ -110,6 +111,7 @@ final class OkxDryRunExecutionPortTest extends TestCase
 
         $encoded = json_encode([$result->metadata, $result->raw], JSON_THROW_ON_ERROR);
         self::assertStringNotContainsString('demo-secret-key', $encoded);
+        self::assertStringNotContainsString('raw-okx-signature', $encoded);
         self::assertStringContainsString('[redacted]', $encoded);
     }
 
@@ -153,13 +155,37 @@ final class OkxDryRunExecutionPortTest extends TestCase
 
         $result = (new OkxDryRunExecutionPort())->execute($request);
 
+        $expectedBase = 'OKX' . substr(strtoupper(hash('sha256', $parentClientOrderId)), 0, 27);
         self::assertSame($parentClientOrderId, $result->raw['okx_dry_run']['requests'][2]['body']['clOrdId']);
-        self::assertSame(str_repeat('A', 30) . 'SL', $result->raw['okx_dry_run']['requests'][3]['body']['algoClOrdId']);
-        self::assertSame(str_repeat('A', 30) . 'TP', $result->raw['okx_dry_run']['requests'][4]['body']['algoClOrdId']);
+        self::assertSame($expectedBase . 'SL', $result->raw['okx_dry_run']['requests'][3]['body']['algoClOrdId']);
+        self::assertSame($expectedBase . 'TP', $result->raw['okx_dry_run']['requests'][4]['body']['algoClOrdId']);
         self::assertNotSame(
             $result->raw['okx_dry_run']['requests'][3]['body']['algoClOrdId'],
             $result->raw['okx_dry_run']['requests'][4]['body']['algoClOrdId'],
         );
+    }
+
+    public function testDryRunKeepsLongProtectionClientOrderIdsUniqueWhenParentPrefixesCollide(): void
+    {
+        $first = (new OkxDryRunExecutionPort())->execute(ExecutionRequest::forPlan(
+            $this->executablePlan(instrument: 'BTC-USDT-SWAP', clientOrderId: str_repeat('A', 30) . '11'),
+            ExecutionMode::DryRun,
+            ['environment' => 'demo'],
+        ));
+        $second = (new OkxDryRunExecutionPort())->execute(ExecutionRequest::forPlan(
+            $this->executablePlan(instrument: 'BTC-USDT-SWAP', clientOrderId: str_repeat('A', 30) . '22'),
+            ExecutionMode::DryRun,
+            ['environment' => 'demo'],
+        ));
+
+        $firstSl = $first->raw['okx_dry_run']['requests'][3]['body']['algoClOrdId'];
+        $secondSl = $second->raw['okx_dry_run']['requests'][3]['body']['algoClOrdId'];
+
+        self::assertSame(32, strlen($firstSl));
+        self::assertSame(32, strlen($secondSl));
+        self::assertStringEndsWith('SL', $firstSl);
+        self::assertStringEndsWith('SL', $secondSl);
+        self::assertNotSame($firstSl, $secondSl);
     }
 
     public function testDryRunTrimsPostOnlyTimeInForceBeforeSerialization(): void
