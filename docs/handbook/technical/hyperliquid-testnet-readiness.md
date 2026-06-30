@@ -86,8 +86,8 @@ reutilisables.
 | Signer fake/local | Livre HL-004 | `FakeHyperliquidSigner` produit une signature deterministe de fixture, sans secret et sans HTTP. `HyperliquidDryRunExecutionPort` ne signe pas et ne broadcast pas. | Conserver le fake pour les recettes local dry-run et les tests de payload. |
 | Signer testnet | Encapsule HL-004 | `HyperliquidAgentSigner` valide `HYPERLIQUID_ENV=testnet`, `HYPERLIQUID_NETWORK=testnet` et les variables agent/account testnet, puis delegue a un backend de signature injecte. Aucun backend crypto n'est cable au client `/exchange` par defaut. | Ajouter le backend crypto officiel/valide par vecteurs dans une PR ulterieure avant tout broadcast. |
 | Nonce manager | Livre HL-005 | `PersistentHyperliquidNonceManager` persiste `hyperliquid_nonce_state` par `environment + network + signer_address`, garde `account_address` en audit, rejette la reutilisation d'un signer sur un autre compte, et detecte les replays. | L'utiliser seulement dans une PR mutative future, apres signer crypto officiel et garde `/exchange`. |
-| Metadata / precision | Partiel HL-003 | Mapping `symbol -> coin -> asset_id`, `szDecimals`, max leverage et precision derivee sont exposes dans `HyperliquidInstrumentMetadataDto`. | Precision complete fees/min-notional en HL-007. |
-| Fees / funding / costs | Partiel HL-006 | Funding public absent reste `null` avec `funding_rate_unknown`. User fills et funding history sont lisibles via account read-only, redacted et non certifies PnL. | Fees/min-notional complets et couts ledger/certification dans les PRs dediees. |
+| Metadata / precision | Renforce HL-007 | Mapping `symbol -> coin -> asset_id`, `szDecimals`, tick prix, step quantite, max leverage, status marche et flags de qualite sont exposes dans `HyperliquidInstrumentMetadataDto`. Les collisions d'asset et metadata requises manquantes ne sont pas resolues arbitrairement. | Min-notional si Hyperliquid l'expose dans une surface officielle future. |
+| Fees / funding / costs | Renforce HL-007 | Funding public absent reste `null` avec `funding_rate_unknown`. `getTradingFees()` lit `userFees` read-only et expose maker/taker `null` + flags si absents. User fills et funding history sont lisibles via account read-only, redacted et non certifies PnL. | Ledger/certification dans les PRs dediees. |
 | Local dry-run no broadcast | Partiel | `HyperliquidDryRunExecutionPort` simule sans HTTP ni `/exchange`. | Serialization future des payloads HL sans broadcast ni secret. |
 | Runtime-check candidate | Private-read possible HL-006 | `HyperliquidRuntimeCheck` peut retourner `private_read_only` quand les probes publiques et account sont bonnes. La commande runtime reste `Schedule ready: no` tant que les guards local dry-run/protection ne sont pas complets. | Niveaux `local_dry_run_ready`, puis `demo_testnet_candidate`. |
 | SL/TP / protection | A valider | Aucun attachement runtime Hyperliquid n'est prouve par HL-001. | Modele ordre/protection testnet avec SL immediat ou compensation fail-safe. |
@@ -138,6 +138,24 @@ HL-003 normalise :
   `qualityFlags` quand le funding public est absent ;
 - les erreurs publiques 429 en `hyperliquid_public_rate_limited`.
 
+HL-007 renforce ce mapping :
+
+- `BTCUSDT` interne est normalise en coin Hyperliquid `BTC`; l'`asset_id`
+  reste l'index de `meta.universe`/`metaAndAssetCtxs` et n'est jamais hardcode ;
+- `price_tick` est derive de la regle Hyperliquid `max_decimals = 6 -
+  szDecimals`, en respectant aussi la limite de 5 chiffres significatifs pour
+  les prix non entiers ;
+- `quantity_step` et `min_size` viennent de `szDecimals`; si `szDecimals` est
+  absent ou invalide, le DTO porte `missing_size_decimals` ou
+  `invalid_size_decimals` et `isCompleteForSizing()` vaut false ;
+- `max_leverage` vient de `meta.universe[].maxLeverage`; absence ou valeur
+  invalide donne `missing_max_leverage` ou `invalid_max_leverage`, sans fallback
+  optimiste ;
+- un marche `isDelisted=true` est expose avec `status=suspend`,
+  `market_suspended`, et n'est pas considere complet pour sizing ;
+- deux assets resolus vers le meme coin provoquent `hyperliquid_asset_collision`
+  afin d'eviter une resolution arbitraire.
+
 Configuration testnet public cible :
 
 ```dotenv
@@ -162,6 +180,7 @@ touchent jamais a `/exchange`.
 | User fills | `POST /info` user fills / fills by time | Prix, quantite, fees, side, oid, timestamps et pagination. |
 | Historical orders | `POST /info` historical orders | Statuts terminaux et reconciliation apres restart. |
 | User funding | `POST /info` user funding | Funding utilisateur, couts et quality flags. |
+| User fees | `POST /info` user fees | Fee schedule compte, maker=`userAddRate`, taker=`userCrossRate`, devise USDC, flags `*_fee_unknown` si absent. |
 | WebSocket account | WS testnet si retenu | Deltas ordres/fills/positions, ou justification d'un polling read-only borne. |
 
 Configuration account read-only cible :
@@ -352,7 +371,7 @@ Les elements suivants restent explicitement non supportes :
 | Confusion testnet/mainnet | Endpoints testnet obligatoires, `mainnet_write_enabled=false`, `HYPERLIQUID_MAINNET_ENABLED=0` dans les templates de recette. |
 | Secret de wallet principal expose | API wallet dediee obligatoire pour toute future mutation, redaction defensive, aucun secret dans Git. |
 | Collision de nonce | Nonce manager persistant par signer avant tout broadcast. |
-| Asset id divergent | Mapping issu de metadata testnet, jamais hardcode depuis mainnet. |
+| Asset id divergent | Mapping issu de metadata testnet, jamais hardcode depuis mainnet ; collision d'asset rejetee avec `hyperliquid_asset_collision`. |
 | Frais/funding absents | Flags de qualite et PnL non certifie, jamais zero implicite. |
 | Private stream incomplet | `demo_testnet_enabled` bloque par private observability policy. |
 | Partial fill ou SL attach failure | Scenario Fake/Paper d'abord, compensation fail-safe avant toute ecriture testnet. |

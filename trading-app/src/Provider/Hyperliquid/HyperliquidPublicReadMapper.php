@@ -19,10 +19,16 @@ final readonly class HyperliquidPublicReadMapper
     public function contract(array $asset, int $assetId, ?array $context = null): ContractDto
     {
         $coin = $this->coin($asset);
+        $maxLeverage = $this->maxLeverage($asset);
+        if (!$this->hasValidSizeDecimals($asset) || $maxLeverage === null) {
+            throw new \InvalidArgumentException(sprintf('hyperliquid_contract_metadata_incomplete:%s', $coin));
+        }
+
         $last = $this->string($context['markPx'] ?? $context['midPx'] ?? '0') ?: '0';
         $prevDay = $this->string($context['prevDayPx'] ?? '0') ?: '0';
         $openInterest = $this->string($context['openInterest'] ?? '0') ?: '0';
         $priceMaxDecimals = $this->priceMaxDecimals($asset);
+        $quantityStep = $this->quantityStep($asset);
 
         return new ContractDto(
             symbol: $this->symbol($coin),
@@ -39,11 +45,11 @@ final readonly class HyperliquidPublicReadMapper
             indexName: $coin,
             contractSize: BigDecimal::of('1'),
             minLeverage: BigDecimal::of('1'),
-            maxLeverage: BigDecimal::of($this->string($asset['maxLeverage'] ?? '1') ?: '1'),
+            maxLeverage: BigDecimal::of($maxLeverage),
             pricePrecision: BigDecimal::of((string) $priceMaxDecimals),
-            volPrecision: BigDecimal::of((string) $this->decimalPlaces($this->quantityStep($asset))),
+            volPrecision: BigDecimal::of((string) $this->decimalPlaces($quantityStep)),
             maxVolume: BigDecimal::of('0'),
-            minVolume: BigDecimal::of($this->quantityStep($asset)),
+            minVolume: BigDecimal::of($quantityStep === '0' ? '0' : $quantityStep),
             fundingRate: BigDecimal::of($this->string($context['funding'] ?? '0') ?: '0'),
             expectedFundingRate: BigDecimal::of($this->string($context['funding'] ?? '0') ?: '0'),
             openInterest: BigDecimal::of($openInterest),
@@ -75,9 +81,22 @@ final readonly class HyperliquidPublicReadMapper
         $coin = $this->coin($asset);
         $fundingRate = $this->nullableNumericString($funding['fundingRate'] ?? $context['funding'] ?? null);
         $priceMaxDecimals = $this->priceMaxDecimals($asset);
+        $quantityStep = $this->quantityStep($asset);
+        $maxLeverage = $this->maxLeverage($asset);
+        $status = $this->status($asset);
 
         if ($fundingRate === null) {
             $qualityFlags[] = 'funding_rate_unknown';
+        }
+        if (!$this->hasValidSizeDecimals($asset)) {
+            $qualityFlags[] = array_key_exists('szDecimals', $asset) ? 'invalid_size_decimals' : 'missing_size_decimals';
+        }
+        if ($maxLeverage === null) {
+            $qualityFlags[] = array_key_exists('maxLeverage', $asset) ? 'invalid_max_leverage' : 'missing_max_leverage';
+            $maxLeverage = '0';
+        }
+        if ($status !== 'live') {
+            $qualityFlags[] = 'market_suspended';
         }
 
         return new HyperliquidInstrumentMetadataDto(
@@ -86,13 +105,14 @@ final readonly class HyperliquidPublicReadMapper
             assetId: $assetId,
             priceTick: $this->stepFromDecimalPlaces($priceMaxDecimals),
             priceMaxDecimals: $priceMaxDecimals,
-            quantityStep: $this->quantityStep($asset),
-            minSize: $this->quantityStep($asset),
+            quantityStep: $quantityStep,
+            minSize: $quantityStep,
             maxSize: '0',
-            maxLeverage: $this->string($asset['maxLeverage'] ?? '1') ?: '1',
+            maxLeverage: $maxLeverage,
             fundingRate: $fundingRate,
             fundingTime: $this->time($funding['time'] ?? null),
             qualityFlags: array_values(array_unique($qualityFlags)),
+            status: $status,
         );
     }
 
@@ -197,7 +217,11 @@ final readonly class HyperliquidPublicReadMapper
      */
     private function quantityStep(array $asset): string
     {
-        $decimals = max(0, (int) ($asset['szDecimals'] ?? 0));
+        if (!$this->hasValidSizeDecimals($asset)) {
+            return '0';
+        }
+
+        $decimals = (int) $asset['szDecimals'];
 
         return $decimals === 0 ? '1' : '0.' . str_repeat('0', $decimals - 1) . '1';
     }
@@ -207,9 +231,45 @@ final readonly class HyperliquidPublicReadMapper
      */
     private function priceMaxDecimals(array $asset): int
     {
-        $sizeDecimals = max(0, (int) ($asset['szDecimals'] ?? 0));
+        if (!$this->hasValidSizeDecimals($asset)) {
+            return 0;
+        }
+
+        $sizeDecimals = (int) $asset['szDecimals'];
 
         return max(0, 6 - $sizeDecimals);
+    }
+
+    /**
+     * @param array<string,mixed> $asset
+     */
+    private function hasValidSizeDecimals(array $asset): bool
+    {
+        if (!array_key_exists('szDecimals', $asset) || !\is_scalar($asset['szDecimals'])) {
+            return false;
+        }
+
+        $value = trim((string) $asset['szDecimals']);
+        if ($value === '' || !ctype_digit($value)) {
+            return false;
+        }
+
+        $decimals = (int) $value;
+
+        return $decimals >= 0 && $decimals <= 6;
+    }
+
+    /**
+     * @param array<string,mixed> $asset
+     */
+    private function maxLeverage(array $asset): ?string
+    {
+        $value = $this->nullableNumericString($asset['maxLeverage'] ?? null);
+        if ($value === null || (float) $value <= 0.0) {
+            return null;
+        }
+
+        return $value;
     }
 
     private function stepFromDecimalPlaces(int $places): string

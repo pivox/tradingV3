@@ -157,7 +157,13 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
      */
     public function getTradingFees(string $symbol): array
     {
-        throw $this->notReady(__METHOD__);
+        $coin = $this->coin($symbol);
+        $payload = $this->assoc($this->info([
+            'type' => 'userFees',
+            'user' => $this->accountAddress(__METHOD__),
+        ], __METHOD__));
+
+        return $this->mapper->tradingFees($payload, strtoupper($symbol), $coin);
     }
 
     public function healthCheck(): bool

@@ -76,6 +76,68 @@ final class HyperliquidPublicReadProviderTest extends TestCase
         self::assertTrue($metadata->isCompleteForSizing());
     }
 
+    public function testRejectsIncompleteMetadataForSizing(): void
+    {
+        $client = $this->client();
+        $client->missingMaxLeverage = true;
+        $provider = new HyperliquidMetadataProvider($client, new HyperliquidAssetResolver($client));
+
+        $metadata = $provider->getInstrumentMetadata('BTCUSDT');
+
+        self::assertNotNull($metadata);
+        self::assertSame('0', $metadata->maxLeverage);
+        self::assertContains('missing_max_leverage', $metadata->qualityFlags);
+        self::assertFalse($metadata->isCompleteForSizing());
+    }
+
+    public function testContractsFailClosedWhenRequiredMetadataIsMissing(): void
+    {
+        $client = $this->client();
+        $client->missingMaxLeverage = true;
+        $provider = new HyperliquidMetadataProvider($client, new HyperliquidAssetResolver($client));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('hyperliquid_contract_metadata_incomplete:BTC');
+
+        $provider->getContracts();
+    }
+
+    public function testSuspendedMarketIsVisibleAndNotCompleteForSizing(): void
+    {
+        $provider = new HyperliquidMetadataProvider($this->client(), new HyperliquidAssetResolver($this->client()));
+
+        $metadata = $provider->getInstrumentMetadata('ETHUSDT');
+
+        self::assertNotNull($metadata);
+        self::assertSame('suspend', $metadata->status);
+        self::assertContains('market_suspended', $metadata->qualityFlags);
+        self::assertFalse($metadata->isCompleteForSizing());
+    }
+
+    public function testAssetCollisionIsRejected(): void
+    {
+        $client = $this->client();
+        $client->duplicateAsset = true;
+        $provider = new HyperliquidMetadataProvider($client, new HyperliquidAssetResolver($client));
+
+        $this->expectException(HyperliquidProviderUnavailableException::class);
+        $this->expectExceptionMessage('hyperliquid_asset_collision');
+
+        $provider->getInstrumentMetadata('BTCUSDT');
+    }
+
+    public function testAssetResolverDoesNotDetectCollisionAgainstItsCache(): void
+    {
+        $resolver = new HyperliquidAssetResolver($this->client());
+
+        self::assertSame(0, $resolver->assetId('BTCUSDT'));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown Hyperliquid asset "DOGEUSDT"');
+
+        $resolver->assetId('DOGEUSDT');
+    }
+
     public function testHyperliquidPriceRulesEnforceSignificantFiguresAndMaxDecimals(): void
     {
         $provider = new HyperliquidMetadataProvider($this->client(), new HyperliquidAssetResolver($this->client()));
@@ -183,6 +245,8 @@ final class FakeHyperliquidPublicReadClient implements HyperliquidRestClientInte
 {
     public bool $rateLimited = false;
     public bool $hideFunding = false;
+    public bool $missingMaxLeverage = false;
+    public bool $duplicateAsset = false;
 
     /** @var list<array<string,mixed>> */
     public array $requests = [];
@@ -224,12 +288,20 @@ final class FakeHyperliquidPublicReadClient implements HyperliquidRestClientInte
      */
     private function meta(): array
     {
-        return [
-            'universe' => [
-                ['name' => 'BTC', 'szDecimals' => 5, 'maxLeverage' => 50],
-                ['name' => 'ETH', 'szDecimals' => 4, 'maxLeverage' => 25, 'isDelisted' => true],
-            ],
+        $btc = ['name' => 'BTC', 'szDecimals' => 5, 'maxLeverage' => 50];
+        if ($this->missingMaxLeverage) {
+            unset($btc['maxLeverage']);
+        }
+
+        $universe = [
+            $btc,
+            ['name' => 'ETH', 'szDecimals' => 4, 'maxLeverage' => 25, 'isDelisted' => true],
         ];
+        if ($this->duplicateAsset) {
+            $universe[] = ['name' => 'BTC', 'szDecimals' => 3, 'maxLeverage' => 10];
+        }
+
+        return ['universe' => $universe];
     }
 
     /**
@@ -255,6 +327,14 @@ final class FakeHyperliquidPublicReadClient implements HyperliquidRestClientInte
                     'dayNtlVlm' => '500000',
                     'funding' => '0.0002',
                     'openInterest' => '42',
+                ],
+                [
+                    'markPx' => '25100',
+                    'midPx' => '25100',
+                    'prevDayPx' => '25000',
+                    'dayNtlVlm' => '1000',
+                    'funding' => '0.0003',
+                    'openInterest' => '1',
                 ],
             ],
         ];
@@ -304,15 +384,18 @@ final class FakeHyperliquidPublicReadClient implements HyperliquidRestClientInte
      */
     private function funding(array $request): array
     {
-        $this->assertRequestValue($request, 'coin', 'BTC');
+        $coin = (string) ($request['coin'] ?? '');
+        if (!in_array($coin, ['BTC', 'ETH'], true)) {
+            throw new \RuntimeException(sprintf('Expected Hyperliquid funding coin BTC or ETH, got %s.', $coin));
+        }
 
         if ($this->hideFunding) {
             return [];
         }
 
         return [[
-            'coin' => 'BTC',
-            'fundingRate' => '0.0001',
+            'coin' => $coin,
+            'fundingRate' => $coin === 'ETH' ? '0.0002' : '0.0001',
             'premium' => '0.00001',
             'time' => 1767225600000,
         ]];

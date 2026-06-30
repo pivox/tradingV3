@@ -230,11 +230,32 @@ final class HyperliquidMetadataProvider implements ContractProviderInterface
         $meta = $payload[0] ?? [];
         $assets = \is_array($meta) && \is_array($meta['universe'] ?? null) ? array_values($meta['universe']) : [];
         $contexts = \is_array($payload[1] ?? null) ? array_values($payload[1]) : [];
+        $assets = array_values(array_filter($assets, static fn (mixed $row): bool => \is_array($row)));
+        $this->assertUniqueAssets($assets, $operation);
 
         return [
-            array_values(array_filter($assets, static fn (mixed $row): bool => \is_array($row))),
+            $assets,
             array_values(array_filter($contexts, static fn (mixed $row): bool => \is_array($row))),
         ];
+    }
+
+    /**
+     * @param list<array<string,mixed>> $assets
+     */
+    private function assertUniqueAssets(array $assets, string $operation): void
+    {
+        $seen = [];
+        foreach ($assets as $asset) {
+            $coin = $this->mapper->coin($asset);
+            if ($coin === '') {
+                continue;
+            }
+            if (isset($seen[$coin])) {
+                throw new HyperliquidProviderUnavailableException('hyperliquid_asset_collision', $operation);
+            }
+
+            $seen[$coin] = true;
+        }
     }
 
     /**

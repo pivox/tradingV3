@@ -26,13 +26,20 @@ final class HyperliquidAssetResolver
             throw new \RuntimeException('Hyperliquid meta response missing universe');
         }
 
+        $assetIds = [];
         foreach (array_values($universe) as $index => $asset) {
             if (!\is_array($asset) || !isset($asset['name'])) {
                 continue;
             }
             $name = $this->normalizeSymbol((string) $asset['name']);
-            $this->assetIds[$name] = (int) $index;
+            if (isset($assetIds[$name])) {
+                throw new \RuntimeException(sprintf('hyperliquid_asset_collision:%s', $name));
+            }
+
+            $assetIds[$name] = (int) $index;
         }
+
+        $this->assetIds = array_replace($this->assetIds, $assetIds);
 
         if (!isset($this->assetIds[$normalized])) {
             throw new \InvalidArgumentException(sprintf('Unknown Hyperliquid asset "%s"', $symbol));
