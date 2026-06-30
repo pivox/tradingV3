@@ -42,8 +42,10 @@ final readonly class HyperliquidLifecycleNormalizer
 
         $quantity = $this->orderQuantity($base, $fills);
         $remaining = $this->remainingQuantity($base, $quantity);
-        $filled = max($this->sumFillQuantity($fills), max(0.0, $quantity - $remaining));
-        if ($this->isFillRow($latest) && $this->rowTimeMillis($latest) > $this->rowTimeMillis($base)) {
+        $snapshotFilled = max(0.0, $quantity - $remaining);
+        $filled = max($this->sumFillQuantity($fills), $snapshotFilled);
+        if ($latestOrder !== [] && $this->isFillRow($latest) && $this->rowTimeMillis($latest) > $this->rowTimeMillis($base)) {
+            $filled = min($quantity, max($filled, $snapshotFilled + $this->sumFillQuantityAfter($deduplicated, $base)));
             $remaining = max(0.0, $quantity - $filled);
         }
         $status = $this->statusFromRows($base, $latestOrder !== [], $quantity, $filled, $remaining, $fills);
@@ -700,6 +702,25 @@ final readonly class HyperliquidLifecycleNormalizer
         $quantity = 0.0;
         foreach ($fills as $fill) {
             $quantity += $fill->quantity;
+        }
+
+        return $quantity;
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rows
+     * @param array<string,mixed> $base
+     */
+    private function sumFillQuantityAfter(array $rows, array $base): float
+    {
+        $baseTime = $this->rowTimeMillis($base);
+        $quantity = 0.0;
+        foreach ($rows as $row) {
+            if (!$this->isFillRow($row) || $this->rowTimeMillis($row) <= $baseTime) {
+                continue;
+            }
+
+            $quantity += $this->float($row['sz'] ?? $row['quantity'] ?? null);
         }
 
         return $quantity;

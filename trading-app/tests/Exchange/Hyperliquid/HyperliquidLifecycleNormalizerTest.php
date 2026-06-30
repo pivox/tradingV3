@@ -59,7 +59,7 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
     public function testNormalizesPartialFillLifecycleWithFee(): void
     {
         $lifecycle = $this->normalizer->normalizeOrderLifecycle([
-            $this->orderRow(remaining: '0.6', original: '1', status: 'open', updatedAt: 1_767_225_600_000),
+            $this->orderRow(remaining: '0.6', original: '1', status: 'open', updatedAt: 1_767_225_602_000),
             $this->fillRow(quantity: '0.4', price: '25010', hash: 'fill-1', time: 1_767_225_601_000),
         ]);
 
@@ -69,7 +69,7 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(1.0, $lifecycle->quantity, 0.000001);
         self::assertEqualsWithDelta(0.4, $lifecycle->filledQuantity, 0.000001);
         self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
-        self::assertSame(1_767_225_601, $lifecycle->updatedAt->getTimestamp());
+        self::assertSame(1_767_225_602, $lifecycle->updatedAt->getTimestamp());
         self::assertCount(1, $lifecycle->fills);
         self::assertSame('fill-1', $lifecycle->fills[0]->fillId);
         self::assertSame('USDC', $lifecycle->fills[0]->feeCurrency);
@@ -100,6 +100,18 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertSame(HyperliquidLifecycleStatus::PARTIALLY_FILLED, $lifecycle->status);
         self::assertEqualsWithDelta(0.4, $lifecycle->filledQuantity, 0.000001);
         self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
+    }
+
+    public function testCountsFillThatCompletesPartialOrderSnapshot(): void
+    {
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([
+            $this->orderRow(remaining: '0.1', original: '1', status: 'open', updatedAt: 1_767_225_600_000),
+            $this->fillRow(quantity: '0.1', price: '25010', hash: 'remaining-fill', time: 1_767_225_601_000),
+        ]);
+
+        self::assertSame(HyperliquidLifecycleStatus::FILLED, $lifecycle->status);
+        self::assertEqualsWithDelta(1.0, $lifecycle->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.0, $lifecycle->remainingQuantity, 0.000001);
     }
 
     public function testTreatsOpenOrderSnapshotWithoutStatusAsOpen(): void
