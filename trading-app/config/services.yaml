@@ -114,6 +114,9 @@ services:
     App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReportServiceInterface:
         alias: App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReportService
 
+    App\Provider\Hyperliquid\HyperliquidNonceManagerInterface:
+        alias: App\Provider\Hyperliquid\PersistentHyperliquidNonceManager
+
     App\Trading\Reporting\PositionTradeAnalysisLegacyReaderInterface:
         alias: App\Repository\PositionTradeAnalysisRepository
 

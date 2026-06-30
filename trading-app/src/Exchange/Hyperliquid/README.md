@@ -30,12 +30,18 @@ First API-first Hyperliquid integration slice.
   `/exchange`.
 - `HyperliquidRuntimeCheck` may reach `public_read_only` when public probes are
   supplied as good, but `app:exchange:runtime-check hyperliquid perpetual`
-  remains `Schedule ready: no` until account read, signer, nonce, local dry-run,
-  and protection readiness are implemented.
+  remains `Schedule ready: no` until account read, local dry-run, protection
+  readiness, and future controlled `/exchange` wiring are implemented.
 - `HyperliquidAgentSigner` only accepts `HYPERLIQUID_NETWORK=testnet` and
   `HYPERLIQUID_ENV=testnet`. The application never accepts the wallet principal
   private key; only a dedicated testnet agent key is allowed, and signer outputs
   are redacted.
+- `PersistentHyperliquidNonceManager` stores monotonic nonces in
+  `hyperliquid_nonce_state`, scoped by
+  `environment + network + signer_address`. It keeps `account_address` for audit,
+  rejects signer reuse across accounts with `hyperliquid_nonce_scope_conflict`,
+  rejects replay with `hyperliquid_nonce_replay_detected`, and is not a business
+  idempotency key.
 
 Environment:
 
@@ -54,3 +60,8 @@ HYPERLIQUID_TESTNET_TRADING_ENABLED=0
 Rollback for HL-004: unset the three `HYPERLIQUID_TESTNET_*` signer/account
 variables and keep `HYPERLIQUID_TESTNET_TRADING_ENABLED=0`. Public read-only
 HL-003 remains available; no `/exchange` broadcast path is enabled by this slice.
+
+Rollback for HL-005: migrate down `hyperliquid_nonce_state`, remove the
+`PersistentHyperliquidNonceManager` DI alias, and keep
+`HYPERLIQUID_TESTNET_TRADING_ENABLED=0`. Signer boundaries remain available, but
+no `/exchange` broadcast path is enabled by this slice.

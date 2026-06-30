@@ -174,7 +174,7 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
         self::assertContains('hyperliquid_provider_bundle_skeleton_not_ready', $report->blockingErrors);
     }
 
-    public function testSignerAndNonceContractsArePresentButNotImplemented(): void
+    public function testSignerAndNonceContractsArePresent(): void
     {
         self::assertTrue(interface_exists(HyperliquidSignerInterface::class));
         self::assertTrue(interface_exists(HyperliquidNonceManagerInterface::class));

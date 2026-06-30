@@ -6,5 +6,7 @@ namespace App\Provider\Hyperliquid;
 
 interface HyperliquidNonceManagerInterface
 {
-    public function nextNonce(string $signerAddress): int;
+    public function nextNonce(HyperliquidNonceScope $scope): int;
+
+    public function recordObservedNonce(HyperliquidNonceScope $scope, int $nonce): void;
 }
