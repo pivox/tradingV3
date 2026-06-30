@@ -28,6 +28,9 @@ final class OkxMappingTest extends TestCase
         self::assertSame('ETH-USDC-SWAP', $resolver->instId('ETHUSDC'));
         self::assertSame('BTC-USD-SWAP', $resolver->instId('BTC-USD'));
         self::assertSame('BTC-USDT-SWAP', $resolver->instId('BTC-USDT-SWAP'));
+        self::assertSame('BTC-USDT-SWAP', $resolver->instId('BTC_USDT'));
+        self::assertSame('BTC-USDT-SWAP', $resolver->instId('BTC/USDT'));
+        self::assertSame('BTC-USDT-SWAP', $resolver->instId('BTC_USDT_SWAP'));
     }
 
     public function testInstrumentResolverMapsSwapInstrumentsBackToInternalSymbols(): void

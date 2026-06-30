@@ -118,14 +118,18 @@ final readonly class DemoTradingSafetyPolicy
     {
         $normalized = trim((string) preg_replace('/[^a-z0-9]+/', '_', strtolower($key)), '_');
         $compacted = str_replace('_', '', $normalized);
+        if (\in_array($normalized, ['decision_key', 'idempotency_key', 'owner_decision_key', 'blocking_decision_key'], true)) {
+            return false;
+        }
 
-        foreach (['secret', 'token', 'api_key', 'private_key', 'passphrase', 'password', 'signature', 'authorization', 'cookie', 'memo', 'credential'] as $needle) {
+        foreach (['secret', 'token', 'api_key', 'private_key', 'passphrase', 'password', 'signature', 'authorization', 'cookie', 'memo', 'credential', 'sign'] as $needle) {
             if (str_contains($normalized, $needle) || str_contains($compacted, str_replace('_', '', $needle))) {
                 return true;
             }
         }
 
         return $normalized === 'key'
+            || $normalized === 'sign'
             || str_ends_with($normalized, '_key')
             || str_ends_with($normalized, '_sign')
             || str_ends_with($compacted, 'key');

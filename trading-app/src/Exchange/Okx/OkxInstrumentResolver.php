@@ -8,7 +8,7 @@ final class OkxInstrumentResolver
 {
     public function instId(string $symbol): string
     {
-        $symbol = strtoupper(trim($symbol));
+        $symbol = str_replace(['_', '/'], '-', strtoupper(trim($symbol)));
         if ($symbol === '') {
             throw new \InvalidArgumentException('OKX symbol cannot be blank');
         }
