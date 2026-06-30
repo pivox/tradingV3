@@ -357,6 +357,92 @@ def test_runner_disables_stale_sets_when_reusing_recipe_dashboard(tmp_path: Path
     assert r1["evidence"]["summary"]["total_calls"] == 1
 
 
+def test_runner_can_target_okx_dry_run_recipe_without_bitmart_fallback(tmp_path: Path, monkeypatch):
+    api = FakeRecipeApi()
+    runtime_check_calls: list[tuple[Any, ...]] = []
+
+    def runtime_check(*args, **kwargs):
+        runtime_check_calls.append(args)
+
+        class Completed:
+            returncode = 0
+            stdout = "Readiness level: local_dry_run_ready\nSchedule ready: yes\n"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr(runner_module.subprocess, "run", runtime_check)
+
+    report = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            target_exchange="okx",
+        ),
+        http_client=api,
+    ).run(scenarios=("R1", "R2", "R14"), keep_fixtures=True)
+
+    statuses = {item["scenario"]: item["status"] for item in report["results"]}
+    assert statuses == {"R1": "PASS", "R2": "PASS", "R14": "PASS"}
+    assert report["dashboards"]["okx"]["name"] == "recipe-r1-r16-okx-dry-run"
+    assert report["metadata"]["runtime_check"]["status"] == "PASS"
+    assert report["metadata"]["runtime_check"]["schedule_ready"] == "yes"
+    assert runtime_check_calls
+    assert list(runtime_check_calls[0][0][-3:]) == ["app:exchange:runtime-check", "okx", "perpetual"]
+
+    okx_dashboard_id = report["dashboards"]["okx"]["id"]
+    okx_sets = api.sets[okx_dashboard_id]
+    assert {item["set_id"] for item in okx_sets} == {
+        "recipe_okx_regular",
+        "recipe_okx_scalper_micro",
+        "recipe_okx_disabled",
+    }
+    assert {item["exchange"] for item in okx_sets} == {"okx"}
+    assert all(item["dry_run"] is True for item in okx_sets)
+    assert all(item["environment"] == "demo" for item in okx_sets)
+
+    run_requests = [request for request in api.requests if request["path"] == "/orchestrator/run"]
+    assert [request["json"]["idempotency_key"].split("-")[1] for request in run_requests] == [
+        "r1",
+        "r2",
+    ]
+    assert not any(
+        request["json"] and request["json"].get("exchange") == "bitmart"
+        for request in api.requests
+        if isinstance(request["json"], dict)
+    )
+
+
+def test_runner_blocks_okx_recipe_when_runtime_check_is_not_schedule_ready(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api = FakeRecipeApi()
+
+    def runtime_check(*args, **kwargs):
+        class Completed:
+            returncode = 0
+            stdout = "Readiness level: public_read_only\nSchedule ready: no\n"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr(runner_module.subprocess, "run", runtime_check)
+
+    report = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            target_exchange="okx",
+        ),
+        http_client=api,
+    ).run(scenarios=("R1", "R2", "R14"), keep_fixtures=True)
+
+    assert report["metadata"]["runtime_check"]["status"] == "BLOCKED"
+    assert report["summary"]["scenario_counts"] == {"BLOCKED": 3}
+    assert not any(request["path"] == "/orchestrator/run" for request in api.requests)
+
+
 def test_runner_forces_dry_run_exports_report_and_redacts_sensitive_values(tmp_path: Path):
     api = FakeRecipeApi()
     report = RecipeRunner(

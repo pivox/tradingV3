@@ -54,6 +54,19 @@ SECRET_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 
+OKX_RUNTIME_CHECK_COMMAND = (
+    "docker",
+    "compose",
+    "exec",
+    "-T",
+    "trading-app-php",
+    "php",
+    "bin/console",
+    "app:exchange:runtime-check",
+    "okx",
+    "perpetual",
+)
+
 
 class RecipeHttpClient(Protocol):
     def request(
@@ -89,6 +102,7 @@ class RunnerConfig:
     fixtures_dir: Path = DEFAULT_FIXTURES_DIR
     orchestrator_url: str = "http://localhost:8099"
     confirmation_token: str | None = None
+    target_exchange: str = "fake"
     timeout_seconds: float = 30.0
     temporal_available: bool = False
     temporal_dry_run_command: Sequence[str] | None = None
@@ -119,18 +133,20 @@ class RecipeRunner:
         self.invocation_id = uuid4().hex[:12]
 
         service_ok, service_note = self._check_orchestrator()
+        preflight = self._run_target_preflight() if service_ok else {"status": "BLOCKED", "notes": service_note}
         dashboards: dict[str, dict[str, Any]] = {}
         results: list[dict[str, Any]] = []
 
-        if service_ok:
+        if service_ok and preflight["status"] == "PASS":
             dashboards = self._apply_all_fixtures()
             for scenario in selected:
                 results.append(self._run_scenario(scenario, dashboards))
             if self.config.cleanup and not keep_fixtures:
                 self._cleanup_dashboards(dashboards)
         else:
+            blocked_note = service_note if not service_ok else preflight["notes"]
             for scenario in selected:
-                results.append(self._result(scenario, "BLOCKED", service_note))
+                results.append(self._result(scenario, "BLOCKED", blocked_note))
 
         report = {
             "metadata": {
@@ -141,6 +157,8 @@ class RecipeRunner:
                 "invocation_id": self.invocation_id,
                 "orchestrator_url": self.config.orchestrator_url,
                 "fixtures_dir": str(self.config.fixtures_dir),
+                "target_exchange": self.config.target_exchange,
+                "runtime_check": preflight,
                 "cleanup_requested": self.config.cleanup,
             },
             "dashboards": dashboards,
@@ -167,10 +185,74 @@ class RecipeRunner:
             return True, "orchestrator reachable"
         return False, f"orchestrator unavailable: status={status}, body={body}"
 
+    def _run_target_preflight(self) -> dict[str, Any]:
+        target = self.config.target_exchange.strip().lower()
+        if target == "fake":
+            return {"status": "PASS", "notes": "runtime-check not required for Fake/Paper dry-run"}
+        if target != "okx":
+            return {
+                "status": "BLOCKED",
+                "notes": f"unsupported runtime recipe target_exchange: {self.config.target_exchange}",
+            }
+        command = OKX_RUNTIME_CHECK_COMMAND
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=ROOT.parent,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=self.config.timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {
+                "status": "BLOCKED",
+                "notes": "OKX runtime-check did not complete",
+                "command": list(command),
+                "error_type": exc.__class__.__name__,
+                "error": str(exc),
+            }
+        parsed = self._parse_runtime_check_output(completed.stdout)
+        schedule_ready = parsed.get("schedule_ready")
+        if completed.returncode == 0 and schedule_ready == "yes":
+            return {
+                "status": "PASS",
+                "notes": "OKX runtime-check schedule ready",
+                "command": list(command),
+                "readiness_level": parsed.get("readiness_level"),
+                "schedule_ready": schedule_ready,
+            }
+        return {
+            "status": "BLOCKED",
+            "notes": "OKX runtime-check is not schedule ready",
+            "command": list(command),
+            "returncode": completed.returncode,
+            "readiness_level": parsed.get("readiness_level"),
+            "schedule_ready": schedule_ready or "unknown",
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+        }
+
+    @staticmethod
+    def _parse_runtime_check_output(output: str) -> dict[str, str]:
+        parsed: dict[str, str] = {}
+        for line in output.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            parsed[key.strip().lower().replace(" ", "_")] = value.strip().lower()
+        return parsed
+
     def _load_fixtures(self) -> dict[str, dict[str, Any]]:
         nominal = self._read_fixture("r1_r16_nominal_fake_dashboard.json")
         degraded = self._read_fixture("r1_r16_degraded_fake_dashboard.json")
-        return {"nominal": nominal, "degraded": degraded}
+        fixtures = {"nominal": nominal, "degraded": degraded}
+        okx_path = self.config.fixtures_dir / "r1_r16_okx_dry_run_dashboard.json"
+        if okx_path.exists():
+            fixtures["okx"] = json.loads(okx_path.read_text(encoding="utf-8"))
+        elif self.config.target_exchange.strip().lower() == "okx":
+            raise FileNotFoundError(f"missing OKX runtime recipe fixture: {okx_path}")
+        return fixtures
 
     def _read_fixture(self, filename: str) -> dict[str, Any]:
         return json.loads((self.config.fixtures_dir / filename).read_text(encoding="utf-8"))
@@ -268,22 +350,39 @@ class RecipeRunner:
         return handler(dashboards)
 
     def _scenario_r1(self, dashboards: dict[str, dict[str, Any]]) -> dict[str, Any]:
-        dashboard_id = dashboards["nominal"]["id"]
-        self._set_enabled(dashboard_id, "recipe_fake_regular", True)
-        self._set_enabled(dashboard_id, "recipe_fake_scalper", False)
-        self._set_enabled(dashboard_id, "recipe_fake_scalper_micro", False)
+        target = self._target_recipe()
+        dashboard_id = dashboards[target["dashboard"]]["id"]
+        self._set_enabled(dashboard_id, target["r1_set"], True)
+        for set_id in target["r2_sets"]:
+            if set_id != target["r1_set"]:
+                self._set_enabled(dashboard_id, set_id, False)
+        self._set_enabled(dashboard_id, target["disabled_set"], False)
         response = self._run_dashboard(dashboard_id, self._scenario_key("recipe-r1"))
         ok = response.get("status") == "success" and response.get("summary", {}).get("total_calls") == 1
-        return self._result("R1", "PASS" if ok else "FAIL", "single-set nominal run", response)
+        return self._result(
+            "R1",
+            "PASS" if ok else "FAIL",
+            f"single-set {self.config.target_exchange} dry-run",
+            response,
+        )
 
     def _scenario_r2(self, dashboards: dict[str, dict[str, Any]]) -> dict[str, Any]:
-        dashboard_id = dashboards["nominal"]["id"]
-        for set_id in ("recipe_fake_regular", "recipe_fake_scalper", "recipe_fake_scalper_micro"):
+        target = self._target_recipe()
+        dashboard_id = dashboards[target["dashboard"]]["id"]
+        for set_id in target["r2_sets"]:
             self._set_enabled(dashboard_id, set_id, True)
-        self._set_enabled(dashboard_id, "recipe_fake_disabled", False)
+        self._set_enabled(dashboard_id, target["disabled_set"], False)
         response = self._run_dashboard(dashboard_id, self._scenario_key("recipe-r2"))
-        ok = response.get("status") == "success" and response.get("summary", {}).get("total_calls") == 3
-        return self._result("R2", "PASS" if ok else "FAIL", "multi-set nominal run", response)
+        ok = (
+            response.get("status") == "success"
+            and response.get("summary", {}).get("total_calls") == len(target["r2_sets"])
+        )
+        return self._result(
+            "R2",
+            "PASS" if ok else "FAIL",
+            f"multi-set {self.config.target_exchange} dry-run",
+            response,
+        )
 
     def _scenario_r5(self, dashboards: dict[str, dict[str, Any]]) -> dict[str, Any]:
         dashboard_id = dashboards["degraded"]["id"]
@@ -415,7 +514,7 @@ class RecipeRunner:
         )
 
     def _scenario_r14(self, dashboards: dict[str, dict[str, Any]]) -> dict[str, Any]:
-        dashboard_id = dashboards["nominal"]["id"]
+        dashboard_id = dashboards[self._target_recipe()["dashboard"]]["id"]
         status, body = self.http.request(
             "POST",
             f"/dashboards/{dashboard_id}/sets",
@@ -445,6 +544,24 @@ class RecipeRunner:
             "live guard refused non-dry-run set before dispatch",
             {"status": status, "body": body},
         )
+
+    def _target_recipe(self) -> dict[str, Any]:
+        target = self.config.target_exchange.strip().lower()
+        if target == "fake":
+            return {
+                "dashboard": "nominal",
+                "r1_set": "recipe_fake_regular",
+                "r2_sets": ("recipe_fake_regular", "recipe_fake_scalper", "recipe_fake_scalper_micro"),
+                "disabled_set": "recipe_fake_disabled",
+            }
+        if target == "okx":
+            return {
+                "dashboard": "okx",
+                "r1_set": "recipe_okx_regular",
+                "r2_sets": ("recipe_okx_regular", "recipe_okx_scalper_micro"),
+                "disabled_set": "recipe_okx_disabled",
+            }
+        raise ValueError(f"unsupported runtime recipe target_exchange: {self.config.target_exchange}")
 
     def _scenario_r15(self, dashboards: dict[str, dict[str, Any]]) -> dict[str, Any]:
         if not self.config.temporal_available:
@@ -726,6 +843,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fixtures-dir", type=Path, default=DEFAULT_FIXTURES_DIR)
     parser.add_argument("--export-dir", type=Path, default=DEFAULT_EXPORT_DIR)
     parser.add_argument("--scenario", action="append", choices=ALL_SCENARIOS)
+    parser.add_argument(
+        "--target-exchange",
+        choices=("fake", "okx"),
+        default="fake",
+        help="Recipe target for R1/R2/R14; fake remains the default R1-R16 baseline.",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=30.0)
     parser.add_argument("--confirm", required=True, help=f"Must be {CONFIRMATION_TOKEN}")
     parser.add_argument("--keep-fixtures", action="store_true")
@@ -742,6 +865,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         fixtures_dir=args.fixtures_dir,
         orchestrator_url=args.orchestrator_url,
         confirmation_token=args.confirm,
+        target_exchange=args.target_exchange,
         timeout_seconds=args.timeout_seconds,
         temporal_available=args.temporal_available,
         temporal_dry_run_command=args.temporal_dry_run_command,

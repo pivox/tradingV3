@@ -61,8 +61,9 @@ Fixtures versionnees :
 
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_nominal_fake_dashboard.json`
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_degraded_fake_dashboard.json`
+- `python-orchestrator/fixtures/runtime-recipe/r1_r16_okx_dry_run_dashboard.json`
 
-Elles utilisent uniquement :
+Les fixtures Fake/Paper utilisent uniquement :
 
 - `exchange=fake` ;
 - `market_type=perpetual` ;
@@ -70,6 +71,22 @@ Elles utilisent uniquement :
 - `dry_run=true` ;
 - `workers=1` ;
 - profils `regular`, `scalper`, `scalper_micro`.
+
+La fixture OKX est limitee a la recette dry-run :
+
+- `exchange=okx` ;
+- `market_type=perpetual` ;
+- `environment=demo` ;
+- `dry_run=true` ;
+- `workers=1` ;
+- symboles internes allow-listes `BTCUSDT` ;
+- profils `regular` et `scalper_micro`.
+
+Elle ne cree aucun set Bitmart et ne doit jamais servir a `dry_run=false`.
+Avant d'executer R1/R2/R14 avec `--target-exchange okx`, le runner lance
+`docker compose exec -T trading-app-php php bin/console app:exchange:runtime-check okx perpetual`.
+Si la sortie ne contient pas `Schedule ready: yes`, les scenarios OKX sont
+exportes en `BLOCKED` et aucun appel `/orchestrator/run` n'est envoye.
 
 Application idempotente attendue :
 
@@ -186,6 +203,31 @@ Scenarios lances par defaut :
 ```text
 R1, R2, R5, R6, R8, R10, R11, R14, R15, R16
 ```
+
+La cible par defaut reste Fake/Paper. Pour exercer OKX en dry-run uniquement sur
+R1, R2 et R14 :
+
+```bash
+cd python-orchestrator
+python scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --target-exchange okx \
+  --scenario R1 \
+  --scenario R2 \
+  --scenario R14 \
+  --export-dir var/runtime-recipe/okx-dry-run \
+  --keep-fixtures
+```
+
+Preuves attendues dans `runtime-recipe-report.json` :
+
+- `metadata.target_exchange=okx` ;
+- `metadata.runtime_check.status=PASS` et `schedule_ready=yes` ;
+- dashboard `recipe-r1-r16-okx-dry-run` applique ;
+- sets `recipe_okx_regular` et `recipe_okx_scalper_micro` dispatches en R2 ;
+- aucun set ou payload `exchange=bitmart` ;
+- R14 refuse le probe `dry_run=false` avant dispatch.
 
 Pour cibler un sous-ensemble :
 
