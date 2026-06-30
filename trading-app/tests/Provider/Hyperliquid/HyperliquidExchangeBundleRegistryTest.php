@@ -130,7 +130,7 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
         );
     }
 
-    public function testRuntimeCheckReturnsNotReadyAndNeverEnablesTestnet(): void
+    public function testRuntimeCheckCanReachPublicReadOnlyButNeverEnablesTestnet(): void
     {
         $report = (new HyperliquidRuntimeCheck())->check(new ExchangeReadinessInput(
             exchange: Exchange::HYPERLIQUID,
@@ -152,8 +152,8 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
             dryRun: false,
         ));
 
-        self::assertSame(ExchangeReadinessLevel::NotReady, $report->readyLevel);
-        self::assertContains('hyperliquid_provider_bundle_skeleton_not_ready', $report->blockingErrors);
+        self::assertSame(ExchangeReadinessLevel::PublicReadOnly, $report->readyLevel);
+        self::assertSame([], $report->blockingErrors);
         self::assertFalse($report->permissionsTrade);
         self::assertFalse($report->stopLossCapability);
         self::assertTrue($report->killSwitch);

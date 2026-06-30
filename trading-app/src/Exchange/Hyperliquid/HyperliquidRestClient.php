@@ -18,7 +18,7 @@ final readonly class HyperliquidRestClient implements HyperliquidRestClientInter
 
     public function info(array $request): array
     {
-        /** @var array<string,mixed> $data */
+        /** @var array<mixed> $data */
         $data = $this->httpClient
             ->request('POST', $this->config->apiBaseUri() . '/info', ['json' => $request])
             ->toArray(false);

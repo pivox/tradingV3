@@ -8,7 +8,7 @@ interface HyperliquidRestClientInterface
 {
     /**
      * @param array<string,mixed> $request
-     * @return array<string,mixed>
+     * @return array<mixed>
      */
     public function info(array $request): array;
 

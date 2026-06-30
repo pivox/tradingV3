@@ -13,11 +13,22 @@ First API-first Hyperliquid integration slice.
 - Internal app client order IDs are deterministically mapped to Hyperliquid Cloid values (`0x` + 128-bit hex) before they reach `/exchange`.
 - Private WebSocket support is not advertised yet; keep reconciliation on REST snapshots until a Hyperliquid WS client and normalizer are added.
 - Live signing is intentionally not enabled by the default REST client. Inject a signed `HyperliquidRestClientInterface` implementation before sending real testnet orders.
-- HL-002 adds a separate `App\Provider\Hyperliquid\*` provider bundle skeleton for
-  `hyperliquid/perpetual`. Those provider gateways are deliberately fail-closed:
-  they throw `HyperliquidProviderNotReadyException`, do not call `/info`, do not
-  sign, do not broadcast `/exchange`, and keep `app:exchange:runtime-check
-  hyperliquid perpetual` at `Readiness level: not_ready` / `Schedule ready: no`.
+- HL-002 adds a separate `App\Provider\Hyperliquid\*` provider bundle for
+  `hyperliquid/perpetual`.
+- HL-003 enables only public REST reads through `/info` on that provider bundle:
+  `metaAndAssetCtxs`, `allMids`, `l2Book`, `candleSnapshot`, and
+  `fundingHistory`. Candles are normalized as `KlineDto` with source
+  `HYPERLIQUID_REST_PUBLIC`; public 429 responses are normalized as
+  `hyperliquid_public_rate_limited`.
+- Public WebSocket is not wired in HL-003. The supported public fallback is
+  bounded REST polling through `/info`.
+- Account and execution provider gateways remain fail-closed. They still throw
+  `HyperliquidProviderNotReadyException`, do not sign, and do not broadcast
+  `/exchange`.
+- `HyperliquidRuntimeCheck` may reach `public_read_only` when public probes are
+  supplied as good, but `app:exchange:runtime-check hyperliquid perpetual`
+  remains `Schedule ready: no` until account read, signer, nonce, local dry-run,
+  and protection readiness are implemented.
 
 Environment:
 
