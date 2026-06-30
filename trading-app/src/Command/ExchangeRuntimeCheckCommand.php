@@ -77,7 +77,7 @@ final class ExchangeRuntimeCheckCommand extends Command
             ? $this->okxReadinessReport($marketType, $adapterStatus, $providerStatus, $credentials, $adapter, $providerBundle)
             : null;
         $hyperliquidReadinessReport = $exchange === Exchange::HYPERLIQUID
-            ? $this->hyperliquidReadinessReport($marketType)
+            ? $this->hyperliquidReadinessReport($marketType, $adapterStatus, $providerStatus, $providerBundle)
             : null;
         $scheduleReady = $this->scheduleReady($exchange, $adapterStatus, $providerStatus, $okxReadinessReport, $hyperliquidReadinessReport);
         $recommendedDryRun = !$scheduleReady || $credentials !== 'ok' || $liveTrading !== 'enabled';
@@ -246,19 +246,83 @@ final class ExchangeRuntimeCheckCommand extends Command
         return true;
     }
 
-    private function hyperliquidReadinessReport(MarketType $marketType): ExchangeReadinessReport
-    {
+    private function hyperliquidReadinessReport(
+        MarketType $marketType,
+        string $adapterStatus,
+        string $providerStatus,
+        ?ExchangeProviderBundle $providerBundle,
+    ): ExchangeReadinessReport {
+        [$publicConnectivity, $instrumentsLoaded, $metadataValid, $precisionValid, $publicWarnings] = $this->hyperliquidPublicReadStatus($adapterStatus, $providerStatus, $providerBundle);
+        [$privateReadProbeReady, $privateWarnings] = $publicConnectivity && $instrumentsLoaded
+            ? $this->hyperliquidPrivateReadStatus($providerBundle)
+            : [false, []];
+        $privateReadReady = $publicConnectivity && $instrumentsLoaded && $privateReadProbeReady;
+
         return (new HyperliquidRuntimeCheck())->check(new ExchangeReadinessInput(
             exchange: Exchange::HYPERLIQUID,
             marketType: $marketType,
             environment: $this->hyperliquidConfig->normalizedEnvironment(),
+            publicConnectivity: $publicConnectivity,
+            privateReadConnectivity: $privateReadReady,
+            privateObservability: false,
+            instrumentsLoaded: $instrumentsLoaded,
+            metadataValid: $metadataValid,
+            precisionValid: $precisionValid,
+            accountReadable: $privateReadReady,
+            permissionsRead: $privateReadReady,
+            permissionsTrade: false,
             mainnetWriteGuard: !$this->hyperliquidConfig->mainnetEnabled,
             demoTestnetWriteGuard: false,
+            stopLossCapability: false,
             killSwitch: true,
             dryRun: true,
             allowedMarkets: [$marketType->value],
             maxNotional: 25.0,
+            warnings: array_merge($publicWarnings, $privateWarnings),
         ));
+    }
+
+    /**
+     * @return array{0: bool, 1: bool, 2: bool, 3: bool, 4: list<string>}
+     */
+    private function hyperliquidPublicReadStatus(
+        string $adapterStatus,
+        string $providerStatus,
+        ?ExchangeProviderBundle $providerBundle,
+    ): array {
+        if ($adapterStatus !== 'found' || $providerStatus !== 'found' || !$providerBundle instanceof ExchangeProviderBundle) {
+            return [false, false, false, false, []];
+        }
+
+        try {
+            $contracts = $providerBundle->contract()->getContracts();
+        } catch (\Throwable) {
+            return [false, false, false, false, ['hyperliquid_public_read_probe_failed']];
+        }
+
+        $instrumentsLoaded = $contracts !== [];
+
+        return [true, $instrumentsLoaded, $instrumentsLoaded, $instrumentsLoaded, []];
+    }
+
+    /**
+     * @return array{0: bool, 1: list<string>}
+     */
+    private function hyperliquidPrivateReadStatus(?ExchangeProviderBundle $providerBundle): array
+    {
+        if (!$providerBundle instanceof ExchangeProviderBundle) {
+            return [false, []];
+        }
+
+        try {
+            if ($providerBundle->account()->getAccountInfo() !== null) {
+                return [true, []];
+            }
+        } catch (\Throwable) {
+            return [false, ['hyperliquid_private_read_probe_failed']];
+        }
+
+        return [false, ['hyperliquid_private_read_probe_failed']];
     }
 
     private function okxReadinessReport(

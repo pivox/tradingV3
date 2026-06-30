@@ -3,7 +3,8 @@
 ## Statut
 
 ADR documentaire HL-001, accepte le 2026-06-30. HL-002 ajoute le bundle provider
-Hyperliquid skeleton. HL-003 active la lecture publique REST `/info` uniquement.
+Hyperliquid skeleton. HL-003 active la lecture publique REST `/info`. HL-006
+active la lecture account read-only via `/info`, sans signer ni broadcast.
 
 Hyperliquid reste `target_dry_run_only`. Cette page ne rend pas Hyperliquid
 utilisable en ecriture testnet et ne rend jamais Hyperliquid utilisable en
@@ -78,17 +79,17 @@ reutilisables.
 | Config Hyperliquid testnet | Documente | `config/trading/exchange/hyperliquid.yaml` garde Hyperliquid `dry_run_runtime_check_only`. | Normaliser les variables `HYPERLIQUID_TESTNET_*` et les exposer via runtime-check. |
 | Guard mainnet | Present | Les docs et gates existantes bloquent Hyperliquid live/mainnet. | Conserver le blocage dans toutes les PRs HL. |
 | Public read-only | HL-003 | `HyperliquidMetadataProvider` et `HyperliquidMarketGateway` lisent `/info` pour `metaAndAssetCtxs`, `allMids`, `l2Book`, `candleSnapshot` et `fundingHistory`. | Freshness runtime/WS public dedie si un flux temps reel est necessaire. |
-| Account read-only | A livrer | Endpoint `info` officiel couvre state utilisateur, fills et funding. | Client account read-only testnet, redaction et observabilite privee complete. |
-| Provider bundle | Public-read HL-003 | `ExchangeProviderBundle.hyperliquid_perpetual` route `hyperliquid/perpetual` vers les gateways Hyperliquid ; les surfaces publiques lisent REST, les surfaces account/execution restent fail-closed. | Implementer les lectures account et les PRs signer/nonce dediees. |
+| Account read-only | HL-006 | `HyperliquidAccountGateway` lit `clearinghouseState`, `userFills`/`userFillsByTime` et `userFunding` via `/info` avec redaction. `HyperliquidExecutionGateway` lit `frontendOpenOrders`. | Observabilite privee WS/equivalent et couts complets avant toute mutation. |
+| Provider bundle | Account-read HL-006 | `ExchangeProviderBundle.hyperliquid_perpetual` route `hyperliquid/perpetual` vers les gateways Hyperliquid ; les surfaces publiques et account read-only lisent REST, les mutations restent fail-closed. | Implementer les PRs fees, observabilite, signer crypto et guards mutatifs dedies. |
 | WebSocket public | Fallback REST HL-003 | HL-003 choisit le polling REST borne via `/info` au lieu d'un client WS public. | Client public, subscriptions, reconnect et freshness si une PR future remplace le polling. |
 | WebSocket prive / equivalent | A livrer | State compte lisible via `info`, streams a valider. | Policy de snapshot initial + delta, ou justification equivalente avant mutation. |
 | Signer fake/local | Livre HL-004 | `FakeHyperliquidSigner` produit une signature deterministe de fixture, sans secret et sans HTTP. `HyperliquidDryRunExecutionPort` ne signe pas et ne broadcast pas. | Conserver le fake pour les recettes local dry-run et les tests de payload. |
 | Signer testnet | Encapsule HL-004 | `HyperliquidAgentSigner` valide `HYPERLIQUID_ENV=testnet`, `HYPERLIQUID_NETWORK=testnet` et les variables agent/account testnet, puis delegue a un backend de signature injecte. Aucun backend crypto n'est cable au client `/exchange` par defaut. | Ajouter le backend crypto officiel/valide par vecteurs dans une PR ulterieure avant tout broadcast. |
 | Nonce manager | Livre HL-005 | `PersistentHyperliquidNonceManager` persiste `hyperliquid_nonce_state` par `environment + network + signer_address`, garde `account_address` en audit, rejette la reutilisation d'un signer sur un autre compte, et detecte les replays. | L'utiliser seulement dans une PR mutative future, apres signer crypto officiel et garde `/exchange`. |
 | Metadata / precision | Partiel HL-003 | Mapping `symbol -> coin -> asset_id`, `szDecimals`, max leverage et precision derivee sont exposes dans `HyperliquidInstrumentMetadataDto`. | Precision complete fees/min-notional en HL-007. |
-| Fees / funding / costs | Partiel HL-003 | Funding public absent reste `null` avec `funding_rate_unknown`, jamais converti en zero dans le DTO metadata. | User fills/funding/couts complets en PR account/ledger dediees. |
+| Fees / funding / costs | Partiel HL-006 | Funding public absent reste `null` avec `funding_rate_unknown`. User fills et funding history sont lisibles via account read-only, redacted et non certifies PnL. | Fees/min-notional complets et couts ledger/certification dans les PRs dediees. |
 | Local dry-run no broadcast | Partiel | `HyperliquidDryRunExecutionPort` simule sans HTTP ni `/exchange`. | Serialization future des payloads HL sans broadcast ni secret. |
-| Runtime-check candidate | Public-read possible HL-003 | `HyperliquidRuntimeCheck` peut retourner `public_read_only` quand les probes publiques sont bonnes. La commande runtime reste `Schedule ready: no` tant que les probes reelles ne sont pas branchees. | Niveaux `private_read_only`, `local_dry_run_ready`, puis `demo_testnet_candidate`. |
+| Runtime-check candidate | Private-read possible HL-006 | `HyperliquidRuntimeCheck` peut retourner `private_read_only` quand les probes publiques et account sont bonnes. La commande runtime reste `Schedule ready: no` tant que les guards local dry-run/protection ne sont pas complets. | Niveaux `local_dry_run_ready`, puis `demo_testnet_candidate`. |
 | SL/TP / protection | A valider | Aucun attachement runtime Hyperliquid n'est prouve par HL-001. | Modele ordre/protection testnet avec SL immediat ou compensation fail-safe. |
 | Controlled testnet write | Non supporte | Les guards communs existent, mais Hyperliquid reste dry-run only. | PR dediee apres readiness complete, SL obligatoire, reconciliation et rollback. |
 | Mainnet write | Interdit | `mainnet_write_enabled=false` reste requis. | Aucun manque a combler dans cette serie. |
@@ -150,6 +151,10 @@ HYPERLIQUID_TESTNET_TRADING_ENABLED=0
 
 ### Account read-only
 
+HL-006 branche les lectures account read-only sur `POST /info`. Ces lectures
+n'utilisent pas l'adresse agent pour le state compte, ne signent rien et ne
+touchent jamais a `/exchange`.
+
 | Donnee | Surface Hyperliquid attendue | Utilisation |
 |---|---|---|
 | Account state | `POST /info` user state | Equity, margin summary, positions ouvertes. |
@@ -174,6 +179,33 @@ HYPERLIQUID_TESTNET_TRADING_ENABLED=0
 L'adresse de compte n'est pas un secret. Les private keys, API wallet keys,
 signatures et payloads signes restent interdits dans Git, logs, fixtures,
 screenshots et docs.
+
+Regles HL-006 :
+
+- `HYPERLIQUID_ENV` et `HYPERLIQUID_NETWORK` doivent rester `testnet` pour les
+  lectures account de cette serie.
+- `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS` est l'adresse wallet/subaccount a lire.
+  Elle ne doit pas etre remplacee par `HYPERLIQUID_TESTNET_AGENT_ADDRESS`.
+- Si l'adresse account est absente alors qu'une adresse agent est configuree,
+  le provider echoue avec `hyperliquid_account_address_missing_for_signer`.
+- Si account et agent sont identiques, le provider echoue avec
+  `hyperliquid_account_address_matches_agent`.
+- `getAccountBalance('USDC')` expose le withdrawable Hyperliquid. Les demandes
+  `USDT` retournent `0.0` pour eviter une conversion implicite USDC->USDT.
+- Les fills et fundings sont bornes a 200 elements par appel et filtres par coin
+  lorsque le symbole est fourni. Une fenetre temporelle utilise
+  `userFillsByTime`; sinon `userFills`.
+- Les champs sensibles usuels (`secret`, `apiKey`, `privateKey`, `signature`,
+  `passphrase`) sont retires des metadata/raw_reference.
+
+Exemple operateur :
+
+```bash
+docker-compose exec trading-app-php php bin/console app:exchange:runtime-check hyperliquid perpetual
+```
+
+Un compte testnet correctement configure peut atteindre `private_read_only`,
+mais `Recommended dry_run: true` et `Schedule ready: no` restent attendus.
 
 ### Signer et mutation future
 

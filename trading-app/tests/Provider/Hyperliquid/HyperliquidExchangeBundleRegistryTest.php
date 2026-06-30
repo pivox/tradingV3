@@ -97,11 +97,11 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
         );
         $this->assertNotReady(
             static fn (): array => $scoped->getOrderProvider()->getOpenOrdersOrFail('BTCUSDT'),
-            'hyperliquid_execution_not_ready',
+            'hyperliquid_account_address_missing',
         );
         $this->assertNotReady(
             static fn (): array => $scoped->getAccountProvider()->getOpenPositionsOrFail('BTCUSDT'),
-            'hyperliquid_account_not_ready',
+            'hyperliquid_account_address_missing',
         );
         self::assertInstanceOf(HyperliquidSystemProvider::class, $scoped->getSystemProvider());
     }
@@ -130,7 +130,7 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
         );
     }
 
-    public function testRuntimeCheckCanReachPublicReadOnlyButNeverEnablesTestnet(): void
+    public function testRuntimeCheckCanReachPrivateReadOnlyButNeverEnablesTestnet(): void
     {
         $report = (new HyperliquidRuntimeCheck())->check(new ExchangeReadinessInput(
             exchange: Exchange::HYPERLIQUID,
@@ -152,8 +152,11 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
             dryRun: false,
         ));
 
-        self::assertSame(ExchangeReadinessLevel::PublicReadOnly, $report->readyLevel);
+        self::assertSame(ExchangeReadinessLevel::PrivateReadOnly, $report->readyLevel);
         self::assertSame([], $report->blockingErrors);
+        self::assertTrue($report->privateReadConnectivity);
+        self::assertTrue($report->accountReadable);
+        self::assertTrue($report->permissionsRead);
         self::assertFalse($report->permissionsTrade);
         self::assertFalse($report->stopLossCapability);
         self::assertTrue($report->killSwitch);
