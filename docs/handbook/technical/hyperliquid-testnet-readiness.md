@@ -82,8 +82,8 @@ reutilisables.
 | Provider bundle | Public-read HL-003 | `ExchangeProviderBundle.hyperliquid_perpetual` route `hyperliquid/perpetual` vers les gateways Hyperliquid ; les surfaces publiques lisent REST, les surfaces account/execution restent fail-closed. | Implementer les lectures account et les PRs signer/nonce dediees. |
 | WebSocket public | Fallback REST HL-003 | HL-003 choisit le polling REST borne via `/info` au lieu d'un client WS public. | Client public, subscriptions, reconnect et freshness si une PR future remplace le polling. |
 | WebSocket prive / equivalent | A livrer | State compte lisible via `info`, streams a valider. | Policy de snapshot initial + delta, ou justification equivalente avant mutation. |
-| Signer fake/local | Skeleton HL-002 | `HyperliquidSignerInterface` existe sans implementation concrete ; `HyperliquidDryRunExecutionPort` ne signe pas et ne broadcast pas. | Abstraction de signature testable sans private key reelle. |
-| Signer testnet | Non supporte | Hors perimetre HL-001. | API wallet testnet dedie, redaction, aucun secret mainnet, tests de payload signe sans broadcast. |
+| Signer fake/local | Livre HL-004 | `FakeHyperliquidSigner` produit une signature deterministe de fixture, sans secret et sans HTTP. `HyperliquidDryRunExecutionPort` ne signe pas et ne broadcast pas. | Conserver le fake pour les recettes local dry-run et les tests de payload. |
+| Signer testnet | Encapsule HL-004 | `HyperliquidAgentSigner` valide `HYPERLIQUID_ENV=testnet`, `HYPERLIQUID_NETWORK=testnet` et les variables agent/account testnet, puis delegue a un backend de signature injecte. Aucun backend crypto n'est cable au client `/exchange` par defaut. | Ajouter le backend crypto officiel/valide par vecteurs dans une PR ulterieure avant tout broadcast. |
 | Nonce manager | Skeleton HL-002 | `HyperliquidNonceManagerInterface` existe sans implementation concrete. | Compteur persistant par signer, monotone, restart-safe et auditable. |
 | Metadata / precision | Partiel HL-003 | Mapping `symbol -> coin -> asset_id`, `szDecimals`, max leverage et precision derivee sont exposes dans `HyperliquidInstrumentMetadataDto`. | Precision complete fees/min-notional en HL-007. |
 | Fees / funding / costs | Partiel HL-003 | Funding public absent reste `null` avec `funding_rate_unknown`, jamais converti en zero dans le DTO metadata. | User fills/funding/couts complets en PR account/ledger dediees. |
@@ -141,6 +141,7 @@ Configuration testnet public cible :
 
 ```dotenv
 HYPERLIQUID_ENV=testnet
+HYPERLIQUID_NETWORK=testnet
 HYPERLIQUID_API_BASE_URI=https://api.hyperliquid-testnet.xyz
 HYPERLIQUID_WS_URI=wss://api.hyperliquid-testnet.xyz/ws
 HYPERLIQUID_MAINNET_ENABLED=0
@@ -162,7 +163,8 @@ Configuration account read-only cible :
 
 ```dotenv
 HYPERLIQUID_ENV=testnet
-HYPERLIQUID_ACCOUNT_ADDRESS=0x0000000000000000000000000000000000000000
+HYPERLIQUID_NETWORK=testnet
+HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS=0x0000000000000000000000000000000000000000
 HYPERLIQUID_API_BASE_URI=https://api.hyperliquid-testnet.xyz
 HYPERLIQUID_WS_URI=wss://api.hyperliquid-testnet.xyz/ws
 HYPERLIQUID_MAINNET_ENABLED=0
@@ -175,11 +177,26 @@ screenshots et docs.
 
 ### Signer et mutation future
 
-Les actions `POST /exchange` sont hors perimetre HL-001. Une future PR mutative
+HL-004 ajoute la frontiere de signature sans activer de broadcast :
+
+- `HyperliquidSignerInterface` reste la dependance applicative ;
+- `FakeHyperliquidSigner` sert aux tests et recettes sans secret ;
+- `HyperliquidAgentSigner` accepte uniquement `testnet` et refuse `mainnet` ou
+  tout autre domain/network ;
+- les seules variables de secret autorisees sont
+  `HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY`,
+  `HYPERLIQUID_TESTNET_AGENT_ADDRESS` et
+  `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS` ;
+- `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS` est une adresse publique de compte ; la
+  private key du wallet principal ne doit jamais entrer dans l'application ;
+- le client REST `/exchange` par defaut continue de refuser, meme si les
+  variables de signer sont presentes.
+
+Les actions `POST /exchange` restent hors perimetre. Une future PR mutative
 testnet devra prouver :
 
 - API wallet testnet dedie au bot, jamais private key du wallet principal ;
-- signer abstrait et testable avec fixtures sans secret ;
+- signer crypto officiel valide par vecteurs non secrets ;
 - nonce manager persistant par signer ;
 - payloads redacted et hashables pour audit ;
 - whitelist symbole/marche, notional minimal, leverage cap et SL obligatoire ;

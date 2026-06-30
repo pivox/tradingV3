@@ -342,8 +342,10 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
             new OkxConfig(environment: 'demo'),
             new HyperliquidConfig(
                 environment: 'testnet',
-                accountAddress: '0xabc',
-                privateKey: '0xkey',
+                network: 'testnet',
+                testnetAgentPrivateKey: 'fixture-agent-material',
+                testnetAgentAddress: '0xagent',
+                testnetAccountAddress: '0xabc',
             ),
         );
 
@@ -381,9 +383,11 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
             new OkxConfig(environment: 'demo'),
             new HyperliquidConfig(
                 environment: 'mainnet',
-                accountAddress: '0xabc',
-                privateKey: '0xkey',
                 mainnetEnabled: true,
+                network: 'mainnet',
+                testnetAgentPrivateKey: 'fixture-agent-material',
+                testnetAgentAddress: '0xagent',
+                testnetAccountAddress: '0xabc',
             ),
         );
 

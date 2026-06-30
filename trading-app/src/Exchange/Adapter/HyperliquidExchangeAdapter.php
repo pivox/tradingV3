@@ -335,9 +335,12 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
 
     public function hasAuthoritativePositionSnapshot(?string $symbol = null): bool
     {
-        return trim($this->config->accountAddress) !== '';
+        return $this->config->signingAccountAddress() !== '';
     }
 
+    /**
+     * @return array<string,mixed>
+     */
     private function userState(): array
     {
         return $this->client->info([
@@ -348,9 +351,9 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
 
     private function accountAddress(): string
     {
-        $address = trim($this->config->accountAddress);
+        $address = $this->config->signingAccountAddress();
         if ($address === '') {
-            throw new \RuntimeException('HYPERLIQUID_ACCOUNT_ADDRESS is required for account snapshots.');
+            throw new \RuntimeException('HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS is required for account snapshots.');
         }
 
         return $address;
@@ -449,6 +452,9 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         );
     }
 
+    /**
+     * @param array<string,mixed> $order
+     */
     private function mapOrderType(array $order): ExchangeOrderType
     {
         $orderType = strtolower((string)($order['orderType'] ?? ''));
@@ -467,6 +473,9 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         return ExchangeOrderType::LIMIT;
     }
 
+    /**
+     * @param array<string,mixed> $order
+     */
     private function mapTimeInForce(array $order): ExchangeTimeInForce
     {
         return match (strtolower((string)($order['tif'] ?? $order['orderType'] ?? ''))) {
@@ -475,6 +484,9 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         };
     }
 
+    /**
+     * @param array<string,mixed> $order
+     */
     private function triggerPrice(ExchangeOrderType $orderType, array $order): ?float
     {
         if (!\in_array($orderType, [ExchangeOrderType::STOP_LOSS, ExchangeOrderType::TAKE_PROFIT, ExchangeOrderType::TRIGGER], true)) {
@@ -493,6 +505,9 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         return $side === ExchangeOrderSide::BUY ? ExchangePositionSide::LONG : ExchangePositionSide::SHORT;
     }
 
+    /**
+     * @param array<string,mixed> $response
+     */
     private function extractOrderStatus(array $response): ExchangeOrderStatus
     {
         $status = strtolower((string)($response['status'] ?? ''));
@@ -511,6 +526,9 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         return ExchangeOrderStatus::PENDING;
     }
 
+    /**
+     * @param array<string,mixed> $response
+     */
     private function extractOrderId(array $response): ?string
     {
         $statuses = $response['response']['data']['statuses'] ?? null;
