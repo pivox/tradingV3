@@ -89,6 +89,20 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertContains('duplicate_event', $lifecycle->qualityFlags);
     }
 
+    public function testKeepsDistinctFillsSharingTransactionHash(): void
+    {
+        $first = $this->fillRow(quantity: '0.2', price: '25000', hash: 'shared-tx-hash', time: 1_767_225_601_000);
+        $first['tid'] = 10_001;
+        $second = $this->fillRow(quantity: '0.3', price: '25010', hash: 'shared-tx-hash', time: 1_767_225_601_000);
+        $second['tid'] = 10_002;
+
+        $fills = $this->normalizer->normalizeFills([$first, $second]);
+
+        self::assertCount(2, $fills);
+        self::assertSame('10001', $fills[0]->fillId);
+        self::assertSame('10002', $fills[1]->fillId);
+    }
+
     public function testOrderAbsentButFillPresentRequiresResyncAndKeepsFill(): void
     {
         $lifecycle = $this->normalizer->normalizeOrderLifecycle([
@@ -153,6 +167,18 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
             'error' => 'Market is not open for this asset',
             'cloid' => 'cid-market',
         ]);
+        $batched = $this->normalizer->normalizeError([
+            'response' => [
+                'type' => 'order',
+                'data' => [
+                    'statuses' => [[
+                        'error' => 'Insufficient collateral available',
+                        'oid' => 1002,
+                        'cloid' => 'cid-batched',
+                    ]],
+                ],
+            ],
+        ]);
 
         self::assertSame(HyperliquidLifecycleStatus::FAILED, $insufficient->status);
         self::assertSame('insufficient_collateral', $insufficient->code);
@@ -160,6 +186,9 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertSame('[redacted]', $insufficient->redactedPayload['response']['signature']);
         self::assertSame('market_unavailable', $marketUnavailable->code);
         self::assertSame('cid-market', $marketUnavailable->clientOrderId);
+        self::assertSame('insufficient_collateral', $batched->code);
+        self::assertSame('1002', $batched->exchangeOrderId);
+        self::assertSame('cid-batched', $batched->clientOrderId);
     }
 
     /**

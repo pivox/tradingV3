@@ -171,8 +171,7 @@ final readonly class HyperliquidLifecycleNormalizer
      */
     public function normalizeError(array $payload): HyperliquidNormalizedErrorDto
     {
-        $data = \is_array($payload['response'] ?? null) ? $payload['response'] : $payload;
-        /** @var array<string,mixed> $data */
+        $data = $this->errorDataRow($payload);
         $message = $this->firstNonEmpty($data['error'] ?? null, $data['message'] ?? null, $payload['error'] ?? null, $payload['message'] ?? null);
         $lower = strtolower($message);
         $code = match (true) {
@@ -499,7 +498,7 @@ final readonly class HyperliquidLifecycleNormalizer
      */
     private function fillId(array $row): ?string
     {
-        $explicit = $this->firstNonEmpty($row['hash'] ?? null, $row['tid'] ?? null, $row['fillId'] ?? null, $row['exchangeFillId'] ?? null);
+        $explicit = $this->firstNonEmpty($row['tid'] ?? null, $row['fillId'] ?? null, $row['exchangeFillId'] ?? null, $row['hash'] ?? null);
         if ($explicit !== '') {
             return $explicit;
         }
@@ -710,6 +709,27 @@ final readonly class HyperliquidLifecycleNormalizer
     private function hasValue(mixed $value): bool
     {
         return $this->string($value) !== '';
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function errorDataRow(array $payload): array
+    {
+        $response = \is_array($payload['response'] ?? null) ? $payload['response'] : $payload;
+        /** @var array<string,mixed> $response */
+        $data = \is_array($response['data'] ?? null) ? $response['data'] : [];
+        /** @var array<string,mixed> $data */
+        $statuses = \is_array($data['statuses'] ?? null) ? $data['statuses'] : [];
+        foreach ($statuses as $status) {
+            if (\is_array($status) && $this->hasValue($status['error'] ?? null)) {
+                /** @var array<string,mixed> $status */
+                return $status;
+            }
+        }
+
+        return $response;
     }
 
     /**
