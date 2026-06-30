@@ -83,7 +83,7 @@ reutilisables.
 | Signer fake/local | A livrer | `HyperliquidDryRunExecutionPort` existant ne signe pas et ne broadcast pas. | Abstraction de signature testable sans private key reelle. |
 | Signer testnet | Non supporte | Hors perimetre HL-001. | API wallet testnet dedie, redaction, aucun secret mainnet, tests de payload signe sans broadcast. |
 | Nonce manager | Non supporte | Exigence documentaire HL-001. | Compteur persistant par signer, monotone, restart-safe et auditable. |
-| Metadata / precision | A livrer | Docs officielles definissent asset IDs, tick et lot size. | Mapping `symbol -> asset`, tick/lot, size decimals, min notional si disponible, flags si absent. |
+| Metadata / precision | A livrer | Docs officielles definissent asset IDs, tick/lot, `szDecimals` et precision prix. | Mapping `symbol -> asset`, tick/lot, size decimals, precision prix Hyperliquid, min notional si disponible, flags si absent. |
 | Fees / funding / costs | A livrer | Funding et user funding sont exposes par `info`. | DTO couts avec valeurs absentes en `null` + quality flag, jamais zero implicite. |
 | Local dry-run no broadcast | Partiel | `HyperliquidDryRunExecutionPort` simule sans HTTP ni `/exchange`. | Serialization future des payloads HL sans broadcast ni secret. |
 | Runtime-check candidate | Partiel | `app:exchange:runtime-check hyperliquid perpetual` garde Hyperliquid dry-run only. | Niveaux `public_read_only`, `private_read_only`, `local_dry_run_ready`, puis `demo_testnet_candidate`. |
@@ -165,7 +165,11 @@ donnees :
 - environnement `testnet` confirme et endpoints testnet utilises ;
 - `market_type=perpetual` confirme ;
 - mapping symbole interne vers coin Hyperliquid et asset id testnet ;
-- tick size, lot size, size decimals et contraintes de taille ;
+- tick size, lot size, size decimals, contraintes de taille et precision prix
+  Hyperliquid ;
+- validation que les prix respectent les limites Hyperliquid perps : 5 chiffres
+  significatifs maximum et nombre de decimales prix compatible avec
+  `6 - szDecimals` ;
 - best bid/ask, prix courant et timestamps de freshness ;
 - candles normalisees, triees et bornees ;
 - funding courant ou historique exploitable ;
@@ -185,7 +189,8 @@ Hyperliquid peut progresser vers `demo_testnet_candidate` seulement si :
 
 1. `exchange=hyperliquid`, `environment=testnet`, `market_type=perpetual`.
 2. Les endpoints utilises pointent vers `api.hyperliquid-testnet.xyz`.
-3. Les metadata et precisions sont coherentes avec le plan d'ordre.
+3. Les metadata et precisions sont coherentes avec le plan d'ordre, y compris
+   la precision prix Hyperliquid qui evite les rejets `tickRejected`.
 4. La lecture publique est fraiche et bornee.
 5. La lecture account est redacted et couvre positions, ordres, fills et funding.
 6. Les nonces et le signer restent inactifs ou fake tant que le mode est dry-run.
@@ -205,9 +210,11 @@ Hyperliquid ne peut atteindre `demo_testnet_enabled` que si, en plus :
    notional positif sous plafond et stop-loss present.
 4. La private observability policy autorise le statut Hyperliquid testnet.
 5. Le signer utilise uniquement une API wallet testnet dediee.
-6. Le nonce manager persistant est operationnel et audite.
-7. Une compensation fail-safe est documentee si le SL ne peut pas etre attache.
-8. L'audit demo/testnet trading est ecrit avant de considerer la mutation
+6. `permissions_trade=true` est prouve pour l'API wallet/le compte testnet
+   avant tout statut enabled.
+7. Le nonce manager persistant est operationnel et audite.
+8. Une compensation fail-safe est documentee si le SL ne peut pas etre attache.
+9. L'audit demo/testnet trading est ecrit avant de considerer la mutation
    autorisee.
 
 ## Non supporte
@@ -252,7 +259,14 @@ HYPERLIQUID_ENV=testnet
 HYPERLIQUID_MAINNET_ENABLED=0
 HYPERLIQUID_TESTNET_TRADING_ENABLED=0
 DEMO_TRADING_ENABLED=0
+# Config effective / safety envelope :
+demo_testnet_write_enabled=false
+kill_switch_enabled=true
 ```
+
+Voir aussi le runbook [Demo/Testnet kill switch](../runbooks/demo-testnet-kill-switch.md)
+pour refermer les gates effectives et verifier que les processus ont recharge
+la configuration.
 
 ## References officielles
 
@@ -261,5 +275,6 @@ DEMO_TRADING_ENABLED=0
 - Hyperliquid Exchange endpoint : <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint>
 - Hyperliquid Nonces and API wallets : <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/nonces-and-api-wallets>
 - Hyperliquid Asset IDs : <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/asset-ids>
+- Hyperliquid Tick and lot size : <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size>
 - Hyperliquid Rate limits : <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits>
 - Hyperliquid WebSocket : <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket>
