@@ -17,6 +17,7 @@ use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Okx\OkxRuntimeCheck;
+use App\Provider\Registry\ExchangeProviderBundle;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -67,12 +68,12 @@ final class ExchangeRuntimeCheckCommand extends Command
 
         $context = new ExchangeContext($exchange, $marketType);
         [$adapterStatus, $adapter] = $this->adapterStatus($exchange, $marketType);
-        $providerStatus = $this->providerStatus($context);
+        [$providerStatus, $providerBundle] = $this->providerStatus($context);
         $credentials = $this->credentialsStatus($exchange);
         $liveTrading = $this->liveTradingStatus($exchange, $credentials);
         $privateWs = $this->privateWsStatus($adapter);
         $okxReadinessReport = $exchange === Exchange::OKX
-            ? $this->okxReadinessReport($marketType, $adapterStatus, $providerStatus, $credentials, $adapter)
+            ? $this->okxReadinessReport($marketType, $adapterStatus, $providerStatus, $credentials, $adapter, $providerBundle)
             : null;
         $scheduleReady = $this->scheduleReady($exchange, $adapterStatus, $providerStatus, $okxReadinessReport);
         $recommendedDryRun = !$scheduleReady || $credentials !== 'ok' || $liveTrading !== 'enabled';
@@ -151,14 +152,17 @@ final class ExchangeRuntimeCheckCommand extends Command
         }
     }
 
-    private function providerStatus(ExchangeContext $context): string
+    /**
+     * @return array{0: string, 1: ?ExchangeProviderBundle}
+     */
+    private function providerStatus(ExchangeContext $context): array
     {
         try {
-            $this->providers->get($context);
+            $bundle = $this->providers->get($context);
 
-            return 'found';
+            return ['found', $bundle];
         } catch (\Throwable) {
-            return 'missing';
+            return ['missing', null];
         }
     }
 
@@ -212,7 +216,10 @@ final class ExchangeRuntimeCheckCommand extends Command
 
         if ($exchange === Exchange::OKX) {
             return $okxReadinessReport instanceof ExchangeReadinessReport
-                && $okxReadinessReport->readyLevel !== ExchangeReadinessLevel::NotReady;
+                && \in_array($okxReadinessReport->readyLevel, [
+                    ExchangeReadinessLevel::LocalDryRunReady,
+                    ExchangeReadinessLevel::DemoTestnetCandidate,
+                ], true);
         }
 
         return true;
@@ -224,24 +231,25 @@ final class ExchangeRuntimeCheckCommand extends Command
         string $providerStatus,
         string $credentials,
         ?ExchangeAdapterInterface $adapter,
+        ?ExchangeProviderBundle $providerBundle,
     ): ExchangeReadinessReport {
         $capabilities = $adapter instanceof ExchangeAdapterInterface ? $adapter->capabilities() : new ExchangeCapabilities();
         $environment = $this->okxConfig->normalizedEnvironment();
-        $publicReadReady = $adapterStatus === 'found' && $providerStatus === 'found';
+        [$publicConnectivity, $instrumentsLoaded, $metadataValid, $precisionValid, $publicWarnings] = $this->okxPublicReadStatus($adapterStatus, $providerStatus, $providerBundle);
         $mainnetGuard = $this->okxConfig->isDemo() && !$this->okxConfig->liveEnabled;
         $demoHeaderGuard = $this->okxConfig->isDemo() && $this->okxConfig->simulatedTrading && !$this->okxConfig->liveEnabled;
-        $privateReadReady = $publicReadReady && $credentials === 'ok' && $demoHeaderGuard;
+        $privateReadReady = $publicConnectivity && $instrumentsLoaded && $credentials === 'ok' && $demoHeaderGuard;
 
         return (new OkxRuntimeCheck())->check(new ExchangeReadinessInput(
             exchange: Exchange::OKX,
             marketType: $marketType,
             environment: $environment,
-            publicConnectivity: $publicReadReady,
+            publicConnectivity: $publicConnectivity,
             privateReadConnectivity: $privateReadReady,
             privateObservability: false,
-            instrumentsLoaded: $publicReadReady,
-            metadataValid: $publicReadReady,
-            precisionValid: $publicReadReady,
+            instrumentsLoaded: $instrumentsLoaded,
+            metadataValid: $metadataValid,
+            precisionValid: $precisionValid,
             accountReadable: $privateReadReady,
             permissionsRead: $privateReadReady,
             permissionsTrade: false,
@@ -253,7 +261,31 @@ final class ExchangeRuntimeCheckCommand extends Command
             dryRun: true,
             allowedMarkets: [$marketType->value],
             maxNotional: 25.0,
+            warnings: $publicWarnings,
         ));
+    }
+
+    /**
+     * @return array{0: bool, 1: bool, 2: bool, 3: bool, 4: list<string>}
+     */
+    private function okxPublicReadStatus(
+        string $adapterStatus,
+        string $providerStatus,
+        ?ExchangeProviderBundle $providerBundle,
+    ): array {
+        if ($adapterStatus !== 'found' || $providerStatus !== 'found' || !$providerBundle instanceof ExchangeProviderBundle) {
+            return [false, false, false, false, []];
+        }
+
+        try {
+            $contracts = $providerBundle->contract()->getContracts();
+        } catch (\Throwable) {
+            return [false, false, false, false, ['okx_public_read_probe_failed']];
+        }
+
+        $instrumentsLoaded = $contracts !== [];
+
+        return [true, $instrumentsLoaded, $instrumentsLoaded, $instrumentsLoaded, []];
     }
 
     /**

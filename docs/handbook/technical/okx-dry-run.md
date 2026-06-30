@@ -170,6 +170,11 @@ La commande reste read-only : elle force le runtime-check OKX en dry-run, ne ret
 capacité « demo order » d'OKX n'est donc jamais assimilée à « live allowed ». Bitmart legacy
 n'est pas affecté : ces lignes sont spécifiques à OKX.
 
+La readiness publique OKX n'est pas déduite de la simple présence des services : la commande
+sonde `ContractProviderInterface::getContracts()` et exige au moins un instrument public validé
+avant de marquer `instruments_loaded`, `metadata_valid` et `precision_valid`. `Schedule ready:
+yes` est réservé à `local_dry_run_ready` ou `demo_testnet_candidate`.
+
 Exemple :
 
 ```text
