@@ -58,7 +58,7 @@ final readonly class HyperliquidLifecycleNormalizer
             && $this->rowTimeMillis($latest) >= $this->rowTimeMillis($base)
             && ($snapshotFilled <= 0.00000001 || $this->hasLifecycleUpdateTime($base))
         ) {
-            $filled = min($quantity, max($filled, $snapshotFilled + $this->sumFillQuantityAfter($deduplicated, $base)));
+            $filled = min($quantity, max($filled, $snapshotFilled + $this->sumFillQuantityAtOrAfter($deduplicated, $base)));
             $remaining = max(0.0, $quantity - $filled);
         }
         $status = $this->statusFromRows($base, $latestOrder !== [], $quantity, $filled, $remaining, $fills);
@@ -769,12 +769,12 @@ final readonly class HyperliquidLifecycleNormalizer
      * @param list<array<string,mixed>> $rows
      * @param array<string,mixed> $base
      */
-    private function sumFillQuantityAfter(array $rows, array $base): float
+    private function sumFillQuantityAtOrAfter(array $rows, array $base): float
     {
         $baseTime = $this->rowTimeMillis($base);
         $quantity = 0.0;
         foreach ($rows as $row) {
-            if (!$this->isFillRow($row) || $this->rowTimeMillis($row) <= $baseTime) {
+            if (!$this->isFillRow($row) || $this->rowTimeMillis($row) < $baseTime) {
                 continue;
             }
 
