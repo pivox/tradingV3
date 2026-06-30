@@ -8,6 +8,7 @@ use App\Command\ExchangeRuntimeCheckCommand;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Contract\Provider\AccountProviderInterface;
+use App\Contract\Provider\Dto\AccountDto;
 use App\Contract\Provider\ContractProviderInterface;
 use App\Contract\Provider\ExchangeProviderRegistryInterface;
 use App\Contract\Provider\KlineProviderInterface;
@@ -102,6 +103,200 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         // The Hyperliquid-specific lines must never leak into OKX output.
         self::assertStringNotContainsString('Network:', $output);
         self::assertStringNotContainsString('Mainnet enabled:', $output);
+    }
+
+    public function testOkxRuntimeCheckSurfacesLocalDryRunReadinessReasons(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::OKX,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(Exchange::OKX, MarketType::PERPETUAL)),
+            new OkxConfig(
+                environment: 'demo',
+                apiKey: 'key',
+                apiSecret: 'secret',
+                apiPassphrase: 'pass',
+                simulatedTrading: true,
+                demoTradingEnabled: false,
+                liveEnabled: false,
+            ),
+            new HyperliquidConfig(),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Readiness level: local_dry_run_ready', $output);
+        self::assertStringContainsString('Readiness blocking errors: none', $output);
+        self::assertStringContainsString('Readiness warnings: private_observability_absent_for_dry_run, demo_testnet_write_not_enabled', $output);
+        self::assertStringContainsString('Mainnet write guard: yes', $output);
+        self::assertStringContainsString('Demo/testnet write guard: yes', $output);
+        self::assertStringContainsString('Stop loss capability: yes', $output);
+        self::assertStringContainsString('Kill switch: enabled', $output);
+        self::assertStringContainsString('Schedule ready: yes', $output);
+    }
+
+    public function testOkxRuntimeCheckDoesNotScheduleBeforeLocalDryRunReadiness(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::OKX,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(Exchange::OKX, MarketType::PERPETUAL)),
+            new OkxConfig(
+                environment: 'demo',
+                simulatedTrading: true,
+                demoTradingEnabled: true,
+                liveEnabled: false,
+            ),
+            new HyperliquidConfig(),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Credentials: missing', $output);
+        self::assertStringContainsString('Readiness level: public_read_only', $output);
+        self::assertStringContainsString('Readiness warnings: private_read_not_ready', $output);
+        self::assertStringContainsString('Schedule ready: no', $output);
+    }
+
+    public function testOkxRuntimeCheckReportsDemoTestnetCandidateWhenDemoTradingIsExplicitlyEnabled(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::OKX,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(Exchange::OKX, MarketType::PERPETUAL)),
+            new OkxConfig(
+                environment: 'demo',
+                apiKey: 'key',
+                apiSecret: 'secret',
+                apiPassphrase: 'pass',
+                simulatedTrading: true,
+                demoTradingEnabled: true,
+                liveEnabled: false,
+            ),
+            new HyperliquidConfig(),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Readiness level: demo_testnet_candidate', $output);
+        self::assertStringContainsString('Readiness blocking errors: none', $output);
+        self::assertStringContainsString('Readiness warnings: private_observability_absent_for_dry_run', $output);
+        self::assertStringNotContainsString('Readiness level: demo_testnet_enabled', $output);
+        self::assertStringContainsString('Live allowed: no', $output);
+        self::assertStringContainsString('Recommended dry_run: true', $output);
+    }
+
+    public function testOkxRuntimeCheckDoesNotMarkPublicReadReadyWhenProviderReturnsNoContracts(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::OKX,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(
+                Exchange::OKX,
+                MarketType::PERPETUAL,
+                contractsLoaded: false,
+            )),
+            new OkxConfig(
+                environment: 'demo',
+                apiKey: 'key',
+                apiSecret: 'secret',
+                apiPassphrase: 'pass',
+                simulatedTrading: true,
+                demoTradingEnabled: true,
+                liveEnabled: false,
+            ),
+            new HyperliquidConfig(),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Readiness level: not_ready', $output);
+        self::assertStringContainsString('Readiness blocking errors: instruments_not_loaded, metadata_invalid, precision_invalid', $output);
+        self::assertStringContainsString('Schedule ready: no', $output);
+    }
+
+    public function testOkxRuntimeCheckDoesNotMarkPrivateReadReadyWhenAccountProbeFails(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::OKX,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(
+                Exchange::OKX,
+                MarketType::PERPETUAL,
+                accountReadable: false,
+            )),
+            new OkxConfig(
+                environment: 'demo',
+                apiKey: 'key',
+                apiSecret: 'secret',
+                apiPassphrase: 'pass',
+                simulatedTrading: true,
+                demoTradingEnabled: true,
+                liveEnabled: false,
+            ),
+            new HyperliquidConfig(),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Readiness level: public_read_only', $output);
+        self::assertStringContainsString('Readiness warnings: okx_private_read_probe_failed, private_read_not_ready', $output);
+        self::assertStringContainsString('Schedule ready: no', $output);
     }
 
     public function testReportsUnreadyHyperliquidRuntimeWithoutProviderOrCredentials(): void
@@ -270,13 +465,18 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Schedule ready: yes', $output);
     }
 
-    private function adapter(Exchange $exchange, MarketType $marketType, bool $supportsPrivateWs = false): ExchangeAdapterInterface
-    {
+    private function adapter(
+        Exchange $exchange,
+        MarketType $marketType,
+        bool $supportsPrivateWs = false,
+        bool $supportsTriggerOrders = false,
+    ): ExchangeAdapterInterface {
         $adapter = $this->createMock(ExchangeAdapterInterface::class);
         $adapter->method('exchange')->willReturn($exchange);
         $adapter->method('marketType')->willReturn($marketType);
         $adapter->method('capabilities')->willReturn(new ExchangeCapabilities(
             supportsWebSocketPrivate: $supportsPrivateWs,
+            supportsTriggerOrders: $supportsTriggerOrders,
         ));
 
         return $adapter;
@@ -314,14 +514,31 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         return $registry;
     }
 
-    private function providerBundle(Exchange $exchange, MarketType $marketType): ExchangeProviderBundle
+    private function providerBundle(
+        Exchange $exchange,
+        MarketType $marketType,
+        bool $contractsLoaded = true,
+        bool $accountReadable = true,
+    ): ExchangeProviderBundle
     {
+        $contractProvider = $this->createMock(ContractProviderInterface::class);
+        $contractProvider->method('getContracts')->willReturn($contractsLoaded ? [['symbol' => 'BTCUSDT']] : []);
+        $accountProvider = $this->createMock(AccountProviderInterface::class);
+        $accountProvider->method('getAccountInfo')->willReturn($accountReadable ? AccountDto::fromArray([
+            'currency' => 'USDT',
+            'available_balance' => '100',
+            'frozen_balance' => '0',
+            'unrealized' => '0',
+            'equity' => '100',
+            'position_deposit' => '0',
+        ]) : null);
+
         return new ExchangeProviderBundle(
             new ExchangeContext($exchange, $marketType),
             $this->createMock(KlineProviderInterface::class),
-            $this->createMock(ContractProviderInterface::class),
+            $contractProvider,
             $this->createMock(OrderProviderInterface::class),
-            $this->createMock(AccountProviderInterface::class),
+            $accountProvider,
             $this->createMock(SystemProviderInterface::class),
         );
     }
