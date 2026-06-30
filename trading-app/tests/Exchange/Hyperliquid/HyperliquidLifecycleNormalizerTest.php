@@ -118,11 +118,14 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
     {
         $spotFill = $this->fillRow(quantity: '1', price: '10', hash: 'spot-fill', time: 1_767_225_601_000);
         $spotFill['coin'] = '@107';
+        $slashSpotFill = $this->fillRow(quantity: '1', price: '10', hash: 'slash-spot-fill', time: 1_767_225_602_000);
+        $slashSpotFill['coin'] = 'PURR/USDC';
 
-        $fills = $this->normalizer->normalizeFills([$spotFill]);
+        $fills = $this->normalizer->normalizeFills([$spotFill, $slashSpotFill]);
         $lifecycle = $this->normalizer->normalizeOrderLifecycle([
             $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_600_000),
             $spotFill,
+            $slashSpotFill,
         ]);
 
         self::assertSame([], $fills);

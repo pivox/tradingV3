@@ -658,7 +658,7 @@ final readonly class HyperliquidLifecycleNormalizer
     {
         $coin = $this->firstNonEmpty($row['coin'] ?? null, $row['symbol'] ?? null);
 
-        return $coin === '' || !str_starts_with($coin, '@');
+        return $coin === '' || (!str_starts_with($coin, '@') && !str_contains($coin, '/'));
     }
 
     /**
