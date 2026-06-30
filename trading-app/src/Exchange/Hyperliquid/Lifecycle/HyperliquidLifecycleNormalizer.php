@@ -43,6 +43,9 @@ final readonly class HyperliquidLifecycleNormalizer
         $quantity = $this->orderQuantity($base, $fills);
         $remaining = $this->remainingQuantity($base, $quantity);
         $filled = max($this->sumFillQuantity($fills), max(0.0, $quantity - $remaining));
+        if ($this->isFillRow($latest) && $this->rowTimeMillis($latest) > $this->rowTimeMillis($base)) {
+            $remaining = max(0.0, $quantity - $filled);
+        }
         $status = $this->statusFromRows($base, $latestOrder !== [], $quantity, $filled, $remaining, $fills);
         if ($status === HyperliquidLifecycleStatus::FILLED && $filled <= 0.00000001 && $quantity > 0.0) {
             $filled = $quantity;
@@ -413,11 +416,11 @@ final readonly class HyperliquidLifecycleNormalizer
     private function status(mixed $status): HyperliquidLifecycleStatus
     {
         $normalized = strtolower((string) preg_replace('/[^a-zA-Z0-9]+/', '', (string) $status));
-        if (str_contains($normalized, 'cancel')) {
-            return HyperliquidLifecycleStatus::CANCELED;
-        }
         if (str_contains($normalized, 'rejected')) {
             return HyperliquidLifecycleStatus::REJECTED;
+        }
+        if (str_contains($normalized, 'cancel')) {
+            return HyperliquidLifecycleStatus::CANCELED;
         }
 
         return match ($normalized) {

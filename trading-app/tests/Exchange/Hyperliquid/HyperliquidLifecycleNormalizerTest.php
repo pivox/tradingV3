@@ -90,6 +90,18 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertContains('duplicate_event', $lifecycle->qualityFlags);
     }
 
+    public function testRecomputesRemainingWhenNewerFillFollowsOrderSnapshot(): void
+    {
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([
+            $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_600_000),
+            $this->fillRow(quantity: '0.4', price: '25010', hash: 'newer-fill', time: 1_767_225_601_000),
+        ]);
+
+        self::assertSame(HyperliquidLifecycleStatus::PARTIALLY_FILLED, $lifecycle->status);
+        self::assertEqualsWithDelta(0.4, $lifecycle->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
+    }
+
     public function testKeepsDistinctFillsSharingTransactionHash(): void
     {
         $first = $this->fillRow(quantity: '0.2', price: '25000', hash: 'shared-tx-hash', time: 1_767_225_601_000);
@@ -186,10 +198,12 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         $canceled = $this->orderRow(remaining: '1', original: '1', status: 'marginCanceled', updatedAt: 1_767_225_606_000);
         $rejected = $this->orderRow(remaining: '1', original: '1', status: 'badAloPxRejected', updatedAt: 1_767_225_607_000);
         $scheduled = $this->orderRow(remaining: '1', original: '1', status: 'scheduledCancel', updatedAt: 1_767_225_608_000);
+        $iocRejected = $this->orderRow(remaining: '1', original: '1', status: 'iocCancelRejected', updatedAt: 1_767_225_609_000);
 
         self::assertSame(HyperliquidLifecycleStatus::CANCELED, $this->normalizer->normalizeOrderLifecycle([$canceled])->status);
         self::assertSame(HyperliquidLifecycleStatus::REJECTED, $this->normalizer->normalizeOrderLifecycle([$rejected])->status);
         self::assertSame(HyperliquidLifecycleStatus::CANCELED, $this->normalizer->normalizeOrderLifecycle([$scheduled])->status);
+        self::assertSame(HyperliquidLifecycleStatus::REJECTED, $this->normalizer->normalizeOrderLifecycle([$iocRejected])->status);
     }
 
     public function testNormalizesStopOrdersAsTriggerProtectionTypes(): void
