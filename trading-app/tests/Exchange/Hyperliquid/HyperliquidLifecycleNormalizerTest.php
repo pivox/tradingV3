@@ -114,6 +114,38 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(0.0, $lifecycle->remainingQuantity, 0.000001);
     }
 
+    public function testIgnoresSpotCoinFillsInPerpetualLifecycle(): void
+    {
+        $spotFill = $this->fillRow(quantity: '1', price: '10', hash: 'spot-fill', time: 1_767_225_601_000);
+        $spotFill['coin'] = '@107';
+
+        $fills = $this->normalizer->normalizeFills([$spotFill]);
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([
+            $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_600_000),
+            $spotFill,
+        ]);
+
+        self::assertSame([], $fills);
+        self::assertSame(HyperliquidLifecycleStatus::OPEN, $lifecycle->status);
+        self::assertSame('BTCUSDT', $lifecycle->symbol);
+        self::assertSame([], $lifecycle->fills);
+        self::assertEqualsWithDelta(0.0, $lifecycle->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(1.0, $lifecycle->remainingQuantity, 0.000001);
+        self::assertContains('unsupported_lifecycle_row_ignored', $lifecycle->qualityFlags);
+    }
+
+    public function testPreservesMillisecondPrecisionOnFillTimestamps(): void
+    {
+        $fills = $this->normalizer->normalizeFills([
+            $this->fillRow(quantity: '0.1', price: '25010', hash: 'fill-ms-1', time: 1_767_225_601_123),
+            $this->fillRow(quantity: '0.1', price: '25011', hash: 'fill-ms-2', time: 1_767_225_601_456),
+        ]);
+
+        self::assertCount(2, $fills);
+        self::assertSame('1767225601.123000', $fills[0]->occurredAt->format('U.u'));
+        self::assertSame('1767225601.456000', $fills[1]->occurredAt->format('U.u'));
+    }
+
     public function testTreatsOpenOrderSnapshotWithoutStatusAsOpen(): void
     {
         $row = $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_600_000);

@@ -111,7 +111,7 @@ final readonly class HyperliquidLifecycleNormalizer
         foreach ($rows as $row) {
             $position = \is_array($row['position'] ?? null) ? $row['position'] : $row;
             /** @var array<string,mixed> $position */
-            if (!$this->hasValue($position['coin'] ?? null)) {
+            if (!$this->hasValue($position['coin'] ?? null) || !$this->isPerpetualInstrumentRow($position)) {
                 continue;
             }
 
@@ -149,7 +149,7 @@ final readonly class HyperliquidLifecycleNormalizer
         foreach ($rows as $row) {
             $delta = \is_array($row['delta'] ?? null) ? $row['delta'] : $row;
             /** @var array<string,mixed> $delta */
-            if (!$this->hasValue($delta['coin'] ?? null)) {
+            if (!$this->hasValue($delta['coin'] ?? null) || !$this->isPerpetualInstrumentRow($delta)) {
                 continue;
             }
 
@@ -291,7 +291,7 @@ final readonly class HyperliquidLifecycleNormalizer
      */
     private function fillFromRow(array $row): ?HyperliquidNormalizedFillDto
     {
-        if (!$this->isFillRow($row)) {
+        if (!$this->isFillRow($row) || !$this->isPerpetualInstrumentRow($row)) {
             return null;
         }
 
@@ -612,6 +612,10 @@ final readonly class HyperliquidLifecycleNormalizer
      */
     private function symbol(array $row): string
     {
+        if (!$this->isPerpetualInstrumentRow($row)) {
+            return '';
+        }
+
         $coin = strtoupper($this->firstNonEmpty($row['coin'] ?? null, $row['symbol'] ?? null));
         if ($coin === '') {
             return '';
@@ -625,12 +629,15 @@ final readonly class HyperliquidLifecycleNormalizer
      */
     private function isSupportedLifecycleRow(array $row): bool
     {
-        return $this->hasValue($row['oid'] ?? null)
-            || $this->hasValue($row['orderId'] ?? null)
-            || $this->hasValue($row['cloid'] ?? null)
-            || $this->hasValue($row['hash'] ?? null)
-            || $this->hasValue($row['status'] ?? null)
-            || $this->isFillRow($row);
+        return $this->isPerpetualInstrumentRow($row)
+            && (
+                $this->hasValue($row['oid'] ?? null)
+                || $this->hasValue($row['orderId'] ?? null)
+                || $this->hasValue($row['cloid'] ?? null)
+                || $this->hasValue($row['hash'] ?? null)
+                || $this->hasValue($row['status'] ?? null)
+                || $this->isFillRow($row)
+            );
     }
 
     /**
@@ -642,6 +649,16 @@ final readonly class HyperliquidLifecycleNormalizer
             || $this->hasValue($row['tid'] ?? null)
             || $this->hasValue($row['fillId'] ?? null)
             || ($this->hasValue($row['px'] ?? null) && $this->hasValue($row['fee'] ?? null));
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function isPerpetualInstrumentRow(array $row): bool
+    {
+        $coin = $this->firstNonEmpty($row['coin'] ?? null, $row['symbol'] ?? null);
+
+        return $coin === '' || !str_starts_with($coin, '@');
     }
 
     /**
@@ -753,7 +770,11 @@ final readonly class HyperliquidLifecycleNormalizer
 
         $millis = (int) $value;
         if ($millis > 9_999_999_999) {
-            return new \DateTimeImmutable('@' . intdiv($millis, 1000));
+            $seconds = intdiv($millis, 1000);
+            $milliseconds = $millis % 1000;
+            $time = \DateTimeImmutable::createFromFormat('U.u', sprintf('%d.%06d', $seconds, $milliseconds * 1000));
+
+            return $time instanceof \DateTimeImmutable ? $time : new \DateTimeImmutable('@' . $seconds);
         }
 
         return new \DateTimeImmutable('@' . $millis);
