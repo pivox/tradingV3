@@ -292,6 +292,17 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(0.0, $rejectedLifecycle->remainingQuantity, 0.000001);
     }
 
+    public function testPreservesSnapshotPartialFillOnTerminalCancel(): void
+    {
+        $canceled = $this->orderRow(remaining: '0.6', original: '1', status: 'marginCanceled', updatedAt: 1_767_225_610_000);
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$canceled]);
+
+        self::assertSame(HyperliquidLifecycleStatus::CANCELED, $lifecycle->status);
+        self::assertEqualsWithDelta(0.4, $lifecycle->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
+    }
+
     public function testNormalizesStopOrdersAsTriggerProtectionTypes(): void
     {
         $stop = $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_609_000);

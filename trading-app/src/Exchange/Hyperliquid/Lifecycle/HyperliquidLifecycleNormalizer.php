@@ -47,9 +47,11 @@ final readonly class HyperliquidLifecycleNormalizer
             ? $this->status($base['status'] ?? $base['state'] ?? null)
             : null;
         $snapshotFilled = max(0.0, $quantity - $remaining);
-        $filled = $this->isNonFilledTerminalStatus($baseStatus) ? $fillQuantity : max($fillQuantity, $snapshotFilled);
+        $filled = $this->isNonFilledTerminalStatus($baseStatus)
+            ? $this->terminalFilledQuantity($fillQuantity, $snapshotFilled, $remaining)
+            : max($fillQuantity, $snapshotFilled);
         if ($this->isNonFilledTerminalStatus($baseStatus)) {
-            $remaining = 0.0;
+            $remaining = $filled > 0.00000001 && $remaining > 0.00000001 ? $remaining : 0.0;
         } elseif ($latestOrder !== [] && $this->isFillRow($latest) && $this->rowTimeMillis($latest) >= $this->rowTimeMillis($base)) {
             $filled = min($quantity, max($filled, $snapshotFilled + $this->sumFillQuantityAfter($deduplicated, $base)));
             $remaining = max(0.0, $quantity - $filled);
@@ -461,6 +463,18 @@ final readonly class HyperliquidLifecycleNormalizer
             HyperliquidLifecycleStatus::REJECTED,
             HyperliquidLifecycleStatus::FAILED,
         ], true);
+    }
+
+    private function terminalFilledQuantity(float $fillQuantity, float $snapshotFilled, float $remaining): float
+    {
+        if ($fillQuantity > 0.00000001) {
+            return $fillQuantity;
+        }
+        if ($snapshotFilled > 0.00000001 && $remaining > 0.00000001) {
+            return $snapshotFilled;
+        }
+
+        return 0.0;
     }
 
     /**
