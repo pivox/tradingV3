@@ -47,14 +47,19 @@ final class HyperliquidRestClientTest extends TestCase
         });
         $client = new HyperliquidRestClient(
             $http,
-            new HyperliquidConfig(accountAddress: '0x0000000000000000000000000000000000000001'),
+            new HyperliquidConfig(
+                environment: 'testnet',
+                network: 'testnet',
+                testnetAgentAddress: '0x0000000000000000000000000000000000000002',
+                testnetAccountAddress: '0x0000000000000000000000000000000000000001',
+            ),
         );
 
         try {
             $client->exchange(['type' => 'order']);
             self::fail('Expected Hyperliquid exchange guard to reject missing private key.');
         } catch (\RuntimeException $e) {
-            self::assertStringContainsString('HYPERLIQUID_PRIVATE_KEY is required', $e->getMessage());
+            self::assertStringContainsString('HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY is required', $e->getMessage());
         }
 
         self::assertSame(0, $requests);
@@ -71,8 +76,11 @@ final class HyperliquidRestClientTest extends TestCase
         $client = new HyperliquidRestClient(
             $http,
             new HyperliquidConfig(
-                accountAddress: '0x0000000000000000000000000000000000000001',
-                privateKey: 'super-secret-private-key',
+                environment: 'testnet',
+                network: 'testnet',
+                testnetAgentPrivateKey: 'fixture-agent-material',
+                testnetAgentAddress: '0x0000000000000000000000000000000000000002',
+                testnetAccountAddress: '0x0000000000000000000000000000000000000001',
             ),
         );
 
@@ -81,7 +89,7 @@ final class HyperliquidRestClientTest extends TestCase
             self::fail('Expected default Hyperliquid exchange client to reject unsigned actions.');
         } catch (\RuntimeException $e) {
             self::assertStringContainsString('exchange signing is not enabled', $e->getMessage());
-            self::assertStringNotContainsString('super-secret-private-key', $e->getMessage());
+            self::assertStringNotContainsString('fixture-agent-material', $e->getMessage());
         }
 
         self::assertSame(0, $requests);

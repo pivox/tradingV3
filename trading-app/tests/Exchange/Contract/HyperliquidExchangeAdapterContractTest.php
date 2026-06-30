@@ -33,8 +33,10 @@ final class HyperliquidExchangeAdapterContractTest extends ExchangeAdapterContra
             $actions,
             new HyperliquidConfig(
                 environment: 'testnet',
-                accountAddress: '0x0000000000000000000000000000000000000001',
-                privateKey: 'test-private-key',
+                network: 'testnet',
+                testnetAgentPrivateKey: 'fixture-agent-material',
+                testnetAgentAddress: '0x0000000000000000000000000000000000000002',
+                testnetAccountAddress: '0x0000000000000000000000000000000000000001',
             ),
             $this->fixedClock(),
         );

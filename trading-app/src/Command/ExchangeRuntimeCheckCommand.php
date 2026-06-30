@@ -387,8 +387,9 @@ final class ExchangeRuntimeCheckCommand extends Command
 
     private function hasHyperliquidCredentials(): bool
     {
-        return trim($this->hyperliquidConfig->accountAddress) !== ''
-            && trim($this->hyperliquidConfig->privateKey) !== '';
+        return $this->hyperliquidConfig->signingAccountAddress() !== ''
+            && $this->hyperliquidConfig->signerAddress() !== ''
+            && trim($this->hyperliquidConfig->testnetAgentPrivateKey) !== '';
     }
 
     private function envIsPresent(string $name): bool

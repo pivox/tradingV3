@@ -8,11 +8,13 @@ final readonly class HyperliquidConfig
 {
     public function __construct(
         public string $environment = '',
-        public string $accountAddress = '',
-        public string $privateKey = '',
         public string $apiBaseUri = '',
         public string $wsUri = '',
         public bool $mainnetEnabled = false,
+        public string $network = '',
+        public string $testnetAgentPrivateKey = '',
+        public string $testnetAgentAddress = '',
+        public string $testnetAccountAddress = '',
     ) {
     }
 
@@ -20,11 +22,13 @@ final readonly class HyperliquidConfig
     {
         return new self(
             environment: (string)($_ENV['HYPERLIQUID_ENV'] ?? $_SERVER['HYPERLIQUID_ENV'] ?? 'testnet'),
-            accountAddress: (string)($_ENV['HYPERLIQUID_ACCOUNT_ADDRESS'] ?? $_SERVER['HYPERLIQUID_ACCOUNT_ADDRESS'] ?? ''),
-            privateKey: (string)($_ENV['HYPERLIQUID_PRIVATE_KEY'] ?? $_SERVER['HYPERLIQUID_PRIVATE_KEY'] ?? ''),
             apiBaseUri: (string)($_ENV['HYPERLIQUID_API_BASE_URI'] ?? $_SERVER['HYPERLIQUID_API_BASE_URI'] ?? ''),
             wsUri: (string)($_ENV['HYPERLIQUID_WS_URI'] ?? $_SERVER['HYPERLIQUID_WS_URI'] ?? ''),
             mainnetEnabled: filter_var($_ENV['HYPERLIQUID_MAINNET_ENABLED'] ?? $_SERVER['HYPERLIQUID_MAINNET_ENABLED'] ?? false, \FILTER_VALIDATE_BOOL),
+            network: (string)($_ENV['HYPERLIQUID_NETWORK'] ?? $_SERVER['HYPERLIQUID_NETWORK'] ?? $_ENV['HYPERLIQUID_ENV'] ?? $_SERVER['HYPERLIQUID_ENV'] ?? 'testnet'),
+            testnetAgentPrivateKey: (string)($_ENV['HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY'] ?? $_SERVER['HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY'] ?? ''),
+            testnetAgentAddress: (string)($_ENV['HYPERLIQUID_TESTNET_AGENT_ADDRESS'] ?? $_SERVER['HYPERLIQUID_TESTNET_AGENT_ADDRESS'] ?? ''),
+            testnetAccountAddress: (string)($_ENV['HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS'] ?? $_SERVER['HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS'] ?? ''),
         );
     }
 
@@ -35,9 +39,21 @@ final readonly class HyperliquidConfig
         return $env === 'mainnet' ? 'mainnet' : 'testnet';
     }
 
+    public function configuredEnvironment(): string
+    {
+        return strtolower(trim($this->environment));
+    }
+
     public function isTestnet(): bool
     {
         return $this->normalizedEnvironment() === 'testnet';
+    }
+
+    public function normalizedNetwork(): string
+    {
+        $network = strtolower(trim($this->network !== '' ? $this->network : $this->environment));
+
+        return $network === '' ? 'testnet' : $network;
     }
 
     public function chainName(): string
@@ -80,11 +96,37 @@ final readonly class HyperliquidConfig
     {
         $this->assertMainnetAllowed();
 
-        if (trim($this->accountAddress) === '') {
-            throw new \RuntimeException('HYPERLIQUID_ACCOUNT_ADDRESS is required for Hyperliquid trading.');
+        $environment = $this->configuredEnvironment();
+        if (!$this->isTestnet() || $environment === 'mainnet') {
+            throw new \RuntimeException('hyperliquid_trading_mainnet_rejected');
         }
-        if (trim($this->privateKey) === '') {
-            throw new \RuntimeException('HYPERLIQUID_PRIVATE_KEY is required for Hyperliquid trading.');
+
+        if ($environment !== 'testnet') {
+            throw new \RuntimeException('hyperliquid_trading_environment_must_be_testnet');
         }
+
+        if ($this->normalizedNetwork() !== 'testnet') {
+            throw new \RuntimeException('hyperliquid_trading_network_must_be_testnet');
+        }
+
+        if ($this->signingAccountAddress() === '') {
+            throw new \RuntimeException('HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS is required for Hyperliquid testnet signing.');
+        }
+        if ($this->signerAddress() === '') {
+            throw new \RuntimeException('HYPERLIQUID_TESTNET_AGENT_ADDRESS is required for Hyperliquid testnet signing.');
+        }
+        if (trim($this->testnetAgentPrivateKey) === '') {
+            throw new \RuntimeException('HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY is required for Hyperliquid testnet signing.');
+        }
+    }
+
+    public function signingAccountAddress(): string
+    {
+        return strtolower(trim($this->testnetAccountAddress));
+    }
+
+    public function signerAddress(): string
+    {
+        return strtolower(trim($this->testnetAgentAddress));
     }
 }

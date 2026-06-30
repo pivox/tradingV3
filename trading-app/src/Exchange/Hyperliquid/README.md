@@ -12,7 +12,10 @@ First API-first Hyperliquid integration slice.
 - Market orders are sent as IOC limit orders with a 5% slippage cap derived from the current L2 top. Stop-loss/take-profit trigger market orders use the same 5% cap around `stopPrice`.
 - Internal app client order IDs are deterministically mapped to Hyperliquid Cloid values (`0x` + 128-bit hex) before they reach `/exchange`.
 - Private WebSocket support is not advertised yet; keep reconciliation on REST snapshots until a Hyperliquid WS client and normalizer are added.
-- Live signing is intentionally not enabled by the default REST client. Inject a signed `HyperliquidRestClientInterface` implementation before sending real testnet orders.
+- Live signing is intentionally not enabled by the default REST client. HL-004 adds a
+  signer boundary (`HyperliquidSignerInterface`, `FakeHyperliquidSigner`,
+  `HyperliquidAgentSigner`) for deterministic tests and future testnet signing, but it
+  is not wired to `/exchange` broadcast.
 - HL-002 adds a separate `App\Provider\Hyperliquid\*` provider bundle for
   `hyperliquid/perpetual`.
 - HL-003 enables only public REST reads through `/info` on that provider bundle:
@@ -29,14 +32,25 @@ First API-first Hyperliquid integration slice.
   supplied as good, but `app:exchange:runtime-check hyperliquid perpetual`
   remains `Schedule ready: no` until account read, signer, nonce, local dry-run,
   and protection readiness are implemented.
+- `HyperliquidAgentSigner` only accepts `HYPERLIQUID_NETWORK=testnet` and
+  `HYPERLIQUID_ENV=testnet`. The application never accepts the wallet principal
+  private key; only a dedicated testnet agent key is allowed, and signer outputs
+  are redacted.
 
 Environment:
 
 ```dotenv
 HYPERLIQUID_ENV=testnet
-HYPERLIQUID_PRIVATE_KEY=
-HYPERLIQUID_ACCOUNT_ADDRESS=
+HYPERLIQUID_NETWORK=testnet
+HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY=
+HYPERLIQUID_TESTNET_AGENT_ADDRESS=
+HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS=
 HYPERLIQUID_API_BASE_URI=https://api.hyperliquid-testnet.xyz
 HYPERLIQUID_WS_URI=wss://api.hyperliquid-testnet.xyz/ws
 HYPERLIQUID_MAINNET_ENABLED=0
+HYPERLIQUID_TESTNET_TRADING_ENABLED=0
 ```
+
+Rollback for HL-004: unset the three `HYPERLIQUID_TESTNET_*` signer/account
+variables and keep `HYPERLIQUID_TESTNET_TRADING_ENABLED=0`. Public read-only
+HL-003 remains available; no `/exchange` broadcast path is enabled by this slice.

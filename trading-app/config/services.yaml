@@ -43,8 +43,10 @@ parameters:
     env(LOG_LEVEL_HIGHCONVICTION): 'info'
     env(LOG_LEVEL_PIPELINE_EXEC): 'info'
     env(HYPERLIQUID_ENV): 'testnet'
-    env(HYPERLIQUID_PRIVATE_KEY): ''
-    env(HYPERLIQUID_ACCOUNT_ADDRESS): ''
+    env(HYPERLIQUID_NETWORK): 'testnet'
+    env(HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY): ''
+    env(HYPERLIQUID_TESTNET_AGENT_ADDRESS): ''
+    env(HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS): ''
     env(HYPERLIQUID_API_BASE_URI): ''
     env(HYPERLIQUID_WS_URI): ''
     env(HYPERLIQUID_MAINNET_ENABLED): '0'
@@ -192,11 +194,13 @@ services:
     App\Exchange\Hyperliquid\HyperliquidConfig:
         arguments:
             $environment: '%env(string:HYPERLIQUID_ENV)%'
-            $accountAddress: '%env(string:HYPERLIQUID_ACCOUNT_ADDRESS)%'
-            $privateKey: '%env(string:HYPERLIQUID_PRIVATE_KEY)%'
             $apiBaseUri: '%env(string:HYPERLIQUID_API_BASE_URI)%'
             $wsUri: '%env(string:HYPERLIQUID_WS_URI)%'
             $mainnetEnabled: '%env(bool:HYPERLIQUID_MAINNET_ENABLED)%'
+            $network: '%env(string:HYPERLIQUID_NETWORK)%'
+            $testnetAgentPrivateKey: '%env(string:HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY)%'
+            $testnetAgentAddress: '%env(string:HYPERLIQUID_TESTNET_AGENT_ADDRESS)%'
+            $testnetAccountAddress: '%env(string:HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS)%'
 
     App\Exchange\Okx\OkxConfig:
         arguments:
