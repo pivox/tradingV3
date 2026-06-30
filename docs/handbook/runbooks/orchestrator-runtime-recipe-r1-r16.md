@@ -388,6 +388,9 @@ python scripts/runtime_recipe_runner.py \
   --keep-fixtures
 ```
 
+La procedure operateur complete avant/apres cette commande est decrite dans
+[Demo/Testnet Operations](demo-testnet-operations.md).
+
 Le rapport racine `var/runtime-recipe/demo-exchanges/runtime-recipe-report.json`
 contient :
 

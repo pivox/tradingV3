@@ -117,3 +117,7 @@ trading:
 Les raisons issues du safety envelope restent visibles, notamment
 `kill_switch_enabled`, `demo_testnet_write_not_enabled`, `max_notional_exceeded`
 ou `stop_loss_missing`.
+
+Voir aussi le runbook d'exploitation
+[Demo/Testnet Operations](demo-testnet-operations.md) pour la procedure
+complete de preparation, observation, arret et rollback.
