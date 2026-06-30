@@ -84,7 +84,7 @@ reutilisables.
 | WebSocket prive / equivalent | A livrer | State compte lisible via `info`, streams a valider. | Policy de snapshot initial + delta, ou justification equivalente avant mutation. |
 | Signer fake/local | Livre HL-004 | `FakeHyperliquidSigner` produit une signature deterministe de fixture, sans secret et sans HTTP. `HyperliquidDryRunExecutionPort` ne signe pas et ne broadcast pas. | Conserver le fake pour les recettes local dry-run et les tests de payload. |
 | Signer testnet | Encapsule HL-004 | `HyperliquidAgentSigner` valide `HYPERLIQUID_ENV=testnet`, `HYPERLIQUID_NETWORK=testnet` et les variables agent/account testnet, puis delegue a un backend de signature injecte. Aucun backend crypto n'est cable au client `/exchange` par defaut. | Ajouter le backend crypto officiel/valide par vecteurs dans une PR ulterieure avant tout broadcast. |
-| Nonce manager | Skeleton HL-002 | `HyperliquidNonceManagerInterface` existe sans implementation concrete. | Compteur persistant par signer, monotone, restart-safe et auditable. |
+| Nonce manager | Livre HL-005 | `PersistentHyperliquidNonceManager` persiste `hyperliquid_nonce_state` par `environment + network + signer_address`, garde `account_address` en audit, rejette la reutilisation d'un signer sur un autre compte, et detecte les replays. | L'utiliser seulement dans une PR mutative future, apres signer crypto officiel et garde `/exchange`. |
 | Metadata / precision | Partiel HL-003 | Mapping `symbol -> coin -> asset_id`, `szDecimals`, max leverage et precision derivee sont exposes dans `HyperliquidInstrumentMetadataDto`. | Precision complete fees/min-notional en HL-007. |
 | Fees / funding / costs | Partiel HL-003 | Funding public absent reste `null` avec `funding_rate_unknown`, jamais converti en zero dans le DTO metadata. | User fills/funding/couts complets en PR account/ledger dediees. |
 | Local dry-run no broadcast | Partiel | `HyperliquidDryRunExecutionPort` simule sans HTTP ni `/exchange`. | Serialization future des payloads HL sans broadcast ni secret. |
@@ -192,12 +192,41 @@ HL-004 ajoute la frontiere de signature sans activer de broadcast :
 - le client REST `/exchange` par defaut continue de refuser, meme si les
   variables de signer sont presentes.
 
+### Nonce manager et replay
+
+HL-005 ajoute un compteur nonce persistant sans activer de broadcast :
+
+- `HyperliquidNonceManagerInterface` expose `nextNonce()` et
+  `recordObservedNonce()` ;
+- `HyperliquidNonceScope` transporte `environment`, `network`,
+  `account_address` et `signer_address` ;
+- `PersistentHyperliquidNonceManager` reserve `max(now_ms, last_nonce + 1)` ;
+- `hyperliquid_nonce_state` porte la cle unique
+  `environment + network + signer_address` ;
+- `account_address` reste stocke pour audit et pour detecter une tentative de
+  reutiliser le meme signer sur un autre compte ;
+- la reservation utilise un upsert atomique `ON CONFLICT ... RETURNING`, ce qui
+  couvre le premier insert concurrent et les reservations suivantes ;
+- un signer deja associe a un autre compte leve
+  `hyperliquid_nonce_scope_conflict` ;
+- un nonce observe inferieur ou egal au dernier nonce connu leve
+  `hyperliquid_nonce_replay_detected` ;
+- le compteur survit aux restarts et peut etre resynchronise par un nonce
+  observe plus haut ;
+- ce compteur n'est pas une cle d'idempotence metier et ne remplace pas les
+  `client_order_id`/Cloid applicatifs.
+
+Le signer est l'axe de serialization anti-replay. Le compte reste visible dans
+la ligne persistante, mais il ne cree pas un compteur independant pour un meme
+signer. Aucun fallback par symbole, horodatage seul ou ordre metier n'est
+autorise pour determiner un nonce.
+
 Les actions `POST /exchange` restent hors perimetre. Une future PR mutative
 testnet devra prouver :
 
 - API wallet testnet dedie au bot, jamais private key du wallet principal ;
 - signer crypto officiel valide par vecteurs non secrets ;
-- nonce manager persistant par signer ;
+- utilisation explicite du nonce manager persistant par signer ;
 - payloads redacted et hashables pour audit ;
 - whitelist symbole/marche, notional minimal, leverage cap et SL obligatoire ;
 - fail-safe si le SL ne peut pas etre attache ou relu ;
@@ -317,6 +346,17 @@ HL-003 ajoute la lecture publique. Son rollback doit aussi retirer :
   `HyperliquidMetadataProvider` ;
 - le passage `public_read_only` de `HyperliquidRuntimeCheck` ;
 - les tests `HyperliquidPublicReadProviderTest`.
+
+HL-005 ajoute le compteur nonce persistant. Son rollback doit aussi retirer :
+
+- la table `hyperliquid_nonce_state` via la migration inverse ;
+- `HyperliquidNonceScope`, `HyperliquidNonceReplayException`,
+  `HyperliquidNonceScopeConflictException`, `PersistentHyperliquidNonceManager`
+  et `HyperliquidNonceStateRepository` ;
+- l'entite `HyperliquidNonceState` ;
+- l'alias DI `HyperliquidNonceManagerInterface` vers
+  `PersistentHyperliquidNonceManager` ;
+- les tests `HyperliquidNonceManagerTest`.
 
 Le rollback operationnel a conserver pour les PRs suivantes reste :
 
