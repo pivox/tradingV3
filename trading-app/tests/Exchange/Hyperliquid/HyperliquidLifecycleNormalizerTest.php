@@ -219,6 +219,16 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertSame(ExchangeOrderType::TAKE_PROFIT, $this->normalizer->normalizeOrderLifecycle([$takeProfit])->orderType);
     }
 
+    public function testIgnoresZeroTriggerPriceOnStandardOrders(): void
+    {
+        $limit = $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_611_000);
+        $limit['orderType'] = 'Limit';
+        $limit['triggerPx'] = '0.0';
+        $limit['isTrigger'] = false;
+
+        self::assertSame(ExchangeOrderType::LIMIT, $this->normalizer->normalizeOrderLifecycle([$limit])->orderType);
+    }
+
     public function testNormalizesPositionSnapshotAndZeroClose(): void
     {
         $positions = $this->normalizer->normalizePositions([

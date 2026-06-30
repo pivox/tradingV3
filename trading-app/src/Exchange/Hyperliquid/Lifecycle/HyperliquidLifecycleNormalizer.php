@@ -460,7 +460,7 @@ final readonly class HyperliquidLifecycleNormalizer
     private function orderType(array $row): ExchangeOrderType
     {
         $type = strtolower($this->string($row['orderType'] ?? $row['type'] ?? ''));
-        if ($this->bool($row['isTrigger'] ?? false) || $this->hasValue($row['triggerPx'] ?? null)) {
+        if ($this->bool($row['isTrigger'] ?? false) || $this->float($row['triggerPx'] ?? null) > 0.0) {
             if (str_contains($type, 'take') || str_contains($type, 'profit') || str_contains($type, 'tp')) {
                 return ExchangeOrderType::TAKE_PROFIT;
             }
