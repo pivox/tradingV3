@@ -90,6 +90,18 @@ final class HyperliquidPublicReadProviderTest extends TestCase
         self::assertFalse($metadata->isCompleteForSizing());
     }
 
+    public function testContractsFailClosedWhenRequiredMetadataIsMissing(): void
+    {
+        $client = $this->client();
+        $client->missingMaxLeverage = true;
+        $provider = new HyperliquidMetadataProvider($client, new HyperliquidAssetResolver($client));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('hyperliquid_contract_metadata_incomplete:BTC');
+
+        $provider->getContracts();
+    }
+
     public function testSuspendedMarketIsVisibleAndNotCompleteForSizing(): void
     {
         $provider = new HyperliquidMetadataProvider($this->client(), new HyperliquidAssetResolver($this->client()));

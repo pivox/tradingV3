@@ -19,6 +19,11 @@ final readonly class HyperliquidPublicReadMapper
     public function contract(array $asset, int $assetId, ?array $context = null): ContractDto
     {
         $coin = $this->coin($asset);
+        $maxLeverage = $this->maxLeverage($asset);
+        if (!$this->hasValidSizeDecimals($asset) || $maxLeverage === null) {
+            throw new \InvalidArgumentException(sprintf('hyperliquid_contract_metadata_incomplete:%s', $coin));
+        }
+
         $last = $this->string($context['markPx'] ?? $context['midPx'] ?? '0') ?: '0';
         $prevDay = $this->string($context['prevDayPx'] ?? '0') ?: '0';
         $openInterest = $this->string($context['openInterest'] ?? '0') ?: '0';
@@ -40,7 +45,7 @@ final readonly class HyperliquidPublicReadMapper
             indexName: $coin,
             contractSize: BigDecimal::of('1'),
             minLeverage: BigDecimal::of('1'),
-            maxLeverage: BigDecimal::of($this->maxLeverage($asset) ?? '0'),
+            maxLeverage: BigDecimal::of($maxLeverage),
             pricePrecision: BigDecimal::of((string) $priceMaxDecimals),
             volPrecision: BigDecimal::of((string) $this->decimalPlaces($quantityStep)),
             maxVolume: BigDecimal::of('0'),
