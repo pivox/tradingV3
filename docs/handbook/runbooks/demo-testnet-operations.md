@@ -217,6 +217,54 @@ Le resultat doit etre conserve tel quel dans les preuves redacted. Si
 `Schedule ready: yes` n'apparait pas, la section exchange de la recette reste
 `BLOCKED`.
 
+## Schedule demo/testnet
+
+Le schedule DEMO-004 utilise `cron_symfony_mtf_workers/scripts/manage_demo_testnet_schedule.py`.
+Il cible `OrchestratorCronWorkflow`, force le `RunRequest` a `dry_run=true` et
+cree le schedule en pause par defaut. Aucun schedule mainnet n'est fourni par ce
+script.
+
+Recuperer l'id du dashboard `demo-exchanges` :
+
+```bash
+dashboard_id="$(
+  curl -sS http://localhost:8099/dashboards \
+    | python3 -c 'import json, sys; print(next((str(d["id"]) for d in json.load(sys.stdin) if d["name"] == "demo-exchanges"), ""))'
+)"
+test -n "$dashboard_id"
+```
+
+Previsualiser sans connexion Temporal :
+
+```bash
+cd cron_symfony_mtf_workers
+python scripts/manage_demo_testnet_schedule.py create \
+  --dry-run \
+  --dashboard-id "$dashboard_id"
+```
+
+Creer le schedule paused :
+
+```bash
+python scripts/manage_demo_testnet_schedule.py create \
+  --dashboard-id "$dashboard_id"
+python scripts/manage_demo_testnet_schedule.py status
+```
+
+Activer seulement apres runtime-check OKX + Hyperliquid `Schedule ready: yes` :
+
+```bash
+python scripts/manage_demo_testnet_schedule.py resume \
+  --dashboard-id "$dashboard_id"
+```
+
+Rollback schedule :
+
+```bash
+python scripts/manage_demo_testnet_schedule.py pause
+python scripts/manage_demo_testnet_schedule.py delete
+```
+
 ## Recette dry-run
 
 Commande DEMO-002/DEMO-003 :
