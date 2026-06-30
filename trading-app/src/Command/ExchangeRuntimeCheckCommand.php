@@ -238,7 +238,10 @@ final class ExchangeRuntimeCheckCommand extends Command
         [$publicConnectivity, $instrumentsLoaded, $metadataValid, $precisionValid, $publicWarnings] = $this->okxPublicReadStatus($adapterStatus, $providerStatus, $providerBundle);
         $mainnetGuard = $this->okxConfig->isDemo() && !$this->okxConfig->liveEnabled;
         $demoHeaderGuard = $this->okxConfig->isDemo() && $this->okxConfig->simulatedTrading && !$this->okxConfig->liveEnabled;
-        $privateReadReady = $publicConnectivity && $instrumentsLoaded && $credentials === 'ok' && $demoHeaderGuard;
+        [$privateReadProbeReady, $privateWarnings] = $credentials === 'ok' && $demoHeaderGuard
+            ? $this->okxPrivateReadStatus($providerBundle)
+            : [false, []];
+        $privateReadReady = $publicConnectivity && $instrumentsLoaded && $credentials === 'ok' && $demoHeaderGuard && $privateReadProbeReady;
 
         return (new OkxRuntimeCheck())->check(new ExchangeReadinessInput(
             exchange: Exchange::OKX,
@@ -261,7 +264,7 @@ final class ExchangeRuntimeCheckCommand extends Command
             dryRun: true,
             allowedMarkets: [$marketType->value],
             maxNotional: 25.0,
-            warnings: $publicWarnings,
+            warnings: array_merge($publicWarnings, $privateWarnings),
         ));
     }
 
@@ -286,6 +289,26 @@ final class ExchangeRuntimeCheckCommand extends Command
         $instrumentsLoaded = $contracts !== [];
 
         return [true, $instrumentsLoaded, $instrumentsLoaded, $instrumentsLoaded, []];
+    }
+
+    /**
+     * @return array{0: bool, 1: list<string>}
+     */
+    private function okxPrivateReadStatus(?ExchangeProviderBundle $providerBundle): array
+    {
+        if (!$providerBundle instanceof ExchangeProviderBundle) {
+            return [false, []];
+        }
+
+        try {
+            if ($providerBundle->account()->getAccountInfo() !== null) {
+                return [true, []];
+            }
+        } catch (\Throwable) {
+            return [false, ['okx_private_read_probe_failed']];
+        }
+
+        return [false, ['okx_private_read_probe_failed']];
     }
 
     /**

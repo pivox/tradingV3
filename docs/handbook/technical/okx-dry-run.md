@@ -172,8 +172,11 @@ n'est pas affecté : ces lignes sont spécifiques à OKX.
 
 La readiness publique OKX n'est pas déduite de la simple présence des services : la commande
 sonde `ContractProviderInterface::getContracts()` et exige au moins un instrument public validé
-avant de marquer `instruments_loaded`, `metadata_valid` et `precision_valid`. `Schedule ready:
-yes` est réservé à `local_dry_run_ready` ou `demo_testnet_candidate`.
+avant de marquer `instruments_loaded`, `metadata_valid` et `precision_valid`. De même, la
+présence de credentials ne suffit pas pour la lecture privée : `AccountProviderInterface::getAccountInfo()`
+doit réussir avant de marquer `private_read_connectivity`, `account_readable` et
+`permissions_read`. `Schedule ready: yes` est réservé à `local_dry_run_ready` ou
+`demo_testnet_candidate`.
 
 Exemple :
 
