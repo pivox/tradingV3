@@ -37,6 +37,7 @@ final class HyperliquidPublicReadProviderTest extends TestCase
         self::assertSame('50', (string) $contracts[0]->maxLeverage);
         self::assertSame('live', $contracts[0]->status);
         self::assertSame('ETHUSDT', $contracts[1]->symbol);
+        self::assertSame('2', (string) $contracts[1]->pricePrecision);
         self::assertSame('suspend', $contracts[1]->status);
 
         self::assertSame(0, $provider->assetId('BTCUSDT'));
@@ -75,12 +76,37 @@ final class HyperliquidPublicReadProviderTest extends TestCase
         self::assertTrue($metadata->isCompleteForSizing());
     }
 
+    public function testHyperliquidPriceRulesEnforceSignificantFiguresAndMaxDecimals(): void
+    {
+        $provider = new HyperliquidMetadataProvider($this->client(), new HyperliquidAssetResolver($this->client()));
+
+        $metadata = $provider->getInstrumentMetadata('BTCUSDT');
+
+        self::assertNotNull($metadata);
+        self::assertSame('0.1', $metadata->priceTick);
+
+        $valid = $metadata->validateOrderShape('9999.9', '0.12345');
+        self::assertTrue($valid['price_valid']);
+        self::assertSame('9999.9', $valid['price_quantized']);
+
+        $tooPrecise = $metadata->validateOrderShape('25123.45', '0.12345');
+        self::assertFalse($tooPrecise['price_valid']);
+        self::assertSame('25123', $tooPrecise['price_quantized']);
+        self::assertContains('price_precision_mismatch', $tooPrecise['quality_flags']);
+    }
+
     public function testNormalizesKlinesInAscendingUtcOrderAndDeduplicates(): void
     {
         $client = $this->client();
         $gateway = new HyperliquidMarketGateway($client, new HyperliquidAssetResolver($client));
 
-        $klines = $gateway->getKlines('BTCUSDT', Timeframe::TF_1M, 2);
+        $klines = $gateway->getKlinesInWindow(
+            'BTCUSDT',
+            Timeframe::TF_1M,
+            new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            new \DateTimeImmutable('2026-01-01T00:02:00+00:00'),
+            2,
+        );
 
         self::assertCount(2, $klines);
         self::assertSame('BTCUSDT', $klines[0]->symbol);
@@ -93,6 +119,22 @@ final class HyperliquidPublicReadProviderTest extends TestCase
         self::assertSame('12.5', (string) $klines[0]->volume);
         self::assertSame('HYPERLIQUID_REST_PUBLIC', $klines[0]->source);
         self::assertSame('2026-01-01T00:01:00+00:00', $klines[1]->openTime->format('c'));
+    }
+
+    public function testDefaultKlineReadUsesBoundedRecentWindow(): void
+    {
+        $client = $this->client();
+        $gateway = new HyperliquidMarketGateway($client, new HyperliquidAssetResolver($client));
+
+        $gateway->getKlines('BTCUSDT', Timeframe::TF_1M, 100);
+
+        $request = $client->requests[array_key_last($client->requests)] ?? [];
+        self::assertSame('candleSnapshot', $request['type'] ?? null);
+        self::assertIsArray($request['req'] ?? null);
+
+        $req = $request['req'];
+        self::assertSame(100 * 60 * 1000, $req['endTime'] - $req['startTime']);
+        self::assertGreaterThan(0, $req['startTime']);
     }
 
     public function testPublicRateLimitIsNormalized(): void

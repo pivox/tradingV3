@@ -17,6 +17,7 @@ final readonly class HyperliquidInstrumentMetadataDto
         public string $coin,
         public int $assetId,
         public string $priceTick,
+        public int $priceMaxDecimals,
         public string $quantityStep,
         public string $minSize,
         public string $maxSize,
@@ -49,7 +50,7 @@ final readonly class HyperliquidInstrumentMetadataDto
      */
     public function validateOrderShape(string $price, string $quantity): array
     {
-        $priceValid = $this->isMultipleOf($price, $this->priceTick);
+        $priceValid = $this->isMultipleOf($price, $this->priceTick) && $this->isAllowedHyperliquidPrice($price);
         $quantityValid = $this->isMultipleOf($quantity, $this->quantityStep);
         $flags = [];
 
@@ -63,7 +64,7 @@ final readonly class HyperliquidInstrumentMetadataDto
         return [
             'price_valid' => $priceValid,
             'quantity_valid' => $quantityValid,
-            'price_quantized' => $this->quantizeDown($price, $this->priceTick),
+            'price_quantized' => $this->quantizePriceDown($price),
             'quantity_quantized' => $this->quantizeDown($quantity, $this->quantityStep),
             'quality_flags' => $flags,
         ];
@@ -74,6 +75,33 @@ final readonly class HyperliquidInstrumentMetadataDto
         return BigDecimal::of($value)->remainder(BigDecimal::of($step))->isZero();
     }
 
+    private function isAllowedHyperliquidPrice(string $price): bool
+    {
+        $normalized = $this->normalizeDecimal($price);
+        $decimalPlaces = $this->decimalPlaces($normalized);
+        if ($decimalPlaces > $this->priceMaxDecimals) {
+            return false;
+        }
+
+        if ($decimalPlaces === 0) {
+            return true;
+        }
+
+        return $this->significantFigures($normalized) <= 5;
+    }
+
+    private function quantizePriceDown(string $price): string
+    {
+        for ($scale = $this->priceMaxDecimals; $scale >= 0; --$scale) {
+            $candidate = $this->quantizeDown($price, $this->stepFromDecimalPlaces($scale));
+            if ($this->isAllowedHyperliquidPrice($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return $this->quantizeDown($price, '1');
+    }
+
     private function quantizeDown(string $value, string $step): string
     {
         $stepDecimal = BigDecimal::of($step);
@@ -82,6 +110,29 @@ final readonly class HyperliquidInstrumentMetadataDto
         return (string) $units
             ->multipliedBy($stepDecimal)
             ->toScale($this->decimalPlaces($step), RoundingMode::UNNECESSARY);
+    }
+
+    private function stepFromDecimalPlaces(int $places): string
+    {
+        return $places === 0 ? '1' : '0.' . str_repeat('0', $places - 1) . '1';
+    }
+
+    private function normalizeDecimal(string $value): string
+    {
+        $normalized = (string) BigDecimal::of($value);
+        if (str_contains($normalized, '.')) {
+            $normalized = rtrim(rtrim($normalized, '0'), '.');
+        }
+
+        return $normalized === '-0' ? '0' : $normalized;
+    }
+
+    private function significantFigures(string $value): int
+    {
+        $digits = str_replace(['-', '.'], '', $value);
+        $digits = ltrim($digits, '0');
+
+        return strlen($digits);
     }
 
     private function decimalPlaces(string $value): int

@@ -33,10 +33,11 @@ final class HyperliquidMarketGateway implements KlineProviderInterface
         int $limit = 490,
         ?ExchangeContext $context = null,
     ): array {
-        $end = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->add(new \DateInterval('P1D'));
-        $start = new \DateTimeImmutable('@0', new \DateTimeZone('UTC'));
+        $requested = $this->requestedLimit($limit);
+        $end = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $start = $end->modify(sprintf('-%d seconds', $requested * $timeframe->getStepInSeconds()));
 
-        return $this->fetchKlines($symbol, $timeframe, $start, $end, $limit, __METHOD__);
+        return $this->fetchKlines($symbol, $timeframe, $start, $end, $requested, __METHOD__);
     }
 
     /**
