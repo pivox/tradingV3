@@ -42,6 +42,12 @@ First API-first Hyperliquid integration slice.
   maker=`userAddRate`, taker=`userCrossRate`, fee currency `USDC`. Missing fee
   data remains `null` with `maker_fee_unknown`, `taker_fee_unknown` and/or
   `fee_schedule_unknown`; no absent fee is converted to zero.
+- HL-008 adds read-only lifecycle normalizers for order requests, order status
+  rows, fills, positions, funding rows, and exchange errors. These normalizers
+  only transform local/request or `/info` payloads; they do not sign, allocate a
+  nonce, or broadcast `/exchange`. Ambiguous streams, such as fills without an
+  order row, are returned as `unknown_requires_resync` with quality flags instead
+  of being resolved from symbol or time alone.
 - Mutative execution provider methods remain fail-closed with
   `HyperliquidProviderNotReadyException`.
 - `HyperliquidRuntimeCheck` may reach `private_read_only` when public and
@@ -92,3 +98,10 @@ Rollback for HL-007: revert the metadata strictness and `userFees` read-only
 mapping changes. Public/account reads from HL-003/HL-006 remain available, but
 cost model consumers must treat Hyperliquid fees and incomplete metadata as
 unknown until this slice is restored.
+
+Rollback for HL-008: remove consumers of
+`App\Exchange\Hyperliquid\Lifecycle\HyperliquidLifecycleNormalizer` and revert
+the lifecycle DTOs. Public/account reads from HL-003/HL-006 and metadata/cost
+reads from HL-007 remain available, but ledger and position-state consumers must
+not ingest Hyperliquid order/fill/position lifecycle payloads until the
+normalizer slice is restored.
