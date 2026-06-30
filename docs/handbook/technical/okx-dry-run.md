@@ -214,11 +214,44 @@ création d'un schedule OKX live :
 - `--dry-run=true` (défaut) pour OKX reste autorisé ;
 - Bitmart legacy peut toujours créer un schedule live ; seule OKX est bloquée.
 
+## Recette orchestrateur OKX dry-run
+
+OKX-009 ajoute un dashboard de recette orchestrateur dédié :
+
+```text
+python-orchestrator/fixtures/runtime-recipe/r1_r16_okx_dry_run_dashboard.json
+```
+
+Il contient uniquement des sets `exchange=okx`, `environment=demo`,
+`dry_run=true`, `workers=1` et des symboles allow-listés `BTCUSDT`. Le runner
+R1-R16 reste Fake/Paper par défaut ; OKX est une cible explicite :
+
+```bash
+cd python-orchestrator
+python scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --target-exchange okx \
+  --scenario R1 \
+  --scenario R2 \
+  --scenario R14 \
+  --export-dir var/runtime-recipe/okx-dry-run \
+  --keep-fixtures
+```
+
+Avant d'appliquer les fixtures OKX, le runner exécute
+`app:exchange:runtime-check okx perpetual` via Docker Compose. Si la sortie ne
+contient pas `Schedule ready: yes`, les scenarios OKX sont exportés en
+`BLOCKED` et aucun `POST /orchestrator/run` n'est envoyé pour R1/R2/R14. Les
+autres scenarios restent rattachés aux fixtures Fake/Paper. R14 tente ensuite
+un set négatif `dry_run=false` et doit observer le refus de garde live avant
+tout dispatch.
+
 ## Hors-scope PR11
 
 - aucune activation live OKX (PR de readiness live dédiée requise) ;
-- **aucun bundle provider OKX runtime MTF activé** : `mtf:run`, `POST /api/mtf/run` et le
-  Temporal scheduler ne sont pas branchés sur OKX par cette PR ;
+- aucun ordre OKX réel : le branchement orchestrateur OKX-009 reste strictement
+  `dry_run=true` et bloque si le runtime-check n'est pas schedule-ready ;
 - aucun branchement `TradeEntry` runtime ;
 - aucun changement de stratégie (`regular` / `scalper` / `scalper_micro`), EntryZone,
   Risk / Leverage / SL-TP ni YAML ;
@@ -233,5 +266,5 @@ de preview pour comparer les futurs payloads OKX avant toute PR d'activation liv
 
 ## Suite
 
-OKX-008 : runtime-check `demo_testnet_candidate`. La bascule live OKX restera une PR dédiée,
-testée et réversible.
+OKX-009 : recette orchestrateur OKX dry-run R1/R2/R14. La bascule live OKX restera
+une PR dédiée, testée et réversible.
