@@ -84,11 +84,20 @@ fraîche avant tout broadcast.
 - `Network: testnet/mainnet` — réseau configuré, **distinct** de l'autorisation live ;
 - `Mainnet enabled: yes/no` — capacité réseau (`HYPERLIQUID_MAINNET_ENABLED`), **distincte** de
   l'autorisation live ;
+- `Testnet trading enabled: yes/no` — activation explicite de candidature testnet
+  (`HYPERLIQUID_TESTNET_TRADING_ENABLED`), **distincte** de l'autorisation live ;
+- `Signer configured`, `Signer/account relation`, `Nonce store`, `Collateral readable`,
+  `WS/polling`, `Stop loss capability`, `Kill switch` — raisons operateur qui expliquent
+  pourquoi le niveau reste bloque ou peut monter ;
 - `Recommended dry_run: true` (toujours, pour Hyperliquid).
 
 Le choix testnet/mainnet et le flag `HYPERLIQUID_MAINNET_ENABLED` ne sont donc jamais assimilés à
-« live allowed ». OKX et Bitmart legacy ne sont pas affectés : ces lignes sont spécifiques à
-Hyperliquid.
+« live allowed ». `HYPERLIQUID_TESTNET_TRADING_ENABLED=1` peut seulement permettre
+`demo_testnet_candidate` quand toutes les lectures, guards, nonce store, polling et stop-loss
+capability sont bonnes et que les URLs REST/WS restent sur `api.hyperliquid-testnet.xyz` ;
+la permission trade de l'agent wallet reste signalee comme non prouvee. Cette PR ne produit jamais
+`demo_testnet_enabled`. OKX et Bitmart legacy
+ne sont pas affectés : ces lignes sont spécifiques à Hyperliquid.
 
 ## Schedules Temporal : Hyperliquid dry_run=false interdit
 
@@ -118,6 +127,10 @@ découplé de ces classes. Toute activation live future est une PR dédiée qui 
 - reconciliation testée ;
 - audit minimal complet ;
 - schedule Temporal explicitement autorisé.
+
+Rollback HL-010 : remettre `HYPERLIQUID_TESTNET_TRADING_ENABLED=0` et/ou revert le branchement
+runtime-check Hyperliquid. Le port dry-run local reste no-broadcast et les schedules Hyperliquid
+restent `dry_run=true`.
 
 ## Hors-scope PR12
 

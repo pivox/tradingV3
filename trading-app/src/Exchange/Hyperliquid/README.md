@@ -50,11 +50,13 @@ First API-first Hyperliquid integration slice.
   of being resolved from symbol or time alone.
 - Mutative execution provider methods remain fail-closed with
   `HyperliquidProviderNotReadyException`.
-- `HyperliquidRuntimeCheck` may reach `private_read_only` when public and
-  account probes are supplied as good, but
-  `app:exchange:runtime-check hyperliquid perpetual` remains
-  `Schedule ready: no` until local dry-run, protection readiness, and future
-  controlled `/exchange` wiring are implemented.
+- `HyperliquidRuntimeCheck` may reach `local_dry_run_ready` when public reads,
+  account reads, agent/account config, nonce store, collateral, polling fallback,
+  stop-loss capability and testnet guards are all good. It may reach
+  `demo_testnet_candidate` only when `HYPERLIQUID_TESTNET_TRADING_ENABLED=1`.
+  The command still prints `Live allowed: no`, warns that agent trade permission
+  is not proven in HL-010, recommends `dry_run=true`, and never exposes
+  `demo_testnet_enabled` or `mainnet_ready`.
 - `HyperliquidAgentSigner` only accepts `HYPERLIQUID_NETWORK=testnet` and
   `HYPERLIQUID_ENV=testnet`. The application never accepts the wallet principal
   private key; only a dedicated testnet agent key is allowed, and signer outputs

@@ -90,7 +90,7 @@ reutilisables.
 | Fees / funding / costs | Renforce HL-007 | Funding public absent reste `null` avec `funding_rate_unknown`. `getTradingFees()` lit `userFees` read-only et expose maker/taker `null` + flags si absents. User fills et funding history sont lisibles via account read-only, redacted et non certifies PnL. | Ledger/certification dans les PRs dediees. |
 | Lifecycle normalizers | Livre HL-008 | `HyperliquidLifecycleNormalizer` normalise les requetes d'ordre sans broadcast, statuts ordre, fills, positions, funding et erreurs en DTOs stables. Les fills sans ordre passent en `unknown_requires_resync` avec quality flag. | Branchement mutatif testnet, reconciliation privee continue et consommation ledger/position-state complete. |
 | Local dry-run no broadcast | Livre HL-009 | `HyperliquidDryRunExecutionPort` construit les actions `/exchange` locales (`updateLeverage`, entry, SL reduce-only, TP reduce-only), applique safety/observability en mode informatif, signe avec le fake signer, expose `local_dry_run_ready` et garde `no_http/no_exchange_call/no_broadcast`. | Recette orchestrateur et preuves sur environnement representatif avant toute PR mutative. |
-| Runtime-check candidate | Private-read possible HL-006 | `HyperliquidRuntimeCheck` peut retourner `private_read_only` quand les probes publiques et account sont bonnes. La commande runtime reste `Schedule ready: no` tant que les guards local dry-run/protection ne sont pas complets. | Niveaux `local_dry_run_ready`, puis `demo_testnet_candidate`. |
+| Runtime-check candidate | Livre HL-010 | `HyperliquidRuntimeCheck` expose les paliers `public_read_only`, `private_read_only`, `local_dry_run_ready` et `demo_testnet_candidate`. La commande runtime affiche signer, relation compte/agent configuree, nonce store, collateral, WS/polling, guards, kill switch et stop-loss capability. La permission trade exchange reste affichee comme non prouvee en HL-010. | Recette orchestrateur HL et preuves redacted avant toute PR mutative. |
 | SL/TP / protection | A valider | Aucun attachement runtime Hyperliquid n'est prouve par HL-001. | Modele ordre/protection testnet avec SL immediat ou compensation fail-safe. |
 | Controlled testnet write | Non supporte | Les guards communs existent, mais Hyperliquid reste dry-run only. | PR dediee apres readiness complete, SL obligatoire, reconciliation et rollback. |
 | Mainnet write | Interdit | `mainnet_write_enabled=false` reste requis. | Aucun manque a combler dans cette serie. |
@@ -338,21 +338,29 @@ converties en zero pour obtenir une certification PnL ou une readiness mutative.
 
 ## Gates avant testnet controle
 
-Hyperliquid peut progresser vers `demo_testnet_candidate` seulement si :
+Hyperliquid peut progresser vers `local_dry_run_ready` seulement si :
 
 1. `exchange=hyperliquid`, `environment=testnet`, `market_type=perpetual`.
-2. Les endpoints utilises pointent vers `api.hyperliquid-testnet.xyz`.
+2. Les endpoints REST et WS utilises pointent strictement vers le host `api.hyperliquid-testnet.xyz`.
 3. Les metadata et precisions sont coherentes avec le plan d'ordre, y compris
    la precision prix Hyperliquid qui evite les rejets `tickRejected`.
 4. La lecture publique est fraiche et bornee.
 5. La lecture account est redacted et couvre positions, ordres, fills et funding.
-6. Les nonces et le signer restent inactifs ou fake tant que le mode est dry-run.
-7. `stopLossCapability=true` est prouve avant tout statut candidat mutatif.
-8. L'observabilite privee est complete ou explicitement acceptee par une policy
-   future documentee.
-9. Fake/Paper reste disponible pour rejouer les scenarios protection, duplicate
-   `client_order_id`, partial fill et restart.
-10. Le dry-run local produit une trace deterministe sans broadcast `/exchange`.
+6. Le signer agent testnet est configure et rattache a un compte testnet distinct.
+7. Le nonce store persistant est disponible pour reserver des nonces monotones si une PR future active le broadcast.
+8. Le collateral est lisible via account read-only.
+9. Le runtime declare un fallback polling REST borne tant que le WS prive n'est pas complet.
+10. `stopLossCapability=true` est prouve avant tout statut candidat.
+11. Le dry-run local produit une trace deterministe sans broadcast `/exchange`.
+
+Hyperliquid peut progresser de `local_dry_run_ready` vers `demo_testnet_candidate` seulement si :
+
+1. `HYPERLIQUID_TESTNET_TRADING_ENABLED=1`.
+2. `demo_testnet_write_guard=true` reste limite a `environment=testnet`, `network=testnet`, endpoints testnet et `HYPERLIQUID_MAINNET_ENABLED=0`.
+3. Le kill switch reste visible dans le rapport ; en HL-010 il ne debloque pas de mutation car le runtime force encore `dryRun=true`.
+4. L'observabilite privee est complete ou explicitement acceptee en dry-run par la policy documentee.
+5. La permission trade de l'agent wallet reste `not_proven` en HL-010 ; elle devra etre prouvee avant `demo_testnet_enabled`.
+6. Aucun statut `mainnet_ready`, `live_ready` ou `demo_testnet_enabled` n'est expose par cette PR.
 
 Hyperliquid ne peut atteindre `demo_testnet_enabled` que si, en plus :
 

@@ -204,6 +204,7 @@ services:
             $testnetAgentPrivateKey: '%env(string:HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY)%'
             $testnetAgentAddress: '%env(string:HYPERLIQUID_TESTNET_AGENT_ADDRESS)%'
             $testnetAccountAddress: '%env(string:HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS)%'
+            $testnetTradingEnabled: '%env(bool:HYPERLIQUID_TESTNET_TRADING_ENABLED)%'
 
     App\Exchange\Okx\OkxConfig:
         arguments:

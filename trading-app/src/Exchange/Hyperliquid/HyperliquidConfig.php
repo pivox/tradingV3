@@ -15,6 +15,7 @@ final readonly class HyperliquidConfig
         public string $testnetAgentPrivateKey = '',
         public string $testnetAgentAddress = '',
         public string $testnetAccountAddress = '',
+        public bool $testnetTradingEnabled = false,
     ) {
     }
 
@@ -29,6 +30,7 @@ final readonly class HyperliquidConfig
             testnetAgentPrivateKey: (string)($_ENV['HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY'] ?? $_SERVER['HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY'] ?? ''),
             testnetAgentAddress: (string)($_ENV['HYPERLIQUID_TESTNET_AGENT_ADDRESS'] ?? $_SERVER['HYPERLIQUID_TESTNET_AGENT_ADDRESS'] ?? ''),
             testnetAccountAddress: (string)($_ENV['HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS'] ?? $_SERVER['HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS'] ?? ''),
+            testnetTradingEnabled: filter_var($_ENV['HYPERLIQUID_TESTNET_TRADING_ENABLED'] ?? $_SERVER['HYPERLIQUID_TESTNET_TRADING_ENABLED'] ?? false, \FILTER_VALIDATE_BOOL),
         );
     }
 
