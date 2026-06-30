@@ -77,7 +77,7 @@ final readonly class HyperliquidLifecycleNormalizer
             price: $this->orderPrice($base),
             averageFillPrice: $this->averageFillPrice($base, $fills),
             createdAt: $this->time($base['timestamp'] ?? $base['time'] ?? null),
-            updatedAt: $this->time($base['uTime'] ?? $base['updatedAt'] ?? $base['time'] ?? $latest['time'] ?? null),
+            updatedAt: $this->time($latest['uTime'] ?? $latest['updatedAt'] ?? $latest['time'] ?? $latest['timestamp'] ?? $base['uTime'] ?? $base['updatedAt'] ?? $base['time'] ?? null),
             fills: $fills,
             requiresResync: \in_array('order_absent_fill_present', $qualityFlags, true)
                 || $status === HyperliquidLifecycleStatus::UNKNOWN_REQUIRES_RESYNC,

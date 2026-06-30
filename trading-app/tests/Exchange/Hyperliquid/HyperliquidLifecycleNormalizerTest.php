@@ -69,6 +69,7 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(1.0, $lifecycle->quantity, 0.000001);
         self::assertEqualsWithDelta(0.4, $lifecycle->filledQuantity, 0.000001);
         self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
+        self::assertSame(1_767_225_601, $lifecycle->updatedAt->getTimestamp());
         self::assertCount(1, $lifecycle->fills);
         self::assertSame('fill-1', $lifecycle->fills[0]->fillId);
         self::assertSame('USDC', $lifecycle->fills[0]->feeCurrency);
