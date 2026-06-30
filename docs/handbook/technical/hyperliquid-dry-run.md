@@ -24,9 +24,10 @@ implémentation de `ExecutionPortInterface` (après `FakeExecutionPort` et
 C'est une **preview / simulation TradingCore**, pas une exécution exchange réelle :
 
 - **aucun appel HTTP**, jamais ;
-- **aucun appel `/exchange`**, **aucun signing**, **aucune private key** : le port ne touche ni
-  `HyperliquidExchangeAdapter`, ni `HyperliquidRestClient`, ni `HyperliquidActionFactory`, ni
-  aucune classe `App\Exchange\Hyperliquid\*` ;
+- **aucun broadcast `/exchange`**, **aucune signature réelle**, **aucune private key** : le port ne
+  touche ni `HyperliquidExchangeAdapter`, ni `HyperliquidRestClient` ;
+- les actions `/exchange` sont sérialisées localement via `HyperliquidActionFactory`, puis signées
+  uniquement avec `FakeHyperliquidSigner` pour produire une preuve redacted non diffusable ;
 - aucune dépendance Symfony, Doctrine, Messenger, Temporal ni provider runtime concret ;
 - le port est **pur** : même plan ⇒ même `exchange_order_id`, requête jamais mutée.
 
@@ -37,16 +38,40 @@ Comportement :
 | `ExecutionMode::Live` | `ExecutionStatus::Rejected` (`live_not_supported_by_hyperliquid_dry_run`). |
 | Plan d'un autre exchange (`exchange != hyperliquid`) | `Rejected` (`wrong_exchange_for_hyperliquid_dry_run`). |
 | Market type non supporté (≠ `perpetual`) | `Rejected` (`market_type_not_supported_by_hyperliquid_dry_run`). |
+| Environnement mainnet/live/prod dans la metadata | `Rejected` (`mainnet_environment_forbidden_for_hyperliquid_dry_run`). |
+| Symbole hors whitelist `allowed_symbols` | `Rejected` (`demo_trading_safety_blocked` + `requested_symbol_or_market_not_allowed`). |
+| Notional supérieur à `max_notional` | `Rejected` (`demo_trading_safety_blocked` + `max_notional_exceeded`). |
+| Levier supérieur à `max_leverage` | `Rejected` (`leverage_cap_exceeded`). |
+| Payload Hyperliquid non encodable (prix/quantité/trigger > 8 décimales wire) | `Rejected` (`hyperliquid_dry_run_payload_unencodable`). |
 | Plan non exécutable (revalidé via `OrderPlanValidator`) | `Rejected` (`order_plan_not_executable` + `invalid_reasons`). |
 | Plan Hyperliquid perpetual valide en dry-run | `ExecutionStatus::DryRun`, `exchange_order_id = HYPERLIQUID-DRYRUN-{client_order_id}`. |
 
 Metadata produite (success) : `gateway=hyperliquid`, `mode=dry_run`, `simulated=true`,
-`no_http=true`, `no_exchange_call=true`, `client_order_id`, `idempotency_key`, `requested_at`,
-`order_type`, `side`, `symbol`, `entry_price`, `quantity`, `leverage`, `protection_present`. Les
-descripteurs gateway (`gateway`, `simulated`, `no_http`, `no_exchange_call`) et le `reject_reason`
-sont autoritaires : un appelant ne peut pas les usurper via la metadata entrante.
+`environment=local_dry_run|demo|testnet`, `no_http=true`, `no_exchange_call=true`,
+`no_broadcast=true`, `client_order_id`, `idempotency_key`, `requested_at`, `order_type`, `side`,
+`symbol`, `entry_price`, `quantity`, `leverage`, `notional`, `protection_present`,
+`safety_decision`, `private_observability_decision`, `local_dry_run_ready=true` et
+`readiness_level=local_dry_run_ready`. Les descripteurs gateway (`gateway`, `simulated`, `no_http`,
+`no_exchange_call`, `no_broadcast`) et le `reject_reason` sont autoritaires : un appelant ne peut pas
+les usurper via la metadata entrante.
 
 `client_order_id` et `idempotency_key` sont conservés sur tous les chemins.
+
+La réponse `raw.hyperliquid_dry_run` contient une prévisualisation redacted :
+
+- `no_http=true`, `no_exchange_call=true`, `no_broadcast=true`, `redacted=true` ;
+- `signer=fake_hyperliquid_signer` ;
+- `nonce_policy=deterministic_preview` ;
+- `requests[]` avec `method=POST`, `path=/exchange`, `operation=set_leverage|submit_order|stop_loss|take_profit` ;
+- chaque `body` est le payload signé par `FakeHyperliquidSigner`, contenant `action`, `nonce`,
+  `network=testnet`, adresse fake et signature fake. Ce payload sert d'audit local uniquement.
+
+Le `hyperliquid_asset_id` doit être fourni dans la metadata de requête pour tout symbole autre que la
+fixture BTC. Sans asset id explicite, le port rejette le plan avec
+`hyperliquid_asset_id_required_for_symbol` au lieu de produire une preview potentiellement liée au
+mauvais asset. La fixture BTC peut rester implicite (`asset_id=0`) pour conserver les tests locaux
+déterministes ; une PR mutative future devra résoudre et croiser l'asset depuis la metadata exchange
+fraîche avant tout broadcast.
 
 ## Runtime-check : Hyperliquid reste dry-run only
 
@@ -97,7 +122,7 @@ découplé de ces classes. Toute activation live future est une PR dédiée qui 
 ## Hors-scope PR12
 
 - aucune activation live Hyperliquid, aucun mainnet trading (PR de readiness live dédiée requise) ;
-- aucun signing, aucun appel HTTP, aucun appel `/exchange` ;
+- aucun signing réel, aucun appel HTTP, aucun broadcast `/exchange` ;
 - **aucun bundle provider Hyperliquid runtime MTF activé** : `mtf:run`, `POST /api/mtf/run` et le
   Temporal scheduler ne sont pas branchés sur Hyperliquid par cette PR ;
 - aucun branchement `TradeEntry` runtime ;
