@@ -70,6 +70,12 @@ TARGET_FIXTURE_FILES = {
     "okx": "r1_r16_okx_dry_run_dashboard.json",
     "hyperliquid": "r1_r16_hyperliquid_dry_run_dashboard.json",
 }
+DEMO_EXCHANGES_TARGET = "demo-exchanges"
+DEMO_EXCHANGE_TARGETS = {
+    "global": "fake",
+    "okx": "okx",
+    "hyperliquid": "hyperliquid",
+}
 
 
 class RecipeHttpClient(Protocol):
@@ -132,7 +138,14 @@ class RecipeRunner:
         keep_fixtures: bool = False,
     ) -> dict[str, Any]:
         self._assert_confirmed()
-        selected = tuple(scenarios or DEFAULT_SCENARIOS)
+        target_exchange = self.config.target_exchange.strip().lower()
+        default_scenarios = (
+            ALL_SCENARIOS if target_exchange == DEMO_EXCHANGES_TARGET else DEFAULT_SCENARIOS
+        )
+        selected = tuple(scenarios if scenarios is not None else default_scenarios)
+        if target_exchange == DEMO_EXCHANGES_TARGET:
+            return self._run_demo_exchanges(selected, keep_fixtures=keep_fixtures)
+
         started_at = datetime.now(timezone.utc).isoformat()
         self.invocation_id = uuid4().hex[:12]
 
@@ -181,6 +194,110 @@ class RecipeRunner:
         report = self._redact(report)
         self._export(report)
         return report
+
+    def _run_demo_exchanges(
+        self,
+        selected: tuple[str, ...],
+        *,
+        keep_fixtures: bool,
+    ) -> dict[str, Any]:
+        started_at = datetime.now(timezone.utc).isoformat()
+        self.invocation_id = uuid4().hex[:12]
+
+        exchange_results: dict[str, list[dict[str, Any]]] = {}
+        exchange_summaries: dict[str, dict[str, Any]] = {}
+        dashboards: dict[str, dict[str, Any]] = {}
+        runtime_checks: dict[str, Any] = {}
+        flattened_results: list[dict[str, Any]] = []
+
+        for exchange_scope, target_exchange in DEMO_EXCHANGE_TARGETS.items():
+            target_scenarios = self._demo_exchange_scenarios(exchange_scope, selected)
+            sub_report: dict[str, Any] | None = None
+            observed_by_scenario: dict[str, dict[str, Any]] = {}
+            if target_scenarios:
+                sub_runner = RecipeRunner(
+                    RunnerConfig(
+                        export_dir=self.config.export_dir / exchange_scope,
+                        fixtures_dir=self.config.fixtures_dir,
+                        orchestrator_url=self.config.orchestrator_url,
+                        confirmation_token=self.config.confirmation_token,
+                        target_exchange=target_exchange,
+                        timeout_seconds=self.config.timeout_seconds,
+                        temporal_available=self.config.temporal_available,
+                        temporal_dry_run_command=self.config.temporal_dry_run_command,
+                        cleanup=self.config.cleanup,
+                    ),
+                    http_client=self.http,
+                )
+                sub_report = sub_runner.run(scenarios=target_scenarios, keep_fixtures=keep_fixtures)
+                observed_by_scenario = {
+                    item["scenario"]: {**item, "exchange_scope": exchange_scope}
+                    for item in sub_report["results"]
+                }
+
+            ordered_results: list[dict[str, Any]] = []
+            for scenario in selected:
+                result = observed_by_scenario.get(scenario)
+                if result is None:
+                    result = {
+                        **self._result(
+                            scenario,
+                            "BLOCKED",
+                            (
+                                f"{scenario} is covered by the global Fake/Paper baseline; "
+                                f"no {exchange_scope} exchange-specific automation exists in this dry-run runner"
+                            ),
+                        ),
+                        "exchange_scope": exchange_scope,
+                    }
+                ordered_results.append(result)
+
+            exchange_results[exchange_scope] = ordered_results
+            exchange_summaries[exchange_scope] = {
+                "target_exchange": target_exchange,
+                "scenario_counts": dict(Counter(item["status"] for item in ordered_results)),
+            }
+            dashboards[exchange_scope] = sub_report.get("dashboards", {}) if sub_report else {}
+            runtime_checks[exchange_scope] = (
+                sub_report.get("metadata", {}).get("runtime_check") if sub_report else None
+            )
+            flattened_results.extend(ordered_results)
+
+        report = {
+            "metadata": {
+                "started_at": started_at,
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "dry_run_forced": True,
+                "confirmation_token": "REDACTED",
+                "invocation_id": self.invocation_id,
+                "orchestrator_url": self.config.orchestrator_url,
+                "fixtures_dir": str(self.config.fixtures_dir),
+                "target_exchange": DEMO_EXCHANGES_TARGET,
+                "exchange_targets": DEMO_EXCHANGE_TARGETS,
+                "runtime_checks": runtime_checks,
+                "cleanup_requested": self.config.cleanup,
+            },
+            "dashboards": dashboards,
+            "exchange_results": exchange_results,
+            "exchange_summaries": exchange_summaries,
+            "results": flattened_results,
+            "summary": {
+                "scenario_counts": dict(Counter(item["status"] for item in flattened_results)),
+                "ready_for_final_report": False,
+            },
+        }
+        report = self._redact(report)
+        self._export(report)
+        return report
+
+    def _demo_exchange_scenarios(
+        self,
+        exchange_scope: str,
+        selected: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if exchange_scope == "global":
+            return selected
+        return tuple(scenario for scenario in selected if scenario in TARGET_EXCHANGE_SCENARIOS)
 
     def _assert_confirmed(self) -> None:
         if self.config.confirmation_token != CONFIRMATION_TOKEN:
@@ -891,9 +1008,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scenario", action="append", choices=ALL_SCENARIOS)
     parser.add_argument(
         "--target-exchange",
-        choices=("fake", "okx", "hyperliquid"),
+        choices=("fake", "okx", "hyperliquid", DEMO_EXCHANGES_TARGET),
         default="fake",
-        help="Recipe target for R1/R2/R14; fake remains the default R1-R16 baseline.",
+        help=(
+            "Recipe target for R1/R2/R14; fake remains the default R1-R16 baseline. "
+            "Use demo-exchanges to export global, OKX, and Hyperliquid sections."
+        ),
     )
     parser.add_argument("--timeout-seconds", type=float, default=30.0)
     parser.add_argument("--confirm", required=True, help=f"Must be {CONFIRMATION_TOKEN}")
