@@ -175,6 +175,41 @@ python scripts/manage_orchestrator_schedule.py delete
 
 > `ok=false` n'est pas un succès Temporal. Le workflow propage le `RunResponse` complet sur `ok=true` et lève une `ApplicationError` non-retryable sur `ok=false` (implémenté par **TM-002**), après avoir journalisé `run_id` + `summary`.
 
+### 4.0.1 Schedule demo/testnet gardé (DEMO-004)
+
+- **Objectif** : créer le schedule Temporal dédié OKX demo + Hyperliquid testnet.
+- **Fichier CLI** : `scripts/manage_demo_testnet_schedule.py`.
+- **Défaut sûr** : le schedule est créé `paused=true` et force le `RunRequest` à `dry_run=true`.
+- **Activation** : `resume` et `create --resume-on-create` exécutent les runtime-checks OKX + Hyperliquid et refusent l'activation si `Schedule ready: yes` n'est pas présent pour les deux.
+- **Mainnet** : aucune option mainnet n'est supportée ; `--environment` doit rester `demo-testnet`.
+
+Paramètres via env (surchargés par CLI) :
+
+| Variable | Défaut |
+| --- | --- |
+| `DEMO_TESTNET_ORCHESTRATOR_RUN_URL` | `ORCHESTRATOR_RUN_URL` ou `http://python-orchestrator:8099/orchestrator/run` |
+| `DEMO_TESTNET_ORCHESTRATOR_DASHBOARD_ID` | _(aucun)_ |
+| `DEMO_TESTNET_ORCHESTRATOR_SCHEDULE_ID` | `cron-orchestrator-demo-testnet-1m` |
+| `DEMO_TESTNET_ORCHESTRATOR_WORKFLOW_ID` | `cron-orchestrator-demo-testnet-runner` |
+| `DEMO_TESTNET_ORCHESTRATOR_CRON` | `*/1 * * * *` |
+
+Commandes :
+
+```bash
+# Preview sans connexion Temporal.
+python scripts/manage_demo_testnet_schedule.py create --dry-run --dashboard-id 7
+
+# Création paused par défaut.
+python scripts/manage_demo_testnet_schedule.py create --dashboard-id 7
+
+# Activation après runtime-check OKX + Hyperliquid.
+python scripts/manage_demo_testnet_schedule.py resume --dashboard-id 7
+
+# Rollback opérateur.
+python scripts/manage_demo_testnet_schedule.py pause
+python scripts/manage_demo_testnet_schedule.py delete
+```
+
 ### 4.1 Runtime Matrix Exchange/Profile (legacy, DEPRECATED CLEAN-001)
 
 - **Statut** : **DEPRECATED (CLEAN-001)** — legacy multi-jobs. Conservé pour les déploiements existants ; ne plus créer de nouveaux schedules. Migrer vers le schedule orchestrateur unique (§4.0). Lancer ce script émet un `DeprecationWarning`.

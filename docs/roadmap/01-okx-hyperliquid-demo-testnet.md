@@ -52,11 +52,11 @@ Cette vague remplace la logique “dry-run uniquement” par une cible plus pré
 - [x] HL-011 — Orchestrator dry-run recipe Hyperliquid — #249 / `0b62049`.
 - [x] DEMO-001 — Fixtures demo OKX + Hyperliquid — #250 / `d90b3dd`.
 - [x] DEMO-002 — Recette R1-R16 double exchange en dry-run — #251 / `e524424`.
+- [x] DEMO-003 — Demo ops runbook + rollback — #252 / `79acc0c`.
+- [x] DEMO-004 — Enable demo schedule guarded — #253.
 
 ## Restant vague 1
 
-- [ ] DEMO-003 — Demo ops runbook + rollback.
-- [ ] DEMO-004 — Enable demo schedule guarded.
 - [ ] DEMO-005 — Pre-mutative demo readiness decision.
 - [ ] OKX-010 — Demo trading controlled avec SL.
 - [ ] HL-012 — Testnet trading controlled avec SL.
@@ -65,8 +65,6 @@ Cette vague remplace la logique “dry-run uniquement” par une cible plus pré
 ## Ordre strict recommandé
 
 ```text
-DEMO-003
-DEMO-004
 DEMO-005
 
 OKX-010
