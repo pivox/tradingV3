@@ -20,6 +20,8 @@ use App\Exchange\Dto\ExchangeCapabilities;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Okx\OkxConfig;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Hyperliquid\HyperliquidNonceManagerInterface;
+use App\Provider\Hyperliquid\HyperliquidNonceScope;
 use App\Provider\Registry\ExchangeProviderBundle;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -332,12 +334,15 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringNotContainsString('Demo trading enabled:', $output);
     }
 
-    public function testHyperliquidStaysDryRunOnlyWithPrivateReadAndTestnet(): void
+    public function testHyperliquidReachesLocalDryRunWithoutTestnetActivation(): void
     {
-        // HL-006 can read account state, but Hyperliquid still has no mutative readiness.
-        // Presence in the registry must not make the schedule preflight green.
         $command = new ExchangeRuntimeCheckCommand(
-            $this->adapterRegistry($this->adapter(Exchange::HYPERLIQUID, MarketType::PERPETUAL, supportsPrivateWs: true)),
+            $this->adapterRegistry($this->adapter(
+                Exchange::HYPERLIQUID,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
             $this->providerRegistry($this->providerBundle(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),
             new OkxConfig(environment: 'demo'),
             new HyperliquidConfig(
@@ -347,6 +352,8 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
                 testnetAgentAddress: '0xagent',
                 testnetAccountAddress: '0xabc',
             ),
+            [],
+            $this->readyNonceManager(),
         );
 
         $tester = new CommandTester($command);
@@ -367,10 +374,228 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Live allowed: no', $output);
         self::assertStringContainsString('Network: testnet', $output);
         self::assertStringContainsString('Mainnet enabled: no', $output);
-        self::assertStringContainsString('Readiness level: private_read_only', $output);
+        self::assertStringContainsString('Testnet trading enabled: no', $output);
+        self::assertStringContainsString('Readiness level: local_dry_run_ready', $output);
         self::assertStringContainsString('Readiness blocking errors: none', $output);
-        self::assertStringContainsString('local_dry_run_prerequisites_missing', $output);
+        self::assertStringContainsString('Readiness warnings: hyperliquid_agent_wallet_trade_permission_not_proven, private_observability_absent_for_dry_run, demo_testnet_write_not_enabled', $output);
+        self::assertStringContainsString('Signer configured: yes', $output);
+        self::assertStringContainsString('Signer/account relation: yes', $output);
+        self::assertStringContainsString('Nonce store: ready', $output);
+        self::assertStringContainsString('Collateral readable: yes', $output);
+        self::assertStringContainsString('WS/polling: ready', $output);
+        self::assertStringContainsString('Stop loss capability: yes', $output);
+        self::assertStringContainsString('Kill switch: enabled', $output);
         self::assertStringContainsString('Recommended dry_run: true', $output);
+        self::assertStringContainsString('Schedule ready: yes', $output);
+    }
+
+    public function testHyperliquidReportsDemoTestnetCandidateWhenExplicitlyActivated(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::HYPERLIQUID,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(
+                environment: 'testnet',
+                network: 'testnet',
+                testnetAgentPrivateKey: 'fixture-agent-material',
+                testnetAgentAddress: '0xagent',
+                testnetAccountAddress: '0xabc',
+                testnetTradingEnabled: true,
+            ),
+            [],
+            $this->readyNonceManager(),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'hyperliquid',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Testnet trading enabled: yes', $output);
+        self::assertStringContainsString('Readiness level: demo_testnet_candidate', $output);
+        self::assertStringContainsString('Readiness blocking errors: none', $output);
+        self::assertStringContainsString('Readiness warnings: hyperliquid_agent_wallet_trade_permission_not_proven, private_observability_absent_for_dry_run', $output);
+        self::assertStringNotContainsString('Readiness level: demo_testnet_enabled', $output);
+        self::assertStringNotContainsString('fixture-agent-material', $output);
+        self::assertStringNotContainsString('0xagent', $output);
+        self::assertStringNotContainsString('0xabc', $output);
+        self::assertStringContainsString('Live allowed: no', $output);
+        self::assertStringContainsString('Recommended dry_run: true', $output);
+        self::assertStringContainsString('Schedule ready: yes', $output);
+    }
+
+    public function testHyperliquidDoesNotTrustSpoofedTestnetEndpointHost(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::HYPERLIQUID,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(
+                environment: 'testnet',
+                apiBaseUri: 'https://api.hyperliquid-testnet.xyz.evil.example',
+                wsUri: 'wss://api.hyperliquid-testnet.xyz.evil.example/ws',
+                network: 'testnet',
+                testnetAgentPrivateKey: 'fixture-agent-material',
+                testnetAgentAddress: '0xagent',
+                testnetAccountAddress: '0xabc',
+                testnetTradingEnabled: true,
+            ),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'hyperliquid',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Readiness level: not_ready', $output);
+        self::assertStringContainsString('hyperliquid_testnet_endpoint_guard_not_ready', $output);
+        self::assertStringContainsString('Demo/testnet write guard: no', $output);
+        self::assertStringContainsString('Schedule ready: no', $output);
+    }
+
+    public function testHyperliquidSkipsProviderProbesWhenEndpointGuardFails(): void
+    {
+        $contractProvider = $this->createMock(ContractProviderInterface::class);
+        $contractProvider->expects(self::never())->method('getContracts');
+        $accountProvider = $this->createMock(AccountProviderInterface::class);
+        $accountProvider->expects(self::never())->method('getAccountInfo');
+        $bundle = new ExchangeProviderBundle(
+            new ExchangeContext(Exchange::HYPERLIQUID, MarketType::PERPETUAL),
+            $this->createMock(KlineProviderInterface::class),
+            $contractProvider,
+            $this->createMock(OrderProviderInterface::class),
+            $accountProvider,
+            $this->createMock(SystemProviderInterface::class),
+        );
+
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::HYPERLIQUID,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($bundle),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(
+                environment: 'testnet',
+                apiBaseUri: 'https://api.hyperliquid-testnet.xyz.evil.example',
+                wsUri: 'wss://api.hyperliquid-testnet.xyz.evil.example/ws',
+                network: 'testnet',
+                testnetAgentPrivateKey: 'fixture-agent-material',
+                testnetAgentAddress: '0xagent',
+                testnetAccountAddress: '0xabc',
+                testnetTradingEnabled: true,
+            ),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'hyperliquid',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Readiness level: not_ready', $output);
+        self::assertStringContainsString('hyperliquid_testnet_endpoint_guard_not_ready', $output);
+        self::assertStringContainsString('Schedule ready: no', $output);
+    }
+
+    public function testHyperliquidDoesNotReachLocalDryRunWhenEndpointIsNotTestnet(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::HYPERLIQUID,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(
+                environment: 'testnet',
+                apiBaseUri: 'https://api.hyperliquid.xyz',
+                wsUri: 'wss://api.hyperliquid.xyz/ws',
+                network: 'testnet',
+                testnetAgentPrivateKey: 'fixture-agent-material',
+                testnetAgentAddress: '0xagent',
+                testnetAccountAddress: '0xabc',
+                testnetTradingEnabled: true,
+            ),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'hyperliquid',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Readiness level: not_ready', $output);
+        self::assertStringContainsString('hyperliquid_testnet_endpoint_guard_not_ready', $output);
+        self::assertStringContainsString('Demo/testnet write guard: no', $output);
+        self::assertStringContainsString('Schedule ready: no', $output);
+    }
+
+    public function testHyperliquidDoesNotReachLocalDryRunWhenConfiguredEnvironmentIsBlank(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::HYPERLIQUID,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(
+                environment: '',
+                network: 'testnet',
+                testnetAgentPrivateKey: 'fixture-agent-material',
+                testnetAgentAddress: '0xagent',
+                testnetAccountAddress: '0xabc',
+                testnetTradingEnabled: true,
+            ),
+            [],
+            $this->readyNonceManager(),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'hyperliquid',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Network: testnet', $output);
+        self::assertStringContainsString('Readiness level: private_read_only', $output);
+        self::assertStringContainsString('Demo/testnet write guard: no', $output);
+        self::assertStringContainsString('hyperliquid_nonce_store_not_ready', $output);
         self::assertStringContainsString('Schedule ready: no', $output);
     }
 
@@ -552,5 +777,24 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
             $accountProvider,
             $this->createMock(SystemProviderInterface::class),
         );
+    }
+
+    private function readyNonceManager(): HyperliquidNonceManagerInterface
+    {
+        return new class implements HyperliquidNonceManagerInterface {
+            public function isReady(HyperliquidNonceScope $scope): bool
+            {
+                return true;
+            }
+
+            public function nextNonce(HyperliquidNonceScope $scope): int
+            {
+                return 1;
+            }
+
+            public function recordObservedNonce(HyperliquidNonceScope $scope, int $nonce): void
+            {
+            }
+        };
     }
 }

@@ -22,6 +22,13 @@ final class HyperliquidNonceStateRepository extends ServiceEntityRepository
         parent::__construct($registry, HyperliquidNonceState::class);
     }
 
+    public function isReadyForScope(HyperliquidNonceScope $scope): bool
+    {
+        $accountAddress = $this->accountAddressForSigner($scope);
+
+        return $accountAddress === null || $accountAddress === $scope->accountAddress;
+    }
+
     public function reserveNext(HyperliquidNonceScope $scope, int $candidateNonce, \DateTimeImmutable $now): int
     {
         $result = $this->getEntityManager()->getConnection()->executeQuery(

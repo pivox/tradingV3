@@ -16,6 +16,8 @@ use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Hyperliquid\HyperliquidNonceManagerInterface;
+use App\Provider\Hyperliquid\HyperliquidNonceScope;
 use App\Provider\Hyperliquid\HyperliquidRuntimeCheck;
 use App\Provider\Okx\OkxRuntimeCheck;
 use App\Provider\Registry\ExchangeProviderBundle;
@@ -40,6 +42,7 @@ final class ExchangeRuntimeCheckCommand extends Command
         private readonly OkxConfig $okxConfig,
         private readonly HyperliquidConfig $hyperliquidConfig,
         private readonly array $bitmartEnv = [],
+        private readonly ?HyperliquidNonceManagerInterface $hyperliquidNonceManager = null,
     ) {
         parent::__construct();
     }
@@ -77,7 +80,7 @@ final class ExchangeRuntimeCheckCommand extends Command
             ? $this->okxReadinessReport($marketType, $adapterStatus, $providerStatus, $credentials, $adapter, $providerBundle)
             : null;
         $hyperliquidReadinessReport = $exchange === Exchange::HYPERLIQUID
-            ? $this->hyperliquidReadinessReport($marketType, $adapterStatus, $providerStatus, $providerBundle)
+            ? $this->hyperliquidReadinessReport($marketType, $adapterStatus, $providerStatus, $adapter, $providerBundle)
             : null;
         $scheduleReady = $this->scheduleReady($exchange, $adapterStatus, $providerStatus, $okxReadinessReport, $hyperliquidReadinessReport);
         $recommendedDryRun = !$scheduleReady || $credentials !== 'ok' || $liveTrading !== 'enabled';
@@ -115,6 +118,7 @@ final class ExchangeRuntimeCheckCommand extends Command
             $output->writeln('Live allowed: no');
             $output->writeln(sprintf('Network: %s', $this->hyperliquidConfig->normalizedEnvironment()));
             $output->writeln(sprintf('Mainnet enabled: %s', $this->hyperliquidConfig->mainnetEnabled ? 'yes' : 'no'));
+            $output->writeln(sprintf('Testnet trading enabled: %s', $this->hyperliquidConfig->testnetTradingEnabled ? 'yes' : 'no'));
             if ($hyperliquidReadinessReport instanceof ExchangeReadinessReport) {
                 $hyperliquidReadiness = $hyperliquidReadinessReport->toArray();
                 $output->writeln(sprintf('Readiness level: %s', $hyperliquidReadinessReport->readyLevel->value));
@@ -122,6 +126,13 @@ final class ExchangeRuntimeCheckCommand extends Command
                 $output->writeln(sprintf('Readiness warnings: %s', $this->formatReasons($this->stringReasons($hyperliquidReadiness['warnings']))));
                 $output->writeln(sprintf('Mainnet write guard: %s', $hyperliquidReadinessReport->mainnetWriteGuard ? 'yes' : 'no'));
                 $output->writeln(sprintf('Demo/testnet write guard: %s', $hyperliquidReadinessReport->demoTestnetWriteGuard ? 'yes' : 'no'));
+                $output->writeln(sprintf('Signer configured: %s', $hyperliquidReadinessReport->signerConfigured ? 'yes' : 'no'));
+                $output->writeln(sprintf('Signer/account relation: %s', $hyperliquidReadinessReport->signerMatchesAccount ? 'yes' : 'no'));
+                $output->writeln(sprintf('Nonce store: %s', $hyperliquidReadinessReport->nonceStoreReady ? 'ready' : 'not_ready'));
+                $output->writeln(sprintf('Collateral readable: %s', $hyperliquidReadinessReport->collateralReadable ? 'yes' : 'no'));
+                $output->writeln(sprintf('WS/polling: %s', $hyperliquidReadinessReport->pollingReady ? 'ready' : 'not_ready'));
+                $output->writeln(sprintf('Stop loss capability: %s', $hyperliquidReadinessReport->stopLossCapability ? 'yes' : 'no'));
+                $output->writeln(sprintf('Kill switch: %s', $hyperliquidReadinessReport->killSwitch ? 'enabled' : 'disabled'));
             }
         }
         $output->writeln(sprintf('Recommended dry_run: %s', $recommendedDryRun ? 'true' : 'false'));
@@ -250,13 +261,33 @@ final class ExchangeRuntimeCheckCommand extends Command
         MarketType $marketType,
         string $adapterStatus,
         string $providerStatus,
+        ?ExchangeAdapterInterface $adapter,
         ?ExchangeProviderBundle $providerBundle,
     ): ExchangeReadinessReport {
-        [$publicConnectivity, $instrumentsLoaded, $metadataValid, $precisionValid, $publicWarnings] = $this->hyperliquidPublicReadStatus($adapterStatus, $providerStatus, $providerBundle);
+        $capabilities = $adapter instanceof ExchangeAdapterInterface ? $adapter->capabilities() : new ExchangeCapabilities();
+        $testnetEndpointGuard = $this->hyperliquidTestnetEndpointGuard();
+        [$publicConnectivity, $instrumentsLoaded, $metadataValid, $precisionValid, $publicWarnings] = $testnetEndpointGuard
+            ? $this->hyperliquidPublicReadStatus($adapterStatus, $providerStatus, $providerBundle)
+            : [false, false, false, false, []];
         [$privateReadProbeReady, $privateWarnings] = $publicConnectivity && $instrumentsLoaded
             ? $this->hyperliquidPrivateReadStatus($providerBundle)
             : [false, []];
         $privateReadReady = $publicConnectivity && $instrumentsLoaded && $privateReadProbeReady;
+        $credentialsConfigured = $this->hasHyperliquidCredentials();
+        $testnetGuard = $this->hyperliquidConfig->configuredEnvironment() === 'testnet'
+            && $this->hyperliquidConfig->normalizedNetwork() === 'testnet'
+            && !$this->hyperliquidConfig->mainnetEnabled
+            && $testnetEndpointGuard;
+        $accountAddress = $this->hyperliquidConfig->signingAccountAddress();
+        $agentAddress = $this->hyperliquidConfig->signerAddress();
+        $agentWalletRelationReady = $credentialsConfigured
+            && $accountAddress !== ''
+            && $agentAddress !== ''
+            && $accountAddress !== $agentAddress;
+        [$nonceStoreReady, $nonceWarnings] = $credentialsConfigured && $testnetGuard && $agentWalletRelationReady
+            ? $this->hyperliquidNonceStoreStatus($accountAddress, $agentAddress)
+            : [false, []];
+        $pollingReady = $publicConnectivity && $instrumentsLoaded && $privateReadReady;
 
         return (new HyperliquidRuntimeCheck())->check(new ExchangeReadinessInput(
             exchange: Exchange::HYPERLIQUID,
@@ -271,15 +302,74 @@ final class ExchangeRuntimeCheckCommand extends Command
             accountReadable: $privateReadReady,
             permissionsRead: $privateReadReady,
             permissionsTrade: false,
+            signerConfigured: $credentialsConfigured,
+            signerMatchesAccount: $agentWalletRelationReady,
+            nonceStoreReady: $nonceStoreReady,
+            collateralReadable: $privateReadReady,
+            pollingReady: $pollingReady,
             mainnetWriteGuard: !$this->hyperliquidConfig->mainnetEnabled,
-            demoTestnetWriteGuard: false,
-            stopLossCapability: false,
+            demoTestnetWriteGuard: $testnetGuard,
+            demoTestnetWriteEnabled: $this->hyperliquidConfig->testnetTradingEnabled,
+            stopLossCapability: $capabilities->supportsTriggerOrders || $capabilities->supportsAttachedStopLossOnEntry,
             killSwitch: true,
             dryRun: true,
             allowedMarkets: [$marketType->value],
             maxNotional: 25.0,
-            warnings: array_merge($publicWarnings, $privateWarnings),
+            warnings: array_merge(
+                $publicWarnings,
+                $privateWarnings,
+                $nonceWarnings,
+                $testnetEndpointGuard ? [] : ['hyperliquid_testnet_endpoint_guard_not_ready'],
+            ),
         ));
+    }
+
+    /**
+     * @return array{0: bool, 1: list<string>}
+     */
+    private function hyperliquidNonceStoreStatus(string $accountAddress, string $agentAddress): array
+    {
+        if (!$this->hyperliquidNonceManager instanceof HyperliquidNonceManagerInterface) {
+            return [false, ['hyperliquid_nonce_store_probe_missing']];
+        }
+
+        try {
+            $scope = new HyperliquidNonceScope(
+                environment: $this->hyperliquidConfig->configuredEnvironment(),
+                network: $this->hyperliquidConfig->normalizedNetwork(),
+                accountAddress: $accountAddress,
+                signerAddress: $agentAddress,
+            );
+
+            return $this->hyperliquidNonceManager->isReady($scope)
+                ? [true, []]
+                : [false, ['hyperliquid_nonce_store_scope_conflict']];
+        } catch (\Throwable) {
+            return [false, ['hyperliquid_nonce_store_probe_failed']];
+        }
+    }
+
+    private function hyperliquidTestnetEndpointGuard(): bool
+    {
+        return $this->hasHyperliquidTestnetHost($this->hyperliquidConfig->apiBaseUri(), ['https'])
+            && $this->hasHyperliquidTestnetHost($this->hyperliquidConfig->wsUri(), ['wss']);
+    }
+
+    /**
+     * @param list<string> $allowedSchemes
+     */
+    private function hasHyperliquidTestnetHost(string $uri, array $allowedSchemes): bool
+    {
+        $parts = parse_url($uri);
+        if (!\is_array($parts)) {
+            return false;
+        }
+
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host = strtolower((string) ($parts['host'] ?? ''));
+
+        return \in_array($scheme, $allowedSchemes, true)
+            && $host === 'api.hyperliquid-testnet.xyz';
     }
 
     /**

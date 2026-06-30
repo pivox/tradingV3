@@ -15,6 +15,11 @@ final readonly class PersistentHyperliquidNonceManager implements HyperliquidNon
     ) {
     }
 
+    public function isReady(HyperliquidNonceScope $scope): bool
+    {
+        return $this->repository->isReadyForScope($scope);
+    }
+
     public function nextNonce(HyperliquidNonceScope $scope): int
     {
         $now = $this->clock->now();

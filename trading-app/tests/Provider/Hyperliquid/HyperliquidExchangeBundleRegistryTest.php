@@ -14,6 +14,7 @@ use App\Contract\Provider\ContractProviderInterface;
 use App\Contract\Provider\KlineProviderInterface;
 use App\Contract\Provider\OrderProviderInterface;
 use App\Contract\Provider\SystemProviderInterface;
+use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
 use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Provider\Context\ExchangeContext;
@@ -130,7 +131,7 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
         );
     }
 
-    public function testRuntimeCheckCanReachPrivateReadOnlyButNeverEnablesTestnet(): void
+    public function testRuntimeCheckReachesLocalDryRunWhenActivationIsMissing(): void
     {
         $report = (new HyperliquidRuntimeCheck())->check(new ExchangeReadinessInput(
             exchange: Exchange::HYPERLIQUID,
@@ -144,22 +145,118 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
             accountReadable: true,
             permissionsRead: true,
             permissionsTrade: true,
+            signerConfigured: true,
+            signerMatchesAccount: true,
+            nonceStoreReady: true,
+            collateralReadable: true,
+            pollingReady: true,
             mainnetWriteGuard: true,
             demoTestnetWriteGuard: true,
-            demoTestnetWriteEnabled: true,
+            demoTestnetWriteEnabled: false,
             stopLossCapability: true,
             killSwitch: false,
             dryRun: false,
+            allowedMarkets: ['perpetual'],
+            maxNotional: 25.0,
         ));
 
-        self::assertSame(ExchangeReadinessLevel::PrivateReadOnly, $report->readyLevel);
+        self::assertSame(ExchangeReadinessLevel::LocalDryRunReady, $report->readyLevel);
         self::assertSame([], $report->blockingErrors);
         self::assertTrue($report->privateReadConnectivity);
         self::assertTrue($report->accountReadable);
         self::assertTrue($report->permissionsRead);
         self::assertFalse($report->permissionsTrade);
-        self::assertFalse($report->stopLossCapability);
+        self::assertTrue($report->stopLossCapability);
+        self::assertFalse($report->killSwitch);
+        self::assertContains('hyperliquid_agent_wallet_trade_permission_not_proven', $report->warnings);
+        self::assertContains('demo_testnet_write_not_enabled', $report->warnings);
+    }
+
+    public function testRuntimeCheckReachesDemoTestnetCandidateWithAllPrerequisites(): void
+    {
+        $report = (new HyperliquidRuntimeCheck())->check(new ExchangeReadinessInput(
+            exchange: Exchange::HYPERLIQUID,
+            marketType: MarketType::PERPETUAL,
+            environment: 'testnet',
+            publicConnectivity: true,
+            privateReadConnectivity: true,
+            privateObservabilityStatus: new ExchangePrivateObservabilityStatus(
+                exchange: Exchange::HYPERLIQUID,
+                environment: 'testnet',
+                privateWsSupported: false,
+                privateWsConnected: false,
+                privateWsAuthenticated: false,
+                ordersStreamReady: false,
+                fillsStreamReady: false,
+                positionsStreamReady: false,
+                initialSnapshotLoaded: true,
+                reconciliationFresh: true,
+                warnings: ['hyperliquid_polling_private_observability'],
+            ),
+            instrumentsLoaded: true,
+            metadataValid: true,
+            precisionValid: true,
+            accountReadable: true,
+            permissionsRead: true,
+            permissionsTrade: true,
+            signerConfigured: true,
+            signerMatchesAccount: true,
+            nonceStoreReady: true,
+            collateralReadable: true,
+            pollingReady: true,
+            mainnetWriteGuard: true,
+            demoTestnetWriteGuard: true,
+            demoTestnetWriteEnabled: true,
+            stopLossCapability: true,
+            killSwitch: true,
+            dryRun: true,
+            allowedMarkets: ['perpetual'],
+            maxNotional: 25.0,
+        ));
+
+        self::assertSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
+        self::assertSame([], $report->blockingErrors);
+        self::assertFalse($report->permissionsTrade);
+        self::assertTrue($report->stopLossCapability);
         self::assertTrue($report->killSwitch);
+        self::assertContains('hyperliquid_agent_wallet_trade_permission_not_proven', $report->warnings);
+        self::assertNotContains('demo_testnet_write_not_enabled', $report->warnings);
+        self::assertNotContains('private_observability_status_missing', $report->warnings);
+    }
+
+    public function testRuntimeCheckStaysAccountReadOnlyWithoutNonceStore(): void
+    {
+        $report = (new HyperliquidRuntimeCheck())->check(new ExchangeReadinessInput(
+            exchange: Exchange::HYPERLIQUID,
+            marketType: MarketType::PERPETUAL,
+            environment: 'testnet',
+            publicConnectivity: true,
+            privateReadConnectivity: true,
+            instrumentsLoaded: true,
+            metadataValid: true,
+            precisionValid: true,
+            accountReadable: true,
+            permissionsRead: true,
+            permissionsTrade: true,
+            signerConfigured: true,
+            signerMatchesAccount: true,
+            nonceStoreReady: false,
+            collateralReadable: true,
+            pollingReady: true,
+            mainnetWriteGuard: true,
+            demoTestnetWriteGuard: true,
+            demoTestnetWriteEnabled: true,
+            stopLossCapability: true,
+            killSwitch: true,
+            dryRun: true,
+            allowedMarkets: ['perpetual'],
+            maxNotional: 25.0,
+        ));
+
+        self::assertSame(ExchangeReadinessLevel::PrivateReadOnly, $report->readyLevel);
+        self::assertSame([], $report->blockingErrors);
+        self::assertContains('hyperliquid_nonce_store_not_ready', $report->warnings);
+        self::assertContains('local_dry_run_prerequisites_missing', $report->warnings);
     }
 
     public function testRuntimeCheckPreservesMainnetGuardFailure(): void
