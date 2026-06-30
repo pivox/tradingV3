@@ -402,13 +402,15 @@ final class OkxDryRunExecutionPortTest extends TestCase
         $request = ExecutionRequest::forPlan(
             $this->executablePlan(),
             ExecutionMode::DryRun,
-            ['run_id' => 'run-77', 'correlation_id' => 'corr-9'],
+            ['run_id' => 'run-77', 'correlation_id' => 'corr-9', 'decision_key' => 'decision-42'],
         );
 
         $result = (new OkxDryRunExecutionPort())->execute($request);
 
         self::assertSame('run-77', $result->metadata['run_id']);
         self::assertSame('corr-9', $result->metadata['correlation_id']);
+        self::assertSame('decision-42', $result->metadata['decision_key']);
+        self::assertSame('decision-42', $result->metadata['safety_decision']['policy']['audit_context']['decision_key']);
     }
 
     public function testCallerCannotOverrideGatewayAuthoritativeMetadata(): void
