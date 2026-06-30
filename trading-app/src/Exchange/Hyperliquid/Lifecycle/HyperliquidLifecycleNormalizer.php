@@ -58,7 +58,7 @@ final readonly class HyperliquidLifecycleNormalizer
             && $this->rowTimeMillis($latest) >= $this->rowTimeMillis($base)
             && ($snapshotFilled <= 0.00000001 || $this->hasLifecycleUpdateTime($base))
         ) {
-            $filled = min($quantity, max($filled, $snapshotFilled + $this->sumFillQuantityAtOrAfter($deduplicated, $base)));
+            $filled = min($quantity, max($filled, $snapshotFilled + $this->sumIncrementalFillQuantity($deduplicated, $base, $snapshotFilled, $remaining)));
             $remaining = max(0.0, $quantity - $filled);
         }
         $status = $this->statusFromRows($base, $latestOrder !== [], $quantity, $filled, $remaining, $fills);
@@ -769,19 +769,36 @@ final readonly class HyperliquidLifecycleNormalizer
      * @param list<array<string,mixed>> $rows
      * @param array<string,mixed> $base
      */
-    private function sumFillQuantityAtOrAfter(array $rows, array $base): float
+    private function sumIncrementalFillQuantity(array $rows, array $base, float $snapshotFilled, float $remaining): float
     {
         $baseTime = $this->rowTimeMillis($base);
-        $quantity = 0.0;
+        $sameMillisecondQuantity = 0.0;
+        $laterQuantity = 0.0;
         foreach ($rows as $row) {
             if (!$this->isFillRow($row) || $this->rowTimeMillis($row) < $baseTime) {
                 continue;
             }
 
-            $quantity += $this->float($row['sz'] ?? $row['quantity'] ?? null);
+            if ($this->rowTimeMillis($row) === $baseTime) {
+                $sameMillisecondQuantity += $this->float($row['sz'] ?? $row['quantity'] ?? null);
+
+                continue;
+            }
+
+            $laterQuantity += $this->float($row['sz'] ?? $row['quantity'] ?? null);
         }
 
-        return $quantity;
+        if ($sameMillisecondQuantity <= 0.00000001) {
+            return $laterQuantity;
+        }
+        if ($snapshotFilled <= 0.00000001) {
+            return $laterQuantity + $sameMillisecondQuantity;
+        }
+        if ($sameMillisecondQuantity + 0.00000001 >= $remaining) {
+            return $laterQuantity + min($sameMillisecondQuantity, $remaining);
+        }
+
+        return $laterQuantity;
     }
 
     /**

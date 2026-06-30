@@ -129,6 +129,18 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
     }
 
+    public function testDoesNotDoubleCountSameMillisecondFillAlreadyReflectedByPartialSnapshot(): void
+    {
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([
+            $this->orderRow(remaining: '0.6', original: '1', status: 'open', updatedAt: 1_767_225_600_000),
+            $this->fillRow(quantity: '0.4', price: '25010', hash: 'same-ms-reflected-fill', time: 1_767_225_600_000),
+        ]);
+
+        self::assertSame(HyperliquidLifecycleStatus::PARTIALLY_FILLED, $lifecycle->status);
+        self::assertEqualsWithDelta(0.4, $lifecycle->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
+    }
+
     public function testCountsFillThatCompletesPartialOrderSnapshot(): void
     {
         $lifecycle = $this->normalizer->normalizeOrderLifecycle([
