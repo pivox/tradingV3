@@ -493,6 +493,103 @@ def test_runner_can_target_hyperliquid_dry_run_recipe_without_bitmart_fallback(
     assert probe_requests[0]["json"]["dry_run"] is False
 
 
+def test_runner_exports_demo_exchange_report_by_exchange(tmp_path: Path, monkeypatch):
+    api = FakeRecipeApi()
+    runtime_check_targets: list[str] = []
+
+    def runtime_check(*args, **kwargs):
+        runtime_check_targets.append(args[0][-2])
+
+        class Completed:
+            returncode = 0
+            stdout = "Readiness level: local_dry_run_ready\nSchedule ready: yes\n"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr(runner_module.subprocess, "run", runtime_check)
+
+    report = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            target_exchange="demo-exchanges",
+        ),
+        http_client=api,
+    ).run(scenarios=("R1", "R2", "R3", "R14"), keep_fixtures=True)
+
+    assert report["metadata"]["target_exchange"] == "demo-exchanges"
+    assert set(report["exchange_results"]) == {"global", "okx", "hyperliquid"}
+    assert runtime_check_targets == ["okx", "hyperliquid"]
+
+    global_statuses = {
+        item["scenario"]: item["status"] for item in report["exchange_results"]["global"]
+    }
+    okx_statuses = {
+        item["scenario"]: item["status"] for item in report["exchange_results"]["okx"]
+    }
+    hyperliquid_statuses = {
+        item["scenario"]: item["status"]
+        for item in report["exchange_results"]["hyperliquid"]
+    }
+
+    assert global_statuses == {"R1": "PASS", "R2": "PASS", "R3": "BLOCKED", "R14": "PASS"}
+    assert okx_statuses == {"R1": "PASS", "R2": "PASS", "R3": "BLOCKED", "R14": "PASS"}
+    assert hyperliquid_statuses == {
+        "R1": "PASS",
+        "R2": "PASS",
+        "R3": "BLOCKED",
+        "R14": "PASS",
+    }
+    assert report["exchange_summaries"]["okx"]["scenario_counts"] == {
+        "PASS": 3,
+        "BLOCKED": 1,
+    }
+    assert report["exchange_summaries"]["hyperliquid"]["scenario_counts"] == {
+        "PASS": 3,
+        "BLOCKED": 1,
+    }
+
+    exported = json.loads((tmp_path / "runtime-recipe-report.json").read_text(encoding="utf-8"))
+    assert exported == report
+    assert not any(
+        request["json"] and request["json"].get("exchange") == "bitmart"
+        for request in api.requests
+        if isinstance(request["json"], dict)
+    )
+
+
+def test_demo_exchange_runner_materializes_scenario_iterable_once(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api = FakeRecipeApi()
+
+    def runtime_check(*args, **kwargs):
+        class Completed:
+            returncode = 0
+            stdout = "Readiness level: local_dry_run_ready\nSchedule ready: yes\n"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr(runner_module.subprocess, "run", runtime_check)
+
+    scenarios = (scenario for scenario in ("R1", "R2"))
+    report = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            target_exchange="demo-exchanges",
+        ),
+        http_client=api,
+    ).run(scenarios=scenarios, keep_fixtures=True)
+
+    assert [item["scenario"] for item in report["exchange_results"]["global"]] == ["R1", "R2"]
+    assert [item["scenario"] for item in report["exchange_results"]["okx"]] == ["R1", "R2"]
+    assert [item["scenario"] for item in report["exchange_results"]["hyperliquid"]] == ["R1", "R2"]
+
+
 def test_runner_blocks_okx_recipe_when_runtime_check_is_not_schedule_ready(
     tmp_path: Path,
     monkeypatch,
@@ -694,6 +791,22 @@ def test_parser_accepts_hyperliquid_runtime_recipe_target():
     )
 
     assert args.target_exchange == "hyperliquid"
+    assert args.scenario == ["R1"]
+
+
+def test_parser_accepts_demo_exchange_runtime_recipe_target():
+    args = runner_module._parse_args(
+        [
+            "--confirm",
+            "DRY_RUN_ONLY",
+            "--target-exchange",
+            "demo-exchanges",
+            "--scenario",
+            "R1",
+        ]
+    )
+
+    assert args.target_exchange == "demo-exchanges"
     assert args.scenario == ["R1"]
 
 

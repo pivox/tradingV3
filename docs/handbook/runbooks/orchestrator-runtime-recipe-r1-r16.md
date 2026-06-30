@@ -376,6 +376,41 @@ Preuves attendues dans `runtime-recipe-report.json` :
 - aucun set ou payload `exchange=bitmart` ;
 - R14 refuse le probe `dry_run=false` avant dispatch.
 
+Pour produire le rapport DEMO-002 double exchange :
+
+```bash
+cd python-orchestrator
+python scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --target-exchange demo-exchanges \
+  --export-dir var/runtime-recipe/demo-exchanges \
+  --keep-fixtures
+```
+
+Le rapport racine `var/runtime-recipe/demo-exchanges/runtime-recipe-report.json`
+contient :
+
+- `metadata.target_exchange=demo-exchanges` ;
+- `exchange_results.global` pour la baseline R1-R16 Fake/Paper ;
+- `exchange_results.okx` pour OKX demo ;
+- `exchange_results.hyperliquid` pour Hyperliquid testnet ;
+- `exchange_summaries.*.scenario_counts` pour chaque section ;
+- `metadata.runtime_checks.okx` et `metadata.runtime_checks.hyperliquid`
+  avec le resultat des commandes `app:exchange:runtime-check`.
+
+Les sections OKX et Hyperliquid automatisent uniquement les scenarios
+exchange-specifiques `R1`, `R2` et `R14`. Les autres scenarios restent marques
+`BLOCKED` dans ces sections et sont couverts par `exchange_results.global`.
+Cette classification evite de presenter comme valide un scenario non exerce sur
+l'exchange cible.
+
+Le runner exporte aussi les sous-rapports suivants pour faciliter l'audit :
+
+- `var/runtime-recipe/demo-exchanges/global/runtime-recipe-report.json` ;
+- `var/runtime-recipe/demo-exchanges/okx/runtime-recipe-report.json` ;
+- `var/runtime-recipe/demo-exchanges/hyperliquid/runtime-recipe-report.json`.
+
 Pour cibler un sous-ensemble :
 
 ```bash

@@ -358,6 +358,12 @@ exportes en `BLOCKED` et aucun appel `/orchestrator/run` n'est envoye pour ces
 scenarios. Les fixtures exchange restent `dry_run=true`, n'envoient aucun champ
 `payload` et ne creent aucun set Bitmart.
 
+Pour DEMO-002, `--target-exchange demo-exchanges` exporte un rapport agrege avec
+sections `global`, `okx` et `hyperliquid`. La section globale couvre R1-R16 sur
+Fake/Paper ; les sections OKX et Hyperliquid couvrent R1/R2/R14 et marquent les
+autres scenarios `BLOCKED` tant qu'ils ne sont pas automatises sur l'exchange
+cible.
+
 Commandes de verification locale :
 
 ```bash
