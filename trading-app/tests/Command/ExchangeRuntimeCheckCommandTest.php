@@ -403,6 +403,9 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Network: mainnet', $output);
         self::assertStringContainsString('Mainnet enabled: yes', $output);
         self::assertStringContainsString('Readiness level: not_ready', $output);
+        self::assertStringContainsString('Readiness blocking errors: mainnet_write_guard_missing, hyperliquid_provider_bundle_skeleton_not_ready', $output);
+        self::assertStringContainsString('Mainnet write guard: no', $output);
+        self::assertStringContainsString('Demo/testnet write guard: no', $output);
         self::assertStringContainsString('Recommended dry_run: true', $output);
     }
 

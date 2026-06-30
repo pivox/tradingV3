@@ -120,6 +120,8 @@ final class ExchangeRuntimeCheckCommand extends Command
                 $output->writeln(sprintf('Readiness level: %s', $hyperliquidReadinessReport->readyLevel->value));
                 $output->writeln(sprintf('Readiness blocking errors: %s', $this->formatReasons($this->stringReasons($hyperliquidReadiness['blocking_errors']))));
                 $output->writeln(sprintf('Readiness warnings: %s', $this->formatReasons($this->stringReasons($hyperliquidReadiness['warnings']))));
+                $output->writeln(sprintf('Mainnet write guard: %s', $hyperliquidReadinessReport->mainnetWriteGuard ? 'yes' : 'no'));
+                $output->writeln(sprintf('Demo/testnet write guard: %s', $hyperliquidReadinessReport->demoTestnetWriteGuard ? 'yes' : 'no'));
             }
         }
         $output->writeln(sprintf('Recommended dry_run: %s', $recommendedDryRun ? 'true' : 'false'));
