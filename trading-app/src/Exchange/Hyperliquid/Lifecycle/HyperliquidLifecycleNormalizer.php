@@ -111,7 +111,9 @@ final readonly class HyperliquidLifecycleNormalizer
      */
     public function normalizeFills(array $rows): array
     {
-        return $this->fillsFromRows($this->deduplicate($rows));
+        $normalizedRows = array_map(fn (array $row): array => $this->normalizeLifecycleRow($row), $rows);
+
+        return $this->fillsFromRows($this->deduplicate($normalizedRows));
     }
 
     /**
@@ -699,6 +701,13 @@ final readonly class HyperliquidLifecycleNormalizer
      */
     private function normalizeLifecycleRow(array $row): array
     {
+        if (\is_array($row['fill'] ?? null)) {
+            /** @var array<string,mixed> $fill */
+            $fill = $row['fill'];
+
+            return array_merge($row, $fill);
+        }
+
         if (!\is_array($row['order'] ?? null)) {
             return $row;
         }

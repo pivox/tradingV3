@@ -176,6 +176,26 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertSame('1767225601.456000', $fills[1]->occurredAt->format('U.u'));
     }
 
+    public function testUnwrapsTwapSliceFillRowsBeforeDeduplication(): void
+    {
+        $first = ['twapId' => 'twap-a', 'fill' => $this->fillRow(quantity: '0.1', price: '25010', hash: 'twap-fill-1', time: 1_767_225_601_000)];
+        $second = ['twapId' => 'twap-b', 'fill' => $this->fillRow(quantity: '0.3', price: '25020', hash: 'twap-fill-2', time: 1_767_225_602_000)];
+
+        $fills = $this->normalizer->normalizeFills([$first, $second]);
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([
+            $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_600_000),
+            $first,
+            $second,
+        ]);
+
+        self::assertCount(2, $fills);
+        self::assertSame('twap-fill-1', $fills[0]->fillId);
+        self::assertSame('twap-fill-2', $fills[1]->fillId);
+        self::assertEqualsWithDelta(0.4, $lifecycle->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
+        self::assertCount(2, $lifecycle->fills);
+    }
+
     public function testTreatsOpenOrderSnapshotWithoutStatusAsOpen(): void
     {
         $row = $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_600_000);
