@@ -350,6 +350,14 @@ Par defaut, il cible les scenarios critiques `R1`, `R2`, `R5`, `R6`, `R8`,
 schedule reel : les scenarios qui exigent une panne/crash/Temporal reel sont
 marques `BLOCKED` si la condition n'est pas observable depuis le runner.
 
+Pour cibler les recettes exchange dry-run sur `R1`, `R2` et `R14`, utiliser
+`--target-exchange okx` ou `--target-exchange hyperliquid`. Le runner execute
+d'abord `app:exchange:runtime-check <exchange> perpetual` dans le conteneur
+Symfony ; si `Schedule ready: yes` n'est pas observe, les scenarios cibles sont
+exportes en `BLOCKED` et aucun appel `/orchestrator/run` n'est envoye pour ces
+scenarios. Les fixtures exchange restent `dry_run=true`, n'envoient aucun champ
+`payload` et ne creent aucun set Bitmart.
+
 Commandes de verification locale :
 
 ```bash

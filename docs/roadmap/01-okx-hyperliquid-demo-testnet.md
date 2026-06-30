@@ -37,7 +37,7 @@ Cette vague remplace la logique “dry-run uniquement” par une cible plus pré
 - [x] OKX-005 — Metadata / precision / fees / funding OKX — #231 / `5d7f399`.
 - [x] OKX-006 — Normalizers lifecycle OKX — #232 / `bf8c1fb`.
 - [x] OKX-007 — Local dry-run write serialization OKX — #233 / `18ef164`.
-- [x] OKX-008 — Runtime-check demo/testnet candidate OKX — #234 / `4e5919c`.
+- [x] OKX-008 — Runtime-check demo/testnet candidate OKX — #234 / `8444f7b`.
 - [x] OKX-009 — Orchestrator dry-run recipe OKX — #235 / `c103c1b`.
 - [x] HL-001 — Capability matrix + ADR Hyperliquid testnet — #236 / `5724aab`.
 - [x] HL-002 — Provider bundle skeleton Hyperliquid — #237 / `ac8e1d2`.
@@ -46,12 +46,12 @@ Cette vague remplace la logique “dry-run uniquement” par une cible plus pré
 - [x] HL-005 — Nonce manager Hyperliquid persistant — #240 / `932d686`.
 - [x] HL-006 — Account read-only Hyperliquid — #241 / `7bfad8f`.
 - [x] HL-007 — Metadata / precision / fees / funding Hyperliquid — #242 / `b0ce547`.
+- [x] HL-008 — Order/fill/position normalizers Hyperliquid — #243 / `8d75cf5`.
+- [x] HL-009 — Local dry-run no broadcast Hyperliquid — #245 / `d595d4d`.
+- [x] HL-010 — Runtime-check `demo_testnet_candidate` Hyperliquid — #248 / `8e1650f`.
 
 ## Restant vague 1
 
-- [ ] HL-008 — Order/fill/position normalizers Hyperliquid.
-- [ ] HL-009 — Local dry-run no broadcast Hyperliquid.
-- [ ] HL-010 — Runtime-check `demo_testnet_candidate` Hyperliquid.
 - [ ] HL-011 — Orchestrator dry-run recipe Hyperliquid.
 - [ ] DEMO-001 — Fixtures demo OKX + Hyperliquid.
 - [ ] DEMO-002 — Recette R1-R16 double exchange en dry-run.
@@ -65,9 +65,6 @@ Cette vague remplace la logique “dry-run uniquement” par une cible plus pré
 ## Ordre strict recommandé
 
 ```text
-HL-008
-HL-009
-HL-010
 HL-011
 
 DEMO-001
