@@ -227,6 +227,15 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         self::assertSame(100, $request['limit']);
     }
 
+    public function testDoesNotReturnFundingRowsAsRealizedPnlTransactions(): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $gateway = $this->accountGateway($client);
+
+        self::assertSame([], $gateway->getTransactionHistory('BTCUSDT', 2));
+        self::assertSame([], $client->requests);
+    }
+
     private function accountGateway(
         FakeHyperliquidPrivateReadClient $client,
         ?HyperliquidConfig $config = null,

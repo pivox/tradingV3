@@ -123,6 +123,10 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
         ?int $startTime = null,
         ?int $endTime = null,
     ): array {
+        if ($flowType !== null && $flowType !== 3) {
+            return [];
+        }
+
         $request = [
             'type' => 'userFunding',
             'user' => $this->accountAddress(__METHOD__),

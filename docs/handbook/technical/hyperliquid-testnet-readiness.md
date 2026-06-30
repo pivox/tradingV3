@@ -196,7 +196,8 @@ Regles HL-006 :
   lorsque le symbole est fourni. Une fenetre temporelle utilise
   `userFillsByTime`; sinon `userFills`. `userFunding` recoit toujours un
   `startTime` en millisecondes ; par defaut HL-006 utilise une fenetre de 30
-  jours.
+  jours. `getTransactionHistory()` retourne ce funding uniquement pour
+  `flowType=null` ou `flowType=3`; les flux non-funding restent hors HL-006.
 - Les champs sensibles usuels (`secret`, `apiKey`, `privateKey`, `signature`,
   `passphrase`) sont retires des metadata/raw_reference.
 
