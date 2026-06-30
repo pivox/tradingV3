@@ -6,12 +6,17 @@ namespace App\Contract\Runner\Dto;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Provider\Context\ExchangeContextResolver;
 
 /**
  * DTO pour les requêtes d'exécution du Runner MTF
  */
 final class MtfRunnerRequestDto
 {
+    /**
+     * @param string[] $symbols
+     * @param array{open_positions?: array<int,mixed>, open_orders?: array<int,mixed>}|null $openStateSnapshot
+     */
     public function __construct(
         public readonly array $symbols = [],
         public readonly bool $dryRun = false,
@@ -37,6 +42,9 @@ final class MtfRunnerRequestDto
         public readonly ?array $openStateSnapshot = null,
     ) {}
 
+    /**
+     * @param array<string,mixed> $data
+     */
     public static function fromArray(array $data): self
     {
         [$exchange, $marketType] = self::extractContext($data);
@@ -61,6 +69,9 @@ final class MtfRunnerRequestDto
         );
     }
 
+    /**
+     * @return array<string,mixed>
+     */
     public function toArray(): array
     {
         return [
@@ -115,6 +126,7 @@ final class MtfRunnerRequestDto
     }
 
     /**
+     * @param array<string,mixed> $data
      * @return array{0: ?Exchange, 1: ?MarketType}
      */
     private static function extractContext(array $data): array
@@ -142,19 +154,11 @@ final class MtfRunnerRequestDto
 
     private static function normalizeExchange(string $value): Exchange
     {
-        return match (strtolower(trim($value))) {
-            'bitmart' => Exchange::BITMART,
-            'binance' => Exchange::BINANCE,
-            default => throw new \InvalidArgumentException(sprintf('Unsupported exchange "%s"', $value)),
-        };
+        return ExchangeContextResolver::normalizeExchange($value);
     }
 
     private static function normalizeMarketType(string $value): MarketType
     {
-        return match (strtolower(trim($value))) {
-            'perpetual', 'perp', 'future', 'futures' => MarketType::PERPETUAL,
-            'spot' => MarketType::SPOT,
-            default => throw new \InvalidArgumentException(sprintf('Unsupported market type "%s"', $value)),
-        };
+        return ExchangeContextResolver::normalizeMarketType($value);
     }
 }
