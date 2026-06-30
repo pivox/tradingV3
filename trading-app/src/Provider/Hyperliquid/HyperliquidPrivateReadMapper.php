@@ -153,11 +153,19 @@ final readonly class HyperliquidPrivateReadMapper
      */
     public function legacyFunding(array $row, ?int $requestedFlowType): array
     {
+        $delta = $this->array($row['delta'] ?? []);
+
         return [
             'exchange' => 'hyperliquid',
-            'symbol' => $this->symbol($row['coin'] ?? ''),
+            'symbol' => $this->symbol($row['coin'] ?? $delta['coin'] ?? ''),
             'flow_type' => $requestedFlowType ?? 3,
-            'amount' => $this->firstNumber($row['usdc'] ?? null, $row['funding'] ?? null, $row['delta'] ?? null, '0'),
+            'amount' => $this->firstNumber(
+                $row['usdc'] ?? null,
+                $delta['usdc'] ?? null,
+                $row['funding'] ?? null,
+                $delta['funding'] ?? null,
+                '0',
+            ),
             'currency' => 'USDC',
             'create_time' => is_numeric($row['time'] ?? null) ? (int) $row['time'] : null,
             'raw_reference' => $this->redacted($row),

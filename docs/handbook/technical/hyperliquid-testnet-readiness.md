@@ -194,7 +194,9 @@ Regles HL-006 :
   `USDT` retournent `0.0` pour eviter une conversion implicite USDC->USDT.
 - Les fills et fundings sont bornes a 200 elements par appel et filtres par coin
   lorsque le symbole est fourni. Une fenetre temporelle utilise
-  `userFillsByTime`; sinon `userFills`.
+  `userFillsByTime`; sinon `userFills`. `userFunding` recoit toujours un
+  `startTime` en millisecondes ; par defaut HL-006 utilise une fenetre de 30
+  jours.
 - Les champs sensibles usuels (`secret`, `apiKey`, `privateKey`, `signature`,
   `passphrase`) sont retires des metadata/raw_reference.
 

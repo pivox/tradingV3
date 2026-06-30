@@ -13,6 +13,8 @@ use App\Exchange\Hyperliquid\HyperliquidRestClientInterface;
 
 final class HyperliquidAccountGateway implements AccountProviderInterface
 {
+    private const DEFAULT_FUNDING_LOOKBACK_SECONDS = 30 * 24 * 60 * 60;
+
     private HyperliquidPrivateReadMapper $mapper;
 
     public function __construct(
@@ -125,10 +127,8 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
             'type' => 'userFunding',
             'user' => $this->accountAddress(__METHOD__),
             'limit' => $this->limit($limit),
+            'startTime' => ($startTime ?? (time() - self::DEFAULT_FUNDING_LOOKBACK_SECONDS)) * 1000,
         ];
-        if ($startTime !== null) {
-            $request['startTime'] = $startTime * 1000;
-        }
         if ($endTime !== null) {
             $request['endTime'] = $endTime * 1000;
         }
@@ -136,6 +136,7 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
         $target = $symbol !== null ? $this->coin($symbol) : null;
         $transactions = [];
         foreach ($this->infoRows($request, __METHOD__) as $row) {
+            $row = $this->fundingRow($row);
             $coin = strtoupper((string) ($row['coin'] ?? ''));
             if ($target !== null && $coin !== $target) {
                 continue;
@@ -311,6 +312,17 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
     private function limit(int $limit): int
     {
         return max(1, min($limit, 200));
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @return array<string,mixed>
+     */
+    private function fundingRow(array $row): array
+    {
+        $delta = \is_array($row['delta'] ?? null) ? $row['delta'] : [];
+
+        return $delta + $row;
     }
 
     private function reason(\Throwable $exception): string

@@ -218,6 +218,13 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         self::assertSame('USDC', $transactions[0]['currency']);
         self::assertSame(1_704_067_260_000, $transactions[0]['create_time']);
         self::assertArrayNotHasKey('apiKey', $transactions[0]['raw_reference']);
+        self::assertArrayNotHasKey('apiKey', $transactions[0]['raw_reference']['delta']);
+
+        $request = $client->requests[array_key_last($client->requests)];
+        self::assertSame('userFunding', $request['type']);
+        self::assertIsInt($request['startTime']);
+        self::assertGreaterThan(0, $request['startTime']);
+        self::assertSame(100, $request['limit']);
     }
 
     private function accountGateway(
@@ -425,15 +432,19 @@ final class FakeHyperliquidPrivateReadClient implements HyperliquidRestClientInt
     {
         return [
             [
-                'coin' => 'BTC',
-                'usdc' => '-0.42',
                 'time' => 1_704_067_260_000,
-                'apiKey' => 'must-not-leak',
+                'delta' => [
+                    'coin' => 'BTC',
+                    'usdc' => '-0.42',
+                    'apiKey' => 'must-not-leak',
+                ],
             ],
             [
-                'coin' => 'ETH',
-                'usdc' => '0.11',
                 'time' => 1_704_067_270_000,
+                'delta' => [
+                    'coin' => 'ETH',
+                    'usdc' => '0.11',
+                ],
             ],
         ];
     }
