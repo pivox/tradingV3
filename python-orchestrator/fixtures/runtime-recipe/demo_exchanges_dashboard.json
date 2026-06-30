@@ -1,0 +1,131 @@
+{
+  "$schema": "https://pivox.local/schemas/orchestrator-runtime-recipe-fixture-v1.json",
+  "fixture_id": "demo-exchanges-okx-hyperliquid-v1",
+  "version": 1,
+  "dry_run_only": true,
+  "purpose": "Dashboard de preparation demo/testnet pour OKX demo et Hyperliquid testnet, sans ordre exchange.",
+  "dashboard": {
+    "name": "demo-exchanges",
+    "enabled": true,
+    "description": "Preparation demo/testnet OKX + Hyperliquid - sets dry-run desactives par defaut, kill switch actif."
+  },
+  "sets": [
+    {
+      "set_id": "okx_scalper_demo",
+      "enabled": false,
+      "action": "mtf_run",
+      "exchange": "okx",
+      "market_type": "perpetual",
+      "mtf_profile": "scalper_micro",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["BTCUSDT"],
+      "contracts_limit": null,
+      "priority": 10,
+      "demo_role": "okx_demo_scalper_micro",
+      "safety_policy": {
+        "kill_switch_enabled": true,
+        "demo_testnet_write_enabled": false,
+        "require_stop_loss": true,
+        "allowed_symbols": ["BTCUSDT"],
+        "allowed_markets": ["perpetual"],
+        "max_notional_usdt": 25
+      }
+    },
+    {
+      "set_id": "okx_regular_demo",
+      "enabled": false,
+      "action": "mtf_run",
+      "exchange": "okx",
+      "market_type": "perpetual",
+      "mtf_profile": "regular",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["BTCUSDT"],
+      "contracts_limit": null,
+      "priority": 20,
+      "demo_role": "okx_demo_regular",
+      "safety_policy": {
+        "kill_switch_enabled": true,
+        "demo_testnet_write_enabled": false,
+        "require_stop_loss": true,
+        "allowed_symbols": ["BTCUSDT"],
+        "allowed_markets": ["perpetual"],
+        "max_notional_usdt": 25
+      }
+    },
+    {
+      "set_id": "hyperliquid_scalper_testnet",
+      "enabled": false,
+      "action": "mtf_run",
+      "exchange": "hyperliquid",
+      "market_type": "perpetual",
+      "mtf_profile": "scalper_micro",
+      "environment": "testnet",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["BTCUSDT"],
+      "contracts_limit": null,
+      "priority": 30,
+      "demo_role": "hyperliquid_testnet_scalper_micro",
+      "safety_policy": {
+        "kill_switch_enabled": true,
+        "demo_testnet_write_enabled": false,
+        "require_stop_loss": true,
+        "allowed_symbols": ["BTCUSDT"],
+        "allowed_markets": ["perpetual"],
+        "max_notional_usdt": 25
+      }
+    },
+    {
+      "set_id": "hyperliquid_regular_testnet",
+      "enabled": false,
+      "action": "mtf_run",
+      "exchange": "hyperliquid",
+      "market_type": "perpetual",
+      "mtf_profile": "regular",
+      "environment": "testnet",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["BTCUSDT"],
+      "contracts_limit": null,
+      "priority": 40,
+      "demo_role": "hyperliquid_testnet_regular",
+      "safety_policy": {
+        "kill_switch_enabled": true,
+        "demo_testnet_write_enabled": false,
+        "require_stop_loss": true,
+        "allowed_symbols": ["BTCUSDT"],
+        "allowed_markets": ["perpetual"],
+        "max_notional_usdt": 25
+      }
+    }
+  ],
+  "scenario_mapping": {
+    "DEMO-001": [
+      "okx_scalper_demo",
+      "okx_regular_demo",
+      "hyperliquid_scalper_testnet",
+      "hyperliquid_regular_testnet"
+    ]
+  },
+  "expected_invariants": {
+    "dry_run": true,
+    "mainnet": false,
+    "workers_per_set": 1,
+    "fixture_application": "upsert_by_dashboard_name_and_set_id",
+    "no_bitmart_fallback": true,
+    "no_broadcast": true,
+    "demo_testnet_write_enabled": false,
+    "disable_stale_sets": true,
+    "kill_switch_enabled": true,
+    "require_stop_loss": true,
+    "max_notional_usdt": 25
+  }
+}

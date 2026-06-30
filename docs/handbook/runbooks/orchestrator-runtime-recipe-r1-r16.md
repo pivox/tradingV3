@@ -63,6 +63,7 @@ Fixtures versionnees :
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_degraded_fake_dashboard.json`
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_okx_dry_run_dashboard.json`
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_hyperliquid_dry_run_dashboard.json`
+- `python-orchestrator/fixtures/runtime-recipe/demo_exchanges_dashboard.json`
 
 Les fixtures Fake/Paper utilisent uniquement :
 
@@ -109,6 +110,26 @@ sont exportes en `BLOCKED` et aucun appel `/orchestrator/run` n'est envoye pour
 R1/R2/R14. Le probe R14 cree uniquement un set desactive `dry_run=false` pour
 verifier le refus de persistance avant dispatch ; aucun broadcast exchange n'est
 possible dans ce runner.
+
+La fixture `demo-exchanges` prepare les dashboards/sets dedies a la recette
+double exchange OKX demo + Hyperliquid testnet :
+
+- dashboard `demo-exchanges` ;
+- sets `okx_scalper_demo`, `okx_regular_demo`, `hyperliquid_scalper_testnet`,
+  `hyperliquid_regular_testnet` ;
+- `dry_run=true`, `workers=1`, `sync_tables=false` ;
+- sets desactives par defaut ;
+- symboles allow-listes `BTCUSDT` uniquement ;
+- `max_notional_usdt=25` dans la politique de securite documentaire ;
+- `require_stop_loss=true`, `kill_switch_enabled=true`,
+  `demo_testnet_write_enabled=false` ;
+- les sets existants du dashboard qui ne figurent pas dans la fixture sont
+  desactives lors de la reapplication ;
+- aucun set `mainnet`, aucun set Bitmart et aucun broadcast exchange.
+
+Cette fixture sert a preparer l'environnement, pas a lancer une recette mutative.
+Rollback : supprimer le dashboard `demo-exchanges` via l'API orchestrateur, ou le
+desactiver si l'on souhaite conserver l'historique des runs associes.
 
 Application idempotente attendue :
 
@@ -157,6 +178,86 @@ curl -sS -X POST "http://localhost:8099/dashboards/${RECIPE_DASHBOARD_ID}/sets" 
 
 Pour une execution reproductible, preferer le runner du prochain lot #188. Cette
 PR livre seulement les donnees et le contrat d'application.
+
+Application de la fixture DEMO-001 :
+
+```bash
+cd python-orchestrator
+python3 - <<'PY'
+import json
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+BASE_URL = "http://localhost:8099"
+FIXTURE = Path("fixtures/runtime-recipe/demo_exchanges_dashboard.json")
+SET_FIELDS = {
+    "set_id", "enabled", "action", "exchange", "market_type", "mtf_profile",
+    "environment", "dry_run", "workers", "sync_tables", "symbols",
+    "contracts_limit", "priority",
+}
+
+def request(method, path, payload=None):
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{BASE_URL}{path}",
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body) if body else None
+    except urllib.error.HTTPError as exc:
+        raise SystemExit(f"{method} {path} failed: {exc.code} {exc.read().decode('utf-8')}")
+
+fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+dashboard = fixture["dashboard"]
+existing = next(
+    (item for item in request("GET", "/dashboards") if item["name"] == dashboard["name"]),
+    None,
+)
+if existing:
+    request("PATCH", f"/dashboards/{existing['id']}", dashboard)
+    dashboard_id = existing["id"]
+else:
+    dashboard_id = request("POST", "/dashboards", dashboard)["id"]
+
+existing_sets = {
+    item["set_id"]: item
+    for item in request("GET", f"/dashboards/{dashboard_id}/sets")
+}
+expected_set_ids = {item["set_id"] for item in fixture["sets"]}
+if fixture["expected_invariants"].get("disable_stale_sets") is True:
+    for set_id, existing_set in existing_sets.items():
+        if set_id not in expected_set_ids and existing_set.get("enabled") is True:
+            request(
+                "PATCH",
+                f"/dashboards/{dashboard_id}/sets/{set_id}",
+                {"enabled": False, "dry_run": True},
+            )
+
+for item in fixture["sets"]:
+    payload = {key: item[key] for key in SET_FIELDS if key in item}
+    if item["set_id"] in existing_sets:
+        request("PATCH", f"/dashboards/{dashboard_id}/sets/{item['set_id']}", {
+            key: value for key, value in payload.items() if key != "set_id"
+        })
+    else:
+        request("POST", f"/dashboards/{dashboard_id}/sets", payload)
+
+print(f"demo-exchanges dashboard applied with id={dashboard_id}")
+PY
+```
+
+Rollback DEMO-001 :
+
+```bash
+curl -sS http://localhost:8099/dashboards \
+  | python3 -c 'import json, sys; print(next((str(d["id"]) for d in json.load(sys.stdin) if d["name"] == "demo-exchanges"), ""))' \
+  | xargs -r -I{} curl -sS -X DELETE "http://localhost:8099/dashboards/{}"
+```
 
 ## Format des resultats
 
