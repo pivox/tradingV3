@@ -93,7 +93,7 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
     {
         $first = $this->fillRow(quantity: '0.2', price: '25000', hash: 'shared-tx-hash', time: 1_767_225_601_000);
         $first['tid'] = 10_001;
-        $second = $this->fillRow(quantity: '0.3', price: '25010', hash: 'shared-tx-hash', time: 1_767_225_601_000);
+        $second = $this->fillRow(quantity: '0.2', price: '25000', hash: 'shared-tx-hash', time: 1_767_225_601_000);
         $second['tid'] = 10_002;
 
         $fills = $this->normalizer->normalizeFills([$first, $second]);
@@ -101,6 +101,21 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertCount(2, $fills);
         self::assertSame('10001', $fills[0]->fillId);
         self::assertSame('10002', $fills[1]->fillId);
+    }
+
+    public function testUsesFillDirectionForClosePositionSide(): void
+    {
+        $closeLong = $this->fillRow(quantity: '0.2', price: '25000', hash: 'close-long', time: 1_767_225_601_000);
+        $closeLong['side'] = 'A';
+        $closeLong['dir'] = 'Close Long';
+        $closeShort = $this->fillRow(quantity: '0.2', price: '25000', hash: 'close-short', time: 1_767_225_602_000);
+        $closeShort['side'] = 'B';
+        $closeShort['dir'] = 'Close Short';
+
+        $fills = $this->normalizer->normalizeFills([$closeLong, $closeShort]);
+
+        self::assertSame(ExchangePositionSide::LONG, $fills[0]->positionSide);
+        self::assertSame(ExchangePositionSide::SHORT, $fills[1]->positionSide);
     }
 
     public function testOrderAbsentButFillPresentRequiresResyncAndKeepsFill(): void
@@ -113,6 +128,44 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertTrue($lifecycle->requiresResync);
         self::assertContains('order_absent_fill_present', $lifecycle->qualityFlags);
         self::assertCount(1, $lifecycle->fills);
+    }
+
+    public function testNormalizesNestedOrderStatusWrapper(): void
+    {
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([[
+            'status' => 'order',
+            'order' => [
+                'status' => 'open',
+                'statusTimestamp' => 1_767_225_606_000,
+                'order' => [
+                    'coin' => 'BTC',
+                    'oid' => 1003,
+                    'cloid' => 'client-nested',
+                    'side' => 'B',
+                    'sz' => '0.7',
+                    'origSz' => '1',
+                    'limitPx' => '25020',
+                    'orderType' => 'Limit',
+                    'timestamp' => 1_767_225_600_000,
+                ],
+            ],
+        ]]);
+
+        self::assertSame(HyperliquidLifecycleStatus::PARTIALLY_FILLED, $lifecycle->status);
+        self::assertSame('BTCUSDT', $lifecycle->symbol);
+        self::assertSame('1003', $lifecycle->exchangeOrderId);
+        self::assertSame('client-nested', $lifecycle->clientOrderId);
+        self::assertEqualsWithDelta(1.0, $lifecycle->quantity, 0.000001);
+        self::assertEqualsWithDelta(0.7, $lifecycle->remainingQuantity, 0.000001);
+    }
+
+    public function testNormalizesCamelCaseTerminalOrderStatuses(): void
+    {
+        $canceled = $this->orderRow(remaining: '1', original: '1', status: 'marginCanceled', updatedAt: 1_767_225_606_000);
+        $rejected = $this->orderRow(remaining: '1', original: '1', status: 'badAloPxRejected', updatedAt: 1_767_225_607_000);
+
+        self::assertSame(HyperliquidLifecycleStatus::CANCELED, $this->normalizer->normalizeOrderLifecycle([$canceled])->status);
+        self::assertSame(HyperliquidLifecycleStatus::REJECTED, $this->normalizer->normalizeOrderLifecycle([$rejected])->status);
     }
 
     public function testNormalizesPositionSnapshotAndZeroClose(): void

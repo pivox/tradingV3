@@ -32,7 +32,8 @@ final readonly class HyperliquidLifecycleNormalizer
      */
     public function normalizeOrderLifecycle(array $rows): HyperliquidNormalizedOrderLifecycleDto
     {
-        $supportedRows = array_values(array_filter($rows, fn (array $row): bool => $this->isSupportedLifecycleRow($row)));
+        $normalizedRows = array_map(fn (array $row): array => $this->normalizeLifecycleRow($row), $rows);
+        $supportedRows = array_values(array_filter($normalizedRows, fn (array $row): bool => $this->isSupportedLifecycleRow($row)));
         $deduplicated = $this->sortLifecycleRows($this->deduplicate($supportedRows));
         $fills = $this->fillsFromRows($deduplicated);
         $latest = $deduplicated[array_key_last($deduplicated)] ?? [];
@@ -210,7 +211,7 @@ final readonly class HyperliquidLifecycleNormalizer
                 $this->clientOrderId($row) ?? '',
                 $this->string($row['status'] ?? $row['state'] ?? ''),
                 $this->string($row['uTime'] ?? $row['updatedAt'] ?? $row['time'] ?? ''),
-                $this->string($row['hash'] ?? $row['tid'] ?? $row['fillId'] ?? ''),
+                $this->string($row['tid'] ?? $row['fillId'] ?? $row['exchangeFillId'] ?? $row['hash'] ?? ''),
                 $this->string($row['sz'] ?? ''),
                 $this->string($row['px'] ?? ''),
             ]);
@@ -302,7 +303,7 @@ final readonly class HyperliquidLifecycleNormalizer
             clientOrderId: $this->clientOrderId($row),
             fillId: $fillId,
             side: $this->orderSide($row['side'] ?? null),
-            positionSide: $this->positionSide(null, null, $row['side'] ?? null, $this->bool($row['reduceOnly'] ?? false)),
+            positionSide: $this->fillPositionSide($row),
             quantity: $quantity,
             price: $price,
             fee: $this->floatOrNull($row['fee'] ?? null),
@@ -411,15 +412,19 @@ final readonly class HyperliquidLifecycleNormalizer
 
     private function status(mixed $status): HyperliquidLifecycleStatus
     {
-        return match (strtolower(trim((string) $status))) {
+        $normalized = strtolower((string) preg_replace('/[^a-zA-Z0-9]+/', '', (string) $status));
+        if (str_contains($normalized, 'canceled') || str_contains($normalized, 'cancelled')) {
+            return HyperliquidLifecycleStatus::CANCELED;
+        }
+        if (str_contains($normalized, 'rejected')) {
+            return HyperliquidLifecycleStatus::REJECTED;
+        }
+
+        return match ($normalized) {
             'accepted', 'resting', 'placed' => HyperliquidLifecycleStatus::ACCEPTED,
             'open', 'triggered' => HyperliquidLifecycleStatus::OPEN,
-            'partial', 'partially_filled', 'partially filled' => HyperliquidLifecycleStatus::PARTIALLY_FILLED,
+            'partial', 'partiallyfilled' => HyperliquidLifecycleStatus::PARTIALLY_FILLED,
             'filled', 'closed' => HyperliquidLifecycleStatus::FILLED,
-            'canceled', 'cancelled', 'margin_canceled', 'open_interest_cap_canceled', 'self_trade_canceled',
-            'vault_withdrawal_canceled', 'reduce_only_canceled', 'sibling_filled_canceled',
-            'delisted_canceled', 'liquidated_canceled', 'scheduled_cancel' => HyperliquidLifecycleStatus::CANCELED,
-            'rejected' => HyperliquidLifecycleStatus::REJECTED,
             'failed', 'err', 'error' => HyperliquidLifecycleStatus::FAILED,
             default => HyperliquidLifecycleStatus::UNKNOWN_REQUIRES_RESYNC,
         };
@@ -558,6 +563,22 @@ final readonly class HyperliquidLifecycleNormalizer
     /**
      * @param array<string,mixed> $row
      */
+    private function fillPositionSide(array $row): ?ExchangePositionSide
+    {
+        $direction = strtolower($this->string($row['dir'] ?? ''));
+        if (str_contains($direction, 'long')) {
+            return ExchangePositionSide::LONG;
+        }
+        if (str_contains($direction, 'short')) {
+            return ExchangePositionSide::SHORT;
+        }
+
+        return $this->positionSide(null, null, $row['side'] ?? null, $this->bool($row['reduceOnly'] ?? false));
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
     private function symbol(array $row): string
     {
         $coin = strtoupper($this->firstNonEmpty($row['coin'] ?? null, $row['symbol'] ?? null));
@@ -590,6 +611,35 @@ final readonly class HyperliquidLifecycleNormalizer
             || $this->hasValue($row['tid'] ?? null)
             || $this->hasValue($row['fillId'] ?? null)
             || ($this->hasValue($row['px'] ?? null) && $this->hasValue($row['fee'] ?? null));
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @return array<string,mixed>
+     */
+    private function normalizeLifecycleRow(array $row): array
+    {
+        if (!\is_array($row['order'] ?? null)) {
+            return $row;
+        }
+
+        /** @var array<string,mixed> $wrapper */
+        $wrapper = $row['order'];
+        $details = \is_array($wrapper['order'] ?? null) ? $wrapper['order'] : $wrapper;
+        /** @var array<string,mixed> $details */
+        $normalized = array_merge($details, [
+            'status' => $this->firstNonEmpty($wrapper['status'] ?? null, $details['status'] ?? null, $row['status'] ?? null),
+            'uTime' => $this->firstNonEmpty($wrapper['statusTimestamp'] ?? null, $wrapper['uTime'] ?? null, $details['uTime'] ?? null, $row['uTime'] ?? null),
+        ]);
+
+        if ($normalized['status'] === 'order') {
+            unset($normalized['status']);
+        }
+        if ($normalized['uTime'] === '') {
+            unset($normalized['uTime']);
+        }
+
+        return $normalized;
     }
 
     /**
