@@ -114,6 +114,21 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
     }
 
+    public function testDoesNotDoubleCountFillsAlreadyReflectedByCurrentSnapshot(): void
+    {
+        $snapshot = $this->orderRow(remaining: '0.6', original: '1', status: 'open', updatedAt: 1_767_225_600_000);
+        unset($snapshot['uTime']);
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([
+            $snapshot,
+            $this->fillRow(quantity: '0.4', price: '25010', hash: 'snapshot-fill', time: 1_767_225_601_000),
+        ]);
+
+        self::assertSame(HyperliquidLifecycleStatus::PARTIALLY_FILLED, $lifecycle->status);
+        self::assertEqualsWithDelta(0.4, $lifecycle->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
+    }
+
     public function testCountsFillThatCompletesPartialOrderSnapshot(): void
     {
         $lifecycle = $this->normalizer->normalizeOrderLifecycle([
@@ -297,6 +312,20 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         $canceled = $this->orderRow(remaining: '0.6', original: '1', status: 'marginCanceled', updatedAt: 1_767_225_610_000);
 
         $lifecycle = $this->normalizer->normalizeOrderLifecycle([$canceled]);
+
+        self::assertSame(HyperliquidLifecycleStatus::CANCELED, $lifecycle->status);
+        self::assertEqualsWithDelta(0.4, $lifecycle->filledQuantity, 0.000001);
+        self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
+    }
+
+    public function testDoesNotDowngradeTerminalSnapshotPartialFillWithIncompleteFillPage(): void
+    {
+        $canceled = $this->orderRow(remaining: '0.6', original: '1', status: 'marginCanceled', updatedAt: 1_767_225_610_000);
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([
+            $canceled,
+            $this->fillRow(quantity: '0.1', price: '25010', hash: 'incomplete-fill-page', time: 1_767_225_601_000),
+        ]);
 
         self::assertSame(HyperliquidLifecycleStatus::CANCELED, $lifecycle->status);
         self::assertEqualsWithDelta(0.4, $lifecycle->filledQuantity, 0.000001);

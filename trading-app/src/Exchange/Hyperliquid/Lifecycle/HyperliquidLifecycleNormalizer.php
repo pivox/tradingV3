@@ -52,7 +52,12 @@ final readonly class HyperliquidLifecycleNormalizer
             : max($fillQuantity, $snapshotFilled);
         if ($this->isNonFilledTerminalStatus($baseStatus)) {
             $remaining = $filled > 0.00000001 && $remaining > 0.00000001 ? $remaining : 0.0;
-        } elseif ($latestOrder !== [] && $this->isFillRow($latest) && $this->rowTimeMillis($latest) >= $this->rowTimeMillis($base)) {
+        } elseif (
+            $latestOrder !== []
+            && $this->isFillRow($latest)
+            && $this->rowTimeMillis($latest) >= $this->rowTimeMillis($base)
+            && ($snapshotFilled <= 0.00000001 || $this->hasLifecycleUpdateTime($base))
+        ) {
             $filled = min($quantity, max($filled, $snapshotFilled + $this->sumFillQuantityAfter($deduplicated, $base)));
             $remaining = max(0.0, $quantity - $filled);
         }
@@ -467,14 +472,9 @@ final readonly class HyperliquidLifecycleNormalizer
 
     private function terminalFilledQuantity(float $fillQuantity, float $snapshotFilled, float $remaining): float
     {
-        if ($fillQuantity > 0.00000001) {
-            return $fillQuantity;
-        }
-        if ($snapshotFilled > 0.00000001 && $remaining > 0.00000001) {
-            return $snapshotFilled;
-        }
+        $snapshotPartialFilled = $snapshotFilled > 0.00000001 && $remaining > 0.00000001 ? $snapshotFilled : 0.0;
 
-        return 0.0;
+        return max($fillQuantity, $snapshotPartialFilled);
     }
 
     /**
@@ -787,6 +787,14 @@ final readonly class HyperliquidLifecycleNormalizer
         }
 
         return 0;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function hasLifecycleUpdateTime(array $row): bool
+    {
+        return $this->hasValue($row['uTime'] ?? null) || $this->hasValue($row['updatedAt'] ?? null);
     }
 
     private function time(mixed $value): \DateTimeImmutable
