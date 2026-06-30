@@ -104,6 +104,86 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringNotContainsString('Mainnet enabled:', $output);
     }
 
+    public function testOkxRuntimeCheckSurfacesLocalDryRunReadinessReasons(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::OKX,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(Exchange::OKX, MarketType::PERPETUAL)),
+            new OkxConfig(
+                environment: 'demo',
+                apiKey: 'key',
+                apiSecret: 'secret',
+                apiPassphrase: 'pass',
+                simulatedTrading: true,
+                demoTradingEnabled: false,
+                liveEnabled: false,
+            ),
+            new HyperliquidConfig(),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Readiness level: local_dry_run_ready', $output);
+        self::assertStringContainsString('Readiness blocking errors: none', $output);
+        self::assertStringContainsString('Readiness warnings: private_observability_absent_for_dry_run, demo_testnet_write_not_enabled', $output);
+        self::assertStringContainsString('Mainnet write guard: yes', $output);
+        self::assertStringContainsString('Demo/testnet write guard: yes', $output);
+        self::assertStringContainsString('Stop loss capability: yes', $output);
+        self::assertStringContainsString('Kill switch: enabled', $output);
+        self::assertStringContainsString('Schedule ready: yes', $output);
+    }
+
+    public function testOkxRuntimeCheckReportsDemoTestnetCandidateWhenDemoTradingIsExplicitlyEnabled(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::OKX,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(Exchange::OKX, MarketType::PERPETUAL)),
+            new OkxConfig(
+                environment: 'demo',
+                apiKey: 'key',
+                apiSecret: 'secret',
+                apiPassphrase: 'pass',
+                simulatedTrading: true,
+                demoTradingEnabled: true,
+                liveEnabled: false,
+            ),
+            new HyperliquidConfig(),
+        );
+
+        $tester = new CommandTester($command);
+        $exitCode = $tester->execute([
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Readiness level: demo_testnet_candidate', $output);
+        self::assertStringContainsString('Readiness blocking errors: none', $output);
+        self::assertStringContainsString('Readiness warnings: private_observability_absent_for_dry_run', $output);
+        self::assertStringNotContainsString('Readiness level: demo_testnet_enabled', $output);
+        self::assertStringContainsString('Live allowed: no', $output);
+        self::assertStringContainsString('Recommended dry_run: true', $output);
+    }
+
     public function testReportsUnreadyHyperliquidRuntimeWithoutProviderOrCredentials(): void
     {
         $command = new ExchangeRuntimeCheckCommand(
@@ -270,13 +350,18 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Schedule ready: yes', $output);
     }
 
-    private function adapter(Exchange $exchange, MarketType $marketType, bool $supportsPrivateWs = false): ExchangeAdapterInterface
-    {
+    private function adapter(
+        Exchange $exchange,
+        MarketType $marketType,
+        bool $supportsPrivateWs = false,
+        bool $supportsTriggerOrders = false,
+    ): ExchangeAdapterInterface {
         $adapter = $this->createMock(ExchangeAdapterInterface::class);
         $adapter->method('exchange')->willReturn($exchange);
         $adapter->method('marketType')->willReturn($marketType);
         $adapter->method('capabilities')->willReturn(new ExchangeCapabilities(
             supportsWebSocketPrivate: $supportsPrivateWs,
+            supportsTriggerOrders: $supportsTriggerOrders,
         ));
 
         return $adapter;

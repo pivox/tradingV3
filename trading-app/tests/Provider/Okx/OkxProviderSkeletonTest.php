@@ -11,6 +11,7 @@ use App\Common\Enum\OrderType;
 use App\Common\Enum\Timeframe;
 use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
+use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
 use App\Provider\Okx\OkxAccountGateway;
 use App\Provider\Okx\OkxMarketDataGateway;
 use App\Provider\Okx\OkxMetadataProvider;
@@ -130,6 +131,59 @@ final class OkxProviderSkeletonTest extends TestCase
         self::assertNotContains('private_read_not_ready', $report->warnings);
     }
 
+    public function testRuntimeCheckKeepsLocalDryRunReadyWhenDemoTradingIsDisabled(): void
+    {
+        $report = (new OkxRuntimeCheck())->check($this->okxLocalDryRunInput(
+            demoTestnetWriteEnabled: false,
+        ));
+
+        self::assertSame(ExchangeReadinessLevel::LocalDryRunReady, $report->readyLevel);
+        self::assertTrue($report->stopLossCapability);
+        self::assertContains('demo_testnet_write_not_enabled', $report->warnings);
+        self::assertNotContains('stop_loss_capability_required_for_demo_testnet_candidate', $report->warnings);
+    }
+
+    public function testRuntimeCheckCanReachDemoTestnetCandidateWhenDemoTradingIsExplicitlyEnabled(): void
+    {
+        $report = (new OkxRuntimeCheck())->check($this->okxLocalDryRunInput(
+            demoTestnetWriteEnabled: true,
+            killSwitch: true,
+        ));
+
+        self::assertSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
+        self::assertTrue($report->stopLossCapability);
+        self::assertTrue($report->killSwitch);
+        self::assertNotContains('demo_testnet_write_not_enabled', $report->warnings);
+        self::assertNotContains('stop_loss_capability_required_for_demo_testnet_candidate', $report->warnings);
+    }
+
+    public function testRuntimeCheckNeverReportsDemoTestnetEnabled(): void
+    {
+        $report = (new OkxRuntimeCheck())->check($this->okxLocalDryRunInput(
+            demoTestnetWriteEnabled: true,
+            killSwitch: false,
+            dryRun: false,
+            permissionsTrade: true,
+            privateObservabilityStatus: new ExchangePrivateObservabilityStatus(
+                exchange: Exchange::OKX,
+                environment: 'demo',
+                privateWsSupported: true,
+                privateWsConnected: true,
+                privateWsAuthenticated: true,
+                ordersStreamReady: true,
+                fillsStreamReady: true,
+                positionsStreamReady: true,
+                initialSnapshotLoaded: true,
+                lastEventAt: new \DateTimeImmutable('2026-06-29T10:15:00+00:00'),
+                reconnecting: false,
+                reconciliationFresh: true,
+            ),
+        ));
+
+        self::assertSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
+        self::assertNotSame(ExchangeReadinessLevel::DemoTestnetEnabled, $report->readyLevel);
+    }
+
     /**
      * @param callable(): mixed $operation
      */
@@ -142,5 +196,39 @@ final class OkxProviderSkeletonTest extends TestCase
             self::assertSame($reason, $exception->reason());
             self::assertStringContainsString($reason, $exception->getMessage());
         }
+    }
+
+    private function okxLocalDryRunInput(
+        bool $demoTestnetWriteEnabled,
+        bool $killSwitch = true,
+        bool $dryRun = true,
+        bool $permissionsTrade = false,
+        ?ExchangePrivateObservabilityStatus $privateObservabilityStatus = null,
+    ): ExchangeReadinessInput {
+        return new ExchangeReadinessInput(
+            exchange: Exchange::OKX,
+            marketType: MarketType::PERPETUAL,
+            environment: 'demo',
+            publicConnectivity: true,
+            privateReadConnectivity: true,
+            privateObservability: $privateObservabilityStatus !== null,
+            privateObservabilityStatus: $privateObservabilityStatus,
+            instrumentsLoaded: true,
+            metadataValid: true,
+            precisionValid: true,
+            accountReadable: true,
+            permissionsRead: true,
+            permissionsTrade: $permissionsTrade,
+            mainnetWriteGuard: true,
+            demoTestnetWriteGuard: true,
+            demoTestnetWriteEnabled: $demoTestnetWriteEnabled,
+            stopLossCapability: true,
+            killSwitch: $killSwitch,
+            dryRun: $dryRun,
+            allowedSymbols: ['BTCUSDT'],
+            allowedMarkets: ['perpetual'],
+            maxNotional: 25.0,
+            configHash: str_repeat('b', 64),
+        );
     }
 }

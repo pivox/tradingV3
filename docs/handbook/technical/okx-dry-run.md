@@ -150,10 +150,50 @@ Elle bloquera seulement les futures PRs mutatives `dry_run=false`.
 - `Dry-run only: yes` ;
 - `Live allowed: no` ;
 - `Demo trading enabled: yes/no` — capacité demo OKX, **distincte** de l'autorisation live ;
+- `Readiness level: ...` — niveau structuré issu de `OkxRuntimeCheck` ;
+- `Readiness blocking errors: ...` et `Readiness warnings: ...` — raisons opérables, redacted ;
+- `Mainnet write guard: yes/no` ;
+- `Demo/testnet write guard: yes/no` ;
+- `Stop loss capability: yes/no` ;
+- `Kill switch: enabled/disabled` ;
 - `Recommended dry_run: true` (toujours, pour OKX).
 
-La capacité « demo order » d'OKX n'est donc jamais assimilée à « live allowed ». Bitmart legacy
+Depuis OKX-008, `OkxRuntimeCheck` distingue explicitement :
+
+- `local_dry_run_ready` quand les lectures, guards, whitelist/notional et la capacité SL sont
+  prêts, mais que l'activation demo/testnet n'est pas explicitement ouverte ;
+- `demo_testnet_candidate` quand `OKX_DEMO_TRADING_ENABLED=1` est présent et que le kill switch
+  opérateur reste actif.
+
+La commande reste read-only : elle force le runtime-check OKX en dry-run, ne retourne jamais
+`demo_testnet_enabled`, `live_ready` ou `mainnet_ready`, et n'appelle aucun endpoint write. La
+capacité « demo order » d'OKX n'est donc jamais assimilée à « live allowed ». Bitmart legacy
 n'est pas affecté : ces lignes sont spécifiques à OKX.
+
+Exemple :
+
+```text
+Exchange: okx
+Market type: perpetual
+Adapter: found
+Provider bundle: found
+Credentials: ok
+REST: unknown
+Private WS: enabled
+Live trading: disabled
+Dry-run only: yes
+Live allowed: no
+Demo trading enabled: yes
+Readiness level: demo_testnet_candidate
+Readiness blocking errors: none
+Readiness warnings: private_observability_absent_for_dry_run
+Mainnet write guard: yes
+Demo/testnet write guard: yes
+Stop loss capability: yes
+Kill switch: enabled
+Recommended dry_run: true
+Schedule ready: yes
+```
 
 ## Schedules Temporal : OKX dry_run=false interdit
 
