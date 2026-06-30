@@ -247,11 +247,12 @@ class RecipeRunner:
         nominal = self._read_fixture("r1_r16_nominal_fake_dashboard.json")
         degraded = self._read_fixture("r1_r16_degraded_fake_dashboard.json")
         fixtures = {"nominal": nominal, "degraded": degraded}
+        if self.config.target_exchange.strip().lower() != "okx":
+            return fixtures
         okx_path = self.config.fixtures_dir / "r1_r16_okx_dry_run_dashboard.json"
-        if okx_path.exists():
-            fixtures["okx"] = json.loads(okx_path.read_text(encoding="utf-8"))
-        elif self.config.target_exchange.strip().lower() == "okx":
+        if not okx_path.exists():
             raise FileNotFoundError(f"missing OKX runtime recipe fixture: {okx_path}")
+        fixtures["okx"] = json.loads(okx_path.read_text(encoding="utf-8"))
         return fixtures
 
     def _read_fixture(self, filename: str) -> dict[str, Any]:

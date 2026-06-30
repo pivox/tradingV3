@@ -305,7 +305,13 @@ def test_runner_applies_fixtures_idempotently_without_sending_payload(tmp_path: 
         for dashboard in api.dashboards
         if dashboard["name"] == "recipe-r1-r16-nominal-fake"
     ]
+    okx_dashboards = [
+        dashboard
+        for dashboard in api.dashboards
+        if dashboard["name"] == "recipe-r1-r16-okx-dry-run"
+    ]
     assert len(matching_dashboards) == 1
+    assert okx_dashboards == []
     assert len(api.sets[first["dashboards"]["nominal"]["id"]]) == 4
     run_keys = [
         request["json"]["idempotency_key"]
