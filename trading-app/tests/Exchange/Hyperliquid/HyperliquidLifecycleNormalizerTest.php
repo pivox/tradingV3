@@ -102,6 +102,17 @@ final class HyperliquidLifecycleNormalizerTest extends TestCase
         self::assertEqualsWithDelta(0.6, $lifecycle->remainingQuantity, 0.000001);
     }
 
+    public function testTreatsOpenOrderSnapshotWithoutStatusAsOpen(): void
+    {
+        $row = $this->orderRow(remaining: '1', original: '1', status: 'open', updatedAt: 1_767_225_600_000);
+        unset($row['status']);
+
+        $lifecycle = $this->normalizer->normalizeOrderLifecycle([$row]);
+
+        self::assertSame(HyperliquidLifecycleStatus::OPEN, $lifecycle->status);
+        self::assertFalse($lifecycle->requiresResync);
+    }
+
     public function testKeepsDistinctFillsSharingTransactionHash(): void
     {
         $first = $this->fillRow(quantity: '0.2', price: '25000', hash: 'shared-tx-hash', time: 1_767_225_601_000);

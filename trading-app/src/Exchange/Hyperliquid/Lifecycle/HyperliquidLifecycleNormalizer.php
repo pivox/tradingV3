@@ -401,6 +401,16 @@ final readonly class HyperliquidLifecycleNormalizer
         if (!$hasOrderRow && $fills !== []) {
             return HyperliquidLifecycleStatus::UNKNOWN_REQUIRES_RESYNC;
         }
+        if (!$this->hasValue($row['status'] ?? $row['state'] ?? null) && $hasOrderRow) {
+            if ($quantity > 0.0 && $filled >= $quantity - 0.00000001) {
+                return HyperliquidLifecycleStatus::FILLED;
+            }
+            if ($filled > 0.00000001 && $remaining > 0.00000001) {
+                return HyperliquidLifecycleStatus::PARTIALLY_FILLED;
+            }
+
+            return HyperliquidLifecycleStatus::OPEN;
+        }
 
         $status = $this->status($row['status'] ?? $row['state'] ?? null);
         if ($status === HyperliquidLifecycleStatus::OPEN && $filled > 0.00000001 && $remaining > 0.00000001) {
