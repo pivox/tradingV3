@@ -449,6 +449,37 @@ def test_runner_blocks_okx_recipe_when_runtime_check_is_not_schedule_ready(
     assert not any(request["path"] == "/orchestrator/run" for request in api.requests)
 
 
+def test_runner_does_not_block_fake_scenarios_when_okx_runtime_check_is_not_ready(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api = FakeRecipeApi()
+
+    def runtime_check(*args, **kwargs):
+        class Completed:
+            returncode = 0
+            stdout = "Readiness level: public_read_only\nSchedule ready: no\n"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr(runner_module.subprocess, "run", runtime_check)
+
+    report = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            target_exchange="okx",
+        ),
+        http_client=api,
+    ).run(scenarios=("R5",), keep_fixtures=True)
+
+    assert report["results"][0]["status"] == "PASS"
+    assert "degraded" in report["dashboards"]
+    assert "okx" not in report["dashboards"]
+    assert any(request["path"] == "/orchestrator/run" for request in api.requests)
+
+
 def test_runner_forces_dry_run_exports_report_and_redacts_sensitive_values(tmp_path: Path):
     api = FakeRecipeApi()
     report = RecipeRunner(

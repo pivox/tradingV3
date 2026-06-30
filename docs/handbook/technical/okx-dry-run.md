@@ -242,9 +242,10 @@ python scripts/runtime_recipe_runner.py \
 Avant d'appliquer les fixtures OKX, le runner exécute
 `app:exchange:runtime-check okx perpetual` via Docker Compose. Si la sortie ne
 contient pas `Schedule ready: yes`, les scenarios OKX sont exportés en
-`BLOCKED` et aucun `POST /orchestrator/run` n'est envoyé. R14 tente ensuite un
-set négatif `dry_run=false` et doit observer le refus de garde live avant tout
-dispatch.
+`BLOCKED` et aucun `POST /orchestrator/run` n'est envoyé pour R1/R2/R14. Les
+autres scenarios restent rattachés aux fixtures Fake/Paper. R14 tente ensuite
+un set négatif `dry_run=false` et doit observer le refus de garde live avant
+tout dispatch.
 
 ## Hors-scope PR11
 

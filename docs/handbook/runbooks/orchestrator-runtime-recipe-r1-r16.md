@@ -86,7 +86,9 @@ Elle ne cree aucun set Bitmart et ne doit jamais servir a `dry_run=false`.
 Avant d'executer R1/R2/R14 avec `--target-exchange okx`, le runner lance
 `docker compose exec -T trading-app-php php bin/console app:exchange:runtime-check okx perpetual`.
 Si la sortie ne contient pas `Schedule ready: yes`, les scenarios OKX sont
-exportes en `BLOCKED` et aucun appel `/orchestrator/run` n'est envoye.
+exportes en `BLOCKED` et aucun appel `/orchestrator/run` n'est envoye pour
+R1/R2/R14. Les autres scenarios restent sur les fixtures Fake/Paper et peuvent
+continuer a produire leur preuve baseline.
 
 Application idempotente attendue :
 

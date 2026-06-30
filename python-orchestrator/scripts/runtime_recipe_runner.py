@@ -47,6 +47,7 @@ SET_FIELDS = {
 
 ALL_SCENARIOS = tuple(f"R{i}" for i in range(1, 17))
 DEFAULT_SCENARIOS = ("R1", "R2", "R5", "R6", "R8", "R10", "R11", "R14", "R15", "R16")
+TARGET_EXCHANGE_SCENARIOS = frozenset({"R1", "R2", "R14"})
 
 SECRET_KEY_RE = re.compile(
     r"(api[_-]?key|secret|password|passwd|token|signature|private[_-]?key|"
@@ -137,10 +138,16 @@ class RecipeRunner:
         dashboards: dict[str, dict[str, Any]] = {}
         results: list[dict[str, Any]] = []
 
-        if service_ok and preflight["status"] == "PASS":
-            dashboards = self._apply_all_fixtures()
+        if service_ok:
+            dashboards = self._apply_all_fixtures(
+                include_target=self.config.target_exchange.strip().lower() != "okx"
+                or preflight["status"] == "PASS"
+            )
             for scenario in selected:
-                results.append(self._run_scenario(scenario, dashboards))
+                if self._scenario_requires_target_preflight(scenario) and preflight["status"] != "PASS":
+                    results.append(self._result(scenario, "BLOCKED", preflight["notes"], preflight))
+                else:
+                    results.append(self._run_scenario(scenario, dashboards))
             if self.config.cleanup and not keep_fixtures:
                 self._cleanup_dashboards(dashboards)
         else:
@@ -258,8 +265,18 @@ class RecipeRunner:
     def _read_fixture(self, filename: str) -> dict[str, Any]:
         return json.loads((self.config.fixtures_dir / filename).read_text(encoding="utf-8"))
 
-    def _apply_all_fixtures(self) -> dict[str, dict[str, Any]]:
-        return {name: self._apply_fixture(fixture) for name, fixture in self.fixtures.items()}
+    def _apply_all_fixtures(self, *, include_target: bool = True) -> dict[str, dict[str, Any]]:
+        return {
+            name: self._apply_fixture(fixture)
+            for name, fixture in self.fixtures.items()
+            if include_target or name != "okx"
+        }
+
+    def _scenario_requires_target_preflight(self, scenario: str) -> bool:
+        return (
+            self.config.target_exchange.strip().lower() == "okx"
+            and scenario in TARGET_EXCHANGE_SCENARIOS
+        )
 
     def _apply_fixture(self, fixture: dict[str, Any]) -> dict[str, Any]:
         dashboard_id = self._upsert_dashboard(fixture["dashboard"])
