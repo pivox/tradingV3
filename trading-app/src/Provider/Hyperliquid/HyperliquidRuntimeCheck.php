@@ -7,6 +7,7 @@ namespace App\Provider\Hyperliquid;
 use App\Common\Enum\Exchange;
 use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
+use App\Exchange\Readiness\ExchangeReadinessEvaluator;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Exchange\Readiness\ExchangeRuntimeCheckInterface;
 
@@ -18,23 +19,58 @@ final readonly class HyperliquidRuntimeCheck implements ExchangeRuntimeCheckInte
             throw new \InvalidArgumentException('HyperliquidRuntimeCheck only accepts exchange=hyperliquid.');
         }
 
-        $blockingErrors = $input->blockingErrors;
-        if (!$input->mainnetWriteGuard) {
-            $blockingErrors[] = 'mainnet_write_guard_missing';
+        $warnings = $input->warnings;
+        if (!$input->publicConnectivity || !$input->instrumentsLoaded || !$input->metadataValid || !$input->precisionValid) {
+            $warnings[] = 'hyperliquid_public_read_not_ready';
         }
+        if (!$input->privateReadConnectivity || !$input->accountReadable || !$input->permissionsRead) {
+            $warnings[] = 'hyperliquid_account_read_not_ready';
+        }
+        if (!$input->permissionsTrade) {
+            $warnings[] = 'hyperliquid_api_wallet_not_ready';
+        }
+        $warnings[] = 'hyperliquid_nonce_manager_not_ready';
+
+        $report = (new ExchangeReadinessEvaluator())->evaluate(new ExchangeReadinessInput(
+            exchange: $input->exchange,
+            marketType: $input->marketType,
+            environment: $input->environment,
+            publicConnectivity: $input->publicConnectivity,
+            privateReadConnectivity: false,
+            privateObservability: false,
+            privateObservabilityStatus: null,
+            instrumentsLoaded: $input->instrumentsLoaded,
+            metadataValid: $input->metadataValid,
+            precisionValid: $input->precisionValid,
+            accountReadable: false,
+            permissionsRead: false,
+            permissionsTrade: false,
+            mainnetWriteGuard: $input->mainnetWriteGuard,
+            demoTestnetWriteGuard: $input->demoTestnetWriteGuard,
+            demoTestnetWriteEnabled: false,
+            stopLossCapability: false,
+            killSwitch: true,
+            dryRun: true,
+            allowedSymbols: $input->allowedSymbols,
+            allowedMarkets: $input->allowedMarkets,
+            maxNotional: $input->maxNotional,
+            configHash: $input->configHash,
+            blockingErrors: $input->blockingErrors,
+            warnings: $warnings,
+        ));
 
         return new ExchangeReadinessReport(
             exchange: $input->exchange,
             marketType: $input->marketType,
             environment: $input->environment,
-            readyLevel: ExchangeReadinessLevel::NotReady,
-            publicConnectivity: false,
+            readyLevel: $report->readyLevel,
+            publicConnectivity: $report->publicConnectivity,
             privateReadConnectivity: false,
             privateObservability: false,
             privateObservabilityStatus: null,
-            instrumentsLoaded: false,
-            metadataValid: false,
-            precisionValid: false,
+            instrumentsLoaded: $report->instrumentsLoaded,
+            metadataValid: $report->metadataValid,
+            precisionValid: $report->precisionValid,
             accountReadable: false,
             permissionsRead: false,
             permissionsTrade: false,
@@ -42,21 +78,32 @@ final readonly class HyperliquidRuntimeCheck implements ExchangeRuntimeCheckInte
             demoTestnetWriteGuard: $input->demoTestnetWriteGuard,
             stopLossCapability: false,
             killSwitch: true,
-            allowedSymbols: $input->allowedSymbols,
-            allowedMarkets: $input->allowedMarkets,
+            allowedSymbols: $report->allowedSymbols,
+            allowedMarkets: $report->allowedMarkets,
             maxNotional: $input->maxNotional,
             configHash: $input->configHash,
-            blockingErrors: array_values(array_unique([
-                ...$blockingErrors,
-                'hyperliquid_provider_bundle_skeleton_not_ready',
-            ])),
-            warnings: array_values(array_unique([
-                ...$input->warnings,
-                'hyperliquid_public_read_not_ready',
-                'hyperliquid_account_read_not_ready',
-                'hyperliquid_api_wallet_not_ready',
-                'hyperliquid_nonce_manager_not_ready',
-            ])),
+            blockingErrors: $report->readyLevel === ExchangeReadinessLevel::NotReady
+                ? $this->blockingErrors($report)
+                : $report->blockingErrors,
+            warnings: $report->warnings,
         );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function blockingErrors(ExchangeReadinessReport $report): array
+    {
+        $errors = $report->blockingErrors;
+        if (
+            in_array('public_connectivity_unavailable', $errors, true)
+            || in_array('instruments_not_loaded', $errors, true)
+            || in_array('metadata_invalid', $errors, true)
+            || in_array('precision_invalid', $errors, true)
+        ) {
+            $errors[] = 'hyperliquid_provider_bundle_skeleton_not_ready';
+        }
+
+        return array_values(array_unique($errors));
     }
 }

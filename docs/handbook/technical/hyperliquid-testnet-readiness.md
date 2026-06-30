@@ -3,7 +3,7 @@
 ## Statut
 
 ADR documentaire HL-001, accepte le 2026-06-30. HL-002 ajoute le bundle provider
-Hyperliquid skeleton, toujours `not_ready`.
+Hyperliquid skeleton. HL-003 active la lecture publique REST `/info` uniquement.
 
 Hyperliquid reste `target_dry_run_only`. Cette page ne rend pas Hyperliquid
 utilisable en ecriture testnet et ne rend jamais Hyperliquid utilisable en
@@ -77,18 +77,18 @@ reutilisables.
 |---|---|---|---|
 | Config Hyperliquid testnet | Documente | `config/trading/exchange/hyperliquid.yaml` garde Hyperliquid `dry_run_runtime_check_only`. | Normaliser les variables `HYPERLIQUID_TESTNET_*` et les exposer via runtime-check. |
 | Guard mainnet | Present | Les docs et gates existantes bloquent Hyperliquid live/mainnet. | Conserver le blocage dans toutes les PRs HL. |
-| Public read-only | A livrer | Endpoint `info` officiel couvre metadata, market data et candles. | Provider public read-only avec pagination, freshness, rate-limit et erreurs normalisees. |
+| Public read-only | HL-003 | `HyperliquidMetadataProvider` et `HyperliquidMarketGateway` lisent `/info` pour `metaAndAssetCtxs`, `allMids`, `l2Book`, `candleSnapshot` et `fundingHistory`. | Freshness runtime/WS public dedie si un flux temps reel est necessaire. |
 | Account read-only | A livrer | Endpoint `info` officiel couvre state utilisateur, fills et funding. | Client account read-only testnet, redaction et observabilite privee complete. |
-| Provider bundle | Skeleton HL-002 | `ExchangeProviderBundle.hyperliquid_perpetual` route `hyperliquid/perpetual` vers des gateways Hyperliquid explicites. | Implementer les lectures publiques/account reelles dans les PRs dediees. |
-| WebSocket public | A livrer | Endpoint WS testnet officiel disponible. | Client public, subscriptions, reconnect, freshness et fallback documente. |
+| Provider bundle | Public-read HL-003 | `ExchangeProviderBundle.hyperliquid_perpetual` route `hyperliquid/perpetual` vers les gateways Hyperliquid ; les surfaces publiques lisent REST, les surfaces account/execution restent fail-closed. | Implementer les lectures account et les PRs signer/nonce dediees. |
+| WebSocket public | Fallback REST HL-003 | HL-003 choisit le polling REST borne via `/info` au lieu d'un client WS public. | Client public, subscriptions, reconnect et freshness si une PR future remplace le polling. |
 | WebSocket prive / equivalent | A livrer | State compte lisible via `info`, streams a valider. | Policy de snapshot initial + delta, ou justification equivalente avant mutation. |
 | Signer fake/local | Skeleton HL-002 | `HyperliquidSignerInterface` existe sans implementation concrete ; `HyperliquidDryRunExecutionPort` ne signe pas et ne broadcast pas. | Abstraction de signature testable sans private key reelle. |
 | Signer testnet | Non supporte | Hors perimetre HL-001. | API wallet testnet dedie, redaction, aucun secret mainnet, tests de payload signe sans broadcast. |
 | Nonce manager | Skeleton HL-002 | `HyperliquidNonceManagerInterface` existe sans implementation concrete. | Compteur persistant par signer, monotone, restart-safe et auditable. |
-| Metadata / precision | A livrer | Docs officielles definissent asset IDs, tick/lot, `szDecimals` et precision prix. | Mapping `symbol -> asset`, tick/lot, size decimals, precision prix Hyperliquid, min notional si disponible, flags si absent. |
-| Fees / funding / costs | A livrer | Funding et user funding sont exposes par `info`. | DTO couts avec valeurs absentes en `null` + quality flag, jamais zero implicite. |
+| Metadata / precision | Partiel HL-003 | Mapping `symbol -> coin -> asset_id`, `szDecimals`, max leverage et precision derivee sont exposes dans `HyperliquidInstrumentMetadataDto`. | Precision complete fees/min-notional en HL-007. |
+| Fees / funding / costs | Partiel HL-003 | Funding public absent reste `null` avec `funding_rate_unknown`, jamais converti en zero dans le DTO metadata. | User fills/funding/couts complets en PR account/ledger dediees. |
 | Local dry-run no broadcast | Partiel | `HyperliquidDryRunExecutionPort` simule sans HTTP ni `/exchange`. | Serialization future des payloads HL sans broadcast ni secret. |
-| Runtime-check candidate | Fail-closed HL-002 | `app:exchange:runtime-check hyperliquid perpetual` retourne `Readiness level: not_ready`, `Schedule ready: no` et `hyperliquid_provider_bundle_skeleton_not_ready`. | Niveaux `public_read_only`, `private_read_only`, `local_dry_run_ready`, puis `demo_testnet_candidate`. |
+| Runtime-check candidate | Public-read possible HL-003 | `HyperliquidRuntimeCheck` peut retourner `public_read_only` quand les probes publiques sont bonnes. La commande runtime reste `Schedule ready: no` tant que les probes reelles ne sont pas branchees. | Niveaux `private_read_only`, `local_dry_run_ready`, puis `demo_testnet_candidate`. |
 | SL/TP / protection | A valider | Aucun attachement runtime Hyperliquid n'est prouve par HL-001. | Modele ordre/protection testnet avec SL immediat ou compensation fail-safe. |
 | Controlled testnet write | Non supporte | Les guards communs existent, mais Hyperliquid reste dry-run only. | PR dediee apres readiness complete, SL obligatoire, reconciliation et rollback. |
 | Mainnet write | Interdit | `mainnet_write_enabled=false` reste requis. | Aucun manque a combler dans cette serie. |
@@ -109,10 +109,11 @@ HL-002 ajoute seulement le chemin de registry :
 - `HyperliquidSignerInterface` ;
 - `HyperliquidNonceManagerInterface`.
 
-Ces classes ne lisent pas l'exchange et ne broadcastent rien. Toute methode
-gateway non implementee leve `HyperliquidProviderNotReadyException` avec un
-reason `hyperliquid_*_not_ready`. Aucun contexte `hyperliquid/spot` n'est
-enregistre ; une resolution spot doit donc echouer au lieu de fallback Bitmart.
+HL-003 branche uniquement les surfaces publiques sur `POST /info`. Les surfaces
+account et execution restent fail-closed. Les methodes de persistance locales
+des klines restent non implementees et ne modifient pas la base. Aucun contexte
+`hyperliquid/spot` n'est enregistre ; une resolution spot doit donc echouer au
+lieu de fallback Bitmart.
 
 ### Public read-only
 
@@ -123,7 +124,18 @@ enregistre ; une resolution spot doit donc echouer au lieu de fallback Bitmart.
 | Order book | `POST /info` type L2 book | Best bid/ask, spread et controles de prix d'entree. |
 | Candles | `POST /info` type candle snapshot | OHLCV pour indicateurs et validation de timeframes. |
 | Funding | `POST /info` funding history | Couts de funding et analyse PnL non certifiee tant que le ledger n'est pas complet. |
-| WebSocket public | `wss://api.hyperliquid-testnet.xyz/ws` | Flux trades/book/candles si retenus, avec fallback REST explicite. |
+| WebSocket public | Non branche en HL-003 | Fallback REST polling explicite via `/info`; un client WS public peut remplacer ce fallback dans une PR dediee. |
+
+HL-003 normalise :
+
+- les symboles internes `BTCUSDT` vers coin Hyperliquid `BTC` et asset id issu
+  de `meta`/`metaAndAssetCtxs` ;
+- les books L2 en listes `price`/`quantity` bornees ;
+- les candles en `KlineDto` triees UTC ASC, dedupliquees par open time et
+  source `HYPERLIQUID_REST_PUBLIC` ;
+- les metadata publiques dans `HyperliquidInstrumentMetadataDto` avec
+  `qualityFlags` quand le funding public est absent ;
+- les erreurs publiques 429 en `hyperliquid_public_rate_limited`.
 
 Configuration testnet public cible :
 
@@ -278,6 +290,16 @@ HL-002 ajoute du code/configuration applicative. Son rollback doit aussi retirer
   `ExchangeProviderRegistry` ;
 - le branchement `HyperliquidRuntimeCheck` dans `ExchangeRuntimeCheckCommand` ;
 - les tests HL-002 associes.
+
+HL-003 ajoute la lecture publique. Son rollback doit aussi retirer :
+
+- `HyperliquidPublicReadMapper` ;
+- `HyperliquidProviderUnavailableException` ;
+- `Provider\Hyperliquid\Dto\HyperliquidInstrumentMetadataDto` ;
+- les injections client/resolver dans `HyperliquidMarketGateway` et
+  `HyperliquidMetadataProvider` ;
+- le passage `public_read_only` de `HyperliquidRuntimeCheck` ;
+- les tests `HyperliquidPublicReadProviderTest`.
 
 Le rollback operationnel a conserver pour les PRs suivantes reste :
 
