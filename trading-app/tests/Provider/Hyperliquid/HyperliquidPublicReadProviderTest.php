@@ -114,6 +114,18 @@ final class HyperliquidPublicReadProviderTest extends TestCase
         $provider->getInstrumentMetadata('BTCUSDT');
     }
 
+    public function testAssetResolverDoesNotDetectCollisionAgainstItsCache(): void
+    {
+        $resolver = new HyperliquidAssetResolver($this->client());
+
+        self::assertSame(0, $resolver->assetId('BTCUSDT'));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown Hyperliquid asset "DOGEUSDT"');
+
+        $resolver->assetId('DOGEUSDT');
+    }
+
     public function testHyperliquidPriceRulesEnforceSignificantFiguresAndMaxDecimals(): void
     {
         $provider = new HyperliquidMetadataProvider($this->client(), new HyperliquidAssetResolver($this->client()));
