@@ -223,7 +223,7 @@ class FakeRecipeApi:
                 "error": "set payload not materialized (no concrete symbols)",
                 "response_json": None,
             }
-        if item["symbols"] == ["ERR400USDT"]:
+        if item["mtf_profile"] == "recipe_functional_error":
             if self.r5_outage and key.startswith("recipe-r5-"):
                 return {
                     "set_id": item["set_id"],
@@ -236,10 +236,13 @@ class FakeRecipeApi:
             return {
                 "set_id": item["set_id"],
                 "ok": False,
-                "status": 400,
+                "status": 500,
                 "business_status": "error",
-                "error": "functional 400 validation error",
-                "response_json": {"status": "error", "message": "functional validation error"},
+                "error": "Configuration file not found for recipe fault profile",
+                "response_json": {
+                    "status": "error",
+                    "message": "Configuration file not found for recipe fault profile",
+                },
             }
         if self.r11_outage and key.startswith("recipe-r11-"):
             return {

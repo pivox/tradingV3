@@ -10,6 +10,7 @@ from app.schemas import (
     MarketType,
     MtfProfile,
     OrchestratorSet,
+    SetCreate,
     SetRead,
     assert_set_persistable,
 )
@@ -97,6 +98,36 @@ def test_unknown_exchange_is_rejected():
 def test_unknown_profile_is_rejected():
     with pytest.raises(ValidationError):
         OrchestratorSet(set_id="x", exchange="fake", mtf_profile="hyper_scalp")
+
+
+def test_recipe_functional_error_profile_is_allowed_only_for_fake_demo_dry_run():
+    safe = SetCreate(
+        set_id="recipe_r5",
+        exchange="fake",
+        environment="demo",
+        dry_run=True,
+        mtf_profile="recipe_functional_error",
+        symbols=["BTCUSDT"],
+    )
+    assert safe.mtf_profile is MtfProfile.RECIPE_FUNCTIONAL_ERROR
+
+    unsafe_overrides = (
+        {"exchange": "bitmart"},
+        {"environment": "mainnet"},
+        {"dry_run": False},
+    )
+    for override in unsafe_overrides:
+        payload = {
+            "set_id": "recipe_r5",
+            "exchange": "fake",
+            "environment": "demo",
+            "dry_run": True,
+            "mtf_profile": "recipe_functional_error",
+            "symbols": ["BTCUSDT"],
+            **override,
+        }
+        with pytest.raises(ValidationError):
+            SetCreate(**payload)
 
 
 def test_workers_upper_bound_is_enforced():

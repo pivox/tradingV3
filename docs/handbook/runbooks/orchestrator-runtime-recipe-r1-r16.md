@@ -284,7 +284,7 @@ un scenario non execute en `PASS`.
 | R2 - Run nominal multi-sets | nominal | Executer le dashboard nominal complet. | Trois sets actifs dispatches, ordre deterministe par priorite, resume exact. |
 | R3 - Set desactive | nominal, `recipe_fake_disabled` | Verifier que le set desactive existe puis lancer R2. | Aucun `run_set` pour `recipe_fake_disabled`, exclusion visible dans la configuration. |
 | R4 - Payload non materialise | degraded, `recipe_fake_not_materialized` | Lancer le dashboard degrade sans refresh reussi. | Aucun appel Symfony pour ce set, erreur `not_materialized`, run non marque success. |
-| R5 - Erreur fonctionnelle Symfony | degraded, `recipe_fake_error_regular` | Stubber ou provoquer HTTP 400, 409, `ok=false`, JSON invalide. | Set en echec, corps utile redacted, summary coherent. |
+| R5 - Erreur fonctionnelle Symfony | degraded, `recipe_fake_error_regular` | Utiliser le profil reserve `recipe_functional_error` avec `fake`, `demo`, `dry_run=true`. Symfony refuse deterministement la configuration absente ; ne jamais creer de YAML pour ce profil. | Set en echec, corps utile redacted, summary coherent. |
 | R6 - Symfony indisponible/timeout | degraded | Couper Symfony ou router le set vers un stub timeout/5xx. | Retry/timeout bornes, aucun succes masque, replay possible. |
 | R7 - Echec partiel | degraded | Mixer un set nominal et un set en erreur. | `partial_failure`, compteurs success/failed exacts. |
 | R8 - Idempotence | nominal | Rejouer le meme `idempotency_key`. | Aucun doublon `runs`/`run_sets`, replay explicite du resultat. |

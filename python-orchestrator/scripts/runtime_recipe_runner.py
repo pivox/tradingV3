@@ -883,9 +883,11 @@ class RecipeRunner:
                 continue
             if item.get("ok") is True:
                 continue
+            if item.get("business_status") == "error":
+                return True
             text = json.dumps(item, sort_keys=True).lower()
             if self._looks_like_outage(text, item.get("status")):
-                return False
+                continue
             if item.get("status") in {400, 409, 422}:
                 return True
             return any(

@@ -350,6 +350,12 @@ Par defaut, il cible les scenarios critiques `R1`, `R2`, `R5`, `R6`, `R8`,
 schedule reel : les scenarios qui exigent une panne/crash/Temporal reel sont
 marques `BLOCKED` si la condition n'est pas observable depuis le runner.
 
+R5 utilise le profil reserve `recipe_functional_error`. Ce profil n'est pas une
+strategie et ne doit avoir aucun fichier YAML : son absence provoque l'erreur
+fonctionnelle Symfony que la recette verifie. Le schema le refuse hors de
+`exchange=fake`, `environment=demo` et `dry_run=true` ; il ne peut donc jamais
+servir a une execution exchange mutative.
+
 Pour cibler les recettes exchange dry-run sur `R1`, `R2` et `R14`, utiliser
 `--target-exchange okx` ou `--target-exchange hyperliquid`. Le runner execute
 d'abord `app:exchange:runtime-check <exchange> perpetual` dans le conteneur
