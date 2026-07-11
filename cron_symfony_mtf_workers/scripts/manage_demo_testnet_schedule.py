@@ -171,6 +171,19 @@ async def verify_existing_schedule(handle: Any, config: ScheduleConfig) -> None:
     await validate_schedule_definition(description, config)
 
 
+def existing_schedule_is_paused(description: Any) -> bool:
+    schedule = getattr(description, "schedule", None)
+    state = getattr(schedule, "state", None)
+    return bool(getattr(state, "paused", False))
+
+
+async def ensure_existing_schedule_pause_state(handle: Any, config: ScheduleConfig) -> None:
+    description = await handle.describe()
+    await validate_schedule_definition(description, config)
+    if config.paused and not existing_schedule_is_paused(description):
+        await handle.pause(note="demo/testnet create re-applied paused-by-default")
+
+
 def parse_runtime_check_output(output: str) -> Dict[str, str]:
     parsed: Dict[str, str] = {}
     for line in output.splitlines():
@@ -321,10 +334,10 @@ async def create_schedule(client: Any, config: ScheduleConfig) -> None:
 
         if isinstance(exc, ScheduleAlreadyRunningError):
             handle = client.get_schedule_handle(config.schedule_id)
-            await verify_existing_schedule(handle, config)
+            await ensure_existing_schedule_pause_state(handle, config)
             print(
                 f"schedule '{config.schedule_id}' already exists."
-                " Validated existing definition before reusing it."
+                " Validated existing definition and pause state before reusing it."
             )
             return
         raise

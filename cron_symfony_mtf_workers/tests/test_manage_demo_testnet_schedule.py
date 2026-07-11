@@ -70,6 +70,7 @@ def _description(
     workflow_id=DEFAULT_WORKFLOW_ID,
     task_queue=None,
     data_converter=None,
+    paused=True,
 ):
     if args is None:
         args = [
@@ -87,7 +88,8 @@ def _description(
                 args=args,
                 id=workflow_id,
                 task_queue=task_queue or schedule_manager.TASK_QUEUE,
-            )
+            ),
+            state=types.SimpleNamespace(paused=paused),
         ),
         data_converter=data_converter,
     )
@@ -651,7 +653,44 @@ def test_create_schedule_handles_already_running(monkeypatch, capsys):
 
     output = capsys.readouterr().out
     assert "already exists" in output
-    assert "Validated existing definition" in output
+    assert "Validated existing definition and pause state" in output
+
+
+def test_create_schedule_reapplies_paused_state_for_existing_active_schedule(monkeypatch):
+    _patch_schedule_classes(monkeypatch, {})
+
+    class FakeAlreadyRunning(Exception):
+        pass
+
+    temporalio_module = types.ModuleType("temporalio")
+    temporalio_client_module = types.ModuleType("temporalio.client")
+    temporalio_client_module.ScheduleAlreadyRunningError = FakeAlreadyRunning
+    monkeypatch.setitem(sys.modules, "temporalio", temporalio_module)
+    monkeypatch.setitem(sys.modules, "temporalio.client", temporalio_client_module)
+
+    calls = []
+
+    class Handle:
+        async def describe(self):
+            calls.append(("describe",))
+            return _description(paused=False)
+
+        async def pause(self, *, note=None):
+            calls.append(("pause", note))
+
+    class AlreadyRunningClient:
+        async def create_schedule(self, schedule_id, schedule):
+            raise FakeAlreadyRunning("exists")
+
+        def get_schedule_handle(self, schedule_id):
+            return Handle()
+
+    asyncio.run(create_schedule(AlreadyRunningClient(), _config()))
+
+    assert calls == [
+        ("describe",),
+        ("pause", "demo/testnet create re-applied paused-by-default"),
+    ]
 
 
 def test_create_schedule_rejects_existing_unsafe_schedule(monkeypatch):
