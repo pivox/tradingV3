@@ -54,10 +54,10 @@ Cette vague remplace la logique “dry-run uniquement” par une cible plus pré
 - [x] DEMO-002 — Recette R1-R16 double exchange en dry-run — #251 / `e524424`.
 - [x] DEMO-003 — Demo ops runbook + rollback — #252 / `79acc0c`.
 - [x] DEMO-004 — Enable demo schedule guarded — #253.
+- [x] DEMO-005 — Pre-mutative demo readiness decision — decision `blocked`.
 
 ## Restant vague 1
 
-- [ ] DEMO-005 — Pre-mutative demo readiness decision.
 - [ ] OKX-010 — Demo trading controlled avec SL.
 - [ ] HL-012 — Testnet trading controlled avec SL.
 - [ ] DEMO-006 — Final demo/testnet execution evidence report.
@@ -65,8 +65,6 @@ Cette vague remplace la logique “dry-run uniquement” par une cible plus pré
 ## Ordre strict recommandé
 
 ```text
-DEMO-005
-
 OKX-010
 HL-012
 
