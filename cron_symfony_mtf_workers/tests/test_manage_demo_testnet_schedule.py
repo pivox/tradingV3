@@ -252,6 +252,24 @@ def test_create_schedule_preview_with_missing_dashboard_warns(capsys):
     assert "[DRY-RUN] would create demo/testnet schedule" in output
 
 
+def test_create_schedule_resume_on_create_preview_skips_runtime_checks(monkeypatch, capsys):
+    def fail_runtime_checks(skip):
+        raise AssertionError("dry-run preview must not run activation checks")
+
+    monkeypatch.setattr(schedule_manager, "ensure_runtime_checks_pass", fail_runtime_checks)
+
+    asyncio.run(
+        create_schedule(
+            object(),
+            _config(dry_run_schedule=True, paused=False, resume_on_create=True),
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert "[DRY-RUN] would create demo/testnet schedule" in output
+    assert "paused=False" in output
+
+
 def test_create_schedule_can_be_active_after_runtime_checks(monkeypatch):
     calls = []
     captured = {}

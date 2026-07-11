@@ -323,7 +323,7 @@ async def create_schedule(client: Any, config: ScheduleConfig) -> None:
     if warning is not None:
         print(f"WARNING: {warning}")
 
-    if config.resume_on_create or not config.paused:
+    if not config.dry_run_schedule and (config.resume_on_create or not config.paused):
         ensure_runtime_checks_pass(config.skip_runtime_check)
 
     workflow_config = build_workflow_config(
