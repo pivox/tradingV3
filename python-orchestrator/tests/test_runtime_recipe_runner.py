@@ -229,9 +229,12 @@ class FakeRecipeApi:
                     "set_id": item["set_id"],
                     "ok": False,
                     "status": 503,
-                    "business_status": None,
+                    "business_status": "error",
                     "error": "mtf run failed: Symfony unavailable",
-                    "response_json": {"message": "Symfony unavailable"},
+                    "response_json": {
+                        "status": "error",
+                        "message": "Symfony unavailable",
+                    },
                 }
             return {
                 "set_id": item["set_id"],

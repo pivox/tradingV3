@@ -64,15 +64,23 @@ class Action(str, Enum):
 
 def assert_recipe_fault_profile_allowed(
     *,
-    mtf_profile: MtfProfile,
-    exchange: Exchange,
-    environment: Environment,
+    mtf_profile: MtfProfile | str,
+    exchange: Exchange | str,
+    environment: Environment | str,
     dry_run: bool,
 ) -> None:
-    if mtf_profile is not MtfProfile.RECIPE_FUNCTIONAL_ERROR:
+    profile_value = mtf_profile.value if isinstance(mtf_profile, MtfProfile) else mtf_profile
+    exchange_value = exchange.value if isinstance(exchange, Exchange) else exchange
+    environment_value = environment.value if isinstance(environment, Environment) else environment
+
+    if profile_value != MtfProfile.RECIPE_FUNCTIONAL_ERROR.value:
         return
 
-    if exchange is not Exchange.FAKE or environment is not Environment.DEMO or not dry_run:
+    if (
+        exchange_value != Exchange.FAKE.value
+        or environment_value != Environment.DEMO.value
+        or not dry_run
+    ):
         raise ValueError(
             "recipe_functional_error is restricted to fake/demo dry-run recipe sets"
         )
