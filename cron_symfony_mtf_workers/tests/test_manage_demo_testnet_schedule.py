@@ -690,9 +690,9 @@ def test_async_main_create_connects_and_lifecycle_routes(monkeypatch):
     parser = build_parser()
     for argv in (
         ["create", "--dashboard-id", "7"],
-        ["pause", "--dashboard-id", "7"],
+        ["pause"],
         ["resume", "--dashboard-id", "7"],
-        ["delete", "--dashboard-id", "7"],
+        ["delete"],
         ["status"],
     ):
         asyncio.run(async_main(parser.parse_args(argv)))

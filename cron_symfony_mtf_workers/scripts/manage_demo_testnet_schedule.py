@@ -139,6 +139,17 @@ def _normalize_overlap_policy(value: Any) -> str:
     return name.lower().replace("schedule_overlap_policy_", "")
 
 
+def _normalize_workflow_args_for_comparison(args: list[Any], config: ScheduleConfig) -> list[Any]:
+    if config.dashboard_id is not None:
+        return args
+    normalized: list[Any] = []
+    for arg in args:
+        if isinstance(arg, dict):
+            arg = {key: value for key, value in arg.items() if key != "dashboard_id"}
+        normalized.append(arg)
+    return normalized
+
+
 async def validate_schedule_definition(description: Any, config: ScheduleConfig) -> None:
     schedule = getattr(description, "schedule", None)
     action = getattr(schedule, "action", None)
@@ -154,6 +165,7 @@ async def validate_schedule_definition(description: Any, config: ScheduleConfig)
         )
     ]
     actual_args = await decoded_schedule_args(description, action)
+    actual_args = _normalize_workflow_args_for_comparison(actual_args, config)
     if actual_args != expected_args:
         raise RuntimeError(
             "unexpected workflow args for demo/testnet schedule: "
