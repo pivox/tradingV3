@@ -130,6 +130,15 @@ async def decoded_schedule_args(description: Any, action: Any) -> list[Any]:
     return list(decoded)
 
 
+def _normalize_overlap_policy(value: Any) -> str:
+    if value == 2:
+        return "buffer_one"
+    name = getattr(value, "name", None)
+    if name is None:
+        name = str(value)
+    return name.lower().replace("schedule_overlap_policy_", "")
+
+
 async def validate_schedule_definition(description: Any, config: ScheduleConfig) -> None:
     schedule = getattr(description, "schedule", None)
     action = getattr(schedule, "action", None)
@@ -163,6 +172,32 @@ async def validate_schedule_definition(description: Any, config: ScheduleConfig)
         raise RuntimeError(
             "unexpected task queue for demo/testnet schedule: "
             f"expected {TASK_QUEUE!r}, got {task_queue!r}"
+        )
+
+    spec = getattr(schedule, "spec", None)
+    cron_expressions = list(getattr(spec, "cron_expressions", []) or [])
+    if cron_expressions != [config.cron]:
+        raise RuntimeError(
+            "unexpected cron for demo/testnet schedule: "
+            f"expected {[config.cron]!r}, got {cron_expressions!r}"
+        )
+
+    time_zone_name = getattr(spec, "time_zone_name", None)
+    if time_zone_name != TIME_ZONE:
+        raise RuntimeError(
+            "unexpected time zone for demo/testnet schedule: "
+            f"expected {TIME_ZONE!r}, got {time_zone_name!r}"
+        )
+
+    policy = getattr(schedule, "policy", None)
+    overlap = getattr(policy, "overlap", None)
+    expected_overlap = temporal_schedule_classes()[-1]
+    if overlap != expected_overlap and _normalize_overlap_policy(overlap) != _normalize_overlap_policy(
+        expected_overlap
+    ):
+        raise RuntimeError(
+            "unexpected overlap policy for demo/testnet schedule: "
+            f"expected {expected_overlap!r}, got {overlap!r}"
         )
 
 

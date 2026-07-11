@@ -71,6 +71,9 @@ def _description(
     task_queue=None,
     data_converter=None,
     paused=True,
+    cron=None,
+    time_zone=None,
+    overlap="buffer_one",
 ):
     if args is None:
         args = [
@@ -89,6 +92,11 @@ def _description(
                 id=workflow_id,
                 task_queue=task_queue or schedule_manager.TASK_QUEUE,
             ),
+            spec=types.SimpleNamespace(
+                cron_expressions=[cron or "*/1 * * * *"],
+                time_zone_name=time_zone or schedule_manager.TIME_ZONE,
+            ),
+            policy=types.SimpleNamespace(overlap=overlap),
             state=types.SimpleNamespace(paused=paused),
         ),
         data_converter=data_converter,
@@ -427,6 +435,25 @@ def test_validate_schedule_definition_rejects_wrong_workflow_id_and_task_queue()
     with pytest.raises(RuntimeError, match="unexpected task queue"):
         asyncio.run(
             validate_schedule_definition(_description(task_queue="other-task-queue"), _config("resume"))
+        )
+
+
+def test_validate_schedule_definition_rejects_wrong_spec_and_policy(monkeypatch):
+    _patch_schedule_classes(monkeypatch, {})
+
+    with pytest.raises(RuntimeError, match="unexpected cron"):
+        asyncio.run(
+            validate_schedule_definition(_description(cron="*/5 * * * *"), _config("resume"))
+        )
+
+    with pytest.raises(RuntimeError, match="unexpected time zone"):
+        asyncio.run(
+            validate_schedule_definition(_description(time_zone="Europe/Paris"), _config("resume"))
+        )
+
+    with pytest.raises(RuntimeError, match="unexpected overlap policy"):
+        asyncio.run(
+            validate_schedule_definition(_description(overlap="allow_all"), _config("resume"))
         )
 
 
