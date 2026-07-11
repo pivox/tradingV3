@@ -387,6 +387,8 @@ async def create_schedule(client: Any, config: ScheduleConfig) -> None:
 
 
 async def pause_schedule(handle: Any, config: ScheduleConfig) -> None:
+    assert_demo_environment(config.environment)
+    await verify_existing_schedule(handle, config)
     await handle.pause(note="manual demo/testnet pause")
     print(f"schedule '{config.schedule_id}' paused")
 
@@ -400,6 +402,8 @@ async def resume_schedule(handle: Any, config: ScheduleConfig) -> None:
 
 
 async def delete_schedule(handle: Any, config: ScheduleConfig) -> None:
+    assert_demo_environment(config.environment)
+    await verify_existing_schedule(handle, config)
     await handle.delete()
     print(f"schedule '{config.schedule_id}' deleted")
 

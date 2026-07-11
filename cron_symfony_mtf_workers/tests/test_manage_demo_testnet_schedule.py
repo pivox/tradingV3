@@ -479,6 +479,10 @@ def test_pause_and_delete_delegate_to_handle():
     calls = []
 
     class Handle:
+        async def describe(self):
+            calls.append(("describe",))
+            return _description()
+
         async def pause(self, *, note=None):
             calls.append(("pause", note))
 
@@ -488,7 +492,37 @@ def test_pause_and_delete_delegate_to_handle():
     asyncio.run(pause_schedule(Handle(), _config("pause")))
     asyncio.run(delete_schedule(Handle(), _config("delete")))
 
-    assert calls == [("pause", "manual demo/testnet pause"), ("delete",)]
+    assert calls == [
+        ("describe",),
+        ("pause", "manual demo/testnet pause"),
+        ("describe",),
+        ("delete",),
+    ]
+
+
+def test_pause_and_delete_reject_unsafe_schedule_before_mutation():
+    class Handle:
+        def __init__(self):
+            self.mutated = False
+
+        async def describe(self):
+            return _description(workflow="CronSymfonyMtfWorkersWorkflow")
+
+        async def pause(self, *, note=None):
+            self.mutated = True
+
+        async def delete(self):
+            self.mutated = True
+
+    pause_handle = Handle()
+    with pytest.raises(RuntimeError, match="unexpected workflow"):
+        asyncio.run(pause_schedule(pause_handle, _config("pause")))
+    assert pause_handle.mutated is False
+
+    delete_handle = Handle()
+    with pytest.raises(RuntimeError, match="unexpected workflow"):
+        asyncio.run(delete_schedule(delete_handle, _config("delete")))
+    assert delete_handle.mutated is False
 
 
 def test_describe_schedule_prints_description(capsys):
@@ -656,9 +690,9 @@ def test_async_main_create_connects_and_lifecycle_routes(monkeypatch):
     parser = build_parser()
     for argv in (
         ["create", "--dashboard-id", "7"],
-        ["pause"],
+        ["pause", "--dashboard-id", "7"],
         ["resume", "--dashboard-id", "7"],
-        ["delete"],
+        ["delete", "--dashboard-id", "7"],
         ["status"],
     ):
         asyncio.run(async_main(parser.parse_args(argv)))
