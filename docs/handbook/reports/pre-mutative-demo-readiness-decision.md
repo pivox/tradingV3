@@ -43,7 +43,7 @@ git ls-files \
   'docs/handbook/technical/*.md' \
   'docs/handbook/reports/*.md' \
   'docs/handbook/reports/evidence/*.json' \
-  | rg -v '^docs/handbook/reports/pre-mutative-demo-readiness-decision\.md$' \
+  ':(exclude)docs/handbook/reports/pre-mutative-demo-readiness-decision.md' \
   | sort \
   | xargs shasum -a 256 \
   | shasum -a 256
