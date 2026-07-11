@@ -720,6 +720,49 @@ def test_create_schedule_reapplies_paused_state_for_existing_active_schedule(mon
     ]
 
 
+def test_create_schedule_resume_on_create_unpauses_existing_paused_schedule(monkeypatch):
+    _patch_schedule_classes(monkeypatch, {})
+    monkeypatch.setattr(schedule_manager, "ensure_runtime_checks_pass", lambda skip: None)
+
+    class FakeAlreadyRunning(Exception):
+        pass
+
+    temporalio_module = types.ModuleType("temporalio")
+    temporalio_client_module = types.ModuleType("temporalio.client")
+    temporalio_client_module.ScheduleAlreadyRunningError = FakeAlreadyRunning
+    monkeypatch.setitem(sys.modules, "temporalio", temporalio_module)
+    monkeypatch.setitem(sys.modules, "temporalio.client", temporalio_client_module)
+
+    calls = []
+
+    class Handle:
+        async def describe(self):
+            calls.append(("describe",))
+            return _description(paused=True)
+
+        async def unpause(self, *, note=None):
+            calls.append(("unpause", note))
+
+    class AlreadyRunningClient:
+        async def create_schedule(self, schedule_id, schedule):
+            raise FakeAlreadyRunning("exists")
+
+        def get_schedule_handle(self, schedule_id):
+            return Handle()
+
+    asyncio.run(
+        create_schedule(
+            AlreadyRunningClient(),
+            _config(paused=False, resume_on_create=True),
+        )
+    )
+
+    assert calls == [
+        ("describe",),
+        ("unpause", "demo/testnet runtime checks passed"),
+    ]
+
+
 def test_create_schedule_rejects_existing_unsafe_schedule(monkeypatch):
     _patch_schedule_classes(monkeypatch, {})
 

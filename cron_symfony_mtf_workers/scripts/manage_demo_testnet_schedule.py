@@ -215,8 +215,11 @@ def existing_schedule_is_paused(description: Any) -> bool:
 async def ensure_existing_schedule_pause_state(handle: Any, config: ScheduleConfig) -> None:
     description = await handle.describe()
     await validate_schedule_definition(description, config)
-    if config.paused and not existing_schedule_is_paused(description):
+    is_paused = existing_schedule_is_paused(description)
+    if config.paused and not is_paused:
         await handle.pause(note="demo/testnet create re-applied paused-by-default")
+    elif not config.paused and is_paused:
+        await handle.unpause(note="demo/testnet runtime checks passed")
 
 
 def parse_runtime_check_output(output: str) -> Dict[str, str]:
