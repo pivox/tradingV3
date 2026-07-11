@@ -25,8 +25,8 @@ Cette page n'autorise aucun mainnet et ne declare jamais TradingV3 live-ready.
 | Element | Valeur |
 | --- | --- |
 | Code baseline | `0026613fd2859f3fc18fccbbb9f87264189b3fb6` |
-| Config/docs hash pre-decision | `61848663b0507c85b1ef94de23576e0d9d2d8f8dede4c3879cb116d132341ad4` |
-| Methode hash | `git ls-files` sur configs versionnees, scripts schedule, runbooks, rapports et evidence JSON versionnee, trie puis `shasum -a 256`, avant ajout de ce rapport auto-referentiel |
+| Config/docs content hash | `e2d4f878331d30c9930326f613e4b2fe75c4cec67dec6a3bb469cecc54bed6c9` |
+| Methode hash | Checksums `shasum -a 256` des contenus versionnes pertinents, tries puis re-hashes ; ce rapport auto-referentiel est exclu du hash |
 | Secrets/env locaux | Non lus, non hashes, non exposes |
 
 Commandes de reproduction du hash :
@@ -43,7 +43,9 @@ git ls-files \
   'docs/handbook/technical/*.md' \
   'docs/handbook/reports/*.md' \
   'docs/handbook/reports/evidence/*.json' \
+  | rg -v '^docs/handbook/reports/pre-mutative-demo-readiness-decision\.md$' \
   | sort \
+  | xargs shasum -a 256 \
   | shasum -a 256
 ```
 
