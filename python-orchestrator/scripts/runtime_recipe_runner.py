@@ -885,7 +885,9 @@ class RecipeRunner:
                 continue
             text = json.dumps(item, sort_keys=True).lower()
             if self._looks_like_outage(text, item.get("status")):
-                return False
+                continue
+            if item.get("business_status") == "error":
+                return True
             if item.get("status") in {400, 409, 422}:
                 return True
             return any(
@@ -923,7 +925,7 @@ class RecipeRunner:
                     yield item
 
     def _looks_like_outage(self, text: str, status: Any) -> bool:
-        if isinstance(status, int) and status >= 500:
+        if isinstance(status, int) and status >= 502:
             return True
         return any(
             marker in text

@@ -131,6 +131,20 @@ def test_runtime_recipe_fixtures_are_fake_dry_run_only():
     assert {"regular", "scalper", "scalper_micro"}.issubset(profiles)
 
 
+def test_r5_uses_explicit_safe_fault_profile_instead_of_magic_symbol():
+    fixture = _load(FIXTURE_DIR / "r1_r16_degraded_fake_dashboard.json")
+    r5_set = next(
+        item for item in fixture["sets"]
+        if item["set_id"] == "recipe_fake_error_regular"
+    )
+
+    assert r5_set["mtf_profile"] == "recipe_functional_error"
+    assert r5_set["symbols"] == ["BTCUSDT"]
+    assert r5_set["exchange"] == "fake"
+    assert r5_set["environment"] == "demo"
+    assert r5_set["dry_run"] is True
+
+
 def test_runtime_recipe_okx_dry_run_fixture_is_exchange_scoped():
     fixture = _load(FIXTURE_DIR / "r1_r16_okx_dry_run_dashboard.json")
 

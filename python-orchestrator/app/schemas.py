@@ -47,6 +47,7 @@ class MtfProfile(str, Enum):
     REGULAR = "regular"
     SCALPER = "scalper"
     SCALPER_MICRO = "scalper_micro"
+    RECIPE_FUNCTIONAL_ERROR = "recipe_functional_error"
 
 
 class Environment(str, Enum):
@@ -59,6 +60,30 @@ class Action(str, Enum):
     MTF_RUN = "mtf_run"
     SYNC_CONTRACTS = "sync_contracts"
     REPORTING = "reporting"
+
+
+def assert_recipe_fault_profile_allowed(
+    *,
+    mtf_profile: MtfProfile | str,
+    exchange: Exchange | str,
+    environment: Environment | str,
+    dry_run: bool,
+) -> None:
+    profile_value = mtf_profile.value if isinstance(mtf_profile, MtfProfile) else mtf_profile
+    exchange_value = exchange.value if isinstance(exchange, Exchange) else exchange
+    environment_value = environment.value if isinstance(environment, Environment) else environment
+
+    if profile_value != MtfProfile.RECIPE_FUNCTIONAL_ERROR.value:
+        return
+
+    if (
+        exchange_value != Exchange.FAKE.value
+        or environment_value != Environment.DEMO.value
+        or not dry_run
+    ):
+        raise ValueError(
+            "recipe_functional_error is restricted to fake/demo dry-run recipe sets"
+        )
 
 
 # Exchanges interdits live **en permanence** (OKX/Hyperliquid, cf.
@@ -200,6 +225,12 @@ class OrchestratorSet(BaseModel):
     def _forbid_live_on_restricted_exchanges(self) -> "OrchestratorSet":
         """Interdit ``dry_run=false`` sur les exchanges verrouillés (OKX/Hyperliquid)."""
         assert_live_allowed(self.exchange, self.dry_run)
+        assert_recipe_fault_profile_allowed(
+            mtf_profile=self.mtf_profile,
+            exchange=self.exchange,
+            environment=self.environment,
+            dry_run=self.dry_run,
+        )
         return self
 
 
@@ -431,6 +462,12 @@ class SetCreate(BaseModel):
             exchange=self.exchange,
             market_type=self.market_type,
             environment=self.environment,
+        )
+        assert_recipe_fault_profile_allowed(
+            mtf_profile=self.mtf_profile,
+            exchange=self.exchange,
+            environment=self.environment,
+            dry_run=self.dry_run,
         )
         return self
 

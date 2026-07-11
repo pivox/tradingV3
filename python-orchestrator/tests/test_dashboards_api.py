@@ -287,6 +287,22 @@ def test_patch_set_to_live_forbidden_rejected(api_client):
     assert resp.status_code == 422
 
 
+def test_patch_set_rejects_recipe_fault_profile_outside_safe_envelope(api_client):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(set_id="bitmart_dry", exchange="bitmart", dry_run=True),
+    )
+
+    resp = api_client.patch(
+        f"/dashboards/{dashboard_id}/sets/bitmart_dry",
+        json={"mtf_profile": "recipe_functional_error"},
+    )
+
+    assert resp.status_code == 422
+    assert "restricted to fake/demo dry-run" in resp.json()["detail"]
+
+
 def test_workers_above_bound_rejected(api_client):
     dashboard_id = _create_dashboard(api_client).json()["id"]
     resp = api_client.post(

@@ -37,6 +37,7 @@ from app.schemas import (
     SetCreate,
     SetRead,
     SetUpdate,
+    assert_recipe_fault_profile_allowed,
     assert_set_persistable,
 )
 from app.services import symfony_client
@@ -170,6 +171,7 @@ def update_set(
     effective_exchange = updates.get("exchange", a_set.exchange)
     effective_market_type = updates.get("market_type", a_set.market_type)
     effective_environment = updates.get("environment", a_set.environment)
+    effective_mtf_profile = updates.get("mtf_profile", a_set.mtf_profile)
     try:
         assert_set_persistable(
             dry_run=effective_dry_run,
@@ -178,6 +180,12 @@ def update_set(
             exchange=effective_exchange,
             market_type=effective_market_type,
             environment=effective_environment,
+        )
+        assert_recipe_fault_profile_allowed(
+            mtf_profile=effective_mtf_profile,
+            exchange=effective_exchange,
+            environment=effective_environment,
+            dry_run=effective_dry_run,
         )
     except ValueError as exc:
         # 422 littéral : la constante `status.HTTP_422_*` a été renommée selon
