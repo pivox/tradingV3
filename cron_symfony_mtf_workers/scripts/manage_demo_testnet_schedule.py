@@ -140,7 +140,7 @@ def _normalize_overlap_policy(value: Any) -> str:
 
 
 def _normalize_workflow_args_for_comparison(args: list[Any], config: ScheduleConfig) -> list[Any]:
-    if config.dashboard_id is not None:
+    if config.dashboard_id is not None or config.command not in {"pause", "delete"}:
         return args
     normalized: list[Any] = []
     for arg in args:
@@ -407,6 +407,7 @@ async def pause_schedule(handle: Any, config: ScheduleConfig) -> None:
 
 async def resume_schedule(handle: Any, config: ScheduleConfig) -> None:
     assert_demo_environment(config.environment)
+    assert_dashboard_configured(config)
     ensure_runtime_checks_pass(config.skip_runtime_check)
     await verify_existing_schedule(handle, config)
     await handle.unpause(note="demo/testnet runtime checks passed")

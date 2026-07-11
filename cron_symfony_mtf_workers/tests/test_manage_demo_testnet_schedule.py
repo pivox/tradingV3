@@ -330,6 +330,27 @@ def test_resume_requires_runtime_checks_before_unpause(monkeypatch):
     assert handle.unpaused is False
 
 
+def test_resume_requires_dashboard_before_unpause(monkeypatch):
+    monkeypatch.setattr(
+        schedule_manager,
+        "ensure_runtime_checks_pass",
+        lambda skip: (_ for _ in ()).throw(AssertionError("dashboard guard must run first")),
+    )
+
+    class Handle:
+        def __init__(self):
+            self.unpaused = False
+
+        async def unpause(self, *, note=None):
+            self.unpaused = True
+
+    handle = Handle()
+    with pytest.raises(SystemExit, match="no valid demo/testnet dashboard configured"):
+        asyncio.run(resume_schedule(handle, _config("resume", dashboard_id=None)))
+
+    assert handle.unpaused is False
+
+
 def test_resume_unpauses_when_runtime_checks_pass(monkeypatch):
     calls = []
 
