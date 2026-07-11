@@ -26,6 +26,7 @@ class MtfValidatorCoreService
         private readonly AuditLoggerInterface $auditLogger,
         private readonly ClockInterface $clock,
         private readonly LoggerInterface $mtfLogger,
+        private readonly MtfTimeframeResolver $timeframeResolver,
     ) {
     }
 
@@ -41,8 +42,8 @@ class MtfValidatorCoreService
         $mode = $input->mode ?? ($mtfConfig['mode'] ?? null);
 
         // 2. Timeframes
-        $contextTimeframes   = $this->resolveContextTimeframes($mtfConfig);
-        $executionTimeframes = $this->resolveExecutionTimeframes($mtfConfig, $contextTimeframes);
+        $contextTimeframes   = $this->timeframeResolver->resolveContext($mtfConfig);
+        $executionTimeframes = $this->timeframeResolver->resolveExecution($mtfConfig, $contextTimeframes);
 
         $allTimeframes = \array_values(\array_unique(\array_merge(
             $contextTimeframes,
@@ -150,62 +151,6 @@ class MtfValidatorCoreService
         $this->auditResult($input, $result, 'MTF_EXECUTION_RESULT');
 
         return $result;
-    }
-
-    /**
-     * @param array<string,mixed> $mtfConfig
-     * @return string[]
-     */
-    private function resolveContextTimeframes(array $mtfConfig): array
-    {
-        $context = $mtfConfig['context_timeframes'] ?? null;
-
-        if (\is_string($context)) {
-            $context = [$context];
-        }
-
-        if (\is_array($context) && !empty($context)) {
-            /** @var string[] $context */
-            return $context;
-        }
-
-        $validationTimeframes = \array_keys($mtfConfig['validation']['timeframe'] ?? []);
-        if (!empty($validationTimeframes)) {
-            /** @var string[] $validationTimeframes */
-            return $validationTimeframes;
-        }
-
-        return ['4h', '1h'];
-    }
-
-    /**
-     * @param array<string,mixed> $mtfConfig
-     * @param string[]            $contextTimeframes
-     * @return string[]
-     */
-    private function resolveExecutionTimeframes(array $mtfConfig, array $contextTimeframes): array
-    {
-        $execution = $mtfConfig['execution_timeframes'] ?? null;
-
-        if (\is_string($execution)) {
-            $execution = [$execution];
-        }
-
-        if (\is_array($execution) && !empty($execution)) {
-            /** @var string[] $execution */
-            return $execution;
-        }
-
-        $validationTimeframes = \array_keys($mtfConfig['validation']['timeframe'] ?? []);
-        if (!empty($validationTimeframes)) {
-            $executionDerived = \array_values(\array_diff($validationTimeframes, $contextTimeframes));
-            if (!empty($executionDerived)) {
-                /** @var string[] $executionDerived */
-                return $executionDerived;
-            }
-        }
-
-        return ['15m', '5m', '1m'];
     }
 
     private function buildEmptyResult(

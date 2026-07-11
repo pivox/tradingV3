@@ -21,6 +21,7 @@ class MtfValidatorService implements MtfValidatorInterface
         private readonly MtfValidationConfigProvider $mtfValidationConfigProvider,
         #[Autowire('%app.trade_entry_default_mode%')]
         private readonly string $defaultProfile,
+        private readonly MtfTimeframeResolver $timeframeResolver,
     ) {
     }
 
@@ -128,9 +129,11 @@ class MtfValidatorService implements MtfValidatorInterface
         return 'mtf_validator';
     }
 
+    /** @return list<string> */
     public function getListTimeframe(string $profile = 'scalper'): array
     {
         $config = $this->mtfValidationConfigProvider->getConfigForMode($profile)->getConfig();
-        return array_merge($config['context_timeframes'], $config['execution_timeframes']);
+
+        return $this->timeframeResolver->resolveAll($config);
     }
 }
