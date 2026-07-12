@@ -65,6 +65,10 @@ final class HyperliquidMarginSafetyEvidenceMapperTest extends TestCase
         self::assertSame('cross', $evidence->observedMarginMode);
     }
 
+    /**
+     * @param array<string,mixed> $meta
+     * @param array<string,mixed> $active
+     */
     #[DataProvider('invalidOfficialEvidence')]
     public function testRejectsMalformedTableOrObservedIdentity(array $meta, array $active): void
     {
@@ -138,7 +142,11 @@ final class HyperliquidMarginSafetyEvidenceMapperTest extends TestCase
         return new HyperliquidMarginSafetyEvidenceMapper();
     }
 
-    /** @param array<string,mixed> $asset @param array<mixed> $tables @return array<string,mixed> */
+    /**
+     * @param array<string,mixed> $asset
+     * @param array<mixed> $tables
+     * @return array<string,mixed>
+     */
     private function meta(array $asset, array $tables = []): array
     {
         return ['universe' => [$asset], 'marginTables' => $tables];

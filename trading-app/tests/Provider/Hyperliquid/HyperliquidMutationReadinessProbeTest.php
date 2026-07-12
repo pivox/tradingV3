@@ -51,7 +51,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
 
     public function testCurrentReturnsSoleTypedCandidateFromStrictReadOnlyEvidenceWithoutPhpKeyCustody(): void
     {
-        $rest = new RecordingInfoClient($this->validExtraAgents());
+        $rest = new ReadinessRecordingInfoClient($this->validExtraAgents());
         $probe = $this->probe(rest: $rest);
 
         self::assertInstanceOf(HyperliquidMutationReadinessProbeInterface::class, $probe);
@@ -93,7 +93,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         array $extraAgents,
         string $warning,
     ): void {
-        $report = $this->probe(rest: new RecordingInfoClient($extraAgents))->current();
+        $report = $this->probe(rest: new ReadinessRecordingInfoClient($extraAgents))->current();
 
         self::assertFalse($report->permissionsTrade);
         self::assertContains($warning, $report->warnings);
@@ -115,7 +115,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
     #[DataProvider('zeroAddressConfigs')]
     public function testZeroAccountOrAgentAddressCannotProvePermission(HyperliquidConfig $config): void
     {
-        $rest = new RecordingInfoClient($this->validExtraAgents());
+        $rest = new ReadinessRecordingInfoClient($this->validExtraAgents());
         $report = $this->probe(config: $config, rest: $rest)->current();
 
         self::assertFalse($report->permissionsTrade);
@@ -150,7 +150,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
     {
         $report = $this->probe(
             config: $this->config(agent: strtoupper(self::AGENT)),
-            rest: new RecordingInfoClient([['address' => strtoupper(self::AGENT), 'validUntil' => 1_900_000_000_000]]),
+            rest: new ReadinessRecordingInfoClient([['address' => strtoupper(self::AGENT), 'validUntil' => 1_900_000_000_000]]),
         )->current();
 
         self::assertTrue($report->permissionsTrade);
@@ -285,7 +285,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
 
     public function testSpoofedEndpointPreventsEveryExchangeInfoProbe(): void
     {
-        $rest = new RecordingInfoClient($this->validExtraAgents());
+        $rest = new ReadinessRecordingInfoClient($this->validExtraAgents());
         $report = $this->probe(
             config: new HyperliquidConfig(
                 environment: 'testnet',
@@ -321,7 +321,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
     /** @param list<string> $allowedMarkets */
     private function probe(
         ?HyperliquidConfig $config = null,
-        ?RecordingInfoClient $rest = null,
+        ?ReadinessRecordingInfoClient $rest = null,
         bool $sidecarHealthy = true,
         bool $nonceReady = true,
         bool $durableKillSwitch = false,
@@ -350,7 +350,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
                 $reconciliation,
                 $reconciliationInFlightAfterReads,
             ),
-            readinessInfoClient: $rest ?? new RecordingInfoClient($this->validExtraAgents()),
+            readinessInfoClient: $rest ?? new ReadinessRecordingInfoClient($this->validExtraAgents()),
             signedClient: $this->signedClient($sidecarHealthy),
             nonceManager: $this->nonceManager($nonceReady),
             durableKillSwitch: $this->killSwitch($durableKillSwitch),
@@ -572,7 +572,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
     }
 }
 
-final class RecordingInfoClient implements HyperliquidRestClientInterface, HyperliquidReadinessInfoClientInterface
+final class ReadinessRecordingInfoClient implements HyperliquidRestClientInterface, HyperliquidReadinessInfoClientInterface
 {
     /** @var list<array<string, mixed>> */
     public array $requests = [];

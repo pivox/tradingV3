@@ -597,6 +597,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         );
     }
 
+    /** @param ?list<HyperliquidMarginTierEvidence> $tiers */
     private function marginEvidence(
         string $symbol = 'BTCUSDT',
         ?array $tiers = null,

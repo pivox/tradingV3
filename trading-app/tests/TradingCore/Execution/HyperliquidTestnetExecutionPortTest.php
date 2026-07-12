@@ -484,8 +484,8 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame(ExecutionStatus::Failed, $result->status);
         self::assertSame('hyperliquid_accepted_result_invariant_failed', $result->metadata['failure_reason']);
         self::assertSame(1, $trip->tripAttempts);
-        self::assertTrue($fixture->lock->lease?->released);
-        self::assertFalse($fixture->lock->lease?->retained);
+        self::assertTrue($fixture->lock->lease->released);
+        self::assertFalse($fixture->lock->lease->retained);
     }
 
     public function testAcceptedResultInvariantTripFailureRetainsLease(): void
@@ -503,8 +503,8 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame(ExecutionStatus::Failed, $result->status);
         self::assertSame('hyperliquid_durable_quarantine_failed', $result->metadata['failure_reason']);
         self::assertSame(1, $trip->tripAttempts);
-        self::assertTrue($fixture->lock->lease?->retained);
-        self::assertFalse($fixture->lock->lease?->released);
+        self::assertTrue($fixture->lock->lease->retained);
+        self::assertFalse($fixture->lock->lease->released);
     }
 
     /** @param array<string,mixed> $metadata */
@@ -989,6 +989,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
     /**
      * @param list<HyperliquidSignedActionResult|\Throwable> $signedResults
      * @param array<string,mixed> $requestMetadata
+     * @param ?list<HyperliquidExecutionState> $executionStates
      */
     private function fixture(
         ?HyperliquidConfig $config = null,
