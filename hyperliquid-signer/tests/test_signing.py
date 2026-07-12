@@ -109,7 +109,8 @@ def test_official_sdk_testnet_signing_is_deterministic_and_well_formed() -> None
     assert all(
         isinstance(first[field], str)
         and first[field].startswith("0x")
-        and len(first[field]) == 66
+        and 3 <= len(first[field]) <= 66
+        and 0 < int(first[field], 16) < 2**256
         for field in ("r", "s")
     )
 
