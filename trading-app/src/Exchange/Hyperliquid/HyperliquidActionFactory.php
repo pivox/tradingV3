@@ -61,7 +61,7 @@ final class HyperliquidActionFactory
         if ($this->normalizeSymbol($entry->symbol) !== $this->normalizeSymbol($stop->symbol)) {
             throw new \InvalidArgumentException('hyperliquid_orders_must_use_same_symbol');
         }
-        if ($entry->quantity !== $stop->quantity) {
+        if ($this->decimal($entry->quantity) !== $this->decimal($stop->quantity)) {
             throw new \InvalidArgumentException('hyperliquid_orders_must_use_same_quantity');
         }
         if ($entry->positionSide !== $stop->positionSide) {
@@ -70,17 +70,32 @@ final class HyperliquidActionFactory
         if ($entry->reduceOnly) {
             throw new \InvalidArgumentException('hyperliquid_entry_must_not_be_reduce_only');
         }
+        if (!\in_array($entry->orderType, [ExchangeOrderType::LIMIT, ExchangeOrderType::MARKET], true)) {
+            throw new \InvalidArgumentException('hyperliquid_entry_must_be_limit_or_market');
+        }
+        if ($entry->price === null || $entry->price <= 0.0 || !\is_finite($entry->price)) {
+            throw new \InvalidArgumentException('hyperliquid_entry_requires_positive_finite_reference_price');
+        }
         if (!$stop->reduceOnly) {
             throw new \InvalidArgumentException('hyperliquid_stop_must_be_reduce_only');
         }
         if ($stop->orderType !== ExchangeOrderType::STOP_LOSS) {
             throw new \InvalidArgumentException('hyperliquid_stop_must_be_stop_loss');
         }
+        if ($stop->stopPrice === null || $stop->stopPrice <= 0.0 || !\is_finite($stop->stopPrice)) {
+            throw new \InvalidArgumentException('hyperliquid_stop_requires_positive_finite_stop_price');
+        }
         if ($entry->side === $stop->side) {
             throw new \InvalidArgumentException('hyperliquid_stop_must_close_entry_side');
         }
         if (!$this->isEntrySideCompatible($entry)) {
             throw new \InvalidArgumentException('hyperliquid_entry_side_incompatible_with_position');
+        }
+        if (
+            ($entry->side === ExchangeOrderSide::BUY && $stop->stopPrice >= $entry->price)
+            || ($entry->side === ExchangeOrderSide::SELL && $stop->stopPrice <= $entry->price)
+        ) {
+            throw new \InvalidArgumentException('hyperliquid_stop_price_must_protect_entry');
         }
         if ($this->cloid($entry->clientOrderId) === $this->cloid($stop->clientOrderId)) {
             throw new \InvalidArgumentException('hyperliquid_order_cloids_must_be_distinct');

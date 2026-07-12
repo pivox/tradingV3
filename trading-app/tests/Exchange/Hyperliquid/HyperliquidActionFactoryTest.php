@@ -65,6 +65,28 @@ final class HyperliquidActionFactoryTest extends TestCase
         (new HyperliquidActionFactory())->positionTpsl(0, $this->entry(reduceOnly: true), $this->stop());
     }
 
+    #[DataProvider('unsupportedEntryOrderTypeProvider')]
+    public function testRejectsTriggerEntryOrderTypes(ExchangeOrderType $orderType): void
+    {
+        $this->expectExceptionMessage('hyperliquid_entry_must_be_limit_or_market');
+
+        (new HyperliquidActionFactory())->positionTpsl(
+            0,
+            $this->entry(orderType: $orderType),
+            $this->stop(),
+        );
+    }
+
+    /**
+     * @return iterable<string, array{ExchangeOrderType}>
+     */
+    public static function unsupportedEntryOrderTypeProvider(): iterable
+    {
+        yield 'stop loss' => [ExchangeOrderType::STOP_LOSS];
+        yield 'take profit' => [ExchangeOrderType::TAKE_PROFIT];
+        yield 'generic trigger' => [ExchangeOrderType::TRIGGER];
+    }
+
     public function testRejectsNonReduceOnlyStop(): void
     {
         $this->expectExceptionMessage('hyperliquid_stop_must_be_reduce_only');
@@ -80,6 +102,70 @@ final class HyperliquidActionFactoryTest extends TestCase
             0,
             $this->entry(),
             $this->stop(orderType: ExchangeOrderType::TAKE_PROFIT),
+        );
+    }
+
+    #[DataProvider('invalidStopDirectionProvider')]
+    public function testRejectsStopThatDoesNotProtectEntry(
+        ExchangeOrderSide $entrySide,
+        ExchangePositionSide $positionSide,
+        float $stopPrice,
+    ): void {
+        $stopSide = $entrySide === ExchangeOrderSide::BUY
+            ? ExchangeOrderSide::SELL
+            : ExchangeOrderSide::BUY;
+        $this->expectExceptionMessage('hyperliquid_stop_price_must_protect_entry');
+
+        (new HyperliquidActionFactory())->positionTpsl(
+            0,
+            $this->entry(side: $entrySide, positionSide: $positionSide),
+            $this->stop(side: $stopSide, positionSide: $positionSide, stopPrice: $stopPrice),
+        );
+    }
+
+    /**
+     * @return iterable<string, array{ExchangeOrderSide, ExchangePositionSide, float}>
+     */
+    public static function invalidStopDirectionProvider(): iterable
+    {
+        yield 'long inverted' => [ExchangeOrderSide::BUY, ExchangePositionSide::LONG, 101.0];
+        yield 'long boundary' => [ExchangeOrderSide::BUY, ExchangePositionSide::LONG, 100.0];
+        yield 'short inverted' => [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT, 99.0];
+        yield 'short boundary' => [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT, 100.0];
+    }
+
+    #[DataProvider('invalidEntryReferencePriceProvider')]
+    public function testRejectsEntryWithoutUsableReferencePrice(
+        ExchangeOrderType $orderType,
+        ?float $price,
+    ): void {
+        $this->expectExceptionMessage('hyperliquid_entry_requires_positive_finite_reference_price');
+
+        (new HyperliquidActionFactory())->positionTpsl(
+            0,
+            $this->entry(orderType: $orderType, price: $price),
+            $this->stop(),
+        );
+    }
+
+    /**
+     * @return iterable<string, array{ExchangeOrderType, ?float}>
+     */
+    public static function invalidEntryReferencePriceProvider(): iterable
+    {
+        yield 'market price missing' => [ExchangeOrderType::MARKET, null];
+        yield 'market price infinite' => [ExchangeOrderType::MARKET, INF];
+        yield 'limit price not finite' => [ExchangeOrderType::LIMIT, NAN];
+    }
+
+    public function testRejectsStopWithoutUsableStopPrice(): void
+    {
+        $this->expectExceptionMessage('hyperliquid_stop_requires_positive_finite_stop_price');
+
+        (new HyperliquidActionFactory())->positionTpsl(
+            0,
+            $this->entry(),
+            $this->stop(stopPrice: INF),
         );
     }
 
@@ -149,6 +235,35 @@ final class HyperliquidActionFactoryTest extends TestCase
         self::assertCount(2, $action['orders']);
     }
 
+    public function testAcceptsQuantitiesWithTheSameWireDecimal(): void
+    {
+        $action = (new HyperliquidActionFactory())->positionTpsl(
+            0,
+            $this->entry(quantity: 0.1 + 0.2),
+            $this->stop(quantity: 0.3),
+        );
+
+        self::assertSame('0.3', $action['orders'][0]['s']);
+        self::assertSame('0.3', $action['orders'][1]['s']);
+    }
+
+    public function testBuildsShortPositionTpsl(): void
+    {
+        $action = (new HyperliquidActionFactory())->positionTpsl(
+            0,
+            $this->entry(side: ExchangeOrderSide::SELL, positionSide: ExchangePositionSide::SHORT),
+            $this->stop(
+                side: ExchangeOrderSide::BUY,
+                positionSide: ExchangePositionSide::SHORT,
+                stopPrice: 102.0,
+            ),
+        );
+
+        self::assertFalse($action['orders'][0]['b']);
+        self::assertTrue($action['orders'][1]['b']);
+        self::assertSame('102', $action['orders'][1]['t']['trigger']['triggerPx']);
+    }
+
     public function testRequiresHyperliquidPerpetualOrders(): void
     {
         $this->expectExceptionMessage('hyperliquid_orders_require_hyperliquid_perpetual');
@@ -193,6 +308,21 @@ final class HyperliquidActionFactoryTest extends TestCase
         self::assertFalse($action['orders'][0]['b']);
         self::assertSame('1.25', $action['orders'][0]['s']);
         self::assertSame('95.5', $action['orders'][0]['p']);
+        self::assertTrue($action['orders'][0]['r']);
+        self::assertSame(['limit' => ['tif' => 'Ioc']], $action['orders'][0]['t']);
+    }
+
+    public function testBuildsShortEmergencyCloseAsBuyIoc(): void
+    {
+        $action = (new HyperliquidActionFactory())->emergencyClose(
+            3,
+            self::makeEmergencyClose(
+                side: ExchangeOrderSide::BUY,
+                positionSide: ExchangePositionSide::SHORT,
+            ),
+        );
+
+        self::assertTrue($action['orders'][0]['b']);
         self::assertTrue($action['orders'][0]['r']);
         self::assertSame(['limit' => ['tif' => 'Ioc']], $action['orders'][0]['t']);
     }
@@ -267,6 +397,9 @@ final class HyperliquidActionFactoryTest extends TestCase
         string $symbol = 'BTCUSDT',
         ExchangeOrderSide $side = ExchangeOrderSide::BUY,
         ExchangePositionSide $positionSide = ExchangePositionSide::LONG,
+        ExchangeOrderType $orderType = ExchangeOrderType::LIMIT,
+        float $quantity = 1.25,
+        ?float $price = 100.0,
         bool $reduceOnly = false,
         string $clientOrderId = 'entry-1',
         ?float $attachedTakeProfitPrice = null,
@@ -277,10 +410,10 @@ final class HyperliquidActionFactoryTest extends TestCase
             symbol: $symbol,
             side: $side,
             positionSide: $positionSide,
-            orderType: ExchangeOrderType::LIMIT,
+            orderType: $orderType,
             timeInForce: ExchangeTimeInForce::GTC,
-            quantity: 1.25,
-            price: 100.0,
+            quantity: $quantity,
+            price: $price,
             stopPrice: null,
             reduceOnly: $reduceOnly,
             postOnly: false,
@@ -299,6 +432,7 @@ final class HyperliquidActionFactoryTest extends TestCase
         ExchangePositionSide $positionSide = ExchangePositionSide::LONG,
         ExchangeOrderType $orderType = ExchangeOrderType::STOP_LOSS,
         float $quantity = 1.25,
+        ?float $stopPrice = 98.0,
         bool $reduceOnly = true,
         string $clientOrderId = 'stop-1',
     ): PlaceOrderRequest {
@@ -312,7 +446,7 @@ final class HyperliquidActionFactoryTest extends TestCase
             timeInForce: ExchangeTimeInForce::GTC,
             quantity: $quantity,
             price: null,
-            stopPrice: 98.0,
+            stopPrice: $stopPrice,
             reduceOnly: $reduceOnly,
             postOnly: false,
             leverage: 3,
@@ -326,14 +460,18 @@ final class HyperliquidActionFactoryTest extends TestCase
         return self::makeEmergencyClose();
     }
 
-    private static function makeEmergencyClose(float $quantity = 1.25, ?float $price = 95.5): PlaceOrderRequest
-    {
+    private static function makeEmergencyClose(
+        float $quantity = 1.25,
+        ?float $price = 95.5,
+        ExchangeOrderSide $side = ExchangeOrderSide::SELL,
+        ExchangePositionSide $positionSide = ExchangePositionSide::LONG,
+    ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: Exchange::HYPERLIQUID,
             marketType: MarketType::PERPETUAL,
             symbol: 'BTCUSDT',
-            side: ExchangeOrderSide::SELL,
-            positionSide: ExchangePositionSide::LONG,
+            side: $side,
+            positionSide: $positionSide,
             orderType: ExchangeOrderType::MARKET,
             timeInForce: ExchangeTimeInForce::IOC,
             quantity: $quantity,
