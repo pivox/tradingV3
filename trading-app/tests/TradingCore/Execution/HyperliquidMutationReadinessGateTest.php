@@ -52,6 +52,8 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
         yield 'mainnet guard' => [self::report(mainnetWriteGuard: false), self::config(), 'mainnet_write_guard_not_ready'];
         yield 'mainnet enabled' => [self::report(), self::config(mainnetEnabled: true), 'hyperliquid_mainnet_must_be_disabled'];
         yield 'durable or environment kill switch' => [self::report(killSwitch: true), self::config(), 'kill_switch_enabled'];
+        yield 'effective profile' => [self::report(configProfile: null), self::config(), 'effective_config_profile_required'];
+        yield 'config hash' => [self::report(configHash: null), self::config(), 'effective_config_hash_required'];
         yield 'allow list' => [self::report(allowedMarkets: []), self::config(), 'market_allow_list_required'];
         yield 'null max notional' => [self::report(maxNotional: null), self::config(), 'positive_max_notional_required'];
         yield 'zero max notional' => [self::report(maxNotional: 0.0), self::config(), 'positive_max_notional_required'];
@@ -84,6 +86,8 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
             killSwitch: true,
             allowedMarkets: [],
             maxNotional: 0.0,
+            configProfile: null,
+            configHash: null,
         );
 
         self::assertSame([
@@ -110,6 +114,8 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
             'mainnet_write_guard_not_ready',
             'hyperliquid_mainnet_must_be_disabled',
             'kill_switch_enabled',
+            'effective_config_profile_required',
+            'effective_config_hash_required',
             'market_allow_list_required',
             'positive_max_notional_required',
         ], (new HyperliquidMutationReadinessGate())->blockingReasons(
@@ -166,6 +172,8 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
         bool $killSwitch = false,
         array $allowedMarkets = ['perpetual'],
         ?float $maxNotional = 25.0,
+        ?string $configProfile = 'scalper_micro',
+        ?string $configHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     ): ExchangeReadinessReport {
         return new ExchangeReadinessReport(
             exchange: $exchange,
@@ -194,9 +202,10 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
             allowedSymbols: [],
             allowedMarkets: $allowedMarkets,
             maxNotional: $maxNotional,
-            configHash: null,
+            configHash: $configHash,
             blockingErrors: [],
             warnings: [],
+            configProfile: $configProfile,
         );
     }
 }

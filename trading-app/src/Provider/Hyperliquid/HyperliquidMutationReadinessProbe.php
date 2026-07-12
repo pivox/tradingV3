@@ -64,7 +64,7 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
             ? $this->collaborators($warnings)
             : [null, new ExchangeCapabilities()];
         [$publicConnectivity, $instrumentsLoaded] = $this->publicRead($bundle, $warnings);
-        $accountReadable = $this->accountRead($bundle, $warnings);
+        [$accountReadable, $collateralReadable] = $this->accountRead($bundle, $warnings);
         $ordersReady = $this->ordersRead($bundle, $warnings);
         $fillsReady = $this->fillsRead($bundle, $warnings);
         $positionsReady = $this->positionsRead($bundle, $warnings);
@@ -103,9 +103,11 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
         $killSwitch = $durableKillSwitch || $runtimeConfig->killSwitchEnabled;
         $stopLossCapability = $capabilities->supportsTriggerOrders || $capabilities->supportsAttachedStopLossOnEntry;
         $mutationEvidenceReady = $endpointReady
+            && $runtimeConfig->authorizesTestnetMutation()
             && $this->config->testnetTradingEnabled
             && $this->config->globalDemoTradingEnabled
             && $accountReadable
+            && $collateralReadable
             && $permissionsTrade
             && $sidecarReady
             && $nonceReady
@@ -128,7 +130,7 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
             signerConfigured: $sidecarReady,
             signerMatchesAccount: $sidecarReady,
             nonceStoreReady: $nonceReady,
-            collateralReadable: $accountReadable,
+            collateralReadable: $collateralReadable,
             pollingReady: $pollingReady,
             mainnetWriteGuard: !$this->config->mainnetEnabled,
             demoTestnetWriteGuard: $mutationEvidenceReady,
@@ -140,6 +142,7 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
             allowedMarkets: $runtimeConfig->allowedMarkets,
             maxNotional: $maxNotional,
             configHash: $runtimeConfig->configHash,
+            configProfile: $runtimeConfig->profile,
             warnings: array_values(array_unique(array_merge($warnings, $pollingReasons))),
         ));
 
@@ -175,6 +178,7 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
             warnings: $pollingReady
                 ? array_values(array_diff($report->warnings, ['private_observability_absent_for_dry_run']))
                 : $report->warnings,
+            configProfile: $report->configProfile,
         );
     }
 
@@ -218,23 +222,48 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
         }
     }
 
-    /** @param list<string> $warnings */
-    private function accountRead(?ExchangeProviderBundle $bundle, array &$warnings): bool
+    /**
+     * @param list<string> $warnings
+     * @return array{0: bool, 1: bool}
+     */
+    private function accountRead(?ExchangeProviderBundle $bundle, array &$warnings): array
     {
         if (!$bundle instanceof ExchangeProviderBundle) {
-            return false;
+            return [false, false];
         }
 
         try {
-            if ($bundle->account()->getAccountInfo() !== null) {
-                return true;
+            $account = $bundle->account()->getAccountInfo();
+            if ($account !== null) {
+                if ($this->collateralReadable($account)) {
+                    return [true, true];
+                }
+
+                $warnings[] = 'hyperliquid_collateral_read_probe_failed';
+
+                return [true, false];
             }
         } catch (\Throwable) {
         }
 
         $warnings[] = 'hyperliquid_account_read_probe_failed';
 
-        return false;
+        return [false, false];
+    }
+
+    private function collateralReadable(\App\Contract\Provider\Dto\AccountDto $account): bool
+    {
+        if (strtoupper($account->currency) !== 'USDC') {
+            return false;
+        }
+
+        foreach ([$account->availableBalance, $account->equity, $account->positionDeposit] as $value) {
+            if (!is_finite($value->toFloat())) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** @param list<string> $warnings */
@@ -302,14 +331,23 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
             return false;
         }
 
+        if (!array_is_list($rows)) {
+            $warnings[] = 'hyperliquid_extra_agents_response_malformed';
+
+            return false;
+        }
+
         $nowMilliseconds = $this->milliseconds($this->clock->now());
         $matchedExpired = false;
         foreach ($rows as $row) {
             if (!is_array($row)
+                || array_is_list($row)
                 || !isset($row['address'], $row['validUntil'])
                 || !is_string($row['address'])
                 || !is_int($row['validUntil'])
-                || !$this->validAddress(strtolower($row['address']))) {
+                || !$this->validAddress(strtolower($row['address']))
+                || (array_key_exists('name', $row) && !is_string($row['name']))
+                || array_diff(array_keys($row), ['address', 'validUntil', 'name']) !== []) {
                 $warnings[] = 'hyperliquid_extra_agents_response_malformed';
 
                 return false;
@@ -404,7 +442,10 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
 
     private function validAddress(string $address): bool
     {
-        return preg_match(self::ADDRESS_PATTERN, strtolower($address)) === 1;
+        $address = strtolower($address);
+
+        return preg_match(self::ADDRESS_PATTERN, $address) === 1
+            && $address !== '0x0000000000000000000000000000000000000000';
     }
 
     private function milliseconds(\DateTimeInterface $dateTime): int

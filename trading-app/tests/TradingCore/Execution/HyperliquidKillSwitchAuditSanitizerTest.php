@@ -51,4 +51,35 @@ final class HyperliquidKillSwitchAuditSanitizerTest extends TestCase
             $sanitizer->sanitizeReason('0x' . str_repeat('a', 64)),
         );
     }
+
+    /** @return iterable<string, array{string}> */
+    public static function sensitiveAssignments(): iterable
+    {
+        foreach ([
+            'api_key=hidden',
+            'api-key: hidden',
+            'secret=hidden',
+            'token=hidden',
+            'private_key=hidden',
+            'private-key: hidden',
+            'passphrase=hidden',
+            'password=hidden',
+            'authorization=hidden',
+            'cookie=hidden',
+            'signature=hidden',
+            'credential=hidden',
+            'credentials=hidden',
+            'memo=hidden',
+        ] as $assignment) {
+            yield $assignment => [$assignment];
+        }
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('sensitiveAssignments')]
+    public function testRedactsFullSensitiveAssignmentVocabularyUnderBenignKeys(string $assignment): void
+    {
+        $context = (new HyperliquidKillSwitchAuditSanitizer())->sanitizeContext(['message' => $assignment]);
+
+        self::assertSame('[redacted]', $context['message'] ?? null);
+    }
 }

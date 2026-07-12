@@ -882,9 +882,10 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
                     allowedSymbols: [],
                     allowedMarkets: ['perpetual'],
                     maxNotional: 25.0,
-                    configHash: null,
+                    configHash: str_repeat('a', 64),
                     blockingErrors: [],
                     warnings: [],
+                    configProfile: 'scalper_micro',
                 );
             }
         };

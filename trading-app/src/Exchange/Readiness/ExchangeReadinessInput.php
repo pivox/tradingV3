@@ -46,6 +46,7 @@ final readonly class ExchangeReadinessInput
         public ?string $configHash = null,
         public array $blockingErrors = [],
         public array $warnings = [],
+        public ?string $configProfile = null,
     ) {
         if ($this->maxNotional !== null && (!is_finite($this->maxNotional) || $this->maxNotional <= 0.0)) {
             throw new \InvalidArgumentException('maxNotional must be positive and finite when provided.');

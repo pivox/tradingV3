@@ -90,6 +90,7 @@ final readonly class HyperliquidRuntimeCheck implements ExchangeRuntimeCheckInte
             configHash: $input->configHash,
             blockingErrors: $input->blockingErrors,
             warnings: $warnings,
+            configProfile: $input->configProfile,
         ));
 
         $readyLevel = $report->readyLevel;
@@ -129,6 +130,7 @@ final readonly class HyperliquidRuntimeCheck implements ExchangeRuntimeCheckInte
                 ? $this->blockingErrors($report)
                 : $report->blockingErrors,
             warnings: $report->warnings,
+            configProfile: $input->configProfile,
         );
     }
 

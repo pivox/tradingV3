@@ -41,6 +41,65 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         self::assertSame(0, $client->exchangeCalls);
     }
 
+    public function testAcceptsFiniteZeroCollateralValues(): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $client->overrides['clearinghouseState'] = [
+            'marginSummary' => [
+                'accountValue' => '0',
+                'totalRawUsd' => '0.0',
+                'totalMarginUsed' => '-0',
+            ],
+            'withdrawable' => '0.00',
+            'assetPositions' => [],
+        ];
+
+        $account = $this->accountGateway($client)->getAccountInfo();
+
+        self::assertNotNull($account);
+        self::assertSame('0', (string) $account->equity);
+        self::assertSame('0.00', (string) $account->availableBalance);
+        self::assertSame('0', (string) $account->positionDeposit);
+    }
+
+    /** @return iterable<string, array{array<mixed>}> */
+    public static function malformedCollateralStates(): iterable
+    {
+        $valid = [
+            'marginSummary' => [
+                'accountValue' => '100',
+                'totalRawUsd' => '90',
+                'totalMarginUsed' => '10',
+            ],
+            'withdrawable' => '90',
+            'assetPositions' => [],
+        ];
+
+        yield 'missing margin summary' => [array_diff_key($valid, ['marginSummary' => true])];
+        yield 'margin summary list' => [array_replace($valid, ['marginSummary' => []])];
+        yield 'missing account value' => [array_replace_recursive($valid, ['marginSummary' => ['accountValue' => null]])];
+        yield 'missing total raw usd' => [array_replace_recursive($valid, ['marginSummary' => ['totalRawUsd' => null]])];
+        yield 'missing total margin used' => [array_replace_recursive($valid, ['marginSummary' => ['totalMarginUsed' => null]])];
+        yield 'missing withdrawable' => [array_diff_key($valid, ['withdrawable' => true])];
+        yield 'NaN' => [array_replace_recursive($valid, ['marginSummary' => ['accountValue' => 'NaN']])];
+        yield 'positive infinity' => [array_replace_recursive($valid, ['marginSummary' => ['totalRawUsd' => 'INF']])];
+        yield 'negative infinity' => [array_replace_recursive($valid, ['marginSummary' => ['totalMarginUsed' => '-INF']])];
+        yield 'non numeric' => [array_replace($valid, ['withdrawable' => 'not-a-number'])];
+        yield 'numeric array' => [array_replace_recursive($valid, ['marginSummary' => ['accountValue' => ['100']]])];
+        yield 'exponent shape' => [array_replace_recursive($valid, ['marginSummary' => ['accountValue' => '1e2']])];
+    }
+
+    /** @param array<mixed> $state */
+    #[\PHPUnit\Framework\Attributes\DataProvider('malformedCollateralStates')]
+    public function testRejectsMalformedOrMissingCollateralEvidence(array $state): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $client->overrides['clearinghouseState'] = $state;
+
+        $this->expectException(HyperliquidProviderUnavailableException::class);
+        $this->accountGateway($client)->getAccountInfo();
+    }
+
     public function testEmptyTopLevelAccountStateFailsStrictReadAndHealthIsFalse(): void
     {
         $client = new FakeHyperliquidPrivateReadClient();

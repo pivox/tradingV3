@@ -47,6 +47,7 @@ final readonly class ExchangeReadinessReport
         public ?string $configHash,
         public array $blockingErrors,
         public array $warnings,
+        public ?string $configProfile = null,
     ) {
     }
 
@@ -80,7 +81,8 @@ final readonly class ExchangeReadinessReport
      *     max_notional: ?float,
      *     config_hash: ?string,
      *     blocking_errors: list<string>,
-     *     warnings: list<string>
+     *     warnings: list<string>,
+     *     config_profile: ?string,
      * }
      */
     public function toArray(): array
@@ -115,6 +117,7 @@ final readonly class ExchangeReadinessReport
             'config_hash' => $this->configHash,
             'blocking_errors' => $this->redactMessages($this->blockingErrors),
             'warnings' => $this->redactMessages($this->warnings),
+            'config_profile' => $this->configProfile,
         ];
     }
 

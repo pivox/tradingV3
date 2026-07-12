@@ -110,11 +110,20 @@ final class HyperliquidTestnetKillSwitchStateRepositoryTest extends KernelTestCa
         $privateKey = '0x' . str_repeat('a', 64);
         $bearer = 'Bearer header.payload.signature';
         $assignment = 'token=plain-text-sensitive-value';
+        $bypassAssignments = [
+            'first' => 'api_key=api-secret',
+            'second' => 'passphrase=wallet-passphrase',
+            'third' => 'cookie=session-cookie',
+            'fourth' => 'signature=raw-signature',
+            'fifth' => 'credentials=credential-bundle',
+            'sixth' => 'memo=sensitive-memo',
+        ];
         $this->repository->trip('compensation_unconfirmed', [
             'note' => $privateKey,
             'detail' => $bearer,
             'message' => $assignment,
             'nested' => ['description' => 'Authorization: ' . $bearer],
+            'diagnostics' => $bypassAssignments,
             'correlation_id' => 'corr-safe',
         ]);
 
@@ -122,6 +131,9 @@ final class HyperliquidTestnetKillSwitchStateRepositoryTest extends KernelTestCa
         self::assertStringNotContainsString($privateKey, $encoded);
         self::assertStringNotContainsString($bearer, $encoded);
         self::assertStringNotContainsString($assignment, $encoded);
+        foreach ($bypassAssignments as $bypassAssignment) {
+            self::assertStringNotContainsString($bypassAssignment, $encoded);
+        }
         self::assertSame('corr-safe', $this->repository->currentAuditContext()['correlation_id']);
     }
 

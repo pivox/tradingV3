@@ -64,6 +64,8 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         self::assertTrue($report->signerMatchesAccount);
         self::assertTrue($report->nonceStoreReady);
         self::assertFalse($report->killSwitch);
+        self::assertSame('scalper_micro', $report->configProfile);
+        self::assertSame(str_repeat('a', 64), $report->configHash);
         self::assertSame([], $report->blockingErrors);
         self::assertSame([], $report->warnings);
         self::assertSame([['type' => 'extraAgents', 'user' => self::ACCOUNT]], $rest->requests);
@@ -101,7 +103,44 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         yield 'expired' => [[['address' => self::AGENT, 'validUntil' => 1_783_857_600_000]], 'hyperliquid_agent_wallet_trade_permission_expired'];
         yield 'malformed row' => [[['address' => self::AGENT]], 'hyperliquid_extra_agents_response_malformed'];
         yield 'malformed address' => [[['address' => 'agent', 'validUntil' => 1_900_000_000_000]], 'hyperliquid_extra_agents_response_malformed'];
+        yield 'associative top-level' => [['agent' => ['address' => self::AGENT, 'validUntil' => 1_900_000_000_000]], 'hyperliquid_extra_agents_response_malformed'];
+        yield 'unexpected row key' => [[['address' => self::AGENT, 'validUntil' => 1_900_000_000_000, 'unexpected' => true]], 'hyperliquid_extra_agents_response_malformed'];
+        yield 'malformed optional name' => [[['address' => self::AGENT, 'validUntil' => 1_900_000_000_000, 'name' => 123]], 'hyperliquid_extra_agents_response_malformed'];
         yield 'wrong agent' => [[['address' => self::OTHER_AGENT, 'validUntil' => 1_900_000_000_000]], 'hyperliquid_agent_wallet_trade_permission_not_proven'];
+    }
+
+    #[DataProvider('zeroAddressConfigs')]
+    public function testZeroAccountOrAgentAddressCannotProvePermission(HyperliquidConfig $config): void
+    {
+        $rest = new RecordingInfoClient($this->validExtraAgents());
+        $report = $this->probe(config: $config, rest: $rest)->current();
+
+        self::assertFalse($report->permissionsTrade);
+        self::assertSame([], $rest->requests);
+        self::assertContains('hyperliquid_agent_wallet_account_relation_not_ready', $report->warnings);
+    }
+
+    /** @return iterable<string, array{HyperliquidConfig}> */
+    public static function zeroAddressConfigs(): iterable
+    {
+        yield 'zero account' => [new HyperliquidConfig(
+            environment: 'testnet',
+            apiBaseUri: 'https://api.hyperliquid-testnet.xyz',
+            network: 'testnet',
+            testnetAgentAddress: self::AGENT,
+            testnetAccountAddress: '0x0000000000000000000000000000000000000000',
+            testnetTradingEnabled: true,
+            globalDemoTradingEnabled: true,
+        )];
+        yield 'zero agent' => [new HyperliquidConfig(
+            environment: 'testnet',
+            apiBaseUri: 'https://api.hyperliquid-testnet.xyz',
+            network: 'testnet',
+            testnetAgentAddress: '0x0000000000000000000000000000000000000000',
+            testnetAccountAddress: self::ACCOUNT,
+            testnetTradingEnabled: true,
+            globalDemoTradingEnabled: true,
+        )];
     }
 
     public function testNormalizesConfiguredAndObservedAgentAddresses(): void
@@ -140,6 +179,16 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         self::assertContains($warning, $report->warnings);
     }
 
+    public function testAccountAndCollateralReadinessAreSeparateEvidence(): void
+    {
+        $report = $this->probe(collateralReadable: false)->current();
+
+        self::assertTrue($report->accountReadable);
+        self::assertFalse($report->collateralReadable);
+        self::assertNotSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
+        self::assertContains('hyperliquid_collateral_read_probe_failed', $report->warnings);
+    }
+
     /** @return iterable<string, array{string, string}> */
     public static function strictReadFailures(): iterable
     {
@@ -171,6 +220,19 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         self::assertTrue($report->killSwitch);
         self::assertSame([], $report->allowedMarkets);
         self::assertNull($report->maxNotional);
+    }
+
+    public function testChangingOnlyCurrentYamlKillSwitchCannotProduceCandidate(): void
+    {
+        $report = $this->probe(
+            environmentKillSwitch: false,
+            effectiveDryRun: true,
+            demoTestnetWriteEnabled: false,
+        )->current();
+
+        self::assertFalse($report->killSwitch);
+        self::assertFalse($report->demoTestnetWriteGuard);
+        self::assertNotSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
     }
 
     public function testSlowReadCycleMakesPollingSnapshotStale(): void
@@ -261,9 +323,12 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         bool $nonceReady = true,
         bool $durableKillSwitch = false,
         bool $environmentKillSwitch = false,
+        bool $effectiveDryRun = false,
+        bool $demoTestnetWriteEnabled = true,
         array $allowedMarkets = ['perpetual'],
         ?float $maxNotional = 25.0,
         ?string $failedRead = null,
+        bool $collateralReadable = true,
         float $readCycleSeconds = 0.0,
         ?HyperliquidReconciliationStatusInterface $reconciliation = null,
         ?bool $reconciliationInFlightAfterReads = null,
@@ -276,6 +341,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
             adapters: $this->adapterRegistry(),
             providers: $this->providerRegistry(
                 $failedRead,
+                $collateralReadable,
                 $clock,
                 $readCycleSeconds,
                 $reconciliation,
@@ -290,6 +356,8 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
             reconciliationStatus: $reconciliation,
             readinessConfig: $this->readinessConfig(
                 $environmentKillSwitch,
+                $effectiveDryRun,
+                $demoTestnetWriteEnabled,
                 $allowedMarkets,
                 $maxNotional,
             ),
@@ -321,6 +389,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
 
     private function providerRegistry(
         ?string $failedRead,
+        bool $collateralReadable,
         MockClock $clock,
         float $readCycleSeconds,
         HyperliquidReconciliationStatusInterface $reconciliation,
@@ -334,7 +403,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
 
         $account = $this->createMock(AccountProviderInterface::class);
         $account->method('getAccountInfo')->willReturnCallback(
-            fn (): AccountDto => $failedRead === 'account' ? throw new \RuntimeException('failed') : $this->account(),
+            fn (): AccountDto => $failedRead === 'account' ? throw new \RuntimeException('failed') : $this->account($collateralReadable),
         );
         $account->method('getOpenPositionsOrFail')->willReturnCallback(
             static fn (): array => $failedRead === 'positions' ? throw new \RuntimeException('failed') : [],
@@ -380,10 +449,10 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         return $registry;
     }
 
-    private function account(): AccountDto
+    private function account(bool $collateralReadable = true): AccountDto
     {
         return AccountDto::fromArray([
-            'currency' => 'USDC',
+            'currency' => $collateralReadable ? 'USDC' : 'UNKNOWN',
             'available_balance' => '100',
             'frozen_balance' => '0',
             'unrealized' => '0',
@@ -457,13 +526,17 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
     /** @param list<string> $allowedMarkets */
     private function readinessConfig(
         bool $killSwitchEnabled,
+        bool $dryRun,
+        bool $demoTestnetWriteEnabled,
         array $allowedMarkets,
         ?float $maxNotional,
     ): HyperliquidMutationReadinessConfigSourceInterface {
-        return new class($killSwitchEnabled, $allowedMarkets, $maxNotional) implements HyperliquidMutationReadinessConfigSourceInterface {
+        return new class($killSwitchEnabled, $dryRun, $demoTestnetWriteEnabled, $allowedMarkets, $maxNotional) implements HyperliquidMutationReadinessConfigSourceInterface {
             /** @param list<string> $allowedMarkets */
             public function __construct(
                 private readonly bool $killSwitchEnabled,
+                private readonly bool $dryRun,
+                private readonly bool $demoTestnetWriteEnabled,
                 private readonly array $allowedMarkets,
                 private readonly ?float $maxNotional,
             ) {
@@ -472,11 +545,18 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
             public function current(): HyperliquidMutationReadinessConfig
             {
                 return new HyperliquidMutationReadinessConfig(
-                    [],
-                    $this->allowedMarkets,
-                    $this->maxNotional,
-                    $this->killSwitchEnabled,
-                    'test-config-hash',
+                    profile: 'scalper_micro',
+                    allowedSymbols: [],
+                    allowedMarkets: $this->allowedMarkets,
+                    maxNotional: $this->maxNotional,
+                    dryRun: $this->dryRun,
+                    liveEnabled: false,
+                    runtimeCheckRequired: true,
+                    mainnetWriteEnabled: false,
+                    demoTestnetWriteEnabled: $this->demoTestnetWriteEnabled,
+                    killSwitchEnabled: $this->killSwitchEnabled,
+                    requireStopLoss: true,
+                    configHash: str_repeat('a', 64),
                 );
             }
         };

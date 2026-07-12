@@ -27,7 +27,7 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
 
     public function getAccountInfo(): ?AccountDto
     {
-        return $this->mapper->account($this->userState(__METHOD__));
+        return $this->mapper->account($this->accountState(__METHOD__));
     }
 
     public function getAccountBalance(string $basicCurrency = 'USDT'): float
@@ -234,6 +234,36 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
         }
 
         return $state;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function accountState(string $operation): array
+    {
+        $state = $this->userState($operation);
+        $marginSummary = $state['marginSummary'] ?? null;
+        if (!is_array($marginSummary) || array_is_list($marginSummary)) {
+            throw new HyperliquidProviderUnavailableException('hyperliquid_collateral_payload_malformed', $operation);
+        }
+
+        foreach (['accountValue', 'totalRawUsd', 'totalMarginUsed'] as $field) {
+            if (!$this->finiteDecimal($marginSummary[$field] ?? null)) {
+                throw new HyperliquidProviderUnavailableException('hyperliquid_collateral_payload_malformed', $operation);
+            }
+        }
+        if (!$this->finiteDecimal($state['withdrawable'] ?? null)) {
+            throw new HyperliquidProviderUnavailableException('hyperliquid_collateral_payload_malformed', $operation);
+        }
+
+        return $state;
+    }
+
+    private function finiteDecimal(mixed $value): bool
+    {
+        return is_string($value)
+            && preg_match('/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/D', $value) === 1
+            && is_finite((float) $value);
     }
 
     /**

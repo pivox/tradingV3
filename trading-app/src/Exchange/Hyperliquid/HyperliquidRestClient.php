@@ -13,6 +13,7 @@ use Symfony\Contracts\HttpClient\ResponseInterface;
 final readonly class HyperliquidRestClient implements HyperliquidRestClientInterface, HyperliquidReadinessInfoClientInterface
 {
     private const TESTNET_ENDPOINT = 'https://api.hyperliquid-testnet.xyz';
+    private const MAINNET_ENDPOINT = 'https://api.hyperliquid.xyz';
     private const MAX_RESPONSE_BYTES = 65_536;
 
     public function __construct(
@@ -23,6 +24,8 @@ final readonly class HyperliquidRestClient implements HyperliquidRestClientInter
 
     public function info(array $request): array
     {
+        $this->assertOfficialEndpoint();
+
         return $this->requestInfo($request);
     }
 
@@ -31,6 +34,7 @@ final readonly class HyperliquidRestClient implements HyperliquidRestClientInter
         if ($this->config->apiBaseUri() !== self::TESTNET_ENDPOINT) {
             throw new \RuntimeException('hyperliquid_readiness_testnet_endpoint_required');
         }
+        $this->assertOfficialEndpoint();
 
         return $this->requestInfo($request);
     }
@@ -50,6 +54,8 @@ final readonly class HyperliquidRestClient implements HyperliquidRestClientInter
                     'timeout' => 5.0,
                     'max_duration' => 5.0,
                     'max_redirects' => 0,
+                    'proxy' => null,
+                    'no_proxy' => '*',
                 ],
             );
             $statusCode = $response->getStatusCode();
@@ -89,6 +95,24 @@ final readonly class HyperliquidRestClient implements HyperliquidRestClientInter
         }
 
         return $body;
+    }
+
+    private function assertOfficialEndpoint(): void
+    {
+        $environment = $this->config->configuredEnvironment();
+        $network = $this->config->normalizedNetwork();
+        $endpoint = $this->config->apiBaseUri();
+        $testnet = $environment === 'testnet'
+            && $network === 'testnet'
+            && $endpoint === self::TESTNET_ENDPOINT
+            && !$this->config->mainnetEnabled;
+        $mainnet = $environment === 'mainnet'
+            && $network === 'mainnet'
+            && $endpoint === self::MAINNET_ENDPOINT
+            && $this->config->mainnetEnabled;
+        if (!$testnet && !$mainnet) {
+            throw new \RuntimeException('hyperliquid_info_endpoint_not_allowed');
+        }
     }
 
     public function exchange(array $action): array

@@ -57,6 +57,10 @@ First API-first Hyperliquid integration slice.
   The command still prints `Live allowed: no`, warns that agent trade permission
   is not proven in HL-010, recommends `dry_run=true`, and never exposes
   `demo_testnet_enabled` or `mainnet_ready`.
+- Mutation readiness resolves exactly one DI-configured effective trading
+  profile. Its profile name and config hash are carried in the readiness report;
+  Task 7 execution must match both values before submitting any action. Changing
+  only `kill_switch_enabled` cannot authorize the current dry-run profile.
 - `HyperliquidAgentSigner` permanently rejects signing in PHP with
   `hyperliquid_php_key_custody_forbidden`. Agent signing is delegated to the
   dedicated sidecar, and PHP receives only its health and signed-action API.

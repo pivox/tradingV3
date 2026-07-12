@@ -28,13 +28,18 @@ final readonly class EffectiveTradingHyperliquidMutationReadinessConfigSource im
                 return HyperliquidMutationReadinessConfig::failClosed();
             }
 
+            $profile = is_array($trading) ? ($trading['profile'] ?? null) : null;
+            if (!is_string($profile) || $profile !== $this->profile || $resolved['request']['mode'] !== $this->profile) {
+                return HyperliquidMutationReadinessConfig::failClosed();
+            }
+
             $allowedSymbols = $this->stringList($execution['allowed_symbols'] ?? null);
             $allowedMarkets = $this->stringList($execution['allowed_markets'] ?? null);
             $maxNotional = $execution['max_notional'] ?? null;
-            $killSwitch = $execution['kill_switch_enabled'] ?? null;
+            $authorization = $this->authorization($execution);
             if (($allowedSymbols === [] && $allowedMarkets === [])
                 || !is_numeric($maxNotional)
-                || !is_bool($killSwitch)) {
+                || $authorization === null) {
                 return HyperliquidMutationReadinessConfig::failClosed();
             }
 
@@ -44,15 +49,57 @@ final readonly class EffectiveTradingHyperliquidMutationReadinessConfigSource im
             }
 
             return new HyperliquidMutationReadinessConfig(
-                $allowedSymbols,
-                $allowedMarkets,
-                $maxNotional,
-                $killSwitch,
-                $resolved['config_hash'],
+                profile: $profile,
+                allowedSymbols: $allowedSymbols,
+                allowedMarkets: $allowedMarkets,
+                maxNotional: $maxNotional,
+                dryRun: $authorization['dryRun'],
+                liveEnabled: $authorization['liveEnabled'],
+                runtimeCheckRequired: $authorization['runtimeCheckRequired'],
+                mainnetWriteEnabled: $authorization['mainnetWriteEnabled'],
+                demoTestnetWriteEnabled: $authorization['demoTestnetWriteEnabled'],
+                killSwitchEnabled: $authorization['killSwitchEnabled'],
+                requireStopLoss: $authorization['requireStopLoss'],
+                configHash: $resolved['config_hash'],
             );
         } catch (\Throwable) {
             return HyperliquidMutationReadinessConfig::failClosed();
         }
+    }
+
+    /**
+     * @param array<string,mixed> $execution
+     * @return null|array{
+     *   dryRun: bool,
+     *   liveEnabled: bool,
+     *   runtimeCheckRequired: bool,
+     *   mainnetWriteEnabled: bool,
+     *   demoTestnetWriteEnabled: bool,
+     *   killSwitchEnabled: bool,
+     *   requireStopLoss: bool
+     * }
+     */
+    private function authorization(array $execution): ?array
+    {
+        $fields = [
+            'dryRun' => 'dry_run',
+            'liveEnabled' => 'live_enabled',
+            'runtimeCheckRequired' => 'runtime_check_required',
+            'mainnetWriteEnabled' => 'mainnet_write_enabled',
+            'demoTestnetWriteEnabled' => 'demo_testnet_write_enabled',
+            'killSwitchEnabled' => 'kill_switch_enabled',
+            'requireStopLoss' => 'require_stop_loss',
+        ];
+        $authorization = [];
+        foreach ($fields as $property => $key) {
+            if (!array_key_exists($key, $execution) || !is_bool($execution[$key])) {
+                return null;
+            }
+            $authorization[$property] = $execution[$key];
+        }
+
+        /** @var array{dryRun: bool, liveEnabled: bool, runtimeCheckRequired: bool, mainnetWriteEnabled: bool, demoTestnetWriteEnabled: bool, killSwitchEnabled: bool, requireStopLoss: bool} $authorization */
+        return $authorization;
     }
 
     /** @return list<string> */

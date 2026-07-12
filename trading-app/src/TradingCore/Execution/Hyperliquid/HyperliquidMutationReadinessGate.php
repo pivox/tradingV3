@@ -42,10 +42,23 @@ final class HyperliquidMutationReadinessGate
         $report->mainnetWriteGuard || $reasons[] = 'mainnet_write_guard_not_ready';
         !$config->mainnetEnabled || $reasons[] = 'hyperliquid_mainnet_must_be_disabled';
         !$report->killSwitch || $reasons[] = 'kill_switch_enabled';
+        $this->hasProfileEvidence($report) || $reasons[] = 'effective_config_profile_required';
+        $this->hasConfigHash($report) || $reasons[] = 'effective_config_hash_required';
         $this->hasAllowList($report) || $reasons[] = 'market_allow_list_required';
         $this->hasPositiveMaxNotional($report) || $reasons[] = 'positive_max_notional_required';
 
         return array_values(array_unique($reasons));
+    }
+
+    private function hasProfileEvidence(ExchangeReadinessReport $report): bool
+    {
+        return is_string($report->configProfile) && trim($report->configProfile) !== '';
+    }
+
+    private function hasConfigHash(ExchangeReadinessReport $report): bool
+    {
+        return is_string($report->configHash)
+            && preg_match('/^[a-f0-9]{64}$/D', $report->configHash) === 1;
     }
 
     private function hasAllowList(ExchangeReadinessReport $report): bool
