@@ -50,6 +50,7 @@ parameters:
     env(HYPERLIQUID_WS_URI): ''
     env(HYPERLIQUID_MAINNET_ENABLED): '0'
     env(HYPERLIQUID_TESTNET_TRADING_ENABLED): '0'
+    env(HYPERLIQUID_SIGNER_BASE_URI): 'http://hyperliquid-signer:8098'
     env(HYPERLIQUID_SIGNER_AUTH_TOKEN): ''
     env(OKX_ENV): 'demo'
     env(OKX_DEMO_API_KEY): ''
@@ -137,6 +138,9 @@ services:
 
     App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationInterface:
         alias: App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationService
+
+    App\TradingCore\Execution\Hyperliquid\HyperliquidTestnetExecutionPortInterface:
+        alias: App\TradingCore\Execution\Hyperliquid\HyperliquidTestnetExecutionPort
 
     hyperliquid.execution_lock_store:
         class: Symfony\Component\Lock\Store\FlockStore
@@ -260,7 +264,7 @@ services:
 
     App\Exchange\Hyperliquid\HttpHyperliquidSignedActionClient:
         arguments:
-            $baseUri: 'http://hyperliquid-signer:8098'
+            $baseUri: '%env(string:HYPERLIQUID_SIGNER_BASE_URI)%'
             $authToken: '%env(string:HYPERLIQUID_SIGNER_AUTH_TOKEN)%'
             $accountAddress: '%env(string:HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS)%'
             $agentAddress: '%env(string:HYPERLIQUID_TESTNET_AGENT_ADDRESS)%'

@@ -384,6 +384,12 @@ services:
       REDIS_ORDER_WATCH_CHANNEL: ${REDIS_ORDER_WATCH_CHANNEL:-watcher:order:watch}
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      DEMO_TRADING_ENABLED: "${DEMO_TRADING_ENABLED:-0}"
+      HYPERLIQUID_TESTNET_TRADING_ENABLED: "${HYPERLIQUID_TESTNET_TRADING_ENABLED:-0}"
+      HYPERLIQUID_SIGNER_BASE_URI: http://hyperliquid-signer:8098
+      HYPERLIQUID_SIGNER_AUTH_TOKEN: "${HYPERLIQUID_SIGNER_AUTH_TOKEN:-}"
+      HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS: "${HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS:-}"
+      HYPERLIQUID_TESTNET_AGENT_ADDRESS: "${HYPERLIQUID_TESTNET_AGENT_ADDRESS:-}"
     depends_on:
       trading-app-db:
         condition: service_healthy
@@ -401,6 +407,23 @@ services:
           memory: 768M
         reservations:
           memory: 256M
+
+  hyperliquid-signer:
+    build: ./hyperliquid-signer
+    profiles: ["hyperliquid-testnet"]
+    expose:
+      - "8098"
+    environment:
+      HYPERLIQUID_ENV: testnet
+      HYPERLIQUID_NETWORK: testnet
+      HYPERLIQUID_API_BASE_URI: https://api.hyperliquid-testnet.xyz
+      HYPERLIQUID_SIGNER_BROADCAST_ENABLED: "${HYPERLIQUID_SIGNER_BROADCAST_ENABLED:-0}"
+      HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS: "${HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS:-}"
+      HYPERLIQUID_TESTNET_AGENT_ADDRESS: "${HYPERLIQUID_TESTNET_AGENT_ADDRESS:-}"
+      HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY: "${HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY:-}"
+      HYPERLIQUID_SIGNER_AUTH_TOKEN: "${HYPERLIQUID_SIGNER_AUTH_TOKEN:-}"
+    networks:
+      - trading-app-net
 
   trading-app-messenger-order-timeout:
     build:

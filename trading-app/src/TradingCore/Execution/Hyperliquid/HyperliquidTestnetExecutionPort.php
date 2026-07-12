@@ -32,7 +32,7 @@ use App\TradingCore\Execution\Safety\ExchangeRuntimeEnvironment;
 use App\TradingCore\OrderPlan\Dto\OrderPlan;
 use Brick\Math\BigDecimal;
 
-final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInterface
+final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInterface, HyperliquidTestnetExecutionPortInterface
 {
     public function __construct(
         private HyperliquidConfig $config,
