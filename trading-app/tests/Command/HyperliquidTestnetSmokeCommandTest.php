@@ -63,6 +63,16 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         self::assertSame(0, $port->calls);
     }
 
+    public function testHelpDocumentsExclusiveExternalAccountOwnership(): void
+    {
+        $command = $this->command(new SmokeTestPort($this->accepted()));
+
+        self::assertStringContainsString(
+            'exclusively controlled by this operator',
+            $command->getHelp(),
+        );
+    }
+
     /** @return iterable<string, array{mixed}> */
     public static function invalidConfirmations(): iterable
     {
@@ -486,7 +496,16 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         ?HyperliquidConfig $config = null,
         ?SmokeTestMarginEvidenceProvider $marginEvidence = null,
     ): CommandTester {
-        return new CommandTester(new HyperliquidTestnetSmokeCommand(
+        return new CommandTester($this->command($port, $probe, $config, $marginEvidence));
+    }
+
+    private function command(
+        SmokeTestPort $port,
+        ?SmokeTestReadinessProbe $probe = null,
+        ?HyperliquidConfig $config = null,
+        ?SmokeTestMarginEvidenceProvider $marginEvidence = null,
+    ): HyperliquidTestnetSmokeCommand {
+        return new HyperliquidTestnetSmokeCommand(
             new HyperliquidTestnetOrderPlanFileDecoder(
                 marginEvidence: $marginEvidence ?? new SmokeTestMarginEvidenceProvider($this->marginEvidence()),
                 clock: new MockClock('2026-07-12T12:00:00Z'),
@@ -495,7 +514,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
             $probe ?? new SmokeTestReadinessProbe($this->report()),
             new HyperliquidMutationReadinessGate(),
             $config ?? $this->config(),
-        ));
+        );
     }
 
     /** @return array<string,mixed> */

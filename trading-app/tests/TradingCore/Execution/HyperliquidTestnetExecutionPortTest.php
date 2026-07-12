@@ -353,6 +353,63 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         yield 'existing short cross' => ['short', 3, 'cross'];
     }
 
+    public function testInitialOpenOrderRejectsBeforeMarginEvidenceOrNonce(): void
+    {
+        $evidence = new TestnetPortMarginEvidenceProvider([$this->marginEvidence()]);
+        $fixture = $this->fixture(
+            state: $this->state(openOrderCount: 1),
+            marginEvidence: $evidence,
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Rejected, $result->status);
+        self::assertContains('hyperliquid_existing_open_orders_not_flat', $result->metadata['blocking_reasons']);
+        self::assertSame(0, $evidence->calls);
+        self::assertSame([], $fixture->nonces->issued);
+        self::assertSame([], $fixture->signed->submissions);
+    }
+
+    #[DataProvider('finalStateRaces')]
+    public function testFinalAuthoritativeStateRaceStopsBeforeGroupedOrderNonce(
+        HyperliquidExecutionState $finalState,
+        string $reason,
+    ): void {
+        $initialState = $this->state();
+        $evidence = new TestnetPortMarginEvidenceProvider([
+            $this->marginEvidence(),
+            $this->marginEvidence(),
+        ]);
+        $fixture = $this->fixture(
+            state: $initialState,
+            executionStates: [$initialState, $finalState],
+            marginEvidence: $evidence,
+            signedResults: [$this->acceptedLeverage(), $this->acceptedGroup(42, 43)],
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Rejected, $result->status);
+        self::assertContains($reason, $result->metadata['blocking_reasons']);
+        self::assertSame([1_000], $fixture->nonces->issued);
+        self::assertCount(1, $fixture->signed->submissions);
+        self::assertSame('updateLeverage', $fixture->signed->submissions[0]['action']['type']);
+    }
+
+    /** @return iterable<string,array{HyperliquidExecutionState,string}> */
+    public static function finalStateRaces(): iterable
+    {
+        yield 'position appears' => [new HyperliquidExecutionState(
+            'BTCUSDT', 99.9, 100.1, new \DateTimeImmutable('2026-07-12T11:59:59Z'), 5, 'isolated', true, 0,
+        ), 'hyperliquid_existing_position_not_flat'];
+        yield 'open order appears' => [new HyperliquidExecutionState(
+            'BTCUSDT', 99.9, 100.1, new \DateTimeImmutable('2026-07-12T11:59:59Z'), null, null, false, 1,
+        ), 'hyperliquid_existing_open_orders_not_flat'];
+        yield 'quote becomes stale' => [new HyperliquidExecutionState(
+            'BTCUSDT', 99.9, 100.1, new \DateTimeImmutable('2026-07-12T11:59:57Z'), null, null, false, 0,
+        ), 'hyperliquid_execution_quote_stale'];
+    }
+
     public function testCrossPositionWithoutPostUpdateIsolatedConfirmationStopsBeforeOrderNonce(): void
     {
         $evidence = new TestnetPortMarginEvidenceProvider([
@@ -953,13 +1010,14 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         bool $lockReleaseThrows = false,
         ?HyperliquidKillSwitchTripInterface $durableTrip = null,
         ?HyperliquidMarginSafetyEvidenceProviderInterface $marginEvidence = null,
+        ?array $executionStates = null,
     ): TestnetPortFixture {
         $config ??= $this->config();
         $report ??= $this->report();
         $plan ??= $this->plan();
         $metadataProvider = new TestnetPortMetadataProvider($metadataMissing ? null : ($metadata ?? $this->metadata()));
         $state ??= $this->state();
-        $stateProvider = new TestnetPortExecutionStateProvider($state);
+        $stateProvider = new TestnetPortExecutionStateProvider($executionStates ?? [$state, $state]);
         $trip ??= new TestnetPortTrip();
         $nonces = new TestnetPortNonceManager($nonceReady);
         if (!$state->hasOpenPosition && $signedResults !== []
@@ -984,11 +1042,11 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         );
         if ($marginEvidence === null) {
             $evidenceResults = [$this->marginEvidence(
-                mode: $stateProvider->current($plan->symbol)->observedMarginMode ?? 'isolated',
-                leverage: $stateProvider->current($plan->symbol)->observedLeverage ?? $plan->leverage,
+                mode: $state->observedMarginMode ?? 'isolated',
+                leverage: $state->observedLeverage ?? $plan->leverage,
             )];
-            if ($stateProvider->current($plan->symbol)->observedLeverage !== $plan->leverage
-                || $stateProvider->current($plan->symbol)->observedMarginMode === 'cross'
+            if ($state->observedLeverage !== $plan->leverage
+                || $state->observedMarginMode === 'cross'
             ) {
                 $evidenceResults[] = $this->marginEvidence(leverage: $plan->leverage);
             }
@@ -1134,9 +1192,11 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         string $observedAt = '2026-07-12T11:59:59.000Z',
         ?string $marginMode = null,
         bool $hasOpenPosition = false,
+        int $openOrderCount = 0,
     ): HyperliquidExecutionState {
         return new HyperliquidExecutionState(
-            'BTCUSDT', $bid, $ask, new \DateTimeImmutable($observedAt), $leverage, $marginMode, $hasOpenPosition,
+            'BTCUSDT', $bid, $ask, new \DateTimeImmutable($observedAt), $leverage, $marginMode,
+            $hasOpenPosition, $openOrderCount,
         );
     }
 
@@ -1301,10 +1361,16 @@ final class TestnetPortMetadataProvider implements HyperliquidInstrumentMetadata
     public function getInstrumentMetadata(string $symbol): ?HyperliquidInstrumentMetadataDto { return $this->metadata; }
 }
 
-final readonly class TestnetPortExecutionStateProvider implements HyperliquidExecutionStateProviderInterface
+final class TestnetPortExecutionStateProvider implements HyperliquidExecutionStateProviderInterface
 {
-    public function __construct(private HyperliquidExecutionState $state) {}
-    public function current(string $symbol): HyperliquidExecutionState { return $this->state; }
+    private HyperliquidExecutionState $last;
+    /** @param list<HyperliquidExecutionState> $states */
+    public function __construct(private array $states) { $this->last = $states[0]; }
+    public function current(string $symbol): HyperliquidExecutionState
+    {
+        $this->last = array_shift($this->states) ?? $this->last;
+        return $this->last;
+    }
 }
 
 final class TestnetPortNonceManager implements HyperliquidNonceManagerInterface

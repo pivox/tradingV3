@@ -39,6 +39,9 @@ final readonly class HyperliquidExecutionStatePolicy
         ) {
             $reasons[] = 'hyperliquid_execution_margin_mode_invalid';
         }
+        if ($state->openOrderCount < 0) {
+            $reasons[] = 'hyperliquid_execution_open_order_count_invalid';
+        }
 
         return array_values(array_unique($reasons));
     }

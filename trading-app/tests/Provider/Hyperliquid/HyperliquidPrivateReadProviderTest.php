@@ -204,6 +204,7 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         $provider = new StrictHyperliquidExecutionStateProvider(
             new HyperliquidMetadataProvider($client, $resolver),
             new HyperliquidAccountGateway($client, $resolver, $this->config()),
+            new HyperliquidExecutionGateway($client, $resolver, $this->config()),
         );
 
         $state = $provider->current('ETHUSDT');
@@ -211,12 +212,14 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         self::assertSame(5, $state->observedLeverage);
         self::assertSame('cross', $state->observedMarginMode);
         self::assertTrue($state->hasOpenPosition);
+        self::assertSame(1, $state->openOrderCount);
     }
 
     public function testStrictExecutionStateMarksNoPositionAsAuthoritativelyFlat(): void
     {
         $client = new FakeHyperliquidPrivateReadClient();
         $client->noPositions = true;
+        $client->overrides['frontendOpenOrders'] = [];
         $client->overrides['l2Book'] = [
             'time' => 1_720_780_799_000,
             'levels' => [
@@ -228,6 +231,7 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         $provider = new StrictHyperliquidExecutionStateProvider(
             new HyperliquidMetadataProvider($client, $resolver),
             new HyperliquidAccountGateway($client, $resolver, $this->config()),
+            new HyperliquidExecutionGateway($client, $resolver, $this->config()),
         );
 
         $state = $provider->current('BTCUSDT');
@@ -235,6 +239,7 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         self::assertFalse($state->hasOpenPosition);
         self::assertNull($state->observedLeverage);
         self::assertNull($state->observedMarginMode);
+        self::assertSame(0, $state->openOrderCount);
     }
 
     public function testPrivateDataUnavailableIsNotReadyForStrictReadAndTolerantForOpenPositions(): void

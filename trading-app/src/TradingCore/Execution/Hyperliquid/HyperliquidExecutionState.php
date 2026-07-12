@@ -14,6 +14,7 @@ final readonly class HyperliquidExecutionState
         public ?int $observedLeverage,
         public ?string $observedMarginMode = null,
         public bool $hasOpenPosition = false,
+        public int $openOrderCount = 0,
     ) {
     }
 }

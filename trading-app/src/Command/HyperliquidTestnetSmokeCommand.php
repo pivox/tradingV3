@@ -46,7 +46,8 @@ final class HyperliquidTestnetSmokeCommand extends Command
             ->addOption('readiness-decision', null, InputOption::VALUE_REQUIRED, 'Exact approved readiness decision.')
             ->setHelp(
                 'Operator-only Hyperliquid testnet mutation command. Required confirmation: ' . self::CONFIRMATION
-                . '. Required readiness decision: ' . self::READINESS_DECISION . '.',
+                . '. Required readiness decision: ' . self::READINESS_DECISION
+                . '. The configured account must be exclusively controlled by this operator during execution.',
             );
     }
 

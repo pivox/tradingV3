@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\TradingCore\Execution\Hyperliquid;
 
 use App\Provider\Hyperliquid\HyperliquidAccountGateway;
+use App\Provider\Hyperliquid\HyperliquidExecutionGateway;
 use App\Provider\Hyperliquid\HyperliquidMetadataProvider;
 
 final readonly class StrictHyperliquidExecutionStateProvider implements HyperliquidExecutionStateProviderInterface
@@ -12,6 +13,7 @@ final readonly class StrictHyperliquidExecutionStateProvider implements Hyperliq
     public function __construct(
         private HyperliquidMetadataProvider $metadata,
         private HyperliquidAccountGateway $account,
+        private HyperliquidExecutionGateway $execution,
     ) {
     }
 
@@ -29,6 +31,7 @@ final readonly class StrictHyperliquidExecutionStateProvider implements Hyperliq
         }
 
         $position = $this->account->getPosition($symbol);
+        $openOrderCount = count($this->execution->getOpenOrdersOrFail($symbol));
         $observedLeverage = null;
         $observedMarginMode = null;
         if ($position !== null) {
@@ -51,6 +54,7 @@ final readonly class StrictHyperliquidExecutionStateProvider implements Hyperliq
             observedLeverage: $observedLeverage,
             observedMarginMode: $observedMarginMode,
             hasOpenPosition: $position !== null,
+            openOrderCount: $openOrderCount,
         );
     }
 }

@@ -83,7 +83,8 @@ final class HyperliquidIsolatedLiquidationSolver
             throw new \InvalidArgumentException('hyperliquid_liquidation_side_invalid');
         }
         // The legacy DTO is float-based: round toward the entry before crossing that final boundary.
-        $decimal = $this->positive($result->liquidationPrice)->toScale(
+        $exact = $this->positive($result->liquidationPrice);
+        $decimal = $exact->toScale(
             self::DTO_SCALE,
             $side === 'long' ? RoundingMode::UP : RoundingMode::DOWN,
         );
@@ -91,9 +92,9 @@ final class HyperliquidIsolatedLiquidationSolver
         if (!is_finite($value) || $value <= 0.0) {
             throw new \InvalidArgumentException('hyperliquid_liquidation_float_invalid');
         }
-        $roundTrip = BigDecimal::of((string) $value);
-        if (($side === 'long' && $roundTrip->isLessThan($decimal))
-            || ($side === 'short' && $roundTrip->isGreaterThan($decimal))
+        $roundTrip = BigDecimal::of(sprintf('%.17g', $value));
+        if (($side === 'long' && $roundTrip->isLessThan($exact))
+            || ($side === 'short' && $roundTrip->isGreaterThan($exact))
         ) {
             throw new \InvalidArgumentException('hyperliquid_liquidation_float_direction_invalid');
         }

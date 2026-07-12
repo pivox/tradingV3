@@ -101,6 +101,29 @@ final class HyperliquidIsolatedLiquidationSolverTest extends TestCase
         $this->solver()->toConservativeFloat($result, 'short');
     }
 
+    public function testRejectsPointOneShortBecauseActualFloatMovesAwayFromEntry(): void
+    {
+        $result = new HyperliquidIsolatedLiquidationResult('0.1', 0, '0', 5, '0.1', '0');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->solver()->toConservativeFloat($result, 'short');
+    }
+
+    public function testRejectsPointThreeLongBecauseActualFloatMovesAwayFromEntry(): void
+    {
+        $result = new HyperliquidIsolatedLiquidationResult('0.3', 0, '0', 5, '0.1', '0');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->solver()->toConservativeFloat($result, 'long');
+    }
+
+    public function testPointOneLongRemainsConservativeInTheOppositeDirection(): void
+    {
+        $result = new HyperliquidIsolatedLiquidationResult('0.1', 0, '0', 5, '0.1', '0');
+
+        self::assertSame(0.1, $this->solver()->toConservativeFloat($result, 'long'));
+    }
+
     /** @param list<HyperliquidMarginTierEvidence>|null $tiers */
     private function evidence(?array $tiers = null, int $universeMaxLeverage = 10): HyperliquidMarginSafetyEvidence
     {

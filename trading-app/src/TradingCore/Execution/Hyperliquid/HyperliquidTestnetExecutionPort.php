@@ -153,10 +153,7 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         } catch (\Throwable) {
             return $this->rejected($plan, 'hyperliquid_execution_state_unavailable', ['hyperliquid_execution_state_unavailable']);
         }
-        $stateReasons = $this->executionStatePolicy->blockingReasons($state, $plan->symbol);
-        if ($state->hasOpenPosition) {
-            $stateReasons[] = 'hyperliquid_existing_position_not_flat';
-        }
+        $stateReasons = $this->flatStateReasons($state, $plan->symbol);
         if ($stateReasons !== []) {
             return $this->rejected($plan, 'hyperliquid_execution_state_rejected', $stateReasons);
         }
@@ -238,6 +235,20 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
 
         $entry = $this->entryRequest($plan, $shape['price'], $shape['quantity']);
         $stop = $this->stopRequest($plan, $shape['stop'], $shape['quantity'], $metadata->priceTick);
+        try {
+            $finalState = $this->executionState->current($plan->symbol);
+        } catch (\Throwable) {
+            return $this->rejected(
+                $plan,
+                'hyperliquid_final_execution_state_unavailable',
+                ['hyperliquid_final_execution_state_unavailable'],
+            );
+        }
+        $finalStateReasons = $this->flatStateReasons($finalState, $plan->symbol);
+        if ($finalStateReasons !== []) {
+            return $this->rejected($plan, 'hyperliquid_final_execution_state_rejected', $finalStateReasons);
+        }
+        $state = $finalState;
         if (!$this->nonceReady($scope)) {
             return $this->rejected($plan, 'hyperliquid_nonce_not_ready', ['hyperliquid_nonce_store_not_ready']);
         }
@@ -253,6 +264,20 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         }
 
         return $this->mapSubmission($submission, $plan, $metadata, $state, $scope, $correlationId, $shape['quantity']);
+    }
+
+    /** @return list<string> */
+    private function flatStateReasons(HyperliquidExecutionState $state, string $symbol): array
+    {
+        $reasons = $this->executionStatePolicy->blockingReasons($state, $symbol);
+        if ($state->hasOpenPosition) {
+            $reasons[] = 'hyperliquid_existing_position_not_flat';
+        }
+        if ($state->openOrderCount !== 0) {
+            $reasons[] = 'hyperliquid_existing_open_orders_not_flat';
+        }
+
+        return array_values(array_unique($reasons));
     }
 
     /**
