@@ -11,6 +11,7 @@ use App\TradingCore\Execution\Dto\ExecutionResult;
 use App\TradingCore\Execution\Enum\ExecutionMode;
 use App\TradingCore\Execution\Enum\ExecutionStatus;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidMutationReadinessGate;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidTestnetExecutionPortInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -34,6 +35,7 @@ final class HyperliquidTestnetSmokeCommand extends Command
         private readonly HyperliquidMutationReadinessProbeInterface $readiness,
         private readonly HyperliquidMutationReadinessGate $readinessGate,
         private readonly HyperliquidConfig $config,
+        private readonly HyperliquidKillSwitchTripInterface $durableTrip,
     ) {
         parent::__construct();
     }
@@ -88,24 +90,45 @@ final class HyperliquidTestnetSmokeCommand extends Command
             return $this->refuse($output, 'Smoke execution failed.');
         }
 
-        return $this->writeResult($output, $result);
+        return $this->writeResult($output, $result, $request->orderPlan->clientOrderId);
     }
 
-    private function writeResult(OutputInterface $output, ExecutionResult $result): int
+    private function writeResult(OutputInterface $output, ExecutionResult $result, ?string $submittedClientOrderId): int
     {
-        $output->writeln('status=' . $result->status->value);
         if ($result->status === ExecutionStatus::Accepted) {
-            if ($this->safeOpaqueIdentifier($result->clientOrderId)) {
-                $output->writeln('client_order_id=' . $result->clientOrderId);
+            if (!$this->acceptedResultIsProven($result, $submittedClientOrderId)) {
+                try {
+                    $this->durableTrip->trip(
+                        'hyperliquid_smoke_accepted_result_ambiguous',
+                        ['command' => 'app:hyperliquid:testnet:smoke'],
+                    );
+                } catch (\Throwable) {
+                    // The fixed ambiguous result remains fail-closed even if durable persistence fails.
+                }
+                $output->writeln('status=ambiguous');
+
+                return Command::FAILURE;
             }
-            if ($this->safeOpaqueIdentifier($result->exchangeOrderId)) {
-                $output->writeln('exchange_order_id=' . $result->exchangeOrderId);
-            }
+
+            $output->writeln('status=accepted');
+            $output->writeln('client_order_id=' . $result->clientOrderId);
+            $output->writeln('exchange_order_id=' . $result->exchangeOrderId);
 
             return Command::SUCCESS;
         }
 
+        $output->writeln('status=' . $result->status->value);
+
         return Command::FAILURE;
+    }
+
+    private function acceptedResultIsProven(ExecutionResult $result, ?string $submittedClientOrderId): bool
+    {
+        return $this->safeOpaqueIdentifier($submittedClientOrderId)
+            && $this->safeOpaqueIdentifier($result->clientOrderId)
+            && hash_equals($submittedClientOrderId, $result->clientOrderId)
+            && $this->safeOpaqueIdentifier($result->exchangeOrderId)
+            && ($result->metadata['protection_confirmed'] ?? null) === true;
     }
 
     private function safeOpaqueIdentifier(?string $value): bool

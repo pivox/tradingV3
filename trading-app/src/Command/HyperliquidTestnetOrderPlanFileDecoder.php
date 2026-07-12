@@ -5,14 +5,28 @@ declare(strict_types=1);
 namespace App\Command;
 
 use App\TradingCore\OrderPlan\Dto\OrderPlan;
-use App\TradingCore\SlTp\Dto\LiquidationCheckResult;
+use App\TradingCore\SlTp\Dto\LiquidationCheckRequest;
 use App\TradingCore\SlTp\Dto\ProtectionPlan;
 use App\TradingCore\SlTp\Dto\StopLossResult;
 use App\TradingCore\SlTp\Enum\ProtectionPlanStatus;
+use App\TradingCore\SlTp\Service\LiquidationGuard;
+use Brick\Math\BigDecimal;
+use Brick\Math\RoundingMode;
 
+/**
+ * Schema v1 accepts only authoritative order primitives. Prices and quantity are
+ * canonical decimal strings (scale <= 8); stop and liquidation metrics are derived.
+ * Without exchange maintenance-margin evidence, LiquidationGuard uses the existing
+ * fallback maintenance margin 0.0 and a conservative minimum distance ratio of 3.0.
+ */
 final class HyperliquidTestnetOrderPlanFileDecoder
 {
-    private const MAX_FILE_BYTES = 65_536;
+    private const MAX_DECIMAL_SCALE = 8;
+    private const MAX_DECIMAL_VALUE = '1000000000000';
+
+    // Existing LiquidationGuard fallback: derive from entry/leverage with no maintenance-margin adjustment.
+    private const DEFAULT_MAINTENANCE_MARGIN_RATE = 0.0;
+    private const MIN_LIQUIDATION_DISTANCE_RATIO = 3.0;
 
     /** @var list<string> */
     private const PLAN_FIELDS = [
@@ -33,14 +47,24 @@ final class HyperliquidTestnetOrderPlanFileDecoder
         'protection_plan',
     ];
 
+    private readonly LiquidationGuard $liquidationGuard;
+    private readonly BoundedDuplicateAwareJsonDecoder $jsonDecoder;
+    private readonly HyperliquidTestnetOrderPlanFileReaderInterface $fileReader;
+
+    public function __construct(
+        ?LiquidationGuard $liquidationGuard = null,
+        ?BoundedDuplicateAwareJsonDecoder $jsonDecoder = null,
+        ?HyperliquidTestnetOrderPlanFileReaderInterface $fileReader = null,
+    ) {
+        $this->liquidationGuard = $liquidationGuard ?? new LiquidationGuard();
+        $this->jsonDecoder = $jsonDecoder ?? new BoundedDuplicateAwareJsonDecoder();
+        $this->fileReader = $fileReader ?? new HyperliquidTestnetOrderPlanFileReader();
+    }
+
     public function decode(string $path): OrderPlan
     {
-        $contents = $this->readRegularFile($path);
-        try {
-            $envelope = json_decode($contents, true, 32, \JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
-            throw new \InvalidArgumentException('order_plan_json_invalid');
-        }
+        $contents = $this->fileReader->read($path);
+        $envelope = $this->jsonDecoder->decode($contents);
         if (!is_array($envelope) || array_is_list($envelope)) {
             throw new \InvalidArgumentException('order_plan_envelope_invalid');
         }
@@ -58,8 +82,10 @@ final class HyperliquidTestnetOrderPlanFileDecoder
         $timeInForce = $this->exactString($plan, 'time_in_force', 'gtc');
         $side = $this->enumString($plan, 'side', ['long', 'short']);
         $marginMode = $this->enumString($plan, 'margin_mode', ['isolated', 'cross']);
-        $entryPrice = $this->positiveNumber($plan, 'entry_price', 1_000_000_000_000.0);
-        $quantity = $this->positiveNumber($plan, 'quantity', 1_000_000_000_000.0);
+        $entryDecimal = $this->positiveDecimal($plan, 'entry_price');
+        $quantityDecimal = $this->positiveDecimal($plan, 'quantity');
+        $entryPrice = $this->exactFloat($entryDecimal, self::MAX_DECIMAL_SCALE);
+        $quantity = $this->exactFloat($quantityDecimal, self::MAX_DECIMAL_SCALE);
         $leverage = $this->boundedInt($plan, 'leverage', 1, 100);
 
         $symbol = $this->patternString($plan, 'symbol', '/^[A-Z0-9][A-Z0-9_-]{1,31}$/D');
@@ -69,36 +95,46 @@ final class HyperliquidTestnetOrderPlanFileDecoder
         $idempotencyKey = $this->opaqueString($plan, 'idempotency_key');
 
         $protection = $this->object($plan, 'protection_plan');
-        $this->assertExactKeys($protection, ['stop_loss', 'liquidation_check']);
+        $this->assertExactKeys($protection, ['stop_loss']);
         $stop = $this->object($protection, 'stop_loss');
-        $this->assertExactKeys($stop, ['stop_price', 'stop_pct', 'stop_distance', 'stop_source', 'is_full_size']);
+        $this->assertExactKeys($stop, ['stop_price', 'stop_source', 'is_full_size']);
         if (($stop['is_full_size'] ?? null) !== true) {
             throw new \InvalidArgumentException('order_plan_full_size_stop_required');
         }
+        $stopDecimal = $this->positiveDecimal($stop, 'stop_price');
+        $stopDistance = $entryDecimal->minus($stopDecimal)->abs();
+        if ($stopDistance->isZero()) {
+            throw new \InvalidArgumentException('order_plan_stop_distance_invalid');
+        }
+        $stopPrice = $this->exactFloat($stopDecimal, self::MAX_DECIMAL_SCALE);
         $stopLoss = new StopLossResult(
-            stopPrice: $this->positiveNumber($stop, 'stop_price', 1_000_000_000_000.0),
-            stopPct: $this->positiveNumber($stop, 'stop_pct', 1.0),
-            stopDistance: $this->positiveNumber($stop, 'stop_distance', 1_000_000_000_000.0),
+            stopPrice: $stopPrice,
+            stopPct: $this->exactFloat(
+                $stopDistance->dividedBy($entryDecimal, 12, RoundingMode::HALF_UP),
+                12,
+            ),
+            stopDistance: $this->exactFloat($stopDistance, self::MAX_DECIMAL_SCALE),
             stopSource: $this->patternString($stop, 'stop_source', '/^[a-z][a-z0-9_.-]{0,31}$/D'),
             isFullSize: true,
         );
 
-        $liquidation = $this->object($protection, 'liquidation_check');
-        $this->assertExactKeys($liquidation, [
-            'is_safe',
-            'liquidation_price',
-            'liquidation_distance_pct',
-            'stop_to_liquidation_ratio',
-        ]);
-        if (($liquidation['is_safe'] ?? null) !== true) {
-            throw new \InvalidArgumentException('order_plan_liquidation_guard_required');
+        $liquidationCheck = $this->liquidationGuard->check(new LiquidationCheckRequest(
+            symbol: $symbol,
+            instrument: $symbol,
+            exchange: $exchange,
+            marketType: $marketType,
+            direction: $side,
+            entryPrice: $entryPrice,
+            stopPrice: $stopPrice,
+            leverage: $leverage,
+            maintenanceMarginRate: self::DEFAULT_MAINTENANCE_MARGIN_RATE,
+            liquidationPrice: null,
+            minDistanceRatio: self::MIN_LIQUIDATION_DISTANCE_RATIO,
+            metadata: ['model' => 'entry_leverage_default_maintenance_margin'],
+        ));
+        if (!$liquidationCheck->isSafe) {
+            throw new \InvalidArgumentException('order_plan_liquidation_guard_unsafe');
         }
-        $liquidationCheck = new LiquidationCheckResult(
-            isSafe: true,
-            liquidationPrice: $this->positiveNumber($liquidation, 'liquidation_price', 1_000_000_000_000.0),
-            liquidationDistancePct: $this->positiveNumber($liquidation, 'liquidation_distance_pct', 1.0),
-            stopToLiquidationRatio: $this->positiveNumber($liquidation, 'stop_to_liquidation_ratio', 1_000_000.0),
-        );
 
         return new OrderPlan(
             symbol: $symbol,
@@ -123,40 +159,6 @@ final class HyperliquidTestnetOrderPlanFileDecoder
             idempotencyKey: $idempotencyKey,
             configHash: $configHash,
         );
-    }
-
-    private function readRegularFile(string $path): string
-    {
-        if ($path === '' || is_link($path)) {
-            throw new \InvalidArgumentException('order_plan_file_invalid');
-        }
-        $before = @lstat($path);
-        if (!is_array($before) || ($before['mode'] & 0170000) !== 0100000 || $before['size'] > self::MAX_FILE_BYTES) {
-            throw new \InvalidArgumentException('order_plan_file_invalid');
-        }
-        $handle = @fopen($path, 'rb');
-        if (!is_resource($handle)) {
-            throw new \InvalidArgumentException('order_plan_file_invalid');
-        }
-        try {
-            $opened = fstat($handle);
-            if (!is_array($opened)
-                || ($opened['mode'] & 0170000) !== 0100000
-                || $opened['dev'] !== $before['dev']
-                || $opened['ino'] !== $before['ino']
-                || $opened['size'] > self::MAX_FILE_BYTES
-            ) {
-                throw new \InvalidArgumentException('order_plan_file_invalid');
-            }
-            $contents = stream_get_contents($handle, self::MAX_FILE_BYTES + 1);
-            if (!is_string($contents) || strlen($contents) > self::MAX_FILE_BYTES) {
-                throw new \InvalidArgumentException('order_plan_file_invalid');
-            }
-
-            return $contents;
-        } finally {
-            fclose($handle);
-        }
     }
 
     /**
@@ -231,14 +233,42 @@ final class HyperliquidTestnetOrderPlanFileDecoder
     }
 
     /** @param array<string,mixed> $source */
-    private function positiveNumber(array $source, string $field, float $maximum): float
+    private function positiveDecimal(array $source, string $field): BigDecimal
     {
         $value = $source[$field] ?? null;
-        if ((!is_int($value) && !is_float($value)) || !is_finite((float) $value) || $value <= 0 || $value > $maximum) {
+        if (!is_string($value)
+            || preg_match('/^(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?$/D', $value) !== 1
+        ) {
             throw new \InvalidArgumentException('order_plan_number_invalid');
         }
 
-        return (float) $value;
+        try {
+            $decimal = BigDecimal::of($value);
+        } catch (\Throwable) {
+            throw new \InvalidArgumentException('order_plan_number_invalid');
+        }
+        if ($decimal->isLessThanOrEqualTo(BigDecimal::zero())
+            || $decimal->isGreaterThan(BigDecimal::of(self::MAX_DECIMAL_VALUE))
+            || $decimal->getScale() > self::MAX_DECIMAL_SCALE
+        ) {
+            throw new \InvalidArgumentException('order_plan_number_invalid');
+        }
+
+        return $decimal;
+    }
+
+    private function exactFloat(BigDecimal $decimal, int $scale): float
+    {
+        $float = $decimal->toFloat();
+        if (!is_finite($float)) {
+            throw new \InvalidArgumentException('order_plan_float_invalid');
+        }
+        $roundTrip = BigDecimal::of(sprintf('%.' . $scale . 'F', $float));
+        if (!$roundTrip->isEqualTo($decimal)) {
+            throw new \InvalidArgumentException('order_plan_float_not_exactly_representable');
+        }
+
+        return $float;
     }
 
     /** @param array<string,mixed> $source */

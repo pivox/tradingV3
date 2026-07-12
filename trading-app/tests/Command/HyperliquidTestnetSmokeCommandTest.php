@@ -17,6 +17,7 @@ use App\TradingCore\Execution\Dto\ExecutionResult;
 use App\TradingCore\Execution\Enum\ExecutionMode;
 use App\TradingCore\Execution\Enum\ExecutionStatus;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidMutationReadinessGate;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidTestnetExecutionPortInterface;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -157,6 +158,29 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         yield 'unknown envelope field' => [json_encode(['schema_version' => 1, 'order_plan' => [], 'secret' => 'no'], \JSON_THROW_ON_ERROR)];
     }
 
+    #[DataProvider('duplicateJsonFiles')]
+    public function testRejectsDuplicateJsonBeforePortExecution(string $needle, string $replacement): void
+    {
+        $json = json_encode($this->validEnvelope(), \JSON_THROW_ON_ERROR);
+        $json = str_replace($needle, $replacement, $json, $replacements);
+        self::assertSame(1, $replacements);
+        $port = new SmokeTestPort($this->accepted());
+        $tester = $this->tester($port);
+
+        self::assertSame(Command::FAILURE, $tester->execute($this->input($this->file($json))));
+        self::assertSame("Smoke execution refused: order-plan file invalid.\n", $tester->getDisplay());
+        self::assertSame(0, $port->calls);
+    }
+
+    /** @return iterable<string, array{string,string}> */
+    public static function duplicateJsonFiles(): iterable
+    {
+        yield 'schema version' => ['"schema_version":1', '"schema_version":1,"schema_version":1'];
+        yield 'exchange' => ['"exchange":"hyperliquid"', '"exchange":"hyperliquid","exchange":"hyperliquid"'];
+        yield 'nested stop' => ['"stop_price":"98"', '"stop_price":"98","stop_price":"97"'];
+        yield 'escaped-equivalent exchange' => ['"exchange":"hyperliquid"', '"exchange":"hyperliquid","exch\\u0061nge":"hyperliquid"'];
+    }
+
     public function testRejectsNonFileAndSymlinkInputs(): void
     {
         $port = new SmokeTestPort($this->accepted());
@@ -207,15 +231,78 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         yield 'missing profile' => ['order_plan.profile', ''];
         yield 'missing config hash' => ['order_plan.config_hash', ''];
         yield 'invalid config hash' => ['order_plan.config_hash', str_repeat('z', 64)];
-        yield 'entry string' => ['order_plan.entry_price', '100'];
-        yield 'negative entry' => ['order_plan.entry_price', -1.0];
-        yield 'zero quantity' => ['order_plan.quantity', 0.0];
+        yield 'numeric entry' => ['order_plan.entry_price', 100];
+        yield 'numeric quantity' => ['order_plan.quantity', 1];
+        yield 'negative entry' => ['order_plan.entry_price', '-1'];
+        yield 'zero quantity' => ['order_plan.quantity', '0'];
+        yield 'exponent entry' => ['order_plan.entry_price', '1e2'];
+        yield 'noncanonical entry' => ['order_plan.entry_price', '100.0'];
+        yield 'entry scale too large' => ['order_plan.entry_price', '100.000000001'];
+        yield 'entry loses downstream float precision' => ['order_plan.entry_price', '999999999999.99999999'];
         yield 'excess leverage' => ['order_plan.leverage', 101];
         yield 'invalid side' => ['order_plan.side', 'buy'];
         yield 'invalid margin mode' => ['order_plan.margin_mode', 'portfolio'];
+        yield 'numeric stop' => ['order_plan.protection_plan.stop_loss.stop_price', 98];
         yield 'missing full-size stop' => ['order_plan.protection_plan.stop_loss.is_full_size', false];
-        yield 'unsafe liquidation check' => ['order_plan.protection_plan.liquidation_check.is_safe', false];
-        yield 'stop on wrong side' => ['order_plan.protection_plan.stop_loss.stop_price', 101.0];
+        yield 'stop on wrong side' => ['order_plan.protection_plan.stop_loss.stop_price', '101'];
+    }
+
+    public function testRejectsCallerSuppliedDerivedProtectionMetrics(): void
+    {
+        foreach (['stop_pct', 'stop_distance'] as $field) {
+            $envelope = $this->validEnvelope();
+            $envelope['order_plan']['protection_plan']['stop_loss'][$field] = '1';
+            $port = new SmokeTestPort($this->accepted());
+            $tester = $this->tester($port);
+
+            self::assertSame(Command::FAILURE, $tester->execute($this->input($this->planFile($envelope))));
+            self::assertSame(0, $port->calls);
+        }
+
+        $envelope = $this->validEnvelope();
+        $envelope['order_plan']['protection_plan']['liquidation_check'] = [
+            'is_safe' => true,
+            'liquidation_distance_pct' => '0.2',
+            'stop_to_liquidation_ratio' => '10',
+        ];
+        $port = new SmokeTestPort($this->accepted());
+        $tester = $this->tester($port);
+
+        self::assertSame(Command::FAILURE, $tester->execute($this->input($this->planFile($envelope))));
+        self::assertSame(0, $port->calls);
+    }
+
+    public function testDerivesStopAndLiquidationMetricsFromAuthoritativePrimitives(): void
+    {
+        $port = new SmokeTestPort($this->accepted());
+        $tester = $this->tester($port);
+
+        self::assertSame(Command::SUCCESS, $tester->execute($this->input($this->planFile())));
+        self::assertNotNull($port->request);
+        $protection = $port->request->orderPlan->protectionPlan;
+        self::assertNotNull($protection);
+        self::assertNotNull($protection->stopLoss);
+        self::assertNotNull($protection->liquidationCheck);
+        self::assertSame(2.0, $protection->stopLoss->stopDistance);
+        self::assertSame(0.02, $protection->stopLoss->stopPct);
+        self::assertTrue($protection->liquidationCheck->isSafe);
+        self::assertSame(80.0, $protection->liquidationCheck->liquidationPrice);
+        self::assertSame(0.2, $protection->liquidationCheck->liquidationDistancePct);
+        self::assertSame(10.0, $protection->liquidationCheck->stopToLiquidationRatio);
+        self::assertSame(0.0, $protection->liquidationCheck->metadata['maintenance_margin_rate'] ?? null);
+        self::assertSame(3.0, $protection->liquidationCheck->metadata['min_distance_ratio'] ?? null);
+    }
+
+    public function testRejectsPlanWhenDerivedLiquidationGuardIsUnsafe(): void
+    {
+        $envelope = $this->validEnvelope();
+        $envelope['order_plan']['leverage'] = 100;
+        $port = new SmokeTestPort($this->accepted());
+        $tester = $this->tester($port);
+
+        self::assertSame(Command::FAILURE, $tester->execute($this->input($this->planFile($envelope))));
+        self::assertSame("Smoke execution refused: order-plan file invalid.\n", $tester->getDisplay());
+        self::assertSame(0, $port->calls);
     }
 
     public function testBuildsCanonicalLiveRequestAndPrintsOnlySafeAcceptedIdentifiers(): void
@@ -225,10 +312,11 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
             'CID-HL-1',
             '123456789',
             ['secret' => 'raw-secret'],
-            ['token' => 'metadata-secret'],
+            ['protection_confirmed' => true, 'token' => 'metadata-secret'],
         );
         $port = new SmokeTestPort($result);
-        $tester = $this->tester($port);
+        $trip = new SmokeTestTrip();
+        $tester = $this->tester($port, trip: $trip);
 
         $exitCode = $tester->execute($this->input($this->planFile()));
 
@@ -244,21 +332,63 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         self::assertSame('gtc', $port->request->orderPlan->timeInForce);
         self::assertTrue($port->request->orderPlan->protectionPlan?->stopLoss?->isFullSize ?? false);
         self::assertSame(self::HASH, $port->request->orderPlan->configHash);
+        self::assertSame(0, $trip->attempts);
     }
 
-    public function testOmitsUnsafeAcceptedIdentifiers(): void
+    /** @param array<string,mixed> $metadata */
+    #[DataProvider('ambiguousAcceptedResults')]
+    public function testAcceptedResultWithoutProvenIdentityAndProtectionTripsQuarantine(
+        ?string $clientOrderId,
+        ?string $exchangeOrderId,
+        array $metadata,
+    ): void
     {
         $port = new SmokeTestPort(new ExecutionResult(
             ExecutionStatus::Accepted,
-            "CID\nleak=1",
-            '<secret>',
+            $clientOrderId,
+            $exchangeOrderId,
+            metadata: $metadata,
         ));
-        $tester = $this->tester($port);
+        $trip = new SmokeTestTrip();
+        $tester = $this->tester($port, trip: $trip);
 
         $exitCode = $tester->execute($this->input($this->planFile()));
 
-        self::assertSame(Command::SUCCESS, $exitCode);
-        self::assertSame("status=accepted\n", $tester->getDisplay());
+        self::assertSame(Command::FAILURE, $exitCode);
+        self::assertSame("status=ambiguous\n", $tester->getDisplay());
+        self::assertSame(1, $trip->attempts);
+        self::assertSame('hyperliquid_smoke_accepted_result_ambiguous', $trip->reason);
+        self::assertSame(['command' => 'app:hyperliquid:testnet:smoke'], $trip->context);
+    }
+
+    /** @return iterable<string, array{?string,?string,array<string,mixed>}> */
+    public static function ambiguousAcceptedResults(): iterable
+    {
+        yield 'missing client id' => [null, '123', ['protection_confirmed' => true]];
+        yield 'unsafe client id' => ["CID\nleak=1", '123', ['protection_confirmed' => true]];
+        yield 'mismatched client id' => ['CID-HL-OTHER', '123', ['protection_confirmed' => true]];
+        yield 'missing exchange id' => ['CID-HL-1', null, ['protection_confirmed' => true]];
+        yield 'unsafe exchange id' => ['CID-HL-1', '<secret>', ['protection_confirmed' => true]];
+        yield 'absent protection proof' => ['CID-HL-1', '123', []];
+        yield 'false protection proof' => ['CID-HL-1', '123', ['protection_confirmed' => false]];
+    }
+
+    public function testAmbiguousAcceptedResultStillFailsWhenDurableTripThrows(): void
+    {
+        $port = new SmokeTestPort(new ExecutionResult(
+            ExecutionStatus::Accepted,
+            'CID-HL-OTHER',
+            '123',
+            metadata: ['protection_confirmed' => true, 'secret' => 'not-output'],
+        ));
+        $trip = new SmokeTestTrip(throwOnTrip: true);
+        $tester = $this->tester($port, trip: $trip);
+
+        $exitCode = $tester->execute($this->input($this->planFile()));
+
+        self::assertSame(Command::FAILURE, $exitCode);
+        self::assertSame("status=ambiguous\n", $tester->getDisplay());
+        self::assertSame(1, $trip->attempts);
     }
 
     #[DataProvider('unsuccessfulStatuses')]
@@ -304,6 +434,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         SmokeTestPort $port,
         ?SmokeTestReadinessProbe $probe = null,
         ?HyperliquidConfig $config = null,
+        ?SmokeTestTrip $trip = null,
     ): CommandTester {
         return new CommandTester(new HyperliquidTestnetSmokeCommand(
             new HyperliquidTestnetOrderPlanFileDecoder(),
@@ -311,6 +442,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
             $probe ?? new SmokeTestReadinessProbe($this->report()),
             new HyperliquidMutationReadinessGate(),
             $config ?? $this->config(),
+            $trip ?? new SmokeTestTrip(),
         ));
     }
 
@@ -368,24 +500,16 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
                 'order_type' => 'limit',
                 'margin_mode' => 'isolated',
                 'time_in_force' => 'gtc',
-                'entry_price' => 100.0,
-                'quantity' => 0.1,
+                'entry_price' => '100',
+                'quantity' => '0.1',
                 'leverage' => 5,
                 'client_order_id' => 'CID-HL-1',
                 'idempotency_key' => 'decision:BTCUSDT:long',
                 'protection_plan' => [
                     'stop_loss' => [
-                        'stop_price' => 98.0,
-                        'stop_pct' => 0.02,
-                        'stop_distance' => 2.0,
+                        'stop_price' => '98',
                         'stop_source' => 'pivot',
                         'is_full_size' => true,
-                    ],
-                    'liquidation_check' => [
-                        'is_safe' => true,
-                        'liquidation_price' => 80.0,
-                        'liquidation_distance_pct' => 0.2,
-                        'stop_to_liquidation_ratio' => 10.0,
                     ],
                 ],
             ],
@@ -394,7 +518,12 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
 
     private function accepted(): ExecutionResult
     {
-        return new ExecutionResult(ExecutionStatus::Accepted, 'CID-HL-1', '123');
+        return new ExecutionResult(
+            ExecutionStatus::Accepted,
+            'CID-HL-1',
+            '123',
+            metadata: ['protection_confirmed' => true],
+        );
     }
 
     private function config(): HyperliquidConfig
@@ -490,5 +619,32 @@ final class SmokeTestReadinessProbe implements HyperliquidMutationReadinessProbe
         }
 
         return $this->report ?? throw new \RuntimeException('missing report');
+    }
+}
+
+final class SmokeTestTrip implements HyperliquidKillSwitchTripInterface
+{
+    public int $attempts = 0;
+    public ?string $reason = null;
+    /** @var array<string,mixed>|null */
+    public ?array $context = null;
+
+    public function __construct(private readonly bool $throwOnTrip = false)
+    {
+    }
+
+    public function isTripped(): bool
+    {
+        return false;
+    }
+
+    public function trip(string $reason, array $auditContext): void
+    {
+        ++$this->attempts;
+        $this->reason = $reason;
+        $this->context = $auditContext;
+        if ($this->throwOnTrip) {
+            throw new \RuntimeException('secret-trip-failure');
+        }
     }
 }
