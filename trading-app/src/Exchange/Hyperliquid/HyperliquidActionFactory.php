@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace App\Exchange\Hyperliquid;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Exchange\Dto\CancelOrderRequest;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderType;
+use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 
 final class HyperliquidActionFactory
@@ -39,6 +42,91 @@ final class HyperliquidActionFactory
             ]],
             'grouping' => 'na',
         ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public function positionTpsl(int $assetId, PlaceOrderRequest $entry, PlaceOrderRequest $stop): array
+    {
+        $this->assertAssetId($assetId);
+        if ($entry->exchange !== $stop->exchange) {
+            throw new \InvalidArgumentException('hyperliquid_orders_must_use_same_exchange');
+        }
+        if ($entry->marketType !== $stop->marketType) {
+            throw new \InvalidArgumentException('hyperliquid_orders_must_use_same_market_type');
+        }
+        $this->assertHyperliquidPerpetual($entry);
+        $this->assertHyperliquidPerpetual($stop);
+        if ($this->normalizeSymbol($entry->symbol) !== $this->normalizeSymbol($stop->symbol)) {
+            throw new \InvalidArgumentException('hyperliquid_orders_must_use_same_symbol');
+        }
+        if ($entry->quantity !== $stop->quantity) {
+            throw new \InvalidArgumentException('hyperliquid_orders_must_use_same_quantity');
+        }
+        if ($entry->positionSide !== $stop->positionSide) {
+            throw new \InvalidArgumentException('hyperliquid_orders_must_use_same_position_side');
+        }
+        if ($entry->reduceOnly) {
+            throw new \InvalidArgumentException('hyperliquid_entry_must_not_be_reduce_only');
+        }
+        if (!$stop->reduceOnly) {
+            throw new \InvalidArgumentException('hyperliquid_stop_must_be_reduce_only');
+        }
+        if ($stop->orderType !== ExchangeOrderType::STOP_LOSS) {
+            throw new \InvalidArgumentException('hyperliquid_stop_must_be_stop_loss');
+        }
+        if ($entry->side === $stop->side) {
+            throw new \InvalidArgumentException('hyperliquid_stop_must_close_entry_side');
+        }
+        if (!$this->isEntrySideCompatible($entry)) {
+            throw new \InvalidArgumentException('hyperliquid_entry_side_incompatible_with_position');
+        }
+        if ($this->cloid($entry->clientOrderId) === $this->cloid($stop->clientOrderId)) {
+            throw new \InvalidArgumentException('hyperliquid_order_cloids_must_be_distinct');
+        }
+
+        $entryWire = $this->order($assetId, $entry)['orders'][0];
+        $stopWire = $this->order($assetId, $stop)['orders'][0];
+
+        return [
+            'type' => 'order',
+            'orders' => [$entryWire, $stopWire],
+            'grouping' => 'positionTpsl',
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public function emergencyClose(int $assetId, PlaceOrderRequest $request): array
+    {
+        $this->assertAssetId($assetId);
+        $this->assertHyperliquidPerpetual($request);
+
+        if (!$request->reduceOnly) {
+            throw new \InvalidArgumentException('hyperliquid_emergency_close_must_be_reduce_only');
+        }
+        if ($request->orderType !== ExchangeOrderType::MARKET) {
+            throw new \InvalidArgumentException('hyperliquid_emergency_close_must_be_market');
+        }
+        if ($request->timeInForce !== ExchangeTimeInForce::IOC) {
+            throw new \InvalidArgumentException('hyperliquid_emergency_close_must_be_ioc');
+        }
+        if ($request->quantity <= 0.0 || !\is_finite($request->quantity)) {
+            throw new \InvalidArgumentException('hyperliquid_emergency_close_requires_positive_finite_quantity');
+        }
+        if ($request->price === null || $request->price <= 0.0 || !\is_finite($request->price)) {
+            throw new \InvalidArgumentException('hyperliquid_emergency_close_requires_positive_finite_slippage_cap_price');
+        }
+        if ($request->postOnly) {
+            throw new \InvalidArgumentException('hyperliquid_emergency_close_must_not_be_post_only');
+        }
+        if ($request->side === $this->entrySide($request->positionSide)) {
+            throw new \InvalidArgumentException('hyperliquid_emergency_close_must_close_position_side');
+        }
+
+        return $this->order($assetId, $request);
     }
 
     /**
@@ -172,6 +260,45 @@ final class HyperliquidActionFactory
         }
 
         throw new \InvalidArgumentException('Hyperliquid generic trigger orders require metadata tpsl="sl" or "tp"');
+    }
+
+    private function assertAssetId(int $assetId): void
+    {
+        if ($assetId < 0) {
+            throw new \InvalidArgumentException('hyperliquid_asset_id_must_be_non_negative');
+        }
+    }
+
+    private function assertHyperliquidPerpetual(PlaceOrderRequest $request): void
+    {
+        if ($request->exchange !== Exchange::HYPERLIQUID || $request->marketType !== MarketType::PERPETUAL) {
+            throw new \InvalidArgumentException('hyperliquid_orders_require_hyperliquid_perpetual');
+        }
+    }
+
+    private function isEntrySideCompatible(PlaceOrderRequest $request): bool
+    {
+        return $request->side === $this->entrySide($request->positionSide);
+    }
+
+    private function entrySide(ExchangePositionSide $positionSide): ExchangeOrderSide
+    {
+        return match ($positionSide) {
+            ExchangePositionSide::LONG => ExchangeOrderSide::BUY,
+            ExchangePositionSide::SHORT => ExchangeOrderSide::SELL,
+        };
+    }
+
+    private function normalizeSymbol(string $symbol): string
+    {
+        $symbol = strtoupper(trim($symbol));
+        foreach (['-PERP', 'PERP', '/USDC', '-USDC', 'USDC', '/USDT', '-USDT', 'USDT'] as $suffix) {
+            if (str_ends_with($symbol, $suffix)) {
+                return substr($symbol, 0, -strlen($suffix));
+            }
+        }
+
+        return $symbol;
     }
 
     private function decimal(float $value): string
