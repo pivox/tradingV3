@@ -280,12 +280,13 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         self::assertNotSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
     }
 
-    public function testSlowReadCycleMakesPollingSnapshotStale(): void
+    public function testSlowSuccessfulReadCycleStampsPollingSnapshotAfterProbesComplete(): void
     {
         $report = $this->probe(readCycleSeconds: 2.001)->current();
 
-        self::assertFalse($report->privateObservability);
-        self::assertContains('hyperliquid_poll_snapshot_stale', $report->warnings);
+        self::assertTrue($report->privateObservability);
+        self::assertTrue($report->pollingReady);
+        self::assertNotContains('hyperliquid_poll_snapshot_stale', $report->warnings);
     }
 
     public function testReconciliationStatusIsQueriedAfterReads(): void

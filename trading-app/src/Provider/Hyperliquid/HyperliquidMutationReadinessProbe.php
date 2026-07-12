@@ -44,7 +44,6 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
 
     public function current(): ExchangeReadinessReport
     {
-        $cycleStartedAt = $this->clock->now();
         $warnings = [];
         $runtimeConfig = $this->runtimeConfig($warnings);
         $maxNotional = $runtimeConfig->maxNotional;
@@ -97,7 +96,7 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
             fillsReady: $fillsReady,
             positionsReady: $positionsReady,
             reconciliationInFlight: $reconciliationInFlight,
-            observedAt: $cycleStartedAt,
+            observedAt: $this->clock->now(),
         );
         $pollingReasons = $this->pollingPolicy->blockingReasons($pollingStatus);
         $pollingReady = $pollingReasons === [];
