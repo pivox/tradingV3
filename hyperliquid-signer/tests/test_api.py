@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import Any
@@ -68,6 +69,65 @@ def request_json(**overrides: Any) -> dict[str, Any]:
     }
     values.update(overrides)
     return values
+
+
+def asgi_post_chunks(
+    application: Any, chunks: list[bytes]
+) -> tuple[int, dict[str, Any], int]:
+    async def invoke() -> tuple[int, dict[str, Any], int]:
+        delivered = 0
+        messages: list[dict[str, Any]] = []
+
+        async def receive() -> dict[str, Any]:
+            nonlocal delivered
+            if delivered >= len(chunks):
+                return {"type": "http.disconnect"}
+            chunk = chunks[delivered]
+            delivered += 1
+            return {
+                "type": "http.request",
+                "body": chunk,
+                "more_body": delivered < len(chunks),
+            }
+
+        async def send(message: dict[str, Any]) -> None:
+            messages.append(message)
+
+        await application(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/v1/exchange",
+                "raw_path": b"/v1/exchange",
+                "query_string": b"",
+                "root_path": "",
+                "headers": [
+                    (b"authorization", f"Bearer {TOKEN}".encode("ascii")),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("127.0.0.1", 1234),
+                "server": ("testserver", 80),
+                "state": {},
+            },
+            receive,
+            send,
+        )
+        start = next(
+            message
+            for message in messages
+            if message["type"] == "http.response.start"
+        )
+        body = b"".join(
+            message.get("body", b"")
+            for message in messages
+            if message["type"] == "http.response.body"
+        )
+        return start["status"], json.loads(body), delivered
+
+    return asyncio.run(invoke())
 
 
 @pytest.fixture
@@ -164,6 +224,31 @@ def test_request_over_64_kib_is_rejected_before_json_parsing(
     assert response.json() == {"detail": "request_too_large"}
 
 
+def test_chunked_request_over_64_kib_stops_stream_consumption() -> None:
+    application = create_app(signer_config(), transport=FakeTransport())
+
+    status, body, delivered = asgi_post_chunks(
+        application, [b"x" * (32 * 1024)] * 4
+    )
+
+    assert status == 413
+    assert body == {"detail": "request_too_large"}
+    assert delivered == 3
+
+
+def test_bounded_chunked_request_is_replayed_to_validation() -> None:
+    application = create_app(signer_config(), transport=FakeTransport())
+    encoded = json.dumps(request_json()).encode("utf-8")
+
+    status, body, delivered = asgi_post_chunks(
+        application, [encoded[:30], encoded[30:]]
+    )
+
+    assert status == 200
+    assert body["outcome"] == "accepted"
+    assert delivered == 2
+
+
 def test_unauthorized_oversized_request_is_rejected_as_unauthorized(
     client: TestClient,
 ) -> None:
@@ -173,16 +258,20 @@ def test_unauthorized_oversized_request_is_rejected_as_unauthorized(
     assert response.json() == {"detail": "unauthorized"}
 
 
-def test_invalid_request_remains_framework_validation_error(
-    client: TestClient,
+@pytest.mark.parametrize("field", ["signature", "auth_token"])
+def test_validation_error_is_fixed_and_does_not_echo_input(
+    client: TestClient, field: str
 ) -> None:
+    sentinel = f"sentinel-{field}-must-not-appear"
     response = client.post(
         "/v1/exchange",
         headers=AUTH,
-        json=request_json(action={"type": "dummy"}),
+        json=request_json(**{field: sentinel}),
     )
 
     assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_request"}
+    assert sentinel not in response.text
 
 
 def test_config_or_signer_failure_returns_503(

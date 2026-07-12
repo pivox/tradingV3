@@ -1,5 +1,6 @@
 import json
-from typing import Any, Protocol
+import time
+from typing import Any, Callable, Protocol
 
 import requests
 from eth_account import Account
@@ -15,6 +16,7 @@ EXCHANGE_URL = TESTNET_URI + "/exchange"
 HTTP_TIMEOUT = (5.0, 5.0)
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_STATUS_ROWS = 20
+TOTAL_TIMEOUT_SECONDS = 5.0
 
 
 class TransportError(Exception):
@@ -32,8 +34,13 @@ class Transport(Protocol):
 
 
 class RequestsTransport:
-    def __init__(self, session: requests.Session | None = None) -> None:
+    def __init__(
+        self,
+        session: requests.Session | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._session = session or requests.Session()
+        self._monotonic = monotonic
 
     def post_json(
         self,
@@ -44,16 +51,21 @@ class RequestsTransport:
     ) -> dict[str, Any]:
         if url != EXCHANGE_URL:
             raise TransportError("testnet_endpoint_required")
+        deadline = _Deadline(self._monotonic, TOTAL_TIMEOUT_SECONDS)
         try:
             response = self._session.post(
                 url,
                 json=json_body,
                 timeout=timeout,
                 stream=True,
+                allow_redirects=False,
             )
             try:
+                deadline.check()
+                if 300 <= response.status_code < 400:
+                    raise TransportError("exchange_redirect_rejected")
                 response.raise_for_status()
-                body = _read_bounded_body(response)
+                body = _read_bounded_body(response, deadline)
             finally:
                 response.close()
         except requests.Timeout as error:
@@ -70,7 +82,21 @@ class RequestsTransport:
         return payload
 
 
-def _read_bounded_body(response: requests.Response) -> bytes:
+class _Deadline:
+    def __init__(
+        self, monotonic: Callable[[], float], timeout_seconds: float
+    ) -> None:
+        self._monotonic = monotonic
+        self._expires_at = monotonic() + timeout_seconds
+
+    def check(self) -> None:
+        if self._monotonic() >= self._expires_at:
+            raise TransportError("exchange_timeout")
+
+
+def _read_bounded_body(
+    response: requests.Response, deadline: _Deadline
+) -> bytes:
     content_length = response.headers.get("Content-Length")
     if content_length is not None:
         try:
@@ -80,7 +106,15 @@ def _read_bounded_body(response: requests.Response) -> bytes:
             raise TransportError("exchange_response_invalid_length") from error
 
     body = bytearray()
-    for chunk in response.iter_content(chunk_size=8192):
+    chunks = iter(response.iter_content(chunk_size=8192))
+    while True:
+        deadline.check()
+        try:
+            chunk = next(chunks)
+        except StopIteration:
+            deadline.check()
+            break
+        deadline.check()
         body.extend(chunk)
         if len(body) > MAX_RESPONSE_BYTES:
             raise TransportError("exchange_response_too_large")
@@ -120,6 +154,12 @@ class HyperliquidTestnetSigner:
                 request,
                 outcome="rejected",
                 reason="broadcast_disabled",
+            )
+        if request.agent_address.lower() != self._config.agent_address:
+            return _response(
+                request,
+                outcome="rejected",
+                reason="agent_address_mismatch",
             )
 
         signature = _sign_l1_testnet_action(
@@ -265,6 +305,7 @@ def _transport_reason(error: TransportError) -> str:
         "exchange_response_invalid_length",
         "exchange_response_invalid_json",
         "exchange_response_not_object",
+        "exchange_redirect_rejected",
         "testnet_endpoint_required",
     }
     return reason if reason in allowed else "exchange_transport_error"

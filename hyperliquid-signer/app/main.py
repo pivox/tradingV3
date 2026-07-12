@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.config import SignerConfig
@@ -37,6 +38,15 @@ def create_app(
 
     application = FastAPI()
 
+    @application.exception_handler(RequestValidationError)
+    async def redact_validation_error(
+        request: Request, error: RequestValidationError
+    ) -> JSONResponse:
+        del request, error
+        return JSONResponse(
+            status_code=422, content={"detail": "invalid_request"}
+        )
+
     @application.middleware("http")
     async def authenticate_and_bound_body(
         request: Request, call_next: Any
@@ -55,9 +65,12 @@ def create_app(
                         return _too_large()
                 except ValueError:
                     return _too_large()
-            body = await request.body()
-            if len(body) > MAX_REQUEST_BYTES:
-                return _too_large()
+            body = bytearray()
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > MAX_REQUEST_BYTES:
+                    return _too_large()
+                body.extend(chunk)
+            request._body = bytes(body)
         return await call_next(request)
 
     @application.get("/v1/health")

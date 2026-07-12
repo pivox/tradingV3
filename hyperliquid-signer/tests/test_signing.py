@@ -120,7 +120,11 @@ def test_broadcast_disabled_rejects_before_signing_or_transport(
         lambda *args, **kwargs: pytest.fail("signing must not run"),
     )
 
-    response = signer.submit(exchange_request())
+    response = signer.submit(
+        exchange_request(
+            agent_address="0x2222222222222222222222222222222222222222"
+        )
+    )
 
     assert response.model_dump() == {
         "schema_version": "1",
@@ -129,6 +133,28 @@ def test_broadcast_disabled_rejects_before_signing_or_transport(
         "reason": "broadcast_disabled",
         "correlation_id": "corr-1",
     }
+    assert transport.calls == []
+
+
+def test_request_agent_mismatch_rejects_before_signing_or_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = FakeTransport()
+    signer = HyperliquidTestnetSigner(config(), transport)
+    monkeypatch.setattr(
+        "app.signing._sign_l1_testnet_action",
+        lambda *args, **kwargs: pytest.fail("signing must not run"),
+    )
+
+    response = signer.submit(
+        exchange_request(
+            agent_address="0x2222222222222222222222222222222222222222"
+        )
+    )
+
+    assert response.outcome == "rejected"
+    assert response.reason == "agent_address_mismatch"
+    assert response.statuses == []
     assert transport.calls == []
 
 
@@ -277,9 +303,10 @@ def test_transport_timeout_is_ambiguous() -> None:
 
 
 class FakeResponse:
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, status_code: int = 200) -> None:
         self.headers: dict[str, str] = {}
         self._body = body
+        self.status_code = status_code
 
     def raise_for_status(self) -> None:
         return None
@@ -304,6 +331,52 @@ class FakeSession:
         return self.response
 
 
+class FakeClock:
+    def __init__(self) -> None:
+        self.current = 0.0
+
+    def __call__(self) -> float:
+        return self.current
+
+    def advance(self, seconds: float) -> None:
+        self.current += seconds
+
+
+class SlowChunkResponse(FakeResponse):
+    def __init__(self, clock: FakeClock) -> None:
+        super().__init__(b"")
+        self._clock = clock
+
+    def iter_content(self, chunk_size: int) -> Any:
+        del chunk_size
+        self._clock.advance(2.5)
+        yield b'{"status":'
+        self._clock.advance(2.6)
+        yield b'"ok"}'
+
+
+class SlowTerminalResponse(FakeResponse):
+    def __init__(self, clock: FakeClock) -> None:
+        super().__init__(b"")
+        self._clock = clock
+
+    def iter_content(self, chunk_size: int) -> Any:
+        del chunk_size
+        self._clock.advance(2.0)
+        yield b'{"status":"ok"}'
+        self._clock.advance(4.0)
+
+
+class SlowPostSession(FakeSession):
+    def __init__(self, response: FakeResponse, clock: FakeClock) -> None:
+        super().__init__(response)
+        self._clock = clock
+
+    def post(self, url: str, **kwargs: Any) -> FakeResponse:
+        self._clock.advance(5.1)
+        return super().post(url, **kwargs)
+
+
 def test_requests_transport_uses_streaming_and_connect_read_timeout() -> None:
     session = FakeSession(FakeResponse(b'{"status":"ok"}'))
     transport = RequestsTransport(session=session)
@@ -321,8 +394,69 @@ def test_requests_transport_uses_streaming_and_connect_read_timeout() -> None:
             "json": {"action": {}},
             "timeout": (5.0, 5.0),
             "stream": True,
+            "allow_redirects": False,
         }
     ]
+
+
+def test_requests_transport_rejects_redirect_without_following() -> None:
+    session = FakeSession(
+        FakeResponse(b'{"status":"ok"}', status_code=302)
+    )
+    transport = RequestsTransport(session=session)
+
+    with pytest.raises(TransportError, match="^exchange_redirect_rejected$"):
+        transport.post_json(
+            TESTNET_URI + "/exchange",
+            json_body={},
+            timeout=(5.0, 5.0),
+        )
+
+    assert len(session.calls) == 1
+    assert session.calls[0]["allow_redirects"] is False
+
+
+def test_requests_transport_deadline_includes_session_post() -> None:
+    clock = FakeClock()
+    transport = RequestsTransport(
+        session=SlowPostSession(FakeResponse(b'{"status":"ok"}'), clock),
+        monotonic=clock,
+    )
+
+    with pytest.raises(TransportError, match="^exchange_timeout$"):
+        transport.post_json(
+            TESTNET_URI + "/exchange",
+            json_body={},
+            timeout=(5.0, 5.0),
+        )
+
+
+def test_requests_transport_deadline_spans_streamed_chunks() -> None:
+    clock = FakeClock()
+    transport = RequestsTransport(
+        session=FakeSession(SlowChunkResponse(clock)), monotonic=clock
+    )
+
+    with pytest.raises(TransportError, match="^exchange_timeout$"):
+        transport.post_json(
+            TESTNET_URI + "/exchange",
+            json_body={},
+            timeout=(5.0, 5.0),
+        )
+
+
+def test_requests_transport_deadline_includes_terminal_stream_read() -> None:
+    clock = FakeClock()
+    transport = RequestsTransport(
+        session=FakeSession(SlowTerminalResponse(clock)), monotonic=clock
+    )
+
+    with pytest.raises(TransportError, match="^exchange_timeout$"):
+        transport.post_json(
+            TESTNET_URI + "/exchange",
+            json_body={},
+            timeout=(5.0, 5.0),
+        )
 
 
 @pytest.mark.parametrize(
