@@ -120,18 +120,82 @@ contient et ne valide aucune private key.
 Configurer ensuite **uniquement les deux adresses publiques** dans
 `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS` et
 `HYPERLIQUID_TESTNET_AGENT_ADDRESS` du runtime PHP, recreer PHP sans demarrer le
-sidecar, puis verifier la permission trade :
+sidecar, puis verifier que PHP a charge exactement ces valeurs publiques :
 
 ```bash
 docker compose up -d --no-deps --force-recreate trading-app-php
+
+HL_CONTAINER_ADDRESSES="$(
+  docker compose exec -T trading-app-php php -r '
+  echo json_encode([
+      "account" => getenv("HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS"),
+      "agent" => getenv("HYPERLIQUID_TESTNET_AGENT_ADDRESS"),
+  ], JSON_THROW_ON_ERROR);
+  '
+)"
+
+printf '%s' "$HL_CONTAINER_ADDRESSES" | jq -e \
+  --arg account "$HL_TESTNET_ACCOUNT_ADDRESS" \
+  --arg agent "$HL_TESTNET_AGENT_ADDRESS" '
+  type == "object" and
+  (.account | type) == "string" and
+  (.agent | type) == "string" and
+  .account == $account and
+  .agent == $agent
+' >/dev/null
 
 HL_READINESS_OUTPUT="$(
   docker compose exec -T trading-app-php \
     php bin/console app:exchange:runtime-check hyperliquid perpetual
 )"
 
+for diagnostic in \
+  'Exchange' \
+  'Market type' \
+  'Adapter' \
+  'Provider bundle' \
+  'Credentials' \
+  'REST' \
+  'Private WS' \
+  'Live trading' \
+  'Dry-run only' \
+  'Network' \
+  'Mainnet enabled' \
+  'Testnet trading enabled' \
+  'Readiness level' \
+  'Readiness blocking errors' \
+  'Readiness warnings' \
+  'Mainnet write guard' \
+  'Demo/testnet write guard' \
+  'Signer configured' \
+  'Signer/account relation' \
+  'Nonce store' \
+  'Collateral readable' \
+  'WS/polling' \
+  'Stop loss capability' \
+  'Kill switch' \
+  'Live allowed' \
+  'Recommended dry_run' \
+  'Schedule ready'
+do
+  count="$(printf '%s\n' "$HL_READINESS_OUTPUT" | awk \
+    -v prefix="$diagnostic: " 'index($0, prefix) == 1 {n++} END {print n + 0}')"
+  test "$count" -eq 1
+done
+
 printf '%s\n' "$HL_READINESS_OUTPUT" \
-  | rg '^(Readiness level|Readiness blocking errors|Readiness warnings|Signer configured|Live allowed|Schedule ready):'
+  | rg '^(Readiness level|Readiness blocking errors|Readiness warnings|Signer configured|Live allowed|Schedule ready): '
+
+printf '%s\n' "$HL_READINESS_OUTPUT" | rg -x 'Exchange: hyperliquid'
+printf '%s\n' "$HL_READINESS_OUTPUT" | rg -x 'Market type: perpetual'
+printf '%s\n' "$HL_READINESS_OUTPUT" | rg -x 'Network: testnet'
+printf '%s\n' "$HL_READINESS_OUTPUT" | rg -x 'Mainnet enabled: no'
+printf '%s\n' "$HL_READINESS_OUTPUT" | rg -x 'Testnet trading enabled: no'
+printf '%s\n' "$HL_READINESS_OUTPUT" | rg -x 'Signer configured: no'
+printf '%s\n' "$HL_READINESS_OUTPUT" | rg -x 'Dry-run only: yes'
+printf '%s\n' "$HL_READINESS_OUTPUT" | rg -x 'Live allowed: no'
+printf '%s\n' "$HL_READINESS_OUTPUT" | rg -x 'Recommended dry_run: true'
+printf '%s\n' "$HL_READINESS_OUTPUT" | rg -x 'Schedule ready: no'
 
 if printf '%s\n' "$HL_READINESS_OUTPUT" | rg -q \
   'hyperliquid_(extra_agents|agent_wallet_trade_permission)'; then
@@ -141,11 +205,14 @@ fi
 ```
 
 Avec le sidecar encore arrete, d'autres blocages comme
-`hyperliquid_signer_sidecar_not_ready` sont attendus. Seules la preuve
-`extraAgents` exacte et l'absence des erreurs readiness de permission autorisent
-le passage de l'enregistrement secret `pending` vers l'injection sidecar par le
-mecanisme local approuve. Ne jamais utiliser `export`, `read`, `docker compose
-run -e`, `--env` ou une ligne de commande pour la private key.
+`hyperliquid_signer_sidecar_not_ready` sont attendus. La requete directe
+`extraAgents` est la preuve positive de permission trade. Le runtime-check doit
+etre complet, lire exactement les memes adresses publiques et ne pas contredire
+cette preuve par un warning `extra_agents` ou `agent_wallet_trade_permission`.
+Seules ces conditions autorisent le passage de l'enregistrement secret
+`pending` vers l'injection sidecar par le mecanisme local approuve. Ne jamais
+utiliser `export`, `read`, `docker compose run -e`, `--env` ou une ligne de
+commande pour la private key.
 
 ## Secrets et sidecar
 
@@ -417,8 +484,8 @@ Elles n'affichent que coin, taille, oid, cloid, statut et flags utiles.
 
 Initialiser les identifiants publics. `HL_COIN` est le coin Hyperliquid, par
 exemple celui lie au symbole du plan. `HL_ENTRY_OID` vient de la sortie smoke et
-`HL_ENTRY_CLOID` est le cloid wire de 16 octets (`0x` + 32 hex) conserve dans
-l'audit redacted ; ce n'est pas le `client_order_id` metier.
+`HL_CLIENT_ORDER_ID` est le `client_order_id` public exact du plan et de la
+sortie acceptee.
 
 ```bash
 set +x
@@ -426,12 +493,27 @@ export HL_INFO_URL='https://api.hyperliquid-testnet.xyz/info'
 : "${HL_TESTNET_ACCOUNT_ADDRESS:?set the dedicated account address}"
 : "${HL_COIN:?set the exact Hyperliquid coin from the approved plan}"
 : "${HL_ENTRY_OID:?set the exact exchange OID returned by the smoke command}"
-: "${HL_ENTRY_CLOID:?set the exact wire cloid from redacted application evidence}"
+: "${HL_CLIENT_ORDER_ID:?set the exact public client_order_id from the plan}"
 
 jq -en --arg account "$HL_TESTNET_ACCOUNT_ADDRESS" --arg coin "$HL_COIN" '
   ($account | test("^0x[0-9a-fA-F]{40}$")) and
   ($coin | test("^[A-Z0-9][A-Z0-9_-]{0,31}$"))
 ' >/dev/null
+
+HL_ENTRY_CLOID="$(
+  printf '%s' "$HL_CLIENT_ORDER_ID" | php -r '
+  $candidate = trim(stream_get_contents(STDIN));
+  if (preg_match("/^0x[0-9a-fA-F]{32}$/", $candidate) === 1) {
+      echo strtolower($candidate);
+      exit(0);
+  }
+  echo "0x" . substr(hash("sha256", $candidate), 0, 32);
+  '
+)"
+export HL_ENTRY_CLOID
+
+printf '%s' "$HL_ENTRY_CLOID" \
+  | jq -R -e 'test("^0x[0-9a-f]{32}$")' >/dev/null
 
 hl_info() {
   curl --fail --silent --show-error \
@@ -440,6 +522,11 @@ hl_info() {
     "$HL_INFO_URL"
 }
 ```
+
+Cette derivation est exactement celle de `HyperliquidActionFactory::cloid` : un
+`client_order_id` deja au format `0x` + 32 hex est preserve puis lower-case ;
+sinon le cloid vaut `0x` suivi des 32 premiers caracteres hexadecimaux
+lower-case du SHA-256 de `trim(client_order_id)`. Elle ne lit aucun secret.
 
 Verifier les positions non nulles du coin, puis exiger un resultat vide pour
 declarer le symbole flat :
@@ -450,11 +537,23 @@ HL_POSITIONS_JSON="$(hl_info "$(
     '{type:"clearinghouseState", user:$user}'
 )")"
 
+printf '%s' "$HL_POSITIONS_JSON" | jq -e '
+  type == "object" and
+  (.assetPositions | type) == "array" and
+  all(.assetPositions[];
+    type == "object" and
+    (.position | type) == "object" and
+    (.position.coin | type) == "string" and
+    (.position.szi | type) == "string" and
+    (.position.szi | test("^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$")) and
+    (try (.position.szi | tonumber) catch null) != null)
+' >/dev/null
+
 HL_OPEN_POSITIONS="$(
   printf '%s' "$HL_POSITIONS_JSON" | jq --arg coin "$HL_COIN" '
     [.assetPositions[]?.position
       | select(.coin == $coin)
-      | select((.szi | tonumber?) != 0)
+      | select((.szi | tonumber) != 0)
       | {coin, size:.szi}]
   '
 )"
@@ -469,6 +568,21 @@ HL_ORDERS_JSON="$(hl_info "$(
   jq -cn --arg user "$HL_TESTNET_ACCOUNT_ADDRESS" \
     '{type:"frontendOpenOrders", user:$user}'
 )")"
+
+printf '%s' "$HL_ORDERS_JSON" | jq -e '
+  type == "array" and
+  all(.[];
+    type == "object" and
+    has("coin") and (.coin | type) == "string" and
+    has("oid") and (.oid | type) == "number" and (.oid | floor) == .oid and .oid > 0 and
+    has("sz") and (.sz | type) == "string" and
+      (.sz | test("^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$")) and
+      (try (.sz | tonumber) catch null) != null and
+    has("cloid") and
+      ((.cloid | type) == "null" or
+       ((.cloid | type) == "string" and
+        (.cloid | test("^0x[0-9a-fA-F]{32}$")))))
+' >/dev/null
 
 HL_OPEN_ORDERS="$(
   printf '%s' "$HL_ORDERS_JSON" | jq --arg coin "$HL_COIN" '
@@ -540,8 +654,8 @@ un cloid absent, un OID divergent ou des statuts incompatibles reste
 `ambiguous`. Si le statut a change entre les deux appels, rejouer immediatement
 les deux lookups une seule fois ; une seconde divergence reste `ambiguous`. Il
 est interdit de chercher un autre ordre par coin, prix, taille ou fenetre
-temporelle. Rejouer `hl_order_status` avec les OID/cloid exacts du SL et de
-l'eventuel `:emergency-close` lorsqu'ils sont emis dans la preuve redacted.
+temporelle. La commande smoke ne sort pas les OID/cloid du SL ou du close ; ne
+pas les inventer ni tenter de les retrouver par approximation.
 
 ### Escalade cancel/close
 
@@ -565,8 +679,8 @@ ordre protecteur restant :
 
 1. laisser la tentative originale terminer son cancel-by-cloid, sa
    reconciliation OID/cloid et, si necessaire, son close reduce-only ;
-2. executer les trois controles read-only ci-dessus avec les identifiants exacts
-   de l'entree, du SL et du close ;
+2. executer les trois controles read-only ci-dessus avec l'OID d'entree et le
+   cloid d'entree derive de son `client_order_id` ;
 3. si `length == 0` n'est pas prouve pour positions **et** open orders, executer
    immediatement « Rollback immediat sans deploiement » pour fermer les flags,
    trip la DB, arreter le signer et conserver la quarantaine ;
