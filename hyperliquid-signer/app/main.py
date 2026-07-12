@@ -1,6 +1,7 @@
 import hmac
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -23,6 +24,7 @@ def create_app(
 ) -> FastAPI:
     signer: HyperliquidTestnetSigner | None = None
     resolved_config = config
+    resolved_transport = transport
     auth_token = (
         config.auth_token.get_secret_value()
         if config is not None
@@ -30,13 +32,26 @@ def create_app(
     )
     try:
         resolved_config = resolved_config or SignerConfig.from_env()
+        resolved_transport = resolved_transport or RequestsTransport()
         signer = HyperliquidTestnetSigner(
-            resolved_config, transport or RequestsTransport()
+            resolved_config, resolved_transport
         )
     except (TypeError, ValueError):
+        if not _broadcast_is_disabled(resolved_config):
+            raise
         signer = None
 
-    application = FastAPI()
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> Any:
+        del application
+        try:
+            yield
+        finally:
+            close = getattr(resolved_transport, "aclose", None)
+            if callable(close):
+                await close()
+
+    application = FastAPI(lifespan=lifespan)
 
     @application.exception_handler(RequestValidationError)
     async def redact_validation_error(
@@ -111,6 +126,14 @@ def _authorized(header: str | None, expected_token: str) -> bool:
     return bool(expected_token) and hmac.compare_digest(
         presented_token.encode("utf-8"), expected_token.encode("utf-8")
     )
+
+
+def _broadcast_is_disabled(config: SignerConfig | None) -> bool:
+    if config is not None:
+        return not config.broadcast_enabled
+    return os.getenv(
+        "HYPERLIQUID_SIGNER_BROADCAST_ENABLED", "0"
+    ).strip().lower() in {"0", "false", "no", "off"}
 
 
 def _too_large() -> JSONResponse:

@@ -60,13 +60,17 @@ class FakeTransport:
         payload: dict[str, Any] | None = None,
         error: Exception | None = None,
     ) -> None:
-        self.payload = payload or {
-            "status": "ok",
-            "response": {
-                "type": "order",
-                "data": {"statuses": [{"resting": {"oid": 42}}]},
-            },
-        }
+        self.payload = (
+            {
+                "status": "ok",
+                "response": {
+                    "type": "order",
+                    "data": {"statuses": [{"resting": {"oid": 42}}]},
+                },
+            }
+            if payload is None
+            else payload
+        )
         self.error = error
         self.calls: list[tuple[str, dict[str, Any], tuple[float, float]]] = []
 
@@ -175,7 +179,7 @@ def test_submit_posts_only_exact_testnet_body_without_returning_signature() -> N
     )
 
     assert response.outcome == "accepted"
-    assert response.statuses == [{"resting": {"oid": 42}}]
+    assert response.statuses == [{"kind": "resting", "oid": 42}]
     assert "signature" not in response.model_dump()
     assert len(transport.calls) == 1
     url, body, timeout = transport.calls[0]
@@ -194,114 +198,225 @@ def test_submit_posts_only_exact_testnet_body_without_returning_signature() -> N
     assert body["expiresAfter"] == 1_700_000_030_000
 
 
+def submit_payload(
+    action_type: str, payload: dict[str, Any]
+) -> Any:
+    return asyncio.run(
+        HyperliquidTestnetSigner(config(), FakeTransport(payload)).submit(
+            exchange_request(action={"type": action_type})
+        )
+    )
+
+
 @pytest.mark.parametrize(
-    ("payload", "outcome", "reason", "statuses"),
+    ("action_type", "payload", "statuses"),
     [
         (
-            {
-                "status": "ok",
-                "response": {"data": {"statuses": [{"filled": {"oid": 7}}]}},
-            },
-            "accepted",
-            None,
-            [{"filled": {"oid": 7}}],
-        ),
-        (
-            {
-                "status": "ok",
-                "response": {"data": {"statuses": [{"error": "bad order"}]}},
-            },
-            "rejected",
-            "exchange_status_error",
-            [{"error": "bad order"}],
-        ),
-        (
-            {"status": "err", "response": "bad request"},
-            "rejected",
-            "exchange_error",
-            [],
-        ),
-        (
-            {"error": "bad request"},
-            "rejected",
-            "exchange_error",
-            [],
-        ),
-        (
-            {"err": "bad request"},
-            "rejected",
-            "exchange_error",
-            [],
-        ),
-        (
-            {"status": "ok", "response": {"data": {"statuses": []}}},
-            "ambiguous",
-            "empty_exchange_statuses",
-            [],
-        ),
-        (
-            {
-                "status": "ok",
-                "response": {"data": {"statuses": [{"waiting": {}}]}},
-            },
-            "ambiguous",
-            "unknown_exchange_status",
-            [{"waiting": {}}],
-        ),
-        (
+            "order",
             {
                 "status": "ok",
                 "response": {
+                    "type": "order",
                     "data": {
                         "statuses": [
-                            {"resting": {"oid": 8}},
-                            {"error": "second row failed"},
+                            {
+                                "filled": {
+                                    "oid": 7,
+                                    "totalSz": "1.25",
+                                    "avgPx": "101.5",
+                                }
+                            }
                         ]
-                    }
+                    },
                 },
             },
-            "ambiguous",
-            "mixed_exchange_statuses",
-            [{"resting": {"oid": 8}}, {"error": "second row failed"}],
+            [
+                {
+                    "kind": "filled",
+                    "oid": 7,
+                    "total_size": "1.25",
+                    "average_price": "101.5",
+                }
+            ],
         ),
         (
+            "cancel",
             {
                 "status": "ok",
                 "response": {
-                    "data": {
-                        "statuses": [
-                            {"resting": {"oid": 8}, "error": "conflict"}
-                        ]
-                    }
+                    "type": "cancel",
+                    "data": {"statuses": ["success"]},
                 },
             },
-            "ambiguous",
-            "mixed_exchange_statuses",
-            [{"resting": {"oid": 8}, "error": "conflict"}],
+            [{"kind": "success"}],
         ),
         (
-            {"status": "ok", "response": {"data": {"statuses": "invalid"}}},
-            "ambiguous",
-            "invalid_exchange_response",
+            "cancelByCloid",
+            {
+                "status": "ok",
+                "response": {
+                    "type": "cancel",
+                    "data": {"statuses": ["success", "success"]},
+                },
+            },
+            [{"kind": "success"}, {"kind": "success"}],
+        ),
+        (
+            "updateLeverage",
+            {"status": "ok", "response": {"type": "default"}},
             [],
         ),
     ],
 )
-def test_normalizes_exchange_payloads(
+def test_normalizes_success_for_each_action(
+    action_type: str,
     payload: dict[str, Any],
-    outcome: str,
-    reason: str | None,
     statuses: list[dict[str, Any]],
 ) -> None:
-    response = asyncio.run(
-        HyperliquidTestnetSigner(config(), FakeTransport(payload)).submit(
-            exchange_request()
-        )
+    response = submit_payload(action_type, payload)
+
+    assert response.outcome == "accepted"
+    assert response.reason is None
+    assert response.statuses == statuses
+
+
+@pytest.mark.parametrize(
+    "action_type", ["order", "cancel", "cancelByCloid", "updateLeverage"]
+)
+def test_normalizes_top_level_error_for_each_action(action_type: str) -> None:
+    response = submit_payload(
+        action_type, {"status": "err", "response": "rejected upstream"}
     )
 
-    assert response.outcome == outcome
-    assert response.reason == reason
-    assert response.statuses == statuses
+    assert response.outcome == "rejected"
+    assert response.reason == "exchange_error"
+    assert response.statuses == []
+    assert "rejected upstream" not in response.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("action_type", "payload"),
+    [
+        (
+            "order",
+            {
+                "status": "ok",
+                "response": {
+                    "type": "cancel",
+                    "data": {"statuses": ["success"]},
+                },
+            },
+        ),
+        (
+            "cancel",
+            {
+                "status": "ok",
+                "response": {
+                    "type": "cancel",
+                    "data": {"statuses": ["pending"]},
+                },
+            },
+        ),
+        (
+            "cancelByCloid",
+            {
+                "status": "ok",
+                "response": {
+                    "type": "order",
+                    "data": {"statuses": [{"resting": {"oid": 9}}]},
+                },
+            },
+        ),
+        (
+            "updateLeverage",
+            {"status": "ok", "response": {"type": "order"}},
+        ),
+    ],
+)
+def test_malformed_response_for_each_action_is_ambiguous(
+    action_type: str, payload: dict[str, Any]
+) -> None:
+    response = submit_payload(action_type, payload)
+
+    assert response.outcome == "ambiguous"
+    assert response.statuses == []
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"resting": None},
+        {"resting": {"oid": 0}},
+        {"resting": {"oid": "42"}},
+        {"resting": {"oid": 2**63}},
+        {"resting": {"oid": 42, "signature": "row-secret-sentinel"}},
+    ],
+)
+def test_malformed_order_row_is_ambiguous_and_never_forwarded(
+    row: dict[str, Any],
+) -> None:
+    response = submit_payload(
+        "order",
+        {
+            "status": "ok",
+            "response": {
+                "type": "order",
+                "data": {"statuses": [row]},
+            },
+        },
+    )
+
+    assert response.outcome == "ambiguous"
+    assert response.statuses == []
+    assert "row-secret-sentinel" not in response.model_dump_json()
+
+
+def test_order_error_row_is_redacted_before_return() -> None:
+    response = submit_payload(
+        "order",
+        {
+            "status": "ok",
+            "response": {
+                "type": "order",
+                "data": {"statuses": [{"error": "upstream secret detail"}]},
+            },
+        },
+    )
+
+    assert response.outcome == "rejected"
+    assert response.reason == "exchange_status_error"
+    assert response.statuses == [{"kind": "error"}]
+    assert "upstream secret detail" not in response.model_dump_json()
+
+
+@pytest.mark.parametrize("action_type", ["cancel", "cancelByCloid"])
+def test_cancel_error_row_is_redacted_before_return(action_type: str) -> None:
+    response = submit_payload(
+        action_type,
+        {
+            "status": "ok",
+            "response": {
+                "type": "cancel",
+                "data": {
+                    "statuses": [{"error": "cancel secret detail"}]
+                },
+            },
+        },
+    )
+
+    assert response.outcome == "rejected"
+    assert response.reason == "exchange_status_error"
+    assert response.statuses == [{"kind": "error"}]
+    assert "cancel secret detail" not in response.model_dump_json()
+
+
+@pytest.mark.parametrize("status", [[], {}, 1, True])
+def test_malformed_top_level_status_is_ambiguous(status: Any) -> None:
+    response = submit_payload("order", {"status": status, "error": "secret"})
+
+    assert response.outcome == "ambiguous"
+    assert response.reason == "unknown_exchange_response"
+    assert response.statuses == []
 
 
 def test_transport_timeout_is_ambiguous() -> None:
@@ -314,6 +429,17 @@ def test_transport_timeout_is_ambiguous() -> None:
     assert response.outcome == "ambiguous"
     assert response.reason == "exchange_timeout"
     assert response.statuses == []
+
+
+def test_fake_transport_preserves_explicit_empty_payload() -> None:
+    response = asyncio.run(
+        HyperliquidTestnetSigner(config(), FakeTransport(payload={})).submit(
+            exchange_request()
+        )
+    )
+
+    assert response.outcome == "ambiguous"
+    assert response.reason == "unknown_exchange_response"
 
 
 def run_transport(
@@ -449,3 +575,52 @@ def test_async_transport_interrupts_entire_exchange_at_total_deadline() -> None:
 
     assert 0.04 <= elapsed < 0.25
     assert stream.cancelled is True
+
+
+def test_transport_lazily_allocates_and_closes_owned_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        owned_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, json={"status": "ok"}, request=request
+                )
+            )
+        )
+        created: list[httpx.AsyncClient] = []
+
+        def client_factory(**kwargs: Any) -> httpx.AsyncClient:
+            assert kwargs == {"follow_redirects": False}
+            created.append(owned_client)
+            return owned_client
+
+        monkeypatch.setattr("app.signing.httpx.AsyncClient", client_factory)
+        transport = RequestsTransport()
+        assert created == []
+
+        await transport.post_json(
+            TESTNET_URI + "/exchange",
+            json_body={},
+            timeout=(5.0, 5.0),
+        )
+        assert created == [owned_client]
+        assert owned_client.is_closed is False
+
+        await transport.aclose()
+        assert owned_client.is_closed is True
+
+    asyncio.run(run())
+
+
+def test_transport_does_not_close_injected_client() -> None:
+    async def run() -> None:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: None))
+        transport = RequestsTransport(client=client)
+
+        await transport.aclose()
+
+        assert client.is_closed is False
+        await client.aclose()
+
+    asyncio.run(run())

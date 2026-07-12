@@ -1,6 +1,9 @@
 import asyncio
 import json
 import logging
+import os
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -37,9 +40,19 @@ class FakeTransport:
         return {
             "status": "ok",
             "response": {
+                "type": "order",
                 "data": {"statuses": [{"resting": {"oid": 42}}]}
             },
         }
+
+
+class ClosableFakeTransport(FakeTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 def signer_config(**overrides: Any) -> SignerConfig:
@@ -182,7 +195,7 @@ def test_exchange_returns_structured_redacted_outcome(
     assert response.json() == {
         "schema_version": "1",
         "outcome": "accepted",
-        "statuses": [{"resting": {"oid": 42}}],
+        "statuses": [{"kind": "resting", "oid": 42}],
         "reason": None,
         "correlation_id": "corr-api-1",
     }
@@ -280,6 +293,7 @@ def test_config_or_signer_failure_returns_503(
     monkeypatch.delenv("HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY", raising=False)
     monkeypatch.delenv("HYPERLIQUID_TESTNET_AGENT_ADDRESS", raising=False)
     monkeypatch.setenv("HYPERLIQUID_SIGNER_AUTH_TOKEN", TOKEN)
+    monkeypatch.setenv("HYPERLIQUID_SIGNER_BROADCAST_ENABLED", "0")
     client = TestClient(create_app())
 
     health = client.get("/v1/health", headers=AUTH)
@@ -291,6 +305,81 @@ def test_config_or_signer_failure_returns_503(
     assert health.json() == {"detail": "signer_unavailable"}
     assert exchange.status_code == 503
     assert exchange.json() == {"detail": "signer_unavailable"}
+
+
+def test_enabled_broadcast_propagates_signer_identity_failure() -> None:
+    with pytest.raises(
+        ValueError, match="^agent_private_key_address_mismatch$"
+    ):
+        create_app(
+            signer_config(
+                agent_address="0x2222222222222222222222222222222222222222"
+            ),
+            transport=FakeTransport(),
+        )
+
+
+def test_invalid_signer_identity_does_not_allocate_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocated = False
+
+    def forbidden_client(**kwargs: Any) -> None:
+        del kwargs
+        nonlocal allocated
+        allocated = True
+        raise AssertionError("http client must not be allocated")
+
+    monkeypatch.setattr("app.signing.httpx.AsyncClient", forbidden_client)
+
+    with pytest.raises(
+        ValueError, match="^agent_private_key_address_mismatch$"
+    ):
+        create_app(
+            signer_config(
+                agent_address="0x2222222222222222222222222222222222222222"
+            )
+        )
+
+    assert allocated is False
+
+
+def test_fastapi_lifespan_closes_transport_with_close_contract() -> None:
+    transport = ClosableFakeTransport()
+    application = create_app(signer_config(), transport=transport)
+
+    with TestClient(application) as client:
+        response = client.get("/v1/health", headers=AUTH)
+        assert response.status_code == 200
+        assert transport.closed is False
+
+    assert transport.closed is True
+
+
+def test_module_startup_fails_for_enabled_invalid_config() -> None:
+    environment = os.environ.copy()
+    environment.pop("HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY", None)
+    environment["HYPERLIQUID_ENV"] = "testnet"
+    environment["HYPERLIQUID_NETWORK"] = "testnet"
+    environment["HYPERLIQUID_API_BASE_URI"] = TESTNET_URI
+    environment["HYPERLIQUID_TESTNET_AGENT_ADDRESS"] = FIXTURE_ADDRESS
+    environment["HYPERLIQUID_SIGNER_AUTH_TOKEN"] = TOKEN
+    environment["HYPERLIQUID_SIGNER_BROADCAST_ENABLED"] = "1"
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import app.main"],
+        cwd=os.path.dirname(os.path.dirname(__file__)),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "signer_credentials_required" in result.stderr
+    assert FIXTURE_KEY not in result.stderr
+    assert TOKEN not in result.stderr
 
 
 def test_logging_contains_only_allowed_exchange_metadata(
