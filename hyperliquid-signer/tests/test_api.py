@@ -24,7 +24,7 @@ class FakeTransport:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def post_json(
+    async def post_json(
         self,
         url: str,
         *,

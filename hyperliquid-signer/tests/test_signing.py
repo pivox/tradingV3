@@ -1,8 +1,10 @@
+import asyncio
 import json
+import time
 from typing import Any
 
+import httpx
 import pytest
-import requests
 from eth_account import Account
 from pydantic import SecretStr
 
@@ -68,7 +70,7 @@ class FakeTransport:
         self.error = error
         self.calls: list[tuple[str, dict[str, Any], tuple[float, float]]] = []
 
-    def post_json(
+    async def post_json(
         self,
         url: str,
         *,
@@ -120,9 +122,11 @@ def test_broadcast_disabled_rejects_before_signing_or_transport(
         lambda *args, **kwargs: pytest.fail("signing must not run"),
     )
 
-    response = signer.submit(
-        exchange_request(
-            agent_address="0x2222222222222222222222222222222222222222"
+    response = asyncio.run(
+        signer.submit(
+            exchange_request(
+                agent_address="0x2222222222222222222222222222222222222222"
+            )
         )
     )
 
@@ -146,9 +150,11 @@ def test_request_agent_mismatch_rejects_before_signing_or_transport(
         lambda *args, **kwargs: pytest.fail("signing must not run"),
     )
 
-    response = signer.submit(
-        exchange_request(
-            agent_address="0x2222222222222222222222222222222222222222"
+    response = asyncio.run(
+        signer.submit(
+            exchange_request(
+                agent_address="0x2222222222222222222222222222222222222222"
+            )
         )
     )
 
@@ -162,7 +168,11 @@ def test_submit_posts_only_exact_testnet_body_without_returning_signature() -> N
     transport = FakeTransport()
     signer = HyperliquidTestnetSigner(config(), transport)
 
-    response = signer.submit(exchange_request(expires_after=1_700_000_030_000))
+    response = asyncio.run(
+        signer.submit(
+            exchange_request(expires_after=1_700_000_030_000)
+        )
+    )
 
     assert response.outcome == "accepted"
     assert response.statuses == [{"resting": {"oid": 42}}]
@@ -283,8 +293,10 @@ def test_normalizes_exchange_payloads(
     reason: str | None,
     statuses: list[dict[str, Any]],
 ) -> None:
-    response = HyperliquidTestnetSigner(config(), FakeTransport(payload)).submit(
-        exchange_request()
+    response = asyncio.run(
+        HyperliquidTestnetSigner(config(), FakeTransport(payload)).submit(
+            exchange_request()
+        )
     )
 
     assert response.outcome == outcome
@@ -293,202 +305,147 @@ def test_normalizes_exchange_payloads(
 
 
 def test_transport_timeout_is_ambiguous() -> None:
-    response = HyperliquidTestnetSigner(
-        config(), FakeTransport(error=TransportError("exchange_timeout"))
-    ).submit(exchange_request())
+    response = asyncio.run(
+        HyperliquidTestnetSigner(
+            config(), FakeTransport(error=TransportError("exchange_timeout"))
+        ).submit(exchange_request())
+    )
 
     assert response.outcome == "ambiguous"
     assert response.reason == "exchange_timeout"
     assert response.statuses == []
 
 
-class FakeResponse:
-    def __init__(self, body: bytes, status_code: int = 200) -> None:
-        self.headers: dict[str, str] = {}
-        self._body = body
-        self.status_code = status_code
+def run_transport(
+    handler: Any,
+    *,
+    url: str = TESTNET_URI + "/exchange",
+    json_body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    async def run() -> dict[str, Any]:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), follow_redirects=True
+        ) as client:
+            return await RequestsTransport(client=client).post_json(
+                url,
+                json_body=json_body or {},
+                timeout=(5.0, 5.0),
+            )
 
-    def raise_for_status(self) -> None:
-        return None
-
-    def iter_content(self, chunk_size: int) -> Any:
-        del chunk_size
-        yield self._body
-
-    def close(self) -> None:
-        return None
-
-
-class FakeSession:
-    def __init__(self, response: FakeResponse | Exception) -> None:
-        self.response = response
-        self.calls: list[dict[str, Any]] = []
-
-    def post(self, url: str, **kwargs: Any) -> FakeResponse:
-        self.calls.append({"url": url, **kwargs})
-        if isinstance(self.response, Exception):
-            raise self.response
-        return self.response
+    return asyncio.run(run())
 
 
-class FakeClock:
-    def __init__(self) -> None:
-        self.current = 0.0
+def test_requests_transport_posts_exact_body_with_http_timeouts() -> None:
+    requests_seen: list[httpx.Request] = []
 
-    def __call__(self) -> float:
-        return self.current
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return httpx.Response(200, json={"status": "ok"})
 
-    def advance(self, seconds: float) -> None:
-        self.current += seconds
-
-
-class SlowChunkResponse(FakeResponse):
-    def __init__(self, clock: FakeClock) -> None:
-        super().__init__(b"")
-        self._clock = clock
-
-    def iter_content(self, chunk_size: int) -> Any:
-        del chunk_size
-        self._clock.advance(2.5)
-        yield b'{"status":'
-        self._clock.advance(2.6)
-        yield b'"ok"}'
-
-
-class SlowTerminalResponse(FakeResponse):
-    def __init__(self, clock: FakeClock) -> None:
-        super().__init__(b"")
-        self._clock = clock
-
-    def iter_content(self, chunk_size: int) -> Any:
-        del chunk_size
-        self._clock.advance(2.0)
-        yield b'{"status":"ok"}'
-        self._clock.advance(4.0)
-
-
-class SlowPostSession(FakeSession):
-    def __init__(self, response: FakeResponse, clock: FakeClock) -> None:
-        super().__init__(response)
-        self._clock = clock
-
-    def post(self, url: str, **kwargs: Any) -> FakeResponse:
-        self._clock.advance(5.1)
-        return super().post(url, **kwargs)
-
-
-def test_requests_transport_uses_streaming_and_connect_read_timeout() -> None:
-    session = FakeSession(FakeResponse(b'{"status":"ok"}'))
-    transport = RequestsTransport(session=session)
-
-    payload = transport.post_json(
-        TESTNET_URI + "/exchange",
-        json_body={"action": {}},
-        timeout=(5.0, 5.0),
-    )
+    payload = run_transport(handler, json_body={"action": {}})
 
     assert payload == {"status": "ok"}
-    assert session.calls == [
-        {
-            "url": TESTNET_URI + "/exchange",
-            "json": {"action": {}},
-            "timeout": (5.0, 5.0),
-            "stream": True,
-            "allow_redirects": False,
-        }
-    ]
+    assert len(requests_seen) == 1
+    request = requests_seen[0]
+    assert request.method == "POST"
+    assert str(request.url) == TESTNET_URI + "/exchange"
+    assert json.loads(request.content) == {"action": {}}
+    assert request.extensions["timeout"] == {
+        "connect": 5.0,
+        "read": 5.0,
+        "write": 5.0,
+        "pool": 5.0,
+    }
 
 
 def test_requests_transport_rejects_redirect_without_following() -> None:
-    session = FakeSession(
-        FakeResponse(b'{"status":"ok"}', status_code=302)
-    )
-    transport = RequestsTransport(session=session)
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return httpx.Response(
+            302, headers={"Location": "https://api.hyperliquid.xyz/exchange"}
+        )
 
     with pytest.raises(TransportError, match="^exchange_redirect_rejected$"):
-        transport.post_json(
-            TESTNET_URI + "/exchange",
-            json_body={},
-            timeout=(5.0, 5.0),
-        )
+        run_transport(handler)
 
-    assert len(session.calls) == 1
-    assert session.calls[0]["allow_redirects"] is False
-
-
-def test_requests_transport_deadline_includes_session_post() -> None:
-    clock = FakeClock()
-    transport = RequestsTransport(
-        session=SlowPostSession(FakeResponse(b'{"status":"ok"}'), clock),
-        monotonic=clock,
-    )
-
-    with pytest.raises(TransportError, match="^exchange_timeout$"):
-        transport.post_json(
-            TESTNET_URI + "/exchange",
-            json_body={},
-            timeout=(5.0, 5.0),
-        )
-
-
-def test_requests_transport_deadline_spans_streamed_chunks() -> None:
-    clock = FakeClock()
-    transport = RequestsTransport(
-        session=FakeSession(SlowChunkResponse(clock)), monotonic=clock
-    )
-
-    with pytest.raises(TransportError, match="^exchange_timeout$"):
-        transport.post_json(
-            TESTNET_URI + "/exchange",
-            json_body={},
-            timeout=(5.0, 5.0),
-        )
-
-
-def test_requests_transport_deadline_includes_terminal_stream_read() -> None:
-    clock = FakeClock()
-    transport = RequestsTransport(
-        session=FakeSession(SlowTerminalResponse(clock)), monotonic=clock
-    )
-
-    with pytest.raises(TransportError, match="^exchange_timeout$"):
-        transport.post_json(
-            TESTNET_URI + "/exchange",
-            json_body={},
-            timeout=(5.0, 5.0),
-        )
+    assert len(requests_seen) == 1
 
 
 @pytest.mark.parametrize(
-    ("response", "reason"),
+    ("body", "error", "reason"),
     [
-        (FakeResponse(b"[]"), "exchange_response_not_object"),
-        (FakeResponse(b"not-json"), "exchange_response_invalid_json"),
-        (FakeResponse(b"x" * (64 * 1024 + 1)), "exchange_response_too_large"),
-        (requests.Timeout(), "exchange_timeout"),
+        (b"[]", None, "exchange_response_not_object"),
+        (b"not-json", None, "exchange_response_invalid_json"),
+        (b"x" * (64 * 1024 + 1), None, "exchange_response_too_large"),
+        (b"", httpx.ReadTimeout("slow response"), "exchange_timeout"),
     ],
 )
 def test_requests_transport_has_stable_bounded_failures(
-    response: FakeResponse | Exception, reason: str
+    body: bytes, error: Exception | None, reason: str
 ) -> None:
-    transport = RequestsTransport(session=FakeSession(response))
+    def handler(request: httpx.Request) -> httpx.Response:
+        if error is not None:
+            raise error
+        return httpx.Response(200, content=body, request=request)
 
     with pytest.raises(TransportError, match=f"^{reason}$"):
-        transport.post_json(
-            TESTNET_URI + "/exchange",
-            json_body={},
-            timeout=(5.0, 5.0),
-        )
+        run_transport(handler)
 
 
 def test_requests_transport_rejects_wrong_url_without_network() -> None:
-    session = FakeSession(FakeResponse(json.dumps({"status": "ok"}).encode()))
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return httpx.Response(200, json={"status": "ok"})
 
     with pytest.raises(TransportError, match="^testnet_endpoint_required$"):
-        RequestsTransport(session=session).post_json(
-            "https://api.hyperliquid.xyz/exchange",
-            json_body={},
-            timeout=(5.0, 5.0),
-        )
+        run_transport(handler, url="https://api.hyperliquid.xyz/exchange")
 
-    assert session.calls == []
+    assert requests_seen == []
+
+
+class CancellableSlowStream(httpx.AsyncByteStream):
+    def __init__(self, delay: float) -> None:
+        self.cancelled = False
+        self._delay = delay
+
+    async def __aiter__(self) -> Any:
+        try:
+            await asyncio.sleep(self._delay)
+            yield b'{"status":"ok"}'
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+def test_async_transport_interrupts_entire_exchange_at_total_deadline() -> None:
+    stream = CancellableSlowStream(delay=0.03)
+
+    async def run() -> float:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(0.03)
+            return httpx.Response(200, stream=stream, request=request)
+
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        )
+        transport = RequestsTransport(client=client, total_timeout=0.05)
+        started = time.monotonic()
+        try:
+            with pytest.raises(TransportError, match="^exchange_timeout$"):
+                await transport.post_json(
+                    TESTNET_URI + "/exchange",
+                    json_body={},
+                    timeout=(5.0, 5.0),
+                )
+        finally:
+            await client.aclose()
+        return time.monotonic() - started
+
+    elapsed = asyncio.run(run())
+
+    assert 0.04 <= elapsed < 0.25
+    assert stream.cancelled is True

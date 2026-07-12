@@ -1,8 +1,8 @@
+import asyncio
 import json
-import time
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
-import requests
+import httpx
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 from hyperliquid.utils.signing import sign_l1_action
@@ -24,7 +24,7 @@ class TransportError(Exception):
 
 
 class Transport(Protocol):
-    def post_json(
+    async def post_json(
         self,
         url: str,
         *,
@@ -36,13 +36,13 @@ class Transport(Protocol):
 class RequestsTransport:
     def __init__(
         self,
-        session: requests.Session | None = None,
-        monotonic: Callable[[], float] = time.monotonic,
+        client: httpx.AsyncClient | None = None,
+        total_timeout: float = TOTAL_TIMEOUT_SECONDS,
     ) -> None:
-        self._session = session or requests.Session()
-        self._monotonic = monotonic
+        self._client = client or httpx.AsyncClient(follow_redirects=False)
+        self._total_timeout = total_timeout
 
-    def post_json(
+    async def post_json(
         self,
         url: str,
         *,
@@ -51,26 +51,27 @@ class RequestsTransport:
     ) -> dict[str, Any]:
         if url != EXCHANGE_URL:
             raise TransportError("testnet_endpoint_required")
-        deadline = _Deadline(self._monotonic, TOTAL_TIMEOUT_SECONDS)
         try:
-            response = self._session.post(
-                url,
-                json=json_body,
-                timeout=timeout,
-                stream=True,
-                allow_redirects=False,
-            )
-            try:
-                deadline.check()
-                if 300 <= response.status_code < 400:
-                    raise TransportError("exchange_redirect_rejected")
-                response.raise_for_status()
-                body = _read_bounded_body(response, deadline)
-            finally:
-                response.close()
-        except requests.Timeout as error:
+            async with asyncio.timeout(self._total_timeout):
+                async with self._client.stream(
+                    "POST",
+                    url,
+                    json=json_body,
+                    timeout=httpx.Timeout(
+                        connect=timeout[0],
+                        read=timeout[1],
+                        write=timeout[1],
+                        pool=timeout[0],
+                    ),
+                    follow_redirects=False,
+                ) as response:
+                    if 300 <= response.status_code < 400:
+                        raise TransportError("exchange_redirect_rejected")
+                    response.raise_for_status()
+                    body = await _read_bounded_body(response)
+        except (TimeoutError, httpx.TimeoutException) as error:
             raise TransportError("exchange_timeout") from error
-        except requests.RequestException as error:
+        except httpx.HTTPError as error:
             raise TransportError("exchange_transport_error") from error
 
         try:
@@ -82,21 +83,7 @@ class RequestsTransport:
         return payload
 
 
-class _Deadline:
-    def __init__(
-        self, monotonic: Callable[[], float], timeout_seconds: float
-    ) -> None:
-        self._monotonic = monotonic
-        self._expires_at = monotonic() + timeout_seconds
-
-    def check(self) -> None:
-        if self._monotonic() >= self._expires_at:
-            raise TransportError("exchange_timeout")
-
-
-def _read_bounded_body(
-    response: requests.Response, deadline: _Deadline
-) -> bytes:
+async def _read_bounded_body(response: httpx.Response) -> bytes:
     content_length = response.headers.get("Content-Length")
     if content_length is not None:
         try:
@@ -106,18 +93,10 @@ def _read_bounded_body(
             raise TransportError("exchange_response_invalid_length") from error
 
     body = bytearray()
-    chunks = iter(response.iter_content(chunk_size=8192))
-    while True:
-        deadline.check()
-        try:
-            chunk = next(chunks)
-        except StopIteration:
-            deadline.check()
-            break
-        deadline.check()
-        body.extend(chunk)
-        if len(body) > MAX_RESPONSE_BYTES:
+    async for chunk in response.aiter_bytes(chunk_size=8192):
+        if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
             raise TransportError("exchange_response_too_large")
+        body.extend(chunk)
     return bytes(body)
 
 
@@ -148,7 +127,7 @@ class HyperliquidTestnetSigner:
         if self._wallet.address.lower() != config.agent_address:
             raise ValueError("agent_private_key_address_mismatch")
 
-    def submit(self, request: ExchangeRequest) -> ExchangeResponse:
+    async def submit(self, request: ExchangeRequest) -> ExchangeResponse:
         if not self._config.broadcast_enabled:
             return _response(
                 request,
@@ -178,7 +157,7 @@ class HyperliquidTestnetSigner:
             body["expiresAfter"] = request.expires_after
 
         try:
-            payload = self._transport.post_json(
+            payload = await self._transport.post_json(
                 EXCHANGE_URL,
                 json_body=body,
                 timeout=HTTP_TIMEOUT,

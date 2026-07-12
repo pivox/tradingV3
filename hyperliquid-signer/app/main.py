@@ -89,7 +89,7 @@ def create_app(
     async def exchange(exchange_request: ExchangeRequest) -> ExchangeResponse:
         if signer is None:
             raise HTTPException(status_code=503, detail="signer_unavailable")
-        response = signer.submit(exchange_request)
+        response = await signer.submit(exchange_request)
         logger.info(
             "exchange_outcome",
             extra={
