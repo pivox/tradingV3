@@ -93,7 +93,7 @@ def _contains_sensitive_field(value: Any) -> bool:
             if _contains_sensitive_field(child):
                 return True
         return False
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return any(_contains_sensitive_field(child) for child in value)
     return False
 

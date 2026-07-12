@@ -192,6 +192,13 @@ def test_response_rejects_nested_non_string_status_key() -> None:
         ExchangeResponse(**response_data(statuses=[{"nested": {1: "invalid"}}]))
 
 
+def test_response_forbids_sensitive_field_nested_in_tuple() -> None:
+    statuses = [{"nested": ({"signature_hex": "forbidden"},)}]
+
+    with pytest.raises(ValidationError, match="sensitive_response_field"):
+        ExchangeResponse(**response_data(statuses=statuses))
+
+
 def test_response_limits_status_rows_to_twenty() -> None:
     with pytest.raises(ValidationError):
         ExchangeResponse(**response_data(statuses=[{"kind": "ok"}] * 21))
