@@ -823,6 +823,7 @@ reprendre.
 Le rollback ne depend pas d'un nouveau build :
 
 ```bash
+set -euo pipefail
 export DEMO_TRADING_ENABLED=0
 export HYPERLIQUID_TESTNET_TRADING_ENABLED=0
 export HYPERLIQUID_SIGNER_BROADCAST_ENABLED=0
