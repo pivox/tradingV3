@@ -66,25 +66,52 @@ final class HyperliquidActionFactoryTest extends TestCase
     }
 
     #[DataProvider('unsupportedEntryOrderTypeProvider')]
-    public function testRejectsTriggerEntryOrderTypes(ExchangeOrderType $orderType): void
-    {
-        $this->expectExceptionMessage('hyperliquid_entry_must_be_limit_or_market');
+    public function testRejectsNonLimitEntryOrderTypes(
+        ExchangeOrderType $orderType,
+        ExchangeOrderSide $side,
+        ExchangePositionSide $positionSide,
+    ): void {
+        $stopSide = $side === ExchangeOrderSide::BUY ? ExchangeOrderSide::SELL : ExchangeOrderSide::BUY;
+        $stopPrice = $side === ExchangeOrderSide::BUY ? 98.0 : 102.0;
+        $this->expectExceptionMessage('hyperliquid_grouped_entry_must_be_limit');
 
         (new HyperliquidActionFactory())->positionTpsl(
             0,
-            $this->entry(orderType: $orderType),
-            $this->stop(),
+            $this->entry(orderType: $orderType, side: $side, positionSide: $positionSide),
+            $this->stop(side: $stopSide, positionSide: $positionSide, stopPrice: $stopPrice),
         );
     }
 
     /**
-     * @return iterable<string, array{ExchangeOrderType}>
+     * @return iterable<string, array{ExchangeOrderType, ExchangeOrderSide, ExchangePositionSide}>
      */
     public static function unsupportedEntryOrderTypeProvider(): iterable
     {
-        yield 'stop loss' => [ExchangeOrderType::STOP_LOSS];
-        yield 'take profit' => [ExchangeOrderType::TAKE_PROFIT];
-        yield 'generic trigger' => [ExchangeOrderType::TRIGGER];
+        yield 'long market cap is not a reference price' => [
+            ExchangeOrderType::MARKET,
+            ExchangeOrderSide::BUY,
+            ExchangePositionSide::LONG,
+        ];
+        yield 'short market cap is not a reference price' => [
+            ExchangeOrderType::MARKET,
+            ExchangeOrderSide::SELL,
+            ExchangePositionSide::SHORT,
+        ];
+        yield 'stop loss' => [
+            ExchangeOrderType::STOP_LOSS,
+            ExchangeOrderSide::BUY,
+            ExchangePositionSide::LONG,
+        ];
+        yield 'take profit' => [
+            ExchangeOrderType::TAKE_PROFIT,
+            ExchangeOrderSide::BUY,
+            ExchangePositionSide::LONG,
+        ];
+        yield 'generic trigger' => [
+            ExchangeOrderType::TRIGGER,
+            ExchangeOrderSide::BUY,
+            ExchangePositionSide::LONG,
+        ];
     }
 
     public function testRejectsNonReduceOnlyStop(): void
@@ -134,28 +161,75 @@ final class HyperliquidActionFactoryTest extends TestCase
         yield 'short boundary' => [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT, 100.0];
     }
 
-    #[DataProvider('invalidEntryReferencePriceProvider')]
-    public function testRejectsEntryWithoutUsableReferencePrice(
-        ExchangeOrderType $orderType,
-        ?float $price,
+    #[DataProvider('canonicalStopBoundaryProvider')]
+    public function testRejectsStopEqualToEntryAfterWireNormalization(
+        ExchangeOrderSide $entrySide,
+        ExchangePositionSide $positionSide,
+        float $entryPrice,
+        float $stopPrice,
     ): void {
+        $stopSide = $entrySide === ExchangeOrderSide::BUY
+            ? ExchangeOrderSide::SELL
+            : ExchangeOrderSide::BUY;
+        $this->expectExceptionMessage('hyperliquid_stop_price_must_protect_entry');
+
+        (new HyperliquidActionFactory())->positionTpsl(
+            0,
+            $this->entry(side: $entrySide, positionSide: $positionSide, price: $entryPrice),
+            $this->stop(side: $stopSide, positionSide: $positionSide, stopPrice: $stopPrice),
+        );
+    }
+
+    /**
+     * @return iterable<string, array{ExchangeOrderSide, ExchangePositionSide, float, float}>
+     */
+    public static function canonicalStopBoundaryProvider(): iterable
+    {
+        yield 'long raw below but canonical equal' => [
+            ExchangeOrderSide::BUY,
+            ExchangePositionSide::LONG,
+            100.0000000000005,
+            100.0,
+        ];
+        yield 'long inverse canonical equal' => [
+            ExchangeOrderSide::BUY,
+            ExchangePositionSide::LONG,
+            100.0,
+            100.0000000000005,
+        ];
+        yield 'short raw above but canonical equal' => [
+            ExchangeOrderSide::SELL,
+            ExchangePositionSide::SHORT,
+            100.0,
+            100.0000000000005,
+        ];
+        yield 'short inverse canonical equal' => [
+            ExchangeOrderSide::SELL,
+            ExchangePositionSide::SHORT,
+            100.0000000000005,
+            100.0,
+        ];
+    }
+
+    #[DataProvider('invalidLimitReferencePriceProvider')]
+    public function testRejectsLimitEntryWithoutUsableReferencePrice(float $price): void
+    {
         $this->expectExceptionMessage('hyperliquid_entry_requires_positive_finite_reference_price');
 
         (new HyperliquidActionFactory())->positionTpsl(
             0,
-            $this->entry(orderType: $orderType, price: $price),
+            $this->entry(price: $price),
             $this->stop(),
         );
     }
 
     /**
-     * @return iterable<string, array{ExchangeOrderType, ?float}>
+     * @return iterable<string, array{float}>
      */
-    public static function invalidEntryReferencePriceProvider(): iterable
+    public static function invalidLimitReferencePriceProvider(): iterable
     {
-        yield 'market price missing' => [ExchangeOrderType::MARKET, null];
-        yield 'market price infinite' => [ExchangeOrderType::MARKET, INF];
-        yield 'limit price not finite' => [ExchangeOrderType::LIMIT, NAN];
+        yield 'limit price infinite' => [INF];
+        yield 'limit price not a number' => [NAN];
     }
 
     public function testRejectsStopWithoutUsableStopPrice(): void

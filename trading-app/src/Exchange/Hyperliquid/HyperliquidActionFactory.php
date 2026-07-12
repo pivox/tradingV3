@@ -70,8 +70,8 @@ final class HyperliquidActionFactory
         if ($entry->reduceOnly) {
             throw new \InvalidArgumentException('hyperliquid_entry_must_not_be_reduce_only');
         }
-        if (!\in_array($entry->orderType, [ExchangeOrderType::LIMIT, ExchangeOrderType::MARKET], true)) {
-            throw new \InvalidArgumentException('hyperliquid_entry_must_be_limit_or_market');
+        if ($entry->orderType !== ExchangeOrderType::LIMIT) {
+            throw new \InvalidArgumentException('hyperliquid_grouped_entry_must_be_limit');
         }
         if ($entry->price === null || $entry->price <= 0.0 || !\is_finite($entry->price)) {
             throw new \InvalidArgumentException('hyperliquid_entry_requires_positive_finite_reference_price');
@@ -91,10 +91,12 @@ final class HyperliquidActionFactory
         if (!$this->isEntrySideCompatible($entry)) {
             throw new \InvalidArgumentException('hyperliquid_entry_side_incompatible_with_position');
         }
-        if (
-            ($entry->side === ExchangeOrderSide::BUY && $stop->stopPrice >= $entry->price)
-            || ($entry->side === ExchangeOrderSide::SELL && $stop->stopPrice <= $entry->price)
-        ) {
+        $stopToEntry = $this->comparePositiveDecimals(
+            $this->decimal($stop->stopPrice),
+            $this->decimal($entry->price),
+        );
+        if (($entry->side === ExchangeOrderSide::BUY && $stopToEntry >= 0)
+            || ($entry->side === ExchangeOrderSide::SELL && $stopToEntry <= 0)) {
             throw new \InvalidArgumentException('hyperliquid_stop_price_must_protect_entry');
         }
         if ($this->cloid($entry->clientOrderId) === $this->cloid($stop->clientOrderId)) {
@@ -314,6 +316,28 @@ final class HyperliquidActionFactory
         }
 
         return $symbol;
+    }
+
+    private function comparePositiveDecimals(string $left, string $right): int
+    {
+        [$leftInteger, $leftFraction] = array_pad(explode('.', $left, 2), 2, '');
+        [$rightInteger, $rightFraction] = array_pad(explode('.', $right, 2), 2, '');
+        $leftInteger = ltrim($leftInteger, '0') ?: '0';
+        $rightInteger = ltrim($rightInteger, '0') ?: '0';
+
+        $integerLengthComparison = strlen($leftInteger) <=> strlen($rightInteger);
+        if ($integerLengthComparison !== 0) {
+            return $integerLengthComparison;
+        }
+
+        $integerComparison = strcmp($leftInteger, $rightInteger);
+        if ($integerComparison !== 0) {
+            return $integerComparison;
+        }
+
+        $scale = max(strlen($leftFraction), strlen($rightFraction));
+
+        return strcmp(str_pad($leftFraction, $scale, '0'), str_pad($rightFraction, $scale, '0'));
     }
 
     private function decimal(float $value): string
