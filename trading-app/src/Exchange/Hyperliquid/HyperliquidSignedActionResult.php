@@ -8,6 +8,7 @@ final readonly class HyperliquidSignedActionResult
 {
     private const MAX_STATUSES = 20;
     private const MAX_STATUSES_BYTES = 65_536;
+    private const ACTION_TYPES = ['order', 'cancel', 'cancelByCloid', 'updateLeverage'];
     private const OUTCOMES = ['accepted', 'rejected', 'ambiguous'];
     private const REASONS = [
         'broadcast_disabled',
@@ -36,11 +37,15 @@ final readonly class HyperliquidSignedActionResult
 
     /** @param list<array<string, mixed>> $statuses */
     public function __construct(
+        public string $actionType,
         public string $outcome,
         public array $statuses,
         public ?string $reason,
         public string $correlationId,
     ) {
+        if (!in_array($actionType, self::ACTION_TYPES, true)) {
+            throw new \InvalidArgumentException('hyperliquid_signed_action_result_action_type_invalid');
+        }
         if (!in_array($outcome, self::OUTCOMES, true)) {
             throw new \InvalidArgumentException('hyperliquid_signed_action_result_outcome_invalid');
         }
@@ -66,6 +71,65 @@ final readonly class HyperliquidSignedActionResult
         if (trim($correlationId) === '' || strlen($correlationId) > 128) {
             throw new \InvalidArgumentException('hyperliquid_signed_action_result_correlation_id_invalid');
         }
+        if (!self::isConsistent($actionType, $outcome, $statuses, $reason)) {
+            throw new \InvalidArgumentException('hyperliquid_signed_action_result_consistency_invalid');
+        }
+    }
+
+    /** @param list<array<string, mixed>> $statuses */
+    private static function isConsistent(
+        string $actionType,
+        string $outcome,
+        array $statuses,
+        ?string $reason,
+    ): bool {
+        $kinds = array_column($statuses, 'kind');
+        if ($actionType === 'updateLeverage' && $statuses !== []) {
+            return false;
+        }
+        if ($actionType === 'order' && !self::containsOnly($kinds, ['resting', 'filled', 'error'])) {
+            return false;
+        }
+        if (in_array($actionType, ['cancel', 'cancelByCloid'], true)
+            && !self::containsOnly($kinds, ['success', 'error'])
+        ) {
+            return false;
+        }
+
+        if ($outcome === 'accepted') {
+            if ($reason !== null) {
+                return false;
+            }
+            if ($actionType === 'order') {
+                return $statuses !== [] && self::containsOnly($kinds, ['resting', 'filled']);
+            }
+            if (in_array($actionType, ['cancel', 'cancelByCloid'], true)) {
+                return $statuses !== [] && self::containsOnly($kinds, ['success']);
+            }
+
+            return $statuses === [];
+        }
+
+        if ($reason === null) {
+            return false;
+        }
+
+        return $outcome !== 'rejected' || self::containsOnly($kinds, ['error']);
+    }
+
+    /**
+     * @param list<string> $values
+     * @param list<string> $allowed
+     */
+    private static function containsOnly(array $values, array $allowed): bool
+    {
+        foreach ($values as $value) {
+            if (!in_array($value, $allowed, true)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** @param array<string, mixed> $status */

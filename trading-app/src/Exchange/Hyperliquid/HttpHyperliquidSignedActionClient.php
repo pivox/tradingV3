@@ -60,6 +60,7 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
         ?int $expiresAfter = null,
     ): HyperliquidSignedActionResult {
         $this->validateSubmission($action, $nonce, $correlationId, $expiresAfter);
+        $actionType = $action['type'];
 
         $payload = [
             'schema_version' => '1',
@@ -93,21 +94,21 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
             $statusCode = $response->getStatusCode();
 
             if ($statusCode === 401 || $statusCode === 403) {
-                return $this->result('rejected', 'signer_auth_failed', $correlationId);
+                return $this->result($actionType, 'rejected', 'signer_auth_failed', $correlationId);
             }
             if ($statusCode !== 200) {
-                return $this->ambiguous($correlationId);
+                return $this->ambiguous($actionType, $correlationId);
             }
 
             $body = $this->readBoundedBody($response);
             if ($body === null) {
-                return $this->ambiguous($correlationId);
+                return $this->ambiguous($actionType, $correlationId);
             }
         } catch (TransportExceptionInterface) {
-            return $this->ambiguous($correlationId);
+            return $this->ambiguous($actionType, $correlationId);
         }
 
-        return $this->normalizeExchangeResponse($body, $correlationId, $action['type']);
+        return $this->normalizeExchangeResponse($body, $correlationId, $actionType);
     }
 
     public function health(): bool
@@ -218,38 +219,39 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
             'schema_version',
             'statuses',
         ], ['reason'])) {
-            return $this->ambiguous($correlationId);
+            return $this->ambiguous($actionType, $correlationId);
         }
         if ($payload['schema_version'] !== '1'
             || !is_string($payload['outcome'])
             || !in_array($payload['outcome'], ['accepted', 'rejected', 'ambiguous'], true)
             || $payload['correlation_id'] !== $correlationId
         ) {
-            return $this->ambiguous($correlationId);
+            return $this->ambiguous($actionType, $correlationId);
         }
 
         $reason = $payload['reason'] ?? null;
         if ($reason !== null && !is_string($reason)) {
-            return $this->ambiguous($correlationId);
+            return $this->ambiguous($actionType, $correlationId);
         }
 
         $statuses = $this->normalizeStatuses($payload['statuses']);
         if ($statuses === null) {
-            return $this->ambiguous($correlationId);
+            return $this->ambiguous($actionType, $correlationId);
         }
 
         try {
             $result = new HyperliquidSignedActionResult(
+                $actionType,
                 $payload['outcome'],
                 $statuses,
                 $reason,
                 $correlationId,
             );
         } catch (\InvalidArgumentException) {
-            return $this->ambiguous($correlationId);
+            return $this->ambiguous($actionType, $correlationId);
         }
 
-        return $this->statusesMatchAction($actionType, $result) ? $result : $this->ambiguous($correlationId);
+        return $result;
     }
 
     /** @return array<string, mixed>|null */
@@ -288,23 +290,6 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
         return get_object_vars($status);
     }
 
-    private function statusesMatchAction(string $actionType, HyperliquidSignedActionResult $result): bool
-    {
-        if ($actionType === 'updateLeverage') {
-            return $result->outcome !== 'accepted' || $result->statuses === [];
-        }
-        $allowedKinds = $actionType === 'order'
-            ? ['resting', 'filled', 'error']
-            : ['success', 'error'];
-        foreach ($result->statuses as $status) {
-            if (!in_array($status['kind'], $allowedKinds, true)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     /**
      * @param array<string, mixed> $payload
      * @param list<string> $requiredKeys
@@ -325,13 +310,17 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
         return $actualKeys === $allowedKeys;
     }
 
-    private function ambiguous(string $correlationId): HyperliquidSignedActionResult
+    private function ambiguous(string $actionType, string $correlationId): HyperliquidSignedActionResult
     {
-        return $this->result('ambiguous', 'signer_response_invalid', $correlationId);
+        return $this->result($actionType, 'ambiguous', 'signer_response_invalid', $correlationId);
     }
 
-    private function result(string $outcome, string $reason, string $correlationId): HyperliquidSignedActionResult
-    {
-        return new HyperliquidSignedActionResult($outcome, [], $reason, $correlationId);
+    private function result(
+        string $actionType,
+        string $outcome,
+        string $reason,
+        string $correlationId,
+    ): HyperliquidSignedActionResult {
+        return new HyperliquidSignedActionResult($actionType, $outcome, [], $reason, $correlationId);
     }
 }

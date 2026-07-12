@@ -129,6 +129,7 @@ final class HyperliquidSignedActionClientTest extends TestCase
             1_700_000_030_000,
         );
 
+        self::assertSame('order', $result->actionType);
         self::assertSame('accepted', $result->outcome);
         self::assertSame([['kind' => 'resting', 'oid' => 42]], $result->statuses);
         self::assertNull($result->reason);
@@ -208,6 +209,14 @@ final class HyperliquidSignedActionClientTest extends TestCase
         yield 'cancel error' => ['cancel', 'rejected', [['kind' => 'error']], 'exchange_status_error'];
         yield 'cancel by cloid success' => ['cancelByCloid', 'accepted', [['kind' => 'success']], null];
         yield 'update leverage empty' => ['updateLeverage', 'accepted', [], null];
+        yield 'ambiguous order preserves reconciliation rows' => ['order', 'ambiguous', [
+            ['kind' => 'resting', 'oid' => 42],
+            ['kind' => 'error'],
+        ], 'mixed_exchange_statuses'];
+        yield 'ambiguous cancel preserves reconciliation rows' => ['cancel', 'ambiguous', [
+            ['kind' => 'success'],
+            ['kind' => 'error'],
+        ], 'mixed_exchange_statuses'];
     }
 
     /** @param list<array<string, mixed>> $statuses */
@@ -226,6 +235,7 @@ final class HyperliquidSignedActionClientTest extends TestCase
             'corr-valid-status',
         );
 
+        self::assertSame($actionType, $result->actionType);
         self::assertSame($outcome, $result->outcome);
         self::assertSame($statuses, $result->statuses);
         self::assertSame($reason, $result->reason);
@@ -290,6 +300,38 @@ final class HyperliquidSignedActionClientTest extends TestCase
         self::assertSame('signer_response_invalid', $result->reason);
     }
 
+    /** @return iterable<string, array{string, string, list<array<string, mixed>>, ?string}> */
+    public static function impossibleSidecarCombinations(): iterable
+    {
+        yield 'accepted order cannot be empty' => ['order', 'accepted', [], null];
+        yield 'accepted response cannot have reason' => ['order', 'accepted', [['kind' => 'resting', 'oid' => 1]], 'exchange_error'];
+        yield 'rejected response cannot contain accepted row' => ['order', 'rejected', [['kind' => 'resting', 'oid' => 1]], 'exchange_error'];
+        yield 'ambiguous response requires reason' => ['cancel', 'ambiguous', [['kind' => 'success']], null];
+        yield 'update leverage never contains statuses' => ['updateLeverage', 'ambiguous', [['kind' => 'error']], 'mixed_exchange_statuses'];
+    }
+
+    /** @param list<array<string, mixed>> $statuses */
+    #[DataProvider('impossibleSidecarCombinations')]
+    public function testMapsImpossibleSidecarCombinationToValidAmbiguousResult(
+        string $actionType,
+        string $outcome,
+        array $statuses,
+        ?string $reason,
+    ): void {
+        $response = $this->response($outcome, $reason, 'corr-impossible', $statuses);
+
+        $result = $this->client(new MockHttpClient($response))->submit(
+            ['type' => $actionType],
+            1,
+            'corr-impossible',
+        );
+
+        self::assertSame($actionType, $result->actionType);
+        self::assertSame('ambiguous', $result->outcome);
+        self::assertSame([], $result->statuses);
+        self::assertSame('signer_response_invalid', $result->reason);
+    }
+
     /** @return iterable<string, array{string}> */
     public static function knownReasons(): iterable
     {
@@ -324,40 +366,75 @@ final class HyperliquidSignedActionClientTest extends TestCase
     #[DataProvider('knownReasons')]
     public function testResultAcceptsOnlyKnownReasonVocabulary(string $reason): void
     {
-        $result = new HyperliquidSignedActionResult('ambiguous', [], $reason, 'corr-result');
+        $result = new HyperliquidSignedActionResult('order', 'ambiguous', [], $reason, 'corr-result');
 
         self::assertSame($reason, $result->reason);
     }
 
-    public function testResultAcceptsGenericNormalizedRowUnion(): void
+    /** @return iterable<string, array{string, string, list<array<string, mixed>>, ?string}> */
+    public static function validResultCombinations(): iterable
     {
-        $statuses = [
+        yield 'accepted order' => ['order', 'accepted', [
             ['kind' => 'resting', 'oid' => 1],
             ['kind' => 'filled', 'oid' => PHP_INT_MAX, 'total_size' => '.5', 'average_price' => '1E-8'],
+        ], null];
+        yield 'accepted cancel' => ['cancel', 'accepted', [['kind' => 'success']], null];
+        yield 'accepted cancel by cloid' => ['cancelByCloid', 'accepted', [['kind' => 'success']], null];
+        yield 'accepted leverage update' => ['updateLeverage', 'accepted', [], null];
+        yield 'rejected order without rows' => ['order', 'rejected', [], 'exchange_error'];
+        yield 'rejected order with errors' => ['order', 'rejected', [['kind' => 'error']], 'exchange_status_error'];
+        yield 'rejected cancel with errors' => ['cancel', 'rejected', [['kind' => 'error']], 'exchange_status_error'];
+        yield 'rejected leverage update' => ['updateLeverage', 'rejected', [], 'broadcast_disabled'];
+        yield 'ambiguous order without rows' => ['order', 'ambiguous', [], 'exchange_timeout'];
+        yield 'ambiguous mixed order' => ['order', 'ambiguous', [
+            ['kind' => 'resting', 'oid' => 1],
+            ['kind' => 'error'],
+        ], 'mixed_exchange_statuses'];
+        yield 'ambiguous mixed cancel' => ['cancel', 'ambiguous', [
             ['kind' => 'success'],
             ['kind' => 'error'],
-        ];
-
-        $result = new HyperliquidSignedActionResult('accepted', $statuses, null, 'corr-result');
-
-        self::assertSame($statuses, $result->statuses);
+        ], 'mixed_exchange_statuses'];
+        yield 'ambiguous leverage update' => ['updateLeverage', 'ambiguous', [], 'unknown_exchange_response'];
     }
 
-    /** @return iterable<string, array{string, array<mixed>, ?string, string, string}> */
+    /** @param list<array<string, mixed>> $statuses */
+    #[DataProvider('validResultCombinations')]
+    public function testResultAcceptsActionConsistentCombination(
+        string $actionType,
+        string $outcome,
+        array $statuses,
+        ?string $reason,
+    ): void {
+        $result = new HyperliquidSignedActionResult(
+            $actionType,
+            $outcome,
+            $statuses,
+            $reason,
+            'corr-result',
+        );
+
+        self::assertSame($actionType, $result->actionType);
+        self::assertSame($outcome, $result->outcome);
+        self::assertSame($statuses, $result->statuses);
+        self::assertSame($reason, $result->reason);
+    }
+
+    /** @return iterable<string, array{string, string, array<mixed>, ?string, string, string}> */
     public static function invalidResults(): iterable
     {
-        yield 'unknown outcome' => ['unknown', [], null, 'corr', 'hyperliquid_signed_action_result_outcome_invalid'];
-        yield 'statuses must be list' => ['accepted', ['row' => ['kind' => 'success']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
-        yield 'statuses limited to twenty' => ['accepted', array_fill(0, 21, ['kind' => 'success']), null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
-        yield 'status row must be object-shaped array' => ['accepted', ['success'], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
-        yield 'unknown reason' => ['rejected', [], 'exchange_rejected', 'corr', 'hyperliquid_signed_action_result_reason_invalid'];
-        yield 'blank correlation' => ['accepted', [], null, ' ', 'hyperliquid_signed_action_result_correlation_id_invalid'];
-        yield 'long correlation' => ['accepted', [], null, str_repeat('x', 129), 'hyperliquid_signed_action_result_correlation_id_invalid'];
-        yield 'arbitrary status key' => ['accepted', [['kind' => 'success', 'wallet_seed' => 'leak']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
-        yield 'unknown status kind' => ['accepted', [['kind' => 'pending']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
-        yield 'invalid oid' => ['accepted', [['kind' => 'resting', 'oid' => '1']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
-        yield 'invalid decimal' => ['accepted', [['kind' => 'filled', 'oid' => 1, 'total_size' => '0']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
-        yield 'oversized statuses' => ['accepted', [[
+        yield 'unknown action' => ['withdraw', 'ambiguous', [], 'exchange_error', 'corr', 'hyperliquid_signed_action_result_action_type_invalid'];
+        yield 'unknown outcome' => ['order', 'unknown', [], null, 'corr', 'hyperliquid_signed_action_result_outcome_invalid'];
+        yield 'statuses must be list' => ['order', 'accepted', ['row' => ['kind' => 'resting', 'oid' => 1]], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'statuses limited to twenty' => ['cancel', 'accepted', array_fill(0, 21, ['kind' => 'success']), null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'status row must be object-shaped array' => ['order', 'accepted', ['success'], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'unknown reason' => ['order', 'rejected', [], 'exchange_rejected', 'corr', 'hyperliquid_signed_action_result_reason_invalid'];
+        yield 'blank correlation' => ['updateLeverage', 'accepted', [], null, ' ', 'hyperliquid_signed_action_result_correlation_id_invalid'];
+        yield 'long correlation' => ['updateLeverage', 'accepted', [], null, str_repeat('x', 129), 'hyperliquid_signed_action_result_correlation_id_invalid'];
+        yield 'arbitrary status key' => ['cancel', 'accepted', [['kind' => 'success', 'wallet_seed' => 'leak']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'unknown status kind' => ['order', 'accepted', [['kind' => 'pending']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'invalid oid' => ['order', 'accepted', [['kind' => 'resting', 'oid' => '1']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'invalid decimal' => ['order', 'accepted', [['kind' => 'filled', 'oid' => 1, 'total_size' => '0']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'oversized statuses' => ['order', 'accepted', [[
             'kind' => 'filled',
             'oid' => 1,
             'total_size' => str_repeat('1', 65_536),
@@ -367,6 +444,7 @@ final class HyperliquidSignedActionClientTest extends TestCase
     /** @param array<mixed> $statuses */
     #[DataProvider('invalidResults')]
     public function testResultRejectsImpossibleOrSensitiveState(
+        string $actionType,
         string $outcome,
         array $statuses,
         ?string $reason,
@@ -376,7 +454,38 @@ final class HyperliquidSignedActionClientTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage($error);
 
-        new HyperliquidSignedActionResult($outcome, $statuses, $reason, $correlationId);
+        new HyperliquidSignedActionResult($actionType, $outcome, $statuses, $reason, $correlationId);
+    }
+
+    /** @return iterable<string, array{string, string, list<array<string, mixed>>, ?string}> */
+    public static function inconsistentResults(): iterable
+    {
+        yield 'accepted has reason' => ['order', 'accepted', [['kind' => 'resting', 'oid' => 1]], 'exchange_error'];
+        yield 'accepted order is empty' => ['order', 'accepted', [], null];
+        yield 'accepted order has error' => ['order', 'accepted', [['kind' => 'error']], null];
+        yield 'accepted cancel is empty' => ['cancel', 'accepted', [], null];
+        yield 'accepted cancel has error' => ['cancel', 'accepted', [['kind' => 'error']], null];
+        yield 'accepted leverage has status' => ['updateLeverage', 'accepted', [['kind' => 'success']], null];
+        yield 'leverage rejection has status' => ['updateLeverage', 'rejected', [['kind' => 'error']], 'exchange_error'];
+        yield 'order has success' => ['order', 'ambiguous', [['kind' => 'success']], 'unknown_exchange_status'];
+        yield 'cancel has resting' => ['cancel', 'ambiguous', [['kind' => 'resting', 'oid' => 1]], 'unknown_exchange_status'];
+        yield 'rejected has no reason' => ['order', 'rejected', [], null];
+        yield 'ambiguous has no reason' => ['order', 'ambiguous', [], null];
+        yield 'rejected order has resting' => ['order', 'rejected', [['kind' => 'resting', 'oid' => 1]], 'exchange_error'];
+        yield 'rejected cancel has success' => ['cancel', 'rejected', [['kind' => 'success']], 'exchange_error'];
+    }
+
+    /** @param list<array<string, mixed>> $statuses */
+    #[DataProvider('inconsistentResults')]
+    public function testResultRejectsActionOutcomeInconsistency(
+        string $actionType,
+        string $outcome,
+        array $statuses,
+        ?string $reason,
+    ): void {
+        $this->expectExceptionMessage('hyperliquid_signed_action_result_consistency_invalid');
+
+        new HyperliquidSignedActionResult($actionType, $outcome, $statuses, $reason, 'corr-inconsistent');
     }
 
     /** @return iterable<string, array{array<string, mixed>, int, string, ?int, string}> */
