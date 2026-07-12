@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import pytest
@@ -8,6 +9,8 @@ from app.contracts import ExchangeRequest, ExchangeResponse
 
 ACCOUNT = "0x1111111111111111111111111111111111111111"
 AGENT = "0x2222222222222222222222222222222222222222"
+MAX_INT64 = 2**63 - 1
+MAX_STATUSES_BYTES = 64 * 1024
 
 
 def request_data(**overrides: Any) -> dict[str, Any]:
@@ -64,6 +67,14 @@ def test_request_rejects_oversized_action() -> None:
         ExchangeRequest(**request_data(action=action))
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_request_rejects_non_finite_action_numbers(value: float) -> None:
+    action = {"type": "order", "price": value}
+
+    with pytest.raises(ValidationError, match="action_not_json_serializable"):
+        ExchangeRequest(**request_data(action=action))
+
+
 @pytest.mark.parametrize("field", ["schema_version", "environment", "network"])
 def test_request_rejects_wrong_literal(field: str) -> None:
     with pytest.raises(ValidationError):
@@ -74,6 +85,26 @@ def test_request_rejects_wrong_literal(field: str) -> None:
 def test_request_requires_positive_nonce(nonce: int) -> None:
     with pytest.raises(ValidationError):
         ExchangeRequest(**request_data(nonce=nonce))
+
+
+@pytest.mark.parametrize("field", ["nonce", "expires_after"])
+@pytest.mark.parametrize("value", [True, "1", 1.0])
+def test_request_requires_strict_integer_fields(field: str, value: Any) -> None:
+    with pytest.raises(ValidationError):
+        ExchangeRequest(**request_data(**{field: value}))
+
+
+@pytest.mark.parametrize("field", ["nonce", "expires_after"])
+def test_request_accepts_maximum_signed_64_bit_integer(field: str) -> None:
+    request = ExchangeRequest(**request_data(**{field: MAX_INT64}))
+
+    assert getattr(request, field) == MAX_INT64
+
+
+@pytest.mark.parametrize("field", ["nonce", "expires_after"])
+def test_request_rejects_integer_above_signed_64_bit_maximum(field: str) -> None:
+    with pytest.raises(ValidationError):
+        ExchangeRequest(**request_data(**{field: MAX_INT64 + 1}))
 
 
 @pytest.mark.parametrize("field", ["account_address", "agent_address"])
@@ -123,18 +154,27 @@ def test_response_forbids_sensitive_top_level_fields(field: str) -> None:
         ExchangeResponse(**response_data(**{field: "forbidden"}))
 
 
+@pytest.mark.parametrize("nested", [False, True])
 @pytest.mark.parametrize(
-    ("field", "nested"),
+    "field",
     [
-        ("signature", True),
-        ("privateKey", True),
-        ("agent_private_key", True),
-        ("signature_hex", False),
-        ("signature_hex", True),
-        ("agent_signature", False),
-        ("agent_signature", True),
-        ("private_key_hex", False),
-        ("private_key_hex", True),
+        "signature",
+        "signature_hex",
+        "agent_signature",
+        "privateKey",
+        "agent_private_key",
+        "private_key_hex",
+        "signing_payload",
+        "canonical_payload",
+        "credential",
+        "access_token",
+        "client_secret",
+        "auth",
+        "authorization",
+        "password",
+        "cookie",
+        "passphrase",
+        "api_key",
     ],
 )
 def test_response_forbids_sensitive_status_fields(
@@ -147,9 +187,42 @@ def test_response_forbids_sensitive_status_fields(
         ExchangeResponse(**response_data(statuses=[status]))
 
 
+def test_response_rejects_nested_non_string_status_key() -> None:
+    with pytest.raises(ValidationError, match="status_keys_must_be_strings"):
+        ExchangeResponse(**response_data(statuses=[{"nested": {1: "invalid"}}]))
+
+
 def test_response_limits_status_rows_to_twenty() -> None:
     with pytest.raises(ValidationError):
         ExchangeResponse(**response_data(statuses=[{"kind": "ok"}] * 21))
+
+
+def statuses_with_serialized_size(size: int) -> list[dict[str, Any]]:
+    empty_statuses = [{"data": ""}]
+    overhead = len(
+        json.dumps(
+            empty_statuses,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+    )
+    return [{"data": "x" * (size - overhead)}]
+
+
+def test_response_accepts_statuses_at_64_kib_serialized_boundary() -> None:
+    statuses = statuses_with_serialized_size(MAX_STATUSES_BYTES)
+
+    response = ExchangeResponse(**response_data(statuses=statuses))
+
+    assert response.statuses == statuses
+
+
+def test_response_rejects_statuses_above_64_kib_serialized_boundary() -> None:
+    statuses = statuses_with_serialized_size(MAX_STATUSES_BYTES + 1)
+
+    with pytest.raises(ValidationError, match="statuses_too_large"):
+        ExchangeResponse(**response_data(statuses=statuses))
 
 
 @pytest.mark.parametrize("value", ["", "Upper_Case", "has-dash", "x" * 129])
