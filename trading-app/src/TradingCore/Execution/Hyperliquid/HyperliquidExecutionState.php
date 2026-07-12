@@ -13,6 +13,7 @@ final readonly class HyperliquidExecutionState
         public \DateTimeImmutable $observedAt,
         public ?int $observedLeverage,
         public ?string $observedMarginMode = null,
+        public bool $hasOpenPosition = false,
     ) {
     }
 }

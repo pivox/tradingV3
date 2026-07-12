@@ -210,6 +210,31 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
 
         self::assertSame(5, $state->observedLeverage);
         self::assertSame('cross', $state->observedMarginMode);
+        self::assertTrue($state->hasOpenPosition);
+    }
+
+    public function testStrictExecutionStateMarksNoPositionAsAuthoritativelyFlat(): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $client->noPositions = true;
+        $client->overrides['l2Book'] = [
+            'time' => 1_720_780_799_000,
+            'levels' => [
+                [['px' => '99', 'sz' => '1', 'n' => 1]],
+                [['px' => '100', 'sz' => '1', 'n' => 1]],
+            ],
+        ];
+        $resolver = new HyperliquidAssetResolver($client);
+        $provider = new StrictHyperliquidExecutionStateProvider(
+            new HyperliquidMetadataProvider($client, $resolver),
+            new HyperliquidAccountGateway($client, $resolver, $this->config()),
+        );
+
+        $state = $provider->current('BTCUSDT');
+
+        self::assertFalse($state->hasOpenPosition);
+        self::assertNull($state->observedLeverage);
+        self::assertNull($state->observedMarginMode);
     }
 
     public function testPrivateDataUnavailableIsNotReadyForStrictReadAndTolerantForOpenPositions(): void

@@ -24,9 +24,10 @@ final class HyperliquidIsolatedLiquidationSolver
     ): HyperliquidIsolatedLiquidationResult {
         $entry = $this->positive($entryPrice);
         $size = $this->positive($quantity);
-        if ($leverage < 1 || !in_array($side, ['long', 'short'], true) || $evidence->tiers === []) {
+        if ($leverage < 1 || $leverage > 50 || !in_array($side, ['long', 'short'], true)) {
             throw new \InvalidArgumentException('hyperliquid_liquidation_input_invalid');
         }
+        $this->validateTableStructure($evidence);
         $openingTier = $this->tierForNotional($evidence, $entry->multipliedBy($size));
         if ($leverage > $openingTier->maxLeverage) {
             throw new \InvalidArgumentException('hyperliquid_opening_tier_leverage_invalid');
@@ -78,6 +79,9 @@ final class HyperliquidIsolatedLiquidationSolver
 
     public function toConservativeFloat(HyperliquidIsolatedLiquidationResult $result, string $side): float
     {
+        if (!in_array($side, ['long', 'short'], true)) {
+            throw new \InvalidArgumentException('hyperliquid_liquidation_side_invalid');
+        }
         // The legacy DTO is float-based: round toward the entry before crossing that final boundary.
         $decimal = $this->positive($result->liquidationPrice)->toScale(
             self::DTO_SCALE,
@@ -86,6 +90,12 @@ final class HyperliquidIsolatedLiquidationSolver
         $value = $decimal->toFloat();
         if (!is_finite($value) || $value <= 0.0) {
             throw new \InvalidArgumentException('hyperliquid_liquidation_float_invalid');
+        }
+        $roundTrip = BigDecimal::of((string) $value);
+        if (($side === 'long' && $roundTrip->isLessThan($decimal))
+            || ($side === 'short' && $roundTrip->isGreaterThan($decimal))
+        ) {
+            throw new \InvalidArgumentException('hyperliquid_liquidation_float_direction_invalid');
         }
 
         return $value;
@@ -101,6 +111,32 @@ final class HyperliquidIsolatedLiquidationSolver
         }
 
         return $selected ?? throw new \InvalidArgumentException('hyperliquid_opening_tier_missing');
+    }
+
+    private function validateTableStructure(HyperliquidMarginSafetyEvidence $evidence): void
+    {
+        if ($evidence->universeMaxLeverage < 1 || $evidence->universeMaxLeverage > 50
+            || $evidence->tiers === [] || count($evidence->tiers) > 3
+            || $evidence->tiers[0]->lowerBound !== '0'
+            || $evidence->tiers[0]->maxLeverage !== $evidence->universeMaxLeverage
+            || ($evidence->marginTableId < 50
+                && ($evidence->marginTableId !== $evidence->universeMaxLeverage || count($evidence->tiers) !== 1))
+        ) {
+            throw new \InvalidArgumentException('hyperliquid_liquidation_table_invalid');
+        }
+        $previousBound = null;
+        $previousLeverage = null;
+        foreach ($evidence->tiers as $tier) {
+            $bound = $this->nonNegative($tier->lowerBound);
+            if ($tier->maxLeverage < 1 || $tier->maxLeverage > 50
+                || ($previousBound instanceof BigDecimal && $bound->isLessThanOrEqualTo($previousBound))
+                || ($previousLeverage !== null && $tier->maxLeverage >= $previousLeverage)
+            ) {
+                throw new \InvalidArgumentException('hyperliquid_liquidation_table_invalid');
+            }
+            $previousBound = $bound;
+            $previousLeverage = $tier->maxLeverage;
+        }
     }
 
     private function positive(string $value): BigDecimal

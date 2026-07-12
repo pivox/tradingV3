@@ -6,6 +6,7 @@ namespace App\Tests\Provider\Hyperliquid;
 
 use App\Provider\Hyperliquid\Dto\HyperliquidMarginSafetyEvidence;
 use App\Provider\Hyperliquid\Dto\HyperliquidMarginTierEvidence;
+use App\Provider\Hyperliquid\Dto\HyperliquidIsolatedLiquidationResult;
 use App\Provider\Hyperliquid\HyperliquidIsolatedLiquidationSolver;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -68,6 +69,36 @@ final class HyperliquidIsolatedLiquidationSolverTest extends TestCase
     {
         $this->expectException(\InvalidArgumentException::class);
         $this->solver()->solve($this->evidence(), '101', '100', 10, 'long');
+    }
+
+    public function testRejectsRequestedOrTierLeverageAboveOfficialMaximum(): void
+    {
+        $evidence = $this->evidence([
+            new HyperliquidMarginTierEvidence('0', 51, '0.009803921568627451', '0'),
+        ], universeMaxLeverage: 51);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->solver()->solve($evidence, '100', '1', 51, 'long');
+    }
+
+    public function testRejectsHugeLongWhenFloatRoundTripMovesBelowConservativeDecimal(): void
+    {
+        $result = new HyperliquidIsolatedLiquidationResult(
+            '10000000000000000.000000000001', 0, '0', 5, '0.1', '0',
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->solver()->toConservativeFloat($result, 'long');
+    }
+
+    public function testRejectsHugeShortWhenFloatRoundTripMovesAboveConservativeDecimal(): void
+    {
+        $result = new HyperliquidIsolatedLiquidationResult(
+            '9999999999999999.999999999999', 0, '0', 5, '0.1', '0',
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->solver()->toConservativeFloat($result, 'short');
     }
 
     /** @param list<HyperliquidMarginTierEvidence>|null $tiers */

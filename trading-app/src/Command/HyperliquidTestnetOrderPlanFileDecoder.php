@@ -97,7 +97,7 @@ final class HyperliquidTestnetOrderPlanFileDecoder
         $quantityDecimal = $this->positiveDecimal($plan, 'quantity');
         $entryPrice = $this->exactFloat($entryDecimal);
         $quantity = $this->exactFloat($quantityDecimal);
-        $leverage = $this->boundedInt($plan, 'leverage', 1, 100);
+        $leverage = $this->boundedInt($plan, 'leverage', 1, 50);
 
         $symbol = $this->patternString($plan, 'symbol', '/^[A-Z0-9][A-Z0-9_-]{1,31}$/D');
         $profile = $this->patternString($plan, 'profile', '/^[a-z0-9][a-z0-9_.-]{0,63}$/D');

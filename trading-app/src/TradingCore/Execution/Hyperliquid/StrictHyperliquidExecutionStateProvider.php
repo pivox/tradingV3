@@ -50,6 +50,7 @@ final readonly class StrictHyperliquidExecutionStateProvider implements Hyperliq
             observedAt: $observedAt,
             observedLeverage: $observedLeverage,
             observedMarginMode: $observedMarginMode,
+            hasOpenPosition: $position !== null,
         );
     }
 }

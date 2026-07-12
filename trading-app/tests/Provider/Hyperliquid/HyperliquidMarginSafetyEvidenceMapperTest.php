@@ -90,6 +90,16 @@ final class HyperliquidMarginSafetyEvidenceMapperTest extends TestCase
         $active = self::activeRow();
 
         yield 'duplicate table id' => [$meta([[51, ['marginTiers' => $validTiers]], [51, ['marginTiers' => $validTiers]]]), $active];
+        yield 'single tier id differs from universe maximum' => [[
+            'universe' => [['name' => 'BTC', 'maxLeverage' => 10, 'marginTableId' => 3]],
+            'marginTables' => [],
+        ], $active];
+        yield 'leverage above official maximum' => [[
+            'universe' => [['name' => 'BTC', 'maxLeverage' => 51, 'marginTableId' => 51]],
+            'marginTables' => [[51, ['marginTiers' => [
+                ['lowerBound' => '0', 'maxLeverage' => 51],
+            ]]]],
+        ], $active];
         yield 'first bound nonzero' => [$meta([[51, ['marginTiers' => [
             ['lowerBound' => '1', 'maxLeverage' => 10],
         ]]]]), $active];
@@ -111,6 +121,12 @@ final class HyperliquidMarginSafetyEvidenceMapperTest extends TestCase
             static fn (int $i): array => ['lowerBound' => (string) $i, 'maxLeverage' => 40 - $i],
             range(0, 32),
         )]]]), $active];
+        yield 'four tiers exceed official limit' => [$meta([[51, ['marginTiers' => [
+            ['lowerBound' => '0', 'maxLeverage' => 10],
+            ['lowerBound' => '10000', 'maxLeverage' => 8],
+            ['lowerBound' => '20000', 'maxLeverage' => 5],
+            ['lowerBound' => '30000', 'maxLeverage' => 3],
+        ]]]]), $active];
         yield 'missing observed user' => [$meta([[51, ['marginTiers' => $validTiers]]]), array_diff_key($active, ['user' => true])];
         yield 'wrong observed user' => [$meta([[51, ['marginTiers' => $validTiers]]]), self::activeRow(user: '0x2222222222222222222222222222222222222222')];
         yield 'missing observed coin' => [$meta([[51, ['marginTiers' => $validTiers]]]), array_diff_key($active, ['coin' => true])];

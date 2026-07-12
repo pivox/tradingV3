@@ -34,7 +34,9 @@ final readonly class HyperliquidExecutionStatePolicy
         } elseif ($age > self::MAX_AGE_MILLISECONDS) {
             $reasons[] = 'hyperliquid_execution_quote_stale';
         }
-        if ($state->observedLeverage !== null && !in_array($state->observedMarginMode, ['isolated', 'cross'], true)) {
+        if ($state->hasOpenPosition && $state->observedLeverage !== null
+            && !in_array($state->observedMarginMode, ['isolated', 'cross'], true)
+        ) {
             $reasons[] = 'hyperliquid_execution_margin_mode_invalid';
         }
 
@@ -43,7 +45,7 @@ final readonly class HyperliquidExecutionStatePolicy
 
     public function requiresIsolatedModeUpdate(HyperliquidExecutionState $state): bool
     {
-        return $state->observedLeverage !== null && $state->observedMarginMode === 'cross';
+        return !$state->hasOpenPosition || $state->observedMarginMode === 'cross';
     }
 
     public function emergencyCloseCap(HyperliquidExecutionState $state, string $positionSide, string $priceTick): float

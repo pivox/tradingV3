@@ -45,7 +45,7 @@ final class HyperliquidExecutionStatePolicyTest extends TestCase
     {
         $policy = new HyperliquidExecutionStatePolicy(new MockClock('2026-07-12T12:00:00Z'));
         $state = new HyperliquidExecutionState(
-            'BTCUSDT', 99.0, 100.0, new \DateTimeImmutable('2026-07-12T11:59:59Z'), 5, 'cross',
+            'BTCUSDT', 99.0, 100.0, new \DateTimeImmutable('2026-07-12T11:59:59Z'), 5, 'cross', true,
         );
 
         self::assertSame([], $policy->blockingReasons($state, 'BTCUSDT'));
@@ -56,9 +56,20 @@ final class HyperliquidExecutionStatePolicyTest extends TestCase
     {
         $policy = new HyperliquidExecutionStatePolicy(new MockClock('2026-07-12T12:00:00Z'));
         $state = new HyperliquidExecutionState(
-            'BTCUSDT', 99.0, 100.0, new \DateTimeImmutable('2026-07-12T11:59:59Z'), 5, null,
+            'BTCUSDT', 99.0, 100.0, new \DateTimeImmutable('2026-07-12T11:59:59Z'), 5, null, true,
         );
 
         self::assertContains('hyperliquid_execution_margin_mode_invalid', $policy->blockingReasons($state, 'BTCUSDT'));
+    }
+
+    public function testFlatNullLeverageAndMarginModeAreValidAndRequireUpdate(): void
+    {
+        $policy = new HyperliquidExecutionStatePolicy(new MockClock('2026-07-12T12:00:00Z'));
+        $state = new HyperliquidExecutionState(
+            'BTCUSDT', 99.0, 100.0, new \DateTimeImmutable('2026-07-12T11:59:59Z'), null, null, false,
+        );
+
+        self::assertSame([], $policy->blockingReasons($state, 'BTCUSDT'));
+        self::assertTrue($policy->requiresIsolatedModeUpdate($state));
     }
 }

@@ -153,10 +153,10 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         } catch (\Throwable) {
             return $this->rejected($plan, 'hyperliquid_execution_state_unavailable', ['hyperliquid_execution_state_unavailable']);
         }
-        $stateReasons = array_merge(
-            $this->executionStatePolicy->blockingReasons($state, $plan->symbol),
-            $this->leveragePolicy->blockingReasons($state->observedLeverage),
-        );
+        $stateReasons = $this->executionStatePolicy->blockingReasons($state, $plan->symbol);
+        if ($state->hasOpenPosition) {
+            $stateReasons[] = 'hyperliquid_existing_position_not_flat';
+        }
         if ($stateReasons !== []) {
             return $this->rejected($plan, 'hyperliquid_execution_state_rejected', $stateReasons);
         }
@@ -281,7 +281,8 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
             ) {
                 return ['hyperliquid_margin_evidence_invalid'];
             }
-            if ($state instanceof HyperliquidExecutionState && $state->observedLeverage !== null
+            if ($state instanceof HyperliquidExecutionState && $state->hasOpenPosition
+                && $state->observedLeverage !== null
                 && ($evidence->observedLeverage !== $state->observedLeverage
                     || $evidence->observedMarginMode !== $state->observedMarginMode)
             ) {

@@ -11,7 +11,7 @@ use Brick\Math\RoundingMode;
 
 final class HyperliquidMarginSafetyEvidenceMapper
 {
-    private const MAX_SUPPORTED_TIERS = 32;
+    private const MAX_SUPPORTED_TIERS = 3;
     private const RATE_SCALE = 36;
 
     /**
@@ -27,10 +27,13 @@ final class HyperliquidMarginSafetyEvidenceMapper
     ): HyperliquidMarginSafetyEvidence {
         $asset = $this->asset($meta, $symbol);
         $coin = strtoupper((string) ($asset['name'] ?? ''));
-        $tableId = $this->positiveInt($asset['marginTableId'] ?? null);
-        $universeMaxLeverage = $this->positiveInt($asset['maxLeverage'] ?? null);
+        $tableId = $this->tableId($asset['marginTableId'] ?? null);
+        $universeMaxLeverage = $this->leverage($asset['maxLeverage'] ?? null);
+        if ($tableId < 50 && $tableId !== $universeMaxLeverage) {
+            throw new \InvalidArgumentException('hyperliquid_single_tier_identity_invalid');
+        }
         $rows = $tableId < 50
-            ? [['lowerBound' => '0', 'maxLeverage' => $universeMaxLeverage]]
+            ? [['lowerBound' => '0', 'maxLeverage' => $tableId]]
             : $this->tableRows($meta, $tableId);
         $tiers = $this->tiers($rows, $universeMaxLeverage);
 
@@ -39,7 +42,7 @@ final class HyperliquidMarginSafetyEvidenceMapper
         $expectedAccount = strtolower($accountAddress);
         $leverage = $activeAssetData['leverage'] ?? null;
         $mode = is_array($leverage) ? ($leverage['type'] ?? null) : null;
-        $observedLeverage = is_array($leverage) ? $this->positiveInt($leverage['value'] ?? null) : 0;
+        $observedLeverage = is_array($leverage) ? $this->leverage($leverage['value'] ?? null) : 0;
         if ($observedUser !== $expectedAccount || $observedCoin !== $coin
             || !is_string($mode) || !in_array($mode, ['isolated', 'cross'], true)
             || preg_match('/^0x[a-f0-9]{40}$/D', $expectedAccount) !== 1
@@ -128,7 +131,7 @@ final class HyperliquidMarginSafetyEvidenceMapper
                 throw new \InvalidArgumentException('hyperliquid_margin_tier_invalid');
             }
             $bound = $this->nonNegativeDecimal($row['lowerBound'] ?? null);
-            $maxLeverage = $this->positiveInt($row['maxLeverage'] ?? null);
+            $maxLeverage = $this->leverage($row['maxLeverage'] ?? null);
             if (($index === 0 && (!$bound->isZero() || $maxLeverage !== $universeMaxLeverage))
                 || ($previousBound instanceof BigDecimal && $bound->isLessThanOrEqualTo($previousBound))
                 || ($previousLeverage !== null && $maxLeverage >= $previousLeverage)
@@ -154,10 +157,19 @@ final class HyperliquidMarginSafetyEvidenceMapper
         return $tiers;
     }
 
-    private function positiveInt(mixed $value): int
+    private function tableId(mixed $value): int
     {
         if (!is_int($value) || $value < 1 || $value > 1_000) {
             throw new \InvalidArgumentException('hyperliquid_margin_integer_invalid');
+        }
+
+        return $value;
+    }
+
+    private function leverage(mixed $value): int
+    {
+        if (!is_int($value) || $value < 1 || $value > 50) {
+            throw new \InvalidArgumentException('hyperliquid_margin_leverage_invalid');
         }
 
         return $value;

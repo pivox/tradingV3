@@ -366,22 +366,16 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         yield 'cross account' => ['cross account'];
     }
 
-    public function testAuthoritativeHalfPercentMaintenanceRegressionRejectsOptimisticStop(): void
+    public function testLeverageAboveOfficialMaximumRejectsBeforeMarginEvidence(): void
     {
         $envelope = $this->validEnvelope();
         $envelope['order_plan']['leverage'] = 100;
-        $envelope['order_plan']['quantity'] = '1';
-        $envelope['order_plan']['protection_plan']['stop_loss']['stop_price'] = '99.7';
-        $evidence = new SmokeTestMarginEvidenceProvider($this->marginEvidence(
-            tiers: [new HyperliquidMarginTierEvidence('0', 100, '0.005', '0')],
-            universeMaxLeverage: 100,
-            observedLeverage: 100,
-        ));
+        $evidence = new SmokeTestMarginEvidenceProvider($this->marginEvidence());
         $port = new SmokeTestPort($this->accepted());
         $tester = $this->tester($port, marginEvidence: $evidence);
 
         self::assertSame(Command::FAILURE, $tester->execute($this->input($this->planFile($envelope))));
-        self::assertSame(1, $evidence->calls);
+        self::assertSame(0, $evidence->calls);
         self::assertSame(0, $port->calls);
     }
 
