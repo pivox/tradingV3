@@ -540,7 +540,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame(2, $evidence->calls);
     }
 
-    public function testFilledEntryAndFilledStopRowsAreAcceptedInOriginalOrder(): void
+    public function testFilledProtectiveStopTriggersCompensation(): void
     {
         $fixture = $this->fixture(signedResults: [new HyperliquidSignedActionResult('order', 'accepted', [
             ['kind' => 'filled', 'oid' => 42, 'total_size' => '0.1', 'average_price' => '100'],
@@ -549,9 +549,12 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
 
         $result = $fixture->port->execute($fixture->request);
 
-        self::assertSame(ExecutionStatus::Accepted, $result->status);
-        self::assertSame('42', $result->exchangeOrderId);
-        self::assertTrue($result->metadata['protection_confirmed']);
+        self::assertSame(ExecutionStatus::Failed, $result->status);
+        self::assertNull($result->exchangeOrderId);
+        self::assertFalse($result->metadata['protection_confirmed']);
+        self::assertSame('unknown_requires_resync', $result->metadata['compensation_outcome']);
+        self::assertCount(1, $fixture->compensation->contexts);
+        self::assertSame('42', $fixture->compensation->contexts[0]->entryExchangeOrderId);
     }
 
     public function testUnsafeClientOrderIdRejectsBeforeLockNonceOrBroadcast(): void
@@ -657,6 +660,10 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
                 ['kind' => 'resting', 'oid' => 42],
                 ['kind' => 'filled', 'oid' => 43, 'total_size' => '0.11'],
             ], null, 'corr-1'),
+            'filled_stop' => new HyperliquidSignedActionResult('order', 'accepted', [
+                ['kind' => 'resting', 'oid' => 42],
+                ['kind' => 'filled', 'oid' => 43, 'total_size' => '0.1'],
+            ], null, 'corr-1'),
             default => throw new \LogicException('unknown_invalid_accepted_group'),
         };
         $fixture = $this->fixture(signedResults: [$submission], compensationResult: $this->unknown());
@@ -680,6 +687,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
             'filled_total_size_malformed',
             'filled_total_size_unrepresentable',
             'filled_total_size_mismatch',
+            'filled_stop',
         ] as $case) {
             yield $case => [$case];
         }

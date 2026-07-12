@@ -644,6 +644,7 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         if ($submission->actionType === 'order' && hash_equals($correlationId, $submission->correlationId)
             && $submission->outcome === 'accepted' && count($statuses) === 2
             && $this->acceptedOrderRow($statuses[0]) && $this->acceptedOrderRow($statuses[1])
+            && ($statuses[1]['kind'] ?? null) === 'resting'
             && $statuses[0]['oid'] !== $statuses[1]['oid']
             && $this->filledSizeMatches($statuses[0], $quantity, $metadata->quantityStep)
             && $this->filledSizeMatches($statuses[1], $quantity, $metadata->quantityStep)
