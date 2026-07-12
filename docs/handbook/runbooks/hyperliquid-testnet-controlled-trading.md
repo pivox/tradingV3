@@ -74,6 +74,7 @@ ci-dessous ne demandent que des adresses publiques et ne les inscrivent pas
 dans l'historique shell :
 
 ```bash
+set -euo pipefail
 set +x
 read -r -p 'Dedicated testnet account address: ' HL_TESTNET_ACCOUNT_ADDRESS
 read -r -p 'Derived testnet agent address: ' HL_TESTNET_AGENT_ADDRESS
@@ -123,6 +124,7 @@ Configurer ensuite **uniquement les deux adresses publiques** dans
 sidecar, puis verifier que PHP a charge exactement ces valeurs publiques :
 
 ```bash
+set -euo pipefail
 docker compose up -d --no-deps --force-recreate trading-app-php
 
 HL_CONTAINER_ADDRESSES="$(
@@ -252,9 +254,11 @@ Avant toute preparation :
 Verifier l'etat sans afficher de valeur sensible :
 
 ```bash
+set -euo pipefail
 docker compose ps trading-app-db trading-app-php trading-app-messenger-trading
 
 docker compose exec -T trading-app-php php -r '
+$missing = false;
 foreach ([
     "HYPERLIQUID_ENV",
     "HYPERLIQUID_NETWORK",
@@ -264,8 +268,11 @@ foreach ([
     "HYPERLIQUID_SIGNER_AUTH_TOKEN",
 ] as $name) {
     $value = getenv($name);
-    echo $name . "=" . ($value === false || trim((string) $value) === "" ? "missing" : "present") . PHP_EOL;
+    $status = $value === false || trim((string) $value) === "" ? "missing" : "present";
+    echo $name . "=" . $status . PHP_EOL;
+    $missing = $missing || $status === "missing";
 }
+exit($missing ? 1 : 0);
 '
 ```
 
@@ -278,6 +285,7 @@ Charger les secrets dans le mecanisme local approuve, sans les saisir dans la
 ligne de commande, puis garder les trois gates d'environnement fermees :
 
 ```bash
+set -euo pipefail
 export DEMO_TRADING_ENABLED=0
 export HYPERLIQUID_TESTNET_TRADING_ENABLED=0
 export HYPERLIQUID_SIGNER_BROADCAST_ENABLED=0
@@ -300,6 +308,7 @@ Recreer PHP apres toute modification de gate d'environnement, puis executer le
 runtime-check :
 
 ```bash
+set -euo pipefail
 docker compose up -d --no-deps --force-recreate trading-app-php
 docker compose exec -T trading-app-php \
   php bin/console app:exchange:runtime-check hyperliquid perpetual
@@ -313,6 +322,7 @@ DEMO-005 reste le gate humain et documentaire.
 La recette orchestrateur autorisee est locale et force `dry_run=true` :
 
 ```bash
+set -euo pipefail
 cd python-orchestrator
 python scripts/runtime_recipe_runner.py \
   --orchestrator-url http://localhost:8099 \
@@ -450,6 +460,7 @@ Apres activation approuvee, recreer PHP et le sidecar, rejouer le runtime-check,
 puis lancer exactement une fois :
 
 ```bash
+set -euo pipefail
 docker compose exec -T trading-app-php \
   php bin/console app:hyperliquid:testnet:smoke \
   /var/www/html/var/operator/hyperliquid-testnet-plan-v1.json \
@@ -470,6 +481,7 @@ reconcilier par symbole seul, proximite temporelle, taille ou prix. Ne pas
 afficher de payload signe.
 
 ```bash
+set -euo pipefail
 rg -n --fixed-strings 'hl12-testnet-attempt-001' trading-app/var/log
 ```
 
@@ -488,6 +500,7 @@ exemple celui lie au symbole du plan. `HL_ENTRY_OID` vient de la sortie smoke et
 sortie acceptee.
 
 ```bash
+set -euo pipefail
 set +x
 export HL_INFO_URL='https://api.hyperliquid-testnet.xyz/info'
 : "${HL_TESTNET_ACCOUNT_ADDRESS:?set the dedicated account address}"
@@ -532,6 +545,7 @@ Verifier les positions non nulles du coin, puis exiger un resultat vide pour
 declarer le symbole flat :
 
 ```bash
+set -euo pipefail
 HL_POSITIONS_JSON="$(hl_info "$(
   jq -cn --arg user "$HL_TESTNET_ACCOUNT_ADDRESS" \
     '{type:"clearinghouseState", user:$user}'
@@ -564,6 +578,7 @@ printf '%s' "$HL_OPEN_POSITIONS" | jq -e 'length == 0' >/dev/null
 Verifier les ordres ouverts du meme coin, puis exiger un resultat vide :
 
 ```bash
+set -euo pipefail
 HL_ORDERS_JSON="$(hl_info "$(
   jq -cn --arg user "$HL_TESTNET_ACCOUNT_ADDRESS" \
     '{type:"frontendOpenOrders", user:$user}'
@@ -599,6 +614,39 @@ Interroger `orderStatus` sans convertir un OID u64 en float et sans accepter un
 identifiant approximatif :
 
 ```bash
+set -euo pipefail
+HL_ALLOWED_ORDER_STATUSES='[
+  "open",
+  "filled",
+  "canceled",
+  "triggered",
+  "rejected",
+  "marginCanceled",
+  "vaultWithdrawalCanceled",
+  "openInterestCapCanceled",
+  "selfTradeCanceled",
+  "reduceOnlyCanceled",
+  "siblingFilledCanceled",
+  "delistedCanceled",
+  "liquidatedCanceled",
+  "scheduledCancel",
+  "tickRejected",
+  "minTradeNtlRejected",
+  "perpMarginRejected",
+  "reduceOnlyRejected",
+  "badAloPxRejected",
+  "iocCancelRejected",
+  "badTriggerPxRejected",
+  "marketOrderNoLiquidityRejected",
+  "positionIncreaseAtOpenInterestCapRejected",
+  "positionFlipAtOpenInterestCapRejected",
+  "tooAggressiveAtOpenInterestCapRejected",
+  "openInterestIncreaseRejected",
+  "insufficientSpotBalanceRejected",
+  "oracleRejected",
+  "perpMaxPositionRejected"
+]'
+
 hl_order_status() {
   local identifier="$1" payload
   if [[ "$identifier" =~ ^[1-9][0-9]*$ ]]; then
@@ -618,39 +666,72 @@ HL_OID_STATUS_JSON="$(hl_order_status "$HL_ENTRY_OID")"
 HL_CLOID_STATUS_JSON="$(hl_order_status "$HL_ENTRY_CLOID")"
 
 for status_json in "$HL_OID_STATUS_JSON" "$HL_CLOID_STATUS_JSON"; do
-  printf '%s' "$status_json" | jq '
-    if .status == "order" then
-      {
-        lookupStatus:.status,
-        oid:.order.order.oid,
-        cloid:.order.order.cloid,
-        orderStatus:.order.status,
-        size:.order.order.sz,
-        originalSize:.order.order.origSz,
-        reduceOnly:.order.order.reduceOnly
-      }
-    else
-      {lookupStatus:.status}
-    end
-  '
-done
-
-for status_json in "$HL_OID_STATUS_JSON" "$HL_CLOID_STATUS_JSON"; do
   printf '%s' "$status_json" | jq -e \
-    --arg oid "$HL_ENTRY_OID" --arg cloid "$HL_ENTRY_CLOID" '
+    --arg oid "$HL_ENTRY_OID" \
+    --arg cloid "$HL_ENTRY_CLOID" \
+    --argjson allowed "$HL_ALLOWED_ORDER_STATUSES" '
+    .order.status as $order_status |
+    type == "object" and
     .status == "order" and
+    (.order | type) == "object" and
+    (.order.status | type) == "string" and
+    ($allowed | index($order_status)) != null and
+    (.order.order | type) == "object" and
+    (.order.order.oid | type) == "number" and
+    (.order.order.oid | floor) == .order.order.oid and
+    .order.order.oid > 0 and
+    (.order.order.cloid | type) == "string" and
+    (.order.order.cloid | test("^0x[0-9a-fA-F]{32}$")) and
+    (.order.order.sz | type) == "string" and
+    (.order.order.sz | test("^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$")) and
+    (try (.order.order.sz | tonumber) catch null) != null and
+    (.order.order.origSz | type) == "string" and
+    (.order.order.origSz | test("^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$")) and
+    (try (.order.order.origSz | tonumber) catch null) != null and
+    (.order.order.reduceOnly | type) == "boolean" and
     ((.order.order.oid | tostring) == $oid) and
     ((.order.order.cloid | ascii_downcase) == ($cloid | ascii_downcase))
   ' >/dev/null
+
+  printf '%s' "$status_json" | jq \
+    --argjson allowed "$HL_ALLOWED_ORDER_STATUSES" '
+    .order.status as $order_status |
+    {
+      lookupStatus:.status,
+      oid:.order.order.oid,
+      cloid:.order.order.cloid,
+      orderStatus:.order.status,
+      statusAllowed:($allowed | index($order_status) != null),
+      size:.order.order.sz,
+      originalSize:.order.order.origSz,
+      reduceOnly:.order.order.reduceOnly
+    }
+  '
 done
 
-HL_OID_STATUS="$(printf '%s' "$HL_OID_STATUS_JSON" | jq -r '.order.status')"
-HL_CLOID_STATUS="$(printf '%s' "$HL_CLOID_STATUS_JSON" | jq -r '.order.status')"
+HL_OID_STATUS="$(printf '%s' "$HL_OID_STATUS_JSON" | jq -er \
+  --argjson allowed "$HL_ALLOWED_ORDER_STATUSES" '
+  .order.status as $order_status |
+  select(($order_status | type) == "string" and
+         ($allowed | index($order_status)) != null) |
+  $order_status
+')"
+HL_CLOID_STATUS="$(printf '%s' "$HL_CLOID_STATUS_JSON" | jq -er \
+  --argjson allowed "$HL_ALLOWED_ORDER_STATUSES" '
+  .order.status as $order_status |
+  select(($order_status | type) == "string" and
+         ($allowed | index($order_status)) != null) |
+  $order_status
+')"
+
+test -n "$HL_OID_STATUS"
+test -n "$HL_CLOID_STATUS"
 test "$HL_OID_STATUS" = "$HL_CLOID_STATUS"
 ```
 
 Les deux recherches doivent retourner le meme couple OID/cloid. `unknownOid`,
-un cloid absent, un OID divergent ou des statuts incompatibles reste
+une reponse mal formee, un statut hors allow-list, un cloid absent, un OID
+divergent ou des statuts incompatibles provoque un exit non nul et reste
 `ambiguous`. Si le statut a change entre les deux appels, rejouer immediatement
 les deux lookups une seule fois ; une seconde divergence reste `ambiguous`. Il
 est interdit de chercher un autre ordre par coin, prix, taille ou fenetre
@@ -716,6 +797,7 @@ renommer ou editer ce marker a la main.
 Verifier la DB sans afficher de contexte sensible :
 
 ```bash
+set -euo pipefail
 docker compose exec -T trading-app-php php bin/console dbal:run-sql \
   "SELECT scope, tripped, reason, tripped_at, updated_at FROM hyperliquid_testnet_kill_switch_state WHERE scope = 'hyperliquid_testnet'"
 ```
@@ -724,6 +806,7 @@ Si le marker existe et **seulement apres** confirmation que la DB est lisible et
 `tripped=true`, transferer la quarantaine avec la commande controlee :
 
 ```bash
+set -euo pipefail
 docker compose exec -T trading-app-php \
   php bin/console app:hyperliquid:testnet:quarantine-recover \
   --confirm=CONFIRM_HYPERLIQUID_TESTNET_QUARANTINE_TRANSFER
