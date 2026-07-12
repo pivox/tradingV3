@@ -20,6 +20,7 @@ use App\Provider\Hyperliquid\HyperliquidInstrumentMetadataProviderInterface;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceManagerInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceScope;
+use App\Provider\Hyperliquid\HyperliquidPublicReadMapper;
 use App\TradingCore\Execution\Dto\ExecutionRequest;
 use App\TradingCore\Execution\Enum\ExecutionMode;
 use App\TradingCore\Execution\Enum\ExecutionStatus;
@@ -112,6 +113,96 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame([], $fixture->signed->submissions);
     }
 
+    public function testMapperMetadataWithoutPublishedMaximumIsCompatibleWithExecutionPort(): void
+    {
+        $metadata = (new HyperliquidPublicReadMapper())->metadata(
+            ['name' => 'BTC', 'szDecimals' => 5, 'maxLeverage' => 10],
+            0,
+            ['funding' => '0.0001'],
+            null,
+            [],
+        );
+        self::assertSame('0', $metadata->maxSize);
+        $fixture = $this->fixture(
+            metadata: $metadata,
+            signedResults: [$this->acceptedGroup(42, 43)],
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Accepted, $result->status, json_encode($result, JSON_THROW_ON_ERROR));
+        self::assertSame([1_000], $fixture->nonces->issued);
+        self::assertCount(1, $fixture->signed->submissions);
+    }
+
+    #[DataProvider('invalidMaximumSizes')]
+    public function testInvalidOrNonCanonicalMaximumSizeRejectsBeforeNonce(string $maxSize): void
+    {
+        $fixture = $this->fixture(metadata: $this->metadata(maxSize: $maxSize));
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Rejected, $result->status, $maxSize);
+        self::assertSame([], $fixture->nonces->issued, $maxSize);
+        self::assertSame([], $fixture->signed->submissions, $maxSize);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function invalidMaximumSizes(): iterable
+    {
+        yield 'negative' => ['-1'];
+        yield 'malformed' => ['unbounded'];
+        yield 'non-canonical decimal zero' => ['0.0'];
+        yield 'non-canonical signed zero' => ['+0'];
+        yield 'non-canonical negative zero' => ['-0'];
+    }
+
+    #[DataProvider('noMaximumSentinelRetainedLimits')]
+    public function testNoMaximumSentinelStillEnforcesOtherSizingLimits(string $case): void
+    {
+        $fixture = match ($case) {
+            'minimum_size' => $this->fixture(metadata: $this->metadata(minSize: '0.20', maxSize: '0')),
+            'notional_cap' => $this->fixture(
+                report: $this->report(maxNotional: 9.99),
+                metadata: $this->metadata(maxSize: '0'),
+            ),
+            default => throw new \LogicException('unknown_retained_limit'),
+        };
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Rejected, $result->status, $case);
+        self::assertSame([], $fixture->nonces->issued, $case);
+        self::assertSame([], $fixture->signed->submissions, $case);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function noMaximumSentinelRetainedLimits(): iterable
+    {
+        yield 'minimum size' => ['minimum_size'];
+        yield 'notional cap' => ['notional_cap'];
+    }
+
+    #[DataProvider('unsupportedTimeInForceRepresentations')]
+    public function testUnsupportedTimeInForceRejectsBeforeNonceOrSignedAction(string $timeInForce): void
+    {
+        $fixture = $this->fixture(plan: $this->plan(timeInForce: $timeInForce));
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Rejected, $result->status, $timeInForce);
+        self::assertSame([], $fixture->nonces->issued, $timeInForce);
+        self::assertSame([], $fixture->signed->submissions, $timeInForce);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function unsupportedTimeInForceRepresentations(): iterable
+    {
+        yield 'IOC' => ['ioc'];
+        yield 'FOK' => ['fok'];
+        yield 'post only' => ['post_only'];
+    }
+
     public function testEqualLeverageUsesOneFreshNonceForExactlyOneGroupedAction(): void
     {
         $fixture = $this->fixture(signedResults: [$this->acceptedGroup(42, 43)]);
@@ -154,6 +245,66 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame(ExecutionStatus::Accepted, $result->status);
         self::assertSame('42', $result->exchangeOrderId);
         self::assertTrue($result->metadata['protection_confirmed']);
+    }
+
+    #[DataProvider('invalidAcceptedGroupedResponses')]
+    public function testInvalidAcceptedGroupedResponseCompensates(string $case): void
+    {
+        $submission = match ($case) {
+            'duplicate_oid' => $this->acceptedGroup(42, 42),
+            'non_positive_oid' => $this->unsafeResult('order', 'accepted', [
+                ['kind' => 'resting', 'oid' => 0],
+                ['kind' => 'resting', 'oid' => 43],
+            ], null, 'corr-1'),
+            'wrong_action_type' => new HyperliquidSignedActionResult('cancel', 'accepted', [
+                ['kind' => 'success'], ['kind' => 'success'],
+            ], null, 'corr-1'),
+            'correlation_mismatch' => new HyperliquidSignedActionResult('order', 'accepted', [
+                ['kind' => 'resting', 'oid' => 42],
+                ['kind' => 'resting', 'oid' => 43],
+            ], null, 'corr-other'),
+            'filled_total_size_missing' => new HyperliquidSignedActionResult('order', 'accepted', [
+                ['kind' => 'filled', 'oid' => 42],
+                ['kind' => 'resting', 'oid' => 43],
+            ], null, 'corr-1'),
+            'filled_total_size_malformed' => $this->unsafeResult('order', 'accepted', [
+                ['kind' => 'filled', 'oid' => 42, 'total_size' => 'not-a-decimal'],
+                ['kind' => 'resting', 'oid' => 43],
+            ], null, 'corr-1'),
+            'filled_total_size_unrepresentable' => new HyperliquidSignedActionResult('order', 'accepted', [
+                ['kind' => 'filled', 'oid' => 42, 'total_size' => '0.101'],
+                ['kind' => 'resting', 'oid' => 43],
+            ], null, 'corr-1'),
+            'filled_total_size_mismatch' => new HyperliquidSignedActionResult('order', 'accepted', [
+                ['kind' => 'resting', 'oid' => 42],
+                ['kind' => 'filled', 'oid' => 43, 'total_size' => '0.11'],
+            ], null, 'corr-1'),
+            default => throw new \LogicException('unknown_invalid_accepted_group'),
+        };
+        $fixture = $this->fixture(signedResults: [$submission], compensationResult: $this->unknown());
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Failed, $result->status, $case);
+        self::assertSame('unknown_requires_resync', $result->metadata['compensation_outcome'], $case);
+        self::assertCount(1, $fixture->compensation->contexts, $case);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function invalidAcceptedGroupedResponses(): iterable
+    {
+        foreach ([
+            'duplicate_oid',
+            'non_positive_oid',
+            'wrong_action_type',
+            'correlation_mismatch',
+            'filled_total_size_missing',
+            'filled_total_size_malformed',
+            'filled_total_size_unrepresentable',
+            'filled_total_size_mismatch',
+        ] as $case) {
+            yield $case => [$case];
+        }
     }
 
     public function testUnknownLeverageCanUpdateOnlyUnderExplicitPolicy(): void
@@ -212,6 +363,42 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame(ExecutionStatus::Rejected, $result->status);
         self::assertSame([], $fixture->compensation->contexts);
         self::assertSame(0, $fixture->trip->tripAttempts);
+    }
+
+    #[DataProvider('invalidRejectedGroupedResponses')]
+    public function testRejectedGroupedResponseWithInvalidIdentityCompensates(string $case): void
+    {
+        $submission = match ($case) {
+            'wrong_action_type' => new HyperliquidSignedActionResult('cancel', 'rejected', [
+                ['kind' => 'error'], ['kind' => 'error'],
+            ], 'exchange_status_error', 'corr-1'),
+            'correlation_mismatch' => new HyperliquidSignedActionResult('order', 'rejected', [
+                ['kind' => 'error'], ['kind' => 'error'],
+            ], 'exchange_status_error', 'corr-other'),
+            'missing_row' => new HyperliquidSignedActionResult('order', 'rejected', [
+                ['kind' => 'error'],
+            ], 'exchange_status_error', 'corr-1'),
+            'extra_row' => new HyperliquidSignedActionResult('order', 'rejected', [
+                ['kind' => 'error'], ['kind' => 'error'], ['kind' => 'error'],
+            ], 'exchange_status_error', 'corr-1'),
+            default => throw new \LogicException('unknown_invalid_rejected_group'),
+        };
+        $fixture = $this->fixture(signedResults: [$submission], compensationResult: $this->unknown());
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Failed, $result->status, $case);
+        self::assertSame('unknown_requires_resync', $result->metadata['compensation_outcome'], $case);
+        self::assertCount(1, $fixture->compensation->contexts, $case);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function invalidRejectedGroupedResponses(): iterable
+    {
+        yield 'wrong action type' => ['wrong_action_type'];
+        yield 'correlation mismatch' => ['correlation_mismatch'];
+        yield 'missing row' => ['missing_row'];
+        yield 'extra row' => ['extra_row'];
     }
 
     public function testEntryAcceptedStopRejectedCompensatesWithExactQuantizedContext(): void
@@ -594,6 +781,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         string $exchange = 'hyperliquid',
         string $market = 'perpetual',
         string $orderType = 'limit',
+        ?string $timeInForce = null,
         string $profile = 'scalper_micro',
         ?string $configHash = self::HASH,
     ): OrderPlan {
@@ -606,7 +794,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
             side: $side,
             orderType: $orderType,
             marginMode: 'isolated',
-            timeInForce: $orderType === 'market' ? 'ioc' : 'gtc',
+            timeInForce: $timeInForce ?? ($orderType === 'market' ? 'ioc' : 'gtc'),
             entryPrice: $entry,
             quantity: $quantity,
             leverage: $leverage,
@@ -654,6 +842,27 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
     private function ambiguous(string $actionType): HyperliquidSignedActionResult
     {
         return new HyperliquidSignedActionResult($actionType, 'ambiguous', [], 'exchange_timeout', 'corr-1');
+    }
+
+    /**
+     * Creates a boundary-corrupt result that could only come from a defective signed-action client.
+     *
+     * @param list<array<string,mixed>> $statuses
+     */
+    private function unsafeResult(
+        string $actionType,
+        string $outcome,
+        array $statuses,
+        ?string $reason,
+        string $correlationId,
+    ): HyperliquidSignedActionResult {
+        $reflection = new \ReflectionClass(HyperliquidSignedActionResult::class);
+        $result = $reflection->newInstanceWithoutConstructor();
+        foreach (compact('actionType', 'outcome', 'statuses', 'reason', 'correlationId') as $property => $value) {
+            $reflection->getProperty($property)->setValue($result, $value);
+        }
+
+        return $result;
     }
 
     private function entryCanceled(): HyperliquidCompensationResult

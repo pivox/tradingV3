@@ -186,7 +186,7 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
             return $this->compensate($plan, $metadata, $state, $scope, $correlationId, null);
         }
 
-        return $this->mapSubmission($submission, $plan, $metadata, $state, $scope, $correlationId);
+        return $this->mapSubmission($submission, $plan, $metadata, $state, $scope, $correlationId, $shape['quantity']);
     }
 
     /** @return list<string> */
@@ -199,6 +199,7 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         strtolower($plan->exchange) === 'hyperliquid' || $reasons[] = 'hyperliquid_exchange_required';
         strtolower($plan->marketType) === 'perpetual' || $reasons[] = 'perpetual_market_required';
         strtolower($plan->orderType) === 'limit' || $reasons[] = 'limit_entry_required';
+        strtolower(trim($plan->timeInForce)) === 'gtc' || $reasons[] = 'gtc_time_in_force_required';
         in_array(strtolower($plan->side), ['long', 'short'], true) || $reasons[] = 'position_side_invalid';
         $plan->protectionPlan?->stopLoss !== null || $reasons[] = 'stop_loss_required';
         $plan->protectionPlan?->stopLoss?->isFullSize === true || $reasons[] = 'full_size_stop_loss_required';
@@ -268,7 +269,8 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
             $step = BigDecimal::of($metadata->quantityStep);
             $tick = BigDecimal::of($metadata->priceTick);
             $maxLeverage = BigDecimal::of($metadata->maxLeverage);
-            if ($min->isLessThanOrEqualTo(BigDecimal::zero()) || $max->isLessThan($min)
+            $hasNoPublishedMaximum = $metadata->maxSize === '0';
+            if ($min->isLessThanOrEqualTo(BigDecimal::zero()) || (!$hasNoPublishedMaximum && $max->isLessThan($min))
                 || $step->isLessThanOrEqualTo(BigDecimal::zero()) || $tick->isLessThanOrEqualTo(BigDecimal::zero())
                 || $maxLeverage->isLessThan(BigDecimal::of($plan->leverage))
                 || $metadata->priceMaxDecimals < 0 || $metadata->priceMaxDecimals > 8
@@ -299,7 +301,7 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
             if ($quantityValue->isLessThan(BigDecimal::of($metadata->minSize))) {
                 $reasons[] = 'hyperliquid_quantity_below_minimum';
             }
-            if ($quantityValue->isGreaterThan(BigDecimal::of($metadata->maxSize))) {
+            if ($metadata->maxSize !== '0' && $quantityValue->isGreaterThan(BigDecimal::of($metadata->maxSize))) {
                 $reasons[] = 'hyperliquid_quantity_above_maximum';
             }
             $stopVsEntry = BigDecimal::of($stopShape['price_quantized'])->compareTo(BigDecimal::of($entryShape['price_quantized']));
@@ -357,11 +359,15 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         HyperliquidExecutionState $state,
         HyperliquidNonceScope $scope,
         string $correlationId,
+        string $quantity,
     ): ExecutionResult {
         $statuses = $submission->statuses;
         if ($submission->actionType === 'order' && hash_equals($correlationId, $submission->correlationId)
             && $submission->outcome === 'accepted' && count($statuses) === 2
             && $this->acceptedOrderRow($statuses[0]) && $this->acceptedOrderRow($statuses[1])
+            && $statuses[0]['oid'] !== $statuses[1]['oid']
+            && $this->filledSizeMatches($statuses[0], $quantity, $metadata->quantityStep)
+            && $this->filledSizeMatches($statuses[1], $quantity, $metadata->quantityStep)
         ) {
             return $this->result(
                 ExecutionStatus::Accepted,
@@ -370,7 +376,8 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
                 ['outcome' => 'accepted', 'protection_confirmed' => true, 'correlation_id' => $correlationId],
             );
         }
-        if ($submission->actionType === 'order' && $submission->outcome === 'rejected'
+        if ($submission->actionType === 'order' && hash_equals($correlationId, $submission->correlationId)
+            && $submission->outcome === 'rejected'
             && count($statuses) === 2 && $this->errorRow($statuses[0]) && $this->errorRow($statuses[1])
         ) {
             return $this->result(
@@ -489,6 +496,27 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
     {
         return in_array($row['kind'] ?? null, ['resting', 'filled'], true)
             && isset($row['oid']) && is_int($row['oid']) && $row['oid'] > 0;
+    }
+
+    /** @param array<string,mixed> $row */
+    private function filledSizeMatches(array $row, string $quantity, string $quantityStep): bool
+    {
+        if (($row['kind'] ?? null) !== 'filled') {
+            return true;
+        }
+        if (!isset($row['total_size']) || !is_string($row['total_size'])) {
+            return false;
+        }
+
+        try {
+            $precision = $this->decimalPlaces($quantityStep);
+            $totalSize = BigDecimal::of($row['total_size'])->toScale($precision);
+
+            return $totalSize->remainder(BigDecimal::of($quantityStep))->isZero()
+                && $totalSize->isEqualTo(BigDecimal::of($quantity));
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     /** @param array<string,mixed> $row */
