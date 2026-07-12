@@ -10,9 +10,13 @@ final readonly class HyperliquidSignedActionResult
     private const MAX_STATUSES_BYTES = 65_536;
     private const ACTION_TYPES = ['order', 'cancel', 'cancelByCloid', 'updateLeverage'];
     private const OUTCOMES = ['accepted', 'rejected', 'ambiguous'];
-    private const REASONS = [
+    private const REJECTED_EMPTY_REASONS = [
         'broadcast_disabled',
         'agent_address_mismatch',
+        'exchange_error',
+        'signer_auth_failed',
+    ];
+    private const AMBIGUOUS_EMPTY_REASONS = [
         'exchange_timeout',
         'exchange_transport_error',
         'exchange_response_too_large',
@@ -22,17 +26,19 @@ final readonly class HyperliquidSignedActionResult
         'exchange_redirect_rejected',
         'testnet_endpoint_required',
         'unknown_exchange_response',
-        'exchange_error',
         'empty_exchange_statuses',
         'too_many_exchange_statuses',
         'invalid_exchange_statuses',
-        'exchange_status_error',
-        'mixed_exchange_statuses',
         'unknown_exchange_status',
         'unexpected_exchange_response_type',
         'invalid_exchange_response',
-        'signer_auth_failed',
         'signer_response_invalid',
+    ];
+    private const REASONS = [
+        ...self::REJECTED_EMPTY_REASONS,
+        'exchange_status_error',
+        ...self::AMBIGUOUS_EMPTY_REASONS,
+        'mixed_exchange_statuses',
     ];
 
     /** @param list<array<string, mixed>> $statuses */
@@ -110,11 +116,22 @@ final readonly class HyperliquidSignedActionResult
             return $statuses === [];
         }
 
-        if ($reason === null) {
-            return false;
+        if ($outcome === 'rejected') {
+            if ($statuses === []) {
+                return $reason !== null && in_array($reason, self::REJECTED_EMPTY_REASONS, true);
+            }
+
+            return $reason === 'exchange_status_error' && self::containsOnly($kinds, ['error']);
         }
 
-        return $outcome !== 'rejected' || self::containsOnly($kinds, ['error']);
+        if ($reason === 'mixed_exchange_statuses') {
+            return in_array('error', $kinds, true)
+                && count(array_filter($kinds, static fn (string $kind): bool => $kind !== 'error')) > 0;
+        }
+
+        return $statuses === []
+            && $reason !== null
+            && in_array($reason, self::AMBIGUOUS_EMPTY_REASONS, true);
     }
 
     /**

@@ -308,6 +308,9 @@ final class HyperliquidSignedActionClientTest extends TestCase
         yield 'rejected response cannot contain accepted row' => ['order', 'rejected', [['kind' => 'resting', 'oid' => 1]], 'exchange_error'];
         yield 'ambiguous response requires reason' => ['cancel', 'ambiguous', [['kind' => 'success']], null];
         yield 'update leverage never contains statuses' => ['updateLeverage', 'ambiguous', [['kind' => 'error']], 'mixed_exchange_statuses'];
+        yield 'rejected timeout remains ambiguous' => ['order', 'rejected', [], 'exchange_timeout'];
+        yield 'mixed reason requires two sides' => ['cancel', 'ambiguous', [['kind' => 'success']], 'mixed_exchange_statuses'];
+        yield 'status rejection requires error rows' => ['order', 'rejected', [], 'exchange_status_error'];
     }
 
     /** @param list<array<string, mixed>> $statuses */
@@ -332,12 +335,20 @@ final class HyperliquidSignedActionClientTest extends TestCase
         self::assertSame('signer_response_invalid', $result->reason);
     }
 
-    /** @return iterable<string, array{string}> */
-    public static function knownReasons(): iterable
+    /** @return iterable<string, array{string, string, list<array<string, mixed>>, string}> */
+    public static function knownReasonTuples(): iterable
     {
+        yield 'broadcast disabled' => ['updateLeverage', 'rejected', [], 'broadcast_disabled'];
+        yield 'agent mismatch' => ['order', 'rejected', [], 'agent_address_mismatch'];
+        yield 'exchange error' => ['order', 'rejected', [], 'exchange_error'];
+        yield 'signer auth' => ['cancel', 'rejected', [], 'signer_auth_failed'];
+        yield 'exchange status error' => ['order', 'rejected', [['kind' => 'error']], 'exchange_status_error'];
+        yield 'mixed exchange statuses' => ['order', 'ambiguous', [
+            ['kind' => 'resting', 'oid' => 1],
+            ['kind' => 'error'],
+        ], 'mixed_exchange_statuses'];
+
         foreach ([
-            'broadcast_disabled',
-            'agent_address_mismatch',
             'exchange_timeout',
             'exchange_transport_error',
             'exchange_response_too_large',
@@ -347,28 +358,73 @@ final class HyperliquidSignedActionClientTest extends TestCase
             'exchange_redirect_rejected',
             'testnet_endpoint_required',
             'unknown_exchange_response',
-            'exchange_error',
             'empty_exchange_statuses',
             'too_many_exchange_statuses',
             'invalid_exchange_statuses',
-            'exchange_status_error',
-            'mixed_exchange_statuses',
             'unknown_exchange_status',
             'unexpected_exchange_response_type',
             'invalid_exchange_response',
-            'signer_auth_failed',
             'signer_response_invalid',
         ] as $reason) {
-            yield $reason => [$reason];
+            yield $reason => ['order', 'ambiguous', [], $reason];
         }
     }
 
-    #[DataProvider('knownReasons')]
-    public function testResultAcceptsOnlyKnownReasonVocabulary(string $reason): void
-    {
-        $result = new HyperliquidSignedActionResult('order', 'ambiguous', [], $reason, 'corr-result');
+    /** @param list<array<string, mixed>> $statuses */
+    #[DataProvider('knownReasonTuples')]
+    public function testResultAcceptsExactKnownReasonTuple(
+        string $actionType,
+        string $outcome,
+        array $statuses,
+        string $reason,
+    ): void {
+        $result = new HyperliquidSignedActionResult(
+            $actionType,
+            $outcome,
+            $statuses,
+            $reason,
+            'corr-result',
+        );
 
         self::assertSame($reason, $result->reason);
+    }
+
+    /** @return iterable<string, array{string, string, list<array<string, mixed>>, string}> */
+    public static function impossibleReasonTuples(): iterable
+    {
+        yield 'rejected timeout' => ['order', 'rejected', [], 'exchange_timeout'];
+        yield 'rejected transport error' => ['order', 'rejected', [], 'exchange_transport_error'];
+        yield 'rejected invalid response' => ['order', 'rejected', [], 'invalid_exchange_response'];
+        yield 'rejected signer response invalid' => ['cancel', 'rejected', [], 'signer_response_invalid'];
+        yield 'status rejection requires error row' => ['order', 'rejected', [], 'exchange_status_error'];
+        yield 'definitive exchange error requires empty rows' => ['order', 'rejected', [['kind' => 'error']], 'exchange_error'];
+        yield 'broadcast rejection requires empty rows' => ['order', 'rejected', [['kind' => 'error']], 'broadcast_disabled'];
+        yield 'mixed reason requires an error row' => ['cancel', 'ambiguous', [['kind' => 'success']], 'mixed_exchange_statuses'];
+        yield 'mixed reason requires a non-error row' => ['order', 'ambiguous', [['kind' => 'error']], 'mixed_exchange_statuses'];
+        yield 'mixed reason requires rows' => ['order', 'ambiguous', [], 'mixed_exchange_statuses'];
+        yield 'timeout requires empty rows' => ['order', 'ambiguous', [['kind' => 'error']], 'exchange_timeout'];
+        yield 'definitive exchange error cannot be ambiguous' => ['order', 'ambiguous', [], 'exchange_error'];
+        yield 'status rejection cannot be ambiguous' => ['order', 'ambiguous', [['kind' => 'error']], 'exchange_status_error'];
+        yield 'auth failure cannot be ambiguous' => ['cancel', 'ambiguous', [], 'signer_auth_failed'];
+    }
+
+    /** @param list<array<string, mixed>> $statuses */
+    #[DataProvider('impossibleReasonTuples')]
+    public function testResultRejectsImpossibleReasonTuple(
+        string $actionType,
+        string $outcome,
+        array $statuses,
+        string $reason,
+    ): void {
+        $this->expectExceptionMessage('hyperliquid_signed_action_result_consistency_invalid');
+
+        new HyperliquidSignedActionResult(
+            $actionType,
+            $outcome,
+            $statuses,
+            $reason,
+            'corr-impossible-reason',
+        );
     }
 
     /** @return iterable<string, array{string, string, list<array<string, mixed>>, ?string}> */
